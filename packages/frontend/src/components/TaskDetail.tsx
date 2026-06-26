@@ -11,6 +11,20 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import styles from './TaskDetail.module.css';
 
+function getProjectRepos(
+  project: { githubRepo?: string } | null | undefined,
+): string[] {
+  const raw = project?.githubRepo;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as string[];
+  } catch {
+    /* bare string */
+  }
+  return [raw];
+}
+
 // ── Display status helpers ─────────────────────────────────────────
 
 const DISPLAY_STATUS_LABELS: Record<DisplayStatus, string> = {
@@ -121,6 +135,10 @@ export function TaskDetail({
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [optimisticDisplayStatus, setOptimisticDisplayStatus] =
     useState<DisplayStatus | null>(null);
+  const [assignedRepo, setAssignedRepo] = useState<string | null>(
+    task.assignedRepo,
+  );
+  const [assignRepoInFlight, setAssignRepoInFlight] = useState(false);
 
   // Reset state when task changes
   useEffect(() => {
@@ -134,7 +152,9 @@ export function TaskDetail({
     setMergeInFlight(false);
     setMarkMergedInFlight(false);
     setAbortInFlight(false);
-  }, [task.taskId]);
+    setAssignedRepo(task.assignedRepo);
+    setAssignRepoInFlight(false);
+  }, [task.taskId, task.assignedRepo]);
 
   // Look up live session state
   const codeSession = task.codeSession
@@ -308,6 +328,35 @@ export function TaskDetail({
     }
   }
 
+  const projectRepos = getProjectRepos(project);
+  const isMultiRepo = projectRepos.length > 1;
+
+  async function handleAssignRepo(repo: string) {
+    if (!projectId || assignRepoInFlight) return;
+    setAssignRepoInFlight(true);
+    setReviewError(null);
+    try {
+      const res = await fetch(
+        `/api/tasks/${encodeURIComponent(task.taskId)}/assign-repo?projectId=${encodeURIComponent(projectId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo }),
+        },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setReviewError(body.error ?? `HTTP ${res.status}`);
+      } else {
+        setAssignedRepo(repo);
+      }
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setAssignRepoInFlight(false);
+    }
+  }
+
   // Accordion: on mobile, REVIEW and PULL REQUEST are mutually exclusive when both exist.
   const mobileAccordionActive = isMobile && !!task.review && !!task.pr;
   const isReviewExpanded = mobileAccordionActive
@@ -369,6 +418,25 @@ export function TaskDetail({
             >
               {getTaskSourceLinkLabel(project?.taskSource ?? 'notion')}
             </a>
+          )}
+          {isMultiRepo && (
+            <select
+              className={styles.repoSelect}
+              value={assignedRepo ?? ''}
+              disabled={assignRepoInFlight}
+              onChange={(e) => {
+                if (e.target.value) void handleAssignRepo(e.target.value);
+              }}
+              aria-label="Assign repository"
+              title="Assign target repository"
+            >
+              <option value="">⚠ Needs repo</option>
+              {projectRepos.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
           )}
         </div>
       </div>

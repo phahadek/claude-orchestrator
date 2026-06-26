@@ -18,6 +18,20 @@ interface Props {
   project: ProjectConfig | null;
 }
 
+function getProjectRepos(
+  project: { githubRepo?: string } | null | undefined,
+): string[] {
+  const raw = project?.githubRepo;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as string[];
+  } catch {
+    /* bare string */
+  }
+  return [raw];
+}
+
 const STATUS_LABELS: Record<DisplayStatus, string> = {
   needs_attention: '⚠️ Needs Attention',
   ready_to_merge: '✅ Ready to Merge',
@@ -91,6 +105,8 @@ function launchTooltip(task: TaskView): string {
 
 export function TaskCard({ task, selected, onClick, send, project }: Props) {
   const { codeSession, pr, review } = task;
+  const isMultiRepo = getProjectRepos(project).length > 1;
+  const needsRepo = isMultiRepo && task.assignedRepo === null;
   const [unblockInFlight, setUnblockInFlight] = useState(false);
   const [optimisticStatus, setOptimisticStatus] =
     useState<DisplayStatus | null>(null);
@@ -277,6 +293,14 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
           <span className={styles.tokenBadge}>
             {formatTokenCount(task.totalTokens.input + task.totalTokens.output)}{' '}
             tokens
+          </span>
+        )}
+        {needsRepo && (
+          <span
+            className={styles.needsRepoBadge}
+            title="Assign a target repository"
+          >
+            ⚠ Needs repo
           </span>
         )}
         {isNonCode ? (

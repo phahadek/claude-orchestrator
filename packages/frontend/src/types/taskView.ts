@@ -59,4 +59,6 @@ export interface TaskView {
     outputTokens: number;
   } | null;
   totalTokens: { input: number; output: number };
+  /** Assigned target repo slug for multi-repo projects. Null when unassigned. */
+  assignedRepo: string | null;
 }
