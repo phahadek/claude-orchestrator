@@ -806,6 +806,25 @@ export class GitHubClient {
     });
   }
 
+  /**
+   * Find the first open PR whose head branch matches `headBranch`.
+   * Returns null when none is found or the request fails.
+   */
+  async findOpenPRForBranch(
+    repo: string,
+    headBranch: string,
+  ): Promise<PRCreationResult | null> {
+    const owner = repo.split('/')[0];
+    try {
+      const results = await this.request<PRCreationResult[]>(
+        `/repos/${repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${headBranch}`)}&per_page=1`,
+      );
+      return results[0] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Post a comment on a PR then close it. Used to abandon stale predecessor branches. */
   async closePRWithComment(
     repo: string,

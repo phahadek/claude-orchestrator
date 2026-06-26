@@ -1321,6 +1321,40 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
                 `[AgentSession] updatePR fallback #${existingPR.pr_number} failed: ${(ue as Error).message}`,
               );
             }
+          } else {
+            // No DB record for this session — query GitHub to find the orphaned PR
+            // and register it so subsequent marker emissions take the update path.
+            const found = await this.githubClient!.findOpenPRForBranch(
+              repo,
+              branch,
+            );
+            if (found) {
+              sessionLog(
+                this.sessionId,
+                `PR creation 422: adopting orphaned PR #${found.number} for this session`,
+              );
+              await this.handlePRDetected(found.html_url, {
+                number: found.number,
+                html_url: found.html_url,
+                title: found.title,
+                body: found.body,
+                head: found.head,
+                base: found.base,
+                state: found.state,
+                created_at: found.created_at,
+                updated_at: found.updated_at,
+                draft: found.draft,
+              });
+              try {
+                await this.githubClient!.updatePR(repo, found.number, {
+                  body: params.body,
+                });
+              } catch (ue) {
+                logger.warn(
+                  `[AgentSession] updatePR on adopted PR #${found.number} failed: ${(ue as Error).message}`,
+                );
+              }
+            }
           }
           return;
         }
