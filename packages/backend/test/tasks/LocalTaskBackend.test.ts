@@ -343,4 +343,136 @@ describe('LocalTaskBackend (milestone schema)', () => {
   it('has type === "local"', () => {
     expect(backend.type).toBe('local');
   });
+
+  describe('listTasksByStatus()', () => {
+    it('returns only tasks matching the given display status', async () => {
+      const ready = await backend.listTasksByStatus('🗂️ Ready');
+      const ids = ready.map((r) => r.task.id);
+      expect(ids).toContain('yaml:task-ready-1');
+      expect(ids).toContain('yaml:task-ready-2');
+      expect(ids).toContain('yaml:task-other-milestone');
+      expect(ids).not.toContain('yaml:task-in-progress');
+      expect(ids).not.toContain('yaml:task-done');
+    });
+
+    it('returns tasks across all milestones', async () => {
+      const ready = await backend.listTasksByStatus('🗂️ Ready');
+      const ids = ready.map((r) => r.task.id);
+      expect(ids).toContain('yaml:task-ready-1');
+      expect(ids).toContain('yaml:task-other-milestone');
+    });
+
+    it('returns empty array when no tasks match', async () => {
+      const blocked = await backend.listTasksByStatus('🚫 Blocked');
+      expect(blocked).toHaveLength(0);
+    });
+
+    it('returns In Progress task when filtering by that status', async () => {
+      const inProg = await backend.listTasksByStatus('🔄 In Progress');
+      expect(inProg.map((r) => r.task.id)).toEqual(['yaml:task-in-progress']);
+    });
+  });
+
+  describe('updateNotes()', () => {
+    it('writes notes to the task and persists to disk', async () => {
+      await backend.updateNotes('yaml:task-ready-2', 'First note content');
+
+      const file = readTasksFile(tmpDir) as {
+        milestones: { tasks: Array<{ id: string; notes?: string }> }[];
+      };
+      const task = file.milestones[0].tasks.find((t) => t.id === 'task-ready-2');
+      expect(task?.notes).toBe('First note content');
+    });
+
+    it('replaces existing notes', async () => {
+      await backend.updateNotes('yaml:task-ready-1', 'original');
+      await backend.updateNotes('yaml:task-ready-1', 'replacement');
+
+      const file = readTasksFile(tmpDir) as {
+        milestones: { tasks: Array<{ id: string; notes?: string }> }[];
+      };
+      const task = file.milestones[0].tasks.find((t) => t.id === 'task-ready-1');
+      expect(task?.notes).toBe('replacement');
+    });
+
+    it('throws when task id is not found', async () => {
+      await expect(
+        backend.updateNotes('yaml:nonexistent', 'note'),
+      ).rejects.toThrow(/task not found/);
+    });
+  });
+
+  describe('appendImplementationNote()', () => {
+    it('sets notes when task has none', async () => {
+      await backend.appendImplementationNote('yaml:task-ready-2', 'first line');
+
+      const file = readTasksFile(tmpDir) as {
+        milestones: { tasks: Array<{ id: string; notes?: string }> }[];
+      };
+      const task = file.milestones[0].tasks.find((t) => t.id === 'task-ready-2');
+      expect(task?.notes).toBe('first line');
+    });
+
+    it('appends to existing notes with a newline separator', async () => {
+      await backend.appendImplementationNote('yaml:task-ready-2', 'line one');
+      await backend.appendImplementationNote('yaml:task-ready-2', 'line two');
+
+      const file = readTasksFile(tmpDir) as {
+        milestones: { tasks: Array<{ id: string; notes?: string }> }[];
+      };
+      const task = file.milestones[0].tasks.find((t) => t.id === 'task-ready-2');
+      expect(task?.notes).toBe('line one\nline two');
+    });
+
+    it('throws when task id is not found', async () => {
+      await expect(
+        backend.appendImplementationNote('yaml:nonexistent', 'note'),
+      ).rejects.toThrow(/task not found/);
+    });
+  });
+
+  describe('display map round-trips', () => {
+    it.each([
+      ['Deferred', '⏭️ Deferred'],
+      ['Blocked', '🚫 Blocked'],
+      ['Backlog', '🔲 Backlog'],
+      ['Ready', '🗂️ Ready'],
+      ['In Progress', '🔄 In Progress'],
+      ['In Review', '👀 In Review'],
+      ['Done', '✅ Done'],
+    ])('status %s ↔ %s round-trips via updateStatus', async (raw, display) => {
+      await backend.updateStatus('yaml:task-ready-2', display);
+      const file = readTasksFile(tmpDir) as {
+        milestones: { tasks: Array<{ id: string; status: string }> }[];
+      };
+      const task = file.milestones[0].tasks.find((t) => t.id === 'task-ready-2');
+      expect(task?.status).toBe(raw);
+    });
+
+    it.each([
+      ['Design', '📐 Design'],
+      ['Tooling', '🛠️ Tooling'],
+      ['Docs', '📝 Docs'],
+      ['Assets', '🎨 Assets'],
+      ['Bug', '🐛 Bug'],
+    ])('type %s maps to display %s in fetchReadyTasks', async (raw, display) => {
+      const dir = makeTempDir();
+      try {
+        writeTasksFile(dir, {
+          milestones: [
+            {
+              id: 'm1',
+              name: 'M1',
+              tasks: [{ id: 't1', name: 'T1', status: 'Ready', type: raw }],
+            },
+          ],
+        });
+        const b = new LocalTaskBackend(dir);
+        const tasks = await b.fetchReadyTasks('m1');
+        expect(tasks[0].task.type).toBe(display);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
 });
