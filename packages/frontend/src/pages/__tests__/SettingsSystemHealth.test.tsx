@@ -95,6 +95,7 @@ describe('SettingsSystemHealth', () => {
         started_at: '2026-06-15T10:05:00.000Z',
         completed_at: '2026-06-15T10:05:00.500Z',
         duration_ms: 500,
+        next_run_at: '2026-06-15T10:06:00.000Z',
       });
     });
 
