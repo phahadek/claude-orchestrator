@@ -25,6 +25,7 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     pr: null,
     review: null,
     totalTokens: { input: 0, output: 0 },
+    assignedRepo: null,
     ...overrides,
   };
 }
@@ -1189,5 +1190,81 @@ describe('TaskDetail', () => {
     });
 
     vi.unstubAllGlobals();
+  });
+
+  // ── Repo dropdown ─────────────────────────────────────────────────────────
+
+  it('renders repo dropdown for multi-repo project with project repos as options', () => {
+    const repos = ['owner/repo-a', 'owner/repo-b'];
+    render(
+      <TaskDetail
+        task={makeTask({ assignedRepo: null })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+        project={makeProject({ githubRepo: JSON.stringify(repos) })}
+      />,
+    );
+    const select = screen.getByRole('combobox', { name: /assign repository/i });
+    expect(select).toBeTruthy();
+    const options = Array.from((select as HTMLSelectElement).options).map((o) => o.value);
+    expect(options).toContain('owner/repo-a');
+    expect(options).toContain('owner/repo-b');
+  });
+
+  it('does not render repo dropdown for single-repo project', () => {
+    render(
+      <TaskDetail
+        task={makeTask({ assignedRepo: null })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+        project={makeProject({ githubRepo: 'owner/repo-a' })}
+      />,
+    );
+    expect(screen.queryByRole('combobox', { name: /assign repository/i })).toBeNull();
+  });
+
+  it('shows assigned repo as selected value in dropdown', () => {
+    render(
+      <TaskDetail
+        task={makeTask({ assignedRepo: 'owner/repo-b' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+        project={makeProject({ githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']) })}
+      />,
+    );
+    const select = screen.getByRole('combobox', { name: /assign repository/i }) as HTMLSelectElement;
+    expect(select.value).toBe('owner/repo-b');
+  });
+
+  it('calls assign-repo endpoint when repo is selected', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, repo: 'owner/repo-b' }),
+    } as Response);
+
+    render(
+      <TaskDetail
+        task={makeTask({ assignedRepo: null })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+        project={makeProject({ githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']) })}
+      />,
+    );
+
+    const select = screen.getByRole('combobox', { name: /assign repository/i });
+    fireEvent.change(select, { target: { value: 'owner/repo-b' } });
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/api/tasks/task-1/assign-repo'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    fetchSpy.mockRestore();
   });
 });

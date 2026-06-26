@@ -23,6 +23,7 @@ const MOCK_TASK = {
   pr: null,
   review: null,
   totalTokens: { input: 0, output: 0 },
+  assignedRepo: null,
 };
 
 // ── Mocks ──────────────────────────────────────────────────────────

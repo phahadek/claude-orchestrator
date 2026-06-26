@@ -25,6 +25,7 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     pr: null,
     review: null,
     totalTokens: { input: 0, output: 0 },
+    assignedRepo: null,
     ...overrides,
   };
 }
@@ -823,5 +824,59 @@ describe('TaskCard', () => {
     expect(badge.getAttribute('data-pause-source')).toBe('ci');
     expect(badge.getAttribute('data-pause-severity')).toBe('needs_attention');
     expect(badge.getAttribute('title')).toContain('[ci]');
+  });
+
+  // ── Needs-repo badge ──────────────────────────────────────────────────────
+
+  it('renders "needs repo" badge for multi-repo project with unassigned task', () => {
+    render(
+      <TaskCard
+        task={makeTask({ assignedRepo: null })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({ githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']) })}
+      />,
+    );
+    expect(screen.getByText('⚠ Needs repo')).toBeDefined();
+  });
+
+  it('does not render "needs repo" badge for single-repo project', () => {
+    render(
+      <TaskCard
+        task={makeTask({ assignedRepo: null })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({ githubRepo: 'owner/repo-a' })}
+      />,
+    );
+    expect(screen.queryByText('⚠ Needs repo')).toBeNull();
+  });
+
+  it('does not render "needs repo" badge when repo is already assigned', () => {
+    render(
+      <TaskCard
+        task={makeTask({ assignedRepo: 'owner/repo-a' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({ githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']) })}
+      />,
+    );
+    expect(screen.queryByText('⚠ Needs repo')).toBeNull();
+  });
+
+  it('does not render "needs repo" badge when project has no repos', () => {
+    render(
+      <TaskCard
+        task={makeTask({ assignedRepo: null })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({ githubRepo: undefined })}
+      />,
+    );
+    expect(screen.queryByText('⚠ Needs repo')).toBeNull();
   });
 });

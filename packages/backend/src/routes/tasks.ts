@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { logger } from '../logger';
 import { getProjectById, runtimeSettings } from '../config';
-import { ProjectService } from '../projects/ProjectService';
+import { ProjectService, getProjectRepos } from '../projects/ProjectService';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   getTaskCache,
@@ -10,6 +10,8 @@ import {
   clearTaskPauseReason,
   resetTaskCrashCount,
   deleteTaskCacheRow,
+  getTaskRepoAssignment,
+  setTaskRepoAssignment,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { typedGetSetting } from '../config/settings';
@@ -193,6 +195,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     pr,
     review,
     totalTokens,
+    assignedRepo: getTaskRepoAssignment(row.task_id)?.repo ?? null,
   };
 }
 
@@ -576,6 +579,44 @@ export function createTasksRouter(): Router {
     });
 
     res.json({ ok: true, newStatus: '🗂️ Ready' });
+  });
+
+  // ── POST /api/tasks/:taskId/assign-repo ────────────────────────────────────
+  router.post('/tasks/:taskId/assign-repo', (req: Request, res: Response) => {
+    const taskId = String(req.params.taskId);
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+    const body = req.body as { repo?: unknown };
+    const repo = typeof body.repo === 'string' ? body.repo.trim() : null;
+
+    if (!projectId) {
+      res.status(422).json({ error: 'projectId is required' });
+      return;
+    }
+    if (!repo) {
+      res.status(422).json({ error: 'repo is required' });
+      return;
+    }
+
+    const project = getProjectById(projectId);
+    if (!project) {
+      res.status(422).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
+
+    const allowedRepos = getProjectRepos(project);
+    try {
+      setTaskRepoAssignment(taskId, projectId, repo, 'human', allowedRepos);
+    } catch (err) {
+      res
+        .status(422)
+        .json({ error: err instanceof Error ? err.message : 'Invalid repo' });
+      return;
+    }
+
+    emitTaskUpdated(taskId);
+
+    res.json({ ok: true, repo });
   });
 
   // ── PATCH /api/tasks/:id/status ──────────────────────────────────────────

@@ -312,6 +312,19 @@
   cursor: not-allowed;
 }
 
+/* Needs-repo badge */
+.needsRepoBadge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: rgba(249, 226, 175, 0.15);
+  color: #f9e2af;
+  border: 1px solid rgba(249, 226, 175, 0.4);
+  flex-shrink: 0;
+}
+
 /* Conflict badge */
 .conflictBadge {
   font-size: 0.75rem;
