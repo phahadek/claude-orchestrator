@@ -30,13 +30,6 @@ export interface OrchestratorClaudeMdParams {
    */
   taskContent?: string;
   /**
-   * Optional contents of `.claude/local-context.md` from the project root.
-   * Appended to the merged CLAUDE.md so orchestrator-launched sessions see the
-   * same host-local context (Notion URLs, etc.) as direct Claude Code sessions.
-   * Omitted when the file is absent (e.g. fresh clone).
-   */
-  localContext?: string;
-  /**
    * Pre-loaded project context content (e.g. from PROJECT.md for GitHub projects).
    * When present, appended as a "## Project Context" section after the task spec.
    */
@@ -137,7 +130,6 @@ export function buildOrchestratorClaudeMd(
     bashRules,
     taskBackend = 'notion',
     taskContent,
-    localContext,
     projectContextContent,
     gitMode = 'github',
   } = params;
@@ -373,18 +365,6 @@ ${taskContent}`
 > Pre-loaded from PROJECT.md in the project root.
 
 ${projectContextContent}`
-      : ''
-  }${
-    localContext
-      ? `
-
----
-
-## Local Context
-
-> Host-local context loaded from \`.claude/local-context.md\`.
-
-${localContext}`
       : ''
   }`.trimEnd();
 }
