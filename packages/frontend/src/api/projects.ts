@@ -9,6 +9,16 @@ export interface GithubTaskSourceConfig {
   defaultMilestone?: number | null;
 }
 
+export interface JiraProjectConfig {
+  host: string;
+  project_key: string;
+  default_jql?: string;
+  ready_statuses?: string[];
+  status_mapping?: Record<string, string>;
+  type_mapping?: Record<string, string>;
+  epic_field?: string;
+}
+
 export interface GithubMilestone {
   id: number;
   nodeId: string;
