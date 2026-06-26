@@ -1297,7 +1297,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       } catch (e) {
         const msg = (e as Error).message;
 
-        // 422 "A pull request already exists" → divert to update path.
+        // 422 "A pull request already exists" → divert to update/adopt path.
         if (/422/.test(msg) && /pull request already exists/i.test(msg)) {
           const existingPR = getPRBySessionId(this.sessionId);
           const parsedNum = extractPRNumberFromError(msg);
@@ -1320,6 +1320,43 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               logger.warn(
                 `[AgentSession] updatePR fallback #${existingPR.pr_number} failed: ${(ue as Error).message}`,
               );
+            }
+          } else {
+            // PR exists on GitHub but isn't tracked in this session's DB (e.g. created
+            // externally or by a prior boot-sweep with no session_id). Adopt it so that
+            // the session is marked as having opened a PR and stops re-prompting.
+            let adoptedNum = parsedNum;
+            if (!adoptedNum) {
+              try {
+                const openPRs = await this.githubClient!.listOpenPRs(repo);
+                const match = openPRs.find((p) => p.headBranch === branch);
+                if (match) adoptedNum = match.id;
+              } catch (le) {
+                logger.warn(
+                  `[AgentSession] listOpenPRs for PR adopt failed: ${(le as Error).message}`,
+                );
+              }
+            }
+            if (adoptedNum) {
+              try {
+                const adopted = await this.githubClient!.fetchPR(repo, adoptedNum);
+                await this.handlePRDetected(adopted.url, {
+                  number: adopted.id,
+                  html_url: adopted.url,
+                  title: adopted.title,
+                  body: adopted.body,
+                  head: { ref: adopted.headBranch, sha: adopted.headSha ?? undefined },
+                  base: { ref: adopted.baseBranch },
+                  state: adopted.state,
+                  created_at: adopted.createdAt,
+                  updated_at: adopted.updatedAt,
+                  draft: adopted.draft,
+                });
+              } catch (fe) {
+                logger.warn(
+                  `[AgentSession] adopt existing PR #${adoptedNum} failed: ${(fe as Error).message}`,
+                );
+              }
             }
           }
           return;
