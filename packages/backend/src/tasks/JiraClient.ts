@@ -127,7 +127,11 @@ export class JiraClient {
     do {
       const body: Record<string, unknown> = { jql, maxResults, fields };
       if (nextPageToken !== undefined) body.nextPageToken = nextPageToken;
-      const resp = await this.request<JiraSearchResponse>('POST', '/search/jql', body);
+      const resp = await this.request<JiraSearchResponse>(
+        'POST',
+        '/search/jql',
+        body,
+      );
       all.push(...resp.issues);
       nextPageToken = resp.nextPageToken;
     } while (nextPageToken !== undefined);
