@@ -1673,6 +1673,42 @@ export function getIdleSessionsWithResolvedPRs(): IdleSessionWithResolvedPR[] {
     .all() as IdleSessionWithResolvedPR[];
 }
 
+export interface IdleReviewSessionWithTerminalCodingOrPR {
+  session_id: string;
+  task_id: string | null;
+  project_id: string | null;
+  pr_url: string | null;
+  pr_state: string;
+  coding_session_status: string | null;
+}
+
+/**
+ * Returns idle review sessions whose linked PR is already terminal (merged/closed)
+ * or whose paired coding session is already terminal (done/error/killed).
+ * Used by the boot-time reconciliation pass to conclude review sessions that were
+ * orphaned while the server was offline or that the closed-PR path left non-terminal.
+ */
+export function getIdleReviewSessionsWithTerminalCodingOrPR(): IdleReviewSessionWithTerminalCodingOrPR[] {
+  return db
+    .prepare(
+      `
+    SELECT s.session_id, s.task_id, s.project_id,
+           pr.pr_url, pr.state AS pr_state,
+           cs.status AS coding_session_status
+    FROM sessions s
+    JOIN pull_requests pr ON pr.review_session_id = s.session_id
+    LEFT JOIN sessions cs ON cs.session_id = pr.session_id
+    WHERE s.session_type = 'review'
+      AND s.status = 'idle'
+      AND (
+        cs.status IN ('done', 'error', 'killed')
+        OR pr.state IN ('merged', 'closed')
+      )
+  `,
+    )
+    .all() as IdleReviewSessionWithTerminalCodingOrPR[];
+}
+
 /**
  * Returns eligible PRs for the bulk-merge button: open, approved verdict,
  * not paused, and mergeable=1, scoped to the given project's milestone.

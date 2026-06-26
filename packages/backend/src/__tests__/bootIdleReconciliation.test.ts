@@ -13,6 +13,7 @@ function makeSession(
   sessionId: string,
   status: string,
   prUrl: string | null = null,
+  sessionType = 'standard',
 ): void {
   insertSession({
     session_id: sessionId,
@@ -25,7 +26,7 @@ function makeSession(
     ended_at: null,
     pr_url: prUrl,
     worktree_path: '/worktrees/w1/feature/test',
-    session_type: 'standard',
+    session_type: sessionType as 'standard',
     task_name: null,
   });
 }
@@ -35,19 +36,21 @@ function makePRRow(
   sessionId: string | null,
   state: 'merged' | 'closed' | 'open',
   repo = 'owner/repo',
+  reviewSessionId: string | null = null,
 ): void {
   const now = new Date().toISOString();
   db.prepare(
     `INSERT INTO pull_requests
-       (pr_number, pr_url, task_id, session_id, repo, title, body,
+       (pr_number, pr_url, task_id, session_id, review_session_id, repo, title, body,
         head_branch, base_branch, state, draft,
         created_at, updated_at, synced_at)
-     VALUES (?, ?, NULL, ?, ?, 'feat: test', NULL,
+     VALUES (?, ?, NULL, ?, ?, ?, 'feat: test', NULL,
              'feature/test', 'dev', ?, 0, ?, ?, ?)`,
   ).run(
     prNumber,
     `https://github.com/${repo}/pull/${prNumber}`,
     sessionId,
+    reviewSessionId,
     repo,
     state,
     now,
@@ -177,5 +180,107 @@ describe('runBootIdleReconciliation', () => {
     makeSession('sess-unrelated', 'idle');
 
     expect(() => runBootIdleReconciliation()).not.toThrow();
+  });
+});
+
+describe('runBootIdleReconciliation — pass 2: idle review sessions', () => {
+  it('transitions idle review session to done when coding session is done', () => {
+    makeSession('code-sess', 'done');
+    makeSession('review-sess', 'idle', null, 'review');
+    makePRRow(100, 'code-sess', 'open', 'owner/repo', 'review-sess');
+
+    runBootIdleReconciliation();
+
+    expect(getSession('review-sess')?.status).toBe('done');
+  });
+
+  it('transitions idle review session to error when coding session is error', () => {
+    makeSession('code-sess', 'error');
+    makeSession('review-sess', 'idle', null, 'review');
+    makePRRow(101, 'code-sess', 'open', 'owner/repo', 'review-sess');
+
+    runBootIdleReconciliation();
+
+    expect(getSession('review-sess')?.status).toBe('error');
+  });
+
+  it('transitions idle review session to error when coding session is killed', () => {
+    makeSession('code-sess', 'killed');
+    makeSession('review-sess', 'idle', null, 'review');
+    makePRRow(102, 'code-sess', 'open', 'owner/repo', 'review-sess');
+
+    runBootIdleReconciliation();
+
+    expect(getSession('review-sess')?.status).toBe('error');
+  });
+
+  it('transitions idle review session to done when PR is merged (no terminal coding session)', () => {
+    makeSession('review-sess', 'idle', null, 'review');
+    makePRRow(103, null, 'merged', 'owner/repo', 'review-sess');
+
+    runBootIdleReconciliation();
+
+    expect(getSession('review-sess')?.status).toBe('done');
+  });
+
+  it('transitions idle review session to error when PR is closed (no terminal coding session)', () => {
+    makeSession('review-sess', 'idle', null, 'review');
+    makePRRow(104, null, 'closed', 'owner/repo', 'review-sess');
+
+    runBootIdleReconciliation();
+
+    expect(getSession('review-sess')?.status).toBe('error');
+  });
+
+  it('does not touch review session when coding session is idle (open PR)', () => {
+    makeSession('code-sess', 'idle');
+    makeSession('review-sess', 'idle', null, 'review');
+    makePRRow(105, 'code-sess', 'open', 'owner/repo', 'review-sess');
+
+    runBootIdleReconciliation();
+
+    expect(getSession('review-sess')?.status).toBe('idle');
+  });
+
+  it('does not touch already-terminal review session', () => {
+    makeSession('code-sess', 'done');
+    makeSession('review-sess', 'done', null, 'review');
+    makePRRow(106, 'code-sess', 'open', 'owner/repo', 'review-sess');
+
+    runBootIdleReconciliation();
+
+    expect(getSession('review-sess')?.status).toBe('done');
+  });
+
+  it('sets ended_at when transitioning idle review session to done', () => {
+    makeSession('code-sess', 'done');
+    makeSession('review-sess-ea', 'idle', null, 'review');
+    makePRRow(107, 'code-sess', 'open', 'owner/repo', 'review-sess-ea');
+
+    runBootIdleReconciliation();
+
+    expect(getSession('review-sess-ea')?.ended_at).not.toBeNull();
+  });
+
+  it('both passes run: idle coding session with merged PR AND idle review session both get transitioned', () => {
+    makeSession('code-sess', 'idle', 'https://github.com/owner/repo/pull/108');
+    makeSession('review-sess', 'idle', null, 'review');
+    makePRRow(108, 'code-sess', 'merged', 'owner/repo', 'review-sess');
+
+    runBootIdleReconciliation();
+
+    // Pass 1 transitions the coding session (idle + merged → done),
+    // then pass 2 sees coding session as done → review session → done.
+    expect(getSession('code-sess')?.status).toBe('done');
+    expect(getSession('review-sess')?.status).toBe('done');
+  });
+
+  it('is a no-op when no orphaned review sessions exist', () => {
+    makeSession('code-sess', 'running');
+    makeSession('review-sess', 'idle', null, 'review');
+    makePRRow(109, 'code-sess', 'open', 'owner/repo', 'review-sess');
+
+    expect(() => runBootIdleReconciliation()).not.toThrow();
+    expect(getSession('review-sess')?.status).toBe('idle');
   });
 });
