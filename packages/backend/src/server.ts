@@ -288,11 +288,11 @@ const autoLauncher = new AutoLauncher(sessionManager, broadcast);
 // TaskCacheRefresher: background loop that keeps per-project board caches warm.
 // Handlers always serve from cache; the refresher populates it on an interval.
 const taskCacheRefresher = new TaskCacheRefresher(broadcast);
-setTaskCacheRefresher((projectId) =>
-  taskCacheRefresher.refreshProjectById(projectId),
+setTaskCacheRefresher((projectId, skipCache) =>
+  taskCacheRefresher.refreshProjectById(projectId, skipCache),
 );
-setWsRouterRefreshFn((projectId) =>
-  taskCacheRefresher.refreshProjectById(projectId),
+setWsRouterRefreshFn((projectId, skipCache) =>
+  taskCacheRefresher.refreshProjectById(projectId, skipCache),
 );
 
 // Auto-updater: polls GitHub Releases on startup + every 24h

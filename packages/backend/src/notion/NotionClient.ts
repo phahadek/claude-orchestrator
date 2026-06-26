@@ -49,7 +49,7 @@ export function normalizeNotionId(input: string): string | null {
   return formatAsUuid(raw);
 }
 
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL_MS = 60 * 1000; // 60 seconds
 const TASK_PAGE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const NOTION_VERSION = '2022-06-28';
 const resolver = new DependencyResolver();

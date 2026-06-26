@@ -5,9 +5,11 @@ import {
   type Project,
   type OrchestratorConfig,
   type OrchestratorConfigResponse,
+  type JiraProjectConfig,
 } from '../../api/projects';
 import { ProjectFormModal, type ProjectFormValues } from './ProjectFormModal';
 import { MilestonesSubPanel } from './MilestonesSubPanel';
+import { JiraProjectConfigPanel } from './JiraProjectConfigPanel';
 import styles from './ProjectsSettingsPanel.module.css';
 
 function ConfigReadOnly({ config }: { config: OrchestratorConfig }) {
@@ -88,6 +90,17 @@ function middleEllipsis(str: string, maxLen = 40): string {
   return str.slice(0, half) + '…' + str.slice(str.length - half);
 }
 
+function isJiraUnconfigured(p: Project): boolean {
+  if (p.taskSource !== 'jira') return false;
+  if (!p.taskSourceConfig) return true;
+  try {
+    const cfg = JSON.parse(p.taskSourceConfig) as JiraProjectConfig;
+    return !cfg.project_key?.trim();
+  } catch {
+    return true;
+  }
+}
+
 interface ProjectsSettingsPanelProps {
   onProjectsChanged?: () => void;
 }
@@ -101,6 +114,7 @@ function ProjectsSettingsPanelInner({
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<Project | null>(null);
   const [drillIn, setDrillIn] = useState<Project | null>(null);
+  const [jiraConfigFor, setJiraConfigFor] = useState<Project | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Project | null>(null);
   const [stubBusy, setStubBusy] = useState<string | null>(null);
   const [stubMessage, setStubMessage] = useState<string | null>(null);
@@ -117,6 +131,10 @@ function ProjectsSettingsPanelInner({
       setProjects(data);
       // Refresh the drilled-in project view if its data changed.
       setDrillIn((current) => {
+        if (!current) return current;
+        return data.find((p) => p.id === current.id) ?? null;
+      });
+      setJiraConfigFor((current) => {
         if (!current) return current;
         return data.find((p) => p.id === current.id) ?? null;
       });
@@ -197,6 +215,16 @@ function ProjectsSettingsPanelInner({
     );
   }
 
+  if (jiraConfigFor) {
+    return (
+      <JiraProjectConfigPanel
+        project={jiraConfigFor}
+        onBack={() => setJiraConfigFor(null)}
+        onSaved={() => void reload()}
+      />
+    );
+  }
+
   return (
     <div className={styles.panel}>
       <div className={styles.panelHeader}>
@@ -251,6 +279,14 @@ function ProjectsSettingsPanelInner({
                 </td>
                 <td data-label="Task Source">
                   <span className={styles.badge}>{p.taskSource}</span>
+                  {isJiraUnconfigured(p) && (
+                    <span
+                      className={styles.warningBadge}
+                      title="project_key not configured — Jira will not work"
+                    >
+                      !
+                    </span>
+                  )}
                   {p.taskSource === 'yaml' && (
                     <button
                       type="button"
@@ -279,6 +315,15 @@ function ProjectsSettingsPanelInner({
                   >
                     Config
                   </button>
+                  {p.taskSource === 'jira' && (
+                    <button
+                      type="button"
+                      className={styles.linkBtn}
+                      onClick={() => setJiraConfigFor(p)}
+                    >
+                      Jira Config
+                    </button>
+                  )}
                   <button
                     type="button"
                     className={styles.linkBtn}

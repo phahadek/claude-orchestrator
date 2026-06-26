@@ -28,6 +28,9 @@ packages/frontend/.env
 
 # Scratch commit message files — never tracked
 .commit-msg
+
+# ESLint file cache
+.eslintcache
 *.commit_msg
 commit-msg.txt
 commit_msg.txt

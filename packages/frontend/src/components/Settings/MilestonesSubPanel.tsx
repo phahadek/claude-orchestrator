@@ -5,7 +5,7 @@ import {
   projectsApi,
   type Project,
   type ProjectMilestone,
-  type BoardValidation,
+  type SourceValidation,
 } from '../../api/projects';
 import { getTaskSourceShortLabel } from '../../utils/taskSourceLabel';
 import styles from './ProjectsSettingsPanel.module.css';
@@ -41,7 +41,7 @@ function MilestonesSubPanelInner({
     null,
   );
   const [sourceValidation, setSourceValidation] =
-    useState<BoardValidation | null>(null);
+    useState<SourceValidation | null>(null);
   const [sourceValidating, setSourceValidating] = useState(false);
   const [sourceValidationError, setSourceValidationError] = useState<
     string | null
@@ -98,25 +98,48 @@ function MilestonesSubPanelInner({
     setSourceValidationError(null);
   }
 
-  async function validateNotionSource(value: string) {
+  async function validateSource(value: string) {
     const trimmed = value.trim();
-    if (!trimmed || project.taskSource !== 'notion') return;
+    if (!trimmed) return;
+    const source = project.taskSource;
+    if (source === 'yaml') return;
     setSourceValidating(true);
     setSourceValidationError(null);
     setSourceValidation(null);
     try {
-      const result = await projectsApi.validateNotionBoard(trimmed);
-      setSourceValidation(result);
-      if (result.type === 'page') {
-        if (result.childDatabaseId) {
-          setSourceValidationError(
-            `This is a Notion page, not a database. It contains one child database ("${result.childDatabaseTitle ?? result.childDatabaseId}"). Use it instead?`,
-          );
-        } else {
-          setSourceValidationError(
-            'This is a Notion page, not a database. Please paste the URL of a Notion database.',
-          );
+      if (source === 'notion') {
+        const result = await projectsApi.validateNotionBoard(trimmed);
+        setSourceValidation(result);
+        if (result.type === 'page') {
+          if (result.childDatabaseId) {
+            setSourceValidationError(
+              `This is a Notion page, not a database. It contains one child database ("${result.childDatabaseTitle ?? result.childDatabaseId}"). Use it instead?`,
+            );
+          } else {
+            setSourceValidationError(
+              'This is a Notion page, not a database. Please paste the URL of a Notion database.',
+            );
+          }
         }
+      } else if (source === 'github') {
+        const n = parseInt(trimmed, 10);
+        if (isNaN(n) || n <= 0 || String(n) !== trimmed) {
+          setSourceValidationError(
+            'GitHub milestone source ID must be a positive integer (the milestone number).',
+          );
+          return;
+        }
+        const result = await projectsApi.validateGithubMilestone(project.id, n);
+        setSourceValidation(result);
+      } else if (source === 'jira') {
+        if (!/^[A-Z][A-Z0-9]*-\d+$/.test(trimmed)) {
+          setSourceValidationError(
+            'Jira Epic key must match the format PROJECT-123.',
+          );
+          return;
+        }
+        const result = await projectsApi.validateJiraEpic(project.id, trimmed);
+        setSourceValidation(result);
       }
     } catch (err) {
       setSourceValidationError(
@@ -140,11 +163,15 @@ function MilestonesSubPanelInner({
       );
       return;
     }
+    if (sourceValidationError) {
+      setFormError('Please fix the source ID field above before saving.');
+      return;
+    }
     setSubmitting(true);
     setFormError(null);
     try {
       const trimmedSource = draft.sourceId.trim();
-      // Prefer the normalized database ID returned by validation
+      // Prefer the normalized ID returned by validation (Notion: database UUID)
       const resolvedSourceId =
         trimmedSource === ''
           ? null
@@ -194,11 +221,19 @@ function MilestonesSubPanelInner({
   const sourceLabel =
     project.taskSource === 'yaml'
       ? 'YAML milestone id'
-      : 'Notion database URL or ID';
+      : project.taskSource === 'github'
+        ? 'GitHub milestone number'
+        : project.taskSource === 'jira'
+          ? 'Jira Epic key'
+          : 'Notion database URL or ID';
   const sourcePlaceholder =
     project.taskSource === 'yaml'
       ? 'm1'
-      : 'https://www.notion.so/workspace/My-Board-abc123…';
+      : project.taskSource === 'github'
+        ? '1'
+        : project.taskSource === 'jira'
+          ? 'PROJ-1'
+          : 'https://www.notion.so/workspace/My-Board-abc123…';
 
   return (
     <div className={styles.subPanel}>
@@ -301,7 +336,7 @@ function MilestonesSubPanelInner({
                     setSourceValidation(null);
                     setSourceValidationError(null);
                   }}
-                  onBlur={(e) => void validateNotionSource(e.target.value)}
+                  onBlur={(e) => void validateSource(e.target.value)}
                   placeholder={sourcePlaceholder}
                 />
                 {sourceValidating && (
@@ -341,6 +376,21 @@ function MilestonesSubPanelInner({
                       {sourceValidation.title
                         ? sourceValidation.title
                         : 'Valid Notion database'}
+                    </p>
+                  )}
+                {!sourceValidating &&
+                  !sourceValidationError &&
+                  sourceValidation?.type === 'github-milestone' && (
+                    <p className={styles.muted}>
+                      ✓ #{sourceValidation.number} — {sourceValidation.title} (
+                      {sourceValidation.state})
+                    </p>
+                  )}
+                {!sourceValidating &&
+                  !sourceValidationError &&
+                  sourceValidation?.type === 'jira-epic' && (
+                    <p className={styles.muted}>
+                      ✓ {sourceValidation.key} — {sourceValidation.summary}
                     </p>
                   )}
               </div>

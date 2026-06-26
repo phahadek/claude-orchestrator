@@ -265,8 +265,8 @@ describe('WS fetch_tasks — skipCache behaviour', () => {
     expect(sent.type).toBe('tasks_ready');
     expect(sent.tasks).toHaveLength(1);
 
-    // Background refresh triggered for the correct project
-    expect(refreshFn).toHaveBeenCalledWith(PROJECT_ID);
+    // Background refresh triggered with skipCache:true so Notion is hit directly
+    expect(refreshFn).toHaveBeenCalledWith(PROJECT_ID, true);
   });
 
   it('skipCache: true with cold cache → tasks_ready [] + background refresh', async () => {
@@ -287,7 +287,7 @@ describe('WS fetch_tasks — skipCache behaviour', () => {
     const sent = parseSent(ws) as { type: string; tasks: unknown[] };
     expect(sent.type).toBe('tasks_ready');
     expect(sent.tasks).toEqual([]);
-    expect(refreshFn).toHaveBeenCalledWith(PROJECT_ID);
+    expect(refreshFn).toHaveBeenCalledWith(PROJECT_ID, true);
   });
 
   it('skipCache absent → no background refresh (#590 invariant)', async () => {

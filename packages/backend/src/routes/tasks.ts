@@ -54,10 +54,12 @@ export function setTaskBroadcast(fn: (msg: ServerMessage) => void): void {
 }
 
 // ── TaskCacheRefresher hook ───────────────────────────────────────────────────
-let cacheRefresherFn: ((projectId: string) => Promise<void>) | null = null;
+let cacheRefresherFn:
+  | ((projectId: string, skipCache?: boolean) => Promise<void>)
+  | null = null;
 
 export function setTaskCacheRefresher(
-  fn: (projectId: string) => Promise<void>,
+  fn: (projectId: string, skipCache?: boolean) => Promise<void>,
 ): void {
   cacheRefresherFn = fn;
 }
@@ -511,7 +513,7 @@ export function createTasksRouter(): Router {
     }
     // Trigger background refresh — returns 202 immediately; broadcasts task_cache_updated when done.
     if (cacheRefresherFn) {
-      void cacheRefresherFn(projectId).catch((err: unknown) => {
+      void cacheRefresherFn(projectId, true).catch((err: unknown) => {
         logger.warn(
           `[tasks] /refresh background error for ${projectId}: ${String(err)}`,
         );

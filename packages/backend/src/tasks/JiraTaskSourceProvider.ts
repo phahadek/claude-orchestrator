@@ -6,6 +6,8 @@ import { JiraClient, JiraApiError } from './JiraClient';
 import type { JiraIssue } from './JiraClient';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import { upsertTaskCache } from '../db/queries';
+import { ProjectService } from '../projects/ProjectService';
+import { logger } from '../logger';
 
 export interface JiraProjectConfig {
   host: string;
@@ -17,6 +19,17 @@ export interface JiraProjectConfig {
   /**
    * Maps orchestrator display statuses (emoji-prefixed) to Jira status names.
    * Defaults to DEFAULT_STATUS_MAPPING.
+   *
+   * Required Jira workflow configuration:
+   * - Your Jira project must have statuses named (or mapped via this field):
+   *   Backlog, To Do, In Progress, In Review, Done.
+   * - The workflow must allow forward transitions between these states
+   *   (e.g. To Do → In Progress → In Review → Done).
+   * - Orchestrator-only statuses ('🚫 Blocked', '⏭️ Deferred') are intentionally
+   *   excluded — no Jira transition is attempted for them.
+   * - If a direct transition is unavailable (e.g. Ready→Done bypass) or the
+   *   issue is already in the target state, the update is silently skipped with
+   *   a warning log rather than throwing.
    */
   status_mapping?: Record<string, string>;
   /**
@@ -76,8 +89,21 @@ export class JiraTaskSourceProvider implements TaskBackend {
     let dispatchableKeys: Set<string>;
 
     if (milestoneId !== null) {
+      const milestoneRow = ProjectService.getMilestone(milestoneId);
+      if (!milestoneRow) {
+        throw new Error(
+          `[JiraTaskSourceProvider] milestone not found: ${milestoneId}`,
+        );
+      }
+      if (!milestoneRow.sourceId) {
+        throw new Error(
+          `[JiraTaskSourceProvider] milestone ${milestoneId} has no source_id — set the Jira Epic key`,
+        );
+      }
+      const epicKey = milestoneRow.sourceId;
+
       // Gap 2: 2-level Epic tree scan
-      const level1 = await this.fetchEpicChildren(milestoneId);
+      const level1 = await this.fetchEpicChildren(epicKey);
 
       // Level 2: sub-tasks of non-Epic, non-SubTask children
       const parentCandidateKeys = level1
@@ -228,20 +254,33 @@ export class JiraTaskSourceProvider implements TaskBackend {
     const externalId = toExternalId(taskId);
     const mapping = this.projectConfig.status_mapping ?? DEFAULT_STATUS_MAPPING;
     const targetJiraStatus = mapping[status];
+
     if (!targetJiraStatus) {
-      throw new Error(
-        `[JiraTaskSourceProvider] no Jira status mapping for: "${status}"`,
+      // Orchestrator-only statuses (e.g. 🚫 Blocked, ⏭️ Deferred) have no Jira counterpart.
+      logger.warn(
+        `[JiraTaskSourceProvider] no Jira status mapping for "${status}" on ${externalId} — skipping Jira transition`,
       );
+      return;
     }
+
     const transitions = await this.client.getTransitions(externalId);
     const transition = transitions.find(
       (t) => t.to.name.toLowerCase() === targetJiraStatus.toLowerCase(),
     );
+
     if (!transition) {
-      throw new Error(
-        `[JiraTaskSourceProvider] no transition to "${targetJiraStatus}" for issue ${externalId}`,
+      // No direct transition available — check whether issue is already in the target state.
+      const issue = await this.client.getIssue(externalId);
+      const currentStatus = issue.fields.status.name;
+      if (currentStatus.toLowerCase() === targetJiraStatus.toLowerCase()) {
+        return; // Already in target state — treat as success.
+      }
+      logger.warn(
+        `[JiraTaskSourceProvider] no direct transition to "${targetJiraStatus}" for ${externalId} (currently "${currentStatus}") — skipping`,
       );
+      return;
     }
+
     await this.client.transitionIssue(externalId, transition.id);
   }
 

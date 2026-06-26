@@ -107,6 +107,7 @@ export class Scheduler {
 
     if (state.running) {
       if (concurrency === 'skip-if-running') {
+        this._scheduleNext(state);
         await this._emitAudit(
           state,
           'skipped',
@@ -115,7 +116,6 @@ export class Scheduler {
           undefined,
           undefined,
         );
-        this._scheduleNext(state);
         return;
       }
       if (concurrency === 'queue-next') {
@@ -128,6 +128,7 @@ export class Scheduler {
     }
 
     if (state.opts.enabled && !state.opts.enabled()) {
+      this._scheduleNext(state);
       await this._emitAudit(
         state,
         'skipped',
@@ -136,7 +137,6 @@ export class Scheduler {
         undefined,
         undefined,
       );
-      this._scheduleNext(state);
       return;
     }
 
@@ -171,6 +171,14 @@ export class Scheduler {
       const itemsProcessed = (
         result as { items_processed?: number } | undefined
       )?.items_processed;
+
+      if (state.queued && !state.stopped) {
+        state.queued = false;
+        void this._runJob(state);
+      } else {
+        this._scheduleNext(state);
+      }
+
       await this._emitAudit(
         state,
         runStatus,
@@ -179,13 +187,6 @@ export class Scheduler {
         itemsProcessed,
         runError,
       );
-
-      if (state.queued && !state.stopped) {
-        state.queued = false;
-        void this._runJob(state);
-      } else {
-        this._scheduleNext(state);
-      }
     }
   }
 
@@ -229,6 +230,7 @@ export class Scheduler {
         started_at: startedAt,
         completed_at: completedAt,
         duration_ms: durationMs,
+        next_run_at: state.nextRunAt,
         ...(itemsProcessed !== undefined && {
           items_processed: itemsProcessed,
         }),
