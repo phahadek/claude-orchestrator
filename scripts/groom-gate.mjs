@@ -74,7 +74,10 @@ const depsClassified = Array.isArray(entry.hard_block_deps);
 // never ran the size check, which is load-bearing per /groom presentation.md.
 // Valid shapes: {decision: "no_split"|"split_now"|"unsplittable"|"n/a", ...}
 const sc = entry.size_check;
-const sizeClassified = sc && typeof sc === 'object' && typeof sc.decision === 'string' &&
+const sizeClassified =
+  sc &&
+  typeof sc === 'object' &&
+  typeof sc.decision === 'string' &&
   ['no_split', 'split_now', 'unsplittable', 'n/a'].includes(sc.decision);
 
 if (signedOff && depsClassified && sizeClassified) process.exit(0); // fully gated → allow
@@ -118,7 +121,9 @@ function loadStatusConfig(cwd) {
         statusProp: m.status_property ?? DEFAULT_STATUS_PROP,
         readyVal: m.status_vocab?.ready ?? DEFAULT_READY,
       };
-    } catch { /* try next candidate */ }
+    } catch {
+      /* try next candidate */
+    }
   }
   return { statusProp: DEFAULT_STATUS_PROP, readyVal: DEFAULT_READY };
 }
@@ -135,9 +140,9 @@ function manifestCandidates(cwd) {
   const out = [];
   const env = process.env.ORCHESTRATOR_CONFIG_DIR;
   if (env) out.push(join(env, 'projects', base, 'grooming.json'));
-  out.push(join(repo, '..', 'config', 'projects', base, 'grooming.json'));      // dev shape
+  out.push(join(repo, '..', 'config', 'projects', base, 'grooming.json')); // dev shape
   out.push(join(repo, '..', '..', 'config', 'projects', base, 'grooming.json')); // prod shape
-  out.push(join(cwd, '.claude', 'grooming.json'));                               // legacy fallback
+  out.push(join(cwd, '.claude', 'grooming.json')); // legacy fallback
   return out;
 }
 
@@ -154,12 +159,18 @@ function findStateEntry(cwd, pageId) {
         const statePath = join(groomingDir, dirent.name, 'grooming-state.json');
         if (!existsSync(statePath)) continue;
         let state;
-        try { state = JSON.parse(readFileSync(statePath, 'utf8')); } catch { continue; }
+        try {
+          state = JSON.parse(readFileSync(statePath, 'utf8'));
+        } catch {
+          continue;
+        }
         for (const [key, val] of Object.entries(state)) {
           if (normalizeId(key) === pageId) return val ?? {};
         }
       }
-    } catch { /* try next root */ }
+    } catch {
+      /* try next root */
+    }
   }
   return null;
 }

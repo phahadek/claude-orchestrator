@@ -67,6 +67,7 @@ If it exits non-zero, **stop** — a partial load means a contaminated groom. Re
 the error.
 
 On success it has written, under `.skill-cache/grooming/<milestone>/`:
+
 - `context-bundle.json` — the 7 context pages (bodies in `context/`), the target
   board, neighbour boards, and every non-Done target task (bodies in `tasks/`),
   each with its parsed `packages` (the code regions it touches).
@@ -88,6 +89,7 @@ Grooming decisions made from task bodies alone routinely miss real gaps. Read th
 code the tasks touch — but only once per region, and only what changed.
 
 **Per package in `worklist.json`:**
+
 - `fresh` → reuse the digest already in `code-map.json`. Do not re-read.
 - `stale` or `missing` → dispatch one **Explore subagent** scoped to that package.
   Have it return a structured digest: public surface (classes/functions/signatures
@@ -95,7 +97,14 @@ code the tasks touch — but only once per region, and only what changed.
   invalidate a Backlog task's stated assumption. Write the digest to
   `code-map.json` keyed by the package path, stamped with `worklist.baseline_sha`:
   ```json
-  { "src/polimarket_analyser/<pkg>": { "head_sha": "<baseline_sha>", "digest": "...", "explored_by_task": ["<id>"], "ts": "<iso>" } }
+  {
+    "src/polimarket_analyser/<pkg>": {
+      "head_sha": "<baseline_sha>",
+      "digest": "...",
+      "explored_by_task": ["<id>"],
+      "ts": "<iso>"
+    }
+  }
   ```
   (The loader reads `code-map.json` for freshness; the skill owns writing it.)
 
@@ -122,10 +131,10 @@ Follow `reference/presentation.md`. In short:
 - Batch by **dependency cluster** (sequencing comes from the depends-on chain — do
   not invent external sequencing labels). One batch per message.
 - For each Backlog task, give the 4-point summary: **what it achieves** / **open
-  questions** (write *None.* if clean) / **automated tests** / **manual verification**.
+  questions** (write _None._ if clean) / **automated tests** / **manual verification**.
   Ground every claim in the code-map digest and the context pages — not the task
   body alone.
-- End the batch with: *"Any changes or questions before I mark these Ready and continue?"*
+- End the batch with: _"Any changes or questions before I mark these Ready and continue?"_
 - **One batch at a time. Never present the next before the current is signed off.**
 
 ---
@@ -149,22 +158,22 @@ the architecture pages win over task wording (see `reference/anti-patterns.md`).
 
 ## Step 4 — Mark Ready after sign-off
 
-Only after explicit sign-off on the batch (*"looks good"*, *"ship it"*, *"next"*):
+Only after explicit sign-off on the batch (_"looks good"_, _"ship it"_, _"next"_):
 
 1. **First**, record the sign-off in `grooming-state.json` for each task **in that
    batch**: fill `achieves`, `open_questions`, `tests`, `manual`, confirm `regions`,
    fill `hard_block_deps` (see `presentation.md` § Dependencies for the hard-block
    vs soft-order distinction), fill `size_check` (an object recording the size
    classification — see `presentation.md` § Size check — one of: `{ "loc": <number>,
-   "decision": "no_split" }` for ≤500 LoC tasks, `{ "loc": <number>, "decision":
-   "split_now", "split_into": ["<task-id>", …] }` after splitting, `{ "loc":
-   <number>, "decision": "unsplittable", "reason": "<one-line>" }` for the atomic
+"decision": "no_split" }` for ≤500 LoC tasks, `{ "loc": <number>, "decision":
+"split_now", "split_into": ["<task-id>", …] }` after splitting, `{ "loc":
+<number>, "decision": "unsplittable", "reason": "<one-line>" }` for the atomic
    case, or `{ "decision": "n/a" }` for Design/Planning tasks), and set
-   `signoff: { "by": "<human>", "at": "<iso>" }`. *(All three — `signoff`,
+   `signoff: { "by": "<human>", "at": "<iso>" }`. _(All three — `signoff`,
    `hard_block_deps`, and `size_check` — are gated by the promotion hook. They
-   must be written **before** the status flip, or the gate blocks the update.)*
+   must be written **before** the status flip, or the gate blocks the update.)_
 2. **Then**, in a **single** `notion-update-page` call (`command:
-   "update_properties"`) per task, write **both** the canonical hard-block deps
+"update_properties"`) per task, write **both** the canonical hard-block deps
    into the `Depends On` property **and** set `Status → 🗂️ Ready`. The
    `Depends On` value is the rendered task-ID list (e.g.
    `"38122f91-52f3-810f | 38122f91-52f3-8129"` — the project's existing pipe-separated
@@ -189,7 +198,7 @@ When every batch is signed off, confirm the milestone board is fully groomed.
 ## Rules (hard)
 
 - **Source of truth**: Notion for architectural rules, decisions, and task
-  definitions. For *implemented* detail (DDL, signatures, analyzer specs), the code
+  definitions. For _implemented_ detail (DDL, signatures, analyzer specs), the code
   under `source_root` wins; on intent/rationale, Notion wins.
 - **Scope is the target milestone only.** Do not modify tasks on other boards unless
   a dependency issue is explicitly identified and the human approves it.
@@ -197,11 +206,11 @@ When every batch is signed off, confirm the milestone board is fully groomed.
   task already at 🗂️ Ready or beyond — file a sibling instead (it may be picked up).
 - **No silent Notion updates.** Every change is confirmed in chat before moving on.
 - **Investigate before resolving.** Reading the code comes before deciding what's
-  resolved. "Decide at implementation time" is a *defer*, not a *resolve*.
+  resolved. "Decide at implementation time" is a _defer_, not a _resolve_.
 - **The human is the promotion gate.** Even a Ready-clean task waits for sign-off.
 - **Code / Tooling tasks default to < 500 LoC estimated.** The size check is
   **load-bearing**, not advisory — every Code/Tooling task carries an explicit
-  *Size:* line in its presentation header, and `size_check` is a required field
+  _Size:_ line in its presentation header, and `size_check` is a required field
   in `grooming-state.json` that the promotion gate enforces. Larger tasks split
   unless **demonstrably unsplittable** (see `presentation.md` § Size check).
   **When splitting: edit the original task down to one of the new subsets and

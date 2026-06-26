@@ -163,7 +163,12 @@ source-controlled here and deployed to `~/.claude` by a run-by-hand script:
       "PreToolUse": [
         {
           "matcher": "mcp__claude_ai_Notion__notion-update-page",
-          "hooks": [{ "type": "command", "command": "node ~/.claude/scripts/groom-gate.mjs" }]
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node ~/.claude/scripts/groom-gate.mjs"
+            }
+          ]
         }
       ]
     }

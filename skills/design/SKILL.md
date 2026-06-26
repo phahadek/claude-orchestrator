@@ -24,7 +24,7 @@ follow-on Code / Tooling tasks that `/groom` will then bring to Ready.
 📐 Design / 📋 Planning  ──/design──▶  🔲 Backlog Code  ──/groom──▶  🗂️ Ready  ──implement──▶  ✅ Done
 ```
 
-> **Scope note.** Throughout this skill, *"Design task"* refers to **both
+> **Scope note.** Throughout this skill, _"Design task"_ refers to **both
 > 📐 Design and 📋 Planning** tasks — they share the same workflow shape (open
 > questions → locked decisions → follow-on Backlog tasks, with or without
 > architecture-page edits). The skill targets both types and treats them
@@ -66,7 +66,7 @@ this skill exists. Read `reference/presentation.md` before Step 2, and
 
 Design Execution runs **interactively in the main repo on `dev`** — never in an
 ephemeral implementation worktree (the cache must persist; this skill drives the
-human, it does not ship code). Any *implementation* triggered by a follow-on Code
+human, it does not ship code). Any _implementation_ triggered by a follow-on Code
 task is a separate session on its own feature branch, governed by the normal
 workflow.
 
@@ -88,6 +88,7 @@ If it exits non-zero, **stop** — a partial load means a contaminated session. 
 the error.
 
 On success it has written, under `.skill-cache/design/<milestone>/`:
+
 - `context-bundle.json` — the fixed context pages (bodies in `context/`), the
   target milestone board, neighbour boards, and every non-Done 📐 Design task
   (bodies in `tasks/`).
@@ -150,7 +151,7 @@ Follow `reference/presentation.md` § **Prioritization**. In short:
 - Priority tags (🔴 / 🟡 / 🟢) are a **tiebreaker only**, not the ordering axis.
 
 Present the proposed order grouped by theme with a one-line rationale per group.
-End with: *"This is the proposed order — push back, regroup, or approve."* Debate
+End with: _"This is the proposed order — push back, regroup, or approve."_ Debate
 is expected and desired; the human reshuffles freely. Do not move to Step 3 until
 the order is signed off.
 
@@ -169,7 +170,7 @@ For the current Design task (in the approved order):
 2. **For each open question, one at a time, in the order written in the task body:**
    - Present the question + the investigation findings from Step 1b + 2–3 viable
      answers with one-line pros/cons + a recommendation.
-   - **Invite pushback explicitly.** *"Where am I wrong? Push back."* The session
+   - **Invite pushback explicitly.** _"Where am I wrong? Push back."_ The session
      is ready to be wrong; the human is the decider. Iterate as long as the human
      wants to debate.
    - On explicit sign-off, record the locked decision in `design-state.json` →
@@ -183,14 +184,14 @@ For the current Design task (in the approved order):
      convention from closed Design tasks in the corpus).
    - A **"Notion pages updated"** list — filled in as Step 3.4 progresses.
    - A **"Follow-on tasks filed"** list — filled in as Step 3.5 progresses.
-   Draft inline and show the human before writing to Notion.
+     Draft inline and show the human before writing to Notion.
 
 4. **For each entry in "Notion pages affected"** — per `reference/page-edits.md`:
    - Fetch the target page via `notion-page.mjs` (full body, not MCP search).
    - Identify the exact section to amend; quote enough context to disambiguate.
    - Compose the exact addition/edit.
-   - Present: *"I'm going to update `<page title>` § `<section>` — append after
-     this anchor / replace these N lines. Diff below. Okay?"*
+   - Present: _"I'm going to update `<page title>` § `<section>` — append after
+     this anchor / replace these N lines. Diff below. Okay?"_
    - On sign-off, apply via `notion-update-page`. Stamp `design-state.json` →
      `pages_affected[i].applied_at`. **Never write to a context page silently.**
 
@@ -203,8 +204,8 @@ For the current Design task (in the approved order):
      it later (when `/groom` brings it to Ready) or edits the Notion page directly
      if a correction is needed sooner. The `check-task-status.mjs` PreToolUse hook
      enforces Backlog status on create.
-   - After each create, post a 1-line confirmation in chat: *"Filed at 🔲 Backlog:
-     `<title>` — `<new page URL>`."* This is a notice, not a request — the user
+   - After each create, post a 1-line confirmation in chat: _"Filed at 🔲 Backlog:
+     `<title>` — `<new page URL>`."_ This is a notice, not a request — the user
      can override after the fact.
    - Record the new page ID in `design-state.json` → `followon_tasks[]`.
 
@@ -226,14 +227,14 @@ session summary:
 - Architecture / Future Scope pages updated (page title + section + a 1-line
   diff fingerprint pulled from `design-state.json`).
 - Follow-on 🔲 Backlog tasks filed (title + new Notion ID).
-- Suggest next: *"Run `/groom <M>` to bring these Backlog tasks to Ready."*
+- Suggest next: _"Run `/groom <M>` to bring these Backlog tasks to Ready."_
 
 ---
 
 ## Rules (hard)
 
 - **Source of truth**: Notion for architectural rules, decisions, and task
-  definitions. For *implemented* detail (DDL, signatures, analyzer specs), the code
+  definitions. For _implemented_ detail (DDL, signatures, analyzer specs), the code
   under `source_root` wins; on intent/rationale, Notion wins.
 - **Scope is the target milestone only.** Do not touch Design tasks on other boards
   unless a dependency issue is explicitly identified and the human approves it.
@@ -249,8 +250,8 @@ session summary:
   Notion directly).
 - **No batch-locking.** One open question per message; one sign-off per question.
 - **Investigate before deciding.** Code reads / API calls / arch-page reads come
-  before presenting a question. "Decide at implementation time" is a *defer*, not
-  a *resolve* — it becomes an explicit Open Question in the follow-on Code task.
+  before presenting a question. "Decide at implementation time" is a _defer_, not
+  a _resolve_ — it becomes an explicit Open Question in the follow-on Code task.
 - **The human is the gate for open-question locks and arch-page writes.** Even a
   recommendation that looks obvious waits for explicit sign-off on the question.
   After every question is locked, the skill marks the Design task ✅ Done

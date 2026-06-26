@@ -7,8 +7,8 @@ batch from your summary alone, without re-reading the task page or the code.
 
 - **Only 🔲 Backlog tasks get a decision.** Tasks at 🗂️ Ready / 🔄 In Progress /
   👀 In Review / ✅ Done are listed for context only — name + status, no 4-point
-  breakdown, no sign-off ask. **⏭️ Deferred tasks are *not* surfaced at all** —
-  Deferred means *"scope superseded by another task"*, not *"do later."* They
+  breakdown, no sign-off ask. **⏭️ Deferred tasks are _not_ surfaced at all** —
+  Deferred means _"scope superseded by another task"_, not _"do later."_ They
   are equivalent to ✅ Done from a grooming standpoint; don't include them in
   context lists, dep discussions, or sequencing chains.
 - **Group by dependency cluster** — tasks that share a depends-on chain or a code
@@ -23,15 +23,15 @@ batch from your summary alone, without re-reading the task page or the code.
 Every Code/Tooling task in a batch is examined for its **dependencies on other
 tasks**, and each dependency is classified as one of:
 
-- **Hard-block (prerequisite).** Task B *cannot start* until Task A is at ✅ Done
-  or 🗂️ Ready without breaking. *"Cannot start"* is concrete: the upstream
+- **Hard-block (prerequisite).** Task B _cannot start_ until Task A is at ✅ Done
+  or 🗂️ Ready without breaking. _"Cannot start"_ is concrete: the upstream
   produces a symbol, schema column, store method, migration, or service
   contract that the downstream's diff literally references; or the CI / runtime
   sequence requires it (a migration must land before the consumer; a new
   alarm-rule kind must be registered before a daemon can emit it). **Test:**
   "if I started B before A is Done/Ready, what specifically breaks?" If you
   can name the break, hard-block. If you can't, it isn't.
-- **Soft-order.** Task B is *better worked after* Task A — the locked spec from
+- **Soft-order.** Task B is _better worked after_ Task A — the locked spec from
   A informs B's shape, or doing them together is more efficient — but B could
   technically begin in parallel with a placeholder. Examples: A locks a
   schema-design decision that B would otherwise have to guess; A's locked
@@ -42,7 +42,7 @@ tasks**, and each dependency is classified as one of:
 the source of truth downstream sessions read; nothing else. The task body is
 **not** authoritative for sequencing. Body sequencing is a session-narrative
 fluff that downstream sessions never see — see the
-*"Locking sequencing in the task body instead of the Depends On property"*
+_"Locking sequencing in the task body instead of the Depends On property"_
 anti-pattern.
 
 **Soft-order does NOT go in `Depends On`.** It's a batch-level conversation
@@ -50,13 +50,13 @@ that informs how the human schedules the work, but it doesn't bind. It lives
 in the chat record only; do not persist it on the task.
 
 **Classify explicitly during the batch discussion.** For every dep you propose:
-ask *"hard-block (prereq) or soft-order?"* and apply the test above. The
+ask _"hard-block (prereq) or soft-order?"_ and apply the test above. The
 default when you cannot articulate the break is **soft-order, not hard-block**
 — but the inverse mistake (classifying a hard prereq as soft) is also real and
 more damaging: it produces a Ready task that fails the moment a worker picks
-it up. Lean toward hard-block when the dep names a *symbol* or *migration*;
-lean toward soft-order when the dep names a *decision* or *informing
-investigation*.
+it up. Lean toward hard-block when the dep names a _symbol_ or _migration_;
+lean toward soft-order when the dep names a _decision_ or _informing
+investigation_.
 
 ### How dependencies appear in the batch summary
 
@@ -73,10 +73,10 @@ investigation*.
 - **At per-task level**, the 4-point summary's task header includes the
   hard-block deps inline:
 
-  > **① 💻 Code — Add HLTV RSS dedupe by GUID** · *Hard-block:* none.
-  > **③ 💻 Code — Wire the dedupe into the runner** · *Hard-block:* ① (this batch), `38122f91-…-81dd` (existing Ready).
+  > **① 💻 Code — Add HLTV RSS dedupe by GUID** · _Hard-block:_ none.
+  > **③ 💻 Code — Wire the dedupe into the runner** · _Hard-block:_ ① (this batch), `38122f91-…-81dd` (existing Ready).
 
-  Always include the *Hard-block:* line — write *none.* if independent.
+  Always include the _Hard-block:_ line — write _none._ if independent.
   Implicit-by-omission is how the previous failure mode happened.
 
 ## Size check (mandatory, per 💻 Code or 🛠️ Tooling task in the batch)
@@ -107,7 +107,7 @@ One of three outcomes per task:
 
 **Keep the original task; edit it down. Create N-1 new siblings.** Do **NOT**
 demote the original to Deferred or mark it "superseded" — Deferred has a
-specific meaning (*"scope superseded by another task"*) and it produces stale
+specific meaning (_"scope superseded by another task"_) and it produces stale
 state where the original carries history, comments, and inbound dep refs but
 isn't usable. The cleaner shape:
 
@@ -132,28 +132,28 @@ isn't usable. The cleaner shape:
 If the task **genuinely cannot be split** — a tight cluster that must land
 atomically (e.g., a schema migration paired with all its consumers, or a
 refactor whose intermediate states don't compile) — proceed with the original
-task. The *"unsplittable"* framing **is** the gate. If you cannot articulate a
+task. The _"unsplittable"_ framing **is** the gate. If you cannot articulate a
 concrete reason the work has to land in one PR, **the task can be split** —
-default to split. *"It's all related"* is not a reason. *"Intermediate states
-don't compile"*, *"the migration and its readers must roll together to avoid a
-NULL window"*, *"the rename touches every callsite by definition"* — those are
+default to split. _"It's all related"_ is not a reason. _"Intermediate states
+don't compile"_, _"the migration and its readers must roll together to avoid a
+NULL window"_, _"the rename touches every callsite by definition"_ — those are
 reasons.
 
 ### Per-task header line (required, not optional)
 
-Every Code/Tooling task in the batch carries an explicit *Size:* line in its
-header — alongside *Hard-block:* — same shape as the dep line, same
+Every Code/Tooling task in the batch carries an explicit _Size:_ line in its
+header — alongside _Hard-block:_ — same shape as the dep line, same
 "implicit-by-omission is how it gets skipped" lesson:
 
-> **① 💻 Code — Add HLTV RSS dedupe by GUID** · *Hard-block:* none. · *Size:* ~120 LoC.
-> **② 💻 Code — Backfill GUID column on existing raw_queue_files** · *Hard-block:* ① (this batch). · *Size:* ~80 LoC.
-> **③ 🛠️ Tooling — Migrate phase-deriver state into Postgres** · *Hard-block:* none. · *Size:* ~720 LoC, **unsplittable** (migration + reader rollout must land together — intermediate state leaves resolution_review pointing at a dropped table).
+> **① 💻 Code — Add HLTV RSS dedupe by GUID** · _Hard-block:_ none. · _Size:_ ~120 LoC.
+> **② 💻 Code — Backfill GUID column on existing raw_queue_files** · _Hard-block:_ ① (this batch). · _Size:_ ~80 LoC.
+> **③ 🛠️ Tooling — Migrate phase-deriver state into Postgres** · _Hard-block:_ none. · _Size:_ ~720 LoC, **unsplittable** (migration + reader rollout must land together — intermediate state leaves resolution_review pointing at a dropped table).
 
-Always write the *Size:* line. *Skipping it is the failure mode this section
-exists to prevent.*
+Always write the _Size:_ line. _Skipping it is the failure mode this section
+exists to prevent._
 
 Design and Planning tasks are sized in open-question count, not LoC; the
-*Size:* line is optional on those (or write *Size: n/a (Design/Planning)*).
+_Size:_ line is optional on those (or write _Size: n/a (Design/Planning)_).
 
 ## The 4-point summary (per 🔲 Backlog task)
 
@@ -171,11 +171,11 @@ Then the four points:
 1. **What it achieves** — one sentence: the goal and why it matters to the system.
 2. **Open questions** — ambiguities, unresolved design decisions, or pre-implementation
    checks. Ground these in the code-map digest and the context pages, not the task body
-   alone. Write ***None.*** if genuinely clean. A `# TODO` / `pass` placeholder upstream
+   alone. Write **_None._** if genuinely clean. A `# TODO` / `pass` placeholder upstream
    means the chain is contaminated — surface it, don't paper over it.
 3. **Automated tests** — what the task's `### 🤖 Automated tests` section will verify.
 4. **Manual verification** — what this task contributes to the Manual Verification Gate
-   (write *Covered by gate only* if nothing standalone).
+   (write _Covered by gate only_ if nothing standalone).
 
 Then, at the end of the batch, under a **Context (no action needed)** heading, list
 the non-Backlog tasks by name + type + status — same Type-first convention as the
@@ -187,10 +187,10 @@ Close every batch with exactly this ask:
 
 ## Sign-off vs iteration
 
-The closing ask invites content. The human's reply may be: *"all good, ship"*
-(sign-off), *"yes but widen task 2 to also cover X"* (sign-off **with** an
-iteration item), or *"no — these aren't Ready because Y; we need a new task
-for Z and task 3 should be deferred"* (iteration only, no sign-off).
+The closing ask invites content. The human's reply may be: _"all good, ship"_
+(sign-off), _"yes but widen task 2 to also cover X"_ (sign-off **with** an
+iteration item), or _"no — these aren't Ready because Y; we need a new task
+for Z and task 3 should be deferred"_ (iteration only, no sign-off).
 
 The third case is the dangerous one. A confidently-phrased substantive reply
 can read like a verdict. **Don't paraphrase it into a "lock."** When the human's
@@ -205,21 +205,22 @@ rider, confirm in chat, then mark the rest Ready. Never glue the rider into
 the sign-off and skip the re-confirmation.
 
 Sign-off is explicit approval of the batch as presented (or as re-presented).
-Approved phrasings: *"looks good"*, *"ship it"*, *"next"*, *"mark them Ready"*.
+Approved phrasings: _"looks good"_, _"ship it"_, _"next"_, _"mark them Ready"_.
 **Not** approved: a substantive reply paraphrased into a lock. When in doubt,
-ask: *"To confirm — apply your edits and then mark the rest Ready, or hold the
-whole batch for re-presentation?"*
+ask: _"To confirm — apply your edits and then mark the rest Ready, or hold the
+whole batch for re-presentation?"_
 
 ## Example shape
 
 > **Batch 1 — ingestion freshness (3 tasks)**
 >
 > **① 💻 Code — Add HLTV RSS dedupe by GUID**
-> - *Achieves:* stops re-ingesting unchanged HLTV items, so downstream normalizers
+>
+> - _Achieves:_ stops re-ingesting unchanged HLTV items, so downstream normalizers
 >   don't reprocess. Matters because the raw queue is single-writer and append-only.
-> - *Open questions:* None. (Verified `RawPayload.guid` exists in `ingestion/rss`.)
-> - *Automated tests:* dedupe drops a duplicate GUID; distinct GUIDs pass through.
-> - *Manual verification:* Covered by gate only.
+> - _Open questions:_ None. (Verified `RawPayload.guid` exists in `ingestion/rss`.)
+> - _Automated tests:_ dedupe drops a duplicate GUID; distinct GUIDs pass through.
+> - _Manual verification:_ Covered by gate only.
 >
 > **② 📐 Design — …**
 >

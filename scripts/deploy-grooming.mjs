@@ -28,7 +28,12 @@ const dryRun = process.argv.includes('--dry-run');
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'); // <repo>/scripts → <repo>
 const claudeHome = join(homedir(), '.claude');
 
-const SCRIPTS = ['groom-load.mjs', 'design-load.mjs', 'groom-gate.mjs', 'notion-page.mjs'];
+const SCRIPTS = [
+  'groom-load.mjs',
+  'design-load.mjs',
+  'groom-gate.mjs',
+  'notion-page.mjs',
+];
 const SKILLS = ['groom', 'design'];
 
 function copy(src, dest, label) {
@@ -43,13 +48,25 @@ function copy(src, dest, label) {
   cpSync(src, dest, { recursive: true, force: true });
 }
 
-console.log(`deploy-grooming: ${repoRoot} -> ${claudeHome}${dryRun ? '  (dry-run)' : ''}`);
+console.log(
+  `deploy-grooming: ${repoRoot} -> ${claudeHome}${dryRun ? '  (dry-run)' : ''}`,
+);
 if (!dryRun) {
   mkdirSync(join(claudeHome, 'scripts'), { recursive: true });
   mkdirSync(join(claudeHome, 'skills'), { recursive: true });
 }
-for (const s of SCRIPTS) copy(join(repoRoot, 'scripts', s), join(claudeHome, 'scripts', s), `scripts/${s}`);
-for (const s of SKILLS) copy(join(repoRoot, 'skills', s), join(claudeHome, 'skills', s), `skills/${s}/`);
+for (const s of SCRIPTS)
+  copy(
+    join(repoRoot, 'scripts', s),
+    join(claudeHome, 'scripts', s),
+    `scripts/${s}`,
+  );
+for (const s of SKILLS)
+  copy(
+    join(repoRoot, 'skills', s),
+    join(claudeHome, 'skills', s),
+    `skills/${s}/`,
+  );
 
 console.log(dryRun ? 'dry-run complete (no changes).' : 'deploy complete.');
 console.log(

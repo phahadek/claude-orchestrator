@@ -89,7 +89,9 @@ if (envPath) {
 
 const NOTION_API_KEY = process.env.NOTION_API_KEY;
 if (!NOTION_API_KEY) {
-  console.error('Error: NOTION_API_KEY not set. Pass --env <path> or export it.');
+  console.error(
+    'Error: NOTION_API_KEY not set. Pass --env <path> or export it.',
+  );
   process.exit(1);
 }
 
@@ -108,7 +110,7 @@ const pageId = normalizeId(pageIdRaw);
 // ── Notion API ───────────────────────────────────────────────────────
 const NOTION_BASE = 'https://api.notion.com/v1';
 const HEADERS = {
-  'Authorization': `Bearer ${NOTION_API_KEY}`,
+  Authorization: `Bearer ${NOTION_API_KEY}`,
   'Notion-Version': '2022-06-28',
   'Content-Type': 'application/json',
 };
@@ -117,7 +119,9 @@ async function getPage(id) {
   const res = await fetch(`${NOTION_BASE}/pages/${id}`, { headers: HEADERS });
   if (!res.ok) {
     const text = await res.text();
-    console.error(`Notion API error ${res.status} fetching page ${id}: ${text}`);
+    console.error(
+      `Notion API error ${res.status} fetching page ${id}: ${text}`,
+    );
     process.exit(1);
   }
   return res.json();
@@ -133,7 +137,9 @@ async function getChildren(blockId) {
     const res = await fetch(url, { headers: HEADERS });
     if (!res.ok) {
       const text = await res.text();
-      console.error(`Notion API error ${res.status} fetching children of ${blockId}: ${text}`);
+      console.error(
+        `Notion API error ${res.status} fetching children of ${blockId}: ${text}`,
+      );
       process.exit(1);
     }
     const data = await res.json();
@@ -146,7 +152,7 @@ async function getChildren(blockId) {
 async function getBlockTree(blockId, depth) {
   const children = await getChildren(blockId);
   if (depth <= 0) {
-    return children.map(b => ({ ...b, _children: [] }));
+    return children.map((b) => ({ ...b, _children: [] }));
   }
   const out = [];
   for (const b of children) {
@@ -182,7 +188,7 @@ function renderRichTextItem(item) {
 function indent(s, prefix) {
   return s
     .split('\n')
-    .map(line => (line.length ? prefix + line : line))
+    .map((line) => (line.length ? prefix + line : line))
     .join('\n');
 }
 
@@ -227,7 +233,10 @@ function renderBlock(block, listCtx) {
       return body + (childMd ? '\n\n' + childMd + '\n' : '') + '</details>';
     }
     case 'quote': {
-      const body = rt().split('\n').map(l => `> ${l}`).join('\n');
+      const body = rt()
+        .split('\n')
+        .map((l) => `> ${l}`)
+        .join('\n');
       const childMd = renderBlocks(kids);
       return body + (childMd ? '\n' + indent(childMd, '> ') : '');
     }
@@ -239,9 +248,16 @@ function renderBlock(block, listCtx) {
     }
     case 'code': {
       const lang = payload.language ?? '';
-      const body = payload.rich_text?.map(t => t.plain_text).join('') ?? '';
+      const body = payload.rich_text?.map((t) => t.plain_text).join('') ?? '';
       const caption = renderRichText(payload.caption);
-      return '```' + lang + '\n' + body + '\n```' + (caption ? '\n*' + caption + '*' : '');
+      return (
+        '```' +
+        lang +
+        '\n' +
+        body +
+        '\n```' +
+        (caption ? '\n*' + caption + '*' : '')
+      );
     }
     case 'divider':
       return '\n---\n';
@@ -291,10 +307,15 @@ function renderBlock(block, listCtx) {
 }
 
 function renderTable(payload, rowBlocks) {
-  const rows = rowBlocks.filter(b => b.type === 'table_row');
+  const rows = rowBlocks.filter((b) => b.type === 'table_row');
   if (rows.length === 0) return '\n[empty table]\n';
   const lines = [];
-  const renderRow = r => '| ' + (r.table_row.cells ?? []).map(c => renderRichText(c).replace(/\n/g, ' ').replace(/\|/g, '\\|')).join(' | ') + ' |';
+  const renderRow = (r) =>
+    '| ' +
+    (r.table_row.cells ?? [])
+      .map((c) => renderRichText(c).replace(/\n/g, ' ').replace(/\|/g, '\\|'))
+      .join(' | ') +
+    ' |';
   lines.push(renderRow(rows[0]));
   if (payload.has_column_header) {
     const colCount = rows[0].table_row.cells?.length ?? 0;
@@ -316,14 +337,17 @@ function renderBlocks(blocks) {
     const md = renderBlock(b, { numberedIndex });
     out.push(md);
   }
-  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return out
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 // ── Property → title extraction ──────────────────────────────────────
 function pageTitle(page) {
   for (const prop of Object.values(page.properties ?? {})) {
     if (prop.type === 'title') {
-      return prop.title?.map(t => t.plain_text).join('') ?? '';
+      return prop.title?.map((t) => t.plain_text).join('') ?? '';
     }
   }
   return '';
@@ -350,7 +374,7 @@ async function main() {
   console.log(lines.join('\n'));
 }
 
-main().catch(e => {
+main().catch((e) => {
   console.error(e);
   process.exit(1);
 });

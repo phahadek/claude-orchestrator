@@ -24,8 +24,8 @@ These shape the proposal; they do not bind it. The human reshuffles freely.
    - Same `source_root` package in their theme tags.
    - Same downstream Code-task chain (one's follow-on tasks will be the next's
      deps).
-   A theme cluster lets a sequence of decisions land consistent — you stay
-   loaded on the same constraints across multiple tasks.
+     A theme cluster lets a sequence of decisions land consistent — you stay
+     loaded on the same constraints across multiple tasks.
 
 2. **Size balance.** Open-question count is the cheap size proxy. A milestone
    with five 1-question tasks and one 6-question task reads better interleaved
@@ -39,8 +39,8 @@ loose enough that it would mislead.
 
 ### Notes from the task body
 
-The body sometimes carries inline sequencing hints like *"Pick up last in M9"*
-or *"Best validated after task X lands"*. These are **stronger signals than the
+The body sometimes carries inline sequencing hints like _"Pick up last in M9"_
+or _"Best validated after task X lands"_. These are **stronger signals than the
 heuristics** but **weaker than the depends_on chain**. Surface them explicitly
 in the proposal.
 
@@ -71,17 +71,19 @@ Why solo: orthogonal to A; no shared code region or arch page.
 This is the proposed order. Push back, regroup, or approve.
 ```
 
-End **exactly** with: *"This is the proposed order. Push back, regroup, or
-approve."*
+End **exactly** with: _"This is the proposed order. Push back, regroup, or
+approve."_
 
 ### Iteration
 
 The human will push back. Common pushbacks:
+
 - "Move ② before ① — its decision actually constrains ①."
 - "Group A and B aren't orthogonal — ③ also touches the L2 page."
 - "Skip ④ entirely; the deps won't land this milestone."
 
 For each pushback:
+
 - Acknowledge briefly.
 - Re-propose the corrected grouping in full (don't make the human reconstruct).
 - Ask the same closing question.
@@ -132,11 +134,11 @@ Batch-locking is the single highest-leverage failure mode it prevents.
 ```
 
 **Why this exact structure for Options:** each option must be a top-level bullet
-with the pros/cons as nested bullets — *not* a flat `A. … / + … / − …` with
+with the pros/cons as nested bullets — _not_ a flat `A. … / + … / − …` with
 indented continuation lines. Flat-with-indent collapses in CommonMark and the
 terminal renderer: sibling options get absorbed into the preceding bullet's
 continuation, and the rendered output reads as one tangled list where B and C
-appear *inside* A. The bullet-list-with-nested-bullets shape renders three
+appear _inside_ A. The bullet-list-with-nested-bullets shape renders three
 distinct option blocks reliably. Always blank-line before the `**Options**`
 heading so the list starts cleanly.
 
@@ -153,19 +155,20 @@ heading so the list starts cleanly.
 - **The recommendation is your judgment, not a summary.** Pick one, say so,
   give the one-line reason. If you genuinely cannot pick, that itself is a
   finding — say so and ask the human to decide directly.
-- **Close with the literal phrase.** *"Debate this — where am I wrong?"* The
+- **Close with the literal phrase.** _"Debate this — where am I wrong?"_ The
   phrase signals expectation-of-debate; a softer ask gets less pushback.
 
 ### Iteration before lock
 
 Expect debate. Some common patterns:
-- *"Your investigation missed X."* → re-investigate, re-present the question
+
+- _"Your investigation missed X."_ → re-investigate, re-present the question
   with X folded in. Don't argue from your original framing.
-- *"Option B's con isn't actually a con."* → acknowledge if true, update the
+- _"Option B's con isn't actually a con."_ → acknowledge if true, update the
   recommendation if it flips.
-- *"There's a fourth option you didn't consider."* → add it, re-present.
-- *"That's a Liquipedia-convention artifact, not corruption — and Liquipedia
-  times shouldn't be load-bearing anyway"* (reframe + new assertion in
+- _"There's a fourth option you didn't consider."_ → add it, re-present.
+- _"That's a Liquipedia-convention artifact, not corruption — and Liquipedia
+  times shouldn't be load-bearing anyway"_ (reframe + new assertion in
   confident-tone) → **investigate the assertions before doing anything else.**
   Reframes carry premises; the premises must be verified before they can become
   premises of the next recommendation.
@@ -175,26 +178,26 @@ Expect debate. Some common patterns:
 The single most subtle failure mode in this cadence: treating the human's
 debate content as the sign-off itself. Pushback that adds new content — a
 reframe, a counter-assertion, a missing premise, an unconsidered option — is
-**iteration data**. It is the opposite of approval; it is *"go do more work."*
+**iteration data**. It is the opposite of approval; it is _"go do more work."_
 
 When the human's reply contains novel claims you haven't yet investigated, the
 correct move is always: investigate → re-present → ask for sign-off **again**.
 Never paraphrase the pushback into a "locked" entry. The diagnostic test: if
-your next message starts with *"Locked. Recording the human's framing…"* and
+your next message starts with _"Locked. Recording the human's framing…"_ and
 the human's prior message contained any factual claim, recommendation reframe,
 or strategic redirection you did not investigate, **you are about to commit
 this anti-pattern**. Stop, undo any stamp, run the investigation, re-present.
 
 A sign-off is explicit approval of a recommendation **you** presented — not a
-synthesis of content the human just introduced. Approved phrasings: *"lock A"*,
-*"go with B"*, *"your recommendation"*, *"ship it"*, *"yes, that one"*. **Not**
+synthesis of content the human just introduced. Approved phrasings: _"lock A"_,
+_"go with B"_, _"your recommendation"_, _"ship it"_, _"yes, that one"_. **Not**
 approved: a substantive reply that happens to end (or be tonally framed) like
-a verdict. When in doubt, ask: *"To confirm — should I lock the original
+a verdict. When in doubt, ask: _"To confirm — should I lock the original
 recommendation, the reframed version you just described, or do you want me to
-investigate first?"* The question itself prevents the failure.
+investigate first?"_ The question itself prevents the failure.
 
 Iterate until the human signs off explicitly. Do not auto-lock on silence,
-on *"ok"*-without-context, or on a substantive reply paraphrased into a lock.
+on _"ok"_-without-context, or on a substantive reply paraphrased into a lock.
 
 ### Recording the lock
 
@@ -215,7 +218,7 @@ On explicit sign-off, write to `design-state.json` (the loader-seeded file):
 }
 ```
 
-Confirm in chat *"Locked: <one-liner>"* before moving to the next question.
+Confirm in chat _"Locked: <one-liner>"_ before moving to the next question.
 
 ### After every question is locked
 
@@ -226,17 +229,17 @@ yet. Show:
 2. **Open questions resolved** table (only if ≥2 questions; mirror the
    MCP-Slice-2 reference closure):
 
-   | Question | Locked answer |
-   | --- | --- |
+   | Question          | Locked answer   |
+   | ----------------- | --------------- |
    | <1-line question> | <1-line answer> |
 
 3. **Notion pages updated** (filled in as Step 3.4 progresses, or marked
-   *"pending — see next messages"*).
-4. **Follow-on tasks filed** (same, or *"pending"*).
+   _"pending — see next messages"_).
+4. **Follow-on tasks filed** (same, or _"pending"_).
 
-Ask: *"This is the Implementation notes draft. Apply it, then move on to the
-page edits / follow-on tasks?"*
+Ask: _"This is the Implementation notes draft. Apply it, then move on to the
+page edits / follow-on tasks?"_
 
-The human's *yes* unblocks Step 3.4 and 3.5; the actual write to the Design
+The human's _yes_ unblocks Step 3.4 and 3.5; the actual write to the Design
 task body happens last, after pages and tasks are in place (so the task body
 references the real new Notion IDs, not placeholders).

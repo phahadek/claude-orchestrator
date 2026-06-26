@@ -17,39 +17,39 @@ must be able to use the page without that history.
 
 The same factual content can be written either way. Compare:
 
-> ❌ *Session-narrative voice:* "After the M9 timezone investigation
+> ❌ _Session-narrative voice:_ "After the M9 timezone investigation
 > (38522f91-…-81ca), we determined that Liquipedia `scheduled_at` is unreliable
 > for date-only matches, so the link deriver was re-anchored on the bo3.gg
 > precise window."
 
-> ✅ *Durable-design voice:* "The market↔match link deriver anchors on the
+> ✅ _Durable-design voice:_ "The market↔match link deriver anchors on the
 > bo3.gg precise window. Liquipedia `scheduled_at` is the fallback, used only
 > when bo3.gg data is absent — Liquipedia entries are sometimes date-only and
 > are not authoritative for window-precise matching."
 
-Both convey the same contract; only the second describes the *system*. The
-first describes the *decision*.
+Both convey the same contract; only the second describes the _system_. The
+first describes the _decision_.
 
 Before drafting any edit, run the **durability check** on your proposed text:
 
 - **Tense.** Present-tense declarative. State what the system does, not what
   someone decided it should do.
-- **Origin story.** Strip task IDs, milestone tags, dates, *"we"*, *"this
-  design"*, *"as of M9"*, *"after the recent investigation"*. If a fact only
+- **Origin story.** Strip task IDs, milestone tags, dates, _"we"_, _"this
+  design"_, _"as of M9"_, _"after the recent investigation"_. If a fact only
   makes sense given originating context, it belongs in the Design task's
   Implementation notes — not on the arch page.
-- **Rationale.** Keep what a future implementer needs to *use the contract
-  correctly* (the *why* that prevents future misuse — *"Liquipedia entries are
-  sometimes date-only"*). Drop what they only need to *understand the history*
-  (the *how-we-got-here* — *"we considered X but ruled it out because Y"*).
+- **Rationale.** Keep what a future implementer needs to _use the contract
+  correctly_ (the _why_ that prevents future misuse — _"Liquipedia entries are
+  sometimes date-only"_). Drop what they only need to _understand the history_
+  (the _how-we-got-here_ — _"we considered X but ruled it out because Y"_).
   Defensive rationale belongs in the Design task body or a decisions log.
 - **Naive-reader test.** Read your draft as someone with zero session context.
   Does it read as a description of the system, or as a report of what someone
   decided? If the latter, rewrite.
 
 If the surrounding section is already polluted with session narrative —
-sprinkled task IDs, *"as of M<n>"* references, decision history — **do not
-echo the drift.** Match the *intended* altitude of the page, not whatever has
+sprinkled task IDs, _"as of M<n>"_ references, decision history — **do not
+echo the drift.** Match the _intended_ altitude of the page, not whatever has
 accumulated. Cleaning up legacy contamination is a separate Backlog task; do
 not fold it into an in-flight edit, and do not let it license writing more.
 
@@ -73,7 +73,7 @@ diff that's voice-wrong should be rewritten, not approved.
 
 3. **Compose the exact replacement text.** Match the page's existing voice
    and formatting — heading levels, bullet style, code-fence languages, the
-   way the page introduces tables. The diff should read as *part of the page*,
+   way the page introduces tables. The diff should read as _part of the page_,
    not as bolted-on commentary.
 
 4. **Present in chat:**
@@ -93,12 +93,12 @@ diff that's voice-wrong should be rewritten, not approved.
    >
    > Okay to apply?
 
-5. **Wait for explicit sign-off.** *"yes"*, *"apply"*, *"go ahead"*, *"ok"* —
+5. **Wait for explicit sign-off.** _"yes"_, _"apply"_, _"go ahead"_, _"ok"_ —
    the exact word doesn't matter, but the human has to say it. Silence is not
    approval.
 
 6. **Apply via** `mcp__claude_ai_Notion__notion-update-page`. Confirm in chat:
-   *"Applied to `<page title>` § `<section>`."*
+   _"Applied to `<page title>` § `<section>`."_
 
 7. **Stamp** `design-state.json` → `pages_affected[i].applied_at` (ISO-8601
    UTC) and `applied_diff` (a short fingerprint: heading + first ~80 chars of
@@ -106,11 +106,11 @@ diff that's voice-wrong should be rewritten, not approved.
 
 ### B. Add a new section
 
-Same as A, but step 2 is *"locate the anchor section the new one follows"*
+Same as A, but step 2 is _"locate the anchor section the new one follows"_
 and step 4 is:
 
 > I'm going to add a new section to **`<page title>`** after § **`<anchor
-> heading>`**:
+heading>`**:
 >
 > ```
 > <full new section, verbatim — heading + body>
@@ -118,8 +118,8 @@ and step 4 is:
 >
 > Okay to apply?
 
-The "after" anchor is the load-bearing detail. *"Add a section about X"* is
-ambiguous about placement; *"after § 'L2 meta-analyzers'"* is not.
+The "after" anchor is the load-bearing detail. _"Add a section about X"_ is
+ambiguous about placement; _"after § 'L2 meta-analyzers'"_ is not.
 
 ---
 
@@ -145,7 +145,7 @@ The Design task's `## Notion pages affected` section names the targets, but
 sometimes inexactly:
 
 - **Page named, section unclear.** Read the page, propose a section, confirm:
-  *"This belongs under § X — agree?"* Don't pick silently.
+  _"This belongs under § X — agree?"_ Don't pick silently.
 - **Section named but doesn't exist.** Either propose creating it (procedure
   B), or propose the closest existing section as the home (procedure A). Surface
   the choice; don't pick silently.
@@ -162,14 +162,14 @@ sometimes inexactly:
 
 ## What never to do
 
-- **Apply without showing the diff.** Even if the human earlier said *"just
-  apply edits"* in this session or a previous one — the diff-then-apply
+- **Apply without showing the diff.** Even if the human earlier said _"just
+  apply edits"_ in this session or a previous one — the diff-then-apply
   cadence is per-edit. Standing pre-approval doesn't exist.
 - **Fold multiple page edits into a single ask.** If a Design task touches
   three arch pages, that's three separate diff-then-apply rounds — not one
-  bundled *"apply all three"*. Each gate is real.
+  bundled _"apply all three"_. Each gate is real.
 - **Edit a page outside the task's `Notion pages affected` list** without
-  surfacing it first. Even if the edit feels "consequential" — *especially*
+  surfacing it first. Even if the edit feels "consequential" — _especially_
   then.
 - **Use** `mcp__claude_ai_Notion__notion-search` **as the page-read step.**
   Search excerpts are truncated; the diff will be wrong. Always
@@ -181,10 +181,10 @@ sometimes inexactly:
 
 ## Failure modes (one-liners)
 
-- *"I'll just append a note and they'll see it later."* → No. Diff-then-apply.
-- *"The diff is too long to show in chat."* → It is exactly that long because
+- _"I'll just append a note and they'll see it later."_ → No. Diff-then-apply.
+- _"The diff is too long to show in chat."_ → It is exactly that long because
   the change is exactly that big. Show it, paginate the message if needed.
-- *"The page is messy; I'll clean up the surrounding section while I'm there."*
+- _"The page is messy; I'll clean up the surrounding section while I'm there."_
   → That's a separate change. File it; don't fold.
-- *"The human approved a similar edit last session."* → That was that session.
+- _"The human approved a similar edit last session."_ → That was that session.
   Sign-off is per-edit, scoped to this session.

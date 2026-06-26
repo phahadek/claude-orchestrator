@@ -49,8 +49,19 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
 // ── Arg parsing (same idiom as the sibling scripts) ──────────────────
 const args = process.argv.slice(2);
-function flag(name) { const i = args.indexOf(name); if (i === -1) return false; args.splice(i, 1); return true; }
-function option(name) { const i = args.indexOf(name); if (i === -1 || i + 1 >= args.length) return undefined; const v = args[i + 1]; args.splice(i, 2); return v; }
+function flag(name) {
+  const i = args.indexOf(name);
+  if (i === -1) return false;
+  args.splice(i, 1);
+  return true;
+}
+function option(name) {
+  const i = args.indexOf(name);
+  if (i === -1 || i + 1 >= args.length) return undefined;
+  const v = args[i + 1];
+  args.splice(i, 2);
+  return v;
+}
 
 const milestone = option('--milestone');
 const repo = resolve(process.cwd(), option('--repo') ?? '.');
@@ -70,16 +81,20 @@ function resolveManifestPath(repoRoot) {
   if (!configDir) {
     fail(
       `could not locate the central config tree. Set $ORCHESTRATOR_CONFIG_DIR or pass --config-dir <path> ` +
-      `(must contain a 'projects/' subdir), or pass --manifest <path> directly. Looked beside the projects ` +
-      `root at ${resolve(repoRoot, '..', 'config')} and ${resolve(repoRoot, '..', '..', 'config')}.`,
+        `(must contain a 'projects/' subdir), or pass --manifest <path> directly. Looked beside the projects ` +
+        `root at ${resolve(repoRoot, '..', 'config')} and ${resolve(repoRoot, '..', '..', 'config')}.`,
     );
   }
   return join(configDir, 'projects', projectKey, 'grooming.json');
 }
 function resolveConfigDir(repoRoot) {
-  const explicit = option('--config-dir') ?? process.env.ORCHESTRATOR_CONFIG_DIR;
+  const explicit =
+    option('--config-dir') ?? process.env.ORCHESTRATOR_CONFIG_DIR;
   if (explicit) return resolve(process.cwd(), explicit);
-  for (const c of [resolve(repoRoot, '..', 'config'), resolve(repoRoot, '..', '..', 'config')]) {
+  for (const c of [
+    resolve(repoRoot, '..', 'config'),
+    resolve(repoRoot, '..', '..', 'config'),
+  ]) {
     if (existsSync(join(c, 'projects'))) return c;
   }
   return null;
@@ -91,49 +106,80 @@ if (!milestone) {
   process.exit(1);
 }
 
-function fail(msg) { console.error(`design-load: ${msg}`); process.exit(1); }
+function fail(msg) {
+  console.error(`design-load: ${msg}`);
+  process.exit(1);
+}
 
 // ── Manifest ─────────────────────────────────────────────────────────
-if (!existsSync(manifestPath)) fail(`manifest not found at ${manifestPath} (the /design skill shares the grooming manifest with /groom — create it in the central config tree; see ~/.claude/skills/groom/reference/manifest.example.json).`);
+if (!existsSync(manifestPath))
+  fail(
+    `manifest not found at ${manifestPath} (the /design skill shares the grooming manifest with /groom — create it in the central config tree; see ~/.claude/skills/groom/reference/manifest.example.json).`,
+  );
 let manifest;
-try { manifest = JSON.parse(readFileSync(manifestPath, 'utf8')); }
-catch (e) { fail(`manifest is not valid JSON: ${e.message}`); }
+try {
+  manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+} catch (e) {
+  fail(`manifest is not valid JSON: ${e.message}`);
+}
 
 const milestoneCfg = manifest.milestones?.[milestone];
-if (!milestoneCfg) fail(`milestone "${milestone}" is not defined in ${manifestPath} (milestones: ${Object.keys(manifest.milestones ?? {}).join(', ') || 'none'}).`);
+if (!milestoneCfg)
+  fail(
+    `milestone "${milestone}" is not defined in ${manifestPath} (milestones: ${Object.keys(manifest.milestones ?? {}).join(', ') || 'none'}).`,
+  );
 
 const statusProp = manifest.status_property ?? 'Status';
 const vocab = manifest.status_vocab ?? {};
 const sourceRoot = (manifest.source_root ?? '').replace(/\/+$/, '');
-const packages = (manifest.packages ?? []).filter(p => typeof p === 'string').sort((a, b) => b.length - a.length);
-const contextPagesCfg = (manifest.context_pages ?? []).filter(p => p && typeof p.id === 'string');
+const packages = (manifest.packages ?? [])
+  .filter((p) => typeof p === 'string')
+  .sort((a, b) => b.length - a.length);
+const contextPagesCfg = (manifest.context_pages ?? []).filter(
+  (p) => p && typeof p.id === 'string',
+);
 
 // The /design skill targets Type = "📐 Design" AND Type = "📋 Planning". Both
 // share the same workflow shape: open questions → locked decisions → follow-on
 // 🔲 Backlog tasks + (sometimes) architecture-page edits. The matcher is tolerant
 // of the emoji being stripped — match on "design" or "planning" (case-insensitive).
-const designTypeMatcher = (t) => typeof t === 'string' && /design|planning/i.test(t);
+const designTypeMatcher = (t) =>
+  typeof t === 'string' && /design|planning/i.test(t);
 
-const cacheDir = resolve(repo, option('--cache-dir') ?? join('.skill-cache', 'design', milestone));
+const cacheDir = resolve(
+  repo,
+  option('--cache-dir') ?? join('.skill-cache', 'design', milestone),
+);
 const contextDir = join(cacheDir, 'context');
 const tasksDir = join(cacheDir, 'tasks');
-for (const d of [cacheDir, contextDir, tasksDir]) mkdirSync(d, { recursive: true });
+for (const d of [cacheDir, contextDir, tasksDir])
+  mkdirSync(d, { recursive: true });
 
 // ── sibling-script orchestration ─────────────────────────────────────
 function runScript(name, scriptArgs) {
   const scriptPath = join(SCRIPT_DIR, name);
   const passthru = envPath ? ['--env', envPath] : [];
-  const r = spawnSync('node', [scriptPath, ...scriptArgs, ...passthru], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync('node', [scriptPath, ...scriptArgs, ...passthru], {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
   if (r.status !== 0) {
-    fail(`${name} ${scriptArgs.join(' ')} failed (exit ${r.status}):\n${(r.stderr ?? '').trim() || (r.stdout ?? '').trim()}`);
+    fail(
+      `${name} ${scriptArgs.join(' ')} failed (exit ${r.status}):\n${(r.stderr ?? '').trim() || (r.stdout ?? '').trim()}`,
+    );
   }
   return r.stdout ?? '';
 }
 
 function queryBoard(boardId) {
   const out = runScript('notion-query.mjs', [boardId, '--json']);
-  try { return JSON.parse(out); }
-  catch (e) { fail(`could not parse notion-query.mjs JSON for board ${boardId}: ${e.message}`); }
+  try {
+    return JSON.parse(out);
+  } catch (e) {
+    fail(
+      `could not parse notion-query.mjs JSON for board ${boardId}: ${e.message}`,
+    );
+  }
 }
 
 function fetchPageMarkdown(pageId) {
@@ -144,14 +190,17 @@ function fetchPageMarkdown(pageId) {
 // Matches both full Notion UUIDs (32 hex, optionally dashed) and the truncated
 // 16-hex prefix form ("38522f91-52f3-81dd") that task bodies sometimes use.
 // Resolution against depMap is prefix-aware (see resolveDep below).
-const NOTION_ID_RE = /\b([0-9a-f]{8})-?([0-9a-f]{4})-?([0-9a-f]{4})(?:-?([0-9a-f]{4}))?(?:-?([0-9a-f]{12}))?\b/gi;
-function normaliseId(id) { return id.replace(/-/g, '').toLowerCase(); }
+const NOTION_ID_RE =
+  /\b([0-9a-f]{8})-?([0-9a-f]{4})-?([0-9a-f]{4})(?:-?([0-9a-f]{4}))?(?:-?([0-9a-f]{12}))?\b/gi;
+function normaliseId(id) {
+  return id.replace(/-/g, '').toLowerCase();
+}
 
 /** Extract the body between a heading matching `headRe` and the next heading. */
 function sectionBody(md, headRe) {
   const lines = md.split('\n');
   const anyHead = /^#{1,4}\s+/;
-  const i = lines.findIndex(l => headRe.test(l));
+  const i = lines.findIndex((l) => headRe.test(l));
   if (i === -1) return '';
   const body = [];
   for (let j = i + 1; j < lines.length; j++) {
@@ -216,12 +265,15 @@ function extractOpenQuestions(md) {
   // "Decide:" convention — find a line containing only "Decide:" or "Decide the following:"
   // and capture the following bullet block.
   const lines = md.split('\n');
-  const decideIdx = lines.findIndex(l => /^\s*decide(?:\s+the\s+following)?\s*:?\s*$/i.test(l));
+  const decideIdx = lines.findIndex((l) =>
+    /^\s*decide(?:\s+the\s+following)?\s*:?\s*$/i.test(l),
+  );
   if (decideIdx !== -1) {
     const tail = lines.slice(decideIdx + 1).join('\n');
     // stop at the next heading
-    const headIdx = tail.split('\n').findIndex(l => /^#{1,4}\s+/.test(l));
-    const block = headIdx === -1 ? tail : tail.split('\n').slice(0, headIdx).join('\n');
+    const headIdx = tail.split('\n').findIndex((l) => /^#{1,4}\s+/.test(l));
+    const block =
+      headIdx === -1 ? tail : tail.split('\n').slice(0, headIdx).join('\n');
     const bullets = topLevelBullets(block);
     if (bullets.length) return { items: bullets, source: 'decide_block' };
   }
@@ -237,7 +289,7 @@ function extractPagesAffected(md) {
   const headRe = /^#{1,4}\s+notion\s+pages?\s+affected/i;
   const body = sectionBody(md, headRe);
   if (!body.trim()) return [];
-  return topLevelBullets(body).map(raw => {
+  return topLevelBullets(body).map((raw) => {
     // Strip leading bold/code/italic markers from the title; keep the rest.
     const trimmed = raw.replace(/^[*`_]+/, '').trim();
     // Title is everything up to the first ' — ' or ' - ' or ' *(' (annotation).
@@ -262,7 +314,10 @@ function extractDepIds(depsStr) {
   if (!depsStr || typeof depsStr !== 'string') return [];
   const out = new Set();
   for (const m of depsStr.matchAll(NOTION_ID_RE)) {
-    const norm = [m[1], m[2], m[3], m[4], m[5]].filter(Boolean).join('').toLowerCase();
+    const norm = [m[1], m[2], m[3], m[4], m[5]]
+      .filter(Boolean)
+      .join('')
+      .toLowerCase();
     if (norm.length >= 16) out.add(norm);
   }
   return [...out];
@@ -287,15 +342,19 @@ function extractThemeTags(md) {
     const cleaned = tok.replace(/\\/g, '/').replace(/^\.\//, '').trim();
     if (!cleaned.includes('/')) return;
     let rel = null;
-    if (sourceRoot && cleaned.startsWith(sourceRoot + '/')) rel = cleaned.slice(sourceRoot.length + 1);
+    if (sourceRoot && cleaned.startsWith(sourceRoot + '/'))
+      rel = cleaned.slice(sourceRoot.length + 1);
     else rel = cleaned;
-    const pkg = packages.find(p => rel === p || rel.startsWith(p + '/'));
+    const pkg = packages.find((p) => rel === p || rel.startsWith(p + '/'));
     if (pkg) tags.add(`pkg:${pkg}`);
   }
   // Backtick-wrapped path-like tokens.
   for (const m of md.matchAll(/`([^`]+)`/g)) tagPath(m[1]);
   // Bare path tokens with a code-ish extension (catches "see ingestion/rest/foo.py").
-  for (const m of md.matchAll(/(?:^|[\s(])([A-Za-z0-9_\-]+(?:\/[A-Za-z0-9_.\-]+)+\.(?:py|sql|toml|ya?ml|json|md|sh))\b/g)) tagPath(m[1]);
+  for (const m of md.matchAll(
+    /(?:^|[\s(])([A-Za-z0-9_\-]+(?:\/[A-Za-z0-9_.\-]+)+\.(?:py|sql|toml|ya?ml|json|md|sh))\b/g,
+  ))
+    tagPath(m[1]);
   // Arch-page references — exact title matches in the body.
   const hay = md.toLowerCase();
   for (const p of contextPagesCfg) {
@@ -316,11 +375,17 @@ for (const pg of contextPagesCfg) {
     writeFileSync(filePath, fetchPageMarkdown(pg.id), 'utf8');
     fetched = true;
   }
-  contextPages.push({ id: pg.id, title: pg.title ?? '', file: fileRel.replace(/\\/g, '/'), refetched: fetched });
+  contextPages.push({
+    id: pg.id,
+    title: pg.title ?? '',
+    file: fileRel.replace(/\\/g, '/'),
+    refetched: fetched,
+  });
 }
 
 // ── Step 2: query target board + neighbour boards ────────────────────
-const titleOf = (row) => row._title ?? row['Task Name'] ?? row['Name'] ?? '(untitled)';
+const titleOf = (row) =>
+  row._title ?? row['Task Name'] ?? row['Name'] ?? '(untitled)';
 
 const targetRows = queryBoard(milestoneCfg.board);
 const neighbours = [];
@@ -332,15 +397,26 @@ for (const n of milestoneCfg.neighbours ?? []) {
 // the milestone board or any neighbour board. We include Done/Deferred rows so
 // finished dependencies still resolve.
 const depMap = new Map();
-for (const r of targetRows) depMap.set(normaliseId(r.id), { status: r[statusProp] ?? '', title: titleOf(r), board: milestoneCfg.board });
-for (const n of neighbours) for (const r of n.rows) depMap.set(normaliseId(r.id), { status: r[statusProp] ?? '', title: titleOf(r), board: n.board });
+for (const r of targetRows)
+  depMap.set(normaliseId(r.id), {
+    status: r[statusProp] ?? '',
+    title: titleOf(r),
+    board: milestoneCfg.board,
+  });
+for (const n of neighbours)
+  for (const r of n.rows)
+    depMap.set(normaliseId(r.id), {
+      status: r[statusProp] ?? '',
+      title: titleOf(r),
+      board: n.board,
+    });
 
 // ── Step 3: process Design + Planning tasks on the milestone board ──────────────
 const tasks = {
-  executable: [],          // Ready + In Progress
-  needs_grooming: [],      // Backlog
-  closed_not_done: [],     // In Review
-  done: [],                // Done (kept for completeness; just title+id)
+  executable: [], // Ready + In Progress
+  needs_grooming: [], // Backlog
+  closed_not_done: [], // In Review
+  done: [], // Done (kept for completeness; just title+id)
   // NOTE: Deferred tasks are NOT surfaced — they mean "scope superseded by another
   // task" (equivalent to Done from the skill's standpoint). They stay in depMap
   // for dep resolution (a dep on a Deferred task is satisfied, not blocked).
@@ -373,14 +449,20 @@ for (const row of targetRows) {
   writeFileSync(bodyPath, md, 'utf8');
 
   const openQ = extractOpenQuestions(md);
-  const pagesAffected = extractPagesAffected(md).map(p => {
+  const pagesAffected = extractPagesAffected(md).map((p) => {
     const page_id = resolvePageId(p.title);
-    if (!page_id) unresolvedPageRefs.push({ task_id: row.id, task_title: titleOf(row), page_title: p.title, raw: p.raw });
+    if (!page_id)
+      unresolvedPageRefs.push({
+        task_id: row.id,
+        task_title: titleOf(row),
+        page_title: p.title,
+        raw: p.raw,
+      });
     return { title: p.title, page_id, raw: p.raw };
   });
 
   const depIds = extractDepIds(row['Depends On'] ?? '');
-  const depDetails = depIds.map(id => {
+  const depDetails = depIds.map((id) => {
     const found = resolveDep(id);
     return found
       ? { id, title: found.title, status: found.status, resolved: true }
@@ -391,7 +473,13 @@ for (const row of targetRows) {
   // 'blocked' otherwise. Unresolved external deps are NOT counted as blocking — they
   // may live on a board not loaded as a neighbour. The skill surfaces them but does
   // not gate on them.
-  const blockingDeps = depDetails.filter(d => d.resolved && d.status !== vocab.done && d.status !== vocab.ready && d.status !== vocab.deferred);
+  const blockingDeps = depDetails.filter(
+    (d) =>
+      d.resolved &&
+      d.status !== vocab.done &&
+      d.status !== vocab.ready &&
+      d.status !== vocab.deferred,
+  );
   const depStatus = blockingDeps.length === 0 ? 'ready' : 'blocked';
 
   const themeTags = extractThemeTags(md);
@@ -409,7 +497,7 @@ for (const row of targetRows) {
     pages_affected: pagesAffected,
     depends_on: depDetails,
     dep_status: depStatus,
-    blocking_dep_ids: blockingDeps.map(d => d.id),
+    blocking_dep_ids: blockingDeps.map((d) => d.id),
     theme_tags: themeTags,
     size: openQ.items.length,
   };
@@ -420,37 +508,56 @@ for (const row of targetRows) {
 }
 
 // neighbour boards: context-only summaries (Design + Planning tasks only).
-const neighboursSummary = neighbours.map(n => ({
+const neighboursSummary = neighbours.map((n) => ({
   id: n.id,
   board: n.board,
   design_tasks: n.rows
-    .filter(r => designTypeMatcher(r['Type'] ?? ''))
-    .map(r => ({ id: r.id, title: titleOf(r), status: r[statusProp] ?? '' })),
+    .filter((r) => designTypeMatcher(r['Type'] ?? ''))
+    .map((r) => ({ id: r.id, title: titleOf(r), status: r[statusProp] ?? '' })),
 }));
 
 // ── Step 4: design-state.json — preserve signed-off entries across resumes ──
 function readJson(path, fallback) {
-  try { return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : fallback; }
-  catch { return fallback; }
+  try {
+    return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 const priorState = readJson(join(cacheDir, 'design-state.json'), {});
 const state = { ...priorState };
 
-for (const t of [...tasks.executable, ...tasks.needs_grooming, ...tasks.closed_not_done]) {
+for (const t of [
+  ...tasks.executable,
+  ...tasks.needs_grooming,
+  ...tasks.closed_not_done,
+]) {
   // Status of the question seed: each open question gets a slot. If the prior
   // state had a locked decision for the SAME question text, preserve it.
   const priorTask = state[t.id] ?? {};
-  const priorQs = Array.isArray(priorTask.open_questions) ? priorTask.open_questions : [];
-  const priorByText = new Map(priorQs.map(q => [q.q, q]));
-  const seededQs = t.open_questions.map(q => {
+  const priorQs = Array.isArray(priorTask.open_questions)
+    ? priorTask.open_questions
+    : [];
+  const priorByText = new Map(priorQs.map((q) => [q.q, q]));
+  const seededQs = t.open_questions.map((q) => {
     const p = priorByText.get(q);
-    return p ?? { q, investigated: false, recommendation: null, locked_decision: null, signed_off_at: null };
+    return (
+      p ?? {
+        q,
+        investigated: false,
+        recommendation: null,
+        locked_decision: null,
+        signed_off_at: null,
+      }
+    );
   });
 
   // Pages-affected: preserve applied_at / applied_diff if the page title matches.
-  const priorPages = Array.isArray(priorTask.pages_affected) ? priorTask.pages_affected : [];
-  const priorPagesByTitle = new Map(priorPages.map(p => [p.title, p]));
-  const seededPages = t.pages_affected.map(p => {
+  const priorPages = Array.isArray(priorTask.pages_affected)
+    ? priorTask.pages_affected
+    : [];
+  const priorPagesByTitle = new Map(priorPages.map((p) => [p.title, p]));
+  const seededPages = t.pages_affected.map((p) => {
     const prev = priorPagesByTitle.get(p.title);
     return {
       title: p.title,
@@ -467,9 +574,13 @@ for (const t of [...tasks.executable, ...tasks.needs_grooming, ...tasks.closed_n
     moved_to_in_progress_at: priorTask.moved_to_in_progress_at ?? null,
     open_questions: seededQs,
     pages_affected: seededPages,
-    followon_tasks: Array.isArray(priorTask.followon_tasks) ? priorTask.followon_tasks : [],
-    implementation_notes_written_at: priorTask.implementation_notes_written_at ?? null,
-    moved_to_done_at: priorTask.moved_to_done_at ?? priorTask.moved_to_in_review_at ?? null,
+    followon_tasks: Array.isArray(priorTask.followon_tasks)
+      ? priorTask.followon_tasks
+      : [],
+    implementation_notes_written_at:
+      priorTask.implementation_notes_written_at ?? null,
+    moved_to_done_at:
+      priorTask.moved_to_done_at ?? priorTask.moved_to_in_review_at ?? null,
   };
 }
 
@@ -478,7 +589,16 @@ const bundle = {
   generated: { milestone, repo, ts: null /* skill stamps this on first use */ },
   context_pages: contextPages,
   boards: {
-    target: { milestone, board: milestoneCfg.board, design_tasks: { executable: tasks.executable.length, needs_grooming: tasks.needs_grooming.length, closed_not_done: tasks.closed_not_done.length, done_or_deferred: tasks.done.length } },
+    target: {
+      milestone,
+      board: milestoneCfg.board,
+      design_tasks: {
+        executable: tasks.executable.length,
+        needs_grooming: tasks.needs_grooming.length,
+        closed_not_done: tasks.closed_not_done.length,
+        done_or_deferred: tasks.done.length,
+      },
+    },
     neighbours: neighboursSummary,
   },
   done_design_tasks: tasks.done,
@@ -494,28 +614,64 @@ const worklist = {
   // task" (equivalent to Done) and are not surfaced. See anti-patterns.md.
 };
 
-writeFileSync(join(cacheDir, 'context-bundle.json'), JSON.stringify(bundle, null, 2), 'utf8');
-writeFileSync(join(cacheDir, 'design-worklist.json'), JSON.stringify(worklist, null, 2), 'utf8');
-writeFileSync(join(cacheDir, 'design-state.json'), JSON.stringify(state, null, 2), 'utf8');
+writeFileSync(
+  join(cacheDir, 'context-bundle.json'),
+  JSON.stringify(bundle, null, 2),
+  'utf8',
+);
+writeFileSync(
+  join(cacheDir, 'design-worklist.json'),
+  JSON.stringify(worklist, null, 2),
+  'utf8',
+);
+writeFileSync(
+  join(cacheDir, 'design-state.json'),
+  JSON.stringify(state, null, 2),
+  'utf8',
+);
 
 // ── summary ──────────────────────────────────────────────────────────
-const blockedExec = tasks.executable.filter(t => t.dep_status === 'blocked').length;
+const blockedExec = tasks.executable.filter(
+  (t) => t.dep_status === 'blocked',
+).length;
 const readyExec = tasks.executable.length - blockedExec;
 console.log(`design-load: milestone ${milestone} loaded into ${cacheDir}`);
-console.log(`  context pages: ${contextPages.length} (${contextPages.filter(p => p.refetched).length} fetched, rest cached)`);
+console.log(
+  `  context pages: ${contextPages.length} (${contextPages.filter((p) => p.refetched).length} fetched, rest cached)`,
+);
 console.log(`  📐 Design + 📋 Planning tasks on target board:`);
-console.log(`    executable (Ready + In Progress): ${tasks.executable.length} (${readyExec} dep-ready, ${blockedExec} dep-blocked)`);
-console.log(`    needs grooming (🔲 Backlog): ${tasks.needs_grooming.length}  ← run /groom first`);
-console.log(`    closed not done (In Review): ${tasks.closed_not_done.length}  done/deferred (not surfaced): ${tasks.done.length}`);
-console.log(`  neighbour boards: ${neighboursSummary.length} (Design-task context only)`);
+console.log(
+  `    executable (Ready + In Progress): ${tasks.executable.length} (${readyExec} dep-ready, ${blockedExec} dep-blocked)`,
+);
+console.log(
+  `    needs grooming (🔲 Backlog): ${tasks.needs_grooming.length}  ← run /groom first`,
+);
+console.log(
+  `    closed not done (In Review): ${tasks.closed_not_done.length}  done/deferred (not surfaced): ${tasks.done.length}`,
+);
+console.log(
+  `  neighbour boards: ${neighboursSummary.length} (Design-task context only)`,
+);
 if (unresolvedPageRefs.length) {
-  console.log(`  ⚠ ${unresolvedPageRefs.length} "Notion pages affected" reference(s) did not resolve to a context_pages title:`);
-  for (const u of unresolvedPageRefs.slice(0, 8)) console.log(`     - "${u.page_title}" (task: ${u.task_title})`);
-  if (unresolvedPageRefs.length > 8) console.log(`     … and ${unresolvedPageRefs.length - 8} more (see design-worklist.json)`);
+  console.log(
+    `  ⚠ ${unresolvedPageRefs.length} "Notion pages affected" reference(s) did not resolve to a context_pages title:`,
+  );
+  for (const u of unresolvedPageRefs.slice(0, 8))
+    console.log(`     - "${u.page_title}" (task: ${u.task_title})`);
+  if (unresolvedPageRefs.length > 8)
+    console.log(
+      `     … and ${unresolvedPageRefs.length - 8} more (see design-worklist.json)`,
+    );
 }
-const tasksMissingQs = tasks.executable.filter(t => t.open_questions.length === 0);
+const tasksMissingQs = tasks.executable.filter(
+  (t) => t.open_questions.length === 0,
+);
 if (tasksMissingQs.length) {
-  console.log(`  ⚠ ${tasksMissingQs.length} executable Design / Planning task(s) parsed with zero open questions — the skill will need manual scoping:`);
+  console.log(
+    `  ⚠ ${tasksMissingQs.length} executable Design / Planning task(s) parsed with zero open questions — the skill will need manual scoping:`,
+  );
   for (const t of tasksMissingQs) console.log(`     - ${t.title}`);
 }
-console.log('Next: the /design skill proposes a thematic execution order over the dep-ready executable tasks, then walks each one question at a time.');
+console.log(
+  'Next: the /design skill proposes a thematic execution order over the dep-ready executable tasks, then walks each one question at a time.',
+);

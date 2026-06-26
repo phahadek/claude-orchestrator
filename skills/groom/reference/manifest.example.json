@@ -27,9 +27,7 @@
   },
   "$status_vocab": "Your board's exact status names. backlog = needs grooming; done = work complete; deferred = scope superseded by another task (NOT 'do later') — treated equivalently to done by /groom and /design (not surfaced, satisfied for dep purposes).",
 
-  "context_pages": [
-    { "id": "<page-id>", "title": "Master Context" }
-  ],
+  "context_pages": [{ "id": "<page-id>", "title": "Master Context" }],
   "$context_pages": "The fixed Step-1 context loads (master context, research goals, architecture, coding + task-writing guidelines, milestones). Bodies are fetched into the cache so the session reads from disk, not by hand.",
 
   "milestones": {
