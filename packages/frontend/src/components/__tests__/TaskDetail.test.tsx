@@ -1207,7 +1207,9 @@ describe('TaskDetail', () => {
     );
     const select = screen.getByRole('combobox', { name: /assign repository/i });
     expect(select).toBeTruthy();
-    const options = Array.from((select as HTMLSelectElement).options).map((o) => o.value);
+    const options = Array.from((select as HTMLSelectElement).options).map(
+      (o) => o.value,
+    );
     expect(options).toContain('owner/repo-a');
     expect(options).toContain('owner/repo-b');
   });
@@ -1222,7 +1224,9 @@ describe('TaskDetail', () => {
         project={makeProject({ githubRepo: 'owner/repo-a' })}
       />,
     );
-    expect(screen.queryByRole('combobox', { name: /assign repository/i })).toBeNull();
+    expect(
+      screen.queryByRole('combobox', { name: /assign repository/i }),
+    ).toBeNull();
   });
 
   it('shows assigned repo as selected value in dropdown', () => {
@@ -1232,10 +1236,14 @@ describe('TaskDetail', () => {
         send={vi.fn()}
         onClose={vi.fn()}
         projectId="proj-1"
-        project={makeProject({ githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']) })}
+        project={makeProject({
+          githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']),
+        })}
       />,
     );
-    const select = screen.getByRole('combobox', { name: /assign repository/i }) as HTMLSelectElement;
+    const select = screen.getByRole('combobox', {
+      name: /assign repository/i,
+    }) as HTMLSelectElement;
     expect(select.value).toBe('owner/repo-b');
   });
 
@@ -1251,7 +1259,9 @@ describe('TaskDetail', () => {
         send={vi.fn()}
         onClose={vi.fn()}
         projectId="proj-1"
-        project={makeProject({ githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']) })}
+        project={makeProject({
+          githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']),
+        })}
       />,
     );
 

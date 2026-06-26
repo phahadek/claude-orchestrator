@@ -835,7 +835,9 @@ describe('TaskCard', () => {
         selected={false}
         onClick={vi.fn()}
         send={noop}
-        project={makeProject({ githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']) })}
+        project={makeProject({
+          githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']),
+        })}
       />,
     );
     expect(screen.getByText('⚠ Needs repo')).toBeDefined();
@@ -861,7 +863,9 @@ describe('TaskCard', () => {
         selected={false}
         onClick={vi.fn()}
         send={noop}
-        project={makeProject({ githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']) })}
+        project={makeProject({
+          githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']),
+        })}
       />,
     );
     expect(screen.queryByText('⚠ Needs repo')).toBeNull();

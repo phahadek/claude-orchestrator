@@ -11,13 +11,17 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import styles from './TaskDetail.module.css';
 
-function getProjectRepos(project: { githubRepo?: string } | null | undefined): string[] {
+function getProjectRepos(
+  project: { githubRepo?: string } | null | undefined,
+): string[] {
   const raw = project?.githubRepo;
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) return parsed as string[];
-  } catch { /* bare string */ }
+  } catch {
+    /* bare string */
+  }
   return [raw];
 }
 
@@ -131,7 +135,9 @@ export function TaskDetail({
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [optimisticDisplayStatus, setOptimisticDisplayStatus] =
     useState<DisplayStatus | null>(null);
-  const [assignedRepo, setAssignedRepo] = useState<string | null>(task.assignedRepo);
+  const [assignedRepo, setAssignedRepo] = useState<string | null>(
+    task.assignedRepo,
+  );
   const [assignRepoInFlight, setAssignRepoInFlight] = useState(false);
 
   // Reset state when task changes

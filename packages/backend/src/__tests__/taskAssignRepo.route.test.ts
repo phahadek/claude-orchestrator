@@ -45,7 +45,9 @@ vi.mock('../projects/ProjectService.js', () => ({
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) return parsed;
-    } catch { /* bare string */ }
+    } catch {
+      /* bare string */
+    }
     return [raw];
   }),
 }));
@@ -147,7 +149,9 @@ describe('POST /api/tasks/:taskId/assign-repo', () => {
 
   it('returns 422 when repo is not in the project repo set', async () => {
     mockSetTaskRepoAssignment.mockImplementation(() => {
-      throw new Error('Repo "owner/wrong-repo" is not in the project\'s repo set');
+      throw new Error(
+        'Repo "owner/wrong-repo" is not in the project\'s repo set',
+      );
     });
     const app = buildApp();
     const res = await supertest(app)

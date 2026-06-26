@@ -18,13 +18,17 @@ interface Props {
   project: ProjectConfig | null;
 }
 
-function getProjectRepos(project: { githubRepo?: string } | null | undefined): string[] {
+function getProjectRepos(
+  project: { githubRepo?: string } | null | undefined,
+): string[] {
   const raw = project?.githubRepo;
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) return parsed as string[];
-  } catch { /* bare string */ }
+  } catch {
+    /* bare string */
+  }
   return [raw];
 }
 
@@ -292,7 +296,10 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
           </span>
         )}
         {needsRepo && (
-          <span className={styles.needsRepoBadge} title="Assign a target repository">
+          <span
+            className={styles.needsRepoBadge}
+            title="Assign a target repository"
+          >
             ⚠ Needs repo
           </span>
         )}
