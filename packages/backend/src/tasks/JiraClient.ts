@@ -42,6 +42,7 @@ export class JiraApiError extends Error {
   constructor(
     public readonly statusCode: number,
     message: string,
+    public readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = 'JiraApiError';
@@ -79,7 +80,15 @@ export class JiraClient {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => res.statusText);
-      throw new JiraApiError(res.status, `Jira API ${method} ${path}: ${text}`);
+      let retryAfterMs: number | undefined;
+      if (res.status === 429) {
+        const retryAfter = res.headers.get('Retry-After');
+        if (retryAfter) {
+          const secs = Number(retryAfter);
+          if (Number.isFinite(secs) && secs > 0) retryAfterMs = secs * 1000;
+        }
+      }
+      throw new JiraApiError(res.status, `Jira API ${method} ${path}: ${text}`, retryAfterMs);
     }
     if (res.status === 204) return undefined as T;
     return res.json() as Promise<T>;
