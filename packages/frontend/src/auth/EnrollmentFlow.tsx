@@ -13,12 +13,16 @@ async function apiPost<T>(path: string, body?: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  return res.json() as Promise<T>;
+  const data = (await res.json()) as T;
+  if (!res.ok) throw Object.assign(new Error('request failed'), { data });
+  return data;
 }
 
 async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(path);
-  return res.json() as Promise<T>;
+  const data = (await res.json()) as T;
+  if (!res.ok) throw Object.assign(new Error('request failed'), { data });
+  return data;
 }
 
 export function EnrollmentFlow({ onEnrolled }: EnrollmentFlowProps) {

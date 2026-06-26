@@ -1,4 +1,10 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from 'react';
 import { EnrollmentFlow } from './auth/EnrollmentFlow';
 import { SetupWizard } from './wizard/SetupWizard';
 import type { ConnectionState } from './hooks/useWebSocket';
@@ -9,6 +15,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useNotifications } from './hooks/useNotifications';
 import { useIsMobile } from './hooks/useIsMobile';
 import { useNavigationHistory } from './hooks/useNavigationHistory';
+import { apiRequest } from './api/projects';
 import { Header } from './components/Header';
 import type { TopView } from './components/Header';
 import { SessionGrid } from './components/SessionGrid';
@@ -65,6 +72,37 @@ const NON_MILESTONE_BOARD_ID = '__non_milestone__';
 
 const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
 
+const loopbackErrorStyles: Record<string, React.CSSProperties> = {
+  overlay: {
+    position: 'fixed',
+    inset: 0,
+    background: '#11111b',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  card: {
+    background: '#1e1e2e',
+    border: '1px solid #313244',
+    borderRadius: 12,
+    padding: '32px 40px',
+    maxWidth: 440,
+    width: '90%',
+    textAlign: 'center',
+  },
+  title: {
+    color: '#cdd6f4',
+    margin: '0 0 16px',
+    fontSize: 20,
+    fontWeight: 600,
+  },
+  text: {
+    color: '#a6adc8',
+    marginBottom: 0,
+    lineHeight: 1.5,
+  },
+};
+
 function getMilestoneKey(projectId: string) {
   return `${ACTIVE_MILESTONE_KEY_PREFIX}${projectId}`;
 }
@@ -84,13 +122,13 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 
 export default function App() {
   const [needsEnrollment, setNeedsEnrollment] = useState(false);
+  const [bootstrapLoopbackOnly, setBootstrapLoopbackOnly] = useState(false);
   const [setupNeeded, setSetupNeeded] = useState(false);
   const [wizardGoToSettings, setWizardGoToSettings] = useState(false);
 
   useEffect(() => {
-    fetch('/api/setup/status')
-      .then((r) => r.json())
-      .then((data: { setupNeeded: boolean }) => {
+    apiRequest<{ setupNeeded: boolean }>('/api/setup/status')
+      .then((data) => {
         if (data.setupNeeded) setSetupNeeded(true);
       })
       .catch(() => {
@@ -102,6 +140,13 @@ export default function App() {
     const handler = () => setNeedsEnrollment(true);
     window.addEventListener('device-unauthorized', handler);
     return () => window.removeEventListener('device-unauthorized', handler);
+  }, []);
+
+  useEffect(() => {
+    const handler = () => setBootstrapLoopbackOnly(true);
+    window.addEventListener('device-bootstrap-loopback-only', handler);
+    return () =>
+      window.removeEventListener('device-bootstrap-loopback-only', handler);
   }, []);
 
   const bootReconciliation = useBootReconciliation();
@@ -332,9 +377,8 @@ export default function App() {
   }, [sessions, send]);
 
   useEffect(() => {
-    fetch('/api/settings')
-      .then((r) => r.json())
-      .then((s: Record<string, string>) => {
+    apiRequest<Record<string, string>>('/api/settings')
+      .then((s) => {
         const lines = Number(s.card_preview_lines);
         if (lines > 0) setCardPreviewLines(lines);
         if (s.session_mode === 'api' || s.session_mode === 'cli')
@@ -350,9 +394,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    fetch('/api/config')
-      .then((r) => r.json())
-      .then((loaded: ProjectConfig[]) => {
+    apiRequest<ProjectConfig[]>('/api/config')
+      .then((loaded) => {
         if (loaded.length === 0) return;
         setProjects(loaded);
 
@@ -1124,6 +1167,20 @@ export default function App() {
       searchInputRef.current?.focus();
     },
   });
+
+  if (bootstrapLoopbackOnly) {
+    return (
+      <div style={loopbackErrorStyles.overlay}>
+        <div style={loopbackErrorStyles.card}>
+          <h2 style={loopbackErrorStyles.title}>Remote Access Restricted</h2>
+          <p style={loopbackErrorStyles.text}>
+            Setup must be initialized from localhost (127.0.0.1) — connect via
+            SSH tunnel or local access, then enroll this device.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (setupNeeded) {
     return (

@@ -128,7 +128,10 @@ export interface UpdateMilestoneInput {
   displayOrder?: number;
 }
 
-async function request<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
+export async function apiRequest<T>(
+  input: RequestInfo,
+  init?: RequestInit,
+): Promise<T> {
   const token = getDeviceToken(); // may be null before enrollment
   const headers: Record<string, string> = {
     ...(init?.headers as Record<string, string> | undefined),
@@ -146,17 +149,24 @@ async function request<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
+    let code: string | undefined;
     try {
-      const body = (await res.json()) as { error?: string };
+      const body = (await res.json()) as { error?: string; code?: string };
       if (body?.error) message = body.error;
+      code = body.code;
     } catch {
       /* body is not JSON */
+    }
+    if (res.status === 403 && code === 'bootstrap_loopback_only') {
+      window.dispatchEvent(new CustomEvent('device-bootstrap-loopback-only'));
     }
     throw new Error(message);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
+
+const request = apiRequest;
 
 export const projectsApi = {
   list(): Promise<Project[]> {
