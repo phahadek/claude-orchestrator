@@ -1,0 +1,48 @@
+{
+  "$comment": "Place this at <central-config>/projects/<repo-dir>/grooming.json (the central config tree, OUTSIDE the repo). The loaders resolve it by repo basename via $ORCHESTRATOR_CONFIG_DIR / --config-dir / a host-aware default (a config/ dir beside the projects root: dev <repo>/../config, prod <repo>/../../config); pass --manifest <path> to override the full path, or --project <key> to override the dir name. The invariant grooming procedure lives in the skill; this file carries the per-repo specifics. notion_env + source_root + packages are repo-relative (resolved against --repo, not the manifest location). The .skill-cache/grooming/<milestone>/ + .skill-cache/design/<milestone>/ caches stay under the repo (gitignored).",
+
+  "backend": "notion",
+  "$backend": "notion | jira | github-issues | yaml — which task backend this repo uses.",
+
+  "architectural_control": "full",
+  "$architectural_control": "full = you own the design docs and resolve/rewrite. low = you are one contributor; the skill reads reference/low-control.md and biases to investigate-propose-route.",
+
+  "source_root": "src/yourpackage",
+  "$source_root": "Repo-relative root the `packages` keys are resolved under.",
+
+  "integration_branch": "dev",
+  "$integration_branch": "LOCAL branch used as the code-freshness baseline. Local (not origin) so it stays a frozen anchor during a grooming session even while implementation sessions push to origin.",
+
+  "notion_env": "/path/to/.env",
+  "$notion_env": "Path to a .env carrying NOTION_API_KEY, passed through to the loader's sibling scripts. Omit for non-Notion backends.",
+
+  "status_property": "Status",
+  "status_vocab": {
+    "backlog": "🔲 Backlog",
+    "ready": "🗂️ Ready",
+    "in_progress": "🔄 In Progress",
+    "in_review": "👀 In Review",
+    "done": "✅ Done",
+    "deferred": "⏭️ Deferred"
+  },
+  "$status_vocab": "Your board's exact status names. backlog = needs grooming; done = work complete; deferred = scope superseded by another task (NOT 'do later') — treated equivalently to done by /groom and /design (not surfaced, satisfied for dep purposes).",
+
+  "context_pages": [
+    { "id": "<page-id>", "title": "Master Context" }
+  ],
+  "$context_pages": "The fixed Step-1 context loads (master context, research goals, architecture, coding + task-writing guidelines, milestones). Bodies are fetched into the cache so the session reads from disk, not by hand.",
+
+  "milestones": {
+    "M1": {
+      "board": "<board-data-source-id>",
+      "neighbours": [{ "id": "M0", "board": "<board-id>" }]
+    }
+  },
+  "$milestones": "Per-milestone board id + immediate neighbour boards (loaded context-only to catch cross-milestone dependencies).",
+
+  "packages": ["ingestion", "normalize", "storage"],
+  "$packages": "Code-region keying granularity, relative to source_root. Longest match wins. Coarser (package/dir) is better than file-level: it survives small edits and lets stubbed tasks that name an area still resolve. Split a large package finer where useful.",
+
+  "area_aliases": {},
+  "$area_aliases": "Map human area phrases used in stubbed tasks ('phase deriver') to a package path. Fill in as real aliases emerge — a wrong alias is worse than none, so leave unknown areas out; the loader flags unresolved tasks for the skill's judgment pass."
+}
