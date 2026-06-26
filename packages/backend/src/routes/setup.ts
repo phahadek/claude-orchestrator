@@ -12,7 +12,7 @@ import { GitHubClient } from '../github/GitHubClient';
 import { GitHubApiError } from '../github/types';
 import { probeNotionToken } from '../notion/NotionClient';
 import { NotionApiError } from '../notion/types';
-import { probeJiraToken, JiraApiError } from '../tasks/JiraClient';
+import { JiraClient, JiraApiError } from '../tasks/JiraClient';
 
 const router = Router();
 
@@ -114,7 +114,7 @@ async function validateJiraToken(
   email?: string,
 ): Promise<{ valid: boolean; message: string }> {
   try {
-    const data = await probeJiraToken(host, token, email);
+    const data = await JiraClient.probe(host, token, email);
     return {
       valid: true,
       message: `Authenticated as ${data.displayName ?? data.emailAddress ?? 'unknown'}`,
@@ -135,9 +135,7 @@ router.post('/setup/validate', async (req, res) => {
     email?: string;
   };
   if (type !== 'github' && type !== 'notion' && type !== 'jira') {
-    res
-      .status(400)
-      .json({ error: 'type must be "github", "notion", or "jira"' });
+    res.status(400).json({ error: 'type must be "github", "notion", or "jira"' });
     return;
   }
   if (typeof token !== 'string' || !token) {
@@ -145,7 +143,7 @@ router.post('/setup/validate', async (req, res) => {
     return;
   }
   if (type === 'jira' && (typeof host !== 'string' || !host)) {
-    res.status(400).json({ error: 'host is required for jira' });
+    res.status(400).json({ error: 'host is required for jira validation' });
     return;
   }
 
