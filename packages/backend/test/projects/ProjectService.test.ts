@@ -5,7 +5,10 @@ vi.mock('../../src/db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
-import { ProjectService, getProjectRepos } from '../../src/projects/ProjectService.js';
+import {
+  ProjectService,
+  getProjectRepos,
+} from '../../src/projects/ProjectService.js';
 import { db } from '../../src/db/db.js';
 
 beforeEach(() => {

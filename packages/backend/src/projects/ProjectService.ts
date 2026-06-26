@@ -123,7 +123,9 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
   };
 }
 
-export function getProjectRepos(project: { githubRepo?: string | null }): string[] {
+export function getProjectRepos(project: {
+  githubRepo?: string | null;
+}): string[] {
   const raw = project.githubRepo;
   if (!raw) return [];
   try {
