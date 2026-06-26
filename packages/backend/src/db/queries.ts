@@ -974,7 +974,18 @@ export function upsertPullRequest(
     pause_reason?: PullRequestRow['pause_reason'];
   },
 ): PullRequestRow | null {
-  if (!getProjectByGithubRepo(pr.repo)) {
+  const repoConfigured = listProjectRows().some((row) => {
+    const raw = row.github_repo;
+    if (!raw) return false;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return (parsed as string[]).includes(pr.repo);
+    } catch {
+      // bare string
+    }
+    return raw === pr.repo;
+  });
+  if (!repoConfigured) {
     logger.warn(
       `[upsertPullRequest] rejected: repo "${pr.repo}" not configured in any project — skipping upsert to prevent phantom row (pr_url=${pr.pr_url})`,
     );
@@ -1949,14 +1960,6 @@ export function getProjectRowById(id: string): ProjectRow | undefined {
   return db
     .prepare<{ id: string }>(`SELECT * FROM projects WHERE id = @id`)
     .get({ id }) as ProjectRow | undefined;
-}
-
-function getProjectByGithubRepo(githubRepo: string): ProjectRow | undefined {
-  return db
-    .prepare<{
-      github_repo: string;
-    }>(`SELECT * FROM projects WHERE github_repo = @github_repo LIMIT 1`)
-    .get({ github_repo: githubRepo }) as ProjectRow | undefined;
 }
 
 export function listProjectRows(): ProjectRow[] {

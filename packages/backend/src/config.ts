@@ -209,7 +209,9 @@ export function getAllProjects(): ProjectConfig[] {
 export function getProjectByGithubRepo(
   githubRepo: string,
 ): ProjectConfig | undefined {
-  return getAllProjects().find((p) => p.githubRepo === githubRepo);
+  const { getProjectRepos } =
+    require('./projects/ProjectService') as typeof import('./projects/ProjectService');
+  return getAllProjects().find((p) => getProjectRepos(p).includes(githubRepo));
 }
 
 export interface RuntimeSettings {

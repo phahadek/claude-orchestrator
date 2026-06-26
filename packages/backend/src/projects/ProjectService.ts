@@ -123,6 +123,18 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
   };
 }
 
+export function getProjectRepos(project: { githubRepo?: string | null }): string[] {
+  const raw = project.githubRepo;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as string[];
+  } catch {
+    // bare string
+  }
+  return [raw];
+}
+
 export const ProjectService = {
   list(): Project[] {
     const rows = listProjectRows();
@@ -142,7 +154,7 @@ export const ProjectService = {
   },
 
   getByGithubRepo(githubRepo: string): Project | undefined {
-    return this.list().find((p) => p.githubRepo === githubRepo);
+    return this.list().find((p) => getProjectRepos(p).includes(githubRepo));
   },
 
   create(input: CreateProjectInput): Project {
