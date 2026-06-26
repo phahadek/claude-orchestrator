@@ -134,10 +134,11 @@ projectsRouter.post('/projects', async (req: Request, res: Response) => {
     rawTaskSource !== undefined &&
     rawTaskSource !== 'notion' &&
     rawTaskSource !== 'yaml' &&
-    rawTaskSource !== 'github'
+    rawTaskSource !== 'github' &&
+    rawTaskSource !== 'jira'
   ) {
     res.status(400).json({
-      error: `taskSource must be 'notion', 'yaml', or 'github'`,
+      error: `taskSource must be 'notion', 'yaml', 'github', or 'jira'`,
     });
     return;
   }
@@ -146,7 +147,9 @@ projectsRouter.post('/projects', async (req: Request, res: Response) => {
       ? 'yaml'
       : rawTaskSource === 'github'
         ? 'github'
-        : 'notion';
+        : rawTaskSource === 'jira'
+          ? 'jira'
+          : 'notion';
 
   let taskSourceConfig: string | null = null;
   if (taskSource === 'github') {
@@ -244,7 +247,8 @@ projectsRouter.patch('/projects/:id', async (req: Request, res: Response) => {
   if (
     body.taskSource === 'notion' ||
     body.taskSource === 'yaml' ||
-    body.taskSource === 'github'
+    body.taskSource === 'github' ||
+    body.taskSource === 'jira'
   ) {
     patch.task_source = body.taskSource;
   }
