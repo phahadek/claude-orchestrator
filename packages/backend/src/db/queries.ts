@@ -2893,15 +2893,7 @@ export interface SchedulerAuditStats {
   errorCount24h: number;
 }
 
-const stmtSchedulerAuditStats = db.prepare<
-  [],
-  {
-    job: string;
-    last_duration_ms: number | null;
-    run_count_24h: number;
-    error_count_24h: number;
-  }
->(`
+const stmtSchedulerAuditStats = db.prepare(`
   WITH ranked AS (
     SELECT
       job,
@@ -2921,7 +2913,12 @@ const stmtSchedulerAuditStats = db.prepare<
 `);
 
 export function getSchedulerAuditStats(): SchedulerAuditStats[] {
-  const rows = stmtSchedulerAuditStats.all();
+  const rows = stmtSchedulerAuditStats.all() as Array<{
+    job: string;
+    last_duration_ms: number | null;
+    run_count_24h: number;
+    error_count_24h: number;
+  }>;
   return rows.map((r) => ({
     job: r.job,
     lastDurationMs: r.last_duration_ms,
