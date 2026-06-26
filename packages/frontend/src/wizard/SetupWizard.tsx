@@ -423,7 +423,8 @@ export function SetupWizard({ onComplete }: Props) {
           <>
             <h1 className={styles.title}>Global Credentials</h1>
             <p className={styles.subtitle}>
-              Add your credentials. Both fields are optional — you can configure them later in Settings.
+              Add your credentials. Both fields are optional — you can configure
+              them later in Settings.
             </p>
 
             <div className={styles.formGroup}>
@@ -567,7 +568,9 @@ export function SetupWizard({ onComplete }: Props) {
               <button
                 className={styles.btnPrimary}
                 onClick={() => void handleSaveCredentials()}
-                disabled={githubToken.trim() !== '' && validation.github !== 'ok'}
+                disabled={
+                  githubToken.trim() !== '' && validation.github !== 'ok'
+                }
                 type="button"
               >
                 Continue
