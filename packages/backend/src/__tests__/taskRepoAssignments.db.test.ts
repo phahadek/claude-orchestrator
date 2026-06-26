@@ -69,20 +69,14 @@ describe('setTaskRepoAssignment / getTaskRepoAssignment', () => {
   });
 
   it('upserts when called twice for the same task_id', () => {
-    setTaskRepoAssignment(
-      'task-3',
-      'proj-1',
+    setTaskRepoAssignment('task-3', 'proj-1', 'owner/repo-a', 'first-user', [
       'owner/repo-a',
-      'first-user',
-      ['owner/repo-a', 'owner/repo-b'],
-    );
-    setTaskRepoAssignment(
-      'task-3',
-      'proj-1',
       'owner/repo-b',
-      'second-user',
-      ['owner/repo-a', 'owner/repo-b'],
-    );
+    ]);
+    setTaskRepoAssignment('task-3', 'proj-1', 'owner/repo-b', 'second-user', [
+      'owner/repo-a',
+      'owner/repo-b',
+    ]);
     const row = getTaskRepoAssignment('task-3');
     expect(row!.repo).toBe('owner/repo-b');
     expect(row!.assigned_by).toBe('second-user');
@@ -103,13 +97,9 @@ describe('setTaskRepoAssignment / getTaskRepoAssignment', () => {
 
 describe('deleteTaskRepoAssignment', () => {
   it('removes the assignment', () => {
-    setTaskRepoAssignment(
-      'task-5',
-      'proj-1',
+    setTaskRepoAssignment('task-5', 'proj-1', 'owner/repo-a', 'user', [
       'owner/repo-a',
-      'user',
-      ['owner/repo-a'],
-    );
+    ]);
     expect(getTaskRepoAssignment('task-5')).toBeDefined();
     deleteTaskRepoAssignment('task-5');
     expect(getTaskRepoAssignment('task-5')).toBeUndefined();
