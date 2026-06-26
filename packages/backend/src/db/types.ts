@@ -336,3 +336,13 @@ export interface PullRequestRow {
   conflict_nudge_sha: string | null; // SHA for which a conflict nudge was last sent (dedup key)
   stalled_pr_retry_count: number; // reconciler attempt counter; resets when head_sha changes
 }
+
+// ─── task_repo_assignments ──────────────────────────────────────────────────
+
+export interface TaskRepoAssignmentRow {
+  task_id: string;
+  project_id: string;
+  repo: string;
+  assigned_by: string;
+  assigned_at: number;
+}

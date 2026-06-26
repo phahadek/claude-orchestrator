@@ -71,6 +71,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'API rate limit reached — session paused. Will resume automatically.',
   stalled_reconcile_cap:
     'PR stalled — reconciler retry cap reached. Manual intervention required.',
+  needs_repo:
+    'No repo assigned — assign a target repository before this task can launch.',
 };
 
 function verdictLabel(verdict: string): string {

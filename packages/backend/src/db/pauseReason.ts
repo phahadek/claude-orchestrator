@@ -36,7 +36,8 @@ export type CanonicalPauseReason =
   | 'diverged_branch_unresolved'
   | 'analyze_failing'
   | 'rate_limit'
-  | 'stalled_reconcile_cap';
+  | 'stalled_reconcile_cap'
+  | 'needs_repo';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -164,6 +165,11 @@ export const PAUSE_REASON_REGISTRY: Record<
   },
   stalled_reconcile_cap: {
     source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  needs_repo: {
+    source: 'launch',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },

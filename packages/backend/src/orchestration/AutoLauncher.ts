@@ -19,6 +19,8 @@ import {
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { runWithConcurrency } from '../utils/concurrency';
+import { getProjectRepos } from '../projects/ProjectService';
+import { getTaskRepoAssignment } from '../db/queries';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -423,6 +425,25 @@ export class AutoLauncher {
     if (this.sessionManager.hasLiveSessionForTask(task.id)) return false;
     if (hasActiveSessionForTask(task.id)) return false;
 
+    // Resolve the repo for this task launch.
+    // Single-repo project: auto-resolve to the sole repo (preserves existing behavior).
+    // Multi-repo project: look up task_repo_assignments; skip if no assignment exists.
+    const repos = getProjectRepos(project);
+    let resolvedRepo: string | undefined;
+    if (repos.length === 1) {
+      resolvedRepo = repos[0];
+    } else if (repos.length > 1) {
+      const assignment = getTaskRepoAssignment(task.id);
+      if (!assignment) {
+        logger.info(
+          `[AutoLauncher] task ${task.id} is in a multi-repo project with no repo assignment — marking needs_repo and skipping`,
+        );
+        setTaskPauseReason(task.id, 'needs_repo', '');
+        return false;
+      }
+      resolvedRepo = assignment.repo;
+    }
+
     try {
       const sessionId = await this.sessionManager.start(
         taskUrl,
@@ -433,12 +454,13 @@ export class AutoLauncher {
           milestoneId,
           taskKind,
           taskId: task.id,
+          repo: resolvedRepo,
         },
       );
       clearTaskPauseReason(task.id);
       this.launchFailedAttempts.delete(task.id);
       logger.info(
-        `[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}`,
+        `[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}${resolvedRepo ? ` repo=${resolvedRepo}` : ''}`,
       );
       this.broadcast?.({
         type: 'auto_launch',
