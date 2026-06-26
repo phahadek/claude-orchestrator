@@ -1339,13 +1339,19 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             }
             if (adoptedNum) {
               try {
-                const adopted = await this.githubClient!.fetchPR(repo, adoptedNum);
+                const adopted = await this.githubClient!.fetchPR(
+                  repo,
+                  adoptedNum,
+                );
                 await this.handlePRDetected(adopted.url, {
                   number: adopted.id,
                   html_url: adopted.url,
                   title: adopted.title,
                   body: adopted.body,
-                  head: { ref: adopted.headBranch, sha: adopted.headSha ?? undefined },
+                  head: {
+                    ref: adopted.headBranch,
+                    sha: adopted.headSha ?? undefined,
+                  },
                   base: { ref: adopted.baseBranch },
                   state: adopted.state,
                   created_at: adopted.createdAt,
