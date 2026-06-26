@@ -268,17 +268,14 @@ export function ProjectFormModal({
               className={styles.input}
               value={values.taskSource}
               onChange={(e) => {
-                const val = e.target.value;
-                update(
-                  'taskSource',
-                  val === 'yaml'
-                    ? 'yaml'
-                    : val === 'github'
-                      ? 'github'
-                      : val === 'jira'
-                        ? 'jira'
-                        : 'notion',
-                );
+                const val = e.target.value as TaskSource;
+                const valid: TaskSource[] = [
+                  'notion',
+                  'yaml',
+                  'github',
+                  'jira',
+                ];
+                update('taskSource', valid.includes(val) ? val : 'notion');
               }}
             >
               <option value="notion">Notion</option>
