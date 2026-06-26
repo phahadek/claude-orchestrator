@@ -69,7 +69,12 @@ function _runPass2(): void {
       row.pr_state,
     );
     if (terminal === 'done') {
-      markSessionDone(row.session_id, now, row.pr_url, 'boot_idle_orphan_review');
+      markSessionDone(
+        row.session_id,
+        now,
+        row.pr_url,
+        'boot_idle_orphan_review',
+      );
       logger.info(
         `[BootIdleReconciliation] review ${row.session_id.slice(0, 8)} idle→done (coding=${row.coding_session_status ?? 'none'} pr=${row.pr_state})`,
       );
