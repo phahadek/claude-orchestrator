@@ -1649,6 +1649,7 @@ export interface IdleSessionWithResolvedPR {
   pr_number: number;
   repo: string;
   pr_url: string | null;
+  review_session_id: string | null;
 }
 
 /**
@@ -1661,7 +1662,8 @@ export function getIdleSessionsWithResolvedPRs(): IdleSessionWithResolvedPR[] {
     .prepare(
       `
     SELECT s.session_id, s.task_id, s.project_id,
-           pr.state AS pr_state, pr.pr_number, pr.repo, pr.pr_url
+           pr.state AS pr_state, pr.pr_number, pr.repo, pr.pr_url,
+           pr.review_session_id
     FROM sessions s
     JOIN pull_requests pr ON pr.session_id = s.session_id
     WHERE s.status = 'idle'
