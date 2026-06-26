@@ -380,7 +380,9 @@ describe('LocalTaskBackend (milestone schema)', () => {
       const file = readTasksFile(tmpDir) as {
         milestones: { tasks: Array<{ id: string; notes?: string }> }[];
       };
-      const task = file.milestones[0].tasks.find((t) => t.id === 'task-ready-2');
+      const task = file.milestones[0].tasks.find(
+        (t) => t.id === 'task-ready-2',
+      );
       expect(task?.notes).toBe('First note content');
     });
 
@@ -391,7 +393,9 @@ describe('LocalTaskBackend (milestone schema)', () => {
       const file = readTasksFile(tmpDir) as {
         milestones: { tasks: Array<{ id: string; notes?: string }> }[];
       };
-      const task = file.milestones[0].tasks.find((t) => t.id === 'task-ready-1');
+      const task = file.milestones[0].tasks.find(
+        (t) => t.id === 'task-ready-1',
+      );
       expect(task?.notes).toBe('replacement');
     });
 
@@ -409,7 +413,9 @@ describe('LocalTaskBackend (milestone schema)', () => {
       const file = readTasksFile(tmpDir) as {
         milestones: { tasks: Array<{ id: string; notes?: string }> }[];
       };
-      const task = file.milestones[0].tasks.find((t) => t.id === 'task-ready-2');
+      const task = file.milestones[0].tasks.find(
+        (t) => t.id === 'task-ready-2',
+      );
       expect(task?.notes).toBe('first line');
     });
 
@@ -420,7 +426,9 @@ describe('LocalTaskBackend (milestone schema)', () => {
       const file = readTasksFile(tmpDir) as {
         milestones: { tasks: Array<{ id: string; notes?: string }> }[];
       };
-      const task = file.milestones[0].tasks.find((t) => t.id === 'task-ready-2');
+      const task = file.milestones[0].tasks.find(
+        (t) => t.id === 'task-ready-2',
+      );
       expect(task?.notes).toBe('line one\nline two');
     });
 
@@ -445,7 +453,9 @@ describe('LocalTaskBackend (milestone schema)', () => {
       const file = readTasksFile(tmpDir) as {
         milestones: { tasks: Array<{ id: string; status: string }> }[];
       };
-      const task = file.milestones[0].tasks.find((t) => t.id === 'task-ready-2');
+      const task = file.milestones[0].tasks.find(
+        (t) => t.id === 'task-ready-2',
+      );
       expect(task?.status).toBe(raw);
     });
 
@@ -455,24 +465,27 @@ describe('LocalTaskBackend (milestone schema)', () => {
       ['Docs', '📝 Docs'],
       ['Assets', '🎨 Assets'],
       ['Bug', '🐛 Bug'],
-    ])('type %s maps to display %s in fetchReadyTasks', async (raw, display) => {
-      const dir = makeTempDir();
-      try {
-        writeTasksFile(dir, {
-          milestones: [
-            {
-              id: 'm1',
-              name: 'M1',
-              tasks: [{ id: 't1', name: 'T1', status: 'Ready', type: raw }],
-            },
-          ],
-        });
-        const b = new LocalTaskBackend(dir);
-        const tasks = await b.fetchReadyTasks('m1');
-        expect(tasks[0].task.type).toBe(display);
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-    });
+    ])(
+      'type %s maps to display %s in fetchReadyTasks',
+      async (raw, display) => {
+        const dir = makeTempDir();
+        try {
+          writeTasksFile(dir, {
+            milestones: [
+              {
+                id: 'm1',
+                name: 'M1',
+                tasks: [{ id: 't1', name: 'T1', status: 'Ready', type: raw }],
+              },
+            ],
+          });
+          const b = new LocalTaskBackend(dir);
+          const tasks = await b.fetchReadyTasks('m1');
+          expect(tasks[0].task.type).toBe(display);
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
   });
 });
