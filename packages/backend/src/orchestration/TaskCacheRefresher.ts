@@ -17,6 +17,8 @@ const PROJECT_CONCURRENCY = 5;
  * it broadcasts `task_cache_updated` so connected frontends can re-read the cache.
  */
 export class TaskCacheRefresher {
+  private _refreshingOnce = false;
+
   constructor(
     private readonly broadcast?: (msg: ServerMessage) => void,
     private readonly options: {
@@ -41,6 +43,8 @@ export class TaskCacheRefresher {
   }
 
   async refreshOnce(): Promise<void> {
+    if (this._refreshingOnce) return;
+    this._refreshingOnce = true;
     const start = Date.now();
     const listProjects = this.options.listProjects ?? getAllProjects;
     const projects = listProjects().filter((p) => p.taskSource === 'notion');
@@ -52,20 +56,27 @@ export class TaskCacheRefresher {
         this.refreshProject(project),
       );
     } finally {
+      this._refreshingOnce = false;
       logger.info(
         `[TaskCacheRefresher] refresh complete projects=${projects.length} durationMs=${Date.now() - start}`,
       );
     }
   }
 
-  async refreshProjectById(projectId: string): Promise<void> {
+  async refreshProjectById(
+    projectId: string,
+    skipCache?: boolean,
+  ): Promise<void> {
     const listProjects = this.options.listProjects ?? getAllProjects;
     const project = listProjects().find((p) => p.id === projectId);
     if (!project) return;
-    await this.refreshProject(project);
+    await this.refreshProject(project, skipCache);
   }
 
-  private async refreshProject(project: ProjectConfig): Promise<void> {
+  private async refreshProject(
+    project: ProjectConfig,
+    skipCache?: boolean,
+  ): Promise<void> {
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     let backend: TaskBackend;
     try {
@@ -80,7 +91,9 @@ export class TaskCacheRefresher {
 
     for (const milestone of milestones) {
       try {
-        const tasks = await backend.fetchReadyTasks(milestone.id);
+        const tasks = skipCache
+          ? await backend.fetchReadyTasks(milestone.id, true)
+          : await backend.fetchReadyTasks(milestone.id);
         this.broadcast?.({
           type: 'task_cache_updated',
           projectId: project.id,
