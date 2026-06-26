@@ -172,9 +172,6 @@ export class Scheduler {
         result as { items_processed?: number } | undefined
       )?.items_processed;
 
-      // Schedule next BEFORE emitting audit so next_run_at is fresh in the broadcast.
-      // For the queued case, _runJob synchronously sets state.nextRunAt = null before
-      // its first await, ensuring the broadcast reflects the running state correctly.
       if (state.queued && !state.stopped) {
         state.queued = false;
         void this._runJob(state);
