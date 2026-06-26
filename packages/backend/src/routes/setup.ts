@@ -212,14 +212,11 @@ router.post('/setup/save-credentials', (req, res) => {
     githubToken?: string;
     notionApiKey?: string;
   };
-  if (typeof githubToken !== 'string' || !githubToken) {
-    res.status(400).json({ error: 'githubToken is required' });
-    return;
-  }
   const src = new DataDirConfigSource();
-  const partial: Parameters<typeof src.write>[0] = {
-    github: { token: githubToken },
-  };
+  const partial: Parameters<typeof src.write>[0] = {};
+  if (typeof githubToken === 'string' && githubToken) {
+    partial.github = { token: githubToken };
+  }
   if (typeof notionApiKey === 'string' && notionApiKey) {
     partial.notion = { apiKey: notionApiKey };
   }
