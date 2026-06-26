@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
+import type { Project } from '../projects/ProjectService.js';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,32 @@ vi.mock('../projects/ProjectService.js', () => ({
 import { projectsRouter } from '../routes/projects.js';
 import { ProjectService } from '../projects/ProjectService.js';
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fakeProject(overrides: Partial<Project>): Project {
+  return {
+    id: 'p1',
+    name: 'Test Project',
+    projectDir: '/tmp/test',
+    contextUrl: null,
+    githubRepo: null,
+    taskSource: 'notion',
+    gitMode: 'github',
+    autoLaunchEnabled: false,
+    autoLaunchMilestoneId: null,
+    autoMergeEnabled: false,
+    milestoneBranching: null,
+    nonMilestoneSourceConfig: null,
+    taskSourceConfig: null,
+    dataResidencyConfirmed: false,
+    baseBranch: 'main',
+    createdAt: 0,
+    updatedAt: 0,
+    milestones: [],
+    ...overrides,
+  };
+}
+
 // ── Test app ──────────────────────────────────────────────────────────────────
 
 function buildApp() {
@@ -88,11 +115,11 @@ beforeEach(() => {
 
 describe('GET /api/projects/:id/github/validate-milestone', () => {
   const PROJECT_ID = 'proj-github-1';
-  const githubProject = {
+  const githubProject = fakeProject({
     id: PROJECT_ID,
-    taskSource: 'github' as const,
+    taskSource: 'github',
     taskSourceConfig: JSON.stringify({ owner: 'acme', repo: 'app' }),
-  };
+  });
 
   it('returns 404 when project not found', async () => {
     const res = await supertest(buildApp()).get(
@@ -102,37 +129,27 @@ describe('GET /api/projects/:id/github/validate-milestone', () => {
   });
 
   it('returns 400 when project is not github source', async () => {
-    vi.mocked(ProjectService.getById).mockReturnValue({
-      ...githubProject,
-      taskSource: 'notion' as const,
-    } as Parameters<typeof ProjectService.getById>[0] extends never
-      ? never
-      :  
-        any);
+    vi.mocked(ProjectService.getById).mockReturnValue(
+      fakeProject({ id: PROJECT_ID, taskSource: 'notion' }),
+    );
     const res = await supertest(buildApp()).get(
       `/api/projects/${PROJECT_ID}/github/validate-milestone?number=1`,
     );
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({
-      error: expect.stringContaining('GitHub'),
-    });
+    expect(res.body).toMatchObject({ error: expect.stringContaining('GitHub') });
   });
 
   it('returns 400 when number param is missing', async () => {
-     
-    vi.mocked(ProjectService.getById).mockReturnValue(githubProject as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(githubProject);
     const res = await supertest(buildApp()).get(
       `/api/projects/${PROJECT_ID}/github/validate-milestone`,
     );
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({
-      error: expect.stringContaining('number'),
-    });
+    expect(res.body).toMatchObject({ error: expect.stringContaining('number') });
   });
 
   it('returns 400 when number is not a positive integer', async () => {
-     
-    vi.mocked(ProjectService.getById).mockReturnValue(githubProject as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(githubProject);
     const res = await supertest(buildApp()).get(
       `/api/projects/${PROJECT_ID}/github/validate-milestone?number=abc`,
     );
@@ -143,8 +160,7 @@ describe('GET /api/projects/:id/github/validate-milestone', () => {
   });
 
   it('returns milestone info for a valid number', async () => {
-     
-    vi.mocked(ProjectService.getById).mockReturnValue(githubProject as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(githubProject);
     mockFetch((url) => {
       if (url.includes('/repos/acme/app/milestones/3')) {
         return jsonResponse({
@@ -175,8 +191,7 @@ describe('GET /api/projects/:id/github/validate-milestone', () => {
   });
 
   it('returns 400 when GitHub API returns an error', async () => {
-     
-    vi.mocked(ProjectService.getById).mockReturnValue(githubProject as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(githubProject);
     mockFetch((_url) => jsonResponse({ message: 'Not Found' }, 404));
 
     const res = await supertest(buildApp()).get(
@@ -191,14 +206,14 @@ describe('GET /api/projects/:id/github/validate-milestone', () => {
 
 describe('GET /api/projects/:id/jira/validate-epic', () => {
   const PROJECT_ID = 'proj-jira-1';
-  const jiraProject = {
+  const jiraProject = fakeProject({
     id: PROJECT_ID,
-    taskSource: 'jira' as const,
+    taskSource: 'jira',
     taskSourceConfig: JSON.stringify({
       host: 'https://mycompany.atlassian.net',
       project_key: 'MYPROJ',
     }),
-  };
+  });
 
   it('returns 404 when project not found', async () => {
     const res = await supertest(buildApp()).get(
@@ -208,11 +223,9 @@ describe('GET /api/projects/:id/jira/validate-epic', () => {
   });
 
   it('returns 400 when project is not jira source', async () => {
-    vi.mocked(ProjectService.getById).mockReturnValue({
-      ...jiraProject,
-      taskSource: 'github' as const,
-       
-    } as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(
+      fakeProject({ id: PROJECT_ID, taskSource: 'github' }),
+    );
     const res = await supertest(buildApp()).get(
       `/api/projects/${PROJECT_ID}/jira/validate-epic?key=PROJ-1`,
     );
@@ -221,8 +234,7 @@ describe('GET /api/projects/:id/jira/validate-epic', () => {
   });
 
   it('returns 400 when key param is missing', async () => {
-     
-    vi.mocked(ProjectService.getById).mockReturnValue(jiraProject as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(jiraProject);
     const res = await supertest(buildApp()).get(
       `/api/projects/${PROJECT_ID}/jira/validate-epic`,
     );
@@ -231,8 +243,7 @@ describe('GET /api/projects/:id/jira/validate-epic', () => {
   });
 
   it('returns 400 when key is not a valid Jira Epic key', async () => {
-     
-    vi.mocked(ProjectService.getById).mockReturnValue(jiraProject as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(jiraProject);
     const res = await supertest(buildApp()).get(
       `/api/projects/${PROJECT_ID}/jira/validate-epic?key=not-valid`,
     );
@@ -243,8 +254,7 @@ describe('GET /api/projects/:id/jira/validate-epic', () => {
   });
 
   it('returns Epic info for a valid key', async () => {
-     
-    vi.mocked(ProjectService.getById).mockReturnValue(jiraProject as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(jiraProject);
     mockFetch((url) => {
       if (url.includes('/issue/MYPROJ-42')) {
         return jsonResponse({
@@ -274,8 +284,7 @@ describe('GET /api/projects/:id/jira/validate-epic', () => {
   });
 
   it('returns 400 when Jira API returns an error', async () => {
-     
-    vi.mocked(ProjectService.getById).mockReturnValue(jiraProject as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(jiraProject);
     mockFetch((_url) =>
       jsonResponse({ errorMessages: ['Issue does not exist'] }, 404),
     );
@@ -292,11 +301,9 @@ describe('GET /api/projects/:id/jira/validate-epic', () => {
 
 describe('POST /api/projects/:id/milestones — sourceId format validation', () => {
   it('rejects a non-integer sourceId for github projects', async () => {
-    vi.mocked(ProjectService.getById).mockReturnValue({
-      id: 'p1',
-      taskSource: 'github',
-       
-    } as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(
+      fakeProject({ id: 'p1', taskSource: 'github' }),
+    );
     const res = await supertest(buildApp())
       .post('/api/projects/p1/milestones')
       .send({ name: 'Sprint', sourceId: 'not-a-number' });
@@ -307,11 +314,9 @@ describe('POST /api/projects/:id/milestones — sourceId format validation', () 
   });
 
   it('rejects a malformed Jira Epic key for jira projects', async () => {
-    vi.mocked(ProjectService.getById).mockReturnValue({
-      id: 'p1',
-      taskSource: 'jira',
-       
-    } as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(
+      fakeProject({ id: 'p1', taskSource: 'jira' }),
+    );
     const res = await supertest(buildApp())
       .post('/api/projects/p1/milestones')
       .send({ name: 'Epic', sourceId: 'proj-1' }); // lowercase — invalid
@@ -322,26 +327,20 @@ describe('POST /api/projects/:id/milestones — sourceId format validation', () 
   });
 
   it('rejects an invalid sourceId for notion projects', async () => {
-    vi.mocked(ProjectService.getById).mockReturnValue({
-      id: 'p1',
-      taskSource: 'notion',
-       
-    } as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(
+      fakeProject({ id: 'p1', taskSource: 'notion' }),
+    );
     const res = await supertest(buildApp())
       .post('/api/projects/p1/milestones')
       .send({ name: 'Board', sourceId: 'not-a-notion-id' });
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({
-      error: expect.stringContaining('Notion'),
-    });
+    expect(res.body).toMatchObject({ error: expect.stringContaining('Notion') });
   });
 
   it('accepts a valid integer sourceId for github projects', async () => {
-    vi.mocked(ProjectService.getById).mockReturnValue({
-      id: 'p1',
-      taskSource: 'github',
-       
-    } as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(
+      fakeProject({ id: 'p1', taskSource: 'github' }),
+    );
     vi.mocked(ProjectService.createMilestone).mockReturnValue({
       id: 'new-ms',
       projectId: 'p1',
@@ -358,11 +357,9 @@ describe('POST /api/projects/:id/milestones — sourceId format validation', () 
   });
 
   it('accepts a valid Jira Epic key', async () => {
-    vi.mocked(ProjectService.getById).mockReturnValue({
-      id: 'p1',
-      taskSource: 'jira',
-       
-    } as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(
+      fakeProject({ id: 'p1', taskSource: 'jira' }),
+    );
     vi.mocked(ProjectService.createMilestone).mockReturnValue({
       id: 'new-ms',
       projectId: 'p1',
@@ -379,11 +376,9 @@ describe('POST /api/projects/:id/milestones — sourceId format validation', () 
   });
 
   it('allows any sourceId for yaml projects', async () => {
-    vi.mocked(ProjectService.getById).mockReturnValue({
-      id: 'p1',
-      taskSource: 'yaml',
-       
-    } as any);
+    vi.mocked(ProjectService.getById).mockReturnValue(
+      fakeProject({ id: 'p1', taskSource: 'yaml' }),
+    );
     vi.mocked(ProjectService.createMilestone).mockReturnValue({
       id: 'new-ms',
       projectId: 'p1',
