@@ -4,9 +4,16 @@ vi.mock('../db/queries', () => ({
   upsertTaskCache: vi.fn(),
 }));
 
+vi.mock('../projects/ProjectService', () => ({
+  ProjectService: {
+    getMilestone: vi.fn(),
+  },
+}));
+
 import { JiraTaskSourceProvider } from './JiraTaskSourceProvider';
 import { JiraApiError } from './JiraClient';
 import { upsertTaskCache } from '../db/queries';
+import { ProjectService } from '../projects/ProjectService';
 import type { JiraIssue } from './JiraClient';
 
 function makeIssue(
@@ -41,6 +48,17 @@ const PROJECT_CONFIG = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: milestone resolves to itself (sourceId === id) so existing tests
+  // that pass raw Epic keys as milestoneId continue to work unchanged.
+  vi.mocked(ProjectService.getMilestone).mockImplementation((id: string) => ({
+    id,
+    projectId: 'test-project',
+    name: id,
+    sourceId: id,
+    displayOrder: 0,
+    createdAt: 0,
+    updatedAt: 0,
+  }));
 });
 
 // ---------------------------------------------------------------------------
@@ -421,6 +439,119 @@ describe('Gap 2 — Epic tree scan', () => {
       'EPIC-1',
     );
     expect(vi.mocked(mockClient.buildEpicParentJql)).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Milestone source_id resolution
+// ---------------------------------------------------------------------------
+
+describe('fetchReadyTasks — milestone source_id resolution', () => {
+  it('uses row.sourceId (not the UUID) as the Epic key for JQL', async () => {
+    const task = makeIssue('PROJ-10', { issuetype: { name: 'Task' } });
+    vi.mocked(ProjectService.getMilestone).mockReturnValue({
+      id: 'some-uuid-1234',
+      projectId: 'test',
+      name: 'Sprint 1',
+      sourceId: 'PROJ-123',
+      displayOrder: 0,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    const mockClient = {
+      searchIssues: vi.fn().mockResolvedValue([task]),
+      buildEpicParentJql: vi.fn().mockReturnValue('parent = "PROJ-123"'),
+      buildSubtaskJql: vi.fn().mockReturnValue(''),
+      buildKeyInJql: vi.fn().mockReturnValue(''),
+    };
+    const provider = new JiraTaskSourceProvider(mockClient as never, {
+      ...PROJECT_CONFIG,
+      epic_field: 'parent',
+    });
+
+    await provider.fetchReadyTasks('some-uuid-1234');
+
+    expect(vi.mocked(mockClient.buildEpicParentJql)).toHaveBeenCalledWith(
+      'PROJ-123',
+    );
+    expect(vi.mocked(mockClient.buildEpicParentJql)).not.toHaveBeenCalledWith(
+      'some-uuid-1234',
+    );
+  });
+
+  it('throws when milestone row is not found', async () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue(undefined);
+
+    const mockClient = {
+      searchIssues: vi.fn(),
+      buildEpicParentJql: vi.fn(),
+    };
+    const provider = new JiraTaskSourceProvider(mockClient as never, {
+      ...PROJECT_CONFIG,
+      epic_field: 'parent',
+    });
+
+    await expect(provider.fetchReadyTasks('nonexistent-uuid')).rejects.toThrow(
+      'milestone not found: nonexistent-uuid',
+    );
+  });
+
+  it('throws when milestone row has no sourceId', async () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue({
+      id: 'some-uuid',
+      projectId: 'test',
+      name: 'Sprint 1',
+      sourceId: null,
+      displayOrder: 0,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    const mockClient = {
+      searchIssues: vi.fn(),
+      buildEpicParentJql: vi.fn(),
+    };
+    const provider = new JiraTaskSourceProvider(mockClient as never, {
+      ...PROJECT_CONFIG,
+      epic_field: 'parent',
+    });
+
+    await expect(provider.fetchReadyTasks('some-uuid')).rejects.toThrow(
+      'has no source_id',
+    );
+  });
+
+  it('board cache key stays as the row UUID, not the sourceId', async () => {
+    const task = makeIssue('PROJ-20', { issuetype: { name: 'Task' } });
+    vi.mocked(ProjectService.getMilestone).mockReturnValue({
+      id: 'board-uuid',
+      projectId: 'test',
+      name: 'Sprint 2',
+      sourceId: 'PROJ-EPIC',
+      displayOrder: 0,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    const mockClient = {
+      searchIssues: vi.fn().mockResolvedValue([task]),
+      buildEpicParentJql: vi.fn().mockReturnValue('parent = "PROJ-EPIC"'),
+      buildSubtaskJql: vi.fn().mockReturnValue(''),
+      buildKeyInJql: vi.fn().mockReturnValue(''),
+    };
+    const provider = new JiraTaskSourceProvider(mockClient as never, {
+      ...PROJECT_CONFIG,
+      epic_field: 'parent',
+    });
+
+    await provider.fetchReadyTasks('board-uuid');
+
+    const boardCacheCall = vi
+      .mocked(upsertTaskCache)
+      .mock.calls.find(([key]) => (key as string).startsWith('board:'));
+    expect(boardCacheCall?.[0]).toBe('board:board-uuid');
+    expect(boardCacheCall?.[0]).not.toBe('board:PROJ-EPIC');
   });
 });
 
