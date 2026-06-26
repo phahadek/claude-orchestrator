@@ -380,8 +380,8 @@ function MilestonesSubPanelInner({
                   !sourceValidationError &&
                   sourceValidation?.type === 'github-milestone' && (
                     <p className={styles.muted}>
-                      ✓ #{sourceValidation.number} — {sourceValidation.title}{' '}
-                      ({sourceValidation.state})
+                      ✓ #{sourceValidation.number} — {sourceValidation.title} (
+                      {sourceValidation.state})
                     </p>
                   )}
                 {!sourceValidating &&

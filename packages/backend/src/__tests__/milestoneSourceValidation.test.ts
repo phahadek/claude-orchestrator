@@ -107,27 +107,31 @@ describe('GET /api/projects/:id/github/validate-milestone', () => {
       taskSource: 'notion' as const,
     } as Parameters<typeof ProjectService.getById>[0] extends never
       ? never
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      : any);
+      :  
+        any);
     const res = await supertest(buildApp()).get(
       `/api/projects/${PROJECT_ID}/github/validate-milestone?number=1`,
     );
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ error: expect.stringContaining('GitHub') });
+    expect(res.body).toMatchObject({
+      error: expect.stringContaining('GitHub'),
+    });
   });
 
   it('returns 400 when number param is missing', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     vi.mocked(ProjectService.getById).mockReturnValue(githubProject as any);
     const res = await supertest(buildApp()).get(
       `/api/projects/${PROJECT_ID}/github/validate-milestone`,
     );
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ error: expect.stringContaining('number') });
+    expect(res.body).toMatchObject({
+      error: expect.stringContaining('number'),
+    });
   });
 
   it('returns 400 when number is not a positive integer', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     vi.mocked(ProjectService.getById).mockReturnValue(githubProject as any);
     const res = await supertest(buildApp()).get(
       `/api/projects/${PROJECT_ID}/github/validate-milestone?number=abc`,
@@ -139,7 +143,7 @@ describe('GET /api/projects/:id/github/validate-milestone', () => {
   });
 
   it('returns milestone info for a valid number', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     vi.mocked(ProjectService.getById).mockReturnValue(githubProject as any);
     mockFetch((url) => {
       if (url.includes('/repos/acme/app/milestones/3')) {
@@ -171,7 +175,7 @@ describe('GET /api/projects/:id/github/validate-milestone', () => {
   });
 
   it('returns 400 when GitHub API returns an error', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     vi.mocked(ProjectService.getById).mockReturnValue(githubProject as any);
     mockFetch((_url) => jsonResponse({ message: 'Not Found' }, 404));
 
@@ -207,7 +211,7 @@ describe('GET /api/projects/:id/jira/validate-epic', () => {
     vi.mocked(ProjectService.getById).mockReturnValue({
       ...jiraProject,
       taskSource: 'github' as const,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
     const res = await supertest(buildApp()).get(
       `/api/projects/${PROJECT_ID}/jira/validate-epic?key=PROJ-1`,
@@ -217,7 +221,7 @@ describe('GET /api/projects/:id/jira/validate-epic', () => {
   });
 
   it('returns 400 when key param is missing', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     vi.mocked(ProjectService.getById).mockReturnValue(jiraProject as any);
     const res = await supertest(buildApp()).get(
       `/api/projects/${PROJECT_ID}/jira/validate-epic`,
@@ -227,7 +231,7 @@ describe('GET /api/projects/:id/jira/validate-epic', () => {
   });
 
   it('returns 400 when key is not a valid Jira Epic key', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     vi.mocked(ProjectService.getById).mockReturnValue(jiraProject as any);
     const res = await supertest(buildApp()).get(
       `/api/projects/${PROJECT_ID}/jira/validate-epic?key=not-valid`,
@@ -239,7 +243,7 @@ describe('GET /api/projects/:id/jira/validate-epic', () => {
   });
 
   it('returns Epic info for a valid key', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     vi.mocked(ProjectService.getById).mockReturnValue(jiraProject as any);
     mockFetch((url) => {
       if (url.includes('/issue/MYPROJ-42')) {
@@ -270,7 +274,7 @@ describe('GET /api/projects/:id/jira/validate-epic', () => {
   });
 
   it('returns 400 when Jira API returns an error', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     vi.mocked(ProjectService.getById).mockReturnValue(jiraProject as any);
     mockFetch((_url) =>
       jsonResponse({ errorMessages: ['Issue does not exist'] }, 404),
@@ -291,7 +295,7 @@ describe('POST /api/projects/:id/milestones — sourceId format validation', () 
     vi.mocked(ProjectService.getById).mockReturnValue({
       id: 'p1',
       taskSource: 'github',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
     const res = await supertest(buildApp())
       .post('/api/projects/p1/milestones')
@@ -306,7 +310,7 @@ describe('POST /api/projects/:id/milestones — sourceId format validation', () 
     vi.mocked(ProjectService.getById).mockReturnValue({
       id: 'p1',
       taskSource: 'jira',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
     const res = await supertest(buildApp())
       .post('/api/projects/p1/milestones')
@@ -321,20 +325,22 @@ describe('POST /api/projects/:id/milestones — sourceId format validation', () 
     vi.mocked(ProjectService.getById).mockReturnValue({
       id: 'p1',
       taskSource: 'notion',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
     const res = await supertest(buildApp())
       .post('/api/projects/p1/milestones')
       .send({ name: 'Board', sourceId: 'not-a-notion-id' });
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ error: expect.stringContaining('Notion') });
+    expect(res.body).toMatchObject({
+      error: expect.stringContaining('Notion'),
+    });
   });
 
   it('accepts a valid integer sourceId for github projects', async () => {
     vi.mocked(ProjectService.getById).mockReturnValue({
       id: 'p1',
       taskSource: 'github',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
     vi.mocked(ProjectService.createMilestone).mockReturnValue({
       id: 'new-ms',
@@ -355,7 +361,7 @@ describe('POST /api/projects/:id/milestones — sourceId format validation', () 
     vi.mocked(ProjectService.getById).mockReturnValue({
       id: 'p1',
       taskSource: 'jira',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
     vi.mocked(ProjectService.createMilestone).mockReturnValue({
       id: 'new-ms',
@@ -376,7 +382,7 @@ describe('POST /api/projects/:id/milestones — sourceId format validation', () 
     vi.mocked(ProjectService.getById).mockReturnValue({
       id: 'p1',
       taskSource: 'yaml',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
     } as any);
     vi.mocked(ProjectService.createMilestone).mockReturnValue({
       id: 'new-ms',

@@ -260,7 +260,9 @@ export const projectsApi = {
     const res = await fetch(
       `/api/projects/${encodeURIComponent(projectId)}/github/validate-milestone?number=${number}`,
     );
-    const body = (await res.json()) as GithubMilestoneValidation | { error: string };
+    const body = (await res.json()) as
+      | GithubMilestoneValidation
+      | { error: string };
     if (!res.ok) {
       throw new Error(
         'error' in body && body.error

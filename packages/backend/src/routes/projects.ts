@@ -649,7 +649,9 @@ projectsRouter.get(
     if (project.taskSource !== 'github') {
       res
         .status(400)
-        .json({ error: `Project '${projectId}' does not use GitHub task source` });
+        .json({
+          error: `Project '${projectId}' does not use GitHub task source`,
+        });
       return;
     }
 
@@ -663,7 +665,9 @@ projectsRouter.get(
     if (isNaN(n) || n <= 0 || String(n) !== rawNumber) {
       res
         .status(400)
-        .json({ error: 'number must be a positive integer (GitHub milestone number)' });
+        .json({
+          error: 'number must be a positive integer (GitHub milestone number)',
+        });
       return;
     }
 
@@ -695,7 +699,9 @@ projectsRouter.get(
       });
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : 'GitHub milestone validation failed';
+        err instanceof Error
+          ? err.message
+          : 'GitHub milestone validation failed';
       res.status(400).json({ error: message });
     }
   },
@@ -715,7 +721,9 @@ projectsRouter.get(
     if (project.taskSource !== 'jira') {
       res
         .status(400)
-        .json({ error: `Project '${projectId}' does not use Jira task source` });
+        .json({
+          error: `Project '${projectId}' does not use Jira task source`,
+        });
       return;
     }
 
@@ -728,7 +736,9 @@ projectsRouter.get(
     if (!JIRA_EPIC_KEY_RE.test(rawKey)) {
       res
         .status(400)
-        .json({ error: 'key must be a valid Jira Epic key (e.g. PROJECT-123)' });
+        .json({
+          error: 'key must be a valid Jira Epic key (e.g. PROJECT-123)',
+        });
       return;
     }
 
