@@ -10,17 +10,34 @@ This section covers running the orchestrator directly from the cloned repository
 
 ### Prerequisites
 
-| Tool   | Purpose                                    |
-| ------ | ------------------------------------------ |
-| `node` | Runtime — install system-wide, not via nvm |
-| `npm`  | Bundled with Node.js                       |
-| `git`  | Clone and pull updates                     |
+| Tool       | Purpose                                                              |
+| ---------- | -------------------------------------------------------------------- |
+| `node`     | Runtime — install system-wide, not via nvm                           |
+| `npm`      | Bundled with Node.js                                                 |
+| `git`      | Clone and pull updates                                               |
+| `gh`       | GitHub CLI — PR creation/lifecycle for `github` git-mode projects    |
+| `gitleaks` | Secret scanning in the orchestrator `analyze` gate (no npm fallback) |
 
 Install Node.js (system-wide, not via nvm so the systemd unit can find it):
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs git
+```
+
+Install `gh` (GitHub CLI) per the [official instructions](https://github.com/cli/cli/blob/trunk/docs/install_linux.md).
+
+Install `gitleaks` — it is a standalone Go binary (not an npm package, so `npx`
+cannot fetch it on demand). Without it the `analyze` pre-review gate fails with
+`gitleaks: not found` and every PR is blocked at `analyze_failing`:
+
+```bash
+GL_VER=$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
+  | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+GL_VER=${GL_VER#v}
+curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GL_VER}/gitleaks_${GL_VER}_linux_x64.tar.gz" \
+  | sudo tar -xz -C /usr/local/bin gitleaks
+gitleaks version
 ```
 
 Verify the paths the unit expects:

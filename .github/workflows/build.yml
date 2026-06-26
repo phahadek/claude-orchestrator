@@ -48,4 +48,11 @@ jobs:
         run: npm run format:check
 
       - name: Verify systemd unit
-        run: systemd-analyze verify installers/linux/orchestrator.service
+        run: |
+          # systemd-analyze verify resolves ExecStart's binary and fails if it is
+          # missing. The unit targets /usr/bin/node (the NodeSource path on the
+          # production host), but actions/setup-node installs node under the runner
+          # toolcache, so /usr/bin/node is absent on CI. Symlink it so verify can
+          # validate the canonical unit without weakening it for production.
+          sudo ln -sf "$(command -v node)" /usr/bin/node
+          systemd-analyze verify installers/linux/orchestrator.service
