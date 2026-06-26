@@ -80,7 +80,13 @@ const sizeClassified =
   typeof sc.decision === 'string' &&
   ['no_split', 'split_now', 'unsplittable', 'n/a'].includes(sc.decision);
 
-if (signedOff && depsClassified && sizeClassified) process.exit(0); // fully gated → allow
+// repo_assignment check: multi-repo project tasks require an assigned repo.
+// Fail-open: absent repo_assignment field = not a multi-repo task → allow.
+const ra = entry.repo_assignment;
+const repoAssigned =
+  !ra || !ra.multi_repo || (typeof ra.repo === 'string' && ra.repo.trim() !== '');
+
+if (signedOff && depsClassified && sizeClassified && repoAssigned) process.exit(0); // fully gated → allow
 
 const reasons = [];
 if (!signedOff) {
@@ -96,6 +102,11 @@ if (!depsClassified) {
 if (!sizeClassified) {
   reasons.push(
     `size_check is missing or malformed — every Code/Tooling task in a batch must have an explicit size classification recorded in grooming-state.json before promotion. Expected shape: {"loc": <number>, "decision": "no_split"} for ≤500 LoC tasks, "split_now" with "split_into" task IDs after splitting (edit the original down + create N-1 siblings; do NOT mark the original Deferred), "unsplittable" with a one-line "reason" for atomic tasks, or {"decision":"n/a"} for Design/Planning. The size check is load-bearing — see /groom presentation.md § Size check`,
+  );
+}
+if (!repoAssigned) {
+  reasons.push(
+    `this task belongs to a multi-repo project but has no repo assigned — set repo_assignment: {"multi_repo": true, "repo": "<repo-name>"} in grooming-state.json before promotion. Assign the target repo during the grooming session and confirm it in the state file`,
   );
 }
 

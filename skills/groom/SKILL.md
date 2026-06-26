@@ -169,9 +169,15 @@ Only after explicit sign-off on the batch (_"looks good"_, _"ship it"_, _"next"_
 "split_now", "split_into": ["<task-id>", …] }` after splitting, `{ "loc":
 <number>, "decision": "unsplittable", "reason": "<one-line>" }` for the atomic
    case, or `{ "decision": "n/a" }` for Design/Planning tasks), and set
-   `signoff: { "by": "<human>", "at": "<iso>" }`. _(All three — `signoff`,
-   `hard_block_deps`, and `size_check` — are gated by the promotion hook. They
-   must be written **before** the status flip, or the gate blocks the update.)_
+   `signoff: { "by": "<human>", "at": "<iso>" }`. For tasks whose project spans
+   multiple repos (multi-repo project), also fill `repo_assignment`:
+   `{ "multi_repo": true, "repo": "<assigned-repo-name>" }` — ask the human which
+   repo this task targets and record the answer. For single-repo project tasks omit
+   the field (the gate is fail-open: an absent `repo_assignment` is treated as
+   "not a multi-repo task" and allowed through). _(All four — `signoff`,
+   `hard_block_deps`, `size_check`, and `repo_assignment` for multi-repo tasks —
+   are gated by the promotion hook. They must be written **before** the status
+   flip, or the gate blocks the update.)_
 2. **Then**, in a **single** `notion-update-page` call (`command:
 "update_properties"`) per task, write **both** the canonical hard-block deps
    into the `Depends On` property **and** set `Status → 🗂️ Ready`. The
