@@ -54,7 +54,10 @@ describe('apiRequest', () => {
     await expect(apiRequest('/api/test')).rejects.toThrow('Unauthorized');
     expect(dispatched).toHaveLength(1);
 
-    window.removeEventListener('device-unauthorized', dispatched[0] as unknown as EventListener);
+    window.removeEventListener(
+      'device-unauthorized',
+      dispatched[0] as unknown as EventListener,
+    );
   });
 
   it('does not clear device_token from localStorage on 401', async () => {

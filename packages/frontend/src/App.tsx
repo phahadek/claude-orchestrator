@@ -1,4 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from 'react';
 import { EnrollmentFlow } from './auth/EnrollmentFlow';
 import { SetupWizard } from './wizard/SetupWizard';
 import type { ConnectionState } from './hooks/useWebSocket';
@@ -139,7 +145,8 @@ export default function App() {
   useEffect(() => {
     const handler = () => setBootstrapLoopbackOnly(true);
     window.addEventListener('device-bootstrap-loopback-only', handler);
-    return () => window.removeEventListener('device-bootstrap-loopback-only', handler);
+    return () =>
+      window.removeEventListener('device-bootstrap-loopback-only', handler);
   }, []);
 
   const bootReconciliation = useBootReconciliation();
