@@ -40,6 +40,7 @@ import {
   setPendingPush,
   getTestResult,
   markSessionDone,
+  updateSessionStatus,
   clearTerminalPRFlags,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
@@ -258,8 +259,9 @@ export class PRMergeWatcher {
       if (pr.session_id) {
         this.sessions.markSessionErrored(pr.session_id, 'error', 'pr_closed');
       }
-      // End review session gracefully
+      // Transition review session to error (terminal) then end it gracefully
       if (pr.review_session_id) {
+        updateSessionStatus(pr.review_session_id, 'error', Date.now());
         this.sessions.endSession(pr.review_session_id);
       }
       this.broadcast({
