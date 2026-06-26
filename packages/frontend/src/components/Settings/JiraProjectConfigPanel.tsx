@@ -35,7 +35,11 @@ function newId() {
 }
 
 function toPairRows(obj: Record<string, string>): PairRow[] {
-  return Object.entries(obj).map(([key, value]) => ({ id: newId(), key, value }));
+  return Object.entries(obj).map(([key, value]) => ({
+    id: newId(),
+    key,
+    value,
+  }));
 }
 
 function fromPairRows(rows: PairRow[]): Record<string, string> | undefined {
@@ -151,9 +155,7 @@ function JiraProjectConfigPanelInner({ project, onBack, onSaved }: Props) {
           ← Back
         </button>
         <div className={styles.subPanelTitleGroup}>
-          <h3 className={styles.sectionTitle}>
-            Jira Config — {project.name}
-          </h3>
+          <h3 className={styles.sectionTitle}>Jira Config — {project.name}</h3>
         </div>
       </div>
 
@@ -244,7 +246,11 @@ function JiraProjectConfigPanelInner({ project, onBack, onSaved }: Props) {
                 ? `project = "${projectKey.trim()}" AND status in ("To Do","Ready") ORDER BY priority DESC`
                 : 'project = "PROJ" AND status in ("To Do","Ready") ORDER BY priority DESC'
             }
-            style={{ resize: 'vertical', fontFamily: 'monospace', fontSize: '0.8125rem' }}
+            style={{
+              resize: 'vertical',
+              fontFamily: 'monospace',
+              fontSize: '0.8125rem',
+            }}
           />
           <p className={styles.fieldHelp}>
             Full JQL override for fetchReadyTasks. When set, ready_statuses is
