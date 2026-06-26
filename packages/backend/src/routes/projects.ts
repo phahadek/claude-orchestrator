@@ -386,8 +386,7 @@ projectsRouter.patch('/projects/:id', async (req: Request, res: Response) => {
       // Determine effective task_source: use the patched value if provided,
       // otherwise look up the existing project's task_source.
       const effectiveTaskSource =
-        patch.task_source ??
-        ProjectService.getById(id)?.taskSource;
+        patch.task_source ?? ProjectService.getById(id)?.taskSource;
       if (effectiveTaskSource === 'jira') {
         const result = parseJiraTaskSourceConfig(body.taskSourceConfig);
         if (!result.ok) {
