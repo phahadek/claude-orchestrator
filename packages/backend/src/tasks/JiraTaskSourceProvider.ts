@@ -259,7 +259,8 @@ export class JiraTaskSourceProvider implements TaskBackend {
       // No direct transition available — check if already in the target state.
       const issue = await this.client.getIssue(externalId);
       if (
-        issue.fields.status.name.toLowerCase() === targetJiraStatus.toLowerCase()
+        issue.fields.status.name.toLowerCase() ===
+        targetJiraStatus.toLowerCase()
       ) {
         return; // already in target state — treat as success
       }
