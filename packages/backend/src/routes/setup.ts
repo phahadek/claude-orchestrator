@@ -135,7 +135,9 @@ router.post('/setup/validate', async (req, res) => {
     email?: string;
   };
   if (type !== 'github' && type !== 'notion' && type !== 'jira') {
-    res.status(400).json({ error: 'type must be "github", "notion", or "jira"' });
+    res
+      .status(400)
+      .json({ error: 'type must be "github", "notion", or "jira"' });
     return;
   }
   if (typeof token !== 'string' || !token) {

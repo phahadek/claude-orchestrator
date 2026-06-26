@@ -202,6 +202,9 @@ export class JiraClient {
       const text = await res.text().catch(() => res.statusText);
       throw new JiraApiError(res.status, `Jira API GET /myself: ${text}`);
     }
-    return res.json() as Promise<{ displayName: string; emailAddress?: string }>;
+    return res.json() as Promise<{
+      displayName: string;
+      emailAddress?: string;
+    }>;
   }
 }
