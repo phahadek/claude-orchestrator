@@ -12,6 +12,9 @@ export interface GithubTaskSourceConfig {
 export interface JiraProjectConfig {
   host: string;
   project_key: string;
+  /** Jira accountId or email to scope task pickup to. Defaults to currentUser(). */
+  assignee?: string;
+  /** Full JQL override; operator owns any assignee clause. */
   default_jql?: string;
   ready_statuses?: string[];
   status_mapping?: Record<string, string>;
