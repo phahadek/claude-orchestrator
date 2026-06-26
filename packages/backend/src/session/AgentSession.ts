@@ -1321,6 +1321,34 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
                 `[AgentSession] updatePR fallback #${existingPR.pr_number} failed: ${(ue as Error).message}`,
               );
             }
+          } else if (parsedNum !== null) {
+            // PR exists on GitHub but not in our DB (e.g. created by a prior
+            // marker emission that crashed before handlePRDetected ran).
+            // Fetch and register it so subsequent sweeper checks and marker
+            // emissions find it correctly.
+            try {
+              const fullPR = await this.githubClient!.fetchPR(repo, parsedNum);
+              const prShape: GitHubPRShape = {
+                number: fullPR.id,
+                html_url: fullPR.url,
+                title: fullPR.title,
+                body: fullPR.body,
+                head: {
+                  ref: fullPR.headBranch,
+                  sha: fullPR.headSha ?? undefined,
+                },
+                base: { ref: fullPR.baseBranch },
+                state: fullPR.state,
+                created_at: fullPR.createdAt,
+                updated_at: fullPR.updatedAt,
+                draft: fullPR.draft,
+              };
+              await this.handlePRDetected(fullPR.url, prShape);
+            } catch (fe) {
+              logger.warn(
+                `[AgentSession] Failed to fetch/register existing PR #${parsedNum}: ${(fe as Error).message}`,
+              );
+            }
           }
           return;
         }
