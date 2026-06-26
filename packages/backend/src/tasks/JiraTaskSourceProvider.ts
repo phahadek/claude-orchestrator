@@ -6,6 +6,7 @@ import { JiraClient, JiraApiError } from './JiraClient';
 import type { JiraIssue } from './JiraClient';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import { upsertTaskCache } from '../db/queries';
+import { logger } from '../logger';
 
 export interface JiraProjectConfig {
   host: string;
@@ -229,18 +230,27 @@ export class JiraTaskSourceProvider implements TaskBackend {
     const mapping = this.projectConfig.status_mapping ?? DEFAULT_STATUS_MAPPING;
     const targetJiraStatus = mapping[status];
     if (!targetJiraStatus) {
-      throw new Error(
-        `[JiraTaskSourceProvider] no Jira status mapping for: "${status}"`,
+      // Orchestrator-only statuses (e.g. 🚫 Blocked, ⏭️ Deferred) have no Jira counterpart.
+      logger.info(
+        `[JiraTaskSourceProvider] no Jira mapping for orchestrator status "${status}" on ${externalId} — skipping Jira transition`,
       );
+      return;
     }
     const transitions = await this.client.getTransitions(externalId);
     const transition = transitions.find(
       (t) => t.to.name.toLowerCase() === targetJiraStatus.toLowerCase(),
     );
     if (!transition) {
-      throw new Error(
-        `[JiraTaskSourceProvider] no transition to "${targetJiraStatus}" for issue ${externalId}`,
+      // No direct transition available — check whether issue is already in the target state.
+      const issue = await this.client.getIssue(externalId);
+      const currentStatus = issue.fields.status.name;
+      if (currentStatus.toLowerCase() === targetJiraStatus.toLowerCase()) {
+        return; // Already in target state — treat as success.
+      }
+      logger.warn(
+        `[JiraTaskSourceProvider] no direct transition to "${targetJiraStatus}" for ${externalId} (currently "${currentStatus}") — skipping`,
       );
+      return;
     }
     await this.client.transitionIssue(externalId, transition.id);
   }
