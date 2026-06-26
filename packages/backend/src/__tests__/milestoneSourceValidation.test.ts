@@ -136,7 +136,9 @@ describe('GET /api/projects/:id/github/validate-milestone', () => {
       `/api/projects/${PROJECT_ID}/github/validate-milestone?number=1`,
     );
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ error: expect.stringContaining('GitHub') });
+    expect(res.body).toMatchObject({
+      error: expect.stringContaining('GitHub'),
+    });
   });
 
   it('returns 400 when number param is missing', async () => {
@@ -145,7 +147,9 @@ describe('GET /api/projects/:id/github/validate-milestone', () => {
       `/api/projects/${PROJECT_ID}/github/validate-milestone`,
     );
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ error: expect.stringContaining('number') });
+    expect(res.body).toMatchObject({
+      error: expect.stringContaining('number'),
+    });
   });
 
   it('returns 400 when number is not a positive integer', async () => {
@@ -334,7 +338,9 @@ describe('POST /api/projects/:id/milestones — sourceId format validation', () 
       .post('/api/projects/p1/milestones')
       .send({ name: 'Board', sourceId: 'not-a-notion-id' });
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ error: expect.stringContaining('Notion') });
+    expect(res.body).toMatchObject({
+      error: expect.stringContaining('Notion'),
+    });
   });
 
   it('accepts a valid integer sourceId for github projects', async () => {
