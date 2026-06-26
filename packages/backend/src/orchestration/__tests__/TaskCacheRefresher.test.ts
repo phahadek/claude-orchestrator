@@ -245,5 +245,43 @@ describe('TaskCacheRefresher', () => {
       ).resolves.not.toThrow();
       expect(getTaskBackend).not.toHaveBeenCalled();
     });
+
+    it('passes skipCache:true to fetchReadyTasks when called with skipCache:true', async () => {
+      const proj = makeProject({ id: 'p1' });
+      vi.mocked(getAllProjects).mockReturnValue([proj]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'src-1'),
+      ]);
+
+      const backend = makeBackend();
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+      await refresher.refreshProjectById('p1', true);
+
+      expect(backend.fetchReadyTasks).toHaveBeenCalledWith('m1', true);
+    });
+
+    it('passes no skipCache to fetchReadyTasks when called without it (passive refresh)', async () => {
+      const proj = makeProject({ id: 'p1' });
+      vi.mocked(getAllProjects).mockReturnValue([proj]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'src-1'),
+      ]);
+
+      const backend = makeBackend();
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+      await refresher.refreshProjectById('p1');
+
+      expect(backend.fetchReadyTasks).toHaveBeenCalledWith('m1');
+    });
   });
 });
