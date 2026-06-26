@@ -101,11 +101,13 @@ function MilestonesSubPanelInner({
   async function validateSource(value: string) {
     const trimmed = value.trim();
     if (!trimmed) return;
+    const source = project.taskSource;
+    if (source === 'yaml') return;
     setSourceValidating(true);
     setSourceValidationError(null);
     setSourceValidation(null);
     try {
-      if (project.taskSource === 'notion') {
+      if (source === 'notion') {
         const result = await projectsApi.validateNotionBoard(trimmed);
         setSourceValidation(result);
         if (result.type === 'page') {
@@ -119,7 +121,7 @@ function MilestonesSubPanelInner({
             );
           }
         }
-      } else if (project.taskSource === 'github') {
+      } else if (source === 'github') {
         const n = parseInt(trimmed, 10);
         if (isNaN(n) || n <= 0 || String(n) !== trimmed) {
           setSourceValidationError(
@@ -129,7 +131,7 @@ function MilestonesSubPanelInner({
         }
         const result = await projectsApi.validateGithubMilestone(project.id, n);
         setSourceValidation(result);
-      } else if (project.taskSource === 'jira') {
+      } else if (source === 'jira') {
         if (!/^[A-Z][A-Z0-9]*-\d+$/.test(trimmed)) {
           setSourceValidationError(
             'Jira Epic key must match the format PROJECT-123.',

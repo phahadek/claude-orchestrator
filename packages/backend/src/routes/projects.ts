@@ -720,7 +720,6 @@ projectsRouter.get(
       });
       return;
     }
-
     const rawKey =
       typeof req.query.key === 'string' ? req.query.key.trim() : '';
     if (!rawKey) {
@@ -756,6 +755,12 @@ projectsRouter.get(
         JIRA_EMAIL || undefined,
       );
       const issue = await client.getIssue(rawKey);
+      if (issue.fields.issuetype.name !== 'Epic') {
+        res.status(400).json({
+          error: `'${rawKey}' is a ${issue.fields.issuetype.name}, not an Epic`,
+        });
+        return;
+      }
       res.json({
         type: 'jira-epic',
         key: issue.key,
