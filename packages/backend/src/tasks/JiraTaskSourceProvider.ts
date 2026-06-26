@@ -12,7 +12,18 @@ import { logger } from '../logger';
 export interface JiraProjectConfig {
   host: string;
   project_key: string;
-  /** Full JQL override. When set, ready_statuses is ignored for fetchReadyTasks. */
+  /**
+   * Jira accountId or email of the user whose tasks to pick up.
+   * Defaults to currentUser() (the orchestrator's Jira token user).
+   * Injected as AND assignee = ... into candidate-fetch JQLs only
+   * (buildReadyJql, Epic-children). Blocker/parent expansion JQLs are
+   * intentionally NOT filtered.
+   *
+   * When default_jql is set, the operator is responsible for including their
+   * own assignee clause — this field is ignored in that case.
+   */
+  assignee?: string;
+  /** Full JQL override. When set, ready_statuses and assignee are both ignored for fetchReadyTasks; the operator owns the full JQL including any assignee clause. */
   default_jql?: string;
   /** Jira status names that map to "ready to launch". Defaults to DEFAULT_READY_STATUSES. */
   ready_statuses?: string[];
@@ -321,14 +332,27 @@ export class JiraTaskSourceProvider implements TaskBackend {
 
   private buildReadyJql(): string {
     if (this.projectConfig.default_jql) {
+      // Operator owns the full JQL — assignee clause is their responsibility.
       return this.projectConfig.default_jql;
     }
     const readyStatuses =
       this.projectConfig.ready_statuses ?? DEFAULT_READY_STATUSES;
-    return this.client.buildReadyJql(
-      this.projectConfig.project_key,
-      readyStatuses,
+    return this.injectAssignee(
+      this.client.buildReadyJql(this.projectConfig.project_key, readyStatuses),
     );
+  }
+
+  /** Injects AND assignee = ... before ORDER BY (or at end) of a JQL string. */
+  private injectAssignee(jql: string): string {
+    const assignee = this.projectConfig.assignee;
+    const clause = assignee
+      ? `assignee = "${assignee}"`
+      : `assignee = currentUser()`;
+    const orderByIdx = jql.toUpperCase().indexOf(' ORDER BY');
+    if (orderByIdx !== -1) {
+      return `${jql.slice(0, orderByIdx)} AND ${clause}${jql.slice(orderByIdx)}`;
+    }
+    return `${jql} AND ${clause}`;
   }
 
   /** Gap 2: Fetch direct children of an Epic, auto-detecting the JQL field. */
@@ -337,22 +361,22 @@ export class JiraTaskSourceProvider implements TaskBackend {
     if (override) {
       const jql =
         override === 'parent'
-          ? this.client.buildEpicParentJql(epicKey)
-          : this.client.buildEpicLinkJql(epicKey);
+          ? this.injectAssignee(this.client.buildEpicParentJql(epicKey))
+          : this.injectAssignee(this.client.buildEpicLinkJql(epicKey));
       return this.client.searchIssues(jql);
     }
 
     // Auto-detect: try 'parent' first, fall back to 'Epic Link' on 400
     try {
       const result = await this.client.searchIssues(
-        this.client.buildEpicParentJql(epicKey),
+        this.injectAssignee(this.client.buildEpicParentJql(epicKey)),
       );
       this.epicFieldCache = 'parent';
       return result;
     } catch (e) {
       if (e instanceof JiraApiError && e.statusCode === 400) {
         const result = await this.client.searchIssues(
-          this.client.buildEpicLinkJql(epicKey),
+          this.injectAssignee(this.client.buildEpicLinkJql(epicKey)),
         );
         this.epicFieldCache = 'Epic Link';
         return result;
