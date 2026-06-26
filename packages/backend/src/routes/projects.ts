@@ -89,6 +89,44 @@ function parseGithubTaskSourceConfig(
   return { ok: true, config: { owner, repo, defaultMilestone } };
 }
 
+interface JiraTaskSourceConfig {
+  host: string;
+  project_key: string;
+  default_jql?: string;
+  ready_statuses?: string[];
+  status_mapping?: Record<string, string>;
+  type_mapping?: Record<string, string>;
+  epic_field?: string;
+}
+
+function parseJiraTaskSourceConfig(
+  raw: unknown,
+): { ok: true; config: JiraTaskSourceConfig } | { ok: false; error: string } {
+  if (typeof raw === 'string') {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { ok: false, error: 'task_source_config is not valid JSON' };
+    }
+    return parseJiraTaskSourceConfig(parsed);
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { ok: false, error: 'task_source_config must be a JSON object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj.project_key !== 'string') {
+    return {
+      ok: false,
+      error: 'task_source_config.project_key must be a string',
+    };
+  }
+  if (typeof obj.host !== 'string') {
+    return { ok: false, error: 'task_source_config.host must be a string' };
+  }
+  return { ok: true, config: raw as JiraTaskSourceConfig };
+}
+
 async function verifyGithubRepoAccess(
   ownerRepo: string,
 ): Promise<string | null> {
@@ -345,21 +383,35 @@ projectsRouter.patch('/projects/:id', async (req: Request, res: Response) => {
     if (body.taskSourceConfig === null) {
       patch.task_source_config = null;
     } else {
-      const parsed = parseGithubTaskSourceConfig(body.taskSourceConfig);
-      if (!parsed.ok) {
-        res.status(400).json({ error: parsed.error });
-        return;
+      // Determine effective task_source: use the patched value if provided,
+      // otherwise look up the existing project's task_source.
+      const effectiveTaskSource =
+        patch.task_source ??
+        ProjectService.getById(id)?.taskSource;
+      if (effectiveTaskSource === 'jira') {
+        const result = parseJiraTaskSourceConfig(body.taskSourceConfig);
+        if (!result.ok) {
+          res.status(400).json({ error: result.error });
+          return;
+        }
+        patch.task_source_config = JSON.stringify(result.config);
+      } else {
+        const parsed = parseGithubTaskSourceConfig(body.taskSourceConfig);
+        if (!parsed.ok) {
+          res.status(400).json({ error: parsed.error });
+          return;
+        }
+        const repoError = await verifyGithubRepoAccess(
+          `${parsed.config.owner}/${parsed.config.repo}`,
+        );
+        if (repoError) {
+          res.status(400).json({ error: repoError });
+          return;
+        }
+        patch.task_source_config = JSON.stringify(parsed.config);
+        // derive github_repo from the validated GitHub task source config
+        patch.github_repo = `${parsed.config.owner}/${parsed.config.repo}`;
       }
-      const repoError = await verifyGithubRepoAccess(
-        `${parsed.config.owner}/${parsed.config.repo}`,
-      );
-      if (repoError) {
-        res.status(400).json({ error: repoError });
-        return;
-      }
-      patch.task_source_config = JSON.stringify(parsed.config);
-      // derive github_repo from the validated GitHub task source config
-      patch.github_repo = `${parsed.config.owner}/${parsed.config.repo}`;
     }
   }
 
