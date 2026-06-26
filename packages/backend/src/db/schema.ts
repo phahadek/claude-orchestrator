@@ -199,6 +199,14 @@ export function runMigrations(target: Database.Database): void {
       last_crash_at       INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS task_repo_assignments (
+      task_id      TEXT    PRIMARY KEY,
+      project_id   TEXT    NOT NULL,
+      repo         TEXT    NOT NULL,
+      assigned_by  TEXT    NOT NULL DEFAULT 'system',
+      assigned_at  INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS pending_review_sync (
       pr_number  INTEGER NOT NULL,
       repo       TEXT    NOT NULL,

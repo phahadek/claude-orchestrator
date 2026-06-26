@@ -25,10 +25,15 @@ vi.mock('../../db/queries.js', () => ({
   setTaskPauseReason: vi.fn(),
   getTaskPauseReason: vi.fn().mockReturnValue(null),
   clearTaskPauseReason: vi.fn(),
+  getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock('../../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
+}));
+
+vi.mock('../../projects/ProjectService.js', () => ({
+  getProjectRepos: vi.fn().mockReturnValue([]),
 }));
 
 import { runtimeSettings } from '../../config.js';

@@ -30,6 +30,7 @@ import type {
   DeviceRow,
   NewDeviceRow,
   SessionPauseInterval,
+  TaskRepoAssignmentRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -2966,4 +2967,44 @@ export function getSchedulerAuditStats(): SchedulerAuditStats[] {
     runCount24h: r.run_count_24h,
     errorCount24h: r.error_count_24h,
   }));
+}
+
+// ─── task_repo_assignments ─────────────────────────────────────────────────────
+
+/**
+ * Write a repo assignment for a task. The `allowedRepos` list is the project's
+ * getProjectRepos() result — callers are responsible for passing the correct set.
+ * Throws if `repo` is not in `allowedRepos`.
+ */
+export function setTaskRepoAssignment(
+  taskId: string,
+  projectId: string,
+  repo: string,
+  assignedBy: string,
+  allowedRepos: string[],
+): void {
+  if (!allowedRepos.includes(repo)) {
+    throw new Error(
+      `Repo "${repo}" is not in the project's repo set: [${allowedRepos.join(', ')}]`,
+    );
+  }
+  db.prepare(
+    `INSERT OR REPLACE INTO task_repo_assignments (task_id, project_id, repo, assigned_by, assigned_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(taskId, projectId, repo, assignedBy, Date.now());
+}
+
+export function getTaskRepoAssignment(
+  taskId: string,
+): TaskRepoAssignmentRow | undefined {
+  return db
+    .prepare<{ task_id: string }>(
+      `SELECT task_id, project_id, repo, assigned_by, assigned_at
+       FROM task_repo_assignments WHERE task_id = @task_id`,
+    )
+    .get({ task_id: taskId }) as TaskRepoAssignmentRow | undefined;
+}
+
+export function deleteTaskRepoAssignment(taskId: string): void {
+  db.prepare(`DELETE FROM task_repo_assignments WHERE task_id = ?`).run(taskId);
 }

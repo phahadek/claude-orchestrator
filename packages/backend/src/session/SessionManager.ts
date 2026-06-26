@@ -197,6 +197,12 @@ export interface StartOptions {
    * ID (AutoLauncher, PRReviewService) don't double-parse via Notion-specific logic.
    */
   taskId?: string;
+  /**
+   * Resolved GitHub repo (owner/repo) for this session. Determined at launch time from
+   * task_repo_assignments for multi-repo projects, or auto-resolved for single-repo projects.
+   * Used for branch deletion and other GitHub API calls in completeStart.
+   */
+  repo?: string;
 }
 
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
@@ -759,6 +765,7 @@ export class SessionManager extends EventEmitter {
       taskName,
       milestoneId = null,
       taskId: precomputedTaskId,
+      repo: resolvedRepo,
     } = options;
 
     const project = getProjectById(projectId)!;
@@ -876,10 +883,11 @@ export class SessionManager extends EventEmitter {
             }
 
             // Delete the branch on origin (best-effort).
-            if (this.githubClient && project.githubRepo) {
+            const branchDeletionRepo = resolvedRepo ?? project.githubRepo;
+            if (this.githubClient && branchDeletionRepo) {
               try {
                 await this.githubClient.deleteBranch(
-                  project.githubRepo,
+                  branchDeletionRepo,
                   featureBranch,
                 );
                 logger.info(
