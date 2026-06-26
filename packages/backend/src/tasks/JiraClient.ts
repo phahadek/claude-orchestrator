@@ -29,9 +29,7 @@ export interface JiraTransition {
 
 interface JiraSearchResponse {
   issues: JiraIssue[];
-  total: number;
-  maxResults: number;
-  startAt: number;
+  nextPageToken?: string;
 }
 
 interface JiraTransitionsResponse {
@@ -111,33 +109,28 @@ export class JiraClient {
     return `key in (${keys.map((k) => `"${k}"`).join(', ')})`;
   }
 
-  /** Search issues using JQL, paginating through all results. */
+  /** Search issues using JQL, paginating through all results via nextPageToken. */
   async searchIssues(jql: string): Promise<JiraIssue[]> {
     const all: JiraIssue[] = [];
-    let startAt = 0;
     const maxResults = 100;
+    const fields = [
+      'summary',
+      'status',
+      'issuetype',
+      'priority',
+      'description',
+      'issuelinks',
+      'parent',
+    ];
+    let nextPageToken: string | undefined;
 
-    let total = Infinity;
-    while (all.length < total) {
-      const resp = await this.request<JiraSearchResponse>('POST', '/search', {
-        jql,
-        startAt,
-        maxResults,
-        fields: [
-          'summary',
-          'status',
-          'issuetype',
-          'priority',
-          'description',
-          'issuelinks',
-          'parent',
-        ],
-      });
+    do {
+      const body: Record<string, unknown> = { jql, maxResults, fields };
+      if (nextPageToken !== undefined) body.nextPageToken = nextPageToken;
+      const resp = await this.request<JiraSearchResponse>('POST', '/search/jql', body);
       all.push(...resp.issues);
-      total = resp.total;
-      startAt += resp.issues.length;
-      if (resp.issues.length === 0) break;
-    }
+      nextPageToken = resp.nextPageToken;
+    } while (nextPageToken !== undefined);
 
     return all;
   }
