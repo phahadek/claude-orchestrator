@@ -137,6 +137,44 @@ The Analytics tab tracks per-session token usage and per-model cost across the p
 - [YAML template](docs/yaml-template.md) — schema reference and conventions for YAML-backed projects
 - [Orchestrator project setup](docs/orchestrator-project-setup.md) — point the orchestrator at an external project (C#, Rust, Godot, …) via `.claude/orchestrator.json` and a bootstrap script
 
+## Grooming & design skills
+
+The `/groom` (Backlog Grooming) and `/design` (Design Execution) Claude Code skills are
+source-controlled here and deployed to `~/.claude` by a run-by-hand script:
+
+- **Vendored artifacts:** `scripts/{groom-load,design-load,groom-gate,notion-page}.mjs` and
+  `skills/{groom,design}/**`.
+- **Deploy:** `node scripts/deploy-grooming.mjs` (add `--dry-run` to preview). Run it by hand
+  whenever a vendored artifact changes — there is no auto-sync. It copies the scripts into
+  `~/.claude/scripts/` and the skill trees into `~/.claude/skills/`.
+- **Manifest:** each managed repo's grooming manifest lives in the **central config tree** at
+  `config/projects/<repo-dir>/grooming.json` (outside the repo), not in `.claude/`. The loaders
+  resolve it by repo basename via `$ORCHESTRATOR_CONFIG_DIR` / `--config-dir` / a host-aware
+  default (a `config/` dir beside the projects root: dev `<repo>/../config`, prod
+  `<repo>/../../config`). See `skills/groom/reference/manifest.example.json`.
+- **One-time hook registration (manual):** the `groom-gate.mjs` promotion gate runs as a
+  `PreToolUse` hook on `mcp__claude_ai_Notion__notion-update-page` (it blocks promoting a task to
+  Ready without a recorded sign-off). The deploy script does **not** edit user-global settings, so
+  register it once in `~/.claude/settings.json`:
+
+  ```json
+  {
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "mcp__claude_ai_Notion__notion-update-page",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node ~/.claude/scripts/groom-gate.mjs"
+            }
+          ]
+        }
+      ]
+    }
+  }
+  ```
+
 ## License
 
 [MIT](LICENSE)
