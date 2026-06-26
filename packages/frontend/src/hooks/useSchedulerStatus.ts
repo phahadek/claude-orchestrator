@@ -39,6 +39,7 @@ export function useSchedulerStatus() {
               lastStatus: msg.status,
               lastDurationMs: msg.duration_ms,
               running: false,
+              nextRunAt: msg.next_run_at,
             }
           : j,
       ),

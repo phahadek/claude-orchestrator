@@ -2885,3 +2885,44 @@ export function pruneSchedulerAudit(keepPerJob = 1000): void {
     ).run({ job, keep: keepPerJob });
   }
 }
+
+export interface SchedulerAuditStats {
+  job: string;
+  lastDurationMs: number | null;
+  runCount24h: number;
+  errorCount24h: number;
+}
+
+const stmtSchedulerAuditStats = db.prepare<[], {
+  job: string;
+  last_duration_ms: number | null;
+  run_count_24h: number;
+  error_count_24h: number;
+}>(`
+  WITH ranked AS (
+    SELECT
+      job,
+      status,
+      duration_ms,
+      started_at,
+      ROW_NUMBER() OVER (PARTITION BY job ORDER BY started_at DESC) AS rn
+    FROM scheduler_audit
+  )
+  SELECT
+    job,
+    MAX(CASE WHEN rn = 1 THEN duration_ms END) AS last_duration_ms,
+    SUM(CASE WHEN status IN ('ok', 'failed') AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS run_count_24h,
+    SUM(CASE WHEN status = 'failed' AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS error_count_24h
+  FROM ranked
+  GROUP BY job
+`);
+
+export function getSchedulerAuditStats(): SchedulerAuditStats[] {
+  const rows = stmtSchedulerAuditStats.all();
+  return rows.map((r) => ({
+    job: r.job,
+    lastDurationMs: r.last_duration_ms,
+    runCount24h: r.run_count_24h,
+    errorCount24h: r.error_count_24h,
+  }));
+}

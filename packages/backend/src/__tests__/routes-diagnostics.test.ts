@@ -4,6 +4,7 @@ import request from 'supertest';
 
 vi.mock('../db/queries.js', () => ({
   insertSchedulerAudit: vi.fn(),
+  getSchedulerAuditStats: vi.fn(() => []),
 }));
 
 import {
@@ -11,6 +12,9 @@ import {
   setScheduler,
 } from '../routes/diagnostics.js';
 import { Scheduler } from '../orchestration/Scheduler.js';
+import { getSchedulerAuditStats } from '../db/queries.js';
+
+const mockGetAuditStats = vi.mocked(getSchedulerAuditStats);
 
 function makeApp(scheduler: Scheduler) {
   setScheduler(scheduler);
@@ -22,6 +26,7 @@ function makeApp(scheduler: Scheduler) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetAuditStats.mockReturnValue([]);
 });
 
 describe('GET /api/diagnostics/scheduler', () => {
@@ -50,6 +55,54 @@ describe('GET /api/diagnostics/scheduler', () => {
     const res = await request(app).get('/api/diagnostics/scheduler');
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
+  });
+
+  it('backfills lastDurationMs, runCount24h, errorCount24h from audit stats', async () => {
+    mockGetAuditStats.mockReturnValue([
+      { job: 'test_job', lastDurationMs: 1234, runCount24h: 5, errorCount24h: 1 },
+    ]);
+    const scheduler = new Scheduler();
+    scheduler.register({ name: 'test_job', intervalMs: 1000, run: async () => {} });
+    const app = makeApp(scheduler);
+    const res = await request(app).get('/api/diagnostics/scheduler');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      name: 'test_job',
+      lastDurationMs: 1234,
+      runCount24h: 5,
+      errorCount24h: 1,
+    });
+  });
+
+  it('returns null/0 for audit fields when no audit data for a job', async () => {
+    mockGetAuditStats.mockReturnValue([]);
+    const scheduler = new Scheduler();
+    scheduler.register({ name: 'new_job', intervalMs: 1000, run: async () => {} });
+    const app = makeApp(scheduler);
+    const res = await request(app).get('/api/diagnostics/scheduler');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      name: 'new_job',
+      lastDurationMs: null,
+      runCount24h: 0,
+      errorCount24h: 0,
+    });
+  });
+
+  it('handles multiple jobs with partial audit coverage', async () => {
+    mockGetAuditStats.mockReturnValue([
+      { job: 'job_a', lastDurationMs: 500, runCount24h: 3, errorCount24h: 0 },
+    ]);
+    const scheduler = new Scheduler();
+    scheduler.register({ name: 'job_a', intervalMs: 1000, run: async () => {} });
+    scheduler.register({ name: 'job_b', intervalMs: 1000, run: async () => {} });
+    const app = makeApp(scheduler);
+    const res = await request(app).get('/api/diagnostics/scheduler');
+    expect(res.status).toBe(200);
+    const a = res.body.find((j: { name: string }) => j.name === 'job_a');
+    const b = res.body.find((j: { name: string }) => j.name === 'job_b');
+    expect(a).toMatchObject({ lastDurationMs: 500, runCount24h: 3, errorCount24h: 0 });
+    expect(b).toMatchObject({ lastDurationMs: null, runCount24h: 0, errorCount24h: 0 });
   });
 });
 

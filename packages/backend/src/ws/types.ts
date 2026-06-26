@@ -378,6 +378,7 @@ export type ServerMessage =
       started_at: string;
       completed_at: string;
       duration_ms: number;
+      next_run_at: string | null;
       items_processed?: number;
       error?: { message: string; stack?: string };
     }

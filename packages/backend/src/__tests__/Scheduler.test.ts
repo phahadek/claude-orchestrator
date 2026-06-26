@@ -145,6 +145,57 @@ describe('Scheduler audit + WS broadcast', () => {
     await scheduler.stopAll();
   });
 
+  it('broadcasts next_run_at as a future ISO string after job completes', async () => {
+    const { scheduler, broadcasts } = makeScheduler();
+    const now = Date.now();
+    scheduler.register({
+      name: 'next_run_job',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      run: async () => {},
+    });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(10);
+    const ws = broadcasts.find(
+      (m: unknown) => (m as { type: string }).type === 'scheduler_job_run',
+    ) as { next_run_at: string | null } | undefined;
+    expect(ws).toBeDefined();
+    expect(ws!.next_run_at).not.toBeNull();
+    expect(new Date(ws!.next_run_at!).getTime()).toBeGreaterThan(now);
+    await scheduler.stopAll();
+  });
+
+  it('broadcasts next_run_at: null for a job that is immediately re-queued', async () => {
+    const { scheduler, broadcasts } = makeScheduler();
+    let resolve1!: () => void;
+    const run1Done = new Promise<void>((r) => { resolve1 = r; });
+    const runFn = vi.fn()
+      .mockReturnValueOnce(run1Done)
+      .mockResolvedValue(undefined);
+    scheduler.register({
+      name: 'queued_job',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      concurrency: 'queue-next',
+      run: runFn,
+    });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(1);
+    // Trigger a second run while first is in-flight → gets queued
+    void scheduler.triggerNow('queued_job');
+    await vi.advanceTimersByTimeAsync(1);
+    // Resolve first run — queued run starts immediately
+    resolve1();
+    await vi.advanceTimersByTimeAsync(10);
+    // First completion broadcast should have next_run_at: null (queued run starts immediately)
+    const ws = broadcasts.find(
+      (m: unknown) => (m as { type: string }).type === 'scheduler_job_run',
+    ) as { next_run_at: string | null } | undefined;
+    expect(ws).toBeDefined();
+    expect(ws!.next_run_at).toBeNull();
+    await scheduler.stopAll();
+  });
+
   it('writes audit row with status=failed on run() throw', async () => {
     const { scheduler } = makeScheduler();
     scheduler.register({
