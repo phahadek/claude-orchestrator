@@ -26,7 +26,10 @@ const GATE_ENV_VARS: Record<keyof CorporateModeGates, string> = {
   secretsViaSeam: 'ORCHESTRATOR_GATE_SECRETS_VIA_SEAM',
 };
 
-function resolveGate(gate: keyof CorporateModeGates, modeDefault: boolean): boolean {
+function resolveGate(
+  gate: keyof CorporateModeGates,
+  modeDefault: boolean,
+): boolean {
   const raw = process.env[GATE_ENV_VARS[gate]];
   if (raw === 'true') return true;
   if (raw === 'false') return false;

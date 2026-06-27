@@ -281,6 +281,7 @@ projectsRouter.post('/projects', async (req: Request, res: Response) => {
         ? body.autoLaunchMilestoneId
         : null,
     autoMergeEnabled: body.autoMergeEnabled === true,
+    dataResidencyConfirmed: body.dataResidencyConfirmed === true,
     baseBranch: typeof body.baseBranch === 'string' ? body.baseBranch : 'dev',
   });
   res.status(201).json(project);
