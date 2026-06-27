@@ -144,13 +144,11 @@ describe('POST /api/projects — dataResidencyConfirmed', () => {
 
   it('passes dataResidencyConfirmed: true to ProjectService.create', async () => {
     const app = buildApp();
-    const res = await supertest(app)
-      .post('/api/projects')
-      .send({
-        name: 'Repo',
-        projectDir: REAL_DIR,
-        dataResidencyConfirmed: true,
-      });
+    const res = await supertest(app).post('/api/projects').send({
+      name: 'Repo',
+      projectDir: REAL_DIR,
+      dataResidencyConfirmed: true,
+    });
 
     expect(res.status).toBe(201);
     expect(mockCreate).toHaveBeenCalledWith(
