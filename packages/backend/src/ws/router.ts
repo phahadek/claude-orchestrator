@@ -146,7 +146,8 @@ export async function handleMessage(
       }
       // Serve from cache only — never block on a Notion round-trip.
       const milestone = ProjectService.getMilestone(msg.milestoneId);
-      if (!milestone?.sourceId) {
+      const isLocalTaskSource = project.taskSource === 'yaml';
+      if (!milestone || (!isLocalTaskSource && !milestone.sourceId)) {
         ws.send(
           JSON.stringify({
             type: 'tasks_ready',
@@ -155,7 +156,10 @@ export async function handleMessage(
         );
         break;
       }
-      const cacheRow = getTaskCache(`board:${milestone.sourceId}`);
+      const boardCacheKey = isLocalTaskSource
+        ? milestone.id
+        : (milestone.sourceId as string);
+      const cacheRow = getTaskCache(`board:${boardCacheKey}`);
       if (!cacheRow) {
         ws.send(JSON.stringify({ type: 'tasks_ready', tasks: [] }));
         if (msg.skipCache && refreshProjectFn) {

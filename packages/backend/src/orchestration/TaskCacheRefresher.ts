@@ -12,7 +12,12 @@ import type { Scheduler } from './Scheduler';
 const MIN_REFRESH_INTERVAL_MS = 10_000;
 const JIRA_MIN_REFRESH_INTERVAL_MS = 120_000;
 const PROJECT_CONCURRENCY = 5;
-const REMOTE_TASK_SOURCES = new Set<string>(['notion', 'github', 'jira']);
+const CACHEABLE_TASK_SOURCES = new Set<string>([
+  'notion',
+  'github',
+  'jira',
+  'yaml',
+]);
 
 /**
  * Background service that refreshes the per-project board cache on a fixed interval
@@ -53,7 +58,7 @@ export class TaskCacheRefresher {
     const listProjects = this.options.listProjects ?? getAllProjects;
     const now = Date.now();
     const projects = listProjects()
-      .filter((p) => REMOTE_TASK_SOURCES.has(p.taskSource))
+      .filter((p) => CACHEABLE_TASK_SOURCES.has(p.taskSource))
       .filter((p) => {
         if (p.taskSource !== 'jira') return true;
         return now >= (this.jiraNextAllowed.get(p.id) ?? 0);
@@ -95,9 +100,10 @@ export class TaskCacheRefresher {
       return;
     }
 
-    const milestones = ProjectService.listMilestones(project.id).filter(
-      (m) => m.sourceId,
-    );
+    const isLocalSource = project.taskSource === 'yaml';
+    const milestones = isLocalSource
+      ? ProjectService.listMilestones(project.id)
+      : ProjectService.listMilestones(project.id).filter((m) => m.sourceId);
 
     for (const milestone of milestones) {
       try {
