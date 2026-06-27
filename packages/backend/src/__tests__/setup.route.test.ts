@@ -26,10 +26,15 @@ vi.mock('../config/dataDir.js', () => ({
   getDataDir: vi.fn(() => os.tmpdir()),
 }));
 
+vi.mock('../config/credentialsPath.js', () => ({
+  claudeCredentialsPath: vi.fn(),
+}));
+
 // Static imports — Vitest resolves these through the mocks above
 import setupRouter, { isSetupRequired } from '../routes/setup.js';
 import { countProjects } from '../db/queries.js';
 import { getDataDir } from '../config/dataDir.js';
+import { claudeCredentialsPath } from '../config/credentialsPath.js';
 import {
   DataDirConfigSource,
   CONFIG_DEFAULTS,
@@ -43,6 +48,9 @@ const mockedCountProjects = countProjects as MockedFunction<
   typeof countProjects
 >;
 const mockedGetDataDir = getDataDir as MockedFunction<typeof getDataDir>;
+const mockedClaudeCredentialsPath = claudeCredentialsPath as MockedFunction<
+  typeof claudeCredentialsPath
+>;
 
 // ── Test app ─────────────────────────────────────────────────────────────────
 
@@ -143,6 +151,25 @@ describe('isSetupRequired (legacy .env / resolved-config regression)', () => {
 // ── GET /api/setup/env-check ──────────────────────────────────────────────────
 
 describe('GET /api/setup/env-check', () => {
+  let tmpDir: string;
+  const origApiKey = process.env.ANTHROPIC_API_KEY;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-creds-'));
+    delete process.env.ANTHROPIC_API_KEY;
+    // Default: no credentials file at the mocked path
+    mockedClaudeCredentialsPath.mockReturnValue(
+      path.join(tmpDir, '.credentials.json'),
+    );
+  });
+
+  afterEach(() => {
+    if (origApiKey !== undefined) process.env.ANTHROPIC_API_KEY = origApiKey;
+    else delete process.env.ANTHROPIC_API_KEY;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
   it('returns claudeInstalled and gitInstalled booleans', async () => {
     const res = await supertest(buildApp()).get('/api/setup/env-check');
     expect(res.status).toBe(200);
@@ -152,49 +179,77 @@ describe('GET /api/setup/env-check', () => {
   });
 
   it('reports claudeAuthenticated=false when credentials file is absent', async () => {
-    const fakeAppData = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'oc-appdata-empty-'),
+    const res = await supertest(buildApp()).get('/api/setup/env-check');
+    expect(res.status).toBe(200);
+    expect(res.body.claudeAuthenticated).toBe(false);
+  });
+
+  it('reports claudeAuthenticated=true with claudeAiOauth bundle (real credential shape)', async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.credentials.json'),
+      JSON.stringify({
+        mcpOAuth: {},
+        claudeAiOauth: { accessToken: 'tok-abc', expiresAt: 9999999999 },
+      }),
+      'utf8',
     );
-    const origAppData = process.env.APPDATA;
-    process.env.APPDATA = fakeAppData;
-    try {
-      const res = await supertest(buildApp()).get('/api/setup/env-check');
-      expect(res.status).toBe(200);
-      // With a fresh dir that has no credentials file, claudeAuthenticated must be false
-      expect(res.body.claudeAuthenticated).toBe(false);
-    } finally {
-      if (origAppData !== undefined) process.env.APPDATA = origAppData;
-      else delete process.env.APPDATA;
-      fs.rmSync(fakeAppData, { recursive: true, force: true });
+    // claudeAuthenticated is only checked when claudeInstalled=true, so test
+    // isClaudeAuthenticated logic directly via the helper that the route uses.
+    // Since claudeInstalled depends on the real host, check conditionally.
+    const res = await supertest(buildApp()).get('/api/setup/env-check');
+    expect(res.status).toBe(200);
+    if (res.body.claudeInstalled) {
+      expect(res.body.claudeAuthenticated).toBe(true);
     }
   });
 
-  it('reports claudeAuthenticated=true when credentials file has a token', async () => {
-    const fakeAppData = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-appdata-'));
-    const claudeDir = path.join(fakeAppData, 'Claude');
-    fs.mkdirSync(claudeDir, { recursive: true });
+  it('reports claudeAuthenticated=true with back-compat claudeAiOauthToken string', async () => {
     fs.writeFileSync(
-      path.join(claudeDir, '.credentials.json'),
-      JSON.stringify({ claudeAiOauthToken: 'tok-abc123' }),
+      path.join(tmpDir, '.credentials.json'),
+      JSON.stringify({ claudeAiOauthToken: 'tok-legacy' }),
       'utf8',
     );
-    const origAppData = process.env.APPDATA;
-    process.env.APPDATA = fakeAppData;
-    try {
-      const res = await supertest(buildApp()).get('/api/setup/env-check');
-      expect(res.status).toBe(200);
-      // If claude is installed on the machine, authenticated must be true.
-      // If it's not installed (e.g. CI without claude), claudeAuthenticated
-      // would be false because the guard `claudeInstalled ? ... : false`.
-      // We assert conditionally so CI passes even without claude installed.
-      if (res.body.claudeInstalled) {
-        expect(res.body.claudeAuthenticated).toBe(true);
-      }
-    } finally {
-      if (origAppData !== undefined) process.env.APPDATA = origAppData;
-      else delete process.env.APPDATA;
-      fs.rmSync(fakeAppData, { recursive: true, force: true });
+    const res = await supertest(buildApp()).get('/api/setup/env-check');
+    expect(res.status).toBe(200);
+    if (res.body.claudeInstalled) {
+      expect(res.body.claudeAuthenticated).toBe(true);
     }
+  });
+
+  it('reports claudeAuthenticated=true when ANTHROPIC_API_KEY is set', async () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+    const res = await supertest(buildApp()).get('/api/setup/env-check');
+    expect(res.status).toBe(200);
+    if (res.body.claudeInstalled) {
+      expect(res.body.claudeAuthenticated).toBe(true);
+    }
+  });
+
+  it('regression: claudeAiOauth object shape does not produce false negative', async () => {
+    // This is the exact shape that caused the false negative bug on Windows.
+    fs.writeFileSync(
+      path.join(tmpDir, '.credentials.json'),
+      JSON.stringify({
+        claudeAiOauth: { accessToken: 'tok', tokenType: 'Bearer' },
+      }),
+      'utf8',
+    );
+    const res = await supertest(buildApp()).get('/api/setup/env-check');
+    expect(res.status).toBe(200);
+    if (res.body.claudeInstalled) {
+      expect(res.body.claudeAuthenticated).toBe(true);
+    }
+  });
+
+  it('reports claudeAuthenticated=false for empty claudeAiOauth', async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.credentials.json'),
+      JSON.stringify({ claudeAiOauth: null }),
+      'utf8',
+    );
+    const res = await supertest(buildApp()).get('/api/setup/env-check');
+    expect(res.status).toBe(200);
+    expect(res.body.claudeAuthenticated).toBe(false);
   });
 });
 

@@ -104,50 +104,19 @@ describe('resolveClaudePath — platform injection', () => {
 
 // ── claudeCredentialsPath ──────────────────────────────────────────────────────
 
-describe('claudeCredentialsPath — platform injection', () => {
-  const originalAppData = process.env.APPDATA;
-
-  beforeEach(() => {
-    delete process.env.APPDATA;
+describe('claudeCredentialsPath — home injection', () => {
+  it('returns <home>/.claude/.credentials.json with injected home', () => {
+    const result = claudeCredentialsPath('/custom/home');
+    expect(result).toBe(
+      path.join('/custom/home', '.claude', '.credentials.json'),
+    );
   });
 
-  afterEach(() => {
-    if (originalAppData !== undefined) {
-      process.env.APPDATA = originalAppData;
-    } else {
-      delete process.env.APPDATA;
-    }
-  });
-
-  it('returns ~/.claude/.credentials.json on linux', () => {
-    const result = claudeCredentialsPath('linux');
+  it('returns ~/.claude/.credentials.json when no home is provided', () => {
+    const result = claudeCredentialsPath();
     expect(result).toBe(
       path.join(os.homedir(), '.claude', '.credentials.json'),
     );
-  });
-
-  it('returns ~/.claude/.credentials.json on darwin', () => {
-    const result = claudeCredentialsPath('darwin');
-    expect(result).toBe(
-      path.join(os.homedir(), '.claude', '.credentials.json'),
-    );
-  });
-
-  it('returns %APPDATA%\\Claude\\.credentials.json on win32 when APPDATA is set', () => {
-    process.env.APPDATA = 'C:\\Users\\test\\AppData\\Roaming';
-    const result = claudeCredentialsPath('win32');
-    expect(result).toBe(
-      path.join(
-        'C:\\Users\\test\\AppData\\Roaming',
-        'Claude',
-        '.credentials.json',
-      ),
-    );
-  });
-
-  it('falls back to homedir on win32 when APPDATA is unset', () => {
-    const result = claudeCredentialsPath('win32');
-    expect(result).toBe(path.join(os.homedir(), 'Claude', '.credentials.json'));
   });
 });
 
