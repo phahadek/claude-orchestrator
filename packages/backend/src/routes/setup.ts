@@ -28,7 +28,10 @@ const router = Router();
  * notion.apiKey is optional and is reported in missing[] but never gates
  * the wizard by itself.
  */
-export function computeSetupStatus(): { setupNeeded: boolean; missing: string[] } {
+export function computeSetupStatus(): {
+  setupNeeded: boolean;
+  missing: string[];
+} {
   const cfg = getOrchestratorConfig();
   const missing: string[] = [];
 
