@@ -259,6 +259,35 @@ not obvious which, ask the human.
 
 ---
 
+## Task types — what 🗂️ Ready triggers, per type
+
+Every task carries a **Type**. The Type decides **what picks the task up once it is
+🗂️ Ready** — the single most-confused point across sessions, so it is stated here once,
+authoritatively.
+
+| Type | Brought to Ready by | Who executes it once Ready |
+| --- | --- | --- |
+| 💻 **Code** | `/groom` | **The orchestrator auto-dispatches it** — unattended, in a fresh worktree — the moment it is 🗂️ Ready with **no unsatisfied dependency** (every `Depends On` task is ✅ Done / 🗂️ Ready / ⏭️ Deferred). No human kicks it off. |
+| 📐 **Design** / 📋 **Planning** | already Ready/In-Progress, or `/groom` | **`/design`, interactively.** The orchestrator does **not** auto-dispatch these — they wait for a human to run a Design Execution session. |
+| 🛠️ **Tooling** / 🧪 **Testing** | `/groom` | **A session, interactively** (a human runs it). Not auto-dispatched. May or may not end in a PR. |
+| 📝 **Docs** / 🎨 **Assets** | `/groom` | Interactively. Not auto-dispatched. |
+
+Two consequences every session must internalize:
+
+- **Marking a 💻 Code task Ready is a live action, not a paper approval.** It *launches*
+  the work unattended. A wrong `Depends On` or an unresolved open question becomes a
+  broken worktree session, not a review comment. This is why `/groom` gates the Ready
+  flip so hard (sign-off + classified hard-block deps + size check).
+- **A 🛠️ Tooling / 🧪 Testing task must not smuggle dispatchable code.** If part of the
+  task is "write module/script X" with **no dependency on data only available at
+  implementation time**, that part is a 💻 **Code** task — **excise it into a separate
+  Code task** so it flows through the normal auto-dispatch path. Keep the Tooling/Testing
+  task scoped to the interactive, judgment-bound remainder (running it, wiring it,
+  observing results). The same rule applies when `/design` or `/groom` files a follow-on:
+  pure code-generation → Code type; interactive/observational → Tooling/Testing.
+
+---
+
 ## Grooming & design sessions
 
 Two structured session types run against a milestone's task board; both are deterministic

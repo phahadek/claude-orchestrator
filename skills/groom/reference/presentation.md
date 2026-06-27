@@ -92,8 +92,15 @@ classification is blocked, same as missing `hard_block_deps`).
 Code and Tooling tasks default to **under 500 LoC** estimated diff. Estimate
 cheaply from the code-map digest: files touched × ~50–100 lines each, or by
 recalling what similar past tasks in this repo landed at (CI / git history is
-the ground truth — `git diff --stat` on the closest prior task is a 5-second
-calibration).
+the ground truth — `git -C <repo> diff --stat` on the closest prior task is a
+5-second calibration).
+
+> **Always `git -C <repo> …`, never `cd <repo> && git …`.** Grooming runs from the
+> projects-root cwd, so the repo is a subdirectory — but `cd <repo> && git …` trips a
+> permission prompt **every time** (Claude Code flags any directory-change-before-git
+> as a hook-execution risk, regardless of allowlist). `git -C <repo> show <sha> --stat`,
+> `git -C <repo> log …`, `git -C <repo> diff --stat …` are allowlisted and run silently.
+> Same for any other repo tool: use its path flag (`npm --prefix`, `uv --project`), not `cd`.
 
 ### Decide
 
@@ -163,6 +170,22 @@ a glance what kind of work is being groomed. Code and Design tasks need differen
 review attention (Design locks specs; Code consumes them; Tooling sits beside both);
 surfacing the type makes that judgment immediate and reduces "wait, is this the one
 that…" friction during sign-off.
+
+Type is not cosmetic here — it determines **what happens when you flip the task to
+🗂️ Ready** (see `procedures.md` § _Task types — what Ready triggers_):
+
+- **💻 Code** Ready with no unsatisfied dependency → **the orchestrator auto-dispatches
+  it unattended.** Marking it Ready *launches* the work; a wrong `Depends On` or an
+  unresolved open question becomes a broken worktree session, not a review comment. Treat
+  the Code Ready-flip as a deploy, not a paper approval — this is why the sign-off + dep
+  + size gates exist.
+- **📐 Design / 📋 Planning** Ready → **not** auto-dispatched; it waits for `/design`.
+  Do not groom these expecting a worker to pick them up.
+- **🛠️ Tooling / 🧪 Testing** Ready → interactive (a human runs it), not auto-dispatched.
+  Before promoting one, check it isn't smuggling dispatchable code: any pure
+  code-generation portion with no dependency on implementation-time data should be
+  **split out into a separate 💻 Code task** (per the size/split procedure) so it flows
+  through auto-dispatch — the Tooling/Testing task keeps only the interactive remainder.
 
 Format: **`<n> <Type emoji + label> — <title>`**, e.g. **`① 💻 Code — Add HLTV RSS dedupe by GUID`**.
 

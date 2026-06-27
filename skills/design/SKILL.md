@@ -57,8 +57,12 @@ this skill exists. Read `reference/presentation.md` before Step 2, and
    - `low` → propose-and-route mode. The skill drafts the decision and the page
      edit but does not apply them; instead it routes to the owner via comment /
      sub-task. Same Step-3 cadence; different terminal step.
-3. Determine the milestone (from the user, e.g. "design M9"). It must exist in
-   `manifest.milestones`.
+3. Determine the milestone (from the user, e.g. "design M9"). If it isn't yet
+   registered in `manifest.milestones` (routine right after a new milestone board is
+   created), the loader no longer dead-ends — it prints a copy-pasteable entry with the
+   neighbour auto-filled. Add that entry to the manifest, or pass `--board
+   <data-source-id>` to run immediately and persist the printed snippet afterward.
+   Never improvise a board id — copy it from the board's Notion URL / context.md.
 4. Determine **mode** from the cache dir `.skill-cache/design/<milestone>/`:
    - absent → **fresh** design session.
    - present → **resume**: the loader preserves signed-off question decisions and
@@ -196,6 +200,13 @@ For the current Design task (in the approved order):
      `pages_affected[i].applied_at`. **Never write to a context page silently.**
 
 5. **For each follow-on Code / Tooling task identified during the design:**
+   - **Pick the Type deliberately** (it determines downstream execution — see
+     `procedures.md` § _Task types — what Ready triggers_). Pure code-generation
+     work that does **not** depend on implementation-time data → 💻 **Code** (so the
+     orchestrator auto-dispatches it once Ready). Interactive / observational work
+     (running a tool, wiring it, inspecting results) → 🛠️ **Tooling** / 🧪 **Testing**.
+     If a single follow-on mixes both, **file two tasks** — never bury dispatchable
+     code-gen inside a Tooling/Testing task, where no worker will pick it up.
    - Draft the full body inline per the Task Writing Guidelines (Summary /
      Dependencies / Context / Files paths affected / Acceptance criteria /
      Implementation notes-placeholder).
@@ -248,6 +259,15 @@ session summary:
   Code/Tooling tasks are the exception — they are created without per-body
   sign-off (Backlog status only; the human reviews at groom time or edits in
   Notion directly).
+- **Cache/state files are edited with the Edit/Write tool, never a shell script.**
+  `design-state.json` / `code-map.json` are loader-seeded JSON on disk — Edit them (or
+  Read + Write the whole file). Never `node _q6lock.cjs && rm …` or any `cd … && …`
+  route; that is what causes the constant permission prompts.
+- **Inspect the repo with `git -C <repo> …`, never `cd <repo> && git …`.** Design runs
+  from the projects-root cwd; the `cd … && git` form prompts every time (Claude Code flags
+  any directory-change-before-git as a hook-execution risk, regardless of allowlist).
+  `git -C <repo> show/log/diff …` is allowlisted and silent. Use path flags for other repo
+  tools too (`npm --prefix`, `uv --project`), not `cd`.
 - **No batch-locking.** One open question per message; one sign-off per question.
 - **Investigate before deciding.** Code reads / API calls / arch-page reads come
   before presenting a question. "Decide at implementation time" is a _defer_, not

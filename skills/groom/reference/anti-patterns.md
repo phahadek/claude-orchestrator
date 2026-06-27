@@ -14,6 +14,16 @@ code (or its code-map digest) before declaring an open question resolved.
 so a single agent under context pressure shortcuts it and "decides whatever." That
 is the entire reason `groom-load.mjs` exists — let it do the load; don't hand-fetch.
 
+**Shelling out a throwaway script to edit the cache/state files.** `grooming-state.json`
+and `code-map.json` are loader-seeded JSON on disk. Writing a one-off
+`_lock.cjs` / `_foo.cjs`, running it with `node`, then `rm`-ing it — usually as one
+`cd … && node … && rm … && echo` chain — is the single biggest source of permission
+friction in a groom session: every token (`cd &&`, `node`, `rm`) prompts, for a JSON
+edit the **Edit** tool (or **Read + Write** the whole file) does in one auto-approved
+call. The script feels like "doing it properly with real code," but it is strictly
+slower, promptier, and leaves a temp file to clean up. Use the file tools; never shell
+out to mutate the cache.
+
 **Locking an external API surface without a live call.** Search summaries and
 community docs are unreliable for third-party APIs. Hit the real endpoint once
 before locking a design that depends on its shape.
@@ -67,6 +77,27 @@ check). _"It's all related"_ is not a load-bearing reason; _"intermediate states
 don't compile"_ / _"the migration and its readers must roll together"_ are.
 When in doubt: split. A two-PR landing is cheap; a one-PR that can't be reviewed
 is expensive.
+
+**Treating a 💻 Code Ready-flip as a paper approval.** A Code task at 🗂️ Ready
+with no unsatisfied dependency is **auto-dispatched by the orchestrator** into an
+unattended worktree session — Ready _is_ the launch. There is no second human gate
+between "marked Ready" and "a session is writing the diff." So a wrong `Depends On`,
+a laundered open question, or an oversized scope does not surface as a review
+comment — it surfaces as a broken or runaway session. This is the load-bearing
+reason the Ready flip is gated (sign-off + classified hard-block deps + size check).
+See `procedures.md` § _Task types — what Ready triggers_ for the per-type dispatch map.
+
+**A 🛠️ Tooling / 🧪 Testing task smuggling dispatchable code.** Tooling and
+Testing tasks are run **interactively** by a human session, not auto-dispatched.
+When such a task bundles a chunk of pure code-generation — _"write module/script
+X"_ — that has **no dependency on data only available at implementation time**,
+that chunk belongs in a separate 💻 Code task so the orchestrator can dispatch it
+the normal way. Excise it (use the split procedure in `presentation.md` § Size
+check): narrow the Tooling/Testing task to the interactive remainder (running it,
+wiring it, observing results) and file the code-gen as its own Code task at
+🔲 Backlog. Leaving them fused **strands** the dispatchable work behind an
+interactive task no worker auto-picks-up — and inflates the Tooling task past
+the point a single session can carry it.
 
 **Demoting the original task to ⏭️ Deferred when splitting.** ⏭️ Deferred means
 _"scope superseded by another task"_ and is intended for tasks the project chose
@@ -184,8 +215,8 @@ When a 📐 Design task moves to 🔄 In Progress, the execution session keeps g
 discipline: surface unilateral decisions for sign-off one at a time (don't batch-lock
 Implementation Notes mid-discussion); file follow-up Code tasks that each get their
 own grooming pass before Ready; and cascade any reversal explicitly through dependent
-task bodies, the Key Decisions Log, the architecture pages, and the Manual
-Verification Gate — never assume downstream readers will infer it.
+task bodies, the architecture pages, and the Manual Verification Gate — never assume
+downstream readers will infer it.
 
 Design-task execution is itself driven by the `/design` skill — but the same
 _"inline grooming"_ rule applies one level up: if a session is executing a Design

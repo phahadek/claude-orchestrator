@@ -19,13 +19,15 @@
  *   node design-load.mjs --milestone M9 [options]
  *
  * Options:
- *   --milestone <id>     Required. Milestone key present in the manifest (e.g. M9).
+ *   --milestone <id>     Required. Milestone key (registered in the manifest, or pass --board).
  *   --manifest <path>    Manifest JSON (explicit full path; overrides the central-tree default).
  *   --config-dir <path>  Central config tree root (overrides $ORCHESTRATOR_CONFIG_DIR).
  *   --project <key>      Project dir under config/projects/ (default: --repo basename).
  *   --repo <path>        Repo / project root for cache (default: cwd). Shared manifest with /groom.
  *   --cache-dir <path>   Cache root (default: <repo>/.skill-cache/design/<milestone>).
  *   --env <path>         .env file with NOTION_API_KEY (passed through to sibling scripts).
+ *   --board <id>         Board data-source id for an UNregistered milestone — run it now
+ *                        without editing the manifest; prints the entry to persist.
  *   --refresh            Re-fetch context pages even if cached files already exist.
  *
  * Status classification (status_vocab from the manifest):
@@ -67,6 +69,7 @@ const milestone = option('--milestone');
 const repo = resolve(process.cwd(), option('--repo') ?? '.');
 const manifestPath = resolveManifestPath(repo);
 const envPath = option('--env');
+const boardOverride = option('--board');
 const refresh = flag('--refresh');
 
 // Resolve the grooming manifest from the central config tree (decoupled from the repo).
@@ -123,11 +126,54 @@ try {
   fail(`manifest is not valid JSON: ${e.message}`);
 }
 
-const milestoneCfg = manifest.milestones?.[milestone];
-if (!milestoneCfg)
-  fail(
-    `milestone "${milestone}" is not defined in ${manifestPath} (milestones: ${Object.keys(manifest.milestones ?? {}).join(', ') || 'none'}).`,
-  );
+// Suggest the immediately-prior registered milestone by trailing integer (M12 → M11),
+// to auto-fill a new milestone's neighbour. Returns {id, board} or null.
+function suggestPriorMilestone(key, registered) {
+  const m = /^(.*?)(\d+)$/.exec(key);
+  if (!m) return null;
+  const [, prefix, numStr] = m;
+  for (let n = parseInt(numStr, 10) - 1; n >= 0; n--) {
+    const cand = `${prefix}${n}`;
+    if (registered[cand]?.board)
+      return { id: cand, board: registered[cand].board };
+  }
+  return null;
+}
+
+// Resolve the milestone. A new milestone board is a routine event, so an unregistered
+// milestone is handled gracefully rather than dead-ending: either run it now via
+// `--board <data-source-id>` (neighbour auto-set to the prior registered milestone), or
+// fail with a copy-pasteable manifest entry so registering it is a paste, not a hunt.
+const registeredMilestones = manifest.milestones ?? {};
+let milestoneCfg = registeredMilestones[milestone];
+let unregisteredNote = null; // set when running an unregistered milestone via --board
+if (!milestoneCfg) {
+  const prior = suggestPriorMilestone(milestone, registeredMilestones);
+  const neighboursJson = prior
+    ? `[{ "id": "${prior.id}", "board": "${prior.board}" }]`
+    : '[]';
+  if (boardOverride) {
+    milestoneCfg = {
+      board: boardOverride,
+      neighbours: prior ? [{ id: prior.id, board: prior.board }] : [],
+    };
+    unregisteredNote = `"${milestone}": { "board": "${boardOverride}", "neighbours": ${neighboursJson} }`;
+    console.error(
+      `design-load: ⚠ milestone "${milestone}" is not registered in ${manifestPath} — running with ` +
+        `--board ${boardOverride} (neighbour: ${prior ? prior.id : 'none'}). Persist it via the snippet printed at the end.`,
+    );
+  } else {
+    fail(
+      `milestone "${milestone}" is not registered in ${manifestPath} ` +
+        `(registered: ${Object.keys(registeredMilestones).join(', ') || 'none'}).\n` +
+        `A new milestone board is routine — do one of:\n` +
+        `  • add this entry under "milestones" (board id = the data-source id in the board's Notion URL / context.md):\n` +
+        `      "${milestone}": { "board": "<board-data-source-id>", "neighbours": ${neighboursJson} }\n` +
+        `  • or run now without editing the manifest: re-run with --board <board-data-source-id> ` +
+        `(auto-neighbour ${prior ? prior.id : 'none'}; prints the entry to persist).`,
+    );
+  }
+}
 
 const statusProp = manifest.status_property ?? 'Status';
 const vocab = manifest.status_vocab ?? {};
@@ -525,7 +571,14 @@ function readJson(path, fallback) {
   }
 }
 const priorState = readJson(join(cacheDir, 'design-state.json'), {});
-const state = { ...priorState };
+// Rebuild from empty against the LIVE board so entries for tasks completed /
+// deferred / removed since the last session are PRUNED, not carried forward with
+// a stale status. The loop below rebuilds every live non-done task's entry from
+// scratch, pulling preserved fields (locked decisions, applied diffs, timestamps)
+// from `priorState`. Spreading `priorState` here instead would leak stale entries
+// — a design task done since the last session would keep its old recorded status
+// and a resumed session would read it as still open.
+const state = {};
 
 for (const t of [
   ...tasks.executable,
@@ -534,7 +587,7 @@ for (const t of [
 ]) {
   // Status of the question seed: each open question gets a slot. If the prior
   // state had a locked decision for the SAME question text, preserve it.
-  const priorTask = state[t.id] ?? {};
+  const priorTask = priorState[t.id] ?? {};
   const priorQs = Array.isArray(priorTask.open_questions)
     ? priorTask.open_questions
     : [];
@@ -583,6 +636,8 @@ for (const t of [
       priorTask.moved_to_done_at ?? priorTask.moved_to_in_review_at ?? null,
   };
 }
+
+const prunedStateIds = Object.keys(priorState).filter((id) => !(id in state));
 
 // ── Step 5: emit ─────────────────────────────────────────────────────
 const bundle = {
@@ -652,6 +707,11 @@ console.log(
 console.log(
   `  neighbour boards: ${neighboursSummary.length} (Design-task context only)`,
 );
+if (prunedStateIds.length) {
+  console.log(
+    `  pruned ${prunedStateIds.length} stale design-state entr${prunedStateIds.length === 1 ? 'y' : 'ies'} (task completed/deferred/removed since last session)`,
+  );
+}
 if (unresolvedPageRefs.length) {
   console.log(
     `  ⚠ ${unresolvedPageRefs.length} "Notion pages affected" reference(s) did not resolve to a context_pages title:`,
@@ -671,6 +731,11 @@ if (tasksMissingQs.length) {
     `  ⚠ ${tasksMissingQs.length} executable Design / Planning task(s) parsed with zero open questions — the skill will need manual scoping:`,
   );
   for (const t of tasksMissingQs) console.log(`     - ${t.title}`);
+}
+if (unregisteredNote) {
+  console.log(
+    `  ⚠ milestone ${milestone} ran UNREGISTERED (via --board). To persist it, add under "milestones" in the manifest:\n      ${unregisteredNote}`,
+  );
 }
 console.log(
   'Next: the /design skill proposes a thematic execution order over the dep-ready executable tasks, then walks each one question at a time.',

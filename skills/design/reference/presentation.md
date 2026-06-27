@@ -201,7 +201,11 @@ on _"ok"_-without-context, or on a substantive reply paraphrased into a lock.
 
 ### Recording the lock
 
-On explicit sign-off, write to `design-state.json` (the loader-seeded file):
+On explicit sign-off, write to `design-state.json` (the loader-seeded file) **with the
+Edit/Write tool** — Edit it for a single field, or Read + Write the whole file for a
+structural change. **Never** write-and-run a throwaway script (`node _q6lock.cjs` then
+`rm`) and never shell out (`cd … && …`, `echo >`): that route prompts for every token
+(`node`, `rm`, the chain) to do what the Edit tool does in one auto-approved call.
 
 ```json
 "<task-id>": {

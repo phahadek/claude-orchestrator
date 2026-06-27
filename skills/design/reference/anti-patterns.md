@@ -11,6 +11,16 @@ paragraph.
 
 ---
 
+**Shelling out a throwaway script to record the lock.** `design-state.json` and
+`code-map.json` are loader-seeded JSON on disk. Writing a one-off `_q6lock.cjs`,
+running it with `node`, then `rm`-ing it — usually as a single `cd … && node … &&
+rm … && echo` chain — is the single biggest source of permission friction in a
+design session: every token (`cd &&`, `node`, `rm`) prompts, for a JSON edit the
+**Edit** tool (or **Read + Write** the whole file) does in one auto-approved call.
+It feels like "doing it properly with real code," but it is strictly slower,
+promptier, and leaves a temp file behind. Use the file tools; never shell out to
+mutate the cache.
+
 **Batch-locking Implementation Notes mid-discussion.** A Design task with five
 open questions tempts a session to "summarize all five and move on" once the
 broad direction feels right. Don't. Each question is its own sign-off, on its

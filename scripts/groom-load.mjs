@@ -20,13 +20,15 @@
  *   node groom-load.mjs --milestone M9 [options]
  *
  * Options:
- *   --milestone <id>     Required. Milestone key present in the manifest (e.g. M9).
+ *   --milestone <id>     Required. Milestone key (registered in the manifest, or pass --board).
  *   --manifest <path>    Manifest JSON (explicit full path; overrides the central-tree default).
  *   --config-dir <path>  Central config tree root (overrides $ORCHESTRATOR_CONFIG_DIR).
  *   --project <key>      Project dir under config/projects/ (default: --repo basename).
  *   --repo <path>        Repo / project root for git + cache (default: cwd).
  *   --cache-dir <path>   Cache root (default: <repo>/.skill-cache/grooming/<milestone>).
  *   --env <path>         .env file with NOTION_API_KEY (passed through to sibling scripts).
+ *   --board <id>         Board data-source id for an UNregistered milestone — run it now
+ *                        without editing the manifest; prints the entry to persist.
  *   --refresh            Re-fetch context pages even if cached files already exist.
  *
  * Freshness model:
@@ -68,6 +70,7 @@ const milestone = option('--milestone');
 const repo = resolve(process.cwd(), option('--repo') ?? '.');
 const manifestPath = resolveManifestPath(repo);
 const envPath = option('--env');
+const boardOverride = option('--board');
 const refresh = flag('--refresh');
 
 // Resolve the grooming manifest from the central config tree (decoupled from the repo).
@@ -124,11 +127,54 @@ try {
   fail(`manifest is not valid JSON: ${e.message}`);
 }
 
-const milestoneCfg = manifest.milestones?.[milestone];
-if (!milestoneCfg)
-  fail(
-    `milestone "${milestone}" is not defined in ${manifestPath} (milestones: ${Object.keys(manifest.milestones ?? {}).join(', ') || 'none'}).`,
-  );
+// Suggest the immediately-prior registered milestone by trailing integer (M12 → M11),
+// to auto-fill a new milestone's neighbour. Returns {id, board} or null.
+function suggestPriorMilestone(key, registered) {
+  const m = /^(.*?)(\d+)$/.exec(key);
+  if (!m) return null;
+  const [, prefix, numStr] = m;
+  for (let n = parseInt(numStr, 10) - 1; n >= 0; n--) {
+    const cand = `${prefix}${n}`;
+    if (registered[cand]?.board)
+      return { id: cand, board: registered[cand].board };
+  }
+  return null;
+}
+
+// Resolve the milestone. A new milestone board is a routine event, so an unregistered
+// milestone is handled gracefully rather than dead-ending: either run it now via
+// `--board <data-source-id>` (neighbour auto-set to the prior registered milestone), or
+// fail with a copy-pasteable manifest entry so registering it is a paste, not a hunt.
+const registeredMilestones = manifest.milestones ?? {};
+let milestoneCfg = registeredMilestones[milestone];
+let unregisteredNote = null; // set when running an unregistered milestone via --board
+if (!milestoneCfg) {
+  const prior = suggestPriorMilestone(milestone, registeredMilestones);
+  const neighboursJson = prior
+    ? `[{ "id": "${prior.id}", "board": "${prior.board}" }]`
+    : '[]';
+  if (boardOverride) {
+    milestoneCfg = {
+      board: boardOverride,
+      neighbours: prior ? [{ id: prior.id, board: prior.board }] : [],
+    };
+    unregisteredNote = `"${milestone}": { "board": "${boardOverride}", "neighbours": ${neighboursJson} }`;
+    console.error(
+      `groom-load: ⚠ milestone "${milestone}" is not registered in ${manifestPath} — running with ` +
+        `--board ${boardOverride} (neighbour: ${prior ? prior.id : 'none'}). Persist it via the snippet printed at the end.`,
+    );
+  } else {
+    fail(
+      `milestone "${milestone}" is not registered in ${manifestPath} ` +
+        `(registered: ${Object.keys(registeredMilestones).join(', ') || 'none'}).\n` +
+        `A new milestone board is routine — do one of:\n` +
+        `  • add this entry under "milestones" (board id = the data-source id in the board's Notion URL / context.md):\n` +
+        `      "${milestone}": { "board": "<board-data-source-id>", "neighbours": ${neighboursJson} }\n` +
+        `  • or run now without editing the manifest: re-run with --board <board-data-source-id> ` +
+        `(auto-neighbour ${prior ? prior.id : 'none'}; prints the entry to persist).`,
+    );
+  }
+}
 
 const sourceRoot = (manifest.source_root ?? '').replace(/\/+$/, '');
 const integrationBranch = manifest.integration_branch ?? 'dev';
@@ -473,11 +519,25 @@ for (const [pkg, taskSet] of Object.entries(pkgMap).sort()) {
   };
 }
 
-// grooming-state.json: seed Backlog skeletons, preserve existing entries
-const state = { ...priorState };
+// grooming-state.json: rebuild against the LIVE board each run so stale entries
+// can't survive a resume. Three guarantees:
+//   1. Seed a fresh skeleton for every Backlog task that has no prior entry.
+//   2. Carry forward human-entered fields for tasks still present, but ALWAYS
+//      refresh `status` (and `title`) from the live board — not only at Backlog,
+//      so a task that moved past Backlog can't keep a stale recorded status.
+//   3. PRUNE any prior entry whose task is no longer a live non-done target
+//      (completed / deferred / removed since the last groom). Done + Deferred
+//      rows were already dropped from `targetTasks` above, so building `state`
+//      from `targetTasks` alone — rather than spreading `priorState` — is the
+//      prune. Without it, a task done since the last groom kept its old recorded
+//      status and a resumed session read it as still Backlog.
+const state = {};
 for (const t of targetTasks) {
-  if (t.status !== vocab.backlog) continue;
-  if (!state[t.id]) {
+  const prior = priorState[t.id];
+  if (!prior) {
+    // No prior entry: only Backlog tasks need a skeleton (the ones grooming acts
+    // on). A live non-Backlog task gets none until it returns to Backlog.
+    if (t.status !== vocab.backlog) continue;
     state[t.id] = {
       title: t.title,
       status: t.status,
@@ -491,14 +551,17 @@ for (const t of targetTasks) {
       signoff: null,
     };
   } else {
-    state[t.id].status = t.status; // refresh status; keep human-entered fields
+    state[t.id] = { ...prior }; // keep human-entered fields (signoff, achieves, …)
+    state[t.id].title = t.title; // refresh — tasks get renamed during grooming
+    state[t.id].status = t.status; // ALWAYS refresh from the live board
     state[t.id].regions = Array.from(
-      new Set([...(state[t.id].regions ?? []), ...t.packages]),
+      new Set([...(prior.regions ?? []), ...t.packages]),
     );
     if (!('hard_block_deps' in state[t.id])) state[t.id].hard_block_deps = null; // back-compat
     if (!('size_check' in state[t.id])) state[t.id].size_check = null; // back-compat
   }
 }
+const prunedStateIds = Object.keys(priorState).filter((id) => !(id in state));
 
 // ── emit ─────────────────────────────────────────────────────────────
 const bundle = {
@@ -560,6 +623,16 @@ if (unresolved.length) {
     `  ⚠ ${unresolved.length} Backlog task(s) with no resolvable code region (manual scoping needed):`,
   );
   for (const u of unresolved) console.log(`     - ${u.title}`);
+}
+if (prunedStateIds.length) {
+  console.log(
+    `  pruned ${prunedStateIds.length} stale grooming-state entr${prunedStateIds.length === 1 ? 'y' : 'ies'} (task completed/deferred/removed since last groom)`,
+  );
+}
+if (unregisteredNote) {
+  console.log(
+    `  ⚠ milestone ${milestone} ran UNREGISTERED (via --board). To persist it, add under "milestones" in the manifest:\n      ${unregisteredNote}`,
+  );
 }
 console.log(
   'Next: the /groom skill explores stale+missing packages (Explore subagents), writes code-map.json, then presents Backlog in batches.',

@@ -38,8 +38,12 @@ reason this skill exists. Read `reference/presentation.md` before Step 2.
    - `low` → **read `reference/low-control.md`** and follow the investigate-propose-route
      adaptation instead. The groomer does not own the architecture; resolution biases to
      proposing and routing to owners.
-3. Determine the milestone (from the user, e.g. "groom M9"). It must exist in
-   `manifest.milestones`.
+3. Determine the milestone (from the user, e.g. "groom M9"). If it isn't yet
+   registered in `manifest.milestones` (routine right after a new milestone board is
+   created), the loader no longer dead-ends — it prints a copy-pasteable entry with the
+   neighbour auto-filled. Add that entry to the manifest, or pass `--board
+   <data-source-id>` to run immediately and persist the printed snippet afterward.
+   Never improvise a board id — copy it from the board's Notion URL / context.md.
 4. Determine **mode** from the cache dir `.skill-cache/grooming/<milestone>/`:
    - absent → **fresh** groom.
    - present → **resume**: the loader reuses fresh digests and re-explores only
@@ -108,6 +112,16 @@ code the tasks touch — but only once per region, and only what changed.
   ```
   (The loader reads `code-map.json` for freshness; the skill owns writing it.)
 
+> **Write the cache/state files with the Edit/Write tool — never a shell script.**
+> `code-map.json`, `grooming-state.json` (and the design skill's `design-state.json`)
+> are ordinary on-disk JSON the loader already seeded. Mutate them with the **Edit**
+> tool (a unique-string change) or **Read + Write** the whole file (a structural
+> change). **Never** write a throwaway script and run it (`node _foo.cjs` then `rm`),
+> and never shell out (`echo >`, `cat >`, a `cd … && …` chain). The script route does
+> in three permission-prompting Bash calls (`node`, `rm`, the `cd &&` chain) what the
+> Edit tool does in one auto-approved call — it is the cause of the constant
+> permission friction, not a workaround for it.
+
 **For each task in `worklist.unresolved_tasks`** (declared no resolvable path —
 common, because real tasks reference code by identifier or prose, not a `Files /
 paths affected` section): this is the **judgment** half the loader deliberately
@@ -169,15 +183,9 @@ Only after explicit sign-off on the batch (_"looks good"_, _"ship it"_, _"next"_
 "split_now", "split_into": ["<task-id>", …] }` after splitting, `{ "loc":
 <number>, "decision": "unsplittable", "reason": "<one-line>" }` for the atomic
    case, or `{ "decision": "n/a" }` for Design/Planning tasks), and set
-   `signoff: { "by": "<human>", "at": "<iso>" }`. For tasks whose project spans
-   multiple repos (multi-repo project), also fill `repo_assignment`:
-   `{ "multi_repo": true, "repo": "<assigned-repo-name>" }` — ask the human which
-   repo this task targets and record the answer. For single-repo project tasks omit
-   the field (the gate is fail-open: an absent `repo_assignment` is treated as
-   "not a multi-repo task" and allowed through). _(All four — `signoff`,
-   `hard_block_deps`, `size_check`, and `repo_assignment` for multi-repo tasks —
-   are gated by the promotion hook. They must be written **before** the status
-   flip, or the gate blocks the update.)_
+   `signoff: { "by": "<human>", "at": "<iso>" }`. _(All three — `signoff`,
+   `hard_block_deps`, and `size_check` — are gated by the promotion hook. They
+   must be written **before** the status flip, or the gate blocks the update.)_
 2. **Then**, in a **single** `notion-update-page` call (`command:
 "update_properties"`) per task, write **both** the canonical hard-block deps
    into the `Depends On` property **and** set `Status → 🗂️ Ready`. The
@@ -211,6 +219,15 @@ When every batch is signed off, confirm the milestone board is fully groomed.
 - **Never** mark a ✅ Done or ⏭️ Deferred task Ready. **Never** retroactively edit a
   task already at 🗂️ Ready or beyond — file a sibling instead (it may be picked up).
 - **No silent Notion updates.** Every change is confirmed in chat before moving on.
+- **Cache/state files are edited with the Edit/Write tool, never a shell script.**
+  `grooming-state.json` / `code-map.json` are loader-seeded JSON on disk — Edit them
+  (or Read + Write the whole file). Never `node _foo.cjs && rm …` or any `cd … && …`
+  shell route; that is what causes the constant permission prompts.
+- **Inspect the repo with `git -C <repo> …`, never `cd <repo> && git …`.** Grooming runs
+  from the projects-root cwd, so the repo is a subdirectory — but the `cd … && git` form
+  prompts every time (Claude Code flags any directory-change-before-git as a hook-execution
+  risk, regardless of allowlist). `git -C <repo> show/log/diff …` is allowlisted and silent.
+  Use path flags for other repo tools too (`npm --prefix`, `uv --project`), not `cd`.
 - **Investigate before resolving.** Reading the code comes before deciding what's
   resolved. "Decide at implementation time" is a _defer_, not a _resolve_.
 - **The human is the promotion gate.** Even a Ready-clean task waits for sign-off.

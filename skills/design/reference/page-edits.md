@@ -42,7 +42,7 @@ Before drafting any edit, run the **durability check** on your proposed text:
   correctly_ (the _why_ that prevents future misuse — _"Liquipedia entries are
   sometimes date-only"_). Drop what they only need to _understand the history_
   (the _how-we-got-here_ — _"we considered X but ruled it out because Y"_).
-  Defensive rationale belongs in the Design task body or a decisions log.
+  Defensive rationale belongs in the Design task body's Implementation notes.
 - **Naive-reader test.** Read your draft as someone with zero session context.
   Does it read as a description of the system, or as a report of what someone
   decided? If the latter, rewrite.
