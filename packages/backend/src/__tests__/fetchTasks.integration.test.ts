@@ -354,3 +354,132 @@ describe('WS fetch_tasks — skipCache behaviour', () => {
     resolveRefresh();
   });
 });
+
+describe('WS fetch_tasks — yaml/local project (no sourceId on milestone)', () => {
+  const YAML_PROJECT_ID = 'proj-yaml';
+  const YAML_MILESTONE_ID = 'yaml-milestone-1';
+
+  function makeYamlProject() {
+    return { id: YAML_PROJECT_ID, name: 'YAML Project', taskSource: 'yaml' };
+  }
+
+  function makeYamlMilestone() {
+    return {
+      id: YAML_MILESTONE_ID,
+      projectId: YAML_PROJECT_ID,
+      name: 'Sprint 1',
+      sourceId: null,
+      displayOrder: 0,
+      createdAt: 0,
+      updatedAt: 0,
+    };
+  }
+
+  function makeYamlWarmCache() {
+    const cachedTasks = [
+      {
+        id: 'yaml:task-1',
+        title: 'YAML Task 1',
+        status: '🗂️ Ready',
+        dependsOn: [],
+        type: '💻 Code',
+      },
+    ];
+    return {
+      task_id: `board:${YAML_MILESTONE_ID}`,
+      fetched_at: Date.now(),
+      raw_json: JSON.stringify(cachedTasks),
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getProjectById).mockReturnValue(makeYamlProject() as never);
+    vi.mocked(ProjectService.getMilestone).mockReturnValue(
+      makeYamlMilestone() as never,
+    );
+    setWsRouterRefreshFn(() => Promise.resolve());
+  });
+
+  it('returns tasks_ready with [] when cache is cold (yaml, no sourceId)', () => {
+    vi.mocked(getTaskCache).mockReturnValue(null);
+
+    const ws = makeFakeWs();
+    handleMessage(
+      ws,
+      JSON.stringify({
+        type: 'fetch_tasks',
+        projectId: YAML_PROJECT_ID,
+        milestoneId: YAML_MILESTONE_ID,
+      }),
+      makeFakeSessions(),
+    );
+
+    const sent = parseSent(ws) as { type: string; tasks: unknown[] };
+    expect(sent.type).toBe('tasks_ready');
+    expect(sent.tasks).toEqual([]);
+  });
+
+  it('reads cache with board:<milestoneId> key for yaml project', () => {
+    vi.mocked(getTaskCache).mockReturnValue(null);
+
+    const ws = makeFakeWs();
+    handleMessage(
+      ws,
+      JSON.stringify({
+        type: 'fetch_tasks',
+        projectId: YAML_PROJECT_ID,
+        milestoneId: YAML_MILESTONE_ID,
+      }),
+      makeFakeSessions(),
+    );
+
+    expect(vi.mocked(getTaskCache)).toHaveBeenCalledWith(
+      `board:${YAML_MILESTONE_ID}`,
+    );
+  });
+
+  it('returns tasks_ready with resolved tasks when cache is warm (yaml)', () => {
+    vi.mocked(getTaskCache).mockReturnValue(makeYamlWarmCache() as never);
+
+    const ws = makeFakeWs();
+    handleMessage(
+      ws,
+      JSON.stringify({
+        type: 'fetch_tasks',
+        projectId: YAML_PROJECT_ID,
+        milestoneId: YAML_MILESTONE_ID,
+      }),
+      makeFakeSessions(),
+    );
+
+    const sent = parseSent(ws) as { type: string; tasks: unknown[] };
+    expect(sent.type).toBe('tasks_ready');
+    expect(sent.tasks).toHaveLength(1);
+  });
+
+  it('notion project with null sourceId still returns [] (no regression)', () => {
+    vi.mocked(getProjectById).mockReturnValue(makeProject() as never);
+    vi.mocked(ProjectService.getMilestone).mockReturnValue(
+      makeMilestoneRow(null) as never,
+    );
+    vi.mocked(getTaskCache).mockReturnValue(null);
+
+    const ws = makeFakeWs();
+    handleMessage(
+      ws,
+      JSON.stringify({
+        type: 'fetch_tasks',
+        projectId: PROJECT_ID,
+        milestoneId: MILESTONE_UUID,
+      }),
+      makeFakeSessions(),
+    );
+
+    const sent = parseSent(ws) as { type: string; tasks: unknown[] };
+    expect(sent.type).toBe('tasks_ready');
+    expect(sent.tasks).toEqual([]);
+    // Should NOT have tried to look up the cache since milestone has no sourceId
+    expect(vi.mocked(getTaskCache)).not.toHaveBeenCalled();
+  });
+});
