@@ -127,7 +127,6 @@ export interface CreateProjectInput {
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
   autoMergeEnabled?: boolean;
-  dataResidencyConfirmed?: boolean;
   baseBranch?: string;
 }
 
