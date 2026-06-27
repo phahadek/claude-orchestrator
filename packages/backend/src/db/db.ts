@@ -118,6 +118,17 @@ db.exec(`
     token       TEXT    NOT NULL UNIQUE,
     revoked     INTEGER NOT NULL DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS scheduler_audit (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    job             TEXT    NOT NULL,
+    status          TEXT    NOT NULL,
+    started_at      TEXT    NOT NULL,
+    completed_at    TEXT    NOT NULL,
+    duration_ms     INTEGER NOT NULL,
+    items_processed INTEGER,
+    error           TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_scheduler_audit_job ON scheduler_audit(job, started_at DESC);
 `);
 
 // ── Column rename migrations (run before queries.ts imports so prepared statements
