@@ -84,9 +84,12 @@ const sizeClassified =
 // Fail-open: absent repo_assignment field = not a multi-repo task → allow.
 const ra = entry.repo_assignment;
 const repoAssigned =
-  !ra || !ra.multi_repo || (typeof ra.repo === 'string' && ra.repo.trim() !== '');
+  !ra ||
+  !ra.multi_repo ||
+  (typeof ra.repo === 'string' && ra.repo.trim() !== '');
 
-if (signedOff && depsClassified && sizeClassified && repoAssigned) process.exit(0); // fully gated → allow
+if (signedOff && depsClassified && sizeClassified && repoAssigned)
+  process.exit(0); // fully gated → allow
 
 const reasons = [];
 if (!signedOff) {

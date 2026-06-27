@@ -33,7 +33,10 @@ function runGate(cwd: string, pageId: string) {
     },
     cwd,
   });
-  return spawnSync(process.execPath, [HOOK], { input: stdin, encoding: 'utf8' });
+  return spawnSync(process.execPath, [HOOK], {
+    input: stdin,
+    encoding: 'utf8',
+  });
 }
 
 describe('groom-gate.mjs — repo_assignment check', () => {
@@ -46,7 +49,10 @@ describe('groom-gate.mjs — repo_assignment check', () => {
   it('blocks a multi-repo task with repo: null', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
     makeStateFile(tmpDir, {
-      [PAGE_ID]: { ...VALID_BASE, repo_assignment: { multi_repo: true, repo: null } },
+      [PAGE_ID]: {
+        ...VALID_BASE,
+        repo_assignment: { multi_repo: true, repo: null },
+      },
     });
     const r = runGate(tmpDir, PAGE_ID);
     expect(r.status).toBe(2);
@@ -56,7 +62,10 @@ describe('groom-gate.mjs — repo_assignment check', () => {
   it('blocks a multi-repo task with repo: ""', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
     makeStateFile(tmpDir, {
-      [PAGE_ID]: { ...VALID_BASE, repo_assignment: { multi_repo: true, repo: '' } },
+      [PAGE_ID]: {
+        ...VALID_BASE,
+        repo_assignment: { multi_repo: true, repo: '' },
+      },
     });
     const r = runGate(tmpDir, PAGE_ID);
     expect(r.status).toBe(2);
@@ -65,7 +74,10 @@ describe('groom-gate.mjs — repo_assignment check', () => {
   it('blocks a multi-repo task with repo: "  " (whitespace only)', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
     makeStateFile(tmpDir, {
-      [PAGE_ID]: { ...VALID_BASE, repo_assignment: { multi_repo: true, repo: '  ' } },
+      [PAGE_ID]: {
+        ...VALID_BASE,
+        repo_assignment: { multi_repo: true, repo: '  ' },
+      },
     });
     const r = runGate(tmpDir, PAGE_ID);
     expect(r.status).toBe(2);
@@ -74,7 +86,10 @@ describe('groom-gate.mjs — repo_assignment check', () => {
   it('allows a multi-repo task when repo is assigned', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
     makeStateFile(tmpDir, {
-      [PAGE_ID]: { ...VALID_BASE, repo_assignment: { multi_repo: true, repo: 'claude-orchestrator' } },
+      [PAGE_ID]: {
+        ...VALID_BASE,
+        repo_assignment: { multi_repo: true, repo: 'claude-orchestrator' },
+      },
     });
     const r = runGate(tmpDir, PAGE_ID);
     expect(r.status).toBe(0);
@@ -83,7 +98,10 @@ describe('groom-gate.mjs — repo_assignment check', () => {
   it('allows a single-repo task (multi_repo: false, no repo required)', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
     makeStateFile(tmpDir, {
-      [PAGE_ID]: { ...VALID_BASE, repo_assignment: { multi_repo: false, repo: null } },
+      [PAGE_ID]: {
+        ...VALID_BASE,
+        repo_assignment: { multi_repo: false, repo: null },
+      },
     });
     const r = runGate(tmpDir, PAGE_ID);
     expect(r.status).toBe(0);
@@ -131,7 +149,10 @@ describe('groom-gate.mjs — regression: pre-existing gate checks', () => {
   it('blocks when size_check is missing', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
     makeStateFile(tmpDir, {
-      [PAGE_ID]: { signoff: { by: 'u', at: '2026-06-26T00:00:00Z' }, hard_block_deps: [] },
+      [PAGE_ID]: {
+        signoff: { by: 'u', at: '2026-06-26T00:00:00Z' },
+        hard_block_deps: [],
+      },
     });
     const r = runGate(tmpDir, PAGE_ID);
     expect(r.status).toBe(2);
@@ -158,7 +179,10 @@ describe('groom-gate.mjs — regression: pre-existing gate checks', () => {
       },
       cwd: tmpDir,
     });
-    const r = spawnSync(process.execPath, [HOOK], { input: stdin, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [HOOK], {
+      input: stdin,
+      encoding: 'utf8',
+    });
     expect(r.status).toBe(0);
   });
 
@@ -170,7 +194,10 @@ describe('groom-gate.mjs — regression: pre-existing gate checks', () => {
       tool_input: { command: 'append_blocks', page_id: PAGE_ID },
       cwd: tmpDir,
     });
-    const r = spawnSync(process.execPath, [HOOK], { input: stdin, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [HOOK], {
+      input: stdin,
+      encoding: 'utf8',
+    });
     expect(r.status).toBe(0);
   });
 });
