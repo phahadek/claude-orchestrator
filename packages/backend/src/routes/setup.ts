@@ -18,7 +18,17 @@ const router = Router();
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
-router.get('/setup/status', (_req, res) => {
+/**
+ * Shared logic for setup status — used by both the /setup/status route and
+ * isSetupRequired() so the two can never drift apart.
+ *
+ * missing[] lists all absent items for an informational Settings badge.
+ * setupNeeded is true only on genuine first-run (setupComplete not yet set)
+ * AND at least one hard requirement is absent (github.token or project).
+ * notion.apiKey is optional and is reported in missing[] but never gates
+ * the wizard by itself.
+ */
+export function computeSetupStatus(): { setupNeeded: boolean; missing: string[] } {
   const cfg = getOrchestratorConfig();
   const missing: string[] = [];
 
@@ -33,7 +43,14 @@ router.get('/setup/status', (_req, res) => {
   }
   if (projectCount === 0) missing.push('project');
 
-  res.json({ setupNeeded: missing.length > 0, missing });
+  if (cfg.setupComplete) return { setupNeeded: false, missing };
+
+  const hardMissing = missing.filter((k) => k !== 'notion.apiKey');
+  return { setupNeeded: hardMissing.length > 0, missing };
+}
+
+router.get('/setup/status', (_req, res) => {
+  res.json(computeSetupStatus());
 });
 
 // ── Env check ─────────────────────────────────────────────────────────────────
@@ -272,20 +289,12 @@ export default router;
 // ── Setup-mode guard ──────────────────────────────────────────────────────────
 
 /**
- * Returns true when the backend is in "setup mode": config.json lacks a GitHub
- * token or no projects have been configured yet.
- * Returns false when setup has been explicitly completed or skipped.
+ * Returns true when the backend is in "setup mode".
+ * Delegates to computeSetupStatus() so this function and /setup/status
+ * always agree.
  */
 export function isSetupRequired(): boolean {
-  const cfg = getOrchestratorConfig();
-  if (cfg.setupComplete) return false;
-  if (!cfg.github.token) return true;
-  try {
-    if (countProjects() === 0) return true;
-  } catch {
-    return true;
-  }
-  return false;
+  return computeSetupStatus().setupNeeded;
 }
 
 /**
