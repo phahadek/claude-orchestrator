@@ -136,7 +136,9 @@ describe('POST /api/projects — dataResidencyConfirmed', () => {
     vi.clearAllMocks();
     mockGetById.mockReturnValue(undefined);
     mockCreate.mockImplementation((input: CreateProjectInput) =>
-      makeProject({ dataResidencyConfirmed: input.dataResidencyConfirmed ?? false }),
+      makeProject({
+        dataResidencyConfirmed: input.dataResidencyConfirmed ?? false,
+      }),
     );
   });
 
@@ -144,13 +146,19 @@ describe('POST /api/projects — dataResidencyConfirmed', () => {
     const app = buildApp();
     const res = await supertest(app)
       .post('/api/projects')
-      .send({ name: 'Repo', projectDir: REAL_DIR, dataResidencyConfirmed: true });
+      .send({
+        name: 'Repo',
+        projectDir: REAL_DIR,
+        dataResidencyConfirmed: true,
+      });
 
     expect(res.status).toBe(201);
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({ dataResidencyConfirmed: true }),
     );
-    expect((res.body as Record<string, unknown>).dataResidencyConfirmed).toBe(true);
+    expect((res.body as Record<string, unknown>).dataResidencyConfirmed).toBe(
+      true,
+    );
   });
 
   it('defaults dataResidencyConfirmed to false when not provided', async () => {
