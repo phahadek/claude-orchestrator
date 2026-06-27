@@ -142,11 +142,14 @@ The Analytics tab tracks per-session token usage and per-model cost across the p
 The `/groom` (Backlog Grooming) and `/design` (Design Execution) Claude Code skills are
 source-controlled here and deployed to `~/.claude` by a run-by-hand script:
 
-- **Vendored artifacts:** `scripts/{groom-load,design-load,groom-gate,notion-page}.mjs` and
-  `skills/{groom,design}/**`.
+- **Vendored artifacts:** `scripts/{groom-load,design-load,groom-gate,notion-page}.mjs`,
+  `skills/{groom,design}/**`, and `config-template/**` (the Remote Control bootstrap — see
+  below).
 - **Deploy:** `node scripts/deploy-grooming.mjs` (add `--dry-run` to preview). Run it by hand
   whenever a vendored artifact changes — there is no auto-sync. It copies the scripts into
-  `~/.claude/scripts/` and the skill trees into `~/.claude/skills/`.
+  `~/.claude/scripts/`, the skill trees into `~/.claude/skills/`, and the `config-template/*`
+  bootstrap into the central config tree (`load-procedures.mjs` overwritten each run;
+  `procedures.md` seeded only if absent).
 - **Manifest:** each managed repo's grooming manifest lives in the **central config tree** at
   `config/projects/<repo-dir>/grooming.json` (outside the repo), not in `.claude/`. The loaders
   resolve it by repo basename via `$ORCHESTRATOR_CONFIG_DIR` / `--config-dir` / a host-aware
@@ -174,6 +177,46 @@ source-controlled here and deployed to `~/.claude` by a run-by-hand script:
     }
   }
   ```
+
+### Remote Control bootstrap (config tree + SessionStart hook)
+
+Human-driven **Remote Control** sessions get the universal `procedures.md` (the project index
+
+- session flow grooming/design rely on) via a **SessionStart** hook. `deploy-grooming.mjs`
+  installs the hook script and a `procedures.md` to fill in (see `config-template/README.md`);
+  you then register the hook once and launch the server.
+
+* **Launch (durable, multi-session):**
+  `claude --permission-mode acceptEdits remote-control`, run from the **projects root**. Note
+  the `remote-control` _subcommand_ does **not** accept `--settings` — context delivery is via
+  the hook below, not a settings file. (The single-session `--remote-control` _flag_ does take
+  `--settings`, but that's not the durable server.)
+* **One-time hook registration (manual):** add a `SessionStart` hook in `~/.claude/settings.json`
+  pointing at the deployed hook (absolute path to your config tree). It self-gates on cwd —
+  it injects only at the projects root, so orchestrator-launched worktree sessions never
+  inherit it:
+
+  ```json
+  {
+    "hooks": {
+      "SessionStart": [
+        {
+          "matcher": "",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node /path/to/config/hooks/load-procedures.mjs"
+            }
+          ]
+        }
+      ]
+    }
+  }
+  ```
+
+* **Non-dev layouts:** if the config tree is not the parent of the projects root, set
+  `ORCHESTRATOR_CONFIG_DIR` (deploy + loaders) and `ORCHESTRATOR_PROJECTS_ROOT` (the hook's cwd
+  gate). The systemd unit shipped in the config tree sets both.
 
 ## License
 
