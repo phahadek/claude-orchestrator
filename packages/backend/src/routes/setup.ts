@@ -49,15 +49,18 @@ function checkInstalled(cmd: string): boolean {
   }
 }
 
-function isClaudeAuthenticated(): boolean {
-  const credPath = claudeCredentialsPath();
+function isClaudeAuthenticated(credPathOverride?: string): boolean {
+  if (process.env.ANTHROPIC_API_KEY) return true;
+  const credPath = credPathOverride ?? claudeCredentialsPath();
   if (!fs.existsSync(credPath)) return false;
   try {
     const raw = JSON.parse(fs.readFileSync(credPath, 'utf8')) as Record<
       string,
       unknown
     >;
-    // Credentials file has a non-empty token when authenticated
+    // Real shape: claudeAiOauth is an object bundle
+    if (raw.claudeAiOauth && typeof raw.claudeAiOauth === 'object') return true;
+    // Back-compat: older claudeAiOauthToken string
     return (
       typeof raw.claudeAiOauthToken === 'string' &&
       raw.claudeAiOauthToken.length > 0
