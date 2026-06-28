@@ -767,7 +767,12 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
       return makeProc(0, '');
     };
 
-    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['echo hi'],
+      () => {},
+    );
 
     expect(result.success).toBe(false);
     expect(result.isGitInfraFailure).toBe(true);
@@ -788,7 +793,12 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
       return makeProc(0, '');
     };
 
-    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['echo hi'],
+      () => {},
+    );
 
     expect(result.success).toBe(false);
     expect(result.isGitInfraFailure).toBe(true);
@@ -815,7 +825,12 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
       return makeProc(0, '');
     };
 
-    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['echo hi'],
+      () => {},
+    );
 
     expect(result.success).toBe(false);
     expect(result.isGitInfraFailure).toBe(true);
@@ -840,7 +855,12 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
       return makeProc(0, '');
     };
 
-    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['echo hi'],
+      () => {},
+    );
 
     expect(result.isGitInfraFailure).toBeUndefined();
   });
@@ -857,7 +877,12 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
       return makeProc(0, '');
     };
 
-    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['echo hi'],
+      () => {},
+    );
 
     expect(result.success).toBe(false);
     expect(result.isGitInfraFailure).toBeUndefined();
@@ -869,12 +894,16 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
-      if (cmd === 'git' && a[0] === 'add')
-        return makeProc(128, stderr, '');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(128, stderr, '');
       return makeProc(0, '');
     };
 
-    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['echo hi'],
+      () => {},
+    );
 
     expect(result.summary).toContain('git add -A failed (exit 128)');
     expect(result.summary).toContain(stderr);
