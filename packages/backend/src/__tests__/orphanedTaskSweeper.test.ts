@@ -805,7 +805,10 @@ describe('OrphanedTaskSweeper', () => {
 
     // Should surface to operator, NOT nudge again, even though session responded
     expect(sendOrResume).not.toHaveBeenCalled();
-    expect(setSessionPauseReason).toHaveBeenCalledWith('sess-1', 'stalled_idle');
+    expect(setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-1',
+      'stalled_idle',
+    );
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'task_orphan_surfaced' }),
     );
@@ -1087,7 +1090,10 @@ describe('OrphanedTaskSweeper', () => {
     await sweeper.sweepOnce();
 
     // No matching PR — nudge proceeds normally
-    expect(sendOrResume).toHaveBeenCalledWith('sess-1', expect.stringContaining('PR'));
+    expect(sendOrResume).toHaveBeenCalledWith(
+      'sess-1',
+      expect.stringContaining('PR'),
+    );
     expect(upsertPullRequest).not.toHaveBeenCalled();
   });
 
@@ -1131,7 +1137,10 @@ describe('OrphanedTaskSweeper', () => {
     await sweeper.sweepOnce();
 
     // Fail-open: GitHub error doesn't prevent the nudge
-    expect(sendOrResume).toHaveBeenCalledWith('sess-1', expect.stringContaining('PR'));
+    expect(sendOrResume).toHaveBeenCalledWith(
+      'sess-1',
+      expect.stringContaining('PR'),
+    );
     expect(upsertPullRequest).not.toHaveBeenCalled();
   });
 
