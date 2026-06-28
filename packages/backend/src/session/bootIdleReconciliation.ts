@@ -1,4 +1,5 @@
 import {
+  getDeadSessionsAtBoot,
   getIdleSessionsWithResolvedPRs,
   getIdleReviewSessionsWithTerminalCodingOrPR,
   markSessionDone,
@@ -14,6 +15,9 @@ import { logger } from '../logger';
  * any closed/merged PRs that exist on GitHub. Without this pass, idle sessions
  * whose PRs resolved while the server was offline remain stuck at status='idle'.
  *
+ * Pass 0 — dead sessions (starting/running at boot):
+ *   starting/running at boot → error (process tree is gone after restart)
+ *
  * Pass 1 — idle coding sessions with resolved PRs:
  *   idle + merged PR → done  (PR merged while server was down)
  *   idle + closed PR → error (PR closed without merge while server was down)
@@ -26,8 +30,26 @@ import { logger } from '../logger';
  * Mirrors the coding session's terminal status; defaults to done if absent.
  */
 export function runBootIdleReconciliation(): void {
+  _runPass0();
   _runPass1();
   _runPass2();
+}
+
+function _runPass0(): void {
+  const rows = getDeadSessionsAtBoot();
+  if (rows.length === 0) return;
+
+  logger.info(
+    `[BootIdleReconciliation] ${rows.length} session(s) at starting/running at boot — process tree gone, marking error`,
+  );
+
+  const now = Date.now();
+  for (const row of rows) {
+    updateSessionStatus(row.session_id, 'error', now);
+    logger.info(
+      `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} ${row.status}→error (dead at boot)`,
+    );
+  }
 }
 
 function _runPass1(): void {
