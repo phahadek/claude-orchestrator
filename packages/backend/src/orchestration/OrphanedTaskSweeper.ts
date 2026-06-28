@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { logger } from '../logger';
-import { runtimeSettings, getAllProjects } from '../config';
+import { runtimeSettings, getAllProjects, GITHUB_REPO } from '../config';
 import type { Scheduler } from './Scheduler';
 import type { ProjectConfig } from '../config';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -14,14 +14,16 @@ import {
   getLocalBranchBySession,
   setSessionPauseReason,
   getLatestSessionEventTimestamp,
+  upsertPullRequest,
 } from '../db/queries';
 import {
   recordEvent,
   countNudgeEvents,
   getLatestNudgeTimestamp,
-  countNudgeEventsSince,
 } from '../audit/AuditLog';
 import type { Session } from '../db/types';
+import { GitHubClient } from '../github/GitHubClient';
+import type { PullRequest } from '../github/types';
 
 const IN_PROGRESS_STATUS = '🔄 In Progress';
 const READY_STATUS = '🗂️ Ready';
@@ -65,6 +67,8 @@ export class OrphanedTaskSweeper {
       recencyGateMs?: number;
       /** Override minimum nudge spacing (ms). Defaults to MIN_NUDGE_SPACING_MS. */
       minNudgeSpacingMs?: number;
+      /** GitHub client override for testing (defaults to a real GitHubClient). */
+      githubClient?: { listOpenPRs(repo?: string): Promise<PullRequest[]> };
     } = {},
   ) {}
 
@@ -212,6 +216,11 @@ export class OrphanedTaskSweeper {
     // An idle session with no PR is a recoverable asset — nudge rather than revert.
     // Exception: an archived idle session is no longer recoverable; fall through to revert.
     if (latestSession?.status === 'idle' && !latestSession.archived) {
+      // Gate: check GitHub before sending the "no PR opened" nudge. Local git may be
+      // dead/corrupt and miss a PR that's already open on GitHub.
+      if (await this.checkAndBackfillGitHubPR(latestSession)) {
+        return;
+      }
       await this.maybeNudgeIdleSession(
         latestSession,
         taskId,
@@ -269,12 +278,9 @@ export class OrphanedTaskSweeper {
       return;
     }
 
-    // Episode-scoped nudge count: only count nudges newer than the last session activity.
-    // A nudge the session responded to (session_events after it) no longer counts.
-    const nudgesAlready =
-      latestEventTs !== null
-        ? countNudgeEventsSince(session_id, latestEventTs)
-        : countNudgeEvents(session_id);
+    // Total nudge count: all task_orphan_nudged events for this session.
+    // A session that responds without resolving still exhausts NUDGE_LIMIT and surfaces.
+    const nudgesAlready = countNudgeEvents(session_id);
 
     if (nudgesAlready >= NUDGE_LIMIT) {
       // Surface-once: skip if the session is already marked stalled_idle.
@@ -320,6 +326,58 @@ export class OrphanedTaskSweeper {
     logger.info(
       `[OrphanedTaskSweeper] nudged idle session ${session_id} for task ${taskId} (nudge ${nudgesAlready + 1}/${NUDGE_LIMIT})`,
     );
+  }
+
+  /**
+   * Check GitHub for an open PR whose head branch matches the session's tracked branch.
+   * If found, backfill the pull_requests row and return true so the caller can skip
+   * the "no PR opened" nudge — guards against broken local git missing a live PR.
+   */
+  private async checkAndBackfillGitHubPR(session: Session): Promise<boolean> {
+    const lb = getLocalBranchBySession(session.session_id);
+    const headBranch = lb?.branch_name;
+    if (!headBranch) return false;
+
+    const client = this.options.githubClient ?? new GitHubClient();
+    let openPRs: PullRequest[];
+    try {
+      openPRs = await client.listOpenPRs();
+    } catch (err) {
+      logger.warn(
+        `[OrphanedTaskSweeper] GitHub PR check failed for session ${session.session_id}: ${(err as Error).message}`,
+      );
+      return false;
+    }
+
+    const found = openPRs.find((pr) => pr.headBranch === headBranch);
+    if (!found) return false;
+
+    upsertPullRequest({
+      pr_number: found.id,
+      pr_url: found.url,
+      task_id: session.task_id ?? null,
+      session_id: session.session_id,
+      repo: GITHUB_REPO,
+      title: found.title,
+      body: found.body,
+      head_branch: found.headBranch,
+      base_branch: found.baseBranch,
+      state: found.state,
+      draft: found.draft ? 1 : 0,
+      review_result: null,
+      review_at: null,
+      created_at: found.createdAt,
+      updated_at: found.updatedAt,
+      synced_at: new Date().toISOString(),
+      node_id: found.nodeId,
+      head_sha: found.headSha,
+      conflict_nudge_sha: null,
+    });
+
+    logger.info(
+      `[OrphanedTaskSweeper] found open PR #${found.id} on GitHub for branch ${headBranch} — suppressing nudge and backfilling DB`,
+    );
+    return true;
   }
 
   /** Surface a stalled session to the operator (attention queue) without reverting the task. */
