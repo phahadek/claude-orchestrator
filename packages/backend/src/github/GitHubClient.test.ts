@@ -442,7 +442,8 @@ describe('GitHubClient.getFailingChecks()', () => {
               name: 'build',
               status: 'completed',
               conclusion: 'failure',
-              details_url: 'https://github.com/owner/repo/actions/runs/42/job/1',
+              details_url:
+                'https://github.com/owner/repo/actions/runs/42/job/1',
               html_url: 'https://github.com/owner/repo/actions/runs/42',
             },
           ],
