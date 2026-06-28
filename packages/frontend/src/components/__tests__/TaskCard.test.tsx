@@ -883,4 +883,117 @@ describe('TaskCard', () => {
     );
     expect(screen.queryByText('⚠ Needs repo')).toBeNull();
   });
+
+  // ── Unpark button ─────────────────────────────────────────────────────────
+
+  it('renders Unpark button for cap-escalated tasks with a PR', () => {
+    const capPauseReason = JSON.stringify({
+      reason: 'stalled_reconcile_cap',
+      source: 'review',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: capPauseReason as unknown as PauseReason,
+          pr: makePr(),
+          taskType: '💻 Code',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /unpark/i })).toBeDefined();
+  });
+
+  it('does not render Unpark button when PR is absent', () => {
+    const capPauseReason = JSON.stringify({
+      reason: 'stalled_reconcile_cap',
+      source: 'review',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: capPauseReason as unknown as PauseReason,
+          pr: null,
+          taskType: '💻 Code',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /unpark/i })).toBeNull();
+  });
+
+  it('does not render Unpark button for non-cap pause reasons', () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: 'max_reviews',
+          pr: makePr(),
+          taskType: '💻 Code',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /unpark/i })).toBeNull();
+  });
+
+  it('Unpark button POSTs to the unpark route with correct prNumber and projectId', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true }),
+    } as Response);
+
+    const capPauseReason = JSON.stringify({
+      reason: 'stalled_reconcile_cap',
+      source: 'review',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
+
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: capPauseReason as unknown as PauseReason,
+          pr: makePr({ prNumber: 570 }),
+          taskType: '💻 Code',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({ id: 'proj-1' })}
+      />,
+    );
+
+    const btn = screen.getByRole('button', { name: /unpark/i });
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/prs/570/unpark'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('projectId=proj-1'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    fetchSpy.mockRestore();
+  });
 });

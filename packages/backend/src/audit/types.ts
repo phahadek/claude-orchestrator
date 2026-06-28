@@ -44,7 +44,8 @@ type EventType =
   | 'stalled_pr_reconcile_attempt'
   | 'stalled_pr_escalated'
   | 'task_launch_escalated'
-  | 'task_unblocked';
+  | 'task_unblocked'
+  | 'pr_unparked';
 
 type ActorType = 'ai' | 'human' | 'system';
 
