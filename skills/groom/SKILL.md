@@ -42,7 +42,7 @@ reason this skill exists. Read `reference/presentation.md` before Step 2.
    registered in `manifest.milestones` (routine right after a new milestone board is
    created), the loader no longer dead-ends — it prints a copy-pasteable entry with the
    neighbour auto-filled. Add that entry to the manifest, or pass `--board
-   <data-source-id>` to run immediately and persist the printed snippet afterward.
+<data-source-id>` to run immediately and persist the printed snippet afterward.
    Never improvise a board id — copy it from the board's Notion URL / context.md.
 4. Determine **mode** from the cache dir `.skill-cache/grooming/<milestone>/`:
    - absent → **fresh** groom.
