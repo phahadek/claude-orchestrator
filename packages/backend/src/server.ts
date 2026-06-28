@@ -61,6 +61,7 @@ import { StalledPRReconciler } from './orchestration/StalledPRReconciler';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
 import { Scheduler } from './orchestration/Scheduler';
+import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
@@ -335,6 +336,7 @@ stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
 sessionEventsPruner.register(scheduler);
 stuckSessionMonitor.register(scheduler);
+registerWorktreeReconciler(scheduler);
 
 void runBootSequence({
   jsonlReader,

@@ -8,13 +8,28 @@ import type { ProjectConfig } from '../config';
 import { getSession, getPRBySessionId } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { runWithConcurrency } from '../utils/concurrency';
+import type { Scheduler } from './Scheduler';
 
 const execAsync = promisify(exec);
 
+// A worktree is reclaimed only when its session is definitively terminal.
+// This guard is safe because a session's DB row is inserted (SessionManager.ts)
+// before its worktree is created (git worktree add). If a session ID is absent
+// from the DB, no live session owns that worktree and it is safe to prune.
 const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SWEEP_CONCURRENCY = 4;
+const MAINTENANCE_INTERVAL_MS = 30 * 60_000;
+
+async function fsExists(p: string): Promise<boolean> {
+  try {
+    await fs.promises.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function normalizeSlashes(p: string): string {
   return p.replace(/\\/g, '/');
@@ -91,7 +106,7 @@ async function reconcileProject(
       continue;
     }
 
-    if (!fs.existsSync(wtPath)) {
+    if (!await fsExists(wtPath)) {
       stats.pruned++;
       logger.debug(
         `[WorktreeReconciler] worktree dir already gone for session ${sessionId.slice(0, 8)}, letting prune reap registration`,
@@ -142,9 +157,9 @@ async function reconcileProject(
       );
     } catch (err) {
       let fallbackOk = false;
-      if (fs.existsSync(wtPath)) {
+      if (await fsExists(wtPath)) {
         try {
-          fs.rmSync(wtPath, {
+          await fs.promises.rm(wtPath, {
             recursive: true,
             force: true,
             maxRetries: 3,
@@ -152,11 +167,11 @@ async function reconcileProject(
           });
           fallbackOk = true;
           logger.info(
-            `[WorktreeReconciler] fs.rmSync fallback succeeded for session ${sessionId.slice(0, 8)} after git worktree remove failed`,
+            `[WorktreeReconciler] fs.promises.rm fallback succeeded for session ${sessionId.slice(0, 8)} after git worktree remove failed`,
           );
         } catch (rmErr) {
           logger.error(
-            `[WorktreeReconciler] fs.rmSync fallback also failed for session ${sessionId.slice(0, 8)}: ${rmErr}`,
+            `[WorktreeReconciler] fs.promises.rm fallback also failed for session ${sessionId.slice(0, 8)}: ${rmErr}`,
           );
         }
       }
@@ -189,7 +204,7 @@ async function reconcileProject(
   // Phase 2: fs-delete unregistered UUID dirs whose session is terminal or absent
   let entries: string[];
   try {
-    entries = fs.readdirSync(worktreesDir);
+    entries = await fs.promises.readdir(worktreesDir);
   } catch {
     entries = [];
   }
@@ -201,7 +216,7 @@ async function reconcileProject(
     const worktreePath = path.join(worktreesDir, entry);
 
     try {
-      if (!fs.statSync(worktreePath).isDirectory()) continue;
+      if (!(await fs.promises.stat(worktreePath)).isDirectory()) continue;
     } catch {
       continue;
     }
@@ -213,7 +228,7 @@ async function reconcileProject(
     }
 
     try {
-      fs.rmSync(worktreePath, { recursive: true, force: true });
+      await fs.promises.rm(worktreePath, { recursive: true, force: true });
       stats.fsDeleted++;
       logger.info(
         `[WorktreeReconciler] fs-deleted orphaned dir for session ${entry.slice(0, 8)} (project ${project.id})`,
@@ -247,7 +262,7 @@ async function reconcileProject(
   return stats;
 }
 
-export async function runBootWorktreeReconciliation(options?: {
+async function runSweep(options?: {
   listProjects?: () => ProjectConfig[];
   platform?: NodeJS.Platform;
 }): Promise<void> {
@@ -277,7 +292,26 @@ export async function runBootWorktreeReconciliation(options?: {
 
   if (removed > 0 || fsDeleted > 0 || failed > 0 || pruned > 0) {
     logger.info(
-      `[WorktreeReconciler] boot sweep complete — removed: ${removed}, fs-deleted: ${fsDeleted}, pruned: ${pruned}, failed: ${failed}, skipped: ${skipped}`,
+      `[WorktreeReconciler] sweep complete — removed: ${removed}, fs-deleted: ${fsDeleted}, pruned: ${pruned}, failed: ${failed}, skipped: ${skipped}`,
     );
   }
+}
+
+export async function runBootWorktreeReconciliation(options?: {
+  listProjects?: () => ProjectConfig[];
+  platform?: NodeJS.Platform;
+}): Promise<void> {
+  return runSweep(options);
+}
+
+export function register(scheduler: Scheduler): void {
+  scheduler.register({
+    name: 'worktree_reconciler',
+    intervalMs: MAINTENANCE_INTERVAL_MS,
+    runOnBoot: true,
+    concurrency: 'skip-if-running',
+    run: async () => {
+      await runSweep();
+    },
+  });
 }

@@ -32,10 +32,13 @@ vi.mock('node:fs', async (importOriginal) => {
     ...actual,
     default: {
       ...actual,
-      existsSync: vi.fn(),
-      readdirSync: vi.fn(),
-      statSync: vi.fn(),
-      rmSync: vi.fn(),
+      promises: {
+        ...actual.promises,
+        access: vi.fn().mockResolvedValue(undefined),
+        readdir: vi.fn().mockResolvedValue([]),
+        stat: vi.fn().mockResolvedValue({ isDirectory: () => true }),
+        rm: vi.fn().mockResolvedValue(undefined),
+      },
     },
   };
 });
@@ -73,14 +76,18 @@ import { getSession, getPRBySessionId } from '../db/queries.js';
 import { recordEvent } from '../audit/AuditLog.js';
 import { logger } from '../logger.js';
 import { runWithConcurrency } from '../utils/concurrency.js';
-import { runBootWorktreeReconciliation } from '../orchestration/WorktreeReconciler.js';
+import {
+  runBootWorktreeReconciliation,
+  register,
+} from '../orchestration/WorktreeReconciler.js';
 import type { ProjectConfig } from '../config.js';
+import type { Scheduler } from '../orchestration/Scheduler.js';
 
 const mockedExec = vi.mocked(exec);
-const mockedExistsSync = vi.mocked(fs.existsSync);
-const mockedReaddirSync = vi.mocked(fs.readdirSync);
-const mockedStatSync = vi.mocked(fs.statSync);
-const mockedRmSync = vi.mocked(fs.rmSync);
+const mockedAccess = vi.mocked(fs.promises.access);
+const mockedReaddir = vi.mocked(fs.promises.readdir);
+const mockedStat = vi.mocked(fs.promises.stat);
+const mockedRm = vi.mocked(fs.promises.rm);
 const mockedGetSession = vi.mocked(getSession);
 const mockedGetPR = vi.mocked(getPRBySessionId);
 const mockedRecordEvent = vi.mocked(recordEvent);
@@ -173,11 +180,11 @@ function makePR(state: 'open' | 'merged' | 'closed') {
 }
 
 function setupWorktreeDir(sessionIds: string[]) {
-  mockedReaddirSync.mockReturnValue(
-    sessionIds as unknown as ReturnType<typeof fs.readdirSync>,
+  mockedReaddir.mockResolvedValue(
+    sessionIds as unknown as ReturnType<typeof fs.promises.readdir>,
   );
-  mockedStatSync.mockReturnValue({ isDirectory: () => true } as ReturnType<
-    typeof fs.statSync
+  mockedStat.mockResolvedValue({ isDirectory: () => true } as ReturnType<
+    typeof fs.promises.stat
   >);
 }
 
@@ -200,14 +207,15 @@ beforeEach(async () => {
     },
   );
   // Default: worktree dir exists on disk
-  mockedExistsSync.mockReturnValue(true);
+  mockedAccess.mockResolvedValue(undefined);
   // Default: empty worktrees dir
-  mockedReaddirSync.mockReturnValue(
-    [] as unknown as ReturnType<typeof fs.readdirSync>,
+  mockedReaddir.mockResolvedValue(
+    [] as unknown as ReturnType<typeof fs.promises.readdir>,
   );
-  mockedStatSync.mockReturnValue({ isDirectory: () => true } as ReturnType<
-    typeof fs.statSync
+  mockedStat.mockResolvedValue({ isDirectory: () => true } as ReturnType<
+    typeof fs.promises.stat
   >);
+  mockedRm.mockResolvedValue(undefined);
   // Restore runWithConcurrency to the real impl (clear any mockImplementationOnce overrides)
   mockedRunWithConcurrency.mockReset();
   const { runWithConcurrency: realRwc } = await vi.importActual<
@@ -480,9 +488,7 @@ describe('runBootWorktreeReconciliation — failure tolerance', () => {
   });
 
   it('never throws — boot never aborts', async () => {
-    mockedReaddirSync.mockImplementation(() => {
-      throw new Error('unexpected FS error');
-    });
+    mockedReaddir.mockRejectedValue(new Error('unexpected FS error'));
 
     await expect(
       runBootWorktreeReconciliation({ listProjects: () => [makeProject()] }),
@@ -548,10 +554,10 @@ describe('runBootWorktreeReconciliation — per-worktree post-remove prune (Fix 
   });
 });
 
-// ── Fix B: fs.rmSync fallback ─────────────────────────────────────────────────
+// ── Fix B: fs.promises.rm fallback ───────────────────────────────────────────
 
-describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
-  it('attempts fs.rmSync when dir exists and git worktree remove fails', async () => {
+describe('runBootWorktreeReconciliation — fs.promises.rm fallback (Fix B)', () => {
+  it('attempts fs.promises.rm when dir exists and git worktree remove fails', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-fail`;
     mockedExec.mockImplementation(
       (cmd: string, _opts: unknown, callback: any) => {
@@ -565,7 +571,7 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
         return {} as ReturnType<typeof exec>;
       },
     );
-    mockedExistsSync.mockReturnValue(true);
+    mockedAccess.mockResolvedValue(undefined);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
@@ -573,7 +579,7 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedRmSync).toHaveBeenCalledWith(wtPath, {
+    expect(mockedRm).toHaveBeenCalledWith(wtPath, {
       recursive: true,
       force: true,
       maxRetries: 3,
@@ -581,7 +587,7 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
     });
   });
 
-  it('does not attempt fs.rmSync when dir is absent after git worktree remove fails', async () => {
+  it('does not attempt fs.promises.rm when dir is absent after git worktree remove fails', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-fail`;
     mockedExec.mockImplementation(
       (cmd: string, _opts: unknown, callback: any) => {
@@ -595,8 +601,10 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
         return {} as ReturnType<typeof exec>;
       },
     );
-    // Phase 1 existsSync (line 88): true → proceed to removal; Fix B existsSync: false → skip rmSync
-    mockedExistsSync.mockReturnValueOnce(true).mockReturnValueOnce(false);
+    // Phase 1 access (check before removal): exists; Fix B access: does not exist
+    mockedAccess
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
@@ -604,10 +612,10 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedRmSync).not.toHaveBeenCalled();
+    expect(mockedRm).not.toHaveBeenCalled();
   });
 
-  it('sets fallbackOk: true in audit event when fs.rmSync succeeds', async () => {
+  it('sets fallbackOk: true in audit event when fs.promises.rm succeeds', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-fail`;
     mockedExec.mockImplementation(
       (cmd: string, _opts: unknown, callback: any) => {
@@ -621,8 +629,8 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
         return {} as ReturnType<typeof exec>;
       },
     );
-    mockedExistsSync.mockReturnValue(true);
-    mockedRmSync.mockReturnValue(undefined);
+    mockedAccess.mockResolvedValue(undefined);
+    mockedRm.mockResolvedValue(undefined);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
@@ -638,7 +646,7 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
     );
   });
 
-  it('sets fallbackOk: false in audit event when fs.rmSync also fails', async () => {
+  it('sets fallbackOk: false in audit event when fs.promises.rm also fails', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-fail`;
     mockedExec.mockImplementation(
       (cmd: string, _opts: unknown, callback: any) => {
@@ -652,10 +660,8 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
         return {} as ReturnType<typeof exec>;
       },
     );
-    mockedExistsSync.mockReturnValue(true);
-    mockedRmSync.mockImplementation(() => {
-      throw new Error('permission denied');
-    });
+    mockedAccess.mockResolvedValue(undefined);
+    mockedRm.mockRejectedValue(new Error('permission denied'));
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
@@ -671,7 +677,7 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
     );
   });
 
-  it('still records worktree_remove_failed even when fs.rmSync fallback succeeds', async () => {
+  it('still records worktree_remove_failed even when fs.promises.rm fallback succeeds', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-fail`;
     mockedExec.mockImplementation(
       (cmd: string, _opts: unknown, callback: any) => {
@@ -685,8 +691,8 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
         return {} as ReturnType<typeof exec>;
       },
     );
-    mockedExistsSync.mockReturnValue(true);
-    mockedRmSync.mockReturnValue(undefined);
+    mockedAccess.mockResolvedValue(undefined);
+    mockedRm.mockResolvedValue(undefined);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
@@ -704,10 +710,9 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
 
 describe('runBootWorktreeReconciliation — idempotent / no-op', () => {
   it('is a no-op when worktrees dir does not exist', async () => {
-    mockedReaddirSync.mockImplementation(() => {
-      const err = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      throw err;
-    });
+    mockedReaddir.mockRejectedValue(
+      Object.assign(new Error('ENOENT'), { code: 'ENOENT' }),
+    );
 
     await runBootWorktreeReconciliation({
       listProjects: () => [makeProject()],
@@ -754,10 +759,14 @@ describe('runBootWorktreeReconciliation — idempotent / no-op', () => {
         return {} as ReturnType<typeof exec>;
       },
     );
-    mockedReaddirSync.mockImplementation((dir) => {
+    mockedReaddir.mockImplementation((dir) => {
       if (String(dir).includes('p1'))
-        return ['sess-1'] as unknown as ReturnType<typeof fs.readdirSync>;
-      return [] as unknown as ReturnType<typeof fs.readdirSync>;
+        return Promise.resolve(['sess-1'] as unknown as ReturnType<
+          typeof fs.promises.readdir
+        >);
+      return Promise.resolve([] as unknown as ReturnType<
+        typeof fs.promises.readdir
+      >);
     });
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
@@ -785,7 +794,9 @@ describe('runBootWorktreeReconciliation — already-gone worktree dir', () => {
         return {} as ReturnType<typeof exec>;
       },
     );
-    mockedExistsSync.mockReturnValue(false);
+    mockedAccess.mockRejectedValue(
+      Object.assign(new Error('ENOENT'), { code: 'ENOENT' }),
+    );
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
@@ -823,7 +834,7 @@ describe('runBootWorktreeReconciliation — already-gone worktree dir', () => {
         return {} as ReturnType<typeof exec>;
       },
     );
-    mockedExistsSync.mockReturnValue(true);
+    mockedAccess.mockResolvedValue(undefined);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
@@ -883,7 +894,7 @@ describe('runBootWorktreeReconciliation — orphaned dir sweep', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedRmSync).toHaveBeenCalledWith(expect.stringContaining(UUID_1), {
+    expect(mockedRm).toHaveBeenCalledWith(expect.stringContaining(UUID_1), {
       recursive: true,
       force: true,
     });
@@ -902,7 +913,7 @@ describe('runBootWorktreeReconciliation — orphaned dir sweep', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedRmSync).toHaveBeenCalledWith(expect.stringContaining(UUID_1), {
+    expect(mockedRm).toHaveBeenCalledWith(expect.stringContaining(UUID_1), {
       recursive: true,
       force: true,
     });
@@ -918,7 +929,7 @@ describe('runBootWorktreeReconciliation — orphaned dir sweep', () => {
         listProjects: () => [makeProject()],
       });
 
-      expect(mockedRmSync).not.toHaveBeenCalled();
+      expect(mockedRm).not.toHaveBeenCalled();
       expect(mockedExec).not.toHaveBeenCalledWith(
         expect.stringContaining('git worktree remove'),
         expect.anything(),
@@ -935,7 +946,7 @@ describe('runBootWorktreeReconciliation — orphaned dir sweep', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedRmSync).not.toHaveBeenCalled();
+    expect(mockedRm).not.toHaveBeenCalled();
     expect(mockedExec).not.toHaveBeenCalledWith(
       expect.stringContaining('git worktree remove'),
       expect.anything(),
@@ -998,17 +1009,17 @@ describe('runBootWorktreeReconciliation — mixed fixture', () => {
       expect.any(Function),
     );
     // Unregistered terminal UUID → fs.rm
-    expect(mockedRmSync).toHaveBeenCalledWith(
+    expect(mockedRm).toHaveBeenCalledWith(
       expect.stringContaining(UUID_2),
       expect.objectContaining({ recursive: true }),
     );
     // Live UUID → not fs.rm
-    expect(mockedRmSync).not.toHaveBeenCalledWith(
+    expect(mockedRm).not.toHaveBeenCalledWith(
       expect.stringContaining(UUID_3),
       expect.anything(),
     );
     // Non-UUID → not fs.rm
-    expect(mockedRmSync).not.toHaveBeenCalledWith(
+    expect(mockedRm).not.toHaveBeenCalledWith(
       expect.stringContaining('not-a-uuid'),
       expect.anything(),
     );
@@ -1029,7 +1040,7 @@ describe('runBootWorktreeReconciliation — mixed fixture', () => {
       expect.anything(),
       expect.any(Function),
     );
-    expect(mockedRmSync).not.toHaveBeenCalled();
+    expect(mockedRm).not.toHaveBeenCalled();
   });
 });
 
@@ -1247,4 +1258,108 @@ describe('runBootWorktreeReconciliation — event-loop responsiveness', () => {
     // If execAsync properly yields the event loop, the scheduled task will have run
     expect(eventLoopTaskRan).toBe(true);
   });
+});
+
+// ── TERMINAL_STATUSES guard — DB row precedes worktree creation invariant ─────
+
+describe('TERMINAL_STATUSES guard — DB row precedes worktree creation invariant', () => {
+  it('never prunes a registered worktree whose session is non-terminal', async () => {
+    // Invariant: SessionManager inserts the session DB row before running
+    // `git worktree add`. A non-terminal DB row means the session owns a live
+    // worktree — pruning it would corrupt the running session.
+    const wtPath = `${WORKTREES_DIR}/sess-1`;
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
+    mockedGetSession.mockReturnValue(makeSession('starting') as never);
+
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
+
+    expect(mockedExec).not.toHaveBeenCalledWith(
+      expect.stringContaining('git worktree remove'),
+      expect.anything(),
+      expect.any(Function),
+    );
+    expect(mockedRm).not.toHaveBeenCalled();
+  });
+
+  it('never prunes an unregistered UUID dir whose session is non-terminal', async () => {
+    // Same invariant for phase 2: the DB row is present and non-terminal so the
+    // worktree is live, even though it is not yet git-registered.
+    setupWorktreeDir([UUID_1]);
+    mockedGetSession.mockReturnValue(makeSession('running') as never);
+
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
+
+    expect(mockedRm).not.toHaveBeenCalled();
+    expect(mockedExec).not.toHaveBeenCalledWith(
+      expect.stringContaining('git worktree remove'),
+      expect.anything(),
+      expect.any(Function),
+    );
+  });
+
+  it('prunes a registered worktree with no DB row (truly orphaned)', async () => {
+    // No DB row: no session was ever created for this worktree path, so it is
+    // safe to reclaim regardless of the guard.
+    const wtPath = `${WORKTREES_DIR}/sess-orphan`;
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
+    mockedGetSession.mockReturnValue(undefined);
+    mockedGetPR.mockReturnValue(null);
+
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
+
+    expect(mockedExec).toHaveBeenCalledWith(
+      expect.stringContaining('git worktree remove --force'),
+      expect.objectContaining({ cwd: PROJECT_DIR }),
+      expect.any(Function),
+    );
+  });
+});
+
+// ── Scheduler job registration ────────────────────────────────────────────────
+
+describe('register — Scheduler job', () => {
+  it('registers a job named worktree_reconciler with runOnBoot: true and skip-if-running', () => {
+    const mockScheduler = { register: vi.fn() } as unknown as Scheduler;
+    register(mockScheduler);
+    expect(mockScheduler.register).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'worktree_reconciler',
+        runOnBoot: true,
+        concurrency: 'skip-if-running',
+      }),
+    );
+  });
+
+  it('registered job has a periodic interval of at least 10 minutes', () => {
+    const mockScheduler = { register: vi.fn() } as unknown as Scheduler;
+    register(mockScheduler);
+    const opts = vi.mocked(mockScheduler.register).mock.calls[0][0];
+    const intervalMs =
+      typeof opts.intervalMs === 'function' ? opts.intervalMs() : opts.intervalMs;
+    expect(intervalMs).toBeGreaterThanOrEqual(10 * 60_000);
+  });
+
+
 });

@@ -2,7 +2,6 @@ import http from 'http';
 import { GitHubClient } from './github/GitHubClient';
 import { runPRBootSweep } from './github/PRBootSweep';
 import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
-import { runBootWorktreeReconciliation } from './orchestration/WorktreeReconciler';
 import { runGitConfigIntegrityCheck } from './orchestration/gitConfigIntegrity';
 import { logger } from './logger';
 import { getCorporateMode } from './config/corporateMode';
@@ -179,7 +178,6 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'resume_orphan_sessions',
     'stuck_session_monitor_rehydrate',
     'auto_merger_rehydrate',
-    'worktree_reconciliation',
     'pr_boot_sweep',
     'boot_idle_reconciliation',
     'stalled_pr_reconciliation',
@@ -206,9 +204,6 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   await tracker.runStep('auto_merger_rehydrate', () =>
     deps.autoMerger.rehydrate(),
   );
-  await tracker.runStep('worktree_reconciliation', () =>
-    runBootWorktreeReconciliation(),
-  );
   await tracker.runStep('pr_boot_sweep', () =>
     runPRBootSweep(deps.githubClient),
   );
@@ -221,6 +216,8 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   await tracker.runStep('auto_launcher_start', () =>
     deps.autoLauncher.pollOnce(),
   );
-  deps.scheduler.start();
+  // Boot-safety gate: scheduler (and its runOnBoot jobs) must not start until
+  // boot_reconciliation_completed is emitted. Ordering is explicit, not incidental.
   tracker.completeSequence();
+  deps.scheduler.start();
 }
