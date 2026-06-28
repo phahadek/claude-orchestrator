@@ -179,6 +179,43 @@ export function writeMcpConfig(
   return filePath;
 }
 
+/**
+ * Context-occupancy fraction above which a resumed non-large session is proactively
+ * escalated to large_task_model in _doSendOrResume rather than waiting for an
+ * overflow event that may never fire (e.g. when the CLI is alive-but-inert at ceiling).
+ */
+export const PROACTIVE_ESCALATION_HWM = 0.9;
+
+/**
+ * Returns true when the session's persisted context occupancy is at/over the
+ * proactive-escalation high-water mark AND escalation is possible (large_task_model
+ * is configured and the session is not already on it).
+ * Exported for unit testing.
+ */
+export function isSessionAtContextCeiling(row: {
+  model?: string | null;
+  context_occupancy_tokens?: number;
+}): boolean {
+  const largeModel = runtimeSettings.large_task_model;
+  if (!largeModel) return false;
+  if (row.model && row.model === largeModel) return false;
+  const tokens = row.context_occupancy_tokens ?? 0;
+  if (!tokens) return false;
+  const windowSize = AgentSession.contextWindowForModel(row.model ?? null);
+  return tokens / windowSize >= PROACTIVE_ESCALATION_HWM;
+}
+
+/**
+ * Builds the escalation nudge message that is delivered to the large-model session
+ * after a proactive ceiling-escalation. Mirrors the text from tryEscalateForOverflow.
+ */
+function buildProactiveEscalationNudge(pendingText: string): string {
+  return (
+    `Your previous session reached the context ceiling and has been resumed on a 1M-context model. ` +
+    `The following message was pending delivery — please process it now:\n\n${pendingText}`
+  );
+}
+
 export interface StartOptions {
   taskType?: string;
   sessionType?: 'standard' | 'review';
@@ -2153,6 +2190,26 @@ export class SessionManager extends EventEmitter {
         runner,
         mcpConfigPath,
       );
+
+      // Proactive ceiling-escalation: if the session's persisted context occupancy
+      // is at/over the HWM, spawn directly on large_task_model and deliver the
+      // nudge via the 2s proactive timer instead of the first-event gate (which
+      // never fires for context-maxed sessions).
+      if (isSessionAtContextCeiling(row)) {
+        const largeModel = runtimeSettings.large_task_model!;
+        session.setProactiveEscalation(
+          largeModel,
+          buildProactiveEscalationNudge(text),
+        );
+        logger.info(
+          `[SessionManager] sendOrResume: proactive ceiling-escalation for session ${sessionId.slice(0, 8)} ` +
+            `(occupancy=${row.context_occupancy_tokens}/${AgentSession.contextWindowForModel(row.model ?? null)}, ` +
+            `model=${row.model ?? 'unknown'} → ${largeModel})`,
+        );
+        this.wireSession(sessionId, session, projectDir, recordedPath);
+        return sessionId;
+      }
+
       const firstEvent = new Promise<void>((resolve) => {
         session.once('message', () => {
           this.send(sessionId, text);
@@ -2345,6 +2402,28 @@ export class SessionManager extends EventEmitter {
     // overflows, the escalated spawn re-delivers the original message rather
     // than dropping it. The session consumes this field in tryEscalateForOverflow().
     session.setPendingOverflowText(text);
+
+    // Proactive ceiling-escalation: if the session's persisted context occupancy
+    // is at/over the HWM, spawn directly on large_task_model and deliver the
+    // nudge via the 2s proactive timer instead of the first-event gate (which
+    // never fires for context-maxed sessions).
+    if (isSessionAtContextCeiling(row)) {
+      const largeModel = runtimeSettings.large_task_model!;
+      session.setProactiveEscalation(
+        largeModel,
+        buildProactiveEscalationNudge(text),
+      );
+      logger.info(
+        `[SessionManager] sendOrResume: proactive ceiling-escalation for session ${sessionId.slice(0, 8)} ` +
+          `(occupancy=${row.context_occupancy_tokens}/${AgentSession.contextWindowForModel(row.model ?? null)}, ` +
+          `model=${row.model ?? 'unknown'} → ${largeModel})`,
+      );
+      // wireSession wires message + pr_opened + push_detected forwarding and starts
+      // run() fire-and-forget. The proactive 2s timer in AgentSession.run() delivers
+      // the nudge text to the large-model session without a first-event gate.
+      this.wireSession(sessionId, session, projectDir, worktreePath);
+      return sessionId;
+    }
 
     // Register the first-event listener BEFORE wireSession starts run() to
     // avoid a race where the first message arrives before the listener is set.

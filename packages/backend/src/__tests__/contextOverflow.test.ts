@@ -141,6 +141,7 @@ vi.mock('../db/queries', () => ({
   insertSessionAudit: vi.fn(),
   getPRByNotionTaskId: vi.fn(() => null),
   listMilestonesByProject: vi.fn(() => []),
+  resetTaskCrashCount: vi.fn(),
 }));
 
 vi.mock('../orchestration/localBranchHelpers', () => ({
@@ -298,6 +299,130 @@ describe('AgentSession — context overflow integration', () => {
 
     const runPromise = session.run();
 
+    stdout.push(
+      JSON.stringify({
+        type: 'result',
+        subtype: 'success',
+        stop_reason: 'end_turn',
+        is_error: false,
+        duration_ms: 1000,
+        usage: { input_tokens: 100, output_tokens: 50 },
+      }) + '\n',
+    );
+    await new Promise((r) => setTimeout(r, 50));
+
+    stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    proc.emit('exit', 0);
+    await runPromise;
+
+    expect(
+      messages.find((m) => m.type === 'context_overflow_detected'),
+    ).toBeUndefined();
+  });
+});
+
+// ── AgentSession.setProactiveEscalation — proactive ceiling-escalation ────────
+
+describe('AgentSession — setProactiveEscalation (proactive ceiling-escalation)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    spawnMockFn = vi.fn();
+  });
+
+  it('uses the escalation model for the first spawn', async () => {
+    const { proc } = makeProc();
+    spawnMockFn.mockReturnValue(proc);
+
+    const session = new AgentSession(
+      's-model-check',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      undefined,
+      '/tmp',
+      'task-model',
+    );
+
+    const ESCALATION_MODEL = 'claude-opus-4[1m]';
+    session.setProactiveEscalation(ESCALATION_MODEL, 'nudge text');
+
+    // Fire-and-forget — the subprocess never exits so run() never returns.
+    void session.run();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // The runner should have been spawned with the escalation model flag.
+    expect(spawnMockFn).toHaveBeenCalled();
+    const spawnArgs = spawnMockFn.mock.calls[0];
+    const spawnArgStr = JSON.stringify(spawnArgs);
+    expect(spawnArgStr).toContain(ESCALATION_MODEL);
+  });
+
+  it('delivers the nudge text via sendMessage ~2s after spawn', async () => {
+    vi.useFakeTimers();
+    try {
+      const { proc } = makeProc();
+      spawnMockFn.mockReturnValue(proc);
+
+      const writtenMessages: string[] = [];
+      // Intercept stdin writes to capture what sendMessage sends.
+      vi.spyOn(proc.stdin, 'write').mockImplementation(
+        (data: unknown, ...rest: unknown[]) => {
+          writtenMessages.push(String(data));
+          // Call the callback if provided (last arg when it's a function).
+          const cb = rest[rest.length - 1];
+          if (typeof cb === 'function') (cb as () => void)();
+          return true;
+        },
+      );
+
+      const session = new AgentSession(
+        's-proactive-nudge',
+        'https://notion.so/task',
+        'https://notion.so/ctx',
+        undefined,
+        '/tmp',
+        'task-nudge',
+      );
+
+      const NUDGE_TEXT = 'Please open a PR for your completed work.';
+      session.setProactiveEscalation('claude-opus-4[1m]', NUDGE_TEXT);
+
+      void session.run();
+
+      // Let the synchronous startup (spawn, initial broadcast) settle.
+      await Promise.resolve();
+
+      // Advance past the 2s proactive nudge delay (ESCALATION_NUDGE_DELAY_MS = 2000).
+      await vi.advanceTimersByTimeAsync(2_100);
+
+      const nudgeDelivered = writtenMessages.some((m) => m.includes(NUDGE_TEXT));
+      expect(nudgeDelivered).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not emit context_overflow_detected (proactive path bypasses overflow detection)', async () => {
+    const { proc, stdout } = makeProc();
+    spawnMockFn.mockReturnValue(proc);
+
+    const session = new AgentSession(
+      's-no-overflow',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      undefined,
+      '/tmp',
+      'task-no-overflow',
+    );
+
+    session.setProactiveEscalation('claude-opus-4[1m]', 'nudge');
+
+    const messages: ServerMessage[] = [];
+    session.on('message', (m: ServerMessage) => messages.push(m));
+
+    const runPromise = session.run();
+
+    // Push a successful result (not an overflow).
     stdout.push(
       JSON.stringify({
         type: 'result',
