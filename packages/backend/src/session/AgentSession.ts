@@ -241,6 +241,8 @@ export class AgentSession extends EventEmitter {
   private _pendingEscalationNudge: string | null = null;
   /** Text that triggered an overflow on this resume; re-delivered to the escalated session. */
   private _pendingOverflowText: string | null = null;
+  /** Set by setProactiveEscalation() — skip waiting for overflow and enter escalation spawn on the first run iteration. */
+  private _proactiveEscalation = false;
   /** Number of rebase nudges sent for diverged-branch recovery. Bounded by MAX_REBASE_NUDGES. */
   private rebaseNudgeCount = 0;
 
@@ -377,6 +379,20 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         this.sessionId,
         `starting session: runner=${this.runner.constructor.name} worktree=${this.worktreePath}`,
       );
+
+      // Proactive ceiling-escalation: activated by setProactiveEscalation() when
+      // SessionManager detected context-at-ceiling before the first spawn. Immediately
+      // enter escalation spawn mode so the large model gets the nudge via the 2s timer.
+      if (this._proactiveEscalation) {
+        this._proactiveEscalation = false;
+        isEscalationSpawn = true;
+        escalationNudgeText = this._pendingEscalationNudge;
+        this._pendingEscalationNudge = null;
+        sessionLog(
+          this.sessionId,
+          `proactive ceiling-escalation: spawning on ${this._escalationModel ?? 'large model'} from the first iteration`,
+        );
+      }
 
       // Per-attempt escalation watchdog + proactive nudge state.
       let watchdogFiredThisAttempt = false;
@@ -1830,6 +1846,20 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    */
   setPendingOverflowText(text: string): void {
     this._pendingOverflowText = text;
+  }
+
+  /**
+   * Configures this session for proactive ceiling-escalation. Called by
+   * SessionManager._doSendOrResume when the persisted context occupancy is at/over
+   * the ceiling before the first spawn. On the first run-loop iteration the session
+   * immediately enters escalation spawn mode (large model + proactive nudge timer)
+   * rather than waiting for an overflow event that may never arrive.
+   */
+  setProactiveEscalation(model: string, nudgeText: string): void {
+    this._escalationModel = model;
+    this._escalationDisableAutoCompact = false;
+    this._pendingEscalationNudge = nudgeText;
+    this._proactiveEscalation = true;
   }
 
   /**
