@@ -957,11 +957,7 @@ export function createPrsRouter(
     clearTerminalPRFlags(prNumber, repo);
 
     if (reviewOrchestrator) {
-      void reviewOrchestrator.runAutofixPipeline(
-        prNumber,
-        repo,
-        prRow.task_id,
-      );
+      void reviewOrchestrator.runAutofixPipeline(prNumber, repo, prRow.task_id);
     }
 
     if (prRow.task_id) emitTaskUpdated(prRow.task_id);

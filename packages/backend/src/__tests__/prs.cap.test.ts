@@ -167,7 +167,9 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
   it('calls clearTerminalPRFlags when PR has stalled_reconcile_cap pause', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(makeCapPRRow() as never);
 
-    const runAutofixPipeline = vi.fn().mockResolvedValue({ success: true, summary: 'done' });
+    const runAutofixPipeline = vi
+      .fn()
+      .mockResolvedValue({ success: true, summary: 'done' });
     const reviewOrchestrator = { runAutofixPipeline };
 
     const app = express();
@@ -185,9 +187,7 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
       ),
     );
 
-    await supertest(app)
-      .post('/api/prs/owner/repo/42/approve')
-      .expect(200);
+    await supertest(app).post('/api/prs/owner/repo/42/approve').expect(200);
 
     expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(42, 'owner/repo');
   });
@@ -197,7 +197,9 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
       makeCapPRRow({ task_id: 'task-abc' }) as never,
     );
 
-    const runAutofixPipeline = vi.fn().mockResolvedValue({ success: true, summary: 'done' });
+    const runAutofixPipeline = vi
+      .fn()
+      .mockResolvedValue({ success: true, summary: 'done' });
     const reviewOrchestrator = { runAutofixPipeline };
 
     const app = express();
@@ -215,14 +217,16 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
       ),
     );
 
-    await supertest(app)
-      .post('/api/prs/owner/repo/42/approve')
-      .expect(200);
+    await supertest(app).post('/api/prs/owner/repo/42/approve').expect(200);
 
     // Allow the void promise to settle
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(runAutofixPipeline).toHaveBeenCalledWith(42, 'owner/repo', 'task-abc');
+    expect(runAutofixPipeline).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'task-abc',
+    );
   });
 
   it('does NOT call clearTerminalPRFlags when PR has no cap pause', async () => {
@@ -230,7 +234,9 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
       makeCapPRRow({ pause_reason: null }) as never,
     );
 
-    const runAutofixPipeline = vi.fn().mockResolvedValue({ success: true, summary: 'done' });
+    const runAutofixPipeline = vi
+      .fn()
+      .mockResolvedValue({ success: true, summary: 'done' });
     const reviewOrchestrator = { runAutofixPipeline };
 
     const app = express();
@@ -248,9 +254,7 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
       ),
     );
 
-    await supertest(app)
-      .post('/api/prs/owner/repo/42/approve')
-      .expect(200);
+    await supertest(app).post('/api/prs/owner/repo/42/approve').expect(200);
 
     expect(queries.clearTerminalPRFlags).not.toHaveBeenCalled();
     expect(runAutofixPipeline).not.toHaveBeenCalled();
@@ -267,11 +271,16 @@ describe('POST /prs/:prNumber/unpark', () => {
   it('returns 400 when projectId is missing', async () => {
     const app = express();
     app.use(express.json());
-    app.use('/api', createPrsRouter(makeGithub(), makePRReviewService(), makeSessionManager()));
+    app.use(
+      '/api',
+      createPrsRouter(
+        makeGithub(),
+        makePRReviewService(),
+        makeSessionManager(),
+      ),
+    );
 
-    await supertest(app)
-      .post('/api/prs/42/unpark')
-      .expect(400);
+    await supertest(app).post('/api/prs/42/unpark').expect(400);
   });
 
   it('returns 404 when PR is not found', async () => {
@@ -279,7 +288,14 @@ describe('POST /prs/:prNumber/unpark', () => {
 
     const app = express();
     app.use(express.json());
-    app.use('/api', createPrsRouter(makeGithub(), makePRReviewService(), makeSessionManager()));
+    app.use(
+      '/api',
+      createPrsRouter(
+        makeGithub(),
+        makePRReviewService(),
+        makeSessionManager(),
+      ),
+    );
 
     await supertest(app)
       .post('/api/prs/42/unpark?projectId=proj-1')
@@ -291,7 +307,14 @@ describe('POST /prs/:prNumber/unpark', () => {
 
     const app = express();
     app.use(express.json());
-    app.use('/api', createPrsRouter(makeGithub(), makePRReviewService(), makeSessionManager()));
+    app.use(
+      '/api',
+      createPrsRouter(
+        makeGithub(),
+        makePRReviewService(),
+        makeSessionManager(),
+      ),
+    );
 
     const res = await supertest(app)
       .post('/api/prs/42/unpark?projectId=proj-1')
@@ -306,7 +329,9 @@ describe('POST /prs/:prNumber/unpark', () => {
       makeCapPRRow({ task_id: 'task-xyz' }) as never,
     );
 
-    const runAutofixPipeline = vi.fn().mockResolvedValue({ success: true, summary: 'done' });
+    const runAutofixPipeline = vi
+      .fn()
+      .mockResolvedValue({ success: true, summary: 'done' });
     const reviewOrchestrator = { runAutofixPipeline };
 
     const app = express();
@@ -330,7 +355,11 @@ describe('POST /prs/:prNumber/unpark', () => {
 
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(runAutofixPipeline).toHaveBeenCalledWith(42, 'owner/repo', 'task-xyz');
+    expect(runAutofixPipeline).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'task-xyz',
+    );
   });
 
   it('records a pr_unparked audit event', async () => {
@@ -340,7 +369,14 @@ describe('POST /prs/:prNumber/unpark', () => {
 
     const app = express();
     app.use(express.json());
-    app.use('/api', createPrsRouter(makeGithub(), makePRReviewService(), makeSessionManager()));
+    app.use(
+      '/api',
+      createPrsRouter(
+        makeGithub(),
+        makePRReviewService(),
+        makeSessionManager(),
+      ),
+    );
 
     await supertest(app)
       .post('/api/prs/42/unpark?projectId=proj-1')
