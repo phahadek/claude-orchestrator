@@ -175,10 +175,10 @@ Type is not cosmetic here — it determines **what happens when you flip the tas
 🗂️ Ready** (see `procedures.md` § _Task types — what Ready triggers_):
 
 - **💻 Code** Ready with no unsatisfied dependency → **the orchestrator auto-dispatches
-  it unattended.** Marking it Ready _launches_ the work; a wrong `Depends On` or an
+  it unattended.** Marking it Ready *launches* the work; a wrong `Depends On` or an
   unresolved open question becomes a broken worktree session, not a review comment. Treat
   the Code Ready-flip as a deploy, not a paper approval — this is why the sign-off + dep
-  - size gates exist.
+  + size gates exist.
 - **📐 Design / 📋 Planning** Ready → **not** auto-dispatched; it waits for `/design`.
   Do not groom these expecting a worker to pick them up.
 - **🛠️ Tooling / 🧪 Testing** Ready → interactive (a human runs it), not auto-dispatched.

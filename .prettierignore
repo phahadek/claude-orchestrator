@@ -10,3 +10,5 @@ packages/backend/package-lock.json
 *.db-journal
 .claude/**
 CLAUDE.MD
+config-template/**
+skills/**
