@@ -754,3 +754,130 @@ describe('runAutofix — proactive banned-file unstaging', () => {
     expect(files).toContain('.commit-msg');
   });
 });
+
+// ── runAutofix — exit-128 git infrastructure failures ─────────────────────────
+
+describe('runAutofix — exit-128 classified as git infrastructure failure', () => {
+  it('returns isGitInfraFailure:true when git add exits 128', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add')
+        return makeProc(128, '', 'fatal: bad config line 1 in .git/config');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+
+    expect(result.success).toBe(false);
+    expect(result.isGitInfraFailure).toBe(true);
+    expect(result.gitFailureReason).toContain('fatal: bad config');
+    expect(result.summary).toContain('git add -A failed (exit 128)');
+    expect(result.summary).toContain('fatal: bad config');
+  });
+
+  it('returns isGitInfraFailure:true when git commit exits 128', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, 'foo.ts\n');
+      if (cmd === 'git' && a[0] === 'commit')
+        return makeProc(128, '', 'fatal: unable to read /repo/.git/config');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+
+    expect(result.success).toBe(false);
+    expect(result.isGitInfraFailure).toBe(true);
+    expect(result.gitFailureReason).toContain('fatal: unable to read');
+    expect(result.summary).toContain('git commit failed (exit 128)');
+  });
+
+  it('returns isGitInfraFailure:true when git push exits 128, includes commitSha', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, 'foo.ts\n');
+      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only')
+        return makeProc(0, 'foo.ts\n');
+      if (cmd === 'git' && a[0] === 'rev-parse') {
+        if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/x\n');
+        return makeProc(0, 'sha128push\n');
+      }
+      if (cmd === 'git' && a[0] === 'push')
+        return makeProc(128, '', 'fatal: repository not found');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+
+    expect(result.success).toBe(false);
+    expect(result.isGitInfraFailure).toBe(true);
+    expect(result.commitSha).toBe('sha128push');
+    expect(result.gitFailureReason).toContain('fatal: repository not found');
+    expect(result.summary).toContain('git push failed (exit 128)');
+  });
+
+  it('does NOT set isGitInfraFailure for non-128 git add failure', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(1, '', 'some error');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, 'foo.ts\n');
+      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'rev-parse') {
+        if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/x\n');
+        return makeProc(0, 'sha\n');
+      }
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+
+    expect(result.isGitInfraFailure).toBeUndefined();
+  });
+
+  it('does NOT set isGitInfraFailure for non-128 git commit failure', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, 'foo.ts\n');
+      if (cmd === 'git' && a[0] === 'commit')
+        return makeProc(1, '', 'pre-commit hook failed');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+
+    expect(result.success).toBe(false);
+    expect(result.isGitInfraFailure).toBeUndefined();
+  });
+
+  it('surfaces git failure reason distinctly in summary when gitReason is present', async () => {
+    const stderr = 'fatal: bad config line 7 in /repo/.git/config';
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add')
+        return makeProc(128, stderr, '');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+
+    expect(result.summary).toContain('git add -A failed (exit 128)');
+    expect(result.summary).toContain(stderr);
+    expect(result.gitFailureReason).toBe(stderr);
+  });
+});

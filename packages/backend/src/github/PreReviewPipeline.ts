@@ -15,6 +15,7 @@ import {
 } from '../db/queries';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import { validateAndRepairGitConfig } from '../orchestration/gitConfigIntegrity';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { runTestCommands } from '../session/test-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
@@ -31,6 +32,7 @@ interface GateFailureDetail {
   truncatedOutput?: string;
   summary: string;
   output?: string;
+  isGitInfraFailure?: boolean;
 }
 
 interface GateStageDescriptor {
@@ -116,6 +118,21 @@ export class PreReviewPipeline {
                   `[PreReviewPipeline] autofix PR #${ctx.prNumber}: ${msg}`,
                 ),
             );
+
+            if (result.isGitInfraFailure) {
+              try {
+                await validateAndRepairGitConfig(
+                  ctx.project.projectDir,
+                  ctx.project.id,
+                );
+              } catch (err) {
+                logger.warn(
+                  `[PreReviewPipeline] git config repair failed for PR #${ctx.prNumber}: ${err}`,
+                );
+              }
+              return { summary: result.summary, isGitInfraFailure: true };
+            }
+
             success = result.success;
             summary = result.summary;
 
@@ -369,11 +386,15 @@ export class PreReviewPipeline {
   ): Promise<void> {
     const prRow = getPRByNumber(job.prNumber, job.repo);
 
+    const verdict = detail.isGitInfraFailure
+      ? 'autofix_git_infra_failure'
+      : stage.verdict;
+
     setPRReviewResult(
       job.prNumber,
       job.repo,
       JSON.stringify({
-        verdict: stage.verdict,
+        verdict,
         summary: detail.summary,
         dimensions: [],
       }),
@@ -383,14 +404,19 @@ export class PreReviewPipeline {
 
     setPreReviewStage(job.prNumber, job.repo, stage.blockedStage);
 
-    if (stage.pauseReason) {
-      setPauseReason(job.prNumber, job.repo, stage.pauseReason);
+    const pauseReasonToSet: PauseReason | undefined = detail.isGitInfraFailure
+      ? 'autofix_git_infra_failure'
+      : stage.pauseReason;
+    if (pauseReasonToSet) {
+      setPauseReason(job.prNumber, job.repo, pauseReasonToSet);
     }
 
     const sessionId = prRow?.session_id;
     if (!sessionId) return;
 
-    const message = stage.formatFailure(detail);
+    const message = detail.isGitInfraFailure
+      ? `## Autofix Infrastructure Failure\n\nA git operation failed with exit code 128, indicating a git infrastructure issue (likely a corrupted .git/config). The orchestrator has attempted to repair the configuration automatically.\n\n**Detail:** ${detail.summary}`
+      : stage.formatFailure(detail);
     try {
       await this.sessionManager.sendOrResume(sessionId, message);
     } catch (e) {

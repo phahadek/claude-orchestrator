@@ -37,7 +37,8 @@ export type CanonicalPauseReason =
   | 'analyze_failing'
   | 'rate_limit'
   | 'stalled_reconcile_cap'
-  | 'needs_repo';
+  | 'needs_repo'
+  | 'autofix_git_infra_failure';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -170,6 +171,11 @@ export const PAUSE_REASON_REGISTRY: Record<
   },
   needs_repo: {
     source: 'launch',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  autofix_git_infra_failure: {
+    source: 'autofix',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },
