@@ -1259,8 +1259,8 @@ export default function App() {
                         data-testid="cold-cache-banner"
                       >
                         Warming cache for{' '}
-                        {projects.find((p) => p.id === activeProjectId)
-                          ?.name ?? activeProjectId}
+                        {projects.find((p) => p.id === activeProjectId)?.name ??
+                          activeProjectId}
                         …
                       </div>
                     )}

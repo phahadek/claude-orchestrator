@@ -59,7 +59,11 @@ describe('BootLoadingBanner', () => {
   it('shows X of Y progress derived from steps and currentStep', () => {
     const state = makeState({
       phase: 'in_progress',
-      steps: ['jsonl_import', 'resume_orphan_sessions', 'worktree_reconciliation'],
+      steps: [
+        'jsonl_import',
+        'resume_orphan_sessions',
+        'worktree_reconciliation',
+      ],
       stepEntries: [
         { name: 'jsonl_import', status: 'completed', duration_ms: 120 },
         { name: 'resume_orphan_sessions', status: 'started' },
@@ -124,7 +128,9 @@ describe('BootLoadingBanner', () => {
     const completedState = makeState({
       phase: 'completed',
       steps: ['jsonl_import'],
-      stepEntries: [{ name: 'jsonl_import', status: 'completed', duration_ms: 500 }],
+      stepEntries: [
+        { name: 'jsonl_import', status: 'completed', duration_ms: 500 },
+      ],
       totalDurationMs: 500,
     });
     rerender(<BootLoadingBanner state={completedState} />);

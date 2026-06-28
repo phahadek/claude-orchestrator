@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { BootReconciliationState } from '../../hooks/useBootReconciliation';
 
 const bootDispatchRef = { current: vi.fn() };
-let bootStateRef: { current: BootReconciliationState } = {
+const bootStateRef: { current: BootReconciliationState } = {
   current: {
     phase: 'idle',
     steps: [],

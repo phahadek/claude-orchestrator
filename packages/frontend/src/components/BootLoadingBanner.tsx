@@ -27,10 +27,7 @@ export function BootLoadingBanner({ state }: Props) {
       <div className={styles.content}>
         <div className={styles.title}>Backend booting…</div>
         {state.currentStep !== null && (
-          <div
-            className={styles.currentStep}
-            data-testid="boot-current-step"
-          >
+          <div className={styles.currentStep} data-testid="boot-current-step">
             {stepLabel(state.currentStep)}
           </div>
         )}
