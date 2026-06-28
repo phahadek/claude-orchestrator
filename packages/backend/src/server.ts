@@ -171,6 +171,7 @@ app.use(
     undefined,
     prMergeWatcher,
     autoMerger,
+    reviewOrchestrator,
   ),
 );
 app.use('/api', createTasksRouter());

@@ -19,6 +19,7 @@ import {
   markSessionDone,
   clearTerminalPRFlags,
 } from '../db/queries';
+import { parsePauseReason } from '../db/pauseReason';
 import { recordEvent } from '../audit/AuditLog';
 import { GitHubApiError } from '../github/types';
 import type { MergeabilityCategory } from '../github/types';
@@ -74,6 +75,14 @@ export function extractNotionTaskFromBody(
   return { taskId, taskUrl };
 }
 
+interface ReviewOrchestratorLike {
+  runAutofixPipeline(
+    prNumber: number,
+    repo: string,
+    taskId: string | null,
+  ): Promise<{ success: boolean; summary: string }>;
+}
+
 export function createPrsRouter(
   github: GitHubClient,
   prReviewService: PRReviewService,
@@ -85,6 +94,7 @@ export function createPrsRouter(
   taskBackendOverride?: TaskBackend,
   mergeWatcher?: PRMergeWatcher,
   autoMerger?: AutoMerger,
+  reviewOrchestrator?: ReviewOrchestratorLike,
 ): Router {
   const router = Router();
 
@@ -745,6 +755,19 @@ export function createPrsRouter(
       };
       setPRReviewResult(prNumber, repo, JSON.stringify(result));
 
+      // If the PR is cap-escalated, clear the pause and re-run the pre-review gate
+      const pauseStruct = parsePauseReason(prRow.pause_reason ?? null);
+      if (pauseStruct?.reason === 'stalled_reconcile_cap') {
+        clearTerminalPRFlags(prNumber, repo);
+        if (reviewOrchestrator) {
+          void reviewOrchestrator.runAutofixPipeline(
+            prNumber,
+            repo,
+            prRow.task_id,
+          );
+        }
+      }
+
       // Transition draft → ready on GitHub (always attempt; handles "already not a draft" gracefully)
       try {
         await github.markPRReady(repo, prNumber);
@@ -906,6 +929,52 @@ export function createPrsRouter(
     const fixMessage = `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${reviewResult.summary}`;
     await sessionManager.sendOrResume(prRow.session_id, fixMessage);
     res.json({ sessionId: prRow.session_id });
+  });
+
+  // ── POST /api/prs/:prNumber/unpark ──────────────────────────────────────────
+  // Operator action: clear a stalled_reconcile_cap pause and re-enqueue the
+  // pre-review pipeline so the PR can recover without being merged.
+  router.post('/prs/:prNumber/unpark', async (req: Request, res: Response) => {
+    const prNumber = parseInt(String(req.params.prNumber), 10);
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : '';
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId query param is required' });
+      return;
+    }
+    const project = getProjectById(projectId);
+    if (!project?.githubRepo) {
+      res.status(422).json({ error: 'Project has no githubRepo configured' });
+      return;
+    }
+    const repo = project.githubRepo;
+    const prRow = getPRByNumber(prNumber, repo);
+    if (!prRow) {
+      res.status(404).json({ error: `PR #${prNumber} not found` });
+      return;
+    }
+
+    clearTerminalPRFlags(prNumber, repo);
+
+    if (reviewOrchestrator) {
+      void reviewOrchestrator.runAutofixPipeline(
+        prNumber,
+        repo,
+        prRow.task_id,
+      );
+    }
+
+    if (prRow.task_id) emitTaskUpdated(prRow.task_id);
+
+    recordEvent({
+      event_type: 'pr_unparked',
+      actor_type: 'human',
+      actor_id: null,
+      task_id: prRow.task_id ?? null,
+      payload: { pr_number: prNumber, repo },
+    });
+
+    res.json({ ok: true });
   });
 
   // ── POST /api/prs/ingest ─────────────────────────────────────────────────────

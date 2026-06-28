@@ -108,6 +108,7 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
   const isMultiRepo = getProjectRepos(project).length > 1;
   const needsRepo = isMultiRepo && task.assignedRepo === null;
   const [unblockInFlight, setUnblockInFlight] = useState(false);
+  const [unparkInFlight, setUnparkInFlight] = useState(false);
   const [optimisticStatus, setOptimisticStatus] =
     useState<DisplayStatus | null>(null);
   const effectiveDisplayStatus = optimisticStatus ?? task.displayStatus;
@@ -152,6 +153,22 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
         taskName: task.taskName,
       },
     ]);
+  };
+
+  const handleUnpark = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (unparkInFlight || !project?.id || !pr) return;
+    setUnparkInFlight(true);
+    try {
+      await fetch(
+        `/api/prs/${encodeURIComponent(pr.prNumber)}/unpark?projectId=${encodeURIComponent(project.id)}`,
+        { method: 'POST' },
+      );
+    } catch {
+      // state will be updated via WS broadcast
+    } finally {
+      setUnparkInFlight(false);
+    }
   };
 
   const handleUnblock = async (e: React.MouseEvent) => {
@@ -316,6 +333,17 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
                 aria-label={`Unblock ${task.taskName}`}
               >
                 ↩ Unblock
+              </button>
+            )}
+            {pauseStruct?.reason === 'stalled_reconcile_cap' && pr && (
+              <button
+                className={styles.unblockButton}
+                disabled={unparkInFlight}
+                onClick={(e) => void handleUnpark(e)}
+                title="Clear cap-pause and re-run the pre-review pipeline"
+                aria-label={`Unpark ${task.taskName}`}
+              >
+                ↩ Unpark
               </button>
             )}
             <button
