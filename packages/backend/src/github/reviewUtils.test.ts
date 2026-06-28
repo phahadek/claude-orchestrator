@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldAutoReview, formatCIFailureFeedback } from './reviewUtils';
+import { shouldAutoReview, formatCIFailureFeedback, CI_LOG_EXCERPT_CAP } from './reviewUtils';
 
 describe('shouldAutoReview()', () => {
   const withCap = (
@@ -104,7 +104,9 @@ describe('formatCIFailureFeedback() — source: github (regression)', () => {
   });
 
   it('truncates log excerpt at the cap and appends a marker', () => {
-    const longLog = 'x'.repeat(900);
+    // Multi-line log exceeding CI_LOG_EXCERPT_CAP (4000) — realistic CI output shape
+    const longLog = Array.from({ length: 100 }, (_, i) => `line ${i}: ${'x'.repeat(50)}`).join('\n');
+    // ~5800 chars total, well above 4000 cap
     const result = formatCIFailureFeedback({
       prNumber: 42,
       failingCheckNames: ['lint'],
@@ -112,10 +114,58 @@ describe('formatCIFailureFeedback() — source: github (regression)', () => {
       logExcerpt: longLog,
     });
     expect(result).toContain('… [');
-    expect(result).toContain('more line');
-    const excerptStart = result.indexOf('xxx');
-    const excerptEnd = result.indexOf('\n…');
-    expect(excerptEnd - excerptStart).toBeLessThanOrEqual(800);
+    expect(result).toContain('lines omitted');
+  });
+
+  it('keeps the failing tail of a long log where the error lives at the end', () => {
+    const passingLines = 'test_foo PASSED\n'.repeat(300); // ~4800 chars of passing output
+    const errorTail =
+      'FAILED: test_bar - AssertionError\n' +
+      'AssertionError: assert 1 == 2\n' +
+      '  File "test_bar.py", line 10\n' +
+      '1 failed, 300 passed in 2.50s\n';
+    const longLog = passingLines + errorTail;
+
+    const result = formatCIFailureFeedback({
+      prNumber: 42,
+      failingCheckNames: ['tests'],
+      runUrl: null,
+      logExcerpt: longLog,
+    });
+
+    expect(result).toContain('FAILED: test_bar');
+    expect(result).toContain('1 failed, 300 passed');
+  });
+
+  it('elision marker reports omitted line count and omits content from the middle not the tail', () => {
+    // 5 identifiable head lines, then a unique middle marker close to the head,
+    // then a large filler to push the total well past CI_LOG_EXCERPT_CAP (4000),
+    // then an identifiable tail error at the very end.
+    const headLines = Array.from({ length: 5 }, (_, i) => `context line ${i + 1}`).join('\n');
+    const uniqueMiddleMarker = 'UNIQUE_MIDDLE_OMIT_XYZ';
+    const filler = 'filler\n'.repeat(700); // ~4900 chars — pushes total far past cap
+    const errorTail = 'UNIQUE_TAIL_ERROR_ABC\nAssertionError: failed\n';
+    const log = headLines + '\n' + uniqueMiddleMarker + '\n' + filler + errorTail;
+
+    const result = formatCIFailureFeedback({
+      prNumber: 42,
+      failingCheckNames: ['tests'],
+      runUrl: null,
+      logExcerpt: log,
+    });
+
+    // Elision marker is present with a line count
+    expect(result).toMatch(/… \[\d+ lines? omitted\] …/);
+    // Head context is preserved
+    expect(result).toContain('context line 1');
+    // Tail error is preserved
+    expect(result).toContain('UNIQUE_TAIL_ERROR_ABC');
+    // Middle marker (right after head) falls in the omitted section — must not appear
+    expect(result).not.toContain(uniqueMiddleMarker);
+  });
+
+  it('CI_LOG_EXCERPT_CAP is 4000', () => {
+    expect(CI_LOG_EXCERPT_CAP).toBe(4000);
   });
 
   it('does not truncate log excerpt that fits within the cap', () => {
