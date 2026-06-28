@@ -60,6 +60,8 @@ export interface MergeResult {
 export interface FailingCheck {
   name: string;
   conclusion: string;
+  /** URL to the failing check-run (details_url ?? html_url from the GitHub API). */
+  detailsUrl?: string;
 }
 
 /**
