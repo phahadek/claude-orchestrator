@@ -35,7 +35,11 @@ export function isTerminalStalePR(pr: PullRequestRow): boolean {
   }
 
   // Incomplete verdict with no new push since last review
-  if (verdict === 'incomplete' && pr.head_sha !== null && pr.head_sha === pr.last_reviewed_sha) {
+  if (
+    verdict === 'incomplete' &&
+    pr.head_sha !== null &&
+    pr.head_sha === pr.last_reviewed_sha
+  ) {
     return true;
   }
 

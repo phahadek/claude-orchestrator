@@ -37,11 +37,15 @@ vi.mock('../routes/tasks.js', () => ({
 vi.mock('../config.js', () => ({
   getProjectByGithubRepo: vi.fn(),
   AUTO_REVIEW_ENABLED: false,
-  loadOrchestratorConfig: vi.fn().mockReturnValue({ ci_check_name: [], test: [] }),
+  loadOrchestratorConfig: vi
+    .fn()
+    .mockReturnValue({ ci_check_name: [], test: [] }),
 }));
 
 vi.mock('../session/orchestrator-config.js', () => ({
-  loadOrchestratorConfig: vi.fn().mockReturnValue({ ci_check_name: [], test: [] }),
+  loadOrchestratorConfig: vi
+    .fn()
+    .mockReturnValue({ ci_check_name: [], test: [] }),
 }));
 
 import {
