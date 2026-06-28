@@ -1653,6 +1653,27 @@ export function getAllOpenPRs(): PullRequestRow[] {
     .all() as PullRequestRow[];
 }
 
+export interface DeadSessionAtBoot {
+  session_id: string;
+  status: string;
+}
+
+/**
+ * Returns all sessions at a non-terminal, non-idle status (starting or running)
+ * that exist at boot time. After a server restart the entire process tree is gone,
+ * so these sessions are dead by definition and must be driven to a terminal state.
+ */
+export function getDeadSessionsAtBoot(): DeadSessionAtBoot[] {
+  return db
+    .prepare(
+      `
+    SELECT session_id, status FROM sessions
+    WHERE status IN ('starting', 'running')
+  `,
+    )
+    .all() as DeadSessionAtBoot[];
+}
+
 export interface IdleSessionWithResolvedPR {
   session_id: string;
   task_id: string | null;
