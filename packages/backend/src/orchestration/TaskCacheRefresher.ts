@@ -101,19 +101,28 @@ export class TaskCacheRefresher {
     }
 
     const isLocalSource = project.taskSource === 'yaml';
-    const milestones = isLocalSource
-      ? ProjectService.listMilestones(project.id)
-      : ProjectService.listMilestones(project.id).filter((m) => m.sourceId);
+
+    if (isLocalSource) {
+      ProjectService.reconcileYamlMilestones(project.id, project.projectDir);
+    }
+
+    const milestones = ProjectService.listMilestones(project.id).filter(
+      (m) => m.sourceId,
+    );
 
     for (const milestone of milestones) {
+      // yaml projects: fetch by source_id (yaml milestone id) so LocalTaskBackend matches correctly
+      const fetchId = isLocalSource
+        ? (milestone.sourceId as string)
+        : milestone.id;
       try {
         const tasks = skipCache
-          ? await backend.fetchReadyTasks(milestone.id, true)
-          : await backend.fetchReadyTasks(milestone.id);
+          ? await backend.fetchReadyTasks(fetchId, true)
+          : await backend.fetchReadyTasks(fetchId);
         this.broadcast?.({
           type: 'task_cache_updated',
           projectId: project.id,
-          boardId: milestone.id,
+          boardId: fetchId,
           taskCount: tasks.length,
           refreshedAt: Date.now(),
         });
@@ -125,12 +134,12 @@ export class TaskCacheRefresher {
           );
           this.jiraNextAllowed.set(project.id, Date.now() + backoffMs);
           logger.warn(
-            `[TaskCacheRefresher] Jira 429 project=${project.id} milestone=${milestone.id}, backing off ${backoffMs}ms`,
+            `[TaskCacheRefresher] Jira 429 project=${project.id} milestone=${fetchId}, backing off ${backoffMs}ms`,
           );
           return;
         }
         logger.warn(
-          `[TaskCacheRefresher] failed to refresh project=${project.id} milestone=${milestone.id}: ${String(err)}`,
+          `[TaskCacheRefresher] failed to refresh project=${project.id} milestone=${fetchId}: ${String(err)}`,
         );
       }
     }

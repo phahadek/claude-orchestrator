@@ -2,9 +2,10 @@
  * TaskCacheRefresher — YAML source coverage
  *
  * Verifies that:
- * 1. refreshOnce() includes yaml projects (Gate 1 fix: CACHEABLE_TASK_SOURCES)
- * 2. refreshProject() iterates milestones without sourceId for yaml/local (Gate 2 fix)
- * 3. notion/github/jira projects still require sourceId and are unaffected
+ * 1. refreshOnce() includes yaml projects
+ * 2. reconcileYamlMilestones is called before milestone iteration for yaml projects
+ * 3. fetchReadyTasks receives milestone.sourceId (yaml id) not milestone.id (DB PK)
+ * 4. notion/github/jira projects still require sourceId and are unaffected
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -14,6 +15,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../projects/ProjectService.js', () => ({
   ProjectService: {
     listMilestones: vi.fn(),
+    reconcileYamlMilestones: vi.fn(),
   },
 }));
 
@@ -39,6 +41,7 @@ function makeYamlProject(id = 'proj-yaml') {
   return {
     id,
     name: 'YAML Project',
+    projectDir: '/fake/yaml',
     taskSource: 'yaml' as const,
     nonMilestoneSourceConfig: null,
   };
@@ -53,11 +56,11 @@ function makeNotionProject(id = 'proj-notion') {
   };
 }
 
-function makeMilestone(id: string, sourceId: string | null) {
+function makeMilestone(id: string, sourceId: string | null, name = 'M1') {
   return {
     id,
     projectId: 'proj-yaml',
-    name: 'M1',
+    name,
     sourceId,
     displayOrder: 0,
     createdAt: 0,
@@ -79,22 +82,20 @@ describe('TaskCacheRefresher — YAML source (Gate 1)', () => {
     vi.clearAllMocks();
   });
 
-  it('refreshOnce() includes yaml projects (projects count > 0)', async () => {
+  it('refreshOnce() includes yaml projects', async () => {
     const yamlProject = makeYamlProject();
     vi.mocked(getAllProjects).mockReturnValue([yamlProject] as never);
     vi.mocked(ProjectService.listMilestones).mockReturnValue([]);
     const backend = makeMockBackend();
     vi.mocked(getTaskBackend).mockReturnValue(backend as never);
 
-    const broadcasts: unknown[] = [];
-    const refresher = new TaskCacheRefresher((msg) => broadcasts.push(msg), {
+    const refresher = new TaskCacheRefresher(undefined, {
       listProjects: getAllProjects,
       resolveBackend: getTaskBackend,
     });
 
     await refresher.refreshOnce();
 
-    // getTaskBackend should have been called for the yaml project
     expect(getTaskBackend).toHaveBeenCalledWith('proj-yaml');
   });
 
@@ -117,18 +118,44 @@ describe('TaskCacheRefresher — YAML source (Gate 1)', () => {
   });
 });
 
-describe('TaskCacheRefresher — YAML milestone iteration (Gate 2)', () => {
+describe('TaskCacheRefresher — YAML reconcile and sourceId routing (M9)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('iterates yaml milestones without sourceId', async () => {
+  it('calls reconcileYamlMilestones before iterating milestones', async () => {
+    const yamlProject = makeYamlProject();
+    vi.mocked(getAllProjects).mockReturnValue([yamlProject] as never);
+    vi.mocked(ProjectService.listMilestones).mockReturnValue([]);
+    const backend = makeMockBackend();
+    vi.mocked(getTaskBackend).mockReturnValue(backend as never);
+
+    const refresher = new TaskCacheRefresher(undefined, {
+      listProjects: getAllProjects,
+      resolveBackend: getTaskBackend,
+    });
+
+    await refresher.refreshOnce();
+
+    expect(ProjectService.reconcileYamlMilestones).toHaveBeenCalledWith(
+      'proj-yaml',
+      '/fake/yaml',
+    );
+    // reconcile is called before listMilestones (invocation order)
+    const reconcileOrder = vi.mocked(ProjectService.reconcileYamlMilestones)
+      .mock.invocationCallOrder[0];
+    const listOrder = vi.mocked(ProjectService.listMilestones).mock
+      .invocationCallOrder[0];
+    expect(reconcileOrder).toBeLessThan(listOrder);
+  });
+
+  it('passes milestone.sourceId (yaml id) to fetchReadyTasks, not milestone.id (DB PK)', async () => {
     const yamlProject = makeYamlProject();
     vi.mocked(getAllProjects).mockReturnValue([yamlProject] as never);
 
-    const milestoneWithoutSourceId = makeMilestone('milestone-yaml-1', null);
+    const milestoneWithSourceId = makeMilestone('db-uuid-pk', 'yaml-m1');
     vi.mocked(ProjectService.listMilestones).mockReturnValue([
-      milestoneWithoutSourceId,
+      milestoneWithSourceId,
     ] as never);
 
     const backend = makeMockBackend([{ id: 'yaml:task-1', title: 'T1' }]);
@@ -142,26 +169,23 @@ describe('TaskCacheRefresher — YAML milestone iteration (Gate 2)', () => {
 
     await refresher.refreshOnce();
 
-    expect(backend.fetchReadyTasks).toHaveBeenCalledWith('milestone-yaml-1');
+    expect(backend.fetchReadyTasks).toHaveBeenCalledWith('yaml-m1');
     expect(broadcasts).toHaveLength(1);
     expect(broadcasts[0]).toMatchObject({
       type: 'task_cache_updated',
       projectId: 'proj-yaml',
-      boardId: 'milestone-yaml-1',
+      boardId: 'yaml-m1',
       taskCount: 1,
     });
   });
 
-  it('iterates yaml milestones with sourceId too (no regression)', async () => {
+  it('skips yaml milestones that still have no sourceId after reconcile', async () => {
     const yamlProject = makeYamlProject();
     vi.mocked(getAllProjects).mockReturnValue([yamlProject] as never);
 
-    const milestoneWithSourceId = makeMilestone(
-      'milestone-yaml-2',
-      'some-source-id',
-    );
+    const milestoneWithoutSourceId = makeMilestone('db-uuid-pk', null);
     vi.mocked(ProjectService.listMilestones).mockReturnValue([
-      milestoneWithSourceId,
+      milestoneWithoutSourceId,
     ] as never);
 
     const backend = makeMockBackend([]);
@@ -174,11 +198,63 @@ describe('TaskCacheRefresher — YAML milestone iteration (Gate 2)', () => {
 
     await refresher.refreshOnce();
 
-    expect(backend.fetchReadyTasks).toHaveBeenCalledWith('milestone-yaml-2');
+    expect(backend.fetchReadyTasks).not.toHaveBeenCalled();
+  });
+
+  it('does not call reconcile for notion projects', async () => {
+    const notionProject = makeNotionProject();
+    vi.mocked(getAllProjects).mockReturnValue([notionProject] as never);
+    const milestone = makeMilestone('m-notion', 'notion-db-id');
+    vi.mocked(ProjectService.listMilestones).mockReturnValue([
+      milestone,
+    ] as never);
+    const backend = makeMockBackend([]);
+    vi.mocked(getTaskBackend).mockReturnValue(backend as never);
+
+    const refresher = new TaskCacheRefresher(undefined, {
+      listProjects: getAllProjects,
+      resolveBackend: getTaskBackend,
+    });
+
+    await refresher.refreshOnce();
+
+    expect(ProjectService.reconcileYamlMilestones).not.toHaveBeenCalled();
+  });
+
+  it('refreshProjectById also calls reconcile for yaml projects', async () => {
+    const yamlProject = makeYamlProject();
+    vi.mocked(getAllProjects).mockReturnValue([yamlProject] as never);
+
+    const milestone = makeMilestone('db-uuid', 'yaml-milestone-sync');
+    vi.mocked(ProjectService.listMilestones).mockReturnValue([
+      milestone,
+    ] as never);
+
+    const backend = makeMockBackend([{ id: 'yaml:task-x', title: 'TX' }]);
+    vi.mocked(getTaskBackend).mockReturnValue(backend as never);
+
+    const broadcasts: unknown[] = [];
+    const refresher = new TaskCacheRefresher((msg) => broadcasts.push(msg), {
+      listProjects: getAllProjects,
+      resolveBackend: getTaskBackend,
+    });
+
+    await refresher.refreshProjectById('proj-yaml');
+
+    expect(ProjectService.reconcileYamlMilestones).toHaveBeenCalledWith(
+      'proj-yaml',
+      '/fake/yaml',
+    );
+    expect(backend.fetchReadyTasks).toHaveBeenCalledWith('yaml-milestone-sync');
+    expect(broadcasts[0]).toMatchObject({
+      type: 'task_cache_updated',
+      boardId: 'yaml-milestone-sync',
+      taskCount: 1,
+    });
   });
 });
 
-describe('TaskCacheRefresher — notion/github/jira unchanged (Gate 2 regression)', () => {
+describe('TaskCacheRefresher — notion/github/jira unchanged (regression)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -202,11 +278,10 @@ describe('TaskCacheRefresher — notion/github/jira unchanged (Gate 2 regression
 
     await refresher.refreshOnce();
 
-    // fetchReadyTasks must NOT be called since notion milestone has no sourceId
     expect(backend.fetchReadyTasks).not.toHaveBeenCalled();
   });
 
-  it('still processes notion milestones that have sourceId', async () => {
+  it('still processes notion milestones that have sourceId using milestone.id', async () => {
     const notionProject = makeNotionProject();
     vi.mocked(getAllProjects).mockReturnValue([notionProject] as never);
 
@@ -229,41 +304,8 @@ describe('TaskCacheRefresher — notion/github/jira unchanged (Gate 2 regression
 
     await refresher.refreshOnce();
 
+    // notion uses milestone.id (DB PK), not sourceId
     expect(backend.fetchReadyTasks).toHaveBeenCalledWith('milestone-notion-2');
     expect(broadcasts).toHaveLength(1);
-  });
-});
-
-describe('TaskCacheRefresher — refreshProjectById reaches yaml projects', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('refreshProjectById warms cache for yaml milestones without sourceId', async () => {
-    const yamlProject = makeYamlProject();
-    vi.mocked(getAllProjects).mockReturnValue([yamlProject] as never);
-
-    const milestone = makeMilestone('milestone-yaml-sync', null);
-    vi.mocked(ProjectService.listMilestones).mockReturnValue([
-      milestone,
-    ] as never);
-
-    const backend = makeMockBackend([{ id: 'yaml:task-x', title: 'TX' }]);
-    vi.mocked(getTaskBackend).mockReturnValue(backend as never);
-
-    const broadcasts: unknown[] = [];
-    const refresher = new TaskCacheRefresher((msg) => broadcasts.push(msg), {
-      listProjects: getAllProjects,
-      resolveBackend: getTaskBackend,
-    });
-
-    await refresher.refreshProjectById('proj-yaml');
-
-    expect(backend.fetchReadyTasks).toHaveBeenCalledWith('milestone-yaml-sync');
-    expect(broadcasts[0]).toMatchObject({
-      type: 'task_cache_updated',
-      boardId: 'milestone-yaml-sync',
-      taskCount: 1,
-    });
   });
 });
