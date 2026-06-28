@@ -25,6 +25,7 @@ import { PRPanel } from './components/PRPanel';
 import { DispatchModal } from './components/DispatchModal';
 import { PermissionEventLog } from './components/PermissionEventLog';
 import { TaskList } from './components/TaskList';
+import { BootLoadingBanner } from './components/BootLoadingBanner';
 import { TaskDetail } from './components/TaskDetail';
 import { Settings } from './components/Settings';
 import { UpdateBanner } from './components/UpdateBanner';
@@ -1248,36 +1249,42 @@ export default function App() {
               className={`${styles.contentArea}${selectedTaskId ? ` ${styles.contentAreaHasDetail}` : ''}`}
             >
               <div className={styles.leftPanel}>
-                {taskCacheCold && !taskViewsLoading && (
-                  <div
-                    className={styles.coldCacheBanner}
-                    data-testid="cold-cache-banner"
-                  >
-                    Warming cache for{' '}
-                    {projects.find((p) => p.id === activeProjectId)?.name ??
-                      activeProjectId}
-                    …
-                  </div>
+                {bootReconciliation.state.phase === 'in_progress' ? (
+                  <BootLoadingBanner state={bootReconciliation.state} />
+                ) : (
+                  <>
+                    {taskCacheCold && !taskViewsLoading && (
+                      <div
+                        className={styles.coldCacheBanner}
+                        data-testid="cold-cache-banner"
+                      >
+                        Warming cache for{' '}
+                        {projects.find((p) => p.id === activeProjectId)?.name ??
+                          activeProjectId}
+                        …
+                      </div>
+                    )}
+                    <TaskList
+                      activeProjectId={activeProjectId}
+                      boardId={activeBoardId}
+                      selectedTaskId={selectedTaskId}
+                      onSelectTask={handleSelectTask}
+                      tasks={taskViews}
+                      loading={taskViewsLoading}
+                      onOptimisticDispatch={handleTaskOptimisticDispatch}
+                      onForceRefetch={handleForceRefetch}
+                      reviewRefreshTrigger={taskListRefreshTrigger}
+                      cacheUpdatedAt={
+                        lastCacheUpdatedEvent?.projectId === activeProjectId &&
+                        lastCacheUpdatedEvent?.boardId === activeBoardId
+                          ? lastCacheUpdatedEvent.refreshedAt
+                          : undefined
+                      }
+                      send={send}
+                      project={activeProject}
+                    />
+                  </>
                 )}
-                <TaskList
-                  activeProjectId={activeProjectId}
-                  boardId={activeBoardId}
-                  selectedTaskId={selectedTaskId}
-                  onSelectTask={handleSelectTask}
-                  tasks={taskViews}
-                  loading={taskViewsLoading}
-                  onOptimisticDispatch={handleTaskOptimisticDispatch}
-                  onForceRefetch={handleForceRefetch}
-                  reviewRefreshTrigger={taskListRefreshTrigger}
-                  cacheUpdatedAt={
-                    lastCacheUpdatedEvent?.projectId === activeProjectId &&
-                    lastCacheUpdatedEvent?.boardId === activeBoardId
-                      ? lastCacheUpdatedEvent.refreshedAt
-                      : undefined
-                  }
-                  send={send}
-                  project={activeProject}
-                />
               </div>
 
               <div
