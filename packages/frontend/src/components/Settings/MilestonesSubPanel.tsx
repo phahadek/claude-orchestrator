@@ -255,8 +255,8 @@ function MilestonesSubPanelInner({
       </div>
       {project.taskSource === 'yaml' && (
         <p className={styles.hint}>
-          Milestones for YAML projects are managed via{' '}
-          <code>tasks.yaml</code> and synced automatically.
+          Milestones for YAML projects are managed via <code>tasks.yaml</code>{' '}
+          and synced automatically.
         </p>
       )}
 

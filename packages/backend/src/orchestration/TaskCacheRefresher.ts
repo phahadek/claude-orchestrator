@@ -112,7 +112,9 @@ export class TaskCacheRefresher {
 
     for (const milestone of milestones) {
       // yaml projects: fetch by source_id (yaml milestone id) so LocalTaskBackend matches correctly
-      const fetchId = isLocalSource ? (milestone.sourceId as string) : milestone.id;
+      const fetchId = isLocalSource
+        ? (milestone.sourceId as string)
+        : milestone.id;
       try {
         const tasks = skipCache
           ? await backend.fetchReadyTasks(fetchId, true)

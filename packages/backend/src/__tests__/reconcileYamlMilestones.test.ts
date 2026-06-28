@@ -191,7 +191,10 @@ describe('reconcileYamlMilestones — upsert-only (never deletes)', () => {
 
     // Only ms-1 updated; ms-removed is left intact (no delete)
     expect(updateMilestone).toHaveBeenCalledOnce();
-    expect(updateMilestone).toHaveBeenCalledWith('uuid-ms-1', expect.any(Object));
+    expect(updateMilestone).toHaveBeenCalledWith(
+      'uuid-ms-1',
+      expect.any(Object),
+    );
     expect(insertMilestone).not.toHaveBeenCalled();
   });
 });

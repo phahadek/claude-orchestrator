@@ -142,11 +142,10 @@ describe('TaskCacheRefresher — YAML reconcile and sourceId routing (M9)', () =
       '/fake/yaml',
     );
     // reconcile is called before listMilestones (invocation order)
-    const reconcileOrder = vi
-      .mocked(ProjectService.reconcileYamlMilestones)
+    const reconcileOrder = vi.mocked(ProjectService.reconcileYamlMilestones)
       .mock.invocationCallOrder[0];
-    const listOrder =
-      vi.mocked(ProjectService.listMilestones).mock.invocationCallOrder[0];
+    const listOrder = vi.mocked(ProjectService.listMilestones).mock
+      .invocationCallOrder[0];
     expect(reconcileOrder).toBeLessThan(listOrder);
   });
 
