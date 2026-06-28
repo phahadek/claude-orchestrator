@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { shouldAutoReview, formatCIFailureFeedback, CI_LOG_EXCERPT_CAP } from './reviewUtils';
+import {
+  shouldAutoReview,
+  formatCIFailureFeedback,
+  CI_LOG_EXCERPT_CAP,
+} from './reviewUtils';
 
 describe('shouldAutoReview()', () => {
   const withCap = (
@@ -105,7 +109,10 @@ describe('formatCIFailureFeedback() — source: github (regression)', () => {
 
   it('truncates log excerpt at the cap and appends a marker', () => {
     // Multi-line log exceeding CI_LOG_EXCERPT_CAP (4000) — realistic CI output shape
-    const longLog = Array.from({ length: 100 }, (_, i) => `line ${i}: ${'x'.repeat(50)}`).join('\n');
+    const longLog = Array.from(
+      { length: 100 },
+      (_, i) => `line ${i}: ${'x'.repeat(50)}`,
+    ).join('\n');
     // ~5800 chars total, well above 4000 cap
     const result = formatCIFailureFeedback({
       prNumber: 42,
@@ -141,11 +148,15 @@ describe('formatCIFailureFeedback() — source: github (regression)', () => {
     // 5 identifiable head lines, then a unique middle marker close to the head,
     // then a large filler to push the total well past CI_LOG_EXCERPT_CAP (4000),
     // then an identifiable tail error at the very end.
-    const headLines = Array.from({ length: 5 }, (_, i) => `context line ${i + 1}`).join('\n');
+    const headLines = Array.from(
+      { length: 5 },
+      (_, i) => `context line ${i + 1}`,
+    ).join('\n');
     const uniqueMiddleMarker = 'UNIQUE_MIDDLE_OMIT_XYZ';
     const filler = 'filler\n'.repeat(700); // ~4900 chars — pushes total far past cap
     const errorTail = 'UNIQUE_TAIL_ERROR_ABC\nAssertionError: failed\n';
-    const log = headLines + '\n' + uniqueMiddleMarker + '\n' + filler + errorTail;
+    const log =
+      headLines + '\n' + uniqueMiddleMarker + '\n' + filler + errorTail;
 
     const result = formatCIFailureFeedback({
       prNumber: 42,
