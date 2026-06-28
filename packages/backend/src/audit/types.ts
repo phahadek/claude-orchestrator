@@ -45,7 +45,8 @@ type EventType =
   | 'stalled_pr_escalated'
   | 'task_launch_escalated'
   | 'task_unblocked'
-  | 'pr_unparked';
+  | 'pr_unparked'
+  | 'repo_git_config_repaired';
 
 type ActorType = 'ai' | 'human' | 'system';
 
