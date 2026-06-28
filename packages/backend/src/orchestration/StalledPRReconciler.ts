@@ -149,8 +149,11 @@ export class StalledPRReconciler {
       payload: { pr_number: prNumber, repo, kind, attempt: newCount },
     });
 
-    if (kind === 'errored_review_session') {
-      // Clear the terminal review_session_id so PRReviewService spawns a fresh
+    if (
+      kind === 'errored_review_session' ||
+      kind === 'pre_review_interrupted'
+    ) {
+      // Clear any stale review_session_id so PRReviewService spawns a fresh
       // session rather than calling sendOrResume on a terminal session.
       clearReviewSessionId(prNumber, repo);
     }

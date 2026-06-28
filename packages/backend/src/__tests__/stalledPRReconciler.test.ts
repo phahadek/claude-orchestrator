@@ -411,6 +411,68 @@ describe('StalledPRReconciler', () => {
     expect(ro.enqueueReview).not.toHaveBeenCalled();
   });
 
+  it('clears review_session_id and enqueues review for pre_review_interrupted PR', async () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+      pause_reason: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getSession).mockReturnValue(null as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(clearReviewSessionId).toHaveBeenCalledWith(42, 'org/repo');
+    expect(ro.enqueueReview).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42, repo: 'org/repo' }),
+    );
+    expect(incrementStalledPRRetryCount).toHaveBeenCalledWith(42, 'org/repo');
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'stalled_pr_reconcile_attempt' }),
+    );
+  });
+
+  it('escalates pre_review_interrupted to stalled_reconcile_cap after retry cap', async () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+      pause_reason: null,
+      stalled_pr_retry_count: 2, // at cap
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast, messages } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      'stalled_reconcile_cap',
+    );
+    expect(
+      messages.find((m) => m.type === 'pr_stalled_escalated'),
+    ).toMatchObject({
+      type: 'pr_stalled_escalated',
+      prNumber: 42,
+      repo: 'org/repo',
+      kind: 'pre_review_interrupted',
+    });
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+  });
+
   it('skips analyze_failing PR with pending_push (push flow handles it)', async () => {
     const pr = makePR({
       pause_reason: JSON.stringify({
