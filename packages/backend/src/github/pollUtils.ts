@@ -5,7 +5,8 @@ export type StalledPRKind =
   | 'incomplete_verdict'
   | 'errored_review_session'
   | 'gate_failed'
-  | 'analyze_failing';
+  | 'analyze_failing'
+  | 'pre_review_interrupted';
 
 /**
  * True when a PR is in a terminal-stale state where PRMergeWatcher polling
@@ -34,7 +35,7 @@ export function isTerminalStalePR(pr: PullRequestRow): boolean {
   }
 
   // Incomplete verdict with no new push since last review
-  if (verdict === 'incomplete' && pr.head_sha === pr.last_reviewed_sha) {
+  if (verdict === 'incomplete' && pr.head_sha !== null && pr.head_sha === pr.last_reviewed_sha) {
     return true;
   }
 
@@ -86,6 +87,15 @@ export function classifyStalledPR(
   // Incomplete verdict + no push since last review
   if (verdict === 'incomplete' && pr.head_sha === pr.last_reviewed_sha) {
     return { kind: 'incomplete_verdict' };
+  }
+
+  // Pre-review pipeline was interrupted on restart (or PR awaited its first
+  // review): no verdict, no pending push, and no live/errored session holding
+  // the slot. reviewSessionStatus is null when review_session_id is absent or
+  // the session row is gone — exactly the cases that fall through everything
+  // else and need a fresh enqueueReview.
+  if (!pr.review_result && !pr.pending_push && !reviewSessionStatus) {
+    return { kind: 'pre_review_interrupted' };
   }
 
   // Errored or killed review session
