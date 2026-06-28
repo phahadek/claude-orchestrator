@@ -3,6 +3,7 @@ import { GitHubClient } from './github/GitHubClient';
 import { runPRBootSweep } from './github/PRBootSweep';
 import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
 import { runBootWorktreeReconciliation } from './orchestration/WorktreeReconciler';
+import { runGitConfigIntegrityCheck } from './orchestration/gitConfigIntegrity';
 import { logger } from './logger';
 import { getCorporateMode } from './config/corporateMode';
 import type { ServerMessage } from './ws/types';
@@ -174,6 +175,7 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   tracker.startSequence([
     'jsonl_import',
     'session_events_pruner_at_boot',
+    'git_config_integrity_check',
     'resume_orphan_sessions',
     'stuck_session_monitor_rehydrate',
     'auto_merger_rehydrate',
@@ -189,6 +191,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   deps.jsonlReader.backfillTokens();
   void tracker.runStep('session_events_pruner_at_boot', () =>
     deps.sessionEventsPruner.runAtBoot(),
+  );
+  await tracker.runStep('git_config_integrity_check', () =>
+    runGitConfigIntegrityCheck(),
   );
   await tracker.runStep(
     'resume_orphan_sessions',
