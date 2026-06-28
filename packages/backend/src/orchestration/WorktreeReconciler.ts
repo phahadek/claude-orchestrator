@@ -106,7 +106,7 @@ async function reconcileProject(
       continue;
     }
 
-    if (!await fsExists(wtPath)) {
+    if (!(await fsExists(wtPath))) {
       stats.pruned++;
       logger.debug(
         `[WorktreeReconciler] worktree dir already gone for session ${sessionId.slice(0, 8)}, letting prune reap registration`,

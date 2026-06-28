@@ -11,7 +11,9 @@ vi.mock('../orchestration/gitConfigIntegrity.js', () => ({
   runGitConfigIntegrityCheck: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../config/corporateMode.js', () => ({
-  getCorporateMode: vi.fn().mockReturnValue({ enabled: false, envLocked: false, gates: {} }),
+  getCorporateMode: vi
+    .fn()
+    .mockReturnValue({ enabled: false, envLocked: false, gates: {} }),
 }));
 
 import { runBootSequence } from '../bootSequence.js';
@@ -62,7 +64,9 @@ function makeDeps(): {
     autoLauncher: { pollOnce: vi.fn().mockResolvedValue(undefined) },
     scheduler,
     sessionEventsPruner: { runAtBoot: vi.fn().mockResolvedValue(undefined) },
-    stalledPRReconciler: { reconcileOnce: vi.fn().mockResolvedValue(undefined) },
+    stalledPRReconciler: {
+      reconcileOnce: vi.fn().mockResolvedValue(undefined),
+    },
     server,
     port: 3000,
     broadcast,
@@ -121,11 +125,16 @@ describe('boot chain — worktree_reconciliation step removed', () => {
 
     await runAndDrain(deps);
 
-    const startedCall = vi.mocked(broadcast).mock.calls.find(
-      ([msg]) => msg.type === 'boot_reconciliation_started',
-    );
+    const startedCall = vi
+      .mocked(broadcast)
+      .mock.calls.find(([msg]) => msg.type === 'boot_reconciliation_started');
     expect(startedCall).toBeDefined();
-    const steps = (startedCall![0] as Extract<ServerMessage, { type: 'boot_reconciliation_started' }>).steps;
+    const steps = (
+      startedCall![0] as Extract<
+        ServerMessage,
+        { type: 'boot_reconciliation_started' }
+      >
+    ).steps;
     expect(steps).not.toContain('worktree_reconciliation');
   });
 
@@ -134,11 +143,13 @@ describe('boot chain — worktree_reconciliation step removed', () => {
 
     await runAndDrain(deps);
 
-    const stepCalls = vi.mocked(broadcast).mock.calls.filter(
-      ([msg]) => msg.type === 'boot_reconciliation_step',
-    );
+    const stepCalls = vi
+      .mocked(broadcast)
+      .mock.calls.filter(([msg]) => msg.type === 'boot_reconciliation_step');
     const stepNames = stepCalls.map(
-      ([msg]) => (msg as Extract<ServerMessage, { type: 'boot_reconciliation_step' }>).step,
+      ([msg]) =>
+        (msg as Extract<ServerMessage, { type: 'boot_reconciliation_step' }>)
+          .step,
     );
     expect(stepNames).not.toContain('worktree_reconciliation');
   });

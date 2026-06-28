@@ -604,7 +604,9 @@ describe('runBootWorktreeReconciliation — fs.promises.rm fallback (Fix B)', ()
     // Phase 1 access (check before removal): exists; Fix B access: does not exist
     mockedAccess
       .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      .mockRejectedValueOnce(
+        Object.assign(new Error('ENOENT'), { code: 'ENOENT' }),
+      );
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
@@ -764,9 +766,9 @@ describe('runBootWorktreeReconciliation — idempotent / no-op', () => {
         return Promise.resolve(['sess-1'] as unknown as ReturnType<
           typeof fs.promises.readdir
         >);
-      return Promise.resolve([] as unknown as ReturnType<
-        typeof fs.promises.readdir
-      >);
+      return Promise.resolve(
+        [] as unknown as ReturnType<typeof fs.promises.readdir>,
+      );
     });
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
@@ -1357,9 +1359,9 @@ describe('register — Scheduler job', () => {
     register(mockScheduler);
     const opts = vi.mocked(mockScheduler.register).mock.calls[0][0];
     const intervalMs =
-      typeof opts.intervalMs === 'function' ? opts.intervalMs() : opts.intervalMs;
+      typeof opts.intervalMs === 'function'
+        ? opts.intervalMs()
+        : opts.intervalMs;
     expect(intervalMs).toBeGreaterThanOrEqual(10 * 60_000);
   });
-
-
 });
