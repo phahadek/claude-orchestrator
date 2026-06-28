@@ -19,7 +19,7 @@ export interface VerifyCIFailureArgs {
 
 export const CI_LOG_EXCERPT_CAP = 4000;
 
-function truncateLog(log: string, cap: number): string {
+export function truncateLog(log: string, cap: number): string {
   if (log.length <= cap) return log;
 
   const lines = log.split('\n');

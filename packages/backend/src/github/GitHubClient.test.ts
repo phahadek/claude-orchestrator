@@ -429,6 +429,34 @@ describe('GitHubClient.getFailingChecks()', () => {
       expect.anything(),
     );
   });
+
+  it('populates detailsUrl from details_url on failing checks', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => ({
+          check_runs: [
+            {
+              name: 'build',
+              status: 'completed',
+              conclusion: 'failure',
+              details_url: 'https://github.com/owner/repo/actions/runs/42/job/1',
+              html_url: 'https://github.com/owner/repo/actions/runs/42',
+            },
+          ],
+        }),
+        text: async () => '',
+      }),
+    );
+
+    const client = new GitHubClient();
+    const failing = await client.getFailingChecks('deadbeef', 'owner/repo');
+    expect(failing[0]?.detailsUrl).toBe(
+      'https://github.com/owner/repo/actions/runs/42/job/1',
+    );
+  });
 });
 
 // ── categorizeMergeability() ─────────────────────────────────────────────────
@@ -443,6 +471,8 @@ describe('GitHubClient.categorizeMergeability()', () => {
       name: string;
       status: string;
       conclusion: string | null;
+      details_url?: string;
+      html_url?: string;
     }> = [],
   ): ReturnType<typeof vi.fn> {
     const fetchSpy = vi
@@ -628,6 +658,39 @@ describe('GitHubClient.categorizeMergeability()', () => {
     // safeGetFailingChecks returns [] on error → unknown (AutoMerger polls until deadline).
     expect(result.category).toBe('unknown');
     expect(result.failingChecks).toEqual([]);
+  });
+
+  it('populates detailsUrl on failing checks from details_url ?? html_url', async () => {
+    mockPRThenChecks({ mergeable_state: 'unstable' }, [
+      {
+        name: 'unit-tests',
+        status: 'completed',
+        conclusion: 'failure',
+        details_url: 'https://github.com/owner/repo/actions/runs/999/job/123',
+        html_url: 'https://github.com/owner/repo/actions/runs/999',
+      },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo');
+    expect(result.failingChecks[0]?.detailsUrl).toBe(
+      'https://github.com/owner/repo/actions/runs/999/job/123',
+    );
+  });
+
+  it('falls back to html_url when details_url is absent', async () => {
+    mockPRThenChecks({ mergeable_state: 'unstable' }, [
+      {
+        name: 'unit-tests',
+        status: 'completed',
+        conclusion: 'failure',
+        html_url: 'https://github.com/owner/repo/actions/runs/999',
+      },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo');
+    expect(result.failingChecks[0]?.detailsUrl).toBe(
+      'https://github.com/owner/repo/actions/runs/999',
+    );
   });
 });
 

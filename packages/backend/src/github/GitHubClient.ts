@@ -339,6 +339,8 @@ export class GitHubClient {
         name: string;
         status: string;
         conclusion: string | null;
+        details_url?: string;
+        html_url?: string;
       }>;
     }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
     return data.check_runs
@@ -348,7 +350,11 @@ export class GitHubClient {
           c.conclusion !== null &&
           FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
       )
-      .map((c) => ({ name: c.name, conclusion: c.conclusion as string }));
+      .map((c) => ({
+        name: c.name,
+        conclusion: c.conclusion as string,
+        detailsUrl: c.details_url ?? c.html_url,
+      }));
   }
 
   /**
@@ -561,6 +567,8 @@ export class GitHubClient {
       name: string;
       status: string;
       conclusion: string | null;
+      details_url?: string;
+      html_url?: string;
     }>;
     try {
       const data = await this.request<{
@@ -568,6 +576,8 @@ export class GitHubClient {
           name: string;
           status: string;
           conclusion: string | null;
+          details_url?: string;
+          html_url?: string;
         }>;
       }>(`/repos/${repo}/commits/${sha}/check-runs?per_page=100`);
       allCheckRuns = data.check_runs;
@@ -592,7 +602,11 @@ export class GitHubClient {
           c.conclusion !== null &&
           FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
       )
-      .map((c) => ({ name: c.name, conclusion: c.conclusion as string }));
+      .map((c) => ({
+        name: c.name,
+        conclusion: c.conclusion as string,
+        detailsUrl: c.details_url ?? c.html_url,
+      }));
 
     if (ciCheckNames.length === 0) {
       return {

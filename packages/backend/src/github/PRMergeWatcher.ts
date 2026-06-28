@@ -1,5 +1,5 @@
 import type { GitHubClient } from './GitHubClient';
-import type { MergeabilityCategory } from './types';
+import type { MergeabilityCategory, FailingCheck } from './types';
 import { GitHubRateLimitError } from './types';
 import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -20,6 +20,8 @@ import {
   formatCIFailureFeedback,
   shouldAutoReview,
   formatReviewFeedback,
+  truncateLog,
+  CI_LOG_EXCERPT_CAP,
 } from './reviewUtils';
 import { sendConflictNudge } from './conflictNudge';
 import { isTerminalStalePR } from './pollUtils';
@@ -342,7 +344,21 @@ export class PRMergeWatcher {
             'ci_failing',
             testResult.output ? testResult.output.slice(0, 1000) : undefined,
           );
-          await this.runCIFailureRemediation(pr, [], testResult.output);
+          const verifyMsg = formatCIFailureFeedback({
+            source: 'verify',
+            failedCommand: config.test.join(' && '),
+            truncatedOutput: testResult.output
+              ? truncateLog(testResult.output, CI_LOG_EXCERPT_CAP)
+              : undefined,
+          });
+          this.sessions
+            .sendOrResume(pr.session_id!, verifyMsg)
+            .catch((err: unknown) =>
+              logger.warn(
+                `[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`,
+                (err as Error).message,
+              ),
+            );
         }
         return; // Gated on failing tests — skip GitHub mergeability evaluation
       }
@@ -427,7 +443,7 @@ export class PRMergeWatcher {
           }
         }
 
-        await this.runCIFailureRemediation(pr, failingNames);
+        await this.runCIFailureRemediation(pr, category.failingChecks);
       }
     }
 
@@ -485,9 +501,10 @@ export class PRMergeWatcher {
    */
   private async runCIFailureRemediation(
     pr: PullRequestRow,
-    failingNames: string[],
+    failingChecks: FailingCheck[],
     logExcerpt?: string | null,
   ): Promise<void> {
+    const failingNames = failingChecks.map((c) => c.name);
     logger.info(
       `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has failing CI checks: ${failingNames.join(', ') || '(unknown)'}`,
     );
@@ -539,7 +556,7 @@ export class PRMergeWatcher {
       }
     }
 
-    const runUrl = `https://github.com/${pr.repo}/pull/${pr.pr_number}/checks`;
+    const runUrl = failingChecks[0]?.detailsUrl ?? null;
     const msg = formatCIFailureFeedback({
       prNumber: pr.pr_number,
       failingCheckNames: failingNames,

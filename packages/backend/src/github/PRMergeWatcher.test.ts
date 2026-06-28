@@ -92,6 +92,9 @@ function makeMockGitHub(): GitHubClient {
     getFailingChecks: vi.fn().mockResolvedValue([]),
     fetchPR: vi.fn().mockResolvedValue({ headSha: null }),
     deleteBranch: vi.fn().mockResolvedValue(undefined),
+    detectBillingBlock: vi
+      .fn()
+      .mockResolvedValue({ blocked: false, message: null }),
     // Default: GitHub still computing — watcher should skip.
     categorizeMergeability: vi.fn().mockResolvedValue({
       category: 'unknown',
@@ -640,7 +643,11 @@ describe('PRMergeWatcher categorization branches', () => {
       mergeState: 'ci_failed',
       rawMergeableState: 'unstable',
       failingChecks: [
-        { name: 'lint', conclusion: 'failure' },
+        {
+          name: 'lint',
+          conclusion: 'failure',
+          detailsUrl: 'https://github.com/owner/repo/actions/runs/789/job/123',
+        },
         { name: 'unit', conclusion: 'failure' },
       ],
     });
@@ -661,10 +668,12 @@ describe('PRMergeWatcher categorization branches', () => {
     // Failing check names rendered as list items
     expect(sentMessage).toContain('- lint');
     expect(sentMessage).toContain('- unit');
-    // GitHub checks URL present
+    // Links to the real check-run URL (first failing check's detailsUrl)
     expect(sentMessage).toContain(
-      'https://github.com/owner/repo/pull/42/checks',
+      'https://github.com/owner/repo/actions/runs/789/job/123',
     );
+    // NOT the hardcoded /pull/N/checks page
+    expect(sentMessage).not.toContain('/pull/42/checks');
     // Instruction block present
     expect(sentMessage).toMatch(/investigate the failures and push a fix/i);
     // NOT the legacy plain-text format
@@ -677,6 +686,37 @@ describe('PRMergeWatcher categorization branches', () => {
       'ci_failed',
       ['lint', 'unit'],
     );
+  });
+
+  it('omits Run: line when no failing check has a detailsUrl', async () => {
+    const pr = makePRRow({
+      merge_state: 'clean',
+      session_id: 'coding-session',
+      head_sha: 'abc123',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [{ name: 'typecheck', conclusion: 'failure' }],
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    const sentMessage = vi.mocked(sessions.sendOrResume).mock
+      .calls[0][1] as string;
+    expect(sentMessage).toMatch(/## CI Failure — PR #42/);
+    expect(sentMessage).not.toContain('**Run:**');
+    expect(sentMessage).not.toContain('/pull/42/checks');
   });
 
   it('does NOT message session for blocked category (requires human action)', async () => {
@@ -2954,8 +2994,13 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       'FAIL src/foo.test.ts\n  ● test name\n    expected 1 to equal 2',
     );
     const sent = vi.mocked(sessions.sendOrResume).mock.calls[0]?.[1] as string;
-    expect(sent).toMatch(/## CI Failure — PR #42/);
+    // verify-gate framing, not GitHub-check framing
+    expect(sent).toMatch(/## CI Failure — verify gate/);
+    expect(sent).toContain('npm test');
     expect(sent).toContain('FAIL src/foo.test.ts');
+    // No ### Failing checks section and no /checks URL
+    expect(sent).not.toContain('### Failing checks');
+    expect(sent).not.toContain('/pull/42/checks');
     // GitHub mergeability was NOT consulted — returned early after test gate
     expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
   });
@@ -3107,7 +3152,7 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
     );
     expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
       'coding-session',
-      expect.stringMatching(/## CI Failure — PR #42/),
+      expect.stringMatching(/## CI Failure — verify gate/),
     );
   });
 
