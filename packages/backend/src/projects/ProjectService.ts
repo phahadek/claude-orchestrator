@@ -1,3 +1,7 @@
+import fs from 'fs';
+import path from 'path';
+import yaml from 'js-yaml';
+import { randomUUID } from 'crypto';
 import {
   insertProject,
   getProjectRowById,
@@ -22,6 +26,7 @@ import type {
 import type { NonMilestoneSourceConfig } from '../tasks/TaskBackend';
 import { recordEvent } from '../audit/AuditLog';
 import { normalizePath } from '../config';
+import { logger } from '../logger';
 
 export interface ProjectMilestone {
   id: string;
@@ -218,6 +223,71 @@ export const ProjectService = {
 
   deleteMilestone(id: string): boolean {
     return deleteMilestone(id);
+  },
+
+  /**
+   * Reconcile tasks.yaml milestones into the DB milestones table for a yaml project.
+   * Upsert-only: never deletes rows. For each yaml milestone in order:
+   *   1. update the row whose source_id matches the yaml id
+   *   2. adopt a source_id=null row whose name matches (backfill source_id, keep id)
+   *   3. create a new row
+   */
+  reconcileYamlMilestones(projectId: string, projectDir: string): void {
+    const filePath = path.join(projectDir, 'tasks.yaml');
+    if (!fs.existsSync(filePath)) return;
+
+    let yamlMilestones: { id: string; name: string }[];
+    try {
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      const parsed = yaml.load(raw) as {
+        milestones?: { id: string; name: string }[];
+      } | null;
+      if (!parsed?.milestones || !Array.isArray(parsed.milestones)) return;
+      yamlMilestones = parsed.milestones.filter(
+        (m) => typeof m.id === 'string' && typeof m.name === 'string',
+      );
+    } catch (err) {
+      logger.warn(
+        `[ProjectService] reconcileYamlMilestones: failed to read ${filePath}: ${String(err)}`,
+      );
+      return;
+    }
+
+    const existing = listMilestonesByProject(projectId);
+
+    for (let i = 0; i < yamlMilestones.length; i++) {
+      const ym = yamlMilestones[i];
+      const displayOrder = i;
+
+      const bySourceId = existing.find((r) => r.source_id === ym.id);
+      if (bySourceId) {
+        updateMilestone(bySourceId.id, {
+          name: ym.name,
+          display_order: displayOrder,
+        });
+        continue;
+      }
+
+      const byName = existing.find(
+        (r) => r.source_id === null && r.name === ym.name,
+      );
+      if (byName) {
+        updateMilestone(byName.id, {
+          name: ym.name,
+          source_id: ym.id,
+          display_order: displayOrder,
+        });
+        continue;
+      }
+
+      insertMilestone({
+        id: randomUUID(),
+        project_id: projectId,
+        name: ym.name,
+        source_id: ym.id,
+        display_order: displayOrder,
+      });
+    }
   },
 
   setDataResidencyConfirmed(

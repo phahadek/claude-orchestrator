@@ -18,6 +18,7 @@ vi.mock('../../tasks/TaskBackend.js', () => ({
 vi.mock('../../projects/ProjectService.js', () => ({
   ProjectService: {
     listMilestones: vi.fn(),
+    reconcileYamlMilestones: vi.fn(),
   },
 }));
 
@@ -78,16 +79,26 @@ describe('TaskCacheRefresher', () => {
   });
 
   describe('refreshOnce', () => {
-    it('skips yaml projects (non-remote sources)', async () => {
+    it('processes yaml projects: calls reconcile and iterates milestones with sourceId', async () => {
       const yamlProject = makeProject({ taskSource: 'yaml' });
       vi.mocked(getAllProjects).mockReturnValue([yamlProject]);
+      // listMilestones returns empty after reconcile → no fetchReadyTasks calls
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([]);
+
+      const backend = makeBackend();
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
 
       const refresher = new TaskCacheRefresher(undefined, {
         listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
       });
       await refresher.refreshOnce();
 
-      expect(getTaskBackend).not.toHaveBeenCalled();
+      expect(ProjectService.reconcileYamlMilestones).toHaveBeenCalledWith(
+        'proj-1',
+        '/fake/project',
+      );
+      expect(backend.fetchReadyTasks).not.toHaveBeenCalled();
     });
 
     it('refreshes jira projects', async () => {

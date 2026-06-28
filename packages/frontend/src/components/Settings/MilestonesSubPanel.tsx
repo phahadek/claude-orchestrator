@@ -247,10 +247,18 @@ function MilestonesSubPanelInner({
             Source: {getTaskSourceShortLabel(project.taskSource)}
           </p>
         </div>
-        <button type="button" className={styles.btnPrimary} onClick={openAdd}>
-          + Add milestone
-        </button>
+        {project.taskSource !== 'yaml' && (
+          <button type="button" className={styles.btnPrimary} onClick={openAdd}>
+            + Add milestone
+          </button>
+        )}
       </div>
+      {project.taskSource === 'yaml' && (
+        <p className={styles.hint}>
+          Milestones for YAML projects are managed via{' '}
+          <code>tasks.yaml</code> and synced automatically.
+        </p>
+      )}
 
       {error && <p className={styles.error}>{error}</p>}
 
@@ -275,20 +283,24 @@ function MilestonesSubPanelInner({
                 <td className={styles.mono}>{m.sourceId ?? '—'}</td>
                 <td>{m.displayOrder}</td>
                 <td className={styles.actionsCol}>
-                  <button
-                    type="button"
-                    className={styles.linkBtn}
-                    onClick={() => openEdit(m)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className={`${styles.linkBtn} ${styles.danger}`}
-                    onClick={() => setConfirmDelete(m)}
-                  >
-                    Delete
-                  </button>
+                  {project.taskSource !== 'yaml' && (
+                    <>
+                      <button
+                        type="button"
+                        className={styles.linkBtn}
+                        onClick={() => openEdit(m)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className={`${styles.linkBtn} ${styles.danger}`}
+                        onClick={() => setConfirmDelete(m)}
+                      >
+                        Delete
+                      </button>
+                    </>
+                  )}
                 </td>
               </tr>
             ))}
