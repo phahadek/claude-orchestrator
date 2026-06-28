@@ -197,7 +197,11 @@ vi.mock('../config/corporateMode', () => ({
 
 // ── Imports ────────────────────────────────────────────────────────────────
 
-import { SessionManager, isSessionAtContextCeiling, PROACTIVE_ESCALATION_HWM } from '../session/SessionManager';
+import {
+  SessionManager,
+  isSessionAtContextCeiling,
+  PROACTIVE_ESCALATION_HWM,
+} from '../session/SessionManager';
 import { AgentSession } from '../session/AgentSession';
 import * as queries from '../db/queries';
 
@@ -207,7 +211,9 @@ const SESSION_ID = 'aaaabbbb-cccc-dddd-eeee-ffffffffffff';
 const LARGE_MODEL = 'claude-sonnet-4-6[1m]';
 const SMALL_MODEL = 'claude-sonnet-4-6';
 
-function makeSessionRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function makeSessionRow(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     session_id: SESSION_ID,
     task_name: 'my-feature-task',
@@ -241,45 +247,66 @@ describe('isSessionAtContextCeiling()', () => {
   it('returns false when large_task_model is not configured', () => {
     mockRuntimeSettings.large_task_model = null;
     expect(
-      isSessionAtContextCeiling({ model: SMALL_MODEL, context_occupancy_tokens: 195_000 }),
+      isSessionAtContextCeiling({
+        model: SMALL_MODEL,
+        context_occupancy_tokens: 195_000,
+      }),
     ).toBe(false);
   });
 
   it('returns false when the session is already on the large model', () => {
     expect(
-      isSessionAtContextCeiling({ model: LARGE_MODEL, context_occupancy_tokens: 900_000 }),
+      isSessionAtContextCeiling({
+        model: LARGE_MODEL,
+        context_occupancy_tokens: 900_000,
+      }),
     ).toBe(false);
   });
 
   it('returns false when context_occupancy_tokens is 0 (not yet tracked)', () => {
     expect(
-      isSessionAtContextCeiling({ model: SMALL_MODEL, context_occupancy_tokens: 0 }),
+      isSessionAtContextCeiling({
+        model: SMALL_MODEL,
+        context_occupancy_tokens: 0,
+      }),
     ).toBe(false);
   });
 
   it('returns false when occupancy is below the HWM', () => {
     const tokens = Math.floor(200_000 * (PROACTIVE_ESCALATION_HWM - 0.01));
     expect(
-      isSessionAtContextCeiling({ model: SMALL_MODEL, context_occupancy_tokens: tokens }),
+      isSessionAtContextCeiling({
+        model: SMALL_MODEL,
+        context_occupancy_tokens: tokens,
+      }),
     ).toBe(false);
   });
 
   it('returns true when occupancy is exactly at the HWM', () => {
     const tokens = Math.floor(200_000 * PROACTIVE_ESCALATION_HWM);
     expect(
-      isSessionAtContextCeiling({ model: SMALL_MODEL, context_occupancy_tokens: tokens }),
+      isSessionAtContextCeiling({
+        model: SMALL_MODEL,
+        context_occupancy_tokens: tokens,
+      }),
     ).toBe(true);
   });
 
   it('returns true when occupancy is above the HWM', () => {
     expect(
-      isSessionAtContextCeiling({ model: SMALL_MODEL, context_occupancy_tokens: 195_000 }),
+      isSessionAtContextCeiling({
+        model: SMALL_MODEL,
+        context_occupancy_tokens: 195_000,
+      }),
     ).toBe(true);
   });
 
   it('returns true for a null model (treated as 200k window)', () => {
     expect(
-      isSessionAtContextCeiling({ model: null, context_occupancy_tokens: 185_000 }),
+      isSessionAtContextCeiling({
+        model: null,
+        context_occupancy_tokens: 185_000,
+      }),
     ).toBe(true);
   });
 });
@@ -290,7 +317,10 @@ describe('sendOrResume(): proactive ceiling-escalation (worktree-recreation path
   beforeEach(() => {
     mockRuntimeSettings.large_task_model = LARGE_MODEL;
     vi.mocked(queries.getSession).mockReturnValue(
-      makeSessionRow({ context_occupancy_tokens: 185_000, model: SMALL_MODEL }) as never,
+      makeSessionRow({
+        context_occupancy_tokens: 185_000,
+        model: SMALL_MODEL,
+      }) as never,
     );
   });
 
@@ -347,7 +377,10 @@ describe('sendOrResume(): no escalation when session is already on the large mod
   it('does NOT call setProactiveEscalation when session.model === large_task_model', async () => {
     mockRuntimeSettings.large_task_model = LARGE_MODEL;
     vi.mocked(queries.getSession).mockReturnValue(
-      makeSessionRow({ context_occupancy_tokens: 900_000, model: LARGE_MODEL }) as never,
+      makeSessionRow({
+        context_occupancy_tokens: 900_000,
+        model: LARGE_MODEL,
+      }) as never,
     );
 
     const spy = vi.spyOn(AgentSession.prototype, 'setProactiveEscalation');
@@ -364,7 +397,10 @@ describe('sendOrResume(): no escalation when occupancy is below the HWM', () => 
     mockRuntimeSettings.large_task_model = LARGE_MODEL;
     const belowHwm = Math.floor(200_000 * (PROACTIVE_ESCALATION_HWM - 0.05));
     vi.mocked(queries.getSession).mockReturnValue(
-      makeSessionRow({ context_occupancy_tokens: belowHwm, model: SMALL_MODEL }) as never,
+      makeSessionRow({
+        context_occupancy_tokens: belowHwm,
+        model: SMALL_MODEL,
+      }) as never,
     );
 
     const spy = vi.spyOn(AgentSession.prototype, 'setProactiveEscalation');

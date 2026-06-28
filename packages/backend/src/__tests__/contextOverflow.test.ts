@@ -395,7 +395,9 @@ describe('AgentSession — setProactiveEscalation (proactive ceiling-escalation)
       // Advance past the 2s proactive nudge delay (ESCALATION_NUDGE_DELAY_MS = 2000).
       await vi.advanceTimersByTimeAsync(2_100);
 
-      const nudgeDelivered = writtenMessages.some((m) => m.includes(NUDGE_TEXT));
+      const nudgeDelivered = writtenMessages.some((m) =>
+        m.includes(NUDGE_TEXT),
+      );
       expect(nudgeDelivered).toBe(true);
     } finally {
       vi.useRealTimers();
