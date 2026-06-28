@@ -43,24 +43,6 @@ export function getLatestNudgeTimestamp(sessionId: string): number | null {
 }
 
 /**
- * Count task_orphan_nudged events for the session recorded after sinceTs.
- * Used for episode-scoped counting: only nudges newer than the session's
- * last activity count toward NUDGE_LIMIT.
- */
-export function countNudgeEventsSince(
-  sessionId: string,
-  sinceTs: number,
-): number {
-  const row = db
-    .prepare<[string, number], { cnt: number }>(
-      `SELECT COUNT(*) AS cnt FROM audit_log
-       WHERE event_type = 'task_orphan_nudged' AND actor_id = ? AND ts > ?`,
-    )
-    .get(sessionId, sinceTs);
-  return row?.cnt ?? 0;
-}
-
-/**
  * Returns the number of pr_creation_failed events with stage='push' recorded
  * for the given session. Used to derive the persisted push-retry count.
  */
