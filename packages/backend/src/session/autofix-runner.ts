@@ -24,6 +24,10 @@ export interface AutofixResult {
    * the implementing session so the coding agent can fix them.
    */
   unfixableViolations?: string;
+  /** True when a git operation (add/commit/push) exited 128 — infrastructure failure, not a code defect. */
+  isGitInfraFailure?: boolean;
+  /** Combined stderr/stdout of the failing git command, surfaced distinctly from summary. */
+  gitFailureReason?: string;
 }
 
 export const ORCHESTRATOR_BOT_EMAIL = 'bot@claude-code.internal';
@@ -157,8 +161,17 @@ export async function runAutofix(
     env,
   });
   if (addResult.exitCode !== 0) {
+    const gitReason = addResult.stdout.trim();
     const msg = `git add -A failed (exit ${addResult.exitCode})`;
     log(`[autofix] ERROR: ${msg}\n`);
+    if (addResult.exitCode === 128) {
+      return {
+        success: false,
+        isGitInfraFailure: true,
+        gitFailureReason: gitReason,
+        summary: gitReason ? `${msg}: ${gitReason}` : msg,
+      };
+    }
     failures.push(msg);
   }
 
@@ -222,8 +235,17 @@ export async function runAutofix(
     { cwd: worktreePath, env },
   );
   if (commitResult.exitCode !== 0) {
+    const gitReason = commitResult.stdout.trim();
     const msg = `git commit failed (exit ${commitResult.exitCode})`;
     log(`[autofix] ERROR: ${msg}\n`);
+    if (commitResult.exitCode === 128) {
+      return {
+        success: false,
+        isGitInfraFailure: true,
+        gitFailureReason: gitReason,
+        summary: gitReason ? `${msg}: ${gitReason}` : msg,
+      };
+    }
     return {
       success: false,
       summary: [...failures, msg].join('; '),
@@ -259,8 +281,21 @@ export async function runAutofix(
     env,
   });
   if (pushResult.exitCode !== 0) {
+    const gitReason = pushResult.stdout.trim();
     const msg = `git push failed (exit ${pushResult.exitCode})`;
     log(`[autofix] ERROR: ${msg}\n`);
+    if (pushResult.exitCode === 128) {
+      return {
+        success: false,
+        isGitInfraFailure: true,
+        gitFailureReason: gitReason,
+        commitSha: sha,
+        touchedFiles,
+        summary: gitReason
+          ? `autofix committed ${sha} but ${msg}: ${gitReason}`
+          : `autofix committed ${sha} but ${msg}`,
+      };
+    }
     failures.push(msg);
   }
 

@@ -37,6 +37,14 @@ vi.mock('../../orchestration/verifyRunner', () => ({
   runVerifyAsGate: (...args: unknown[]) => mockRunVerifyAsGate(...args),
 }));
 
+const mockValidateAndRepairGitConfig = vi
+  .fn()
+  .mockResolvedValue({ healthy: true, repaired: false, backupAvailable: true });
+vi.mock('../../orchestration/gitConfigIntegrity', () => ({
+  validateAndRepairGitConfig: (...args: unknown[]) =>
+    mockValidateAndRepairGitConfig(...args),
+}));
+
 const mockLoadAutofixCommands = vi.fn().mockReturnValue([]);
 const mockRunAutofix = vi
   .fn()
@@ -152,6 +160,11 @@ beforeEach(() => {
     success: true,
     summary: 'ok',
     commitSha: null,
+  });
+  mockValidateAndRepairGitConfig.mockResolvedValue({
+    healthy: true,
+    repaired: false,
+    backupAvailable: true,
   });
   mockRunTestCommands.mockResolvedValue({ passed: true, output: '' });
   mockHasTestResultForSha.mockReturnValue(false);
@@ -271,6 +284,134 @@ describe('PreReviewPipeline — autofix gate', () => {
         stage: 'autofix',
       }),
     );
+  });
+});
+
+describe('PreReviewPipeline — autofix git infra failure (exit 128)', () => {
+  it('invokes validateAndRepairGitConfig when runAutofix returns isGitInfraFailure', async () => {
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: false,
+      isGitInfraFailure: true,
+      gitFailureReason: 'fatal: bad config line 1 in /repo/.git/config',
+      summary:
+        'git add -A failed (exit 128): fatal: bad config line 1 in /repo/.git/config',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockValidateAndRepairGitConfig).toHaveBeenCalledWith(
+      '/project',
+      'proj-1',
+    );
+  });
+
+  it('sets verdict=autofix_git_infra_failure, not autofix_failed', async () => {
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: false,
+      isGitInfraFailure: true,
+      gitFailureReason: 'fatal: bad config',
+      summary: 'git add -A failed (exit 128): fatal: bad config',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockSetPRReviewResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      expect.stringContaining('autofix_git_infra_failure'),
+    );
+    expect(mockSetPRReviewResult).not.toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      expect.stringContaining('autofix_failed'),
+    );
+  });
+
+  it('sets pause reason to autofix_git_infra_failure', async () => {
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: false,
+      isGitInfraFailure: true,
+      gitFailureReason: 'fatal: bad config',
+      summary: 'git add -A failed (exit 128): fatal: bad config',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'autofix_git_infra_failure',
+    );
+  });
+
+  it('sends an infra failure message to the session (not the standard autofix gate message)', async () => {
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: false,
+      isGitInfraFailure: true,
+      gitFailureReason: 'fatal: bad config',
+      summary: 'git add -A failed (exit 128): fatal: bad config',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(sm.sendOrResume).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.stringContaining('Autofix Infrastructure Failure'),
+    );
+    expect(sm.sendOrResume).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.stringContaining('Autofix Gate Failure'),
+    );
+  });
+
+  it('does not set autofix_failed verdict so classifyStalledPR never returns gate_failed', async () => {
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: false,
+      isGitInfraFailure: true,
+      gitFailureReason: 'fatal: bad config',
+      summary: 'git add -A failed (exit 128): fatal: bad config',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    const resultJson = mockSetPRReviewResult.mock.calls[0]?.[2] as string;
+    const parsed = JSON.parse(resultJson);
+    expect(parsed.verdict).not.toBe('autofix_failed');
+  });
+
+  it('still produces autofix_failed for a non-128 failure (no regression)', async () => {
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: false,
+      summary: 'git commit failed (exit 1)',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockSetPRReviewResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      expect.stringContaining('autofix_failed'),
+    );
+    expect(mockValidateAndRepairGitConfig).not.toHaveBeenCalled();
   });
 });
 

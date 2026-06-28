@@ -87,6 +87,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'PR stalled — reconciler retry cap reached. Manual intervention required.',
   needs_repo:
     'No repo assigned — assign a target repository before this task can launch.',
+  autofix_git_infra_failure:
+    'Git infrastructure failure (exit 128) during autofix — likely a corrupted .git/config. The orchestrator attempted a repair; manual inspection may be needed.',
 };
 
 function verdictLabel(verdict: string): string {
