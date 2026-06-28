@@ -13,7 +13,6 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { ServerMessage } from '../ws/types';
 
 // ── Hoisted mutable config mock ───────────────────────────────────────────────
 // vi.mock factories are hoisted above imports, so top-level variables in the test
