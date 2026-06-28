@@ -64,7 +64,6 @@ import {
   recordEvent,
   countNudgeEvents,
   getLatestNudgeTimestamp,
-  countNudgeEventsSince,
 } from '../audit/AuditLog.js';
 import { getAllProjects } from '../config.js';
 import { OrphanedTaskSweeper } from '../orchestration/OrphanedTaskSweeper.js';
