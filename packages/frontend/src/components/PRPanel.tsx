@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { authedFetch } from '../api/projects';
 import { WorkItemCard } from './WorkItemCard';
 import type {
   WorkItemListItem,
@@ -107,7 +108,7 @@ export function PRPanel({
     if (!activeProjectId) return;
     if (isInitialLoad.current) setIsLoading(true);
     try {
-      const prsRes = await fetch(
+      const prsRes = await authedFetch(
         `/api/prs?projectId=${encodeURIComponent(activeProjectId)}`,
       );
       if (prsRes.status === 422) {
@@ -316,7 +317,7 @@ export function PRPanel({
     setError(prNumber, null);
     startElapsed(prNumber);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${prNumber}/review?projectId=${encodeURIComponent(activeProjectId)}`,
         { method: 'POST' },
       );
@@ -354,7 +355,7 @@ export function PRPanel({
     // so the user gets immediate feedback instead of an opaque merge failure.
     setCheckingMergeability((prev) => new Set(prev).add(prNumber));
     try {
-      const checkRes = await fetch(
+      const checkRes = await authedFetch(
         `/api/prs/${owner}/${repoName}/${prNumber}/mergeability`,
       );
       if (checkRes.ok) {
@@ -383,7 +384,7 @@ export function PRPanel({
     }
     setMergeInFlight((prev) => new Set(prev).add(prNumber));
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${owner}/${repoName}/${prNumber}/merge`,
         { method: 'POST' },
       );
@@ -420,7 +421,7 @@ export function PRPanel({
     setReReviewInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${owner}/${repoName}/${prNumber}/re-review`,
         { method: 'POST' },
       );
@@ -457,7 +458,7 @@ export function PRPanel({
     setFixConflictsInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${owner}/${repoName}/${prNumber}/fix-conflicts`,
         { method: 'POST' },
       );
@@ -490,7 +491,7 @@ export function PRPanel({
     setApproveInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${owner}/${repoName}/${prNumber}/approve`,
         { method: 'POST' },
       );
@@ -518,7 +519,7 @@ export function PRPanel({
     setRemoveInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${prNumber}?projectId=${encodeURIComponent(activeProjectId)}`,
         { method: 'DELETE' },
       );

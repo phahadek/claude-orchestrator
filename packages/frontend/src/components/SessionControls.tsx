@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { authedFetch } from '../api/projects';
 import type { SessionState } from '../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
@@ -79,7 +80,7 @@ export function SessionControls({
     if (!confirm('Delete this session? This cannot be undone.')) return;
     setDeleting(true);
     try {
-      await fetch(`/api/sessions/${session.sessionId}`, { method: 'DELETE' });
+      await authedFetch(`/api/sessions/${session.sessionId}`, { method: 'DELETE' });
       onDeleted?.(session.sessionId);
     } catch {
       setDeleting(false);
@@ -89,7 +90,7 @@ export function SessionControls({
   async function handleArchive() {
     setArchiving(true);
     try {
-      await fetch(`/api/sessions/${session.sessionId}/archive`, {
+      await authedFetch(`/api/sessions/${session.sessionId}/archive`, {
         method: 'PATCH',
       });
       setSessionArchived(session.sessionId, true);
@@ -101,7 +102,7 @@ export function SessionControls({
   async function handleUnarchive() {
     setArchiving(true);
     try {
-      await fetch(`/api/sessions/${session.sessionId}/unarchive`, {
+      await authedFetch(`/api/sessions/${session.sessionId}/unarchive`, {
         method: 'PATCH',
       });
       setSessionArchived(session.sessionId, false);
@@ -112,12 +113,12 @@ export function SessionControls({
 
   async function handleToggleFavorite() {
     if (session.favorited) {
-      await fetch(`/api/sessions/${session.sessionId}/unfavorite`, {
+      await authedFetch(`/api/sessions/${session.sessionId}/unfavorite`, {
         method: 'PATCH',
       });
       setSessionFavorited(session.sessionId, false);
     } else {
-      await fetch(`/api/sessions/${session.sessionId}/favorite`, {
+      await authedFetch(`/api/sessions/${session.sessionId}/favorite`, {
         method: 'PATCH',
       });
       setSessionFavorited(session.sessionId, true);
@@ -127,7 +128,7 @@ export function SessionControls({
   async function handleNoteCommit() {
     setEditingNote(false);
     const trimmed = noteValue.trim() || null;
-    await fetch(`/api/sessions/${session.sessionId}/note`, {
+    await authedFetch(`/api/sessions/${session.sessionId}/note`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ note: trimmed }),
@@ -144,7 +145,7 @@ export function SessionControls({
     }
     const tags = [...existing, tag];
     setTagInput('');
-    await fetch(`/api/sessions/${session.sessionId}/tags`, {
+    await authedFetch(`/api/sessions/${session.sessionId}/tags`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tags }),
@@ -153,7 +154,7 @@ export function SessionControls({
 
   async function handleRemoveTag(tag: string) {
     const tags = (session.tags ?? []).filter((t) => t !== tag);
-    await fetch(`/api/sessions/${session.sessionId}/tags`, {
+    await authedFetch(`/api/sessions/${session.sessionId}/tags`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tags }),

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getDeviceToken } from '../auth/deviceToken';
+import { authedFetch } from '../api/projects';
 import styles from '../components/Settings.module.css';
 
 interface Device {
@@ -12,33 +12,29 @@ interface Device {
   revoked: boolean;
 }
 
-function authHeaders(): Record<string, string> {
-  const token = getDeviceToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
 async function fetchDevices(): Promise<Device[]> {
-  const res = await fetch('/api/enrollment/devices', {
-    headers: authHeaders(),
-  });
+  const res = await authedFetch('/api/enrollment/devices');
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json() as Promise<Device[]>;
 }
 
 async function renameDevice(id: string, name: string): Promise<void> {
-  const res = await fetch(`/api/enrollment/devices/${encodeURIComponent(id)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ name }),
-  });
+  const res = await authedFetch(
+    `/api/enrollment/devices/${encodeURIComponent(id)}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    },
+  );
   if (!res.ok) throw new Error(`${res.status}`);
 }
 
 async function revokeDevice(id: string): Promise<void> {
-  const res = await fetch(`/api/enrollment/devices/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-    headers: authHeaders(),
-  });
+  const res = await authedFetch(
+    `/api/enrollment/devices/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  );
   if (!res.ok) throw new Error(`${res.status}`);
 }
 

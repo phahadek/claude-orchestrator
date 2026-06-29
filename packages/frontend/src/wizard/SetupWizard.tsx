@@ -3,7 +3,7 @@ import {
   ProjectFormModal,
   type ProjectFormValues,
 } from '../components/Settings/ProjectFormModal';
-import { projectsApi } from '../api/projects';
+import { projectsApi, authedFetch } from '../api/projects';
 import type {
   GithubTaskSourceConfig,
   NonMilestoneSourceConfig,
@@ -76,7 +76,7 @@ function toCreatePayload(values: ProjectFormValues) {
 }
 
 async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await authedFetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -138,7 +138,7 @@ export function SetupWizard({ onComplete }: Props) {
     const doCheck = async () => {
       setEnvLoading(true);
       try {
-        const res = await fetch('/api/setup/env-check');
+        const res = await authedFetch('/api/setup/env-check');
         const data = (await res.json()) as EnvCheckResult;
         setEnvCheck(data);
       } catch {
@@ -394,7 +394,7 @@ export function SetupWizard({ onComplete }: Props) {
                 onClick={async () => {
                   setEnvLoading(true);
                   try {
-                    const res = await fetch('/api/setup/env-check');
+                    const res = await authedFetch('/api/setup/env-check');
                     const data = (await res.json()) as EnvCheckResult;
                     setEnvCheck(data);
                   } finally {

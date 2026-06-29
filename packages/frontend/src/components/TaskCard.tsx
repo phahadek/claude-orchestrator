@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { authedFetch } from '../api/projects';
 import type { TaskView, DisplayStatus, PauseReason } from '../types/taskView';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
@@ -162,7 +163,7 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
     if (unparkInFlight || !project?.id || !pr) return;
     setUnparkInFlight(true);
     try {
-      await fetch(
+      await authedFetch(
         `/api/prs/${encodeURIComponent(pr.prNumber)}/unpark?projectId=${encodeURIComponent(project.id)}`,
         { method: 'POST' },
       );
@@ -179,7 +180,7 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
     setUnblockInFlight(true);
     setOptimisticStatus('ready');
     try {
-      await fetch(
+      await authedFetch(
         `/api/tasks/${encodeURIComponent(task.taskId)}/unblock?projectId=${encodeURIComponent(project.id)}`,
         { method: 'POST' },
       );

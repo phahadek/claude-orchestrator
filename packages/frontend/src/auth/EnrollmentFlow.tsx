@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { authedFetch } from '../api/projects';
 import { setDeviceToken } from './deviceToken';
 
 interface EnrollmentFlowProps {
@@ -8,7 +9,7 @@ interface EnrollmentFlowProps {
 type Step = 'checking' | 'requesting' | 'waiting' | 'error';
 
 async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await authedFetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -19,7 +20,7 @@ async function apiPost<T>(path: string, body?: unknown): Promise<T> {
 }
 
 async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await authedFetch(path);
   const data = (await res.json()) as T;
   if (!res.ok) throw Object.assign(new Error('request failed'), { data });
   return data;

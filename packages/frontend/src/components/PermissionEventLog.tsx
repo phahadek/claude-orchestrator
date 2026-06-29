@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { authedFetch } from '../api/projects';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
 import styles from './PermissionEventLog.module.css';
 
@@ -48,7 +49,7 @@ export function PermissionEventLog() {
 
   async function fetchDenials() {
     try {
-      const res = await fetch('/api/permission-denials');
+      const res = await authedFetch('/api/permission-denials');
       if (!res.ok) throw new Error(`${res.status}`);
       setRows((await res.json()) as PermissionDenialRow[]);
       setError(null);
@@ -67,7 +68,7 @@ export function PermissionEventLog() {
 
   async function handleClear() {
     try {
-      const res = await fetch('/api/permission-denials', { method: 'DELETE' });
+      const res = await authedFetch('/api/permission-denials', { method: 'DELETE' });
       if (!res.ok) throw new Error(`${res.status}`);
       setRows([]);
     } catch {

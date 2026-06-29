@@ -6,7 +6,7 @@ import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import type { SessionState } from '../hooks/useSessionStore';
 import { SessionPanel } from './SessionPanel';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
-import { sessionsApi } from '../api/projects';
+import { sessionsApi, authedFetch } from '../api/projects';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import styles from './TaskDetail.module.css';
@@ -179,7 +179,7 @@ export function TaskDetail({
       const url = projectId
         ? `/api/prs/${task.pr.prNumber}/review?projectId=${encodeURIComponent(projectId)}`
         : `/api/prs/${task.pr.prNumber}/review`;
-      const res = await fetch(url, { method: 'POST' });
+      const res = await authedFetch(url, { method: 'POST' });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         setReviewError(body.error ?? `HTTP ${res.status}`);
@@ -201,7 +201,7 @@ export function TaskDetail({
         setReviewError('Could not parse owner/repo from PR URL.');
         return;
       }
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/fix-conflicts`,
         { method: 'POST' },
       );
@@ -232,7 +232,7 @@ export function TaskDetail({
         setReviewError('Could not parse owner/repo from PR URL.');
         return;
       }
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/merge`,
         { method: 'POST' },
       );
@@ -311,7 +311,7 @@ export function TaskDetail({
     setUnblockInFlight(true);
     setReviewError(null);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/tasks/${encodeURIComponent(task.taskId)}/unblock?projectId=${encodeURIComponent(projectId)}`,
         { method: 'POST' },
       );
@@ -336,7 +336,7 @@ export function TaskDetail({
     setAssignRepoInFlight(true);
     setReviewError(null);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/tasks/${encodeURIComponent(task.taskId)}/assign-repo?projectId=${encodeURIComponent(projectId)}`,
         {
           method: 'POST',
