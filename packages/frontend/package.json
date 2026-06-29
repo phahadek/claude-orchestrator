@@ -1,6 +1,6 @@
 {
   "name": "@claude-orchestrator/frontend",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "description": "Frontend (React + Vite) for Claude Code Orchestrator.",
   "homepage": "https://github.com/phahadek/claude-orchestrator#readme",
