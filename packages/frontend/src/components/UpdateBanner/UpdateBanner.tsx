@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { authedFetch } from '../../api/projects';
 import styles from './UpdateBanner.module.css';
 
 interface Props {
@@ -15,7 +16,7 @@ export function UpdateBanner({ version, releaseNotesUrl, onDismiss }: Props) {
     setInstalling(true);
     setError(null);
     try {
-      const res = await fetch('/api/update/install', {
+      const res = await authedFetch('/api/update/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ version }),
@@ -34,7 +35,7 @@ export function UpdateBanner({ version, releaseNotesUrl, onDismiss }: Props) {
 
   async function handleDismiss() {
     try {
-      await fetch('/api/update/dismiss', {
+      await authedFetch('/api/update/dismiss', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ version }),

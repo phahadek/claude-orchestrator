@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { authedFetch } from '../api/projects';
 import {
   BarChart,
   Bar,
@@ -87,7 +88,7 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
     const fromMs = dateRangeToMs(dateRange);
     if (fromMs != null) params.set('from', String(fromMs));
 
-    fetch(`/api/analytics/tokens?${params}`)
+    authedFetch(`/api/analytics/tokens?${params}`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<TokenAnalyticsResponse>;

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { authedFetch } from '../api/projects';
 import { type DiffLineKind, parseDiffLines } from './DiffViewer.helpers';
 import styles from './DiffViewer.module.css';
 
@@ -22,7 +23,7 @@ export function DiffViewer({ prNumber, projectId }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${prNumber}/diff?projectId=${encodeURIComponent(projectId)}`,
       );
       if (!res.ok) {

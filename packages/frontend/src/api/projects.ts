@@ -160,11 +160,11 @@ export interface UpdateMilestoneInput {
   displayOrder?: number;
 }
 
-export async function apiRequest<T>(
+export async function authedFetch(
   input: RequestInfo,
   init?: RequestInit,
-): Promise<T> {
-  const token = getDeviceToken(); // may be null before enrollment
+): Promise<Response> {
+  const token = getDeviceToken();
   const headers: Record<string, string> = {
     ...(init?.headers as Record<string, string> | undefined),
   };
@@ -176,21 +176,37 @@ export async function apiRequest<T>(
 
   if (res.status === 401) {
     window.dispatchEvent(new CustomEvent('device-unauthorized'));
+  } else if (res.status === 403) {
+    try {
+      const body = (await res.clone().json()) as { code?: string };
+      if (body?.code === 'bootstrap_loopback_only') {
+        window.dispatchEvent(new CustomEvent('device-bootstrap-loopback-only'));
+      }
+    } catch {
+      /* body is not JSON */
+    }
+  }
+
+  return res;
+}
+
+export async function apiRequest<T>(
+  input: RequestInfo,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await authedFetch(input, init);
+
+  if (res.status === 401) {
     throw new Error('Unauthorized');
   }
 
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
-    let code: string | undefined;
     try {
       const body = (await res.json()) as { error?: string; code?: string };
       if (body?.error) message = body.error;
-      code = body.code;
     } catch {
       /* body is not JSON */
-    }
-    if (res.status === 403 && code === 'bootstrap_loopback_only') {
-      window.dispatchEvent(new CustomEvent('device-bootstrap-loopback-only'));
     }
     throw new Error(message);
   }
@@ -271,7 +287,7 @@ export const projectsApi = {
     projectId: string,
     number: number,
   ): Promise<GithubMilestoneValidation> {
-    const res = await fetch(
+    const res = await authedFetch(
       `/api/projects/${encodeURIComponent(projectId)}/github/validate-milestone?number=${number}`,
     );
     const body = (await res.json()) as
@@ -291,7 +307,7 @@ export const projectsApi = {
     projectId: string,
     key: string,
   ): Promise<JiraEpicValidation> {
-    const res = await fetch(
+    const res = await authedFetch(
       `/api/projects/${encodeURIComponent(projectId)}/jira/validate-epic?key=${encodeURIComponent(key)}`,
     );
     const body = (await res.json()) as JiraEpicValidation | { error: string };
@@ -306,7 +322,7 @@ export const projectsApi = {
   },
 
   async validateNotionBoard(id: string): Promise<BoardValidation> {
-    const res = await fetch(
+    const res = await authedFetch(
       `/api/notion/validate-board?id=${encodeURIComponent(id)}`,
     );
     const body = (await res.json()) as BoardValidation | { error: string };

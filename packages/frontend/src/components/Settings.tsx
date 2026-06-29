@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { authedFetch } from '../api/projects';
 import { ProjectsSettingsPanel } from './Settings/ProjectsSettingsPanel';
 import { SettingsDevices } from '../pages/SettingsDevices';
 import { SettingsSystemHealth } from '../pages/SettingsSystemHealth';
@@ -34,13 +35,13 @@ interface Props {
 }
 
 async function fetchSettings(): Promise<SettingsValues> {
-  const res = await fetch('/api/settings');
+  const res = await authedFetch('/api/settings');
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json() as Promise<SettingsValues>;
 }
 
 async function patchSettings(patch: Partial<SettingsValues>): Promise<void> {
-  const res = await fetch('/api/settings', {
+  const res = await authedFetch('/api/settings', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
@@ -81,7 +82,7 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
   }, []);
 
   useEffect(() => {
-    fetch('/api/update/channel')
+    authedFetch('/api/update/channel')
       .then((r) => r.json() as Promise<{ channel: 'stable' | 'beta' }>)
       .then((body) => setReleaseChannel(body.channel))
       .catch(() => {});
@@ -90,7 +91,7 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
   async function handleChannelChange(channel: 'stable' | 'beta') {
     setReleaseChannel(channel);
     try {
-      await fetch('/api/update/channel', {
+      await authedFetch('/api/update/channel', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channel }),
@@ -181,7 +182,7 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
     setCheckingUpdate(true);
     setUpdateCheckResult(null);
     try {
-      const res = await fetch('/api/update/check', { method: 'POST' });
+      const res = await authedFetch('/api/update/check', { method: 'POST' });
       const body = (await res.json()) as {
         updateAvailable?: boolean;
         info?: { version: string };

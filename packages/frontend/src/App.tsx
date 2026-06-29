@@ -15,7 +15,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useNotifications } from './hooks/useNotifications';
 import { useIsMobile } from './hooks/useIsMobile';
 import { useNavigationHistory } from './hooks/useNavigationHistory';
-import { apiRequest } from './api/projects';
+import { apiRequest, authedFetch } from './api/projects';
 import { Header } from './components/Header';
 import type { TopView } from './components/Header';
 import { SessionGrid } from './components/SessionGrid';
@@ -345,7 +345,7 @@ export default function App() {
   }, [connectionState, hasConnectedOnce]);
 
   const handleArchiveAll = useCallback(async () => {
-    await fetch('/api/sessions/archive-finished', { method: 'POST' });
+    await authedFetch('/api/sessions/archive-finished', { method: 'POST' });
     for (const s of sessions) {
       if (
         !s.archived &&
@@ -443,7 +443,7 @@ export default function App() {
       if (!projectId) return;
       void (async () => {
         try {
-          const res = await fetch(
+          const res = await authedFetch(
             `/api/projects/${encodeURIComponent(projectId)}`,
             {
               method: 'PATCH',
@@ -452,7 +452,7 @@ export default function App() {
             },
           );
           if (!res.ok) return;
-          const refreshed = await fetch('/api/config');
+          const refreshed = await authedFetch('/api/config');
           if (!refreshed.ok) return;
           const loaded = (await refreshed.json()) as ProjectConfig[];
           setProjects(loaded);
@@ -465,7 +465,7 @@ export default function App() {
   );
 
   const handleProjectsChanged = useCallback(() => {
-    fetch('/api/config')
+    authedFetch('/api/config')
       .then((r) => r.json())
       .then((loaded: ProjectConfig[]) => {
         setProjects(loaded);
@@ -488,7 +488,7 @@ export default function App() {
     let url: string;
     if (activeBoardId === NON_MILESTONE_BOARD_ID) {
       url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
-      fetch(url)
+      authedFetch(url)
         .then((r) =>
           r.ok ? (r.json() as Promise<TaskView[]>) : Promise.resolve([]),
         )
@@ -504,7 +504,7 @@ export default function App() {
       const params = new URLSearchParams({ projectId: activeProjectId });
       if (activeBoardId) params.set('boardId', activeBoardId);
       url = `/api/tasks/active?${params.toString()}`;
-      fetch(url)
+      authedFetch(url)
         .then((r) =>
           r.ok
             ? (r.json() as Promise<TasksActiveResponse>)
@@ -598,7 +598,7 @@ export default function App() {
       return;
     const params = new URLSearchParams({ projectId: activeProjectId });
     params.set('boardId', activeBoardId);
-    fetch(`/api/tasks/active?${params.toString()}`)
+    authedFetch(`/api/tasks/active?${params.toString()}`)
       .then((r) => (r.ok ? (r.json() as Promise<TasksActiveResponse>) : null))
       .then((data) => {
         if (data) {
@@ -634,11 +634,11 @@ export default function App() {
     try {
       if (activeBoardId === NON_MILESTONE_BOARD_ID) {
         const url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
-        const res = await fetch(url);
+        const res = await authedFetch(url);
         if (res.ok) setTaskViews((await res.json()) as TaskView[]);
       } else {
         // Trigger background refresh via POST — returns 202 immediately
-        await fetch('/api/tasks/refresh', {
+        await authedFetch('/api/tasks/refresh', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ projectId: activeProjectId }),
@@ -648,7 +648,7 @@ export default function App() {
         // Also re-read current cache to show any already-populated data
         const params = new URLSearchParams({ projectId: activeProjectId });
         if (activeBoardId) params.set('boardId', activeBoardId);
-        const res = await fetch(`/api/tasks/active?${params.toString()}`);
+        const res = await authedFetch(`/api/tasks/active?${params.toString()}`);
         if (res.ok) {
           const data = (await res.json()) as TasksActiveResponse;
           setTaskViews(data.tasks);
@@ -859,7 +859,7 @@ export default function App() {
     const inStore = sessions.find((s) => s.sessionId === selectedId);
     if (inStore) return;
     fetchedArchivedRef.current.add(selectedId);
-    fetch(`/api/sessions/${selectedId}/events`)
+    authedFetch(`/api/sessions/${selectedId}/events`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<ArchivedSessionResponse>;
@@ -923,7 +923,7 @@ export default function App() {
       if (fetchedTaskSessionsRef.current.has(sessionId)) continue;
       if (sessions.find((s) => s.sessionId === sessionId)) continue;
       fetchedTaskSessionsRef.current.add(sessionId);
-      fetch(`/api/sessions/${sessionId}/events`)
+      authedFetch(`/api/sessions/${sessionId}/events`)
         .then((r) => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           return r.json() as Promise<ArchivedSessionResponse>;
