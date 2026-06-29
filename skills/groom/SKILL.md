@@ -81,9 +81,11 @@ On success it has written, under `.skill-cache/grooming/<milestone>/`:
   gate will check); preserved across resumes.
 
 Read `context-bundle.json` and `worklist.json`. Read the context-page bodies in
-`context/` — the master context, research goals, architecture, coding guidelines,
-task-writing guidelines. **This is non-negotiable**: resolving a task without the
-architectural constraints loaded is how grooming produces confidently-wrong decisions.
+`context/` — the master context, research goals, architecture, coding guidelines.
+Also read the universal task-authoring standard at `config/task-writing.md` (it is no
+longer a context page — the skill reads it from local disk). **This is
+non-negotiable**: resolving a task without the architectural constraints loaded is how
+grooming produces confidently-wrong decisions.
 
 ---
 
@@ -202,8 +204,10 @@ Only after explicit sign-off on the batch (_"looks good"_, _"ship it"_, _"next"_
 3. Confirm in chat what was marked Ready **and** what `Depends On` value was
    written for each task. Then present the next batch.
 
-**Gates last**: Manual Verification Gate tasks are the final batch, after all code
-tasks are signed off.
+**Gates last**: the milestone's **🚦 Gate** task (the Manual Verification Gate) is the
+final batch, after all code tasks are signed off. The Gate rests at 🗂️ Ready and
+**accretes** — as each code task is groomed, append its stripped manual-verification
+items to the Gate. That is the Gate type's defined lifecycle, not editing a Ready task.
 
 When every batch is signed off, confirm the milestone board is fully groomed.
 
@@ -216,8 +220,13 @@ When every batch is signed off, confirm the milestone board is fully groomed.
   under `source_root` wins; on intent/rationale, Notion wins.
 - **Scope is the target milestone only.** Do not modify tasks on other boards unless
   a dependency issue is explicitly identified and the human approves it.
-- **Never** mark a ✅ Done or ⏭️ Deferred task Ready. **Never** retroactively edit a
-  task already at 🗂️ Ready or beyond — file a sibling instead (it may be picked up).
+- **Never** mark a ✅ Done or ⏭️ Deferred task Ready. **Never** retroactively edit any
+  **ordinary** task already at 🗂️ Ready or beyond — file a sibling instead. A Ready task
+  may be in-flight: auto-dispatched if 💻 Code, human-run if 🛠️ Tooling / 🧪 Testing —
+  editing it races a live session. This holds for every ordinary type, **without
+  exception**. The **🚦 Gate** is the lone non-ordinary task: an accumulator that, by its
+  type's definition, accretes manual-verification items while sitting at Ready —
+  appending to it is its lifecycle, not a modify-a-Ready-task exception.
 - **No silent Notion updates.** Every change is confirmed in chat before moving on.
 - **Cache/state files are edited with the Edit/Write tool, never a shell script.**
   `grooming-state.json` / `code-map.json` are loader-seeded JSON on disk — Edit them

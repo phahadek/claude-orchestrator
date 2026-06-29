@@ -165,7 +165,7 @@ _Size:_ line is optional on those (or write _Size: n/a (Design/Planning)_).
 ## The 4-point summary (per 🔲 Backlog task)
 
 Each task's header line carries its **Type** marker (💻 Code / 📐 Design / 🛠️ Tooling /
-📋 Planning / 🧪 Testing / 📝 Docs / 🎨 Assets) before the title — so the reader sees at
+📋 Planning / 🧪 Testing / 🚦 Gate / 📝 Docs / 🎨 Assets) before the title — so the reader sees at
 a glance what kind of work is being groomed. Code and Design tasks need different
 review attention (Design locks specs; Code consumes them; Tooling sits beside both);
 surfacing the type makes that judgment immediate and reduces "wait, is this the one
@@ -186,6 +186,10 @@ Type is not cosmetic here — it determines **what happens when you flip the tas
   code-generation portion with no dependency on implementation-time data should be
   **split out into a separate 💻 Code task** (per the size/split procedure) so it flows
   through auto-dispatch — the Tooling/Testing task keeps only the interactive remainder.
+- **🚦 Gate** Ready → never auto-dispatched; a human runs the Manual Verification Gate
+  once, at the end of the milestone. It rests at 🗂️ Ready and **accretes** manual-
+  verification items as code tasks are groomed (its type's defined lifecycle), and is
+  presented **last** (Step 4 — gates last).
 
 Format: **`<n> <Type emoji + label> — <title>`**, e.g. **`① 💻 Code — Add HLTV RSS dedupe by GUID`**.
 

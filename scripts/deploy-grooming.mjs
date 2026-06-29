@@ -10,14 +10,15 @@
  *   scripts/{groom-load,design-load,groom-gate,notion-page}.mjs → ~/.claude/scripts/
  *   skills/groom/**  +  skills/design/**                         → ~/.claude/skills/
  *   config-template/hooks/load-procedures.mjs → <config-tree>/hooks/  (overwrite)
+ *   config-template/task-writing.md           → <config-tree>/task-writing.md  (overwrite)
  *   config-template/procedures.md             → <config-tree>/procedures.md  (seed-only)
  *
  * The config-template/* artifacts go into the central config tree (outside every repo),
  * not ~/.claude — that's where the Remote Control SessionStart hook runs from. The config
  * tree is resolved via $ORCHESTRATOR_CONFIG_DIR, else a `config/` dir beside the projects
  * root (dev `<repo>/../config`, prod `<repo>/../../config`), else `<repo>/../config`.
- * load-procedures.mjs is overwritten each run (pure mechanism); procedures.md is seeded
- * only if absent (it's deployment-edited — fill in its Project index).
+ * load-procedures.mjs + task-writing.md are overwritten each run (pure universal rules);
+ * procedures.md is seeded only if absent (it's deployment-edited — fill in its Project index).
  *
  * By design there is NO auto-run (no postinstall, no symlink, no watcher) — see the M9
  * "Productize the Backlog Grooming procedure" task. It also does NOT register any hooks in
@@ -119,6 +120,11 @@ copy(
   join(repoRoot, 'config-template', 'hooks', 'load-procedures.mjs'),
   join(configDir, 'hooks', 'load-procedures.mjs'),
   'config/hooks/load-procedures.mjs',
+);
+copy(
+  join(repoRoot, 'config-template', 'task-writing.md'),
+  join(configDir, 'task-writing.md'),
+  'config/task-writing.md',
 );
 seedIfAbsent(
   join(repoRoot, 'config-template', 'procedures.md'),
