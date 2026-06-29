@@ -139,9 +139,12 @@ what the human said in reply. Diagnostic: if your next action is to write
 edit, correction, or reframe, you are about to commit this anti-pattern. Stop,
 apply the feedback, re-present.
 
-**Editing a Ready/Done task.** Tasks at 🗂️ Ready or beyond may already be picked
-up. If their scope was insufficient, file a new sibling task — do not retroactively
-rewrite them.
+**Editing a Ready/Done task.** Any **ordinary** task at 🗂️ Ready or beyond may already
+be in-flight (auto-dispatched if 💻 Code, human-run if 🛠️ Tooling / 🧪 Testing). If its
+scope was insufficient, file a new sibling task — do not retroactively rewrite it. This is
+exceptionless for ordinary types. The **🚦 Gate** is the one task you *do* keep editing at
+Ready — but that's its type's defined accretion, not an exception (a Gate is an
+accumulator, not a frozen task).
 
 **Treating ⏭️ Deferred as "do later."** This is the most common misread of the
 Deferred status. **⏭️ Deferred means _"scope superseded by another task"_ —

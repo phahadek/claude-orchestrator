@@ -130,7 +130,7 @@ runs interactively) and the **`Depends On`** convention. This is the authoring s
 | Property | Guidance |
 | --- | --- |
 | **Task Name** | Verb phrase starting with an action word (*Implement, Scaffold, Add, Fix, Migrate, Lock*). Include the primary file/class/decision. |
-| **Type** | One of `💻 Code` / `📐 Design` / `📋 Planning` / `🛠️ Tooling` / `🧪 Testing` / `📝 Docs` / `🎨 Assets`. Exactly one. See `procedures.md` § Task types. |
+| **Type** | One of `💻 Code` / `📐 Design` / `📋 Planning` / `🛠️ Tooling` / `🧪 Testing` / `🚦 Gate` / `📝 Docs` / `🎨 Assets`. Exactly one. See `procedures.md` § Task types. |
 | **Priority** | `🔴 High` = blocks others / on the critical path. `🟡 Medium` = important, not blocking. `🟢 Low` = nice-to-have this milestone. |
 | **Status** | New tasks always start at `🔲 Backlog`. See Readiness gate below, and `procedures.md` § Status values for the full set (incl. the rare, orchestrator-set `🚫 Blocked`). |
 | **Depends On** | Pipe-delimited page IDs of *direct* dependencies, machine-consumed. Blank if none. The body `## Dependencies` section is its human-readable mirror. |
@@ -178,11 +178,14 @@ as a gate.
   split clean inside every code task.
 - **In code tasks:** include only what's verifiable without a running app (type
   check, lint, unit tests, build). Strip every "launch and observe" item.
-- **The gate task:** Type `🧪 Testing`; one per milestone (or per cluster); lists every
-  runtime item stripped from the code tasks, grouped by source task. Leave `Depends
-  On` empty (the dependency on all code tasks is implicit; documented in Notes:
-  *"Run after all upstream code tasks are merged."*). Implementation Notes record
-  pass/fail per item + links to any follow-up bug tasks.
+- **The gate task:** Type `🚦 Gate` (its own type — not `🧪 Testing`); one per milestone
+  (or per cluster); lists every runtime item stripped from the code tasks, grouped by
+  source task. It **rests at `🗂️ Ready` and accretes** — `/groom` appends each code task's
+  stripped manual items as they're groomed; that is the Gate type's defined lifecycle, not
+  an edit-a-Ready-task exception. Never auto-dispatched (non-Code); a human runs it once at
+  milestone end. Leave `Depends On` empty (the dependency on all code tasks is implicit;
+  documented in Notes: *"Run after all upstream code tasks are merged."*). Implementation
+  Notes record pass/fail per item + links to any follow-up bug tasks.
 - **Placement:** at the end of its cluster. Follow-up tasks that depend on confirmed
   runtime behaviour list the gate task in `Depends On`, not the individual code tasks.
 - **Acceptance criteria:** still uses the two-subsection format — `### 🤖 Automated
