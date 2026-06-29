@@ -147,7 +147,8 @@ export function setEnrollmentBroadcast(fn: BroadcastFn): void {
   broadcastFn = fn;
 }
 
-export function createEnrollmentRouter(): Router {
+/** Public routes: no device token required. */
+export function createPublicEnrollmentRouter(): Router {
   const router = Router();
 
   // GET /api/enrollment/needs-bootstrap — public, no token required
@@ -219,7 +220,14 @@ export function createEnrollmentRouter(): Router {
     res.json(result);
   });
 
-  // POST /api/enrollment/approve — approve a pending code (auth required via middleware)
+  return router;
+}
+
+/** Auth-gated routes: valid enrolled-device token required. */
+export function createGatedEnrollmentRouter(): Router {
+  const router = Router();
+
+  // POST /api/enrollment/approve — approve a pending code (enrolled device required)
   router.post('/approve', (req: Request, res: Response) => {
     const { code } = req.body as { code?: string };
     if (!code) {
@@ -234,7 +242,7 @@ export function createEnrollmentRouter(): Router {
     res.json({ ok: true, ...result });
   });
 
-  // GET /api/enrollment/devices — list enrolled devices (auth required)
+  // GET /api/enrollment/devices — list enrolled devices (enrolled device required)
   router.get('/devices', (_req: Request, res: Response) => {
     const devices = listDevices().map((d) => ({
       id: d.id,
@@ -248,7 +256,7 @@ export function createEnrollmentRouter(): Router {
     res.json(devices);
   });
 
-  // PATCH /api/enrollment/devices/:id — update device name (auth required)
+  // PATCH /api/enrollment/devices/:id — update device name (enrolled device required)
   router.patch('/devices/:id', (req: Request, res: Response) => {
     const id = String(req.params.id);
     const { name } = req.body as { name?: string };
@@ -265,7 +273,7 @@ export function createEnrollmentRouter(): Router {
     res.json({ ok: true });
   });
 
-  // DELETE /api/enrollment/devices/:id — revoke device (auth required)
+  // DELETE /api/enrollment/devices/:id — revoke device (enrolled device required)
   router.delete('/devices/:id', (req: Request, res: Response) => {
     const id = String(req.params.id);
     const device = getDeviceById(id);
@@ -277,5 +285,13 @@ export function createEnrollmentRouter(): Router {
     res.json({ ok: true });
   });
 
+  return router;
+}
+
+/** @deprecated Use createPublicEnrollmentRouter() + createGatedEnrollmentRouter() instead. */
+export function createEnrollmentRouter(): Router {
+  const router = Router();
+  router.use(createPublicEnrollmentRouter());
+  router.use(createGatedEnrollmentRouter());
   return router;
 }

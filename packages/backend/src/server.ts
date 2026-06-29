@@ -40,7 +40,8 @@ import {
   isLoopbackIp,
 } from './auth/DeviceAuth';
 import {
-  createEnrollmentRouter,
+  createPublicEnrollmentRouter,
+  createGatedEnrollmentRouter,
   setEnrollmentBroadcast,
 } from './auth/Enrollment';
 import { getActiveDeviceCount, pruneSchedulerAudit } from './db/queries';
@@ -120,8 +121,8 @@ const PORT = getOrchestratorConfig().server.port;
 
 const app = express();
 app.use(express.json());
-// Enrollment endpoints are public — mount before the device auth middleware
-app.use('/api/enrollment', createEnrollmentRouter());
+// Public enrollment routes (bootstrap, request, status) — no token required
+app.use('/api/enrollment', createPublicEnrollmentRouter());
 // Setup endpoints are public — wizard UI uses them before credentials exist
 app.use('/api', setupRouter);
 // Gate all other /api routes when setup has not been completed
@@ -132,6 +133,8 @@ app.use('/api', createSetupModeGuard());
 // returned JSON instead of the app on every fresh load/reload once a device was
 // enrolled — locking all devices out. The API/WS stay gated.
 app.use('/api', requireDeviceAuth);
+// Auth-gated enrollment routes (approve, devices) — valid enrolled-device token required
+app.use('/api/enrollment', createGatedEnrollmentRouter());
 app.use('/api/permission-events', permissionEventsRouter);
 app.use('/api/permission-denials', permissionDenialsRouter);
 app.use('/api/settings', settingsRouter);
