@@ -72,11 +72,11 @@ beforeEach(() => {
 });
 
 describe('requireDeviceAuth middleware', () => {
-  it('passes request to /api/enrollment/* without auth', async () => {
+  it('rejects /api/enrollment/approve without auth when devices are enrolled', async () => {
     vi.mocked(queries.getActiveDeviceCount).mockReturnValue(1);
     const res = await supertest(buildApp()).get('/api/enrollment/bootstrap');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ bootstrap: true });
+    expect(res.status).toBe(401);
+    expect(res.body).toMatchObject({ error: 'unauthorized' });
   });
 
   it('returns 401 when no token and devices are enrolled', async () => {

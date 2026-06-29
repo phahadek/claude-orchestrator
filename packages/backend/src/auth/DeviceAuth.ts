@@ -29,19 +29,12 @@ function getTokenFromRequest(req: Request): string | null {
 
 /** Express middleware — rejects requests without a valid device token.
  *  Bootstrap exception: when no devices are enrolled, passes through so
- *  the enrollment bootstrap endpoint can create the first device.
- *  Enrollment endpoints (/api/enrollment/*) are always permitted. */
+ *  the enrollment bootstrap endpoint can create the first device. */
 export function requireDeviceAuth(
   req: Request,
   res: Response,
   next: NextFunction,
 ): void {
-  // Enrollment endpoints are always accessible without auth
-  if (req.path.startsWith('/api/enrollment/')) {
-    next();
-    return;
-  }
-
   const token = getTokenFromRequest(req);
 
   if (!token) {
