@@ -40,18 +40,31 @@ vi.mock('../db/queries', () => ({
 }));
 
 import { requireDeviceAuth } from '../auth/DeviceAuth.js';
+import {
+  createPublicEnrollmentRouter,
+  createGatedEnrollmentRouter,
+} from '../auth/Enrollment.js';
 import * as queries from '../db/queries';
 
+/** App wired like the real server: public enrollment before auth, gated after. */
+function buildFullApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/enrollment', createPublicEnrollmentRouter());
+  app.use('/api', requireDeviceAuth);
+  app.get('/api/protected', (_req, res) => res.json({ ok: true }));
+  app.use('/api/enrollment', createGatedEnrollmentRouter());
+  return app;
+}
+
+/** Minimal app with requireDeviceAuth as global middleware (no public bypass). */
 function buildApp() {
   const app = express();
   app.use(express.json());
   app.use(requireDeviceAuth);
   app.get('/api/protected', (_req, res) => res.json({ ok: true }));
-  app.get('/api/enrollment/bootstrap', (_req, res) =>
-    res.json({ bootstrap: true }),
-  );
-  app.get('/api/enrollment/request', (_req, res) =>
-    res.json({ request: true }),
+  app.post('/api/enrollment/approve', (_req, res) =>
+    res.json({ approve: true }),
   );
   return app;
 }
@@ -72,11 +85,22 @@ beforeEach(() => {
 });
 
 describe('requireDeviceAuth middleware', () => {
-  it('rejects /api/enrollment/approve without auth when devices are enrolled', async () => {
+  it('rejects POST /api/enrollment/approve without auth when devices are enrolled', async () => {
     vi.mocked(queries.getActiveDeviceCount).mockReturnValue(1);
-    const res = await supertest(buildApp()).get('/api/enrollment/bootstrap');
+    const res = await supertest(buildApp())
+      .post('/api/enrollment/approve')
+      .send({ code: '123456' });
     expect(res.status).toBe(401);
     expect(res.body).toMatchObject({ error: 'unauthorized' });
+  });
+
+  it('GET /api/enrollment/bootstrap returns 200 even with devices enrolled (public route)', async () => {
+    vi.mocked(queries.getActiveDeviceCount).mockReturnValue(1);
+    const res = await supertest(buildFullApp()).get(
+      '/api/enrollment/needs-bootstrap',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ needsBootstrap: false });
   });
 
   it('returns 401 when no token and devices are enrolled', async () => {
