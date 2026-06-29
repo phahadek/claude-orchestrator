@@ -150,6 +150,20 @@ export default function App() {
       window.removeEventListener('device-bootstrap-loopback-only', handler);
   }, []);
 
+  // On first load, check if bootstrap is needed before the WS even connects.
+  // On localhost with zero devices the WS succeeds in bootstrap mode (no 4001),
+  // so the device-unauthorized event never fires — this catches that case.
+  useEffect(() => {
+    fetch('/api/enrollment/needs-bootstrap')
+      .then((r) => r.json() as Promise<{ needsBootstrap: boolean }>)
+      .then(({ needsBootstrap }) => {
+        if (needsBootstrap) setNeedsEnrollment(true);
+      })
+      .catch(() => {
+        /* non-fatal — WS 4001 fallback still works for enrolled devices */
+      });
+  }, []);
+
   const bootReconciliation = useBootReconciliation();
   const bootReconciliationDispatch = bootReconciliation.dispatch;
 
