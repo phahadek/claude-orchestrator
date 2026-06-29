@@ -80,6 +80,12 @@ describe('DependencyResolver', () => {
     expect(result.nonCode).toBe(true);
   });
 
+  it('sets nonCode: true for Gate tasks', () => {
+    const tasks = [makeTask({ id: 'g', type: '🚦 Gate' })];
+    const [result] = resolver.resolve(tasks);
+    expect(result.nonCode).toBe(true);
+  });
+
   it('sets nonCode: false for Code tasks', () => {
     const tasks = [makeTask({ id: 'c', type: '💻 Code' })];
     const [result] = resolver.resolve(tasks);

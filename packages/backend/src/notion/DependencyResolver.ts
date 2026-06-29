@@ -23,7 +23,7 @@ export class DependencyResolver {
         source,
         blocked: blockers.length > 0,
         blockers,
-        nonCode: task.type === '📋 Planning' || task.type === '🧪 Testing',
+        nonCode: task.type === '📋 Planning' || task.type === '🧪 Testing' || task.type === '🚦 Gate',
         wave,
       };
     });
