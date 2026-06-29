@@ -114,4 +114,33 @@ describe('DependencyResolver', () => {
     expect(task.blocked).toBe(true);
     expect(task.blockers).toHaveLength(1);
   });
+
+  it('blocks a task when its dependency is Deferred', () => {
+    const tasks = [
+      makeTask({ id: 'dep', status: '⏭️ Deferred' }),
+      makeTask({ id: 'task', dependsOn: ['dep'] }),
+    ];
+    const resolved = resolver.resolve(tasks);
+    const task = resolved.find((r) => r.task.id === 'task')!;
+    expect(task.blocked).toBe(true);
+    expect(task.blockers.map((t) => t.id)).toContain('dep');
+  });
+
+  it('preserves cross-board passthrough: absent dep ID resolves to not blocked', () => {
+    const tasks = [makeTask({ id: 'a', dependsOn: ['not-on-this-board'] })];
+    const [result] = resolver.resolve(tasks);
+    expect(result.blocked).toBe(false);
+    expect(result.blockers).toHaveLength(0);
+  });
+
+  it('places a task one wave after its Deferred dependency', () => {
+    const tasks = [
+      makeTask({ id: 'dep', status: '⏭️ Deferred' }),
+      makeTask({ id: 'task', dependsOn: ['dep'] }),
+    ];
+    const resolved = resolver.resolve(tasks);
+    const dep = resolved.find((r) => r.task.id === 'dep')!;
+    const task = resolved.find((r) => r.task.id === 'task')!;
+    expect(task.wave).toBe(dep.wave + 1);
+  });
 });

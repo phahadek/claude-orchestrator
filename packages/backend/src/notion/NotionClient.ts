@@ -432,12 +432,10 @@ export class NotionClient {
     let startCursor: string | undefined;
 
     do {
+      // No status filter — Deferred tasks are included so they surface as blockers
+      // in DependencyResolver; only ✅ Done satisfies a dependency.
       const body: Record<string, unknown> = {
         page_size: 100,
-        filter: {
-          property: 'Status',
-          select: { does_not_equal: '⏭️ Deferred' },
-        },
       };
       if (startCursor) body.start_cursor = startCursor;
 
