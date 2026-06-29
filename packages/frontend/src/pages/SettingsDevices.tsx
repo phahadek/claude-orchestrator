@@ -170,11 +170,16 @@ export function SettingsDevices() {
               }}
             >
               <div style={{ flex: 1 }}>
-                <div style={{ color: '#cdd6f4', fontWeight: 500, fontSize: 14 }}>
+                <div
+                  style={{ color: '#cdd6f4', fontWeight: 500, fontSize: 14 }}
+                >
                   {req.deviceName}
                 </div>
                 <div style={{ color: '#6c7086', fontSize: 12, marginTop: 2 }}>
-                  Code: <span style={{ color: '#a6adc8', fontFamily: 'monospace' }}>{req.code}</span>
+                  Code:{' '}
+                  <span style={{ color: '#a6adc8', fontFamily: 'monospace' }}>
+                    {req.code}
+                  </span>
                   {' · '}IP: {req.ip || '—'}
                 </div>
                 <div style={{ color: '#6c7086', fontSize: 11, marginTop: 1 }}>
