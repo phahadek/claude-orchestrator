@@ -266,6 +266,94 @@
   margin: 8px 0 0;
 }
 
+.warning {
+  color: #f9e2af;
+  font-size: 0.875rem;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid #f9e2af44;
+  border-radius: 6px;
+  background: #f9e2af11;
+}
+
+.warningBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #f9e2af;
+  color: #1e1e2e;
+  font-size: 0.625rem;
+  font-weight: 700;
+  margin-left: 4px;
+  cursor: default;
+  vertical-align: middle;
+}
+
+.chipList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+}
+
+.chipDeleteBtn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.9375rem;
+  line-height: 1;
+  padding: 0;
+  display: flex;
+  align-items: center;
+}
+
+.chipDeleteBtn:hover {
+  color: #f38ba8;
+}
+
+.pairTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  margin-bottom: 4px;
+}
+
+.pairTable th {
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 4px 6px 4px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pairTable td {
+  padding: 3px 6px 3px 0;
+  vertical-align: middle;
+}
+
+.pairTable td:last-child {
+  width: 28px;
+  text-align: center;
+}
+
 /* ── Modal: narrow viewport (<480px) ─────────────────────────── */
 @media (max-width: 480px) {
   .modalOverlay {

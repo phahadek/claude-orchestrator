@@ -2,7 +2,9 @@ import https from 'https';
 import type { IncomingMessage } from 'http';
 import type { GitHubRelease, UpdateInfo } from './types';
 import type { ServerMessage } from '../ws/types';
-import { getSetting } from '../db/queries';
+import { typedGetSetting } from '../config/settings';
+import { logger } from '../logger';
+import type { Scheduler } from '../orchestration/Scheduler';
 
 const REPO = 'phahadek/claude-orchestrator';
 const RELEASES_LATEST_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
@@ -68,8 +70,7 @@ function fetchJson<T>(url: string): Promise<T | null> {
 }
 
 export function getChannel(): ReleaseChannel {
-  const stored = getSetting('release_channel');
-  return stored === 'beta' ? 'beta' : 'stable';
+  return typedGetSetting('release_channel');
 }
 
 /** Pick the newest release from a list, optionally including prereleases. */
@@ -82,32 +83,31 @@ export function selectNewest(
     : releases.filter((r) => !r.prerelease);
   return candidates.reduce<GitHubRelease | null>((best, r) => {
     if (!best) return r;
-    return isNewer(best.tag_name, r.tag_name) ? best : r;
+    return isNewer(best.tag_name, r.tag_name) ? r : best;
   }, null);
 }
 
 export class UpdateChecker {
-  private timer: NodeJS.Timeout | null = null;
   private dismissedVersion: string | null = null;
 
   constructor(private readonly broadcast: (msg: ServerMessage) => void) {}
 
-  /** Start polling. Called after server boots. */
-  start(): void {
+  register(scheduler: Scheduler): void {
     if (isDevMode()) {
-      console.log('[updater] dev mode — update checks disabled');
+      logger.info('[updater] dev mode — update checks disabled');
       return;
     }
-    void this.check();
-    this.timer = setInterval(() => void this.check(), POLL_INTERVAL_MS);
-    this.timer.unref();
-  }
-
-  stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    scheduler.register({
+      name: 'update_checker',
+      intervalMs: POLL_INTERVAL_MS,
+      runOnBoot: true,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.check();
+      },
+      onError: (err: unknown) =>
+        logger.warn('[updater] check error:', (err as Error).message),
+    });
   }
 
   /** Force an immediate check, ignoring dismiss state. */
@@ -133,7 +133,7 @@ export class UpdateChecker {
     if (channel === 'beta') {
       const releases = await fetchJson<GitHubRelease[]>(RELEASES_LIST_URL);
       if (!releases) {
-        console.warn(
+        logger.warn(
           '[updater] failed to fetch releases list — will retry next cycle',
         );
         return null;
@@ -142,7 +142,7 @@ export class UpdateChecker {
     } else {
       release = await fetchJson<GitHubRelease>(RELEASES_LATEST_URL);
       if (!release) {
-        console.warn(
+        logger.warn(
           '[updater] failed to fetch latest release — will retry next cycle',
         );
         return null;
@@ -181,7 +181,7 @@ export class UpdateChecker {
       releaseNotesUrl: release.html_url,
     });
 
-    console.log(
+    logger.info(
       `[updater] update available: ${currentVersion} → ${tagVersion}`,
     );
     return info;

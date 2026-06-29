@@ -93,4 +93,12 @@ describe('buildOrchestratorClaudeMd', () => {
       expect(output).not.toContain('<pr-body>');
     });
   });
+
+  describe('local-context removal', () => {
+    it('never includes a host-local-context section', () => {
+      const output = buildOrchestratorClaudeMd(BASE_PARAMS);
+      expect(output).not.toContain('## Local Context');
+      expect(output).not.toContain('local-context.md');
+    });
+  });
 });

@@ -5,6 +5,10 @@ import { promisify } from 'util';
 import { EventEmitter } from 'events';
 
 const exec = promisify(execCb);
+
+const GIT_CONFIG_LOCK_RE =
+  /could not lock config file .*\.git[/\\]config: File exists/;
+
 import { recordEvent } from '../audit/AuditLog';
 import { scrubSecrets } from '../security/scrubSecrets';
 import { AgentSession, parseNotionPageIdDashed } from './AgentSession';
@@ -70,6 +74,7 @@ import {
   formatApprovedVerdictMessage,
 } from '../github/reviewUtils';
 import type { PRReviewResult } from '../github/PRReviewService';
+import { logger } from '../logger';
 
 /**
  * Derive a prefixed task ID from a task URL, using the project's task source
@@ -174,6 +179,43 @@ export function writeMcpConfig(
   return filePath;
 }
 
+/**
+ * Context-occupancy fraction above which a resumed non-large session is proactively
+ * escalated to large_task_model in _doSendOrResume rather than waiting for an
+ * overflow event that may never fire (e.g. when the CLI is alive-but-inert at ceiling).
+ */
+export const PROACTIVE_ESCALATION_HWM = 0.9;
+
+/**
+ * Returns true when the session's persisted context occupancy is at/over the
+ * proactive-escalation high-water mark AND escalation is possible (large_task_model
+ * is configured and the session is not already on it).
+ * Exported for unit testing.
+ */
+export function isSessionAtContextCeiling(row: {
+  model?: string | null;
+  context_occupancy_tokens?: number;
+}): boolean {
+  const largeModel = runtimeSettings.large_task_model;
+  if (!largeModel) return false;
+  if (row.model && row.model === largeModel) return false;
+  const tokens = row.context_occupancy_tokens ?? 0;
+  if (!tokens) return false;
+  const windowSize = AgentSession.contextWindowForModel(row.model ?? null);
+  return tokens / windowSize >= PROACTIVE_ESCALATION_HWM;
+}
+
+/**
+ * Builds the escalation nudge message that is delivered to the large-model session
+ * after a proactive ceiling-escalation. Mirrors the text from tryEscalateForOverflow.
+ */
+function buildProactiveEscalationNudge(pendingText: string): string {
+  return (
+    `Your previous session reached the context ceiling and has been resumed on a 1M-context model. ` +
+    `The following message was pending delivery — please process it now:\n\n${pendingText}`
+  );
+}
+
 export interface StartOptions {
   taskType?: string;
   sessionType?: 'standard' | 'review';
@@ -192,6 +234,12 @@ export interface StartOptions {
    * ID (AutoLauncher, PRReviewService) don't double-parse via Notion-specific logic.
    */
   taskId?: string;
+  /**
+   * Resolved GitHub repo (owner/repo) for this session. Determined at launch time from
+   * task_repo_assignments for multi-repo projects, or auto-resolved for single-repo projects.
+   * Used for branch deletion and other GitHub API calls in completeStart.
+   */
+  repo?: string;
 }
 
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
@@ -201,12 +249,17 @@ const TERMINAL_STATUSES = new Set(['done', 'error', 'killed', 'superseded']);
 const ALWAYS_GUARDED_BRANCHES = new Set(['dev', 'main']);
 
 /**
- * Error causes that are operator-intentional and should NOT count against the
- * crash budget (user explicitly killed the session or the PR was closed).
- * All other causes increment the per-task consecutive crash counter; reaching
- * 2+ consecutive counted failures → 🚫 Blocked (circuit breaker).
+ * Error causes that are operator-intentional or infra-level and should NOT
+ * count against the crash budget. All other causes increment the per-task
+ * consecutive crash counter; reaching 2+ consecutive counted failures → 🚫
+ * Blocked (circuit breaker).
+ *
+ * launch_failed is excluded because it reflects pre-spawn infrastructure
+ * problems (git fetch / worktree add / bootstrap), not in-session crashes.
+ * AutoLauncher owns backoff + escalation for these via session_launch_failed
+ * messages.
  */
-const UNCOUNTED_REASONS = new Set(['user_kill', 'pr_closed']);
+const UNCOUNTED_REASONS = new Set(['user_kill', 'pr_closed', 'launch_failed']);
 
 /**
  * Delete the local session/<sessionId> branch if it exists and conditions are met:
@@ -249,11 +302,11 @@ export function pruneSessionBranch(
 
   try {
     execSync(`git branch -D "${branchName}"`, { cwd: projectDir });
-    console.log(
+    logger.info(
       `[SessionManager] pruned ${branchName} (session ${sessionId.slice(0, 8)})`,
     );
   } catch (err) {
-    console.error(`[SessionManager] failed to prune ${branchName}: ${err}`);
+    logger.error(`[SessionManager] failed to prune ${branchName}: ${err}`);
   }
 }
 
@@ -264,6 +317,48 @@ export function pruneSessionBranch(
 export const RESUME_NUDGE_MESSAGE =
   'Continue implementing the task. Check git status and your todo list to see where you left off.';
 
+/**
+ * Wraps `git worktree add` with a retry loop that fires **only** on transient
+ * .git/config lock contention (the "could not lock config file" error). All
+ * other errors propagate immediately so the caller's existing branch-already-exists
+ * / directory-exists handling is unaffected.
+ *
+ * The lock is typically held for milliseconds; a short jittered backoff is more
+ * than enough to clear it across concurrent session launches.
+ */
+export async function gitWorktreeAddWithRetry(
+  cmd: string,
+  opts: { cwd: string; timeout?: number },
+  maxAttempts = 3,
+  /** Overrideable for unit tests; defaults to 100–300 ms jitter. */
+  getDelayMs: () => number = () => 100 + Math.random() * 200,
+): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await exec(cmd, opts);
+      return;
+    } catch (err) {
+      const stderr =
+        (err as { stderr?: string | Buffer })?.stderr?.toString() ?? '';
+      if (!GIT_CONFIG_LOCK_RE.test(stderr)) {
+        throw err; // non-lock error: fail immediately, no retry
+      }
+      lastErr = err;
+      if (attempt < maxAttempts) {
+        const backoffMs = getDelayMs();
+        logger.warn(
+          `[SessionManager] git worktree add .git/config lock contention (attempt ${attempt}/${maxAttempts}), retry in ${Math.round(backoffMs)}ms: ${stderr.trim()}`,
+        );
+        if (backoffMs > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
+        }
+      }
+    }
+  }
+  throw lastErr;
+}
+
 export class SessionManager extends EventEmitter {
   private sessions = new Map<string, AgentSession>();
   private pendingStarts = new Map<
@@ -271,7 +366,7 @@ export class SessionManager extends EventEmitter {
     { sessionType: 'standard' | 'review' }
   >();
   /** Concurrency guard: prevents double-spawning when two concurrent sendOrResume calls race. */
-  private resumesInFlight = new Map<string, Promise<string>>();
+  private resumesInFlight = new Map<string, Promise<string | null>>();
 
   /** Last known DisplayStatus per taskId — used to skip no-op broadcasts. */
   private _lastDisplayStatus = new Map<string, DisplayStatus>();
@@ -308,7 +403,7 @@ export class SessionManager extends EventEmitter {
       try {
         this._handleTaskUpdated(emitArgs[0] as ServerMessage);
       } catch (err) {
-        console.error('[SessionManager] task_updated handler error:', err);
+        logger.error('[SessionManager] task_updated handler error:', err);
       } finally {
         this._inTaskUpdate = false;
       }
@@ -469,6 +564,15 @@ export class SessionManager extends EventEmitter {
       }
     } else {
       notionStatus = '🗂️ Ready';
+      // Notify AutoLauncher about launch failures so it can apply per-task
+      // cooldown and escalate after repeated infra failures.
+      if (reason === 'launch_failed') {
+        this.emit('message', {
+          type: 'session_launch_failed',
+          taskId: notionTaskId,
+          sessionId,
+        } satisfies ServerMessage);
+      }
     }
 
     // Update Notion task status (fire-and-forget; failures logged, not thrown)
@@ -486,7 +590,7 @@ export class SessionManager extends EventEmitter {
         emitTaskUpdated(notionTaskId);
       })
       .catch((e) =>
-        console.error(
+        logger.error(
           `[SessionManager] markSessionErrored updateStatus failed: ${e}`,
         ),
       );
@@ -580,7 +684,7 @@ export class SessionManager extends EventEmitter {
       precomputedTaskId ??
       deriveTaskId(project.taskSource ?? 'notion', taskUrl);
 
-    console.log(
+    logger.info(
       `[SessionManager] start ${sessionId} project=${projectId} sessionType=${sessionType}`,
     );
 
@@ -654,7 +758,7 @@ export class SessionManager extends EventEmitter {
       startedAt,
     ).catch(async (err) => {
       this.pendingStarts.delete(sessionId);
-      console.error(
+      logger.error(
         `[SessionManager] completeStart failed for ${sessionId}:`,
         err,
       );
@@ -698,6 +802,7 @@ export class SessionManager extends EventEmitter {
       taskName,
       milestoneId = null,
       taskId: precomputedTaskId,
+      repo: resolvedRepo,
     } = options;
 
     const project = getProjectById(projectId)!;
@@ -722,7 +827,7 @@ export class SessionManager extends EventEmitter {
         try {
           ensureMilestoneBranch(milestoneSlug, projectDir, project.baseBranch);
         } catch (err) {
-          console.warn(
+          logger.warn(
             `[SessionManager] ensureMilestoneBranch failed (continuing): ${err}`,
           );
         }
@@ -733,7 +838,7 @@ export class SessionManager extends EventEmitter {
             timeout: 30_000,
           });
         } catch (err) {
-          console.warn(
+          logger.warn(
             `[SessionManager] git fetch origin ${project.baseBranch} failed (continuing with local ref): ${err}`,
           );
         }
@@ -748,7 +853,7 @@ export class SessionManager extends EventEmitter {
     const featureBranch = taskName ? deriveBranchSlug(taskName) : null;
     if (featureBranch) {
       try {
-        await exec(
+        await gitWorktreeAddWithRetry(
           `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
           { cwd: projectDir },
         );
@@ -768,7 +873,7 @@ export class SessionManager extends EventEmitter {
 
           if (predecessor) {
             // Owned by a terminal predecessor of the same task — abandon and retry fresh.
-            console.log(
+            logger.info(
               `[SessionManager] completeStart: stale branch ${featureBranch} from terminal session ${predecessor.session_id.slice(0, 8)} — abandoning`,
             );
 
@@ -785,11 +890,11 @@ export class SessionManager extends EventEmitter {
                   prRow.pr_number,
                   "Superseded — task relaunched; this PR's branch was abandoned per fresh-start policy.",
                 );
-                console.log(
+                logger.info(
                   `[SessionManager] completeStart: closed predecessor PR #${prRow.pr_number} (${prRow.repo})`,
                 );
               } catch (closeErr) {
-                console.warn(
+                logger.warn(
                   `[SessionManager] completeStart: failed to close predecessor PR #${prRow.pr_number}: ${closeErr}`,
                 );
               }
@@ -805,27 +910,28 @@ export class SessionManager extends EventEmitter {
             // Delete the branch locally (best-effort).
             try {
               execSync(`git branch -D "${featureBranch}"`, { cwd: projectDir });
-              console.log(
+              logger.info(
                 `[SessionManager] completeStart: deleted local branch ${featureBranch}`,
               );
             } catch (delLocalErr) {
-              console.warn(
+              logger.warn(
                 `[SessionManager] completeStart: failed to delete local branch ${featureBranch}: ${delLocalErr}`,
               );
             }
 
             // Delete the branch on origin (best-effort).
-            if (this.githubClient && project.githubRepo) {
+            const branchDeletionRepo = resolvedRepo ?? project.githubRepo;
+            if (this.githubClient && branchDeletionRepo) {
               try {
                 await this.githubClient.deleteBranch(
-                  project.githubRepo,
+                  branchDeletionRepo,
                   featureBranch,
                 );
-                console.log(
+                logger.info(
                   `[SessionManager] completeStart: deleted origin branch ${featureBranch}`,
                 );
               } catch (delRemoteErr) {
-                console.warn(
+                logger.warn(
                   `[SessionManager] completeStart: failed to delete origin branch ${featureBranch}: ${delRemoteErr}`,
                 );
               }
@@ -848,7 +954,7 @@ export class SessionManager extends EventEmitter {
 
             // Single retry — if this also fails, propagate normally (no loop).
             try {
-              await exec(
+              await gitWorktreeAddWithRetry(
                 `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
                 { cwd: projectDir },
               );
@@ -860,7 +966,7 @@ export class SessionManager extends EventEmitter {
               const retryStderr = re.stderr ? re.stderr.toString() : '';
               const retryMsg =
                 `${re.message}${retryStderr ? `\nstderr: ${retryStderr}` : ''}`.trim();
-              console.error(
+              logger.error(
                 `[SessionManager] completeStart: retry after stale-branch abandonment also failed for ${sessionId}: ${retryMsg}`,
               );
               throw new WorktreeSetupError(retryMsg, {
@@ -870,13 +976,13 @@ export class SessionManager extends EventEmitter {
           } else {
             // Branch exists but not attributable to a terminal predecessor of this task.
             // Keep deterministic failure — crash budget backstop handles it.
-            console.error(
+            logger.error(
               `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
             );
             throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists });
           }
         } else {
-          console.error(
+          logger.error(
             `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
           );
           throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists });
@@ -884,7 +990,7 @@ export class SessionManager extends EventEmitter {
       }
     } else {
       try {
-        await exec(
+        await gitWorktreeAddWithRetry(
           `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
           { cwd: projectDir },
         );
@@ -893,7 +999,7 @@ export class SessionManager extends EventEmitter {
         const stderr = e.stderr ? e.stderr.toString() : '';
         const fullMsg =
           `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
-        console.error(
+        logger.error(
           `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
         );
         throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists: false });
@@ -902,7 +1008,7 @@ export class SessionManager extends EventEmitter {
 
     const isUnixStylePath =
       worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
-    console.log(
+    logger.info(
       `[SessionManager] worktree created: path=${worktreePath} startingPoint=${startingPoint}` +
         (isUnixStylePath
           ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
@@ -913,15 +1019,15 @@ export class SessionManager extends EventEmitter {
 
     if (orchConfig.bootstrap_script) {
       try {
-        await exec(`bash ${orchConfig.bootstrap_script} "${worktreePath}"`, {
+        await exec(`bash "${orchConfig.bootstrap_script}" "${worktreePath}"`, {
           cwd: projectDir,
           timeout: 120_000,
         });
-        console.log(
+        logger.info(
           `[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`,
         );
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[SessionManager] bootstrap script failed for ${sessionId.slice(0, 8)} (continuing): ${err}`,
         );
       }
@@ -940,11 +1046,11 @@ export class SessionManager extends EventEmitter {
       try {
         taskContent =
           await getTaskBackend(projectId).fetchTaskPage(sessionTaskId);
-        console.log(
+        logger.info(
           `[SessionManager] pre-fetched task content for ${sessionId.slice(0, 8)} (${taskContent.length} chars)`,
         );
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[SessionManager] failed to pre-fetch task content for ${sessionId.slice(0, 8)} — session will fetch from task backend: ${err}`,
         );
       }
@@ -955,12 +1061,12 @@ export class SessionManager extends EventEmitter {
         const fileSnippets = readTaskFiles(taskContent, projectDir);
         if (fileSnippets) {
           taskContent += '\n\n' + fileSnippets;
-          console.log(
+          logger.info(
             `[SessionManager] appended file snippets for ${sessionId.slice(0, 8)}`,
           );
         }
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[SessionManager] failed to read task files for ${sessionId.slice(0, 8)}: ${err}`,
         );
       }
@@ -993,7 +1099,7 @@ export class SessionManager extends EventEmitter {
           gitMode: project.gitMode,
         });
       } catch (err) {
-        console.error(
+        logger.error(
           `[SessionManager] failed to build session context for ${sessionId}: ${err}`,
         );
       }
@@ -1001,7 +1107,7 @@ export class SessionManager extends EventEmitter {
 
     const mcpConfigPath = writeMcpConfig(worktreePath, orchConfig.mcp_servers);
     if (mcpConfigPath) {
-      console.log(
+      logger.info(
         `[SessionManager] wrote MCP config to ${mcpConfigPath} for ${sessionId.slice(0, 8)}`,
       );
     }
@@ -1027,7 +1133,7 @@ export class SessionManager extends EventEmitter {
 
     if (sessionMode === 'cli' && sessionContextContent) {
       session.injectContextFile('CLAUDE.md', sessionContextContent);
-      console.log(
+      logger.info(
         `[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`,
       );
     }
@@ -1052,7 +1158,7 @@ export class SessionManager extends EventEmitter {
           emitTaskUpdated(sessionTaskId);
         })
         .catch((e) => {
-          console.error(`[SessionManager] failed to set In Progress: ${e}`);
+          logger.error(`[SessionManager] failed to set In Progress: ${e}`);
           this.emit('message', {
             type: 'error',
             message: `Failed to update task status to In Progress: ${e}`,
@@ -1090,7 +1196,20 @@ export class SessionManager extends EventEmitter {
 
   /**
    * Remove a partially-created worktree and its feature branch after a failed
-   * completeStart(). Safe to call even if nothing was created (idempotent).
+   * completeStart() (e.g. a transient launch_failed). Safe to call even if
+   * nothing was created (idempotent).
+   *
+   * A `git worktree add -b <branch> <path>` that fails partway can leave the
+   * environment in any of these states:
+   *   - the worktree directory exists and is registered,
+   *   - the directory is gone but a *stale registration* remains,
+   *   - the branch was created even though the worktree wasn't.
+   * If any of these survive, the cooldown retry's `git worktree add` re-fails
+   * with "A branch named X already exists" — defeating the backoff. So we
+   * unconditionally: (1) remove the worktree if its dir exists, (2) prune stale
+   * registrations, then (3) delete the feature branch. Steps run in that order
+   * because a branch checked out in a (possibly stale) worktree can't be
+   * deleted until the worktree/registration is gone.
    */
   private async cleanupPartialWorktree(sessionId: string): Promise<void> {
     const row = getSession(sessionId);
@@ -1108,14 +1227,23 @@ export class SessionManager extends EventEmitter {
         await exec(`git worktree remove --force "${worktreePath}"`, {
           cwd: projectDir,
         });
-        console.log(
+        logger.info(
           `[SessionManager] cleanupPartialWorktree: removed worktree for ${sessionId.slice(0, 8)}`,
         );
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[SessionManager] cleanupPartialWorktree: worktree remove failed for ${sessionId.slice(0, 8)}: ${err}`,
         );
       }
+    }
+
+    // Prune stale worktree registrations (covers the dir-gone-but-registered
+    // case that the existsSync guard above skips) so a retry's `git worktree
+    // add` and the branch delete below aren't blocked by a phantom checkout.
+    try {
+      await exec(`git worktree prune`, { cwd: projectDir });
+    } catch {
+      // Best-effort — nothing to prune is a no-op
     }
 
     const featureBranch = row.task_name
@@ -1124,7 +1252,7 @@ export class SessionManager extends EventEmitter {
     if (featureBranch) {
       try {
         await exec(`git branch -D "${featureBranch}"`, { cwd: projectDir });
-        console.log(
+        logger.info(
           `[SessionManager] cleanupPartialWorktree: deleted branch ${featureBranch} for ${sessionId.slice(0, 8)}`,
         );
       } catch {
@@ -1153,7 +1281,7 @@ export class SessionManager extends EventEmitter {
         prNumber?: number;
         repo?: string;
       };
-      console.log(
+      logger.info(
         `[SessionManager] forwarding pr_opened for PR #${prJob.prNumber ?? '?'} (${prJob.repo ?? '?'}) from session ${sessionId.slice(0, 8)}`,
       );
       const dispatched = session.taskId;
@@ -1162,7 +1290,7 @@ export class SessionManager extends EventEmitter {
         prJob.taskId &&
         prJob.taskId.replace(/-/g, '') !== dispatched.replace(/-/g, '')
       ) {
-        console.error(
+        logger.error(
           `[SessionManager] PR attribution mismatch: session ${sessionId.slice(0, 8)} dispatched for ${dispatched} but PR is attributed to ${prJob.taskId}`,
         );
         recordEvent({
@@ -1174,7 +1302,7 @@ export class SessionManager extends EventEmitter {
           payload: { dispatchedTaskId: dispatched, prTaskId: prJob.taskId },
         });
       }
-      console.log(
+      logger.info(
         `[SessionManager] emitting pr_opened to ReviewOrchestrator for PR #${prJob.prNumber ?? '?'}`,
       );
       this.emit('pr_opened', job);
@@ -1196,7 +1324,7 @@ export class SessionManager extends EventEmitter {
         ),
       )
       .catch((err) => {
-        console.error(`[SessionManager] session ${sessionId} error: ${err}`);
+        logger.error(`[SessionManager] session ${sessionId} error: ${err}`);
         // If run() threw before broadcasting session_ended, update SQLite and
         // notify the frontend so the session doesn't stay stuck at 'running'.
         if (!session.hasEnded) {
@@ -1266,7 +1394,7 @@ export class SessionManager extends EventEmitter {
   private async resumeSession(row: Session): Promise<void> {
     const project = getProjectById(row.project_id ?? '');
     if (!project) {
-      console.warn(
+      logger.warn(
         `[SessionManager] orphan ${row.session_id}: project not found, marking error`,
       );
       this.markSessionErrored(
@@ -1286,14 +1414,14 @@ export class SessionManager extends EventEmitter {
     // fallback would fire. Detect this upfront and mark the session as error
     // without spawning anything.
     if (!worktreePath || !fs.existsSync(worktreePath)) {
-      console.warn(
+      logger.warn(
         `[SessionManager] resumability pre-check failed for ${row.session_id}: worktree missing (${worktreePath}) — marking error`,
       );
       this.markSessionErrored(row.session_id, 'error', 'worktree_missing');
       return;
     }
 
-    console.log(
+    logger.info(
       `[SessionManager] resumeSession ${row.session_id}: re-using worktree ${worktreePath}`,
     );
 
@@ -1334,7 +1462,7 @@ export class SessionManager extends EventEmitter {
               row.task_id,
             );
           } catch (fetchErr) {
-            console.warn(
+            logger.warn(
               `[SessionManager] resumeSession: task fetch failed for ${row.session_id.slice(0, 8)} (injecting without pre-loaded content): ${fetchErr}`,
             );
           }
@@ -1361,11 +1489,11 @@ export class SessionManager extends EventEmitter {
           gitMode: project.gitMode,
         });
         session.injectContextFile('CLAUDE.md', repinnedContext);
-        console.log(
+        logger.info(
           `[SessionManager] resumeSession: re-pinned CLAUDE.md for ${row.session_id.slice(0, 8)}`,
         );
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[SessionManager] resumeSession: CLAUDE.md re-pin failed for ${row.session_id.slice(0, 8)}: ${err}`,
         );
       }
@@ -1380,7 +1508,7 @@ export class SessionManager extends EventEmitter {
       (eventKind(lastEvent) === 'tool_result' ||
         eventKind(lastEvent) === 'tool_use')
     ) {
-      console.warn(
+      logger.warn(
         `[SessionManager] resumeSession ${row.session_id}: Resuming mid-turn session — sending continuation nudge`,
       );
     }
@@ -1398,7 +1526,7 @@ export class SessionManager extends EventEmitter {
     // Error timer: if the CLI doesn't emit any events within 30s, mark as error.
     const errorTimer = setTimeout(() => {
       if (!session.hasEnded) {
-        console.warn(
+        logger.warn(
           `[SessionManager] resumeSession ${row.session_id}: no events within 30s after resume — marking as error`,
         );
         this.markSessionErrored(row.session_id, 'error', 'resume_timeout');
@@ -1462,7 +1590,7 @@ export class SessionManager extends EventEmitter {
     // 'running' because the review pipeline threw mid-handleCleanExit.
     const stuckRows = getStuckResultSessionRows();
     if (stuckRows.length > 0) {
-      console.log(
+      logger.info(
         `[SessionManager] recovering ${stuckRows.length} stuck session(s) from running→done`,
       );
       for (const row of stuckRows) {
@@ -1494,7 +1622,7 @@ export class SessionManager extends EventEmitter {
             broadcast: (msg) => this.emit('message', msg),
             emitPrOpened: (data) => this.emit('pr_opened', data),
           }).catch((e) =>
-            console.error(
+            logger.error(
               `[SessionManager] recoverSession failed for ${row.session_id}: ${e}`,
             ),
           );
@@ -1506,7 +1634,7 @@ export class SessionManager extends EventEmitter {
     // rather than resume so they don't re-dispatch already-merged work.
     const mergedPrRows = getRunningSessionsWithMergedOrClosedPR();
     if (mergedPrRows.length > 0) {
-      console.log(
+      logger.info(
         `[SessionManager] reaping ${mergedPrRows.length} session(s) with merged/closed PR`,
       );
       for (const row of mergedPrRows) {
@@ -1538,7 +1666,7 @@ export class SessionManager extends EventEmitter {
             broadcast: (msg) => this.emit('message', msg),
             emitPrOpened: (data) => this.emit('pr_opened', data),
           }).catch((e) =>
-            console.error(
+            logger.error(
               `[SessionManager] recoverSession failed for ${row.session_id}: ${e}`,
             ),
           );
@@ -1554,7 +1682,7 @@ export class SessionManager extends EventEmitter {
 
     const orphans = getSessionsByStatus(['running']);
     if (orphans.length === 0) return;
-    console.log(
+    logger.info(
       `[SessionManager] found ${orphans.length} orphan session(s) — resuming`,
     );
 
@@ -1573,7 +1701,7 @@ export class SessionManager extends EventEmitter {
       try {
         await this.resumeSession(row);
       } catch (err) {
-        console.error(
+        logger.error(
           `[SessionManager] failed to resume ${row.session_id}: ${err}`,
         );
         // Mark as error so it doesn't retry forever on subsequent restarts.
@@ -1582,7 +1710,7 @@ export class SessionManager extends EventEmitter {
     }
 
     for (const row of toError) {
-      console.warn(
+      logger.warn(
         `[SessionManager] max concurrent code sessions reached — marking orphan ${row.session_id} as error`,
       );
       this.markSessionErrored(row.session_id, 'error', 'max_concurrent');
@@ -1628,12 +1756,12 @@ export class SessionManager extends EventEmitter {
         encoding: 'utf8',
       }).trim();
       if (dirty) {
-        console.warn(
+        logger.warn(
           `[SessionManager] [WARNING] Main repo has uncommitted changes after session ${sessionId.slice(0, 8)} ended — possible worktree escape:\n${dirty}`,
         );
       }
     } catch (err) {
-      console.error(
+      logger.error(
         `[SessionManager] failed to check main repo status after session ${sessionId.slice(0, 8)}: ${err}`,
       );
     }
@@ -1649,7 +1777,7 @@ export class SessionManager extends EventEmitter {
         fs.unlinkSync(mcpConfigFile);
       }
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[SessionManager] failed to remove orchestrator-mcp.json for ${sessionId.slice(0, 8)}: ${err}`,
       );
     }
@@ -1662,17 +1790,46 @@ export class SessionManager extends EventEmitter {
       const stderr =
         (err as { stderr?: string | Buffer })?.stderr?.toString() ??
         String(err);
-      console.error(
+      logger.error(
         `[SessionManager] failed to remove worktree for ${sessionId}: ${err}`,
       );
+      // Fix B: fall back to Node-side fs.rmSync for Windows EINVAL / file-handle errors
+      let fallbackOk = false;
+      if (fs.existsSync(worktreePath)) {
+        try {
+          fs.rmSync(worktreePath, {
+            recursive: true,
+            force: true,
+            maxRetries: 3,
+            retryDelay: 500,
+          });
+          fallbackOk = true;
+          logger.info(
+            `[SessionManager] fs.rmSync fallback succeeded for ${sessionId.slice(0, 8)} after git worktree remove failed`,
+          );
+        } catch (rmErr) {
+          logger.error(
+            `[SessionManager] fs.rmSync fallback also failed for ${sessionId.slice(0, 8)}: ${rmErr}`,
+          );
+        }
+      }
       recordEvent({
         event_type: 'worktree_remove_failed',
         actor_type: 'system',
         actor_id: sessionId,
         project_id: null,
         task_id: null,
-        payload: { sessionId, worktreePath, stderr },
+        payload: { sessionId, worktreePath, stderr, fallbackOk },
       });
+    }
+
+    // Fix A: always prune orphan registrations whether remove succeeded or failed
+    try {
+      execSync('git worktree prune', { cwd: projectDir });
+    } catch (pruneErr) {
+      logger.warn(
+        `[SessionManager] post-cleanup prune failed for ${sessionId.slice(0, 8)}: ${pruneErr}`,
+      );
     }
 
     const deleteBranch = !prUrl || this._mergedSessionIds.has(sessionId);
@@ -1684,7 +1841,7 @@ export class SessionManager extends EventEmitter {
           cwd: projectDir,
         });
       } catch (err) {
-        console.error(
+        logger.error(
           `[SessionManager] failed to delete branch ${branchName}: ${err}`,
         );
       }
@@ -1793,7 +1950,7 @@ export class SessionManager extends EventEmitter {
     // Kill the process (fire-and-forget — cleanup via run().then() still fires).
     if (liveSession) {
       liveSession.kill().catch((err) => {
-        console.error(
+        logger.error(
           `[SessionManager] abortSession kill error for ${sessionId.slice(0, 8)}: ${err}`,
         );
       });
@@ -1818,9 +1975,7 @@ export class SessionManager extends EventEmitter {
         emitTaskUpdated(notionTaskId);
       })
       .catch((e) =>
-        console.error(
-          `[SessionManager] abortSession updateStatus failed: ${e}`,
-        ),
+        logger.error(`[SessionManager] abortSession updateStatus failed: ${e}`),
       );
   }
 
@@ -1907,10 +2062,21 @@ export class SessionManager extends EventEmitter {
    * is wired via wireSession, and the message is sent after the first event.
    * A concurrency guard ensures only one respawn runs per session ID at a time.
    */
-  async sendOrResume(sessionId: string, text: string): Promise<string> {
+  async sendOrResume(sessionId: string, text: string): Promise<string | null> {
     // Live session — deliver directly
     if (this.sessions.has(sessionId)) {
       this.send(sessionId, text);
+      // Mirror the respawn path: ensure status reflects the resumed activity
+      // so the UI doesn't keep rendering this session as idle.
+      const row = getSession(sessionId);
+      if (row && row.status !== 'running') {
+        updateSessionStatus(sessionId, 'running');
+        this.emit('message', {
+          type: 'session_status',
+          sessionId,
+          status: 'running',
+        } satisfies ServerMessage);
+      }
       return sessionId;
     }
 
@@ -1931,14 +2097,14 @@ export class SessionManager extends EventEmitter {
   private async _doSendOrResume(
     sessionId: string,
     text: string,
-  ): Promise<string> {
+  ): Promise<string | null> {
     // Session not live — look up details from DB and re-launch with --resume
     const row = getSession(sessionId);
     if (!row) {
-      console.error(
+      logger.error(
         `[SessionManager] sendOrResume: session ${sessionId} not found in DB`,
       );
-      return sessionId;
+      return null;
     }
 
     // Refuse to respawn sessions that reached a terminal state — done/error/killed
@@ -1948,7 +2114,7 @@ export class SessionManager extends EventEmitter {
       row.status === 'error' ||
       row.status === 'killed'
     ) {
-      console.warn(
+      logger.warn(
         `[SessionManager] sendOrResume: refusing to respawn terminal session ${sessionId} (status=${row.status})`,
       );
       this.emit('message', {
@@ -1958,12 +2124,12 @@ export class SessionManager extends EventEmitter {
         reason: 'terminal_session',
         detail: `Session is in terminal state: ${row.status}`,
       } satisfies ServerMessage);
-      return sessionId;
+      return null;
     }
 
     const project = getProjectById(row.project_id ?? '');
     if (!project) {
-      console.error(
+      logger.error(
         `[SessionManager] sendOrResume: project not found for session ${sessionId}`,
       );
       return sessionId;
@@ -1990,7 +2156,7 @@ export class SessionManager extends EventEmitter {
       fs.existsSync(recordedPath) &&
       fs.existsSync(path.join(recordedPath, '.git'))
     ) {
-      console.log(
+      logger.info(
         `[SessionManager] sendOrResume reusing surviving worktree: path=${recordedPath}`,
       );
       const orchConfig = loadOrchestratorConfig(projectDir);
@@ -2011,7 +2177,7 @@ export class SessionManager extends EventEmitter {
           row.session_id,
         );
         for (const s of stale) {
-          console.log(
+          logger.info(
             `[SessionManager] sendOrResume: superseding stale session ${s.session_id.slice(0, 8)} for task ${row.task_id}`,
           );
           markSessionSuperseded(s.session_id, Date.now());
@@ -2024,6 +2190,26 @@ export class SessionManager extends EventEmitter {
         runner,
         mcpConfigPath,
       );
+
+      // Proactive ceiling-escalation: if the session's persisted context occupancy
+      // is at/over the HWM, spawn directly on large_task_model and deliver the
+      // nudge via the 2s proactive timer instead of the first-event gate (which
+      // never fires for context-maxed sessions).
+      if (isSessionAtContextCeiling(row)) {
+        const largeModel = runtimeSettings.large_task_model!;
+        session.setProactiveEscalation(
+          largeModel,
+          buildProactiveEscalationNudge(text),
+        );
+        logger.info(
+          `[SessionManager] sendOrResume: proactive ceiling-escalation for session ${sessionId.slice(0, 8)} ` +
+            `(occupancy=${row.context_occupancy_tokens}/${AgentSession.contextWindowForModel(row.model ?? null)}, ` +
+            `model=${row.model ?? 'unknown'} → ${largeModel})`,
+        );
+        this.wireSession(sessionId, session, projectDir, recordedPath);
+        return sessionId;
+      }
+
       const firstEvent = new Promise<void>((resolve) => {
         session.once('message', () => {
           this.send(sessionId, text);
@@ -2047,7 +2233,7 @@ export class SessionManager extends EventEmitter {
         try {
           ensureMilestoneBranch(milestoneSlug, projectDir, project.baseBranch);
         } catch (err) {
-          console.warn(
+          logger.warn(
             `[SessionManager] sendOrResume: ensureMilestoneBranch failed (continuing): ${err}`,
           );
         }
@@ -2058,7 +2244,7 @@ export class SessionManager extends EventEmitter {
             timeout: 30_000,
           });
         } catch (err) {
-          console.warn(
+          logger.warn(
             `[SessionManager] sendOrResume: git fetch origin ${project.baseBranch} failed (continuing with local ref): ${err}`,
           );
         }
@@ -2080,7 +2266,7 @@ export class SessionManager extends EventEmitter {
     try {
       execSync(`git worktree prune`, { cwd: projectDir });
     } catch (pruneErr) {
-      console.warn(
+      logger.warn(
         `[SessionManager] sendOrResume: git worktree prune failed (continuing): ${pruneErr}`,
       );
     }
@@ -2089,7 +2275,7 @@ export class SessionManager extends EventEmitter {
       if (resumeFeatureBranch) {
         try {
           // Attach to existing branch — preserves all PR commits.
-          execSync(
+          await gitWorktreeAddWithRetry(
             `git worktree add "${worktreePath}" "${resumeFeatureBranch}"`,
             { cwd: projectDir },
           );
@@ -2108,14 +2294,14 @@ export class SessionManager extends EventEmitter {
             } catch {
               // best-effort
             }
-            execSync(
+            await gitWorktreeAddWithRetry(
               `git worktree add "${worktreePath}" "${resumeFeatureBranch}"`,
               { cwd: projectDir },
             );
           } else {
             // Branch doesn't exist locally (cleaned up) — try to recreate with -b.
             try {
-              execSync(
+              await gitWorktreeAddWithRetry(
                 `git worktree add -b "${resumeFeatureBranch}" "${worktreePath}" ${worktreeBase}`,
                 { cwd: projectDir },
               );
@@ -2132,7 +2318,7 @@ export class SessionManager extends EventEmitter {
                 } catch {
                   // best-effort
                 }
-                execSync(
+                await gitWorktreeAddWithRetry(
                   `git worktree add "${worktreePath}" "${resumeFeatureBranch}"`,
                   { cwd: projectDir },
                 );
@@ -2143,7 +2329,7 @@ export class SessionManager extends EventEmitter {
           }
         }
       } else {
-        execSync(
+        await gitWorktreeAddWithRetry(
           `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
           { cwd: projectDir },
         );
@@ -2152,7 +2338,7 @@ export class SessionManager extends EventEmitter {
       const stderr =
         (err as { stderr?: string | Buffer })?.stderr?.toString() ?? '';
       const msg = `sendOrResume: worktree recreation failed for session ${sessionId.slice(0, 8)}: ${(err as Error).message}\nstderr: ${stderr}`;
-      console.error(`[SessionManager] ${msg}`);
+      logger.error(`[SessionManager] ${msg}`);
 
       this.markSessionErrored(sessionId, 'error', 'worktree_recreate_failed');
 
@@ -2169,7 +2355,7 @@ export class SessionManager extends EventEmitter {
 
     const isUnixStylePath =
       worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
-    console.log(
+    logger.info(
       `[SessionManager] sendOrResume worktree created: path=${worktreePath} startingPoint=${startingPoint}` +
         (isUnixStylePath
           ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
@@ -2195,7 +2381,7 @@ export class SessionManager extends EventEmitter {
     if (row.task_id) {
       const stale = getOtherRunningSessionsForTask(row.task_id, row.session_id);
       for (const s of stale) {
-        console.log(
+        logger.info(
           `[SessionManager] sendOrResume: superseding stale session ${s.session_id.slice(0, 8)} for task ${row.task_id}`,
         );
         markSessionSuperseded(s.session_id, Date.now());
@@ -2216,6 +2402,28 @@ export class SessionManager extends EventEmitter {
     // overflows, the escalated spawn re-delivers the original message rather
     // than dropping it. The session consumes this field in tryEscalateForOverflow().
     session.setPendingOverflowText(text);
+
+    // Proactive ceiling-escalation: if the session's persisted context occupancy
+    // is at/over the HWM, spawn directly on large_task_model and deliver the
+    // nudge via the 2s proactive timer instead of the first-event gate (which
+    // never fires for context-maxed sessions).
+    if (isSessionAtContextCeiling(row)) {
+      const largeModel = runtimeSettings.large_task_model!;
+      session.setProactiveEscalation(
+        largeModel,
+        buildProactiveEscalationNudge(text),
+      );
+      logger.info(
+        `[SessionManager] sendOrResume: proactive ceiling-escalation for session ${sessionId.slice(0, 8)} ` +
+          `(occupancy=${row.context_occupancy_tokens}/${AgentSession.contextWindowForModel(row.model ?? null)}, ` +
+          `model=${row.model ?? 'unknown'} → ${largeModel})`,
+      );
+      // wireSession wires message + pr_opened + push_detected forwarding and starts
+      // run() fire-and-forget. The proactive 2s timer in AgentSession.run() delivers
+      // the nudge text to the large-model session without a first-event gate.
+      this.wireSession(sessionId, session, projectDir, worktreePath);
+      return sessionId;
+    }
 
     // Register the first-event listener BEFORE wireSession starts run() to
     // avoid a race where the first message arrives before the listener is set.

@@ -26,6 +26,24 @@ test: []
 # Per-command timeout in seconds for test commands. Default 300 (5 min).
 test_timeout_sec: 300
 
+# Commands the orchestrator runs on each PR before spawning review — catches lint errors, license contamination, and secret leaks.
+# Phase 1 baseline: eslint errors + GPL/AGPL dependency check. Warnings tolerated (11-warning baseline on dev).
+# Phase 4: gitleaks secret scanning — git-aware mode auto-respects .gitignore; allowlist in .gitleaks.toml.
+# Phase 6: knip unused-export / dead-code gate — knip.json silences false positives (gitignored dirs, scripts, test helpers).
+# Phase 7: npm audit vulnerability gate — high threshold, prod deps only (--omit=dev).
+analyze:
+  - npm run lint
+  - npm run audit:licenses
+  - gitleaks dir .
+  - npx knip --no-progress --reporter compact
+  - npm audit --audit-level=high --omit=dev
+
+# Timeout in seconds for the analyze phase.
+analyze_timeout_sec: 180
+
+# Maximum RSS in MB for the analyze phase.
+analyze_max_rss_mb: 2048
+
 # Extra Bash tool permission patterns merged with the base allowed-tools set.
 allowed_tools: []
 

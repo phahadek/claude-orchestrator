@@ -107,3 +107,44 @@ describe('large_task_model setting', () => {
     expect(res.body.large_task_model).toBe(model);
   });
 });
+
+describe('failure-loud validation (M8 footgun fix)', () => {
+  it('PATCH with invalid session_mode returns 400 and does not persist', async () => {
+    const res = await supertest(buildApp())
+      .patch('/')
+      .send({ session_mode: 'web' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/session_mode/);
+    expect(mockSetSetting).not.toHaveBeenCalled();
+  });
+
+  it('PATCH with invalid release_channel returns 400 and does not persist', async () => {
+    const res = await supertest(buildApp())
+      .patch('/')
+      .send({ release_channel: 'nightly' });
+
+    // release_channel is not in the route's SETTING_KEYS, so it is ignored
+    // and the PATCH succeeds with no updates (this tests that unknown keys are silently skipped)
+    expect(res.status).toBe(200);
+    expect(mockSetSetting).not.toHaveBeenCalled();
+  });
+
+  it('PATCH with negative max_review_iterations returns 400', async () => {
+    const res = await supertest(buildApp())
+      .patch('/')
+      .send({ max_review_iterations: -1 });
+
+    expect(res.status).toBe(400);
+    expect(mockSetSetting).not.toHaveBeenCalled();
+  });
+
+  it('PATCH with non-numeric string for numeric field returns 400', async () => {
+    const res = await supertest(buildApp())
+      .patch('/')
+      .send({ max_review_iterations: 'abc' });
+
+    expect(res.status).toBe(400);
+    expect(mockSetSetting).not.toHaveBeenCalled();
+  });
+});

@@ -60,6 +60,8 @@ export interface MergeResult {
 export interface FailingCheck {
   name: string;
   conclusion: string;
+  /** URL to the failing check-run (details_url ?? html_url from the GitHub API). */
+  detailsUrl?: string;
 }
 
 /**
@@ -74,12 +76,7 @@ export interface FailingCheck {
  *                 with no failing checks.
  * - `unknown`   — GitHub is still computing, or returned a state we don't recognize.
  */
-export type MergeCategory =
-  | 'clean'
-  | 'conflict'
-  | 'ci_failed'
-  | 'blocked'
-  | 'unknown';
+type MergeCategory = 'clean' | 'conflict' | 'ci_failed' | 'blocked' | 'unknown';
 
 export interface MergeabilityCategory {
   category: MergeCategory;

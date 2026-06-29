@@ -1,6 +1,7 @@
 import path from 'path';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
+import { logger } from '../logger';
 import { parseSection } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
 import {
@@ -45,6 +46,8 @@ export interface ISessionManager {
     status: 'error' | 'killed',
     reason: string,
   ): void;
+  /** Deliver a message to a live session or resume a dead one and deliver it. */
+  sendOrResume?(sessionId: string, text: string): Promise<string | null>;
 }
 
 /**
@@ -56,16 +59,18 @@ export function detectInFlightEscape(
   toolName: string,
   toolInput: Record<string, unknown>,
   worktreePath: string,
+  platform: NodeJS.Platform = process.platform,
 ): WorktreeEscapeViolation | null {
   const block: ToolUseBlock = { name: toolName, input: toolInput };
   const paths = extractPathsFromBlock(block);
-  const normalizedWorktree = normalizePath(worktreePath);
-  const worktreePrefix = normalizedWorktree.endsWith(path.sep)
+  const normalizedWorktree = normalizePath(worktreePath, undefined, platform);
+  const sep = platform === 'win32' ? '\\' : '/';
+  const worktreePrefix = normalizedWorktree.endsWith(sep)
     ? normalizedWorktree
-    : normalizedWorktree + path.sep;
+    : normalizedWorktree + sep;
 
   for (const p of paths) {
-    const resolved = normalizePath(p, worktreePath);
+    const resolved = normalizePath(p, worktreePath, platform);
     if (
       resolved !== normalizedWorktree &&
       !resolved.startsWith(worktreePrefix)
@@ -153,7 +158,7 @@ export class SessionAuditor {
         try {
           pr = await this.githubClient.fetchPR(repo, prNumber);
         } catch (err) {
-          console.warn(
+          logger.warn(
             `[SessionAuditor] GitHub fetchPR failed — skipping PR checks: ${err}`,
           );
         }
@@ -208,7 +213,7 @@ export class SessionAuditor {
         );
         violations.push(...escapes);
       } catch (err) {
-        console.warn(`[SessionAuditor] auditWorktreeEscape failed: ${err}`);
+        logger.warn(`[SessionAuditor] auditWorktreeEscape failed: ${err}`);
       }
     }
 
@@ -287,7 +292,7 @@ export class SessionAuditor {
       const prDiff = await this.githubClient.fetchDiff(prNumber, repo);
       diffFiles = prDiff.filesChanged;
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[SessionAuditor] fetchDiff failed — skipping spec comparison: ${err}`,
       );
       return null;
@@ -297,7 +302,7 @@ export class SessionAuditor {
     try {
       taskMarkdown = await this.resolveBackend().fetchTaskPage(taskId);
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[SessionAuditor] fetchTaskPage failed — skipping spec comparison: ${err}`,
       );
       return null;
@@ -412,12 +417,14 @@ function extractWriteTargetsFromCommand(command: string): string[] {
   }
   // tee destinations: tee [-flags] path
   for (const match of stripped.matchAll(
+    // eslint-disable-next-line security/detect-unsafe-regex -- Reason: verified non-backtracking; (?:-\S+\s+)* has non-overlapping char classes (non-whitespace then whitespace), no catastrophic path exists.
     /\btee\s+(?:-\S+\s+)*([^\s"'`;\n|&]+)/g,
   )) {
     targets.push(match[1]);
   }
   // cp/mv destinations: cp/mv [-flags] src dest
   for (const match of stripped.matchAll(
+    // eslint-disable-next-line security/detect-unsafe-regex -- Reason: verified non-backtracking; (?:-\S+\s+)* alternates non-whitespace+whitespace with no overlap; anchored by \b and trailing \s+.
     /\b(?:cp|mv)\s+(?:-\S+\s+)*\S+\s+([^\s"'`;\n|&]+)/g,
   )) {
     targets.push(match[1]);
@@ -429,17 +436,29 @@ function extractWriteTargetsFromCommand(command: string): string[] {
 
 /**
  * Normalize a path to a canonical absolute form for comparison.
- * Converts Git-Bash /c/... paths to Windows C:\... on Windows hosts.
+ * On win32: converts Git-Bash /c/... paths to C:\... before resolving.
  * When baseDir is provided, drive-rootless absolute paths (e.g. /Users/foo)
  * inherit the drive letter from baseDir via path.resolve, preventing false-positive
  * worktree_escape violations when the Claude CLI reports Unix-style paths on Windows.
+ *
+ * Uses path.posix on non-win32 and path.win32 on win32 so the function is
+ * fully testable from any host OS without producing host-OS-specific paths.
+ *
+ * The `platform` parameter is injectable for unit tests.
  */
-function normalizePath(p: string, baseDir?: string): string {
-  // Git-Bash /c/foo → C:\foo. Must precede path.resolve, which would otherwise
-  // mangle the single-letter drive segment into a literal \c\ component.
-  const gitBashMatch = /^\/([a-zA-Z])\//i.exec(p);
-  if (gitBashMatch) {
-    p = `${gitBashMatch[1].toUpperCase()}:\\${p.slice(3)}`;
+export function normalizePath(
+  p: string,
+  baseDir?: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const pathModule = platform === 'win32' ? path.win32 : path.posix;
+  if (platform === 'win32') {
+    // Git-Bash /c/foo → C:\foo. Must precede path.resolve, which would otherwise
+    // mangle the single-letter drive segment into a literal \c\ component.
+    const gitBashMatch = /^\/([a-zA-Z])\//i.exec(p);
+    if (gitBashMatch) {
+      p = `${gitBashMatch[1].toUpperCase()}:\\${p.slice(3)}`;
+    }
   }
-  return baseDir ? path.resolve(baseDir, p) : path.normalize(p);
+  return baseDir ? pathModule.resolve(baseDir, p) : pathModule.normalize(p);
 }

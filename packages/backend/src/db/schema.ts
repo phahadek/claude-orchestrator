@@ -177,6 +177,16 @@ export function runMigrations(target: Database.Database): void {
       PRIMARY KEY (pr_number, repo, sha)
     );
 
+    CREATE TABLE IF NOT EXISTS orchestrator_analyze_results (
+      pr_number  INTEGER NOT NULL,
+      repo       TEXT    NOT NULL,
+      sha        TEXT    NOT NULL,
+      passed     INTEGER NOT NULL,
+      output     TEXT    NOT NULL DEFAULT '',
+      ran_at     TEXT    NOT NULL,
+      PRIMARY KEY (pr_number, repo, sha)
+    );
+
     CREATE TABLE IF NOT EXISTS task_no_op_attempts (
       task_id          TEXT PRIMARY KEY,
       retry_count      INTEGER NOT NULL DEFAULT 0,
@@ -187,6 +197,14 @@ export function runMigrations(target: Database.Database): void {
       task_id             TEXT    PRIMARY KEY,
       consecutive_crashes INTEGER NOT NULL DEFAULT 0,
       last_crash_at       INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS task_repo_assignments (
+      task_id      TEXT    PRIMARY KEY,
+      project_id   TEXT    NOT NULL,
+      repo         TEXT    NOT NULL,
+      assigned_by  TEXT    NOT NULL DEFAULT 'system',
+      assigned_at  INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS pending_review_sync (
@@ -258,6 +276,18 @@ export function runMigrations(target: Database.Database): void {
       pause_reason_set_at          INTEGER,
       conflict_nudge_sha           TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS scheduler_audit (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      job            TEXT    NOT NULL,
+      status         TEXT    NOT NULL,
+      started_at     TEXT    NOT NULL,
+      completed_at   TEXT    NOT NULL,
+      duration_ms    INTEGER NOT NULL,
+      items_processed INTEGER,
+      error          TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_scheduler_audit_job ON scheduler_audit(job, started_at DESC);
 
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
@@ -797,5 +827,36 @@ export function runMigrations(target: Database.Database): void {
     target.exec(`ALTER TABLE pull_requests ADD COLUMN conflict_nudge_sha TEXT`);
   } catch {
     /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN stalled_pr_retry_count INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE orchestrator_analyze_results ADD COLUMN is_transient INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // ── Git-Bash project_dir backfill (win32-only, idempotent) ──────────────────
+  // Converts any /c/... or /D/... style project_dir stored by Git-Bash
+  // into the native Win32 form C:/... / D:/... so exec cwd is valid.
+  // Guard: substr(1,1)='/' ensures already-normalized C:/... rows are skipped.
+  if (process.platform === 'win32') {
+    target.exec(`
+      UPDATE projects
+      SET project_dir = upper(substr(project_dir, 2, 1)) || ':' || substr(project_dir, 3)
+      WHERE substr(project_dir, 1, 1) = '/'
+        AND substr(project_dir, 3, 1) = '/'
+        AND (
+          (substr(project_dir, 2, 1) BETWEEN 'a' AND 'z')
+          OR (substr(project_dir, 2, 1) BETWEEN 'A' AND 'Z')
+        )
+    `);
   }
 }

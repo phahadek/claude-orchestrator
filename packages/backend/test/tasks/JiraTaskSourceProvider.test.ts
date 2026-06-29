@@ -7,6 +7,12 @@ vi.mock('../../src/db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../../src/projects/ProjectService.js', () => ({
+  ProjectService: {
+    getMilestone: vi.fn().mockReturnValue({ id: 'ms1', sourceId: 'EPIC-1' }),
+  },
+}));
+
 import { JiraClient } from '../../src/tasks/JiraClient.js';
 import {
   JiraTaskSourceProvider,
@@ -42,7 +48,17 @@ function makeClient() {
     addComment: vi.fn(),
     buildReadyJql: vi
       .fn()
-      .mockReturnValue('project = "PROJ" AND status in ("To Do")'),
+      .mockReturnValue(
+        'project = "PROJ" AND status in ("To Do") ORDER BY priority DESC',
+      ),
+    buildEpicParentJql: vi
+      .fn()
+      .mockReturnValue('parent = "EPIC-1" ORDER BY priority DESC'),
+    buildEpicLinkJql: vi
+      .fn()
+      .mockReturnValue('"Epic Link" = "EPIC-1" ORDER BY priority DESC'),
+    buildSubtaskJql: vi.fn().mockReturnValue('parent in ("PROJ-1")'),
+    buildKeyInJql: vi.fn().mockReturnValue('key in ("PROJ-99")'),
   } as unknown as JiraClient;
 }
 
@@ -225,5 +241,162 @@ describe('JiraTaskSourceProvider.fetchNonMilestoneReadyTasks', () => {
     const provider = new JiraTaskSourceProvider(client, PROJECT_CONFIG);
     const result = await provider.fetchNonMilestoneReadyTasks();
     expect(result).toEqual([]);
+  });
+});
+
+// ── assignee injection ────────────────────────────────────────────────────────
+
+describe('JiraTaskSourceProvider assignee injection', () => {
+  it('injects assignee = currentUser() into buildReadyJql when no assignee configured', async () => {
+    const client = makeClient();
+    client.searchIssues = vi.fn().mockResolvedValue([]);
+
+    const provider = new JiraTaskSourceProvider(client, PROJECT_CONFIG);
+    await provider.fetchReadyTasks(null);
+
+    expect(client.searchIssues).toHaveBeenCalledWith(
+      'project = "PROJ" AND status in ("To Do") AND assignee = currentUser() ORDER BY priority DESC',
+    );
+  });
+
+  it('injects configured assignee into buildReadyJql', async () => {
+    const client = makeClient();
+    client.searchIssues = vi.fn().mockResolvedValue([]);
+
+    const provider = new JiraTaskSourceProvider(client, {
+      ...PROJECT_CONFIG,
+      assignee: 'user-account-id',
+    });
+    await provider.fetchReadyTasks(null);
+
+    expect(client.searchIssues).toHaveBeenCalledWith(
+      'project = "PROJ" AND status in ("To Do") AND assignee = "user-account-id" ORDER BY priority DESC',
+    );
+  });
+
+  it('passes default_jql through unchanged — operator owns assignee clause', async () => {
+    const client = makeClient();
+    client.searchIssues = vi.fn().mockResolvedValue([]);
+
+    const provider = new JiraTaskSourceProvider(client, {
+      ...PROJECT_CONFIG,
+      assignee: 'ignored',
+      default_jql: 'project = PROJ AND assignee = "myuser" AND status = Ready',
+    });
+    await provider.fetchReadyTasks(null);
+
+    expect(client.searchIssues).toHaveBeenCalledWith(
+      'project = PROJ AND assignee = "myuser" AND status = Ready',
+    );
+  });
+
+  it('injects assignee into Epic-parent JQL (milestone path)', async () => {
+    const client = makeClient();
+    client.searchIssues = vi.fn().mockResolvedValue([]);
+
+    const provider = new JiraTaskSourceProvider(client, {
+      ...PROJECT_CONFIG,
+      assignee: 'testuser',
+      epic_field: 'parent',
+    });
+    await provider.fetchReadyTasks('ms1');
+
+    expect(client.searchIssues).toHaveBeenCalledWith(
+      'parent = "EPIC-1" AND assignee = "testuser" ORDER BY priority DESC',
+    );
+  });
+
+  it('injects assignee into Epic-Link JQL (milestone path)', async () => {
+    const client = makeClient();
+    client.searchIssues = vi.fn().mockResolvedValue([]);
+
+    const provider = new JiraTaskSourceProvider(client, {
+      ...PROJECT_CONFIG,
+      assignee: 'testuser',
+      epic_field: 'Epic Link',
+    });
+    await provider.fetchReadyTasks('ms1');
+
+    expect(client.searchIssues).toHaveBeenCalledWith(
+      '"Epic Link" = "EPIC-1" AND assignee = "testuser" ORDER BY priority DESC',
+    );
+  });
+
+  it('does NOT inject assignee into buildKeyInJql (blocker expansion)', async () => {
+    const issueWithBlocker = {
+      id: '10001',
+      key: 'PROJ-1',
+      fields: {
+        summary: 'Task: PROJ-1',
+        status: { name: 'To Do' },
+        issuetype: { name: 'Task' },
+        priority: { name: 'High' },
+        description: null,
+        issuelinks: [
+          {
+            type: { inward: 'is blocked by' },
+            inwardIssue: { key: 'PROJ-99' },
+          },
+        ],
+      },
+    };
+
+    const client = makeClient();
+    client.searchIssues = vi
+      .fn()
+      .mockResolvedValueOnce([issueWithBlocker])
+      .mockResolvedValue([makeIssue('PROJ-99', 'In Progress')]);
+
+    const provider = new JiraTaskSourceProvider(client, {
+      ...PROJECT_CONFIG,
+      assignee: 'testuser',
+    });
+    await provider.fetchReadyTasks(null);
+
+    // The key-in fetch for round1 must not include the assignee clause
+    const keyInCall = (
+      client.searchIssues as ReturnType<typeof vi.fn>
+    ).mock.calls.find(([jql]: [string]) => jql.includes('key in'));
+    expect(keyInCall).toBeDefined();
+    expect(keyInCall![0]).not.toContain('assignee');
+  });
+
+  it('blocker of a ready task resolves even when assigned to a different user', async () => {
+    const issueWithBlocker = {
+      id: '10001',
+      key: 'PROJ-1',
+      fields: {
+        summary: 'Task: PROJ-1',
+        status: { name: 'To Do' },
+        issuetype: { name: 'Task' },
+        priority: { name: 'High' },
+        description: null,
+        issuelinks: [
+          {
+            type: { inward: 'is blocked by' },
+            inwardIssue: { key: 'PROJ-99' },
+          },
+        ],
+      },
+    };
+
+    const client = makeClient();
+    client.buildKeyInJql = vi.fn().mockReturnValue('key in ("PROJ-99")');
+    client.searchIssues = vi
+      .fn()
+      .mockResolvedValueOnce([issueWithBlocker]) // ready fetch (with assignee)
+      .mockResolvedValueOnce([makeIssue('PROJ-99', 'In Progress')]); // blocker fetch (no assignee)
+
+    const provider = new JiraTaskSourceProvider(client, {
+      ...PROJECT_CONFIG,
+      assignee: 'testuser',
+    });
+    const tasks = await provider.fetchReadyTasks(null);
+
+    // PROJ-1 should appear in results
+    const readyTask = tasks.find((t) => t.task.id === 'jira:PROJ-1');
+    expect(readyTask).toBeDefined();
+    // Its blocker PROJ-99 should be listed as a dependency
+    expect(readyTask!.task.dependsOn).toContain('jira:PROJ-99');
   });
 });

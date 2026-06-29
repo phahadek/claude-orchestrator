@@ -2526,7 +2526,7 @@ describe('ReviewOrchestrator — executeReview gate failures', () => {
     );
   });
 
-  it('verify failure: broadcasts pr_review_blocked_by_gate with kind=verify', async () => {
+  it('verify failure: broadcasts pipeline_stage_failed with stage=verify', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
     vi.mocked(getSession).mockReturnValue({
       worktree_path: '/fake/worktree',
@@ -2548,13 +2548,13 @@ describe('ReviewOrchestrator — executeReview gate failures', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     const blocked = messages.find(
-      (m: any) => m.type === 'pr_review_blocked_by_gate',
+      (m: any) => m.type === 'pipeline_stage_failed',
     );
     expect(blocked).toMatchObject({
-      type: 'pr_review_blocked_by_gate',
+      type: 'pipeline_stage_failed',
       prNumber: 1,
       repo: 'owner/repo',
-      kind: 'verify',
+      stage: 'verify',
     });
   });
 
@@ -2630,7 +2630,7 @@ describe('ReviewOrchestrator — executeReview gate failures', () => {
     );
   });
 
-  it('autofix failure: broadcasts pr_review_blocked_by_gate with kind=autofix', async () => {
+  it('autofix failure: broadcasts pipeline_stage_failed with stage=autofix', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
     vi.mocked(getSession).mockReturnValue({
       worktree_path: '/fake/worktree',
@@ -2652,13 +2652,13 @@ describe('ReviewOrchestrator — executeReview gate failures', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     const blocked = messages.find(
-      (m: any) => m.type === 'pr_review_blocked_by_gate',
+      (m: any) => m.type === 'pipeline_stage_failed',
     );
     expect(blocked).toMatchObject({
-      type: 'pr_review_blocked_by_gate',
+      type: 'pipeline_stage_failed',
       prNumber: 1,
       repo: 'owner/repo',
-      kind: 'autofix',
+      stage: 'autofix',
     });
   });
 
@@ -3323,7 +3323,7 @@ describe('ReviewOrchestrator — stall detector', () => {
 // ── Pipeline stage events ─────────────────────────────────────────────────────
 
 describe('ReviewOrchestrator — pipeline stage events and persistence', () => {
-  it('emits verify_pipeline_started / complete events and persists stage when worktree is available', async () => {
+  it('emits pipeline_stage_entered / passed events for verify and persists stage when worktree is available', async () => {
     vi.mocked(getPRByNumber).mockReturnValue({
       ...basePRRow,
       session_id: 'coding-session-id',
@@ -3356,8 +3356,8 @@ describe('ReviewOrchestrator — pipeline stage events and persistence', () => {
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(emitted).toContain('verify_pipeline_started');
-    expect(emitted).toContain('verify_pipeline_complete');
+    expect(emitted).toContain('pipeline_stage_entered');
+    expect(emitted).toContain('pipeline_stage_passed');
     expect(vi.mocked(setPreReviewStage)).toHaveBeenCalledWith(
       1,
       'owner/repo',
@@ -3365,7 +3365,7 @@ describe('ReviewOrchestrator — pipeline stage events and persistence', () => {
     );
   });
 
-  it('emits test_pipeline_started / complete and sets awaiting_review stage when tests are configured', async () => {
+  it('emits pipeline_stage_entered / passed events for tests and sets awaiting_review stage when tests are configured', async () => {
     vi.mocked(getPRByNumber).mockReturnValue({
       ...basePRRow,
       session_id: 'coding-session-id',
@@ -3399,8 +3399,8 @@ describe('ReviewOrchestrator — pipeline stage events and persistence', () => {
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(emitted).toContain('test_pipeline_started');
-    expect(emitted).toContain('test_pipeline_complete');
+    expect(emitted).toContain('pipeline_stage_entered');
+    expect(emitted).toContain('pipeline_stage_passed');
     expect(vi.mocked(setPreReviewStage)).toHaveBeenCalledWith(
       1,
       'owner/repo',

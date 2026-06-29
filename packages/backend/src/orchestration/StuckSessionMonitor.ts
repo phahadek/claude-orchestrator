@@ -1,5 +1,7 @@
+import { logger } from '../logger';
 import type { SessionManager } from '../session/SessionManager';
 import { runtimeSettings } from '../config';
+import type { Scheduler } from './Scheduler';
 import {
   getPRBySessionId,
   setPauseReason,
@@ -63,9 +65,6 @@ const DEFAULT_SCAN_INTERVAL_MS = 60 * 1000;
 
 export class StuckSessionMonitor {
   private timers = new Map<string, TimerState>();
-  private scanTimer: NodeJS.Timeout | null = null;
-  private scanStopped = true;
-  private scanRunning = false;
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -75,42 +74,25 @@ export class StuckSessionMonitor {
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
   }
 
-  /**
-   * Start the periodic stuck-session scan. Runs at the given interval (or
-   * DEFAULT_SCAN_INTERVAL_MS) and calls recoverSession() for any session
-   * still at status='running' whose last event is 'result'.
-   */
-  startScan(intervalMs?: number): void {
-    if (!this.scanStopped) return;
-    this.scanStopped = false;
-    this.scheduleNextScan(intervalMs ?? DEFAULT_SCAN_INTERVAL_MS);
+  register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'stuck_session_monitor',
+      intervalMs: DEFAULT_SCAN_INTERVAL_MS,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.scanForStuckSessions();
+      },
+    });
   }
 
-  /** Cancel all in-flight timers. Used on shutdown and from tests. */
+  /** Clear all per-session timers. Called on shutdown. */
   stop(): void {
-    this.scanStopped = true;
-    if (this.scanTimer) {
-      clearTimeout(this.scanTimer);
-      this.scanTimer = null;
-    }
     for (const sessionId of [...this.timers.keys()]) {
       this.clear(sessionId);
     }
   }
 
-  private scheduleNextScan(intervalMs: number): void {
-    if (this.scanStopped) return;
-    this.scanTimer = setTimeout(() => {
-      void this.scanForStuckSessions().finally(() =>
-        this.scheduleNextScan(intervalMs),
-      );
-    }, intervalMs);
-    this.scanTimer.unref?.();
-  }
-
   async scanForStuckSessions(): Promise<void> {
-    if (this.scanRunning) return;
-    this.scanRunning = true;
     try {
       const rows = getStuckResultSessionRows(PERIODIC_MIN_AGE_MS);
       for (const row of rows) {
@@ -176,15 +158,13 @@ export class StuckSessionMonitor {
           broadcast: this.broadcast,
           emitPrOpened: () => {},
         }).catch((e) =>
-          console.error(
+          logger.error(
             `[StuckSessionMonitor] recoverSession failed for ${row.session_id}: ${e}`,
           ),
         );
       }
     } catch (e) {
-      console.error(`[StuckSessionMonitor] scanForStuckSessions error: ${e}`);
-    } finally {
-      this.scanRunning = false;
+      logger.error(`[StuckSessionMonitor] scanForStuckSessions error: ${e}`);
     }
   }
 
@@ -526,7 +506,7 @@ export class StuckSessionMonitor {
     try {
       this.sessionManager.send(sessionId, PAUSE_MESSAGE);
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[StuckSessionMonitor] send failed for ${sessionId}: ${(err as Error).message}`,
       );
     }
@@ -561,7 +541,7 @@ export class StuckSessionMonitor {
     if (!state.hardStopArmed) return;
     if (Date.now() > state.hardStopDeadline) return;
 
-    console.warn(
+    logger.warn(
       `[StuckSessionMonitor] hard-stopping session ${sessionId.slice(0, 8)} — tool_use within hard-stop window after pause`,
     );
     // Disarm immediately so a flurry of tool_use events doesn't spawn parallel kills.
@@ -577,7 +557,7 @@ export class StuckSessionMonitor {
     this.sessionManager
       .kill(sessionId)
       .catch((err: unknown) =>
-        console.warn(
+        logger.warn(
           `[StuckSessionMonitor] kill failed for ${sessionId}: ${(err as Error).message}`,
         ),
       );

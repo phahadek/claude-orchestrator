@@ -2,7 +2,7 @@ import { getSecret } from './security/secrets';
 import { getOrchestratorConfig } from './config/appConfig';
 import type { NonMilestoneSourceConfig } from './tasks/TaskBackend';
 
-export interface Board {
+interface Board {
   /** Milestone row id — used as the milestoneId for WS fetch_tasks. */
   id: string;
   /** Notion database id (milestone.source_id) — used internally by NotionTaskBackend. */
@@ -29,30 +29,32 @@ export interface ProjectConfig {
   baseBranch: string; // default branch used when creating worktrees (e.g. 'dev' or 'main')
 }
 
-function resolveClaudePath(): string {
+export function resolveClaudePath(
+  platform: NodeJS.Platform = process.platform,
+  _exec?: (cmd: string, opts: { encoding: string }) => string,
+): string {
   const explicit = process.env.CLAUDE_PATH;
   if (explicit) return explicit;
   // On Windows, spawn('claude', ..., { cwd }) fails if claude isn't in the
   // system PATH. Resolve the full path at startup so it always works.
+  const cmd = platform === 'win32' ? 'where claude' : 'which claude';
   try {
-    const { execSync } =
-      require('child_process') as typeof import('child_process');
-    return execSync(
-      process.platform === 'win32' ? 'where claude' : 'which claude',
-      {
-        encoding: 'utf8',
-      },
-    )
-      .trim()
-      .split('\n')[0];
+    const execFn =
+      _exec ??
+      // eslint-disable-next-line security/detect-child-process -- Reason: orchestrator spawns claude CLI as the core dispatch primitive.
+      (require('child_process') as typeof import('child_process')).execSync;
+    return (execFn(cmd, { encoding: 'utf8' }) as string).trim().split('\n')[0];
   } catch {
     return 'claude'; // fallback — hope it's on PATH
   }
 }
 
 /** Convert Git Bash paths like /c/Users/... to C:/Users/... for Windows Node. */
-export function normalizePath(p: string): string {
-  if (process.platform === 'win32' && /^\/[a-zA-Z]\//.test(p)) {
+export function normalizePath(
+  p: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === 'win32' && /^\/[a-zA-Z]\//.test(p)) {
     return p[1].toUpperCase() + ':' + p.slice(2);
   }
   return p;
@@ -207,7 +209,9 @@ export function getAllProjects(): ProjectConfig[] {
 export function getProjectByGithubRepo(
   githubRepo: string,
 ): ProjectConfig | undefined {
-  return getAllProjects().find((p) => p.githubRepo === githubRepo);
+  const { getProjectRepos } =
+    require('./projects/ProjectService') as typeof import('./projects/ProjectService');
+  return getAllProjects().find((p) => getProjectRepos(p).includes(githubRepo));
 }
 
 export interface RuntimeSettings {

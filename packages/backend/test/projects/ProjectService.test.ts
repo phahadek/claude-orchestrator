@@ -5,7 +5,10 @@ vi.mock('../../src/db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
-import { ProjectService } from '../../src/projects/ProjectService.js';
+import {
+  ProjectService,
+  getProjectRepos,
+} from '../../src/projects/ProjectService.js';
 import { db } from '../../src/db/db.js';
 
 beforeEach(() => {
@@ -159,6 +162,36 @@ describe('ProjectService.getByGithubRepo', () => {
     expect(ProjectService.getByGithubRepo('owner/a')?.id).toBe('p1');
     expect(ProjectService.getByGithubRepo('owner/b')?.id).toBe('p2');
     expect(ProjectService.getByGithubRepo('owner/missing')).toBeUndefined();
+  });
+
+  it('matches a repo inside a multi-repo JSON array', () => {
+    ProjectService.create({
+      id: 'multi',
+      name: 'Multi',
+      projectDir: '/m',
+      githubRepo: JSON.stringify(['org/r1', 'org/r2']),
+    });
+    expect(ProjectService.getByGithubRepo('org/r1')?.id).toBe('multi');
+    expect(ProjectService.getByGithubRepo('org/r2')?.id).toBe('multi');
+    expect(ProjectService.getByGithubRepo('org/r3')).toBeUndefined();
+  });
+});
+
+describe('getProjectRepos', () => {
+  it('returns [repo] for a bare string', () => {
+    expect(getProjectRepos({ githubRepo: 'owner/repo' })).toEqual([
+      'owner/repo',
+    ]);
+  });
+
+  it('returns parsed list for a JSON array', () => {
+    expect(
+      getProjectRepos({ githubRepo: JSON.stringify(['o/r1', 'o/r2']) }),
+    ).toEqual(['o/r1', 'o/r2']);
+  });
+
+  it('returns [] for null', () => {
+    expect(getProjectRepos({ githubRepo: null })).toEqual([]);
   });
 });
 

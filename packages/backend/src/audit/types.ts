@@ -1,4 +1,4 @@
-export type EventType =
+type EventType =
   | 'session_launched'
   | 'commit'
   | 'pr_opened'
@@ -36,9 +36,19 @@ export type EventType =
   | 'conflict_nudge_delivery_failed'
   | 'worktree_remove_failed'
   | 'stale_branch_abandoned'
-  | 'review_side_effect_failed';
+  | 'review_side_effect_failed'
+  | 'pipeline_stage_entered'
+  | 'pipeline_stage_passed'
+  | 'pipeline_stage_failed'
+  | 'pr_terminal_flags_cleared'
+  | 'stalled_pr_reconcile_attempt'
+  | 'stalled_pr_escalated'
+  | 'task_launch_escalated'
+  | 'task_unblocked'
+  | 'pr_unparked'
+  | 'repo_git_config_repaired';
 
-export type ActorType = 'ai' | 'human' | 'system';
+type ActorType = 'ai' | 'human' | 'system';
 
 export interface AuditEvent {
   event_type: EventType;

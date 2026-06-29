@@ -6,6 +6,7 @@ import { DependencyResolver } from '../notion/DependencyResolver';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { Issue } from '../github/types';
 import { ProjectService } from '../projects/ProjectService';
+import { logger } from '../logger';
 
 export interface GithubProjectConfig {
   owner: string;
@@ -29,6 +30,7 @@ const LABEL_TO_TYPE: Record<string, string> = {
   'type:code': '💻 Code',
   'type:testing': '🧪 Testing',
   'type:planning': '📋 Planning',
+  'type:gate': '🚦 Gate',
 };
 
 const LABEL_TO_PRIORITY: Record<string, string> = {
@@ -68,6 +70,7 @@ const LABEL_DEFINITIONS = [
 ];
 
 // Matches: "Depends on: #1 #2 #3" (anchored at start of line in multiline mode)
+// eslint-disable-next-line security/detect-unsafe-regex -- Reason: verified non-backtracking; anchored by ^ and $, \d+ and \s+ char classes don't overlap, no catastrophic backtracking path against structured dependency-reference inputs.
 const DEPENDS_ON_RE = /^Depends on:\s+(#\d+(?:\s+#\d+)*)$/m;
 
 const resolver = new DependencyResolver();
@@ -83,7 +86,7 @@ function resolveStatus(labels: string[], issueNum: number): string {
   for (const label of labels) {
     if (LABEL_TO_STATUS[label]) return LABEL_TO_STATUS[label];
   }
-  console.warn(
+  logger.warn(
     `[GithubTaskSourceProvider] issue #${issueNum} has no status:* label; defaulting to 🔲 Backlog`,
   );
   return '🔲 Backlog';
@@ -206,7 +209,7 @@ export class GithubTaskSourceProvider implements TaskBackend {
     const issue = await this.client.getIssue(this.repo, issueNumber);
     const hadStatusLabel = issue.labels.some((l) => l.startsWith('status:'));
     if (!hadStatusLabel) {
-      console.warn(
+      logger.warn(
         `[GithubTaskSourceProvider] issue #${issueNumber} had no status:* label before updateStatus`,
       );
     }

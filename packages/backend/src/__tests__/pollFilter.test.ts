@@ -17,6 +17,8 @@ vi.mock('../db/queries.js', () => ({
   setHeadSha: vi.fn(),
   updatePRState: vi.fn(),
   deleteAllAutofixShasForPR: vi.fn(),
+  clearTerminalPRFlags: vi.fn(),
+  markSessionDone: vi.fn(),
   setCiRemediationAttemptedSha: vi.fn(),
   updateMergeState: vi.fn(),
   emitTaskUpdated: vi.fn(),
@@ -35,11 +37,15 @@ vi.mock('../routes/tasks.js', () => ({
 vi.mock('../config.js', () => ({
   getProjectByGithubRepo: vi.fn(),
   AUTO_REVIEW_ENABLED: false,
-  loadOrchestratorConfig: vi.fn().mockReturnValue({ ci_check_name: [] }),
+  loadOrchestratorConfig: vi
+    .fn()
+    .mockReturnValue({ ci_check_name: [], test: [] }),
 }));
 
 vi.mock('../session/orchestrator-config.js', () => ({
-  loadOrchestratorConfig: vi.fn().mockReturnValue({ ci_check_name: [] }),
+  loadOrchestratorConfig: vi
+    .fn()
+    .mockReturnValue({ ci_check_name: [], test: [] }),
 }));
 
 import {
@@ -52,7 +58,7 @@ import { getProjectByGithubRepo } from '../config.js';
 import { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import { ReviewerCommentsWatcher } from '../github/ReviewerCommentsWatcher.js';
 import { AutoMerger } from '../github/AutoMerger.js';
-import { isTerminalStalePR } from '../github/pollUtils.js';
+import { isTerminalStalePR, classifyStalledPR } from '../github/pollUtils.js';
 import type { PullRequestRow } from '../db/types.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -603,6 +609,72 @@ describe('ReviewerCommentsWatcher terminal-stale skip', () => {
     await watcher.pollAll();
 
     expect(github.listPRReviews).toHaveBeenCalledOnce();
+  });
+});
+
+// ── classifyStalledPR: pre_review_interrupted ─────────────────────────────────
+
+describe('classifyStalledPR pre_review_interrupted', () => {
+  it('returns pre_review_interrupted for an open PR with head_sha, review_result=null, no session', () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha-abc',
+      review_session_id: null,
+      pending_push: 0,
+      pause_reason: null,
+    });
+    expect(classifyStalledPR(pr, null)).toEqual({
+      kind: 'pre_review_interrupted',
+    });
+  });
+
+  it('returns null for a PR with a live review session (no double-drive)', () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha-abc',
+      review_session_id: 'active-session',
+      pending_push: 0,
+      pause_reason: null,
+    });
+    // reviewSessionStatus = 'running' means a live session is consuming the PR
+    expect(classifyStalledPR(pr, 'running')).toBeNull();
+  });
+
+  it('returns null when pending_push is set (normal push flow handles it)', () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha-abc',
+      review_session_id: null,
+      pending_push: 1,
+      pause_reason: null,
+    });
+    expect(classifyStalledPR(pr, null)).toBeNull();
+  });
+
+  it('returns null when head_sha is missing', () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: null,
+      review_session_id: null,
+      pending_push: 0,
+      pause_reason: null,
+    });
+    expect(classifyStalledPR(pr, null)).toBeNull();
+  });
+
+  it('still classifies errored_review_session when session status is error (not pre_review_interrupted)', () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha-abc',
+      review_session_id: 'dead-session',
+      pending_push: 0,
+      pause_reason: null,
+    });
+    // reviewSessionStatus = 'error' → truthy, so pre_review_interrupted guard skips;
+    // errored_review_session fires instead
+    expect(classifyStalledPR(pr, 'error')).toEqual({
+      kind: 'errored_review_session',
+    });
   });
 });
 

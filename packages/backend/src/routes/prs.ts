@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import { logger } from '../logger';
 import { getProjectById, getProjectByGithubRepo } from '../config';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import {
@@ -15,7 +16,11 @@ import {
   updatePRDraftStatus,
   getSessionsByProject,
   lookupSessionByBranch,
+  markSessionDone,
+  clearTerminalPRFlags,
 } from '../db/queries';
+import { parsePauseReason } from '../db/pauseReason';
+import { recordEvent } from '../audit/AuditLog';
 import { GitHubApiError } from '../github/types';
 import type { MergeabilityCategory } from '../github/types';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -70,6 +75,14 @@ export function extractNotionTaskFromBody(
   return { taskId, taskUrl };
 }
 
+interface ReviewOrchestratorLike {
+  runAutofixPipeline(
+    prNumber: number,
+    repo: string,
+    taskId: string | null,
+  ): Promise<{ success: boolean; summary: string }>;
+}
+
 export function createPrsRouter(
   github: GitHubClient,
   prReviewService: PRReviewService,
@@ -81,6 +94,7 @@ export function createPrsRouter(
   taskBackendOverride?: TaskBackend,
   mergeWatcher?: PRMergeWatcher,
   autoMerger?: AutoMerger,
+  reviewOrchestrator?: ReviewOrchestratorLike,
 ): Router {
   const router = Router();
 
@@ -266,7 +280,7 @@ export function createPrsRouter(
           conflict_nudge_sha: null,
         });
         if (sessionMatch) {
-          console.log(
+          logger.info(
             `[prs] on-demand sync PR #${prNumber}: linked session ${sessionMatch.session_id.slice(0, 8)} via head_branch "${pr.headBranch}"`,
           );
         }
@@ -411,7 +425,7 @@ export function createPrsRouter(
             sessionManager
               .sendOrResume(prRow.session_id, msg)
               .catch((err: unknown) =>
-                console.warn(
+                logger.warn(
                   '[prs] sendOrResume failed:',
                   (err as Error).message,
                 ),
@@ -427,7 +441,7 @@ export function createPrsRouter(
         // the actual merge attempt — the 409/405 catch path below will handle a true conflict.
       } catch (err) {
         // Pre-check error is non-fatal — fall through to the merge attempt
-        console.warn(
+        logger.warn(
           `[prs] pre-merge mergeability check failed for PR #${prNumber}:`,
           (err as Error).message,
         );
@@ -457,9 +471,31 @@ export function createPrsRouter(
 
         const result = await github.mergePR(prNumber, commitTitle, repo);
         updatePRState(prNumber, repo, 'merged');
+        clearTerminalPRFlags(prNumber, repo);
+
+        // Transition session DB status idle → done (must precede endSession subprocess cleanup)
+        if (prRow?.session_id) {
+          markSessionDone(
+            prRow.session_id,
+            Date.now(),
+            prRow.pr_url ?? null,
+            'manual_merge_rest',
+          );
+        }
+        if (prRow?.review_session_id) {
+          markSessionDone(
+            prRow.review_session_id,
+            Date.now(),
+            prRow.pr_url ?? null,
+            'manual_merge_rest',
+          );
+        }
 
         // End coding session gracefully (stdin close → clean CLI exit)
         if (prRow?.session_id) {
+          if (prRow.head_branch?.startsWith('feature/')) {
+            sessionManager.markForBranchDeletion(prRow.session_id);
+          }
           sessionManager.endSession(prRow.session_id);
         }
 
@@ -467,6 +503,20 @@ export function createPrsRouter(
         if (prRow?.review_session_id) {
           sessionManager.endSession(prRow.review_session_id);
         }
+
+        // Audit event — mirrors the AutoMerger path
+        recordEvent({
+          event_type: 'pr_merged',
+          actor_type: 'system',
+          actor_id: null,
+          project_id: getProjectByGithubRepo(repo)?.id ?? null,
+          task_id: prRow?.task_id ?? null,
+          payload: {
+            pr_number: prNumber,
+            repo,
+            merge_sha: (result as { sha?: string }).sha ?? null,
+          },
+        });
 
         // Update task to Done via the project-scoped task backend and broadcast task_updated
         if (prRow?.task_id) {
@@ -484,7 +534,7 @@ export function createPrsRouter(
               });
               emitTaskUpdated(taskId);
             } catch (err: unknown) {
-              console.warn(
+              logger.warn(
                 '[prs] task backend updateStatus failed:',
                 (err as Error).message,
               );
@@ -522,7 +572,7 @@ export function createPrsRouter(
               mergeCiCheckNames,
             );
           } catch (catErr) {
-            console.warn(
+            logger.warn(
               '[prs] categorizeMergeability failed:',
               (catErr as Error).message,
             );
@@ -578,7 +628,7 @@ export function createPrsRouter(
                 sessionManager
                   .sendOrResume(prRow.session_id, msg)
                   .catch((sendErr: unknown) =>
-                    console.warn(
+                    logger.warn(
                       '[prs] sendOrResume failed:',
                       (sendErr as Error).message,
                     ),
@@ -598,7 +648,7 @@ export function createPrsRouter(
                 sessionManager
                   .sendOrResume(prRow.session_id, msg)
                   .catch((sendErr: unknown) =>
-                    console.warn(
+                    logger.warn(
                       '[prs] sendOrResume failed:',
                       (sendErr as Error).message,
                     ),
@@ -705,12 +755,25 @@ export function createPrsRouter(
       };
       setPRReviewResult(prNumber, repo, JSON.stringify(result));
 
+      // If the PR is cap-escalated, clear the pause and re-run the pre-review gate
+      const pauseStruct = parsePauseReason(prRow.pause_reason ?? null);
+      if (pauseStruct?.reason === 'stalled_reconcile_cap') {
+        clearTerminalPRFlags(prNumber, repo);
+        if (reviewOrchestrator) {
+          void reviewOrchestrator.runAutofixPipeline(
+            prNumber,
+            repo,
+            prRow.task_id,
+          );
+        }
+      }
+
       // Transition draft → ready on GitHub (always attempt; handles "already not a draft" gracefully)
       try {
         await github.markPRReady(repo, prNumber);
         updatePRDraftStatus(prNumber, repo, 0);
       } catch (e) {
-        console.warn(`[prs] markPRReady skipped for PR #${prNumber}:`, e);
+        logger.warn(`[prs] markPRReady skipped for PR #${prNumber}:`, e);
       }
 
       // Update task status to In Review via the project-scoped task backend
@@ -722,7 +785,7 @@ export function createPrsRouter(
               source: 'orchestrator',
             })
             .catch((e: unknown) =>
-              console.warn(
+              logger.warn(
                 '[prs] task backend updateStatus failed:',
                 (e as Error).message,
               ),
@@ -868,6 +931,48 @@ export function createPrsRouter(
     res.json({ sessionId: prRow.session_id });
   });
 
+  // ── POST /api/prs/:prNumber/unpark ──────────────────────────────────────────
+  // Operator action: clear a stalled_reconcile_cap pause and re-enqueue the
+  // pre-review pipeline so the PR can recover without being merged.
+  router.post('/prs/:prNumber/unpark', async (req: Request, res: Response) => {
+    const prNumber = parseInt(String(req.params.prNumber), 10);
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : '';
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId query param is required' });
+      return;
+    }
+    const project = getProjectById(projectId);
+    if (!project?.githubRepo) {
+      res.status(422).json({ error: 'Project has no githubRepo configured' });
+      return;
+    }
+    const repo = project.githubRepo;
+    const prRow = getPRByNumber(prNumber, repo);
+    if (!prRow) {
+      res.status(404).json({ error: `PR #${prNumber} not found` });
+      return;
+    }
+
+    clearTerminalPRFlags(prNumber, repo);
+
+    if (reviewOrchestrator) {
+      void reviewOrchestrator.runAutofixPipeline(prNumber, repo, prRow.task_id);
+    }
+
+    if (prRow.task_id) emitTaskUpdated(prRow.task_id);
+
+    recordEvent({
+      event_type: 'pr_unparked',
+      actor_type: 'human',
+      actor_id: null,
+      task_id: prRow.task_id ?? null,
+      payload: { pr_number: prNumber, repo },
+    });
+
+    res.json({ ok: true });
+  });
+
   // ── POST /api/prs/ingest ─────────────────────────────────────────────────────
   // Backfill a PR that exists on GitHub but was never tracked by the orchestrator.
   router.post('/prs/ingest', async (req: Request, res: Response) => {
@@ -912,7 +1017,7 @@ export function createPrsRouter(
     const taskId = notionTask?.taskId ?? null;
     const taskUrl = notionTask?.taskUrl ?? null;
     if (!taskId) {
-      console.warn(
+      logger.warn(
         `[prs/ingest] PR #${prNumber} (${repo}): no Notion URL found in body — inserting with task_id=null`,
       );
     }
@@ -920,7 +1025,7 @@ export function createPrsRouter(
     const sessionMatch = lookupSessionByBranch(pr.headBranch);
     const sessionId = sessionMatch?.session_id ?? null;
     if (!sessionId) {
-      console.warn(
+      logger.warn(
         `[prs/ingest] PR #${prNumber} (${repo}): could not derive session_id from branch "${pr.headBranch}" — inserting with session_id=null`,
       );
     }

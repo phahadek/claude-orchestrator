@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { authedFetch } from '../api/projects';
 import { setDeviceToken } from './deviceToken';
 
 interface EnrollmentFlowProps {
@@ -8,17 +9,21 @@ interface EnrollmentFlowProps {
 type Step = 'checking' | 'requesting' | 'waiting' | 'error';
 
 async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await authedFetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  return res.json() as Promise<T>;
+  const data = (await res.json()) as T;
+  if (!res.ok) throw Object.assign(new Error('request failed'), { data });
+  return data;
 }
 
 async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(path);
-  return res.json() as Promise<T>;
+  const res = await authedFetch(path);
+  const data = (await res.json()) as T;
+  if (!res.ok) throw Object.assign(new Error('request failed'), { data });
+  return data;
 }
 
 export function EnrollmentFlow({ onEnrolled }: EnrollmentFlowProps) {
@@ -49,7 +54,7 @@ export function EnrollmentFlow({ onEnrolled }: EnrollmentFlowProps) {
   // On mount: check bootstrap mode
   useEffect(() => {
     void doBootstrap();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- Reason: intentionally empty — doBootstrap must run exactly once on mount; adding it to deps would re-trigger on deviceName/onEnrolled changes
 
   const requestCode = useCallback(async () => {
     try {

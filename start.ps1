@@ -1,4 +1,4 @@
-# start.ps1 — Launch backend and frontend dev servers as background jobs
+# start.ps1 - Launch backend and frontend dev servers as background jobs
 # Saves PIDs to .dashboard.pids for use by stop.ps1 / restart.ps1
 
 $BackendPort = 3000
@@ -41,12 +41,22 @@ $feJob = Start-Job -ScriptBlock {
 
 Write-Host "[dashboard] Backend job ID: $($beJob.Id), Frontend job ID: $($feJob.Id)" -ForegroundColor Cyan
 
-# Wait briefly for processes to start and acquire ports
-Start-Sleep -Seconds 3
-
-# Try to resolve actual PIDs from port binding
-$bePidActual = Get-PortPid $BackendPort
-$fePidActual = Get-PortPid $FrontendPort
+# Poll for port binding with a 30s upper bound (500ms interval)
+$pollMaxMs = 30000
+$pollIntervalMs = 500
+$pollElapsed = 0
+$bePidActual = $null
+$fePidActual = $null
+Write-Host "[dashboard] Waiting for ports to bind..." -ForegroundColor Cyan
+while ($pollElapsed -lt $pollMaxMs) {
+    if (-not $bePidActual) { $bePidActual = Get-PortPid $BackendPort }
+    if (-not $fePidActual) { $fePidActual = Get-PortPid $FrontendPort }
+    if ($bePidActual -and $fePidActual) { break }
+    Start-Sleep -Milliseconds $pollIntervalMs
+    $pollElapsed += $pollIntervalMs
+}
+if (-not $bePidActual) { Write-Warning "[dashboard] Backend port $BackendPort did not bind within ${pollMaxMs}ms" }
+if (-not $fePidActual) { Write-Warning "[dashboard] Frontend port $FrontendPort did not bind within ${pollMaxMs}ms" }
 
 # Save job IDs and PIDs to file
 @{
@@ -57,7 +67,7 @@ $fePidActual = Get-PortPid $FrontendPort
 } | ConvertTo-Json | Set-Content -Path $PidFile
 
 Write-Host "[dashboard] PID file written to $PidFile" -ForegroundColor Cyan
-Write-Host "[dashboard] Streaming output (Ctrl+C to stop streaming — servers keep running)" -ForegroundColor Yellow
+Write-Host "[dashboard] Streaming output (Ctrl+C to stop streaming - servers keep running)" -ForegroundColor Yellow
 Write-Host ""
 
 # Stream output with color-coded prefixes until interrupted
@@ -87,7 +97,7 @@ try {
     }
 }
 catch [System.Management.Automation.PipelineStoppedException] {
-    # User pressed Ctrl+C — this is expected; servers remain running as background jobs
+    # User pressed Ctrl+C - this is expected; servers remain running as background jobs
     Write-Host ""
     Write-Host "[dashboard] Output streaming stopped. Servers continue running in the background." -ForegroundColor Yellow
     Write-Host "[dashboard] Run stop.ps1 (or npm run stop:win) to shut them down." -ForegroundColor Yellow

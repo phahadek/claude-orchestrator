@@ -2,6 +2,7 @@ import { minimatch } from 'minimatch';
 import { getRules, insertPermissionEvent } from '../db/queries';
 import type { NewPermissionEvent } from '../db/types';
 import type { Decision } from './types';
+import { logger } from '../logger';
 
 // ─── Hard-coded rule lists ───────────────────────────────────────────────────
 // toolArgs is a raw JSON string (e.g. {"command":"rm -rf /"}), so subject is
@@ -53,9 +54,10 @@ function matchPattern(
 ): boolean {
   if (matchType === 'regex') {
     try {
+      // eslint-disable-next-line security/detect-non-literal-regexp -- Reason: pattern is a user-configured permission rule from the settings UI, treated as trusted admin input by design.
       return new RegExp(pattern).test(subject);
     } catch {
-      console.warn(
+      logger.warn(
         `[PermissionEngine] Invalid regex pattern "${pattern}" — skipping`,
       );
       return false;
@@ -142,7 +144,7 @@ export class PermissionEngine {
     } catch (err) {
       // FK constraint fires when session_id is unknown. AgentSession is
       // responsible for wiring the session context; this is best-effort.
-      console.warn(
+      logger.warn(
         '[PermissionEngine] Could not write permission event:',
         (err as Error).message,
       );

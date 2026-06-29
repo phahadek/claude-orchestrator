@@ -7,11 +7,13 @@ import {
 import type { TaskView } from '../types/taskView';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { MilestoneProgress } from './MilestoneProgress';
+import { ReconciliationPill } from './header/ReconciliationPill';
+import type { BootReconciliationState } from '../hooks/useBootReconciliation';
 import styles from './Header.module.css';
 
 export type TopView = 'tasks' | 'sessions' | 'prs' | 'analytics' | 'settings';
 
-export interface AutoLaunchTogglePatch {
+interface AutoLaunchTogglePatch {
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId?: string | null;
 }
@@ -33,6 +35,7 @@ interface Props {
   autoLaunchCap?: number;
   autoLaunchQueuedCount?: number;
   autoLaunchPollIntervalMs?: number;
+  bootReconciliation?: BootReconciliationState;
 }
 
 function useIsMobile() {
@@ -69,6 +72,7 @@ export function Header({
   autoLaunchCap,
   autoLaunchQueuedCount,
   autoLaunchPollIntervalMs,
+  bootReconciliation,
 }: Props) {
   const isMobile = useIsMobile();
 
@@ -251,6 +255,9 @@ export function Header({
             <MilestoneProgress tasks={tasks} compact />
           )}
           {tokenContent}
+          {bootReconciliation && bootReconciliation.phase !== 'idle' && (
+            <ReconciliationPill state={bootReconciliation} />
+          )}
         </div>
       </header>
     );
@@ -288,6 +295,12 @@ export function Header({
         <>
           <div className={styles.divider} />
           {tokenContent}
+        </>
+      )}
+      {bootReconciliation && bootReconciliation.phase !== 'idle' && (
+        <>
+          <div className={styles.divider} />
+          <ReconciliationPill state={bootReconciliation} />
         </>
       )}
     </header>

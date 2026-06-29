@@ -7,6 +7,7 @@ import type { NotionTask } from '../notion/types';
 import { toExternalId, formatTaskId } from './taskId';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import { upsertTaskCache } from '../db/queries';
+import { logger } from '../logger';
 
 // ── tasks.yaml schema ────────────────────────────────────────────────────────
 
@@ -15,7 +16,7 @@ interface LocalTask {
   name: string;
   status: string; // Backlog | Ready | In Progress | In Review | Done
   priority?: string; // High | Medium | Low
-  type?: string; // Code | Planning | Testing
+  type?: string; // Code | Planning | Testing | Gate
   depends_on?: string[];
   pr_url?: string | null;
   context?: string;
@@ -52,12 +53,20 @@ const STATUS_DISPLAY: Record<string, string> = {
   'In Progress': '🔄 In Progress',
   'In Review': '👀 In Review',
   Done: '✅ Done',
+  Deferred: '⏭️ Deferred',
+  Blocked: '🚫 Blocked',
 };
 
 const TYPE_DISPLAY: Record<string, string> = {
   Code: '💻 Code',
   Planning: '📋 Planning',
   Testing: '🧪 Testing',
+  Design: '📐 Design',
+  Tooling: '🛠️ Tooling',
+  Docs: '📝 Docs',
+  Assets: '🎨 Assets',
+  Bug: '🐛 Bug',
+  Gate: '🚦 Gate',
 };
 
 function toDisplayStatus(status: string): string {
@@ -123,7 +132,7 @@ export class LocalTaskBackend implements TaskBackend {
     if (isFlatSchema(parsed)) {
       const migrated = this.migrateFlatToMilestones(parsed);
       this.writeFile(migrated);
-      console.log(
+      logger.info(
         `[LocalTaskBackend] Migrated ${this.filePath} to milestone schema.`,
       );
       return migrated;
@@ -298,14 +307,22 @@ export class LocalTaskBackend implements TaskBackend {
     }));
   }
 
-  async updateNotes(_taskId: string, _notes: string): Promise<void> {
-    // Local task backend does not support Notion-specific Notes property
+  async updateNotes(taskId: string, notes: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.notes = notes;
+    this.writeFile(file);
   }
 
-  async appendImplementationNote(
-    _taskId: string,
-    _note: string,
-  ): Promise<void> {
-    // Local task backend does not support Notion page block appending
+  async appendImplementationNote(taskId: string, note: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    const existing = found.task.notes ?? '';
+    found.task.notes = existing ? `${existing}\n${note}` : note;
+    this.writeFile(file);
   }
 }

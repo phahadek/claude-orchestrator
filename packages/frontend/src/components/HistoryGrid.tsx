@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { authedFetch } from '../api/projects';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
 import { ConcludedSessionRow } from './ConcludedSessionRow';
 import styles from './HistoryGrid.module.css';
@@ -22,7 +23,7 @@ export function HistoryGrid({ onSelect }: HistoryGridProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/sessions/archived')
+    authedFetch('/api/sessions/archived')
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<ArchivedSession[]>;

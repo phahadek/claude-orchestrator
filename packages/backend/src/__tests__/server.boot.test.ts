@@ -1,17 +1,18 @@
 /**
- * Tests for per-step boot-sequence error logging.
+ * Tests for the listen-first boot sequence.
  *
  * Verifies:
- * 1. Each critical boot step logs '[server] BOOT FAILURE in <step>:' on failure.
- * 2. The full error object (not just .message) is passed to console.error so
- *    the stack trace is preserved in the rotating log.
- * 3. process.exit(1) is called on failure for critical steps.
- * 4. Non-critical steps (PR boot sweep, auto-launcher) only warn and continue.
+ * 1. server.listen is called before any reconciler runs.
+ * 2. Background reconciliation chain preserves internal ordering.
+ * 3. process.exit(1) is called on failure for critical steps (jsonl_import,
+ *    resume_orphan_sessions).
+ * 4. Non-critical steps log a warning and continue.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import http from 'http';
 import { EventEmitter } from 'events';
+import type { ServerMessage } from '../ws/types';
 
 vi.mock('../github/PRBootSweep', () => ({
   runPRBootSweep: vi.fn().mockResolvedValue(undefined),
@@ -19,6 +20,10 @@ vi.mock('../github/PRBootSweep', () => ({
 
 vi.mock('../session/bootIdleReconciliation', () => ({
   runBootIdleReconciliation: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../orchestration/WorktreeReconciler', () => ({
+  runBootWorktreeReconciliation: vi.fn().mockResolvedValue(undefined),
 }));
 
 function makeDeps(
@@ -40,7 +45,6 @@ function makeDeps(
     },
     stuckSessionMonitor: {
       rehydrate: vi.fn(),
-      startScan: vi.fn(),
     },
     autoMerger: {
       rehydrate: vi.fn(),
@@ -48,31 +52,113 @@ function makeDeps(
     githubClient: {} as Parameters<
       (typeof import('../bootSequence'))['runBootSequence']
     >[0]['githubClient'],
-    prMergeWatcher: { start: vi.fn() },
-    reviewerCommentsWatcher: { start: vi.fn() },
-    autoLauncher: { start: vi.fn().mockResolvedValue(undefined) },
-    orphanedTaskSweeper: { start: vi.fn() },
-    concludedSessionArchiver: { start: vi.fn() },
-    updateChecker: { start: vi.fn() },
-    taskCacheRefresher: { start: vi.fn() },
+    autoLauncher: { pollOnce: vi.fn().mockResolvedValue(undefined) },
+    scheduler: { start: vi.fn() },
+    sessionEventsPruner: {
+      runAtBoot: vi.fn().mockResolvedValue(undefined),
+    },
+    broadcast: vi.fn() as (msg: ServerMessage) => void,
     server,
     port: 3000,
     ...overrides,
   };
 }
 
-describe('runBootSequence — per-step boot catches', () => {
-  let errorSpy: ReturnType<typeof vi.spyOn>;
+/** Flush all pending microtasks and macrotasks so background chains settle. */
+function flushQueue(): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+describe('runBootSequence — listen-first', () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: number) => {
       throw new Error('process.exit called');
     });
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
-  it('logs BOOT FAILURE in JSONL import with full error and exits when importAll throws', async () => {
+  it('calls server.listen before any reconciler', async () => {
+    const { runBootSequence } = await import('../bootSequence');
+    const callOrder: string[] = [];
+    const deps = makeDeps();
+
+    (deps.server.listen as ReturnType<typeof vi.fn>).mockImplementation(
+      (_port: number, _host: string, cb: () => void) => {
+        callOrder.push('server.listen');
+        cb();
+      },
+    );
+    deps.jsonlReader.importAll = vi.fn().mockImplementation(async () => {
+      callOrder.push('importAll');
+    });
+
+    await runBootSequence(deps);
+    await flushQueue();
+
+    expect(callOrder[0]).toBe('server.listen');
+    expect(callOrder).toContain('importAll');
+    expect(callOrder.indexOf('server.listen')).toBeLessThan(
+      callOrder.indexOf('importAll'),
+    );
+  });
+
+  it('resolves immediately after server.listen (background chain is fire-and-forget)', async () => {
+    const { runBootSequence } = await import('../bootSequence');
+    const deps = makeDeps();
+
+    await expect(runBootSequence(deps)).resolves.toBeUndefined();
+    expect(deps.server.listen).toHaveBeenCalledWith(
+      3000,
+      '0.0.0.0',
+      expect.any(Function),
+    );
+  });
+
+  it('background chain preserves ordering: jsonl → resumeOrphans → rehydrates → worktree → autoLauncher', async () => {
+    const { runBootSequence } = await import('../bootSequence');
+    const callOrder: string[] = [];
+    const deps = makeDeps();
+
+    deps.jsonlReader.importAll = vi.fn().mockImplementation(async () => {
+      callOrder.push('importAll');
+    });
+    deps.sessionManager.resumeOrphanSessions = vi
+      .fn()
+      .mockImplementation(async () => {
+        callOrder.push('resumeOrphanSessions');
+      });
+    deps.stuckSessionMonitor.rehydrate = vi.fn().mockImplementation(() => {
+      callOrder.push('stuckRehydrate');
+    });
+    deps.autoMerger.rehydrate = vi.fn().mockImplementation(() => {
+      callOrder.push('autoMergerRehydrate');
+    });
+    deps.autoLauncher.pollOnce = vi.fn().mockImplementation(async () => {
+      callOrder.push('autoLauncherStart');
+    });
+
+    await runBootSequence(deps);
+    await flushQueue();
+
+    const idxImport = callOrder.indexOf('importAll');
+    const idxOrphans = callOrder.indexOf('resumeOrphanSessions');
+    const idxStuck = callOrder.indexOf('stuckRehydrate');
+    const idxAutoMerger = callOrder.indexOf('autoMergerRehydrate');
+    const idxLauncher = callOrder.indexOf('autoLauncherStart');
+
+    expect(idxImport).toBeGreaterThanOrEqual(0);
+    expect(idxImport).toBeLessThan(idxOrphans);
+    expect(idxOrphans).toBeLessThan(idxStuck);
+    expect(idxStuck).toBeLessThan(idxAutoMerger);
+    expect(idxAutoMerger).toBeLessThan(idxLauncher);
+  });
+
+  it('calls process.exit(1) when jsonl_import fails', async () => {
     const { runBootSequence } = await import('../bootSequence');
     const err = new Error('FK constraint violation');
     const deps = makeDeps({
@@ -82,128 +168,56 @@ describe('runBootSequence — per-step boot catches', () => {
       },
     });
 
-    await expect(runBootSequence(deps)).rejects.toThrow('process.exit called');
+    await runBootSequence(deps);
+    await flushQueue();
 
-    expect(errorSpy).toHaveBeenCalledWith(
-      '[server] BOOT FAILURE in JSONL import:',
-      err,
-    );
-    expect(errorSpy.mock.calls[0][1]).toBe(err);
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
-  it('stack trace is preserved (error is second arg, not interpolated) for JSONL import failure', async () => {
-    const { runBootSequence } = await import('../bootSequence');
-    const err = new Error('FK constraint violation');
-    err.stack =
-      'Error: FK constraint violation\n    at SomeQuery (queries.ts:2384)';
-    const deps = makeDeps({
-      jsonlReader: {
-        importAll: vi.fn().mockRejectedValue(err),
-        backfillTokens: vi.fn(),
-      },
-    });
-
-    await expect(runBootSequence(deps)).rejects.toThrow('process.exit called');
-
-    const [label, actualErr] = errorSpy.mock.calls[0];
-    expect(label).toBe('[server] BOOT FAILURE in JSONL import:');
-    expect(actualErr).toBe(err);
-    expect(actualErr).toHaveProperty('stack');
-  });
-
-  it('logs BOOT FAILURE in resumeOrphanSessions with full error and exits when it throws', async () => {
+  it('calls process.exit(1) when resume_orphan_sessions fails', async () => {
     const { runBootSequence } = await import('../bootSequence');
     const err = new Error('SQLITE_CONSTRAINT_FOREIGNKEY');
     const deps = makeDeps({
       sessionManager: { resumeOrphanSessions: vi.fn().mockRejectedValue(err) },
     });
 
-    await expect(runBootSequence(deps)).rejects.toThrow('process.exit called');
+    await runBootSequence(deps);
+    await flushQueue();
 
-    expect(errorSpy).toHaveBeenCalledWith(
-      '[server] BOOT FAILURE in resumeOrphanSessions:',
-      err,
-    );
-    expect(errorSpy.mock.calls[0][1]).toBe(err);
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
-  it('stack trace is preserved for resumeOrphanSessions failure', async () => {
+  it('does NOT call process.exit when stuck_session_monitor_rehydrate fails (non-fatal)', async () => {
     const { runBootSequence } = await import('../bootSequence');
-    const err = new Error('SQLITE_CONSTRAINT_FOREIGNKEY');
-    err.stack =
-      'Error: SQLITE_CONSTRAINT_FOREIGNKEY\n    at insertPauseInterval (queries.ts:2384)';
-    const deps = makeDeps({
-      sessionManager: { resumeOrphanSessions: vi.fn().mockRejectedValue(err) },
-    });
-
-    await expect(runBootSequence(deps)).rejects.toThrow('process.exit called');
-
-    const [label, actualErr] = errorSpy.mock.calls[0];
-    expect(label).toBe('[server] BOOT FAILURE in resumeOrphanSessions:');
-    expect(actualErr).toBe(err);
-    expect(actualErr).toHaveProperty('stack');
-  });
-
-  it('logs BOOT FAILURE in StuckSessionMonitor.rehydrate with full error and exits when it throws', async () => {
-    const { runBootSequence } = await import('../bootSequence');
-    const err = new Error('SQLITE_CONSTRAINT_FOREIGNKEY');
+    const err = new Error('rehydrate failed');
     const deps = makeDeps({
       stuckSessionMonitor: {
         rehydrate: vi.fn().mockImplementation(() => {
           throw err;
         }),
-        startScan: vi.fn(),
       },
     });
 
-    await expect(runBootSequence(deps)).rejects.toThrow('process.exit called');
+    await runBootSequence(deps);
+    await flushQueue();
 
-    expect(errorSpy).toHaveBeenCalledWith(
-      '[server] BOOT FAILURE in StuckSessionMonitor.rehydrate:',
-      err,
-    );
-    expect(errorSpy.mock.calls[0][1]).toBe(err);
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
   });
 
-  it('stack trace is preserved for StuckSessionMonitor.rehydrate failure', async () => {
-    const { runBootSequence } = await import('../bootSequence');
-    const err = new Error('SQLITE_CONSTRAINT_FOREIGNKEY');
-    err.stack =
-      'Error: SQLITE_CONSTRAINT_FOREIGNKEY\n    at StuckSessionMonitor.rehydrate (StuckSessionMonitor.ts:42)';
-    const deps = makeDeps({
-      stuckSessionMonitor: {
-        rehydrate: vi.fn().mockImplementation(() => {
-          throw err;
-        }),
-        startScan: vi.fn(),
-      },
-    });
-
-    await expect(runBootSequence(deps)).rejects.toThrow('process.exit called');
-
-    const [label, actualErr] = errorSpy.mock.calls[0];
-    expect(label).toBe(
-      '[server] BOOT FAILURE in StuckSessionMonitor.rehydrate:',
-    );
-    expect(actualErr).toBe(err);
-    expect(actualErr).toHaveProperty('stack');
-  });
-
-  it('continues boot when all steps succeed', async () => {
+  it('continues boot and resolves when all steps succeed', async () => {
     const { runBootSequence } = await import('../bootSequence');
     const deps = makeDeps();
 
     await expect(runBootSequence(deps)).resolves.toBeUndefined();
 
     expect(exitSpy).not.toHaveBeenCalled();
-    expect(errorSpy).not.toHaveBeenCalled();
     expect(deps.server.listen).toHaveBeenCalledWith(
       3000,
       '0.0.0.0',
       expect.any(Function),
     );
+    await flushQueue();
+    expect(deps.autoLauncher.pollOnce).toHaveBeenCalled();
   });
 });

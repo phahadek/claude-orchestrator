@@ -1,12 +1,25 @@
 import { getDeviceToken } from '../auth/deviceToken';
 
-export type TaskSource = 'notion' | 'yaml' | 'github';
+export type TaskSource = 'notion' | 'yaml' | 'github' | 'jira';
 export type GitMode = 'github' | 'local-only';
 
 export interface GithubTaskSourceConfig {
   owner: string;
   repo: string;
   defaultMilestone?: number | null;
+}
+
+export interface JiraProjectConfig {
+  host: string;
+  project_key: string;
+  /** Jira accountId or email to scope task pickup to. Defaults to currentUser(). */
+  assignee?: string;
+  /** Full JQL override; operator owns any assignee clause. */
+  default_jql?: string;
+  ready_statuses?: string[];
+  status_mapping?: Record<string, string>;
+  type_mapping?: Record<string, string>;
+  epic_field?: string;
 }
 
 export interface GithubMilestone {
@@ -35,19 +48,37 @@ export interface OrchestratorConfigResponse {
   config: OrchestratorConfig;
 }
 
-export interface DatabaseValidation {
+interface DatabaseValidation {
   type: 'database';
   title: string;
   id: string;
 }
 
-export interface PageValidation {
+interface PageValidation {
   type: 'page';
   childDatabaseId: string | null;
   childDatabaseTitle: string | null;
 }
 
 export type BoardValidation = DatabaseValidation | PageValidation;
+
+export interface GithubMilestoneValidation {
+  type: 'github-milestone';
+  number: number;
+  title: string;
+  state: 'open' | 'closed';
+}
+
+export interface JiraEpicValidation {
+  type: 'jira-epic';
+  key: string;
+  summary: string;
+}
+
+export type SourceValidation =
+  | BoardValidation
+  | GithubMilestoneValidation
+  | JiraEpicValidation;
 
 export interface ProjectMilestone {
   id: string;
@@ -96,6 +127,7 @@ export interface CreateProjectInput {
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
   autoMergeEnabled?: boolean;
+  dataResidencyConfirmed?: boolean;
   baseBranch?: string;
 }
 
@@ -128,8 +160,11 @@ export interface UpdateMilestoneInput {
   displayOrder?: number;
 }
 
-async function request<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const token = getDeviceToken(); // may be null before enrollment
+export async function authedFetch(
+  input: RequestInfo,
+  init?: RequestInit,
+): Promise<Response> {
+  const token = getDeviceToken();
   const headers: Record<string, string> = {
     ...(init?.headers as Record<string, string> | undefined),
   };
@@ -141,13 +176,34 @@ async function request<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
 
   if (res.status === 401) {
     window.dispatchEvent(new CustomEvent('device-unauthorized'));
+  } else if (res.status === 403) {
+    try {
+      const body = (await res.clone().json()) as { code?: string };
+      if (body?.code === 'bootstrap_loopback_only') {
+        window.dispatchEvent(new CustomEvent('device-bootstrap-loopback-only'));
+      }
+    } catch {
+      /* body is not JSON */
+    }
+  }
+
+  return res;
+}
+
+export async function apiRequest<T>(
+  input: RequestInfo,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await authedFetch(input, init);
+
+  if (res.status === 401) {
     throw new Error('Unauthorized');
   }
 
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
     try {
-      const body = (await res.json()) as { error?: string };
+      const body = (await res.json()) as { error?: string; code?: string };
       if (body?.error) message = body.error;
     } catch {
       /* body is not JSON */
@@ -157,6 +213,8 @@ async function request<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
+
+const request = apiRequest;
 
 export const projectsApi = {
   list(): Promise<Project[]> {
@@ -225,8 +283,46 @@ export const projectsApi = {
     });
   },
 
+  async validateGithubMilestone(
+    projectId: string,
+    number: number,
+  ): Promise<GithubMilestoneValidation> {
+    const res = await authedFetch(
+      `/api/projects/${encodeURIComponent(projectId)}/github/validate-milestone?number=${number}`,
+    );
+    const body = (await res.json()) as
+      | GithubMilestoneValidation
+      | { error: string };
+    if (!res.ok) {
+      throw new Error(
+        'error' in body && body.error
+          ? body.error
+          : `${res.status} ${res.statusText}`,
+      );
+    }
+    return body as GithubMilestoneValidation;
+  },
+
+  async validateJiraEpic(
+    projectId: string,
+    key: string,
+  ): Promise<JiraEpicValidation> {
+    const res = await authedFetch(
+      `/api/projects/${encodeURIComponent(projectId)}/jira/validate-epic?key=${encodeURIComponent(key)}`,
+    );
+    const body = (await res.json()) as JiraEpicValidation | { error: string };
+    if (!res.ok) {
+      throw new Error(
+        'error' in body && body.error
+          ? body.error
+          : `${res.status} ${res.statusText}`,
+      );
+    }
+    return body as JiraEpicValidation;
+  },
+
   async validateNotionBoard(id: string): Promise<BoardValidation> {
-    const res = await fetch(
+    const res = await authedFetch(
       `/api/notion/validate-board?id=${encodeURIComponent(id)}`,
     );
     const body = (await res.json()) as BoardValidation | { error: string };

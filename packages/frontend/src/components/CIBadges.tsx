@@ -1,17 +1,34 @@
 import styles from './CIBadges.module.css';
+import { parsePauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
 
-export type PreReviewStage =
+type PreReviewStage =
+  | 'implementing'
+  | 'reviewing'
   | 'autofix'
   | 'verify'
+  | 'analyzing'
   | 'tests'
   | 'awaiting_review'
   | 'blocked_autofix'
-  | 'blocked_verify';
+  | 'blocked_verify'
+  | 'blocked_analyze';
 
 const STAGE_CONFIG: Record<
   PreReviewStage,
   { emoji: string; label: string; compactLabel: string; styleKey: string }
 > = {
+  implementing: {
+    emoji: '💻',
+    label: 'Implementing',
+    compactLabel: 'Implementing',
+    styleKey: 'running',
+  },
+  reviewing: {
+    emoji: '👀',
+    label: 'Reviewing',
+    compactLabel: 'Reviewing',
+    styleKey: 'running',
+  },
   autofix: {
     emoji: '⚙',
     label: 'Running autofix',
@@ -22,6 +39,12 @@ const STAGE_CONFIG: Record<
     emoji: '🔍',
     label: 'Running verify',
     compactLabel: 'Verify',
+    styleKey: 'running',
+  },
+  analyzing: {
+    emoji: '🔬',
+    label: 'Running analyze',
+    compactLabel: 'Analyze',
     styleKey: 'running',
   },
   tests: {
@@ -46,6 +69,12 @@ const STAGE_CONFIG: Record<
     emoji: '❌',
     label: 'Verify failed',
     compactLabel: 'Verify',
+    styleKey: 'blocked',
+  },
+  blocked_analyze: {
+    emoji: '❌',
+    label: 'Analyze failed',
+    compactLabel: 'Analyze',
     styleKey: 'blocked',
   },
 };
@@ -119,15 +148,20 @@ export function CIBadges({
 }: CIBadgesProps) {
   if (prState === 'merged' || prState === 'closed') return null;
 
+  const pauseStruct = parsePauseReason(pauseReason ?? null);
+  const isCIPause = pauseStruct?.source === 'ci';
+  const showBillingBlocked =
+    isCIPause && pauseStruct!.reason === 'ci_billing_blocked';
   const showCiFailing =
-    mergeState === 'ci_failed' || pauseReason === 'ci_failing';
-  const showBillingBlocked = pauseReason === 'ci_billing_blocked';
+    mergeState === 'ci_failed' || (isCIPause && !showBillingBlocked);
+  const showAnalyzeFailing = pauseStruct?.source === 'analyze';
   const showUnstable = mergeState === 'unstable';
   const showRunning = mergeState === 'ci_running';
 
   if (
     !showCiFailing &&
     !showBillingBlocked &&
+    !showAnalyzeFailing &&
     !showUnstable &&
     !showRunning &&
     !awaitingReReview
@@ -166,6 +200,14 @@ export function CIBadges({
           title="GitHub Actions billing/spending limit reached — jobs cannot start. Resolve billing in GitHub settings, then re-run failed jobs."
         >
           ❌ Billing limit — jobs blocked
+        </span>
+      )}
+      {showAnalyzeFailing && (
+        <span
+          className={styles.ciBadge}
+          title="Static analysis gate failed — fix the reported issues and re-push."
+        >
+          ❌ Analyze failing
         </span>
       )}
       {showUnstable && (

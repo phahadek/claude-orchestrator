@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import { getOrchestratorConfig } from '../config/appConfig';
+import { logger } from '../logger';
 
 const _configDbPath = getOrchestratorConfig().db.path;
 const dbPath = _configDbPath || path.join(process.cwd(), 'dashboard.db');
@@ -117,6 +118,17 @@ db.exec(`
     token       TEXT    NOT NULL UNIQUE,
     revoked     INTEGER NOT NULL DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS scheduler_audit (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    job             TEXT    NOT NULL,
+    status          TEXT    NOT NULL,
+    started_at      TEXT    NOT NULL,
+    completed_at    TEXT    NOT NULL,
+    duration_ms     INTEGER NOT NULL,
+    items_processed INTEGER,
+    error           TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_scheduler_audit_job ON scheduler_audit(job, started_at DESC);
 `);
 
 // ── Column rename migrations (run before queries.ts imports so prepared statements
@@ -277,7 +289,7 @@ try {
       )
       .get() as { value: string } | undefined;
     if (already) return;
-    console.log(
+    logger.info(
       '[db] Enabling incremental auto_vacuum (one-time VACUUM — may take a moment)',
     );
     db.pragma('auto_vacuum = INCREMENTAL');
@@ -285,8 +297,8 @@ try {
     db.prepare(
       `INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
     ).run('auto_vacuum_incremental_done', '1');
-    console.log('[db] incremental auto_vacuum enabled');
+    logger.info('[db] incremental auto_vacuum enabled');
   } catch (err) {
-    console.warn('[db] auto_vacuum enablement failed (non-fatal):', err);
+    logger.warn('[db] auto_vacuum enablement failed (non-fatal):', err);
   }
 })();

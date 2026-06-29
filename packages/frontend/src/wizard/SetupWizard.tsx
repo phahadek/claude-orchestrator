@@ -3,7 +3,7 @@ import {
   ProjectFormModal,
   type ProjectFormValues,
 } from '../components/Settings/ProjectFormModal';
-import { projectsApi } from '../api/projects';
+import { projectsApi, authedFetch } from '../api/projects';
 import type {
   GithubTaskSourceConfig,
   NonMilestoneSourceConfig,
@@ -76,7 +76,7 @@ function toCreatePayload(values: ProjectFormValues) {
 }
 
 async function apiPost<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await authedFetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -138,7 +138,7 @@ export function SetupWizard({ onComplete }: Props) {
     const doCheck = async () => {
       setEnvLoading(true);
       try {
-        const res = await fetch('/api/setup/env-check');
+        const res = await authedFetch('/api/setup/env-check');
         const data = (await res.json()) as EnvCheckResult;
         setEnvCheck(data);
       } catch {
@@ -209,21 +209,14 @@ export function SetupWizard({ onComplete }: Props) {
   );
 
   const handleSaveCredentials = useCallback(async () => {
-    if (!githubToken.trim()) {
-      setCredError('GitHub PAT is required.');
-      return;
-    }
-    if (validation.github !== 'ok') {
+    if (githubToken.trim() && validation.github !== 'ok') {
       setCredError('Please validate your GitHub PAT first (click "Check").');
       return;
     }
     setCredError(null);
     try {
-      // Write GitHub token via import endpoint workaround:
-      // create a temporary in-memory write via the validate + setup/complete path.
-      // Use the dedicated config write endpoint.
       await apiPost('/api/setup/save-credentials', {
-        githubToken: githubToken.trim(),
+        githubToken: githubToken.trim() || undefined,
         notionApiKey: notionToken.trim() || undefined,
       });
       setStep('project');
@@ -401,7 +394,7 @@ export function SetupWizard({ onComplete }: Props) {
                 onClick={async () => {
                   setEnvLoading(true);
                   try {
-                    const res = await fetch('/api/setup/env-check');
+                    const res = await authedFetch('/api/setup/env-check');
                     const data = (await res.json()) as EnvCheckResult;
                     setEnvCheck(data);
                   } finally {
@@ -430,12 +423,16 @@ export function SetupWizard({ onComplete }: Props) {
           <>
             <h1 className={styles.title}>Global Credentials</h1>
             <p className={styles.subtitle}>
-              Add your GitHub PAT and (optionally) a Notion integration token.
+              Add your credentials. Both fields are optional — you can configure
+              them later in Settings.
             </p>
 
             <div className={styles.formGroup}>
               <label className={styles.label} htmlFor="wizard-github-pat">
-                GitHub Personal Access Token
+                GitHub Personal Access Token{' '}
+                <span style={{ color: 'var(--text-muted, #6c7086)' }}>
+                  (optional)
+                </span>
               </label>
               <div className={styles.inputRow}>
                 <input
@@ -571,7 +568,9 @@ export function SetupWizard({ onComplete }: Props) {
               <button
                 className={styles.btnPrimary}
                 onClick={() => void handleSaveCredentials()}
-                disabled={!githubToken.trim() || validation.github !== 'ok'}
+                disabled={
+                  githubToken.trim() !== '' && validation.github !== 'ok'
+                }
                 type="button"
               >
                 Continue

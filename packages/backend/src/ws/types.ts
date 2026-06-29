@@ -15,7 +15,7 @@ export interface PermissionDenial {
  * `session_started` WS messages. Populated from the `sessions` table joined
  * against `pull_requests` (for prUrl) on each WS connection.
  */
-export interface SessionState {
+interface SessionState {
   sessionId: string;
   taskName: string;
   notionTaskUrl: string;
@@ -58,6 +58,7 @@ export interface TaskView {
   codeSession: {
     sessionId: string;
     status: string;
+    sessionType?: string | null;
     startedAt: number;
     endedAt: number | null;
     lastMessage: string;
@@ -88,6 +89,8 @@ export interface TaskView {
     outputTokens: number;
   } | null;
   totalTokens: { input: number; output: number };
+  /** Assigned target repo slug for multi-repo projects, e.g. "owner/repo". Null when unassigned. */
+  assignedRepo: string | null;
 }
 
 export type ServerMessage =
@@ -250,6 +253,7 @@ export type ServerMessage =
       reason: 'launch_failed';
       detail: string;
     }
+  | { type: 'session_launch_failed'; taskId: string; sessionId: string }
   | {
       type: 'github_rate_limit_hit';
       resetAt: string; // ISO-8601
@@ -267,18 +271,27 @@ export type ServerMessage =
       success: boolean;
       summary?: string;
     }
-  | { type: 'verify_pipeline_started'; prNumber: number; repo: string }
-  | { type: 'verify_pipeline_complete'; prNumber: number; repo: string }
-  | { type: 'test_pipeline_started'; prNumber: number; repo: string }
-  | { type: 'test_pipeline_complete'; prNumber: number; repo: string }
   | { type: 'review_started'; prNumber: number; sessionId: string }
   | {
-      type: 'pr_review_blocked_by_gate';
+      type: 'pipeline_stage_entered';
       prNumber: number;
       repo: string;
-      kind: 'verify' | 'autofix';
+      stage: string;
+    }
+  | {
+      type: 'pipeline_stage_passed';
+      prNumber: number;
+      repo: string;
+      stage: string;
+      summary?: string;
+    }
+  | {
+      type: 'pipeline_stage_failed';
+      prNumber: number;
+      repo: string;
+      stage: string;
+      summary?: string;
       failedCommand?: string;
-      summary: string;
     }
   | {
       type: 'local_branch_submitted';
@@ -341,6 +354,46 @@ export type ServerMessage =
       action: string;
       reason: string;
       detail: string;
+    }
+  | {
+      type: 'boot_reconciliation_started';
+      steps: string[];
+      started_at: string;
+    }
+  | {
+      type: 'boot_reconciliation_step';
+      step: string;
+      status: 'started' | 'completed' | 'failed';
+      duration_ms?: number;
+      items_processed?: number;
+      error?: string;
+    }
+  | {
+      type: 'boot_reconciliation_completed';
+      duration_ms: number;
+      completed_at: string;
+    }
+  | {
+      type: 'scheduler_job_run';
+      job: string;
+      status: 'ok' | 'failed' | 'skipped';
+      started_at: string;
+      completed_at: string;
+      duration_ms: number;
+      next_run_at: string | null;
+      items_processed?: number;
+      error?: { message: string; stack?: string };
+    }
+  | {
+      type: 'pr_stalled_escalated';
+      prNumber: number;
+      repo: string;
+      kind:
+        | 'incomplete_verdict'
+        | 'errored_review_session'
+        | 'gate_failed'
+        | 'analyze_failing'
+        | 'pre_review_interrupted';
     };
 
 // ── Client → Server ──────────────────────────────────────────────

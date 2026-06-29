@@ -1,6 +1,6 @@
-import { getSetting } from '../db/queries';
+import { typedGetSetting } from './settings';
 
-export interface CorporateModeGates {
+interface CorporateModeGates {
   dockerMandatory: boolean;
   requireHumanApproval: boolean;
   requireZDR: boolean;
@@ -16,13 +16,33 @@ export interface CorporateModeConfig {
 
 let cachedConfig: CorporateModeConfig | null = null;
 
-function buildGates(enabled: boolean): CorporateModeGates {
+// Per-gate env var names. Precedence: env-var override > mode default.
+// Set to "true" or "false" to override the corporate-mode default for that gate.
+const GATE_ENV_VARS: Record<keyof CorporateModeGates, string> = {
+  dockerMandatory: 'ORCHESTRATOR_GATE_DOCKER_MANDATORY',
+  requireHumanApproval: 'ORCHESTRATOR_GATE_REQUIRE_HUMAN_APPROVAL',
+  requireZDR: 'ORCHESTRATOR_GATE_REQUIRE_ZDR',
+  validatePRBody: 'ORCHESTRATOR_GATE_VALIDATE_PR_BODY',
+  secretsViaSeam: 'ORCHESTRATOR_GATE_SECRETS_VIA_SEAM',
+};
+
+function resolveGate(
+  gate: keyof CorporateModeGates,
+  modeDefault: boolean,
+): boolean {
+  const raw = process.env[GATE_ENV_VARS[gate]];
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  return modeDefault;
+}
+
+function buildGates(modeDefault: boolean): CorporateModeGates {
   return {
-    dockerMandatory: enabled,
-    requireHumanApproval: enabled,
-    requireZDR: enabled,
-    validatePRBody: enabled,
-    secretsViaSeam: enabled,
+    dockerMandatory: resolveGate('dockerMandatory', modeDefault),
+    requireHumanApproval: resolveGate('requireHumanApproval', modeDefault),
+    requireZDR: resolveGate('requireZDR', modeDefault),
+    validatePRBody: resolveGate('validatePRBody', modeDefault),
+    secretsViaSeam: resolveGate('secretsViaSeam', modeDefault),
   };
 }
 
@@ -36,14 +56,9 @@ export function getCorporateMode(): CorporateModeConfig {
     return cachedConfig;
   }
 
-  const dbVal = getSetting('corporate_mode');
-  if (dbVal === 'corporate' || dbVal === 'personal') {
-    const enabled = dbVal === 'corporate';
-    cachedConfig = { enabled, envLocked: false, gates: buildGates(enabled) };
-    return cachedConfig;
-  }
-
-  cachedConfig = { enabled: false, envLocked: false, gates: buildGates(false) };
+  const dbVal = typedGetSetting('corporate_mode'); // 'corporate' | 'personal', default 'personal'
+  const enabled = dbVal === 'corporate';
+  cachedConfig = { enabled, envLocked: false, gates: buildGates(enabled) };
   return cachedConfig;
 }
 

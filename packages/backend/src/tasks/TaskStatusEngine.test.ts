@@ -256,6 +256,74 @@ describe('deriveDisplayStatus', () => {
     ).toBe('done');
   });
 
+  // ─── empty / unknown notionStatus (cache miss) ─────────────────────────────
+
+  it("returns 'backlog' when notionStatus is empty (cache miss)", () => {
+    expect(deriveDisplayStatus(makeInput({ notionStatus: '' }))).toBe(
+      'backlog',
+    );
+  });
+
+  it("returns 'backlog' when notionStatus is unrecognized", () => {
+    expect(
+      deriveDisplayStatus(makeInput({ notionStatus: 'Some Future Status' })),
+    ).toBe('backlog');
+  });
+
+  it("returns 'backlog' (not 'ready') when notionStatus is empty even with no PR", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({ notionStatus: '', prState: null, codeSessionStatus: null }),
+      ),
+    ).toBe('backlog');
+  });
+
+  it("returns 'done' (not 'backlog') when PR is merged and notionStatus is empty", () => {
+    expect(
+      deriveDisplayStatus(makeInput({ notionStatus: '', prState: 'merged' })),
+    ).toBe('done');
+  });
+
+  // ─── blocked ───────────────────────────────────────────────────────────────
+
+  it("returns 'blocked' when notionStatus is '🚫 Blocked' with no pauseReason", () => {
+    expect(deriveDisplayStatus(makeInput({ notionStatus: '🚫 Blocked' }))).toBe(
+      'blocked',
+    );
+  });
+
+  it("returns 'blocked' (not 'needs_attention') when notionStatus is '🚫 Blocked' with a pauseReason", () => {
+    // Explicit Blocked status takes precedence over pause_reason so an operator
+    // sees 'blocked' rather than 'needs_attention' and can act on the right signal.
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: '🚫 Blocked',
+          pauseReason: 'stuck_timeout',
+        }),
+      ),
+    ).toBe('blocked');
+  });
+
+  // ─── deferred ──────────────────────────────────────────────────────────────
+
+  it("returns 'deferred' when notionStatus is '⏭️ Deferred' with no pauseReason", () => {
+    expect(
+      deriveDisplayStatus(makeInput({ notionStatus: '⏭️ Deferred' })),
+    ).toBe('deferred');
+  });
+
+  it("returns 'deferred' (not 'needs_attention') when notionStatus is '⏭️ Deferred' with a pauseReason", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: '⏭️ Deferred',
+          pauseReason: 'stuck_timeout',
+        }),
+      ),
+    ).toBe('deferred');
+  });
+
   // ─── Notion status fallback ────────────────────────────────────────────────
 
   it("returns 'done' when notionStatus is '✅ Done' and no PR/session", () => {

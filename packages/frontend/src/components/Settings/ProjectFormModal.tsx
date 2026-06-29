@@ -268,20 +268,20 @@ export function ProjectFormModal({
               className={styles.input}
               value={values.taskSource}
               onChange={(e) => {
-                const val = e.target.value;
-                update(
-                  'taskSource',
-                  val === 'yaml'
-                    ? 'yaml'
-                    : val === 'github'
-                      ? 'github'
-                      : 'notion',
-                );
+                const val = e.target.value as TaskSource;
+                const valid: TaskSource[] = [
+                  'notion',
+                  'yaml',
+                  'github',
+                  'jira',
+                ];
+                update('taskSource', valid.includes(val) ? val : 'notion');
               }}
             >
               <option value="notion">Notion</option>
               <option value="yaml">YAML (tasks.yaml in projectDir)</option>
               <option value="github">GitHub Issues</option>
+              <option value="jira">Jira</option>
             </select>
           </div>
 

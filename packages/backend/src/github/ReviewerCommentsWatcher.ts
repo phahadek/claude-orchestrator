@@ -1,14 +1,16 @@
+import { logger } from '../logger';
 import type { GitHubClient } from './GitHubClient';
 import type { SessionManager } from '../session/SessionManager';
 import { GitHubRateLimitError } from './types';
+import type { Scheduler } from '../orchestration/Scheduler';
 import {
   getAllOpenPRs,
   getRoutedCommentIds,
   markCommentsRouted,
   setPauseReason,
   getSession,
-  getSetting,
 } from '../db/queries';
+import { typedGetSetting } from '../config/settings';
 import { getProjectByGithubRepo } from '../config';
 import { isTerminalStalePR } from './pollUtils';
 import { formatHumanReviewFeedback, type HumanComment } from './reviewUtils';
@@ -22,15 +24,7 @@ const WATCHABLE_PAUSE_REASONS: ReadonlySet<string | null> = new Set([
 ]);
 
 function getAIReviewerUsernames(): Set<string> {
-  const raw = getSetting('ai_reviewer_usernames');
-  if (!raw) return new Set();
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed)) return new Set(parsed.map(String));
-  } catch {
-    /* ignore malformed */
-  }
-  return new Set();
+  return new Set(typedGetSetting('ai_reviewer_usernames'));
 }
 
 /**
@@ -43,7 +37,6 @@ function getAIReviewerUsernames(): Set<string> {
  * coding session promptly without a separate poll infrastructure.
  */
 export class ReviewerCommentsWatcher {
-  private timer: ReturnType<typeof setInterval> | null = null;
   private pausedUntil: Date | null = null;
   private rateLimitBroadcasted = false;
 
@@ -53,31 +46,28 @@ export class ReviewerCommentsWatcher {
     private broadcast: (msg: ServerMessage) => void = () => {},
   ) {}
 
-  start(intervalMs = 10_000): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => {
-      this.pollAll().catch((err: unknown) =>
-        console.warn(
+  register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'reviewer_comments_watcher',
+      intervalMs: 10_000,
+      runOnBoot: false,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.pollAll();
+      },
+      onError: (err: unknown) =>
+        logger.warn(
           '[ReviewerCommentsWatcher] pollAll error:',
           (err as Error).message,
         ),
-      );
-    }, intervalMs);
-    console.log(`[ReviewerCommentsWatcher] started (interval=${intervalMs}ms)`);
-  }
-
-  stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    });
   }
 
   private handleRateLimit(err: GitHubRateLimitError): void {
     this.pausedUntil = err.resetAt;
     if (!this.rateLimitBroadcasted) {
       this.rateLimitBroadcasted = true;
-      console.warn(
+      logger.warn(
         `[ReviewerCommentsWatcher] GitHub rate-limited; backing off until ${err.resetAt.toISOString()}`,
       );
       this.broadcast({
@@ -112,7 +102,7 @@ export class ReviewerCommentsWatcher {
           this.handleRateLimit(err);
           return;
         }
-        console.warn(
+        logger.warn(
           `[ReviewerCommentsWatcher] poll failed for PR #${pr.pr_number} in ${pr.repo}:`,
           (err as Error).message,
         );
@@ -170,7 +160,7 @@ export class ReviewerCommentsWatcher {
 
     if (hasChangesRequested && pr.pause_reason === 'awaiting_human_approval') {
       setPauseReason(pr.pr_number, pr.repo, 'human_changes_requested');
-      console.log(
+      logger.info(
         `[ReviewerCommentsWatcher] PR #${pr.pr_number}: CHANGES_REQUESTED — transitioning awaiting_human_approval → human_changes_requested`,
       );
     }
@@ -185,7 +175,7 @@ export class ReviewerCommentsWatcher {
       sessionRow.status === 'error' ||
       sessionRow.status === 'killed'
     ) {
-      console.warn(
+      logger.warn(
         `[ReviewerCommentsWatcher] PR #${pr.pr_number}: session ${sessionId.slice(0, 8)} is not alive — skipping comment routing`,
       );
       return;
@@ -206,7 +196,7 @@ export class ReviewerCommentsWatcher {
       newComments.map((c) => c.id),
     );
 
-    console.log(
+    logger.info(
       `[ReviewerCommentsWatcher] routed ${newComments.length} new human comment(s) to session ${sessionId.slice(0, 8)} for PR #${pr.pr_number}`,
     );
   }

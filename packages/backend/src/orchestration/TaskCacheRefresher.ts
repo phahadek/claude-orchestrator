@@ -1,13 +1,23 @@
+import { logger } from '../logger';
 import { getAllProjects, runtimeSettings } from '../config';
 import type { ProjectConfig } from '../config';
 import type { ServerMessage } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
+import { JiraApiError } from '../tasks/JiraClient';
 import { ProjectService } from '../projects/ProjectService';
 import { runWithConcurrency } from '../utils/concurrency';
+import type { Scheduler } from './Scheduler';
 
 const MIN_REFRESH_INTERVAL_MS = 10_000;
+const JIRA_MIN_REFRESH_INTERVAL_MS = 120_000;
 const PROJECT_CONCURRENCY = 5;
+const CACHEABLE_TASK_SOURCES = new Set<string>([
+  'notion',
+  'github',
+  'jira',
+  'yaml',
+]);
 
 /**
  * Background service that refreshes the per-project board cache on a fixed interval
@@ -15,9 +25,8 @@ const PROJECT_CONCURRENCY = 5;
  * it broadcasts `task_cache_updated` so connected frontends can re-read the cache.
  */
 export class TaskCacheRefresher {
-  private timer: NodeJS.Timeout | null = null;
-  private stopped = true;
-  private refreshing = false;
+  private readonly jiraNextAllowed = new Map<string, number>();
+  private _refreshingOnce = false;
 
   constructor(
     private readonly broadcast?: (msg: ServerMessage) => void,
@@ -27,39 +36,34 @@ export class TaskCacheRefresher {
     } = {},
   ) {}
 
-  start(): void {
-    if (!this.stopped) return;
-    this.stopped = false;
-    this.scheduleNext();
-  }
-
-  stop(): void {
-    this.stopped = true;
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-  }
-
-  private scheduleNext(): void {
-    if (this.stopped) return;
-    const interval = Math.max(
-      MIN_REFRESH_INTERVAL_MS,
-      runtimeSettings.task_cache_refresh_interval_ms,
-    );
-    this.timer = setTimeout(() => {
-      void this.refreshOnce().finally(() => this.scheduleNext());
-    }, interval);
-    this.timer.unref?.();
+  register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'task_cache_refresher',
+      intervalMs: () =>
+        Math.max(
+          MIN_REFRESH_INTERVAL_MS,
+          runtimeSettings.task_cache_refresh_interval_ms,
+        ),
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.refreshOnce();
+      },
+    });
   }
 
   async refreshOnce(): Promise<void> {
-    if (this.refreshing) return;
-    this.refreshing = true;
+    if (this._refreshingOnce) return;
+    this._refreshingOnce = true;
     const start = Date.now();
     const listProjects = this.options.listProjects ?? getAllProjects;
-    const projects = listProjects().filter((p) => p.taskSource === 'notion');
-    console.log(
+    const now = Date.now();
+    const projects = listProjects()
+      .filter((p) => CACHEABLE_TASK_SOURCES.has(p.taskSource))
+      .filter((p) => {
+        if (p.taskSource !== 'jira') return true;
+        return now >= (this.jiraNextAllowed.get(p.id) ?? 0);
+      });
+    logger.info(
       `[TaskCacheRefresher] refresh start projects=${projects.length}`,
     );
     try {
@@ -67,21 +71,27 @@ export class TaskCacheRefresher {
         this.refreshProject(project),
       );
     } finally {
-      this.refreshing = false;
-      console.log(
+      this._refreshingOnce = false;
+      logger.info(
         `[TaskCacheRefresher] refresh complete projects=${projects.length} durationMs=${Date.now() - start}`,
       );
     }
   }
 
-  async refreshProjectById(projectId: string): Promise<void> {
+  async refreshProjectById(
+    projectId: string,
+    skipCache?: boolean,
+  ): Promise<void> {
     const listProjects = this.options.listProjects ?? getAllProjects;
     const project = listProjects().find((p) => p.id === projectId);
     if (!project) return;
-    await this.refreshProject(project);
+    await this.refreshProject(project, skipCache);
   }
 
-  private async refreshProject(project: ProjectConfig): Promise<void> {
+  private async refreshProject(
+    project: ProjectConfig,
+    skipCache?: boolean,
+  ): Promise<void> {
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     let backend: TaskBackend;
     try {
@@ -90,25 +100,55 @@ export class TaskCacheRefresher {
       return;
     }
 
+    const isLocalSource = project.taskSource === 'yaml';
+
+    if (isLocalSource) {
+      ProjectService.reconcileYamlMilestones(project.id, project.projectDir);
+    }
+
     const milestones = ProjectService.listMilestones(project.id).filter(
       (m) => m.sourceId,
     );
 
     for (const milestone of milestones) {
+      // yaml projects: fetch by source_id (yaml milestone id) so LocalTaskBackend matches correctly
+      const fetchId = isLocalSource
+        ? (milestone.sourceId as string)
+        : milestone.id;
       try {
-        const tasks = await backend.fetchReadyTasks(milestone.id);
+        const tasks = skipCache
+          ? await backend.fetchReadyTasks(fetchId, true)
+          : await backend.fetchReadyTasks(fetchId);
         this.broadcast?.({
           type: 'task_cache_updated',
           projectId: project.id,
-          boardId: milestone.id,
+          boardId: fetchId,
           taskCount: tasks.length,
           refreshedAt: Date.now(),
         });
       } catch (err) {
-        console.warn(
-          `[TaskCacheRefresher] failed to refresh project=${project.id} milestone=${milestone.id}: ${String(err)}`,
+        if (err instanceof JiraApiError && err.statusCode === 429) {
+          const backoffMs = Math.max(
+            JIRA_MIN_REFRESH_INTERVAL_MS,
+            err.retryAfterMs ?? 0,
+          );
+          this.jiraNextAllowed.set(project.id, Date.now() + backoffMs);
+          logger.warn(
+            `[TaskCacheRefresher] Jira 429 project=${project.id} milestone=${fetchId}, backing off ${backoffMs}ms`,
+          );
+          return;
+        }
+        logger.warn(
+          `[TaskCacheRefresher] failed to refresh project=${project.id} milestone=${fetchId}: ${String(err)}`,
         );
       }
+    }
+
+    if (project.taskSource === 'jira') {
+      this.jiraNextAllowed.set(
+        project.id,
+        Date.now() + JIRA_MIN_REFRESH_INTERVAL_MS,
+      );
     }
 
     if (project.nonMilestoneSourceConfig?.notionDatabaseId) {
@@ -125,7 +165,7 @@ export class TaskCacheRefresher {
           refreshedAt: Date.now(),
         });
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[TaskCacheRefresher] failed to refresh non-milestone project=${project.id}: ${String(err)}`,
         );
       }

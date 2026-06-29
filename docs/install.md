@@ -8,6 +8,10 @@ Detailed setup, Docker, and configuration reference for Claude Code Orchestrator
 - [`claude`](https://docs.anthropic.com/en/docs/claude-code) CLI installed and authenticated (`claude login`)
 - Notion integration token, if using Notion as a task source — [create an integration](https://www.notion.so/my-integrations)
 - GitHub personal access token with `repo` scope, for PR tracking
+- [`gitleaks`](https://github.com/gitleaks/gitleaks) ≥ 8.x — required for the `analyze:` gate secret-scanning step:
+  - macOS: `brew install gitleaks`
+  - Windows: `choco install gitleaks`
+  - Linux: see [gitleaks releases](https://github.com/gitleaks/gitleaks/releases) or `go install`
 
 ## Local development
 
@@ -29,6 +33,8 @@ npm run dev
 ```
 
 In dev mode, open `http://localhost:5173` in your browser — that's Vite's frontend with hot reload. The backend runs on `:3000`; Vite proxies API + WebSocket traffic to it automatically. In production (`npm start`), both are served from `:3000` as a single process.
+
+**LAN access (opt-in):** By default the backend and Vite dev server bind to `127.0.0.1` (localhost only). To expose the dashboard on your local network, set `ORCHESTRATOR_BIND_HOST=0.0.0.0` (or a specific LAN IP) in `packages/backend/.env` before starting. Corporate mode always ignores this override and forces `127.0.0.1`.
 
 ### Local context (`.claude/local-context.md`)
 
@@ -117,6 +123,7 @@ All configuration lives in `packages/backend/.env`. See `packages/backend/.env.e
 | `GITHUB_TOKEN`            | Yes                                      | GitHub PAT with `repo` scope                                                                                                                                                                                                                   | `ghp_...`            |
 | `GITHUB_REPO`             | No                                       | Fallback `owner/repo` used only when `GitHubClient` is called without a project context (e.g. CLI scripts). Each project's own `githubRepo` (set in **Settings → Projects**) takes precedence and is required for the dashboard's PR features. | `owner/repo`         |
 | `PORT`                    | No                                       | Backend HTTP port                                                                                                                                                                                                                              | `3000`               |
+| `ORCHESTRATOR_BIND_HOST`  | No                                       | Network interface the backend and Vite dev server bind to. Defaults to `127.0.0.1` (localhost only). Set to `0.0.0.0` or a specific LAN IP to expose the dashboard on the network. Ignored in corporate mode — always binds `127.0.0.1`.       | `0.0.0.0`            |
 | `DB_PATH`                 | No                                       | SQLite database file                                                                                                                                                                                                                           | `./dashboard.db`     |
 | `SESSIONS_DIR`            | No                                       | Claude CLI sessions directory                                                                                                                                                                                                                  | `~/.claude/projects` |
 | `AUTO_REVIEW`             | No                                       | Enable automated PR review                                                                                                                                                                                                                     | `true`               |

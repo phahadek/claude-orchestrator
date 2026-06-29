@@ -4,9 +4,10 @@ import { validatePRFiles } from '../github/PRFileValidator';
 import { revertBannedFiles } from '../github/PRFileReverter';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from '../github/GitHubClient';
+import { logger } from '../logger';
 
 /** Walk a directory tree collecting all .gitignore files, root-first. */
-export function collectGitignoreSources(
+function collectGitignoreSources(
   rootDir: string,
 ): Array<{ dir: string; content: string }> {
   const results: Array<{ dir: string; content: string }> = [];
@@ -91,7 +92,7 @@ export async function runFilePollutionCheck(
     const pr = await github.fetchPR(repo, prNumber);
     headSha = pr.headSha ?? null;
   } catch (e) {
-    console.warn(
+    logger.warn(
       `[filePollutionCheck] could not fetch head SHA for PR #${prNumber}: ${e}`,
     );
   }
@@ -171,12 +172,12 @@ export async function runFilePollutionCheck(
         `🔒 Orchestrator auto-reverted the following files from this PR:\n\n${fileList}`,
       )
       .catch((e) =>
-        console.warn(`[filePollutionCheck] createIssueComment failed: ${e}`),
+        logger.warn(`[filePollutionCheck] createIssueComment failed: ${e}`),
       );
 
     return { headSha, revertCommitSha: commitSha };
   } catch (e) {
-    console.warn(`[filePollutionCheck] check failed for PR #${prNumber}: ${e}`);
+    logger.warn(`[filePollutionCheck] check failed for PR #${prNumber}: ${e}`);
     recordEvent({
       event_type: 'file_pollution_check_failed',
       actor_type: 'system',

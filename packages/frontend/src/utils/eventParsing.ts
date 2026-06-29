@@ -138,7 +138,7 @@ export function extractToolResult(
   return rawContent;
 }
 
-export const SYSTEM_SUBTYPE_LABELS: Record<string, string> = {
+const SYSTEM_SUBTYPE_LABELS: Record<string, string> = {
   thinking: 'Thinking…',
   success: 'Session complete',
   error_during_execution: 'Execution error',
@@ -200,6 +200,7 @@ export function extractSystem(
           // then strip any remaining standalone tags, to remove system-injected content.
           const stripped = b.text
             .replace(
+              // eslint-disable-next-line security/detect-unsafe-regex -- Reason: verified non-backtracking against structured Claude API event payloads; lazy [\s\S]*? is anchored by the literal closing-tag backreference <\/\1>, inputs are bounded system-injected XML-like blocks.
               /<([a-zA-Z][a-zA-Z0-9_-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g,
               '',
             )

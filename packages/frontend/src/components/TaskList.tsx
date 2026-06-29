@@ -36,6 +36,8 @@ const GROUP_ORDER: DisplayStatus[] = [
   'in_review',
   'ready',
   'done',
+  'blocked',
+  'deferred',
 ];
 
 const GROUP_LABELS: Record<DisplayStatus, string> = {
@@ -45,7 +47,9 @@ const GROUP_LABELS: Record<DisplayStatus, string> = {
   in_review: '👀 In Review',
   ready: '🗂️ Ready',
   done: '✔️ Done',
-  backlog: '🗂️ Backlog',
+  backlog: '🔲 Backlog',
+  blocked: '🚫 Blocked',
+  deferred: '⏭️ Deferred',
 };
 
 const PRIORITY_RANK: Record<string, number> = {
@@ -324,7 +328,7 @@ export function TaskList({
     syncPendingRef.current = false;
     if (syncTimeoutRef.current) {
       clearTimeout(syncTimeoutRef.current);
-      // eslint-disable-next-line react-hooks/immutability
+      // eslint-disable-next-line react-hooks/immutability -- Reason: deliberate ref mutation — syncTimeoutRef holds a timeout handle for bookkeeping, not a rendered value; clearing it imperatively is correct
       syncTimeoutRef.current = null;
     }
     setSyncing(false);
@@ -372,7 +376,7 @@ export function TaskList({
     }
     // Safety timeout: clear syncing if no tasks_ready arrives within 5 seconds
     if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-    // eslint-disable-next-line react-hooks/immutability
+    // eslint-disable-next-line react-hooks/immutability -- Reason: deliberate ref mutation — syncTimeoutRef holds a timeout handle for bookkeeping; assigning it imperatively is the correct pattern
     syncTimeoutRef.current = setTimeout(() => {
       syncTimeoutRef.current = null;
       if (syncPendingRef.current) {
@@ -608,7 +612,7 @@ export function TaskList({
               <span className={styles.toggle} aria-hidden="true">
                 {!collapsed.has('backlog') ? '▼' : '▶'}
               </span>
-              <span className={styles.groupLabel}>🗂️ Backlog</span>
+              <span className={styles.groupLabel}>{GROUP_LABELS.backlog}</span>
               <span className={styles.groupCount}>{backlogTasks.length}</span>
             </div>
             {!collapsed.has('backlog') && (

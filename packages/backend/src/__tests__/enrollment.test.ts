@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import express from 'express';
+import supertest from 'supertest';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -52,6 +54,7 @@ import {
   approveEnrollment,
   bootstrapEnroll,
   pendingEnrollments,
+  createEnrollmentRouter,
 } from '../auth/Enrollment.js';
 import * as queries from '../db/queries';
 
@@ -155,5 +158,31 @@ describe('bootstrapEnroll()', () => {
     const result = bootstrapEnroll('Second', 'UA', '127.0.0.1');
     expect(result).toBeNull();
     expect(queries.insertDevice).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/enrollment/needs-bootstrap', () => {
+  function buildApp() {
+    const app = express();
+    app.use('/api/enrollment', createEnrollmentRouter());
+    return app;
+  }
+
+  it('returns needsBootstrap: true when no devices are enrolled', async () => {
+    vi.mocked(queries.getActiveDeviceCount).mockReturnValue(0);
+    const res = await supertest(buildApp()).get(
+      '/api/enrollment/needs-bootstrap',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ needsBootstrap: true });
+  });
+
+  it('returns needsBootstrap: false when at least one device is enrolled', async () => {
+    vi.mocked(queries.getActiveDeviceCount).mockReturnValue(1);
+    const res = await supertest(buildApp()).get(
+      '/api/enrollment/needs-bootstrap',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ needsBootstrap: false });
   });
 });

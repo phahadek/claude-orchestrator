@@ -6,24 +6,25 @@ import type {
   RawSessionEvent,
   SessionRunnerOptions,
 } from './SessionRunner';
+import { logger } from '../logger';
 
 function log(sessionId: string, ...args: unknown[]) {
-  console.log(`[DockerSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
+  logger.info(`[DockerSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
 }
 
 /**
  * Container name prefix for session containers.
  * Used by the orphan-reap logic to identify containers owned by this system.
  */
-export const SESSION_CONTAINER_PREFIX = 'claude-session-';
-export const PROXY_CONTAINER_PREFIX = 'claude-session-proxy-';
-export const NETWORK_PREFIX = 'claude-session-net-';
+const SESSION_CONTAINER_PREFIX = 'claude-session-';
+const PROXY_CONTAINER_PREFIX = 'claude-session-proxy-';
+const NETWORK_PREFIX = 'claude-session-net-';
 
 /**
  * Default egress allowlist for the squid proxy.
  * Extended per-project with the Jira host from task_source_config when applicable.
  */
-export const DEFAULT_EGRESS_ALLOWLIST = [
+const DEFAULT_EGRESS_ALLOWLIST = [
   'api.anthropic.com',
   'api.github.com',
   'github.com',
@@ -137,7 +138,7 @@ export class DockerSessionRunner implements ISessionRunner {
       );
     } catch (err) {
       this._hasSpawnError = true;
-      console.error(
+      logger.error(
         `[DockerSessionRunner] container setup failed for ${this.sessionId}: ${err}`,
       );
       await this._teardown();
@@ -177,7 +178,7 @@ export class DockerSessionRunner implements ISessionRunner {
 
     this.execProc.on('error', (err) => {
       this._hasSpawnError = true;
-      console.error(`[DockerSessionRunner] exec error: ${err.message}`);
+      logger.error(`[DockerSessionRunner] exec error: ${err.message}`);
     });
 
     this.execProc.stderr!.on('data', (chunk: Buffer) => {
@@ -215,7 +216,7 @@ export class DockerSessionRunner implements ISessionRunner {
       try {
         onEvent(event);
       } catch (err) {
-        console.error(
+        logger.error(
           `[DockerSessionRunner] event handler threw for session ${this.sessionId}: ${(err as Error).message}`,
           err,
         );

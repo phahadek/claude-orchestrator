@@ -53,9 +53,13 @@ import {
 } from './eventTypes';
 import { eventKind } from './eventKind';
 import { isContextOverflow } from './contextOverflow';
+import { logger } from '../logger';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
+
+/** Maximum number of rebase nudges sent to a session before escalating to needs_attention. */
+export const MAX_REBASE_NUDGES = 3;
 
 /**
  * Returns true if the tool call represents a git push operation.
@@ -114,7 +118,7 @@ export function extractTextFromToolResultEvent(
 }
 
 function sessionLog(sessionId: string, ...args: unknown[]) {
-  console.log(`[Session ${sessionId.slice(0, 8)}]`, ...args);
+  logger.info(`[Session ${sessionId.slice(0, 8)}]`, ...args);
 }
 
 /** Parse the Notion page ID out of a notion.so URL or return the raw value. */
@@ -237,6 +241,10 @@ export class AgentSession extends EventEmitter {
   private _pendingEscalationNudge: string | null = null;
   /** Text that triggered an overflow on this resume; re-delivered to the escalated session. */
   private _pendingOverflowText: string | null = null;
+  /** Set by setProactiveEscalation() — skip waiting for overflow and enter escalation spawn on the first run iteration. */
+  private _proactiveEscalation = false;
+  /** Number of rebase nudges sent for diverged-branch recovery. Bounded by MAX_REBASE_NUDGES. */
+  private rebaseNudgeCount = 0;
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -333,6 +341,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
     // Backoff schedule for transient API errors: 5s, 10s, 20s, 40s, 80s (5 attempts).
     const BACKOFF_DELAYS_MS = [5_000, 10_000, 20_000, 40_000, 80_000];
+    // Escalation re-spawn: proactive nudge delay and first-event watchdog.
+    const ESCALATION_NUDGE_DELAY_MS = 2_000;
+    const ESCALATION_WATCHDOG_MS = 30_000;
+    const MAX_ESCALATION_RETRIES = 2; // 3 total attempts
     // resumeIdForSpawn: undefined on first run, set to this.sessionId on each retry.
     let resumeIdForSpawn: string | undefined = this.resumeSessionId;
 
@@ -344,6 +356,11 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     // Per-iteration overrides set by tryEscalateForOverflow() (T3b).
     // Instance fields _escalationModel and _escalationDisableAutoCompact hold these
     // so they're accessible from the helper without parameter threading.
+
+    // Escalation state — persisted across loop iterations.
+    let isEscalationSpawn = false;
+    let escalationRetryCount = 0;
+    let escalationNudgeText: string | null = null;
 
     // Loop is exited by an explicit return on every terminal path: clean exit,
     // kill/spawn error, or non-transient failure. Only a transient API error
@@ -363,6 +380,52 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         `starting session: runner=${this.runner.constructor.name} worktree=${this.worktreePath}`,
       );
 
+      // Proactive ceiling-escalation: activated by setProactiveEscalation() when
+      // SessionManager detected context-at-ceiling before the first spawn. Immediately
+      // enter escalation spawn mode so the large model gets the nudge via the 2s timer.
+      if (this._proactiveEscalation) {
+        this._proactiveEscalation = false;
+        isEscalationSpawn = true;
+        escalationNudgeText = this._pendingEscalationNudge;
+        this._pendingEscalationNudge = null;
+        sessionLog(
+          this.sessionId,
+          `proactive ceiling-escalation: spawning on ${this._escalationModel ?? 'large model'} from the first iteration`,
+        );
+      }
+
+      // Per-attempt escalation watchdog + proactive nudge state.
+      let watchdogFiredThisAttempt = false;
+      let nudgeSentThisAttempt = false;
+      let escalationWatchdog: ReturnType<typeof setTimeout> | null = null;
+      let escalationNudgeTimer: ReturnType<typeof setTimeout> | null = null;
+
+      if (isEscalationSpawn && escalationNudgeText !== null) {
+        const capturedNudge = escalationNudgeText;
+
+        // Proactive nudge: send ~2s after spawn without waiting for a first event.
+        // Mirrors the resumeSession fix in SessionManager — a --resumed CLI in
+        // stream-json mode deadlocks waiting for stdin, so we must not gate on events.
+        escalationNudgeTimer = setTimeout(() => {
+          if (!nudgeSentThisAttempt) {
+            nudgeSentThisAttempt = true;
+            this.runner.sendMessage(capturedNudge);
+          }
+        }, ESCALATION_NUDGE_DELAY_MS);
+        escalationNudgeTimer.unref?.();
+
+        // First-event watchdog: if no event arrives within 30s, kill and retry.
+        escalationWatchdog = setTimeout(async () => {
+          watchdogFiredThisAttempt = true;
+          sessionLog(
+            this.sessionId,
+            `escalation watchdog fired (attempt ${escalationRetryCount + 1}/${MAX_ESCALATION_RETRIES + 1}) — killing hung subprocess`,
+          );
+          await this.runner.kill();
+        }, ESCALATION_WATCHDOG_MS);
+        escalationWatchdog.unref?.();
+      }
+
       const exitCode = await this.runner.run(
         resumeIdForSpawn ? undefined : initialPrompt,
         resumeIdForSpawn,
@@ -377,8 +440,28 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               ? this._escalationDisableAutoCompact
               : !!runtimeSettings.large_task_model,
         },
-        (event) => this.handleRawEvent(event),
+        (event) => {
+          // On the first event of an escalated spawn: cancel pending timers and
+          // deliver the nudge immediately if the 2s timer hasn't fired yet.
+          if (isEscalationSpawn && escalationWatchdog !== null) {
+            clearTimeout(escalationWatchdog);
+            escalationWatchdog = null;
+            if (!nudgeSentThisAttempt && escalationNudgeText !== null) {
+              nudgeSentThisAttempt = true;
+              if (escalationNudgeTimer !== null) {
+                clearTimeout(escalationNudgeTimer);
+                escalationNudgeTimer = null;
+              }
+              this.runner.sendMessage(escalationNudgeText);
+            }
+          }
+          this.handleRawEvent(event);
+        },
       );
+
+      // Clear any timers that outlived the run (normal exits, non-watchdog kills).
+      if (escalationNudgeTimer !== null) clearTimeout(escalationNudgeTimer);
+      if (escalationWatchdog !== null) clearTimeout(escalationWatchdog);
 
       if (
         this.runner.hasSpawnError ||
@@ -387,9 +470,51 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       )
         return;
 
+      // Watchdog fired: the escalated subprocess never emitted a first event.
+      // Retry up to MAX_ESCALATION_RETRIES times; on exhaustion mark as error
+      // so the session surfaces in Needs Attention rather than staying idle.
+      if (watchdogFiredThisAttempt) {
+        if (escalationRetryCount < MAX_ESCALATION_RETRIES) {
+          escalationRetryCount++;
+          sessionLog(
+            this.sessionId,
+            `escalation watchdog: retrying large-model spawn (attempt ${escalationRetryCount + 1}/${MAX_ESCALATION_RETRIES + 1})`,
+          );
+          resumeIdForSpawn = this.sessionId;
+          continue;
+        }
+        sessionLog(
+          this.sessionId,
+          `escalation deadlock: all ${MAX_ESCALATION_RETRIES + 1} attempts exhausted — marking session as error`,
+        );
+        if (!this.hasEnded) {
+          this.sessionManager?.markSessionErrored?.(
+            this.sessionId,
+            'error',
+            'escalation_deadlock',
+          );
+          if (!this.hasEnded) {
+            updateSessionStatus(this.sessionId, 'error', Date.now());
+            this.broadcast({
+              type: 'session_ended',
+              sessionId: this.sessionId,
+              status: 'error',
+              ...(this.taskId && { taskId: this.taskId }),
+            });
+          }
+        }
+        return;
+      }
+
       // Check overflow FIRST — clean exit must not bypass escalation.
       if (await this.tryEscalateForOverflow()) {
         resumeIdForSpawn = this.sessionId;
+        isEscalationSpawn = true;
+        escalationRetryCount = 0;
+        // Capture the nudge text and clear the instance field — proactive delivery
+        // (timer + first-event handler above) replaces the old first-event gating.
+        escalationNudgeText = this._pendingEscalationNudge;
+        this._pendingEscalationNudge = null;
         continue;
       }
 
@@ -516,7 +641,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       try {
         this.sessionManager.send(this.sessionId, pauseMessage);
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[AgentSession] send failed for ${this.sessionId}: ${(err as Error).message}`,
         );
       }
@@ -534,13 +659,6 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * This is called for each event by both CliSessionRunner and ApiSessionRunner.
    */
   private handleRawEvent(event: Record<string, unknown>): void {
-    // Deliver escalation nudge on the first event from the restarted session
-    if (this._pendingEscalationNudge !== null) {
-      const nudge = this._pendingEscalationNudge;
-      this._pendingEscalationNudge = null;
-      this.runner.sendMessage(nudge);
-    }
-
     const rawType = (event.type as string) ?? 'unknown';
 
     // Debug logging
@@ -1040,7 +1158,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           payload: { pr_number: existingPR.pr_number, repo: existingPR.repo },
         });
       } catch (e) {
-        console.warn(
+        logger.warn(
           `[AgentSession] updatePR #${existingPR.pr_number} failed: ${(e as Error).message}`,
         );
       }
@@ -1121,7 +1239,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         this.sessionId,
         `PR creation failed: git push of branch "${branch}" to origin rejected — ${msg.slice(0, 200)}`,
       );
-      console.error(
+      logger.error(
         `[AgentSession] git push for <pr-body> marker failed: ${msg}`,
       );
       recordEvent({
@@ -1215,7 +1333,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
                 },
               );
             } catch (ue) {
-              console.warn(
+              logger.warn(
                 `[AgentSession] updatePR fallback #${existingPR.pr_number} failed: ${(ue as Error).message}`,
               );
             }
@@ -1229,7 +1347,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             `PR creation failed: branch "${branch}" not found on origin — GitHub rejected the head ref. Did the prior push step succeed?`,
           );
-          console.error(
+          logger.error(
             `[AgentSession] createPR 422 head-not-found — diverting to push-failure path: ${msg}`,
           );
           recordEvent({
@@ -1260,7 +1378,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             `PR creation failed: GitHub 422 client error — ${msg.slice(0, 300)}`,
           );
-          console.error(`[AgentSession] createPR terminal 422: ${msg}`);
+          logger.error(`[AgentSession] createPR terminal 422: ${msg}`);
           recordEvent({
             event_type: 'pr_creation_failed',
             actor_type: 'system',
@@ -1279,7 +1397,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             `PR creation failed: branch "${branch}" not found on origin (GitHub 404). Did the prior push step succeed?`,
           );
-          console.error(`[AgentSession] createPR 404 not-found: ${msg}`);
+          logger.error(`[AgentSession] createPR 404 not-found: ${msg}`);
           recordEvent({
             event_type: 'pr_creation_failed',
             actor_type: 'system',
@@ -1298,7 +1416,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             `PR creation failed: GitHub auth/permission denied (${msg.slice(0, 200)}). Check GITHUB_TOKEN scope.`,
           );
-          console.error(`[AgentSession] createPR auth error: ${msg}`);
+          logger.error(`[AgentSession] createPR auth error: ${msg}`);
           recordEvent({
             event_type: 'pr_creation_failed',
             actor_type: 'system',
@@ -1323,7 +1441,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             `PR creation failed with unexpected error: ${msg.slice(0, 300)}`,
           );
-          console.error(
+          logger.error(
             `[AgentSession] createPR via <pr-body> marker failed (attempt ${attempt + 1}/${MAX_ATTEMPTS}): ${msg}`,
           );
           recordEvent({
@@ -1342,7 +1460,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           this.sessionId,
           `PR creation failed: GitHub server error (transient, attempt ${attempt + 1}/${MAX_ATTEMPTS}). Retrying in ${BACKOFF_MS[attempt]}ms.`,
         );
-        console.warn(
+        logger.warn(
           `[AgentSession] createPR transient error (attempt ${attempt + 1}/${MAX_ATTEMPTS}), retrying in ${BACKOFF_MS[attempt]}ms: ${msg}`,
         );
         await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]));
@@ -1376,7 +1494,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     if (this.sessionType === 'standard') {
       this.taskBackend()
         .attachPR(this.taskId, prUrl)
-        .catch((e) => console.error(`[AgentSession] attachPR failed: ${e}`));
+        .catch((e) => logger.error(`[AgentSession] attachPR failed: ${e}`));
 
       const upsertResult = upsertPullRequest({
         pr_number: prNumber,
@@ -1403,7 +1521,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         // Repo not configured — no PR row written. Skip pr_created broadcast
         // and pr_opened emit so StuckSessionMonitor sees no PR row and routes
         // correctly (idle, not done) when the subprocess is still alive.
-        console.warn(
+        logger.warn(
           `[AgentSession] handlePRDetected: upsertPullRequest rejected for repo "${repo}" — skipping pr_created broadcast`,
         );
         upsertSucceeded = false;
@@ -1448,7 +1566,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
                   void ghClient
                     .createIssueComment(repo, prNumber, comment)
                     .catch((e) =>
-                      console.warn(
+                      logger.warn(
                         `[AgentSession] createIssueComment failed: ${e}`,
                       ),
                     );
@@ -1456,12 +1574,12 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               }
             }
           } catch (e) {
-            console.warn(
+            logger.warn(
               `[AgentSession] handlePRDetected: failed to fetch PR #${prNumber}:`,
               e,
             );
             if (needsBodyValidation) {
-              console.warn(
+              logger.warn(
                 `[AgentSession] handlePRDetected: skipping PR body validation for PR #${prNumber} — GitHub fetch failed (fail-open)`,
               );
             }
@@ -1498,9 +1616,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               void ghClient
                 .createIssueComment(repo, prNumber, comment)
                 .catch((e) =>
-                  console.warn(
-                    `[AgentSession] createIssueComment failed: ${e}`,
-                  ),
+                  logger.warn(`[AgentSession] createIssueComment failed: ${e}`),
                 );
             }
           }
@@ -1530,7 +1646,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             );
             await ghClient.addLabelToPR(repo, prNumber, 'ai-authored');
           } catch (e) {
-            console.warn(`[AgentSession] ai-authored label failed: ${e}`);
+            logger.warn(`[AgentSession] ai-authored label failed: ${e}`);
           }
         })();
       }
@@ -1544,7 +1660,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       prUrl,
       ...(this.taskId && { taskId: this.taskId }),
     });
-    console.log(
+    logger.info(
       `[AgentSession] emitting pr_opened for PR #${prNumber} (${repo}) session=${this.sessionId}`,
     );
     this.emit('pr_opened', {
@@ -1611,13 +1727,36 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               commits: ahead,
             });
           } else if (behind > 0) {
-            sessionLog(
-              this.sessionId,
-              `auto-push skipped: branch ${branch} has diverged (ahead=${ahead}, behind=${behind}) — manual reconciliation needed`,
-            );
             const pr = getPRBySessionId(this.sessionId);
-            if (pr) {
-              setPauseReason(pr.pr_number, pr.repo, 'diverged_branch');
+            if (this.rebaseNudgeCount < MAX_REBASE_NUDGES) {
+              this.rebaseNudgeCount++;
+              sessionLog(
+                this.sessionId,
+                `auto-push skipped: branch ${branch} has diverged (ahead=${ahead}, behind=${behind}) — sending rebase nudge ${this.rebaseNudgeCount}/${MAX_REBASE_NUDGES}`,
+              );
+              if (pr) {
+                setPauseReason(pr.pr_number, pr.repo, 'diverged_branch');
+              }
+              const baseBranch = pr?.base_branch ?? 'dev';
+              const nudgeMsg =
+                `Your branch has diverged from origin/${branch} (${behind} commit(s) behind). ` +
+                `Run: git fetch origin && git rebase origin/${baseBranch}, resolve any conflicts, then push.`;
+              void this.sessionManager?.sendOrResume?.(
+                this.sessionId,
+                nudgeMsg,
+              );
+            } else {
+              sessionLog(
+                this.sessionId,
+                `auto-push skipped: branch ${branch} has diverged — rebase nudge limit reached (${MAX_REBASE_NUDGES}), escalating to needs_attention`,
+              );
+              if (pr) {
+                setPauseReason(
+                  pr.pr_number,
+                  pr.repo,
+                  'diverged_branch_unresolved',
+                );
+              }
             }
             this.broadcast({
               type: 'session_auto_pushed',
@@ -1666,7 +1805,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           this.taskId || null,
           runtimeSettings.corporate_mode_enabled,
         ).catch((e) =>
-          console.warn(`[AgentSession] checkCommitAttribution failed: ${e}`),
+          logger.warn(`[AgentSession] checkCommitAttribution failed: ${e}`),
         );
       }
     }
@@ -1707,6 +1846,20 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    */
   setPendingOverflowText(text: string): void {
     this._pendingOverflowText = text;
+  }
+
+  /**
+   * Configures this session for proactive ceiling-escalation. Called by
+   * SessionManager._doSendOrResume when the persisted context occupancy is at/over
+   * the ceiling before the first spawn. On the first run-loop iteration the session
+   * immediately enters escalation spawn mode (large model + proactive nudge timer)
+   * rather than waiting for an overflow event that may never arrive.
+   */
+  setProactiveEscalation(model: string, nudgeText: string): void {
+    this._escalationModel = model;
+    this._escalationDisableAutoCompact = false;
+    this._pendingEscalationNudge = nudgeText;
+    this._proactiveEscalation = true;
   }
 
   /**
@@ -1811,7 +1964,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         }
       }
     } catch (e) {
-      console.error(
+      logger.error(
         `[AgentSession] handleCleanExit pre-done failed for ${this.sessionId}:`,
         e,
       );
@@ -1891,7 +2044,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         'utf-8',
       );
     } catch (err) {
-      console.error(
+      logger.error(
         `[AgentSession] injectContextFile: failed to write ${filename}: ${err}`,
       );
     }

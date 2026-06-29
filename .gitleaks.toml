@@ -1,0 +1,5 @@
+[allowlist]
+paths = [
+  '''packages/backend/src/security/scrubSecrets\.test\.ts''',  # Reason: deliberate leak-shaped patterns testing the scrubber
+  '''packages/backend/src/__tests__/jsonlReader\.scrub\.test\.ts''',  # Reason: deliberate leak-shaped patterns testing the scrubber
+]

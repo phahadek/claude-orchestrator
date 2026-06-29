@@ -11,13 +11,13 @@ import { toExternalId } from '../tasks/taskId';
 
 // ─── Board validation types ─────────────────────────────────────────────────
 
-export interface DatabaseValidation {
+interface DatabaseValidation {
   type: 'database';
   title: string;
   id: string;
 }
 
-export interface PageValidation {
+interface PageValidation {
   type: 'page';
   childDatabaseId: string | null;
   childDatabaseTitle: string | null;
@@ -33,7 +33,7 @@ function formatAsUuid(raw: string): string {
   return `${clean.slice(0, 8)}-${clean.slice(8, 12)}-${clean.slice(12, 16)}-${clean.slice(16, 20)}-${clean.slice(20)}`;
 }
 
-export function extractNotionId(input: string): string | null {
+function extractNotionId(input: string): string | null {
   const cleaned = input.split('?')[0].split('#')[0];
   const match = cleaned.match(
     /([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12})/i,
@@ -49,7 +49,7 @@ export function normalizeNotionId(input: string): string | null {
   return formatAsUuid(raw);
 }
 
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL_MS = 60 * 1000; // 60 seconds
 const TASK_PAGE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const NOTION_VERSION = '2022-06-28';
 const resolver = new DependencyResolver();
@@ -286,7 +286,7 @@ function blockToLine(block: NotionBlock): string {
  * like "### 🤖 Automated tests" that do not match any keyword are treated as
  * content within the current section.
  */
-export const TOP_LEVEL_SECTIONS = [
+const TOP_LEVEL_SECTIONS = [
   'summary',
   'dependencies',
   'context',
@@ -432,12 +432,10 @@ export class NotionClient {
     let startCursor: string | undefined;
 
     do {
+      // No status filter — Deferred tasks are included so they surface as blockers
+      // in DependencyResolver; only ✅ Done satisfies a dependency.
       const body: Record<string, unknown> = {
         page_size: 100,
-        filter: {
-          property: 'Status',
-          select: { does_not_equal: '⏭️ Deferred' },
-        },
       };
       if (startCursor) body.start_cursor = startCursor;
 

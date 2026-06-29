@@ -32,13 +32,15 @@ const source = fs.readFileSync(
 );
 
 describe('NotionClient.fetchReadyTasks() — Notion query filter', () => {
-  it('excludes only Deferred tasks (does_not_equal) so Done tasks are included', () => {
-    expect(source).toMatch(/does_not_equal.*Deferred|Deferred.*does_not_equal/);
+  it('includes Deferred tasks in the board fetch (no does_not_equal filter for Deferred)', () => {
+    // Deferred tasks must be returned so DependencyResolver can surface them as blockers.
+    expect(source).not.toMatch(
+      /does_not_equal.*Deferred|Deferred.*does_not_equal/,
+    );
   });
 
   it('does not restrict to a hard-coded allowlist of statuses (no or-filter with equals)', () => {
-    // The old filter used { or: [{ select: { equals: '...' } }, ...] }.
-    // The new filter must not have this pattern — it should use does_not_equal instead.
+    // There must be no allowlist — all statuses including Deferred must be fetched.
     expect(source).not.toMatch(/select:\s*\{\s*equals:\s*['"]🗂️ Ready['"]/);
     expect(source).not.toMatch(/select:\s*\{\s*equals:\s*['"]✅ Done['"]/);
   });

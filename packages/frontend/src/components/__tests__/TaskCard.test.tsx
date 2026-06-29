@@ -1,7 +1,11 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { TaskCard } from '../TaskCard';
-import type { TaskView, DisplayStatus } from '../../types/taskView';
+import type {
+  TaskView,
+  DisplayStatus,
+  PauseReason,
+} from '../../types/taskView';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 
 function makeTask(overrides?: Partial<TaskView>): TaskView {
@@ -21,6 +25,7 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     pr: null,
     review: null,
     totalTokens: { input: 0, output: 0 },
+    assignedRepo: null,
     ...overrides,
   };
 }
@@ -363,6 +368,45 @@ describe('TaskCard', () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  it('renders 🚫 Blocked label for blocked displayStatus', () => {
+    render(
+      <TaskCard
+        task={makeTask({ displayStatus: 'blocked' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('🚫 Blocked')).toBeDefined();
+  });
+
+  it('renders ⏭️ Deferred label for deferred displayStatus', () => {
+    render(
+      <TaskCard
+        task={makeTask({ displayStatus: 'deferred' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('⏭️ Deferred')).toBeDefined();
+  });
+
+  it('renders 🔲 Backlog label for backlog displayStatus', () => {
+    render(
+      <TaskCard
+        task={makeTask({ displayStatus: 'backlog' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('🔲 Backlog')).toBeDefined();
+  });
+
   it('applies correct data-status for each displayStatus value', () => {
     const statuses: DisplayStatus[] = [
       'ready',
@@ -371,6 +415,8 @@ describe('TaskCard', () => {
       'needs_attention',
       'ready_to_merge',
       'done',
+      'blocked',
+      'deferred',
     ];
     for (const status of statuses) {
       const { container, unmount } = render(
@@ -687,6 +733,267 @@ describe('TaskCard', () => {
     );
     const badge = screen.getByText('⚠️ Needs Attention');
     expect(badge.getAttribute('title')).toBeTruthy();
+    // source tag derived from parsed struct (pr_creation_failed → source='merge')
+    expect(badge.getAttribute('title')).toContain('[merge]');
     expect(badge.getAttribute('title')).toContain('PR creation failed');
+    // severity derived from parsed struct
+    expect(badge.getAttribute('data-pause-severity')).toBe('needs_attention');
+    expect(badge.getAttribute('data-pause-source')).toBe('merge');
+  });
+
+  // ── Unblock button ────────────────────────────────────────────────────────
+
+  it('renders Unblock button for blocked tasks', () => {
+    render(
+      <TaskCard
+        task={makeTask({ displayStatus: 'blocked', taskType: '💻 Code' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /unblock/i })).toBeDefined();
+  });
+
+  it('does not render Unblock button for non-blocked tasks', () => {
+    render(
+      <TaskCard
+        task={makeTask({ displayStatus: 'ready', taskType: '💻 Code' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /unblock/i })).toBeNull();
+  });
+
+  it('Unblock button POSTs to the unblock route and optimistically sets status to ready', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, newStatus: '🗂️ Ready' }),
+    } as Response);
+
+    render(
+      <TaskCard
+        task={makeTask({
+          taskId: 'task-blocked',
+          displayStatus: 'blocked',
+          taskType: '💻 Code',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({ id: 'proj-1' })}
+      />,
+    );
+
+    const btn = screen.getByRole('button', { name: /unblock/i });
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/tasks/task-blocked/unblock'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it('derives source tag and severity from JSON struct pauseReason', () => {
+    const jsonPauseReason = JSON.stringify({
+      reason: 'ci_failing',
+      source: 'ci',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: jsonPauseReason as unknown as PauseReason,
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    const badge = screen.getByText('⚠️ Needs Attention');
+    expect(badge.getAttribute('data-pause-source')).toBe('ci');
+    expect(badge.getAttribute('data-pause-severity')).toBe('needs_attention');
+    expect(badge.getAttribute('title')).toContain('[ci]');
+  });
+
+  // ── Needs-repo badge ──────────────────────────────────────────────────────
+
+  it('renders "needs repo" badge for multi-repo project with unassigned task', () => {
+    render(
+      <TaskCard
+        task={makeTask({ assignedRepo: null })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({
+          githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']),
+        })}
+      />,
+    );
+    expect(screen.getByText('⚠ Needs repo')).toBeDefined();
+  });
+
+  it('does not render "needs repo" badge for single-repo project', () => {
+    render(
+      <TaskCard
+        task={makeTask({ assignedRepo: null })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({ githubRepo: 'owner/repo-a' })}
+      />,
+    );
+    expect(screen.queryByText('⚠ Needs repo')).toBeNull();
+  });
+
+  it('does not render "needs repo" badge when repo is already assigned', () => {
+    render(
+      <TaskCard
+        task={makeTask({ assignedRepo: 'owner/repo-a' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({
+          githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']),
+        })}
+      />,
+    );
+    expect(screen.queryByText('⚠ Needs repo')).toBeNull();
+  });
+
+  it('does not render "needs repo" badge when project has no repos', () => {
+    render(
+      <TaskCard
+        task={makeTask({ assignedRepo: null })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({ githubRepo: undefined })}
+      />,
+    );
+    expect(screen.queryByText('⚠ Needs repo')).toBeNull();
+  });
+
+  // ── Unpark button ─────────────────────────────────────────────────────────
+
+  it('renders Unpark button for cap-escalated tasks with a PR', () => {
+    const capPauseReason = JSON.stringify({
+      reason: 'stalled_reconcile_cap',
+      source: 'review',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: capPauseReason as unknown as PauseReason,
+          pr: makePr(),
+          taskType: '💻 Code',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /unpark/i })).toBeDefined();
+  });
+
+  it('does not render Unpark button when PR is absent', () => {
+    const capPauseReason = JSON.stringify({
+      reason: 'stalled_reconcile_cap',
+      source: 'review',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: capPauseReason as unknown as PauseReason,
+          pr: null,
+          taskType: '💻 Code',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /unpark/i })).toBeNull();
+  });
+
+  it('does not render Unpark button for non-cap pause reasons', () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: 'max_reviews',
+          pr: makePr(),
+          taskType: '💻 Code',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /unpark/i })).toBeNull();
+  });
+
+  it('Unpark button POSTs to the unpark route with correct prNumber and projectId', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true }),
+    } as Response);
+
+    const capPauseReason = JSON.stringify({
+      reason: 'stalled_reconcile_cap',
+      source: 'review',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
+
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: capPauseReason as unknown as PauseReason,
+          pr: makePr({ prNumber: 570 }),
+          taskType: '💻 Code',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({ id: 'proj-1' })}
+      />,
+    );
+
+    const btn = screen.getByRole('button', { name: /unpark/i });
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/prs/570/unpark'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('projectId=proj-1'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    fetchSpy.mockRestore();
   });
 });

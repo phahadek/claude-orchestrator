@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
+import { logger } from '../logger';
 
 export interface OrchestratorConfig {
   /** Commands run in the worktree before opening the PR (mechanical fixes only). */
@@ -30,6 +31,14 @@ export interface OrchestratorConfig {
   test_max_rss_mb: number;
   /** Stop running subsequent test commands after the first failure. Default true. */
   test_fail_fast: boolean;
+  /** Commands the orchestrator runs as static analysis gate, between verify and test. Empty = gate skipped. */
+  analyze: string[];
+  /** Per-command timeout in seconds for analyze commands. Default 300. */
+  analyze_timeout_sec: number;
+  /** Max RSS in MB for any single analyze command subprocess. 0 = disabled. Default 0. */
+  analyze_max_rss_mb: number;
+  /** Stop running subsequent analyze commands after the first failure. Default true. */
+  analyze_fail_fast: boolean;
 }
 
 const DEFAULTS: OrchestratorConfig = {
@@ -43,6 +52,10 @@ const DEFAULTS: OrchestratorConfig = {
   test_timeout_sec: 300,
   test_max_rss_mb: 0,
   test_fail_fast: true,
+  analyze: [],
+  analyze_timeout_sec: 300,
+  analyze_max_rss_mb: 0,
+  analyze_fail_fast: true,
 };
 
 /**
@@ -96,6 +109,25 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.test_fail_fast === 'boolean'
           ? parsed.test_fail_fast
           : DEFAULTS.test_fail_fast,
+      analyze: Array.isArray(parsed.analyze)
+        ? parsed.analyze
+        : DEFAULTS.analyze,
+      analyze_timeout_sec:
+        typeof parsed.analyze_timeout_sec === 'number' &&
+        Number.isFinite(parsed.analyze_timeout_sec) &&
+        parsed.analyze_timeout_sec > 0
+          ? parsed.analyze_timeout_sec
+          : DEFAULTS.analyze_timeout_sec,
+      analyze_max_rss_mb:
+        typeof parsed.analyze_max_rss_mb === 'number' &&
+        Number.isFinite(parsed.analyze_max_rss_mb) &&
+        parsed.analyze_max_rss_mb >= 0
+          ? parsed.analyze_max_rss_mb
+          : DEFAULTS.analyze_max_rss_mb,
+      analyze_fail_fast:
+        typeof parsed.analyze_fail_fast === 'boolean'
+          ? parsed.analyze_fail_fast
+          : DEFAULTS.analyze_fail_fast,
       mcp_servers:
         parsed.mcp_servers !== null &&
         typeof parsed.mcp_servers === 'object' &&
@@ -104,7 +136,7 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
           : undefined,
     };
   } catch (err) {
-    console.warn(
+    logger.warn(
       `[orchestrator-config] failed to parse ${configPath}: ${err} — using defaults`,
     );
     return { ...DEFAULTS };

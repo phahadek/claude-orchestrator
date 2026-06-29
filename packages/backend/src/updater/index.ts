@@ -4,4 +4,3 @@ export {
   selectAsset,
   cleanUpdatesDir,
 } from './UpdateDownloader';
-export { launchInstallerAndExit } from './UpdateInstaller';

@@ -1,12 +1,14 @@
+import { logger } from '../logger';
 import {
   getProjectByGithubRepo,
   getProjectById,
   runtimeSettings,
 } from '../config';
+import { typedGetSetting } from '../config/settings';
 import {
   setPRReviewResult,
-  getSetting,
   getPRByNumber,
+  getPRBySessionId,
   setPendingPush,
   setPauseReason,
   getLocalBranchBySession,
@@ -19,8 +21,10 @@ import {
   getAllPendingReviewSyncs,
   hasTestResultForSha,
   upsertTestResult,
+  hasAnalyzeResultForSha,
+  upsertAnalyzeResult,
+  getAnalyzeResult,
   setPreReviewStage,
-  setLastReviewedSha,
 } from '../db/queries';
 import { syncToOrigin } from './PRFileReverter';
 import type {
@@ -41,16 +45,10 @@ import { runTestCommands } from '../session/test-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
-
-const DEFAULT_MAX_ITERATIONS = 3;
+import { PreReviewPipeline } from './PreReviewPipeline';
 
 function getMaxReviewIterations(): number {
-  const raw = getSetting('max_review_iterations');
-  if (!raw) return DEFAULT_MAX_ITERATIONS;
-  const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
-    : DEFAULT_MAX_ITERATIONS;
+  return typedGetSetting('max_review_iterations');
 }
 
 interface LocalBranchJob {
@@ -82,6 +80,7 @@ export class ReviewOrchestrator {
   /** Resolves once all incomplete pending_review_sync rows from the previous run are retried. */
   readonly bootReady: Promise<void>;
   private stallDetectorInterval: ReturnType<typeof setInterval> | null = null;
+  private preReviewPipeline: PreReviewPipeline;
 
   constructor(
     private reviewService: PRReviewService,
@@ -91,6 +90,7 @@ export class ReviewOrchestrator {
     stallCheckIntervalMs: number = STALL_CHECK_INTERVAL_MS,
     stallTimeoutMs: number = STALL_TIMEOUT_MS,
   ) {
+    this.preReviewPipeline = new PreReviewPipeline(sessionManager, github);
     sessionManager.on('pr_opened', (job: ReviewJob) => this.onPrOpened(job));
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
     sessionManager.on(
@@ -125,7 +125,7 @@ export class ReviewOrchestrator {
       for (const [key, startTime] of this.inFlightStartTimes) {
         const elapsedMs = now - startTime;
         if (elapsedMs > timeoutMs) {
-          console.error(
+          logger.error(
             `[ReviewOrchestrator] STALL DETECTED for ${key} — review has been running for ${Math.round(elapsedMs / 60000)} min. Force-clearing slot.`,
           );
           this.inFlightPRKeys.delete(key);
@@ -165,7 +165,7 @@ export class ReviewOrchestrator {
               }
             }
           } catch (e) {
-            console.warn(
+            logger.warn(
               `[ReviewOrchestrator] boot-retry sync failed for PR #${pr_number} (${repo}): ${e}`,
             );
           }
@@ -195,18 +195,18 @@ export class ReviewOrchestrator {
 
   private onPrOpened(job: ReviewJob): void {
     if (!this.enabled) {
-      console.log(
+      logger.info(
         `[ReviewOrchestrator] pr_opened received for PR #${job.prNumber} (${job.repo}) — orchestrator disabled, skipping`,
       );
       return;
     }
     if (!job.taskId) {
-      console.warn(
+      logger.warn(
         `[ReviewOrchestrator] PR #${job.prNumber} has no Notion task — skipping`,
       );
       return;
     }
-    console.log(
+    logger.info(
       `[ReviewOrchestrator] pr_opened received for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
     );
     this.queue.push(job);
@@ -215,13 +215,17 @@ export class ReviewOrchestrator {
 
   private onMessage(msg: ServerMessage): void {
     if (!this.enabled) return;
+    if (msg.type === 'session_ended') {
+      this.onSessionEnded(msg.sessionId);
+      return;
+    }
     if (msg.type !== 'local_branch_submitted') return;
 
     const { projectId, sessionId, branchName, baseBranch } = msg;
 
     const sessionRow = getSession(sessionId);
     if (!sessionRow?.worktree_path) {
-      console.warn(
+      logger.warn(
         `[ReviewOrchestrator] local_branch_submitted for session ${sessionId} — no worktree_path, skipping`,
       );
       return;
@@ -229,7 +233,7 @@ export class ReviewOrchestrator {
 
     const localBranchRow = getLocalBranchBySession(sessionId);
     if (!localBranchRow) {
-      console.warn(
+      logger.warn(
         `[ReviewOrchestrator] local_branch_submitted for session ${sessionId} — no local_branch row found, skipping`,
       );
       return;
@@ -286,12 +290,12 @@ export class ReviewOrchestrator {
 
       if (job.type === 'local_branch') {
         const lbJob = job as LocalBranchJob;
-        console.log(
+        logger.info(
           `[ReviewOrchestrator] drain: starting local-branch review for ${lbJob.branchName} (running: ${this.running}/${runtimeSettings.auto_review_concurrency})`,
         );
       } else {
         const prJob = job as ReviewJob;
-        console.log(
+        logger.info(
           `[ReviewOrchestrator] drain: starting review for PR #${prJob.prNumber} (${prJob.repo}) (running: ${this.running}/${runtimeSettings.auto_review_concurrency})`,
         );
       }
@@ -305,13 +309,13 @@ export class ReviewOrchestrator {
           }
         } catch (e) {
           if (job.type === 'local_branch') {
-            console.error(
+            logger.error(
               `[ReviewOrchestrator] review failed for local branch ${(job as LocalBranchJob).branchName}:`,
               e,
             );
           } else {
             const prJob = job as ReviewJob;
-            console.error(
+            logger.error(
               `[ReviewOrchestrator] review failed for PR #${prJob.prNumber}:`,
               e,
             );
@@ -367,7 +371,7 @@ export class ReviewOrchestrator {
           project.projectDir,
           autofixCommands,
           (msg) =>
-            console.log(`[ReviewOrchestrator] autofix PR #${prNumber}: ${msg}`),
+            logger.info(`[ReviewOrchestrator] autofix PR #${prNumber}: ${msg}`),
         );
         autofixSuccess = result.success;
         autofixSummary = result.summary;
@@ -403,7 +407,7 @@ export class ReviewOrchestrator {
       } catch (err) {
         autofixSuccess = false;
         autofixSummary = `autofix threw: ${String(err)}`;
-        console.error(
+        logger.error(
           `[ReviewOrchestrator] autofix error for PR #${prNumber}:`,
           err,
         );
@@ -419,7 +423,7 @@ export class ReviewOrchestrator {
     });
 
     if (!autofixSuccess) {
-      console.warn(
+      logger.warn(
         `[ReviewOrchestrator] autofix failed for PR #${prNumber}: ${autofixSummary}`,
       );
     }
@@ -449,7 +453,7 @@ export class ReviewOrchestrator {
   enqueueReview(job: ReviewJob): void {
     if (!this.enabled) return;
     if (!job.taskId) return;
-    console.log(
+    logger.info(
       `[ReviewOrchestrator] enqueueReview for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
     );
     this.queue.push(job);
@@ -474,13 +478,13 @@ export class ReviewOrchestrator {
     if (!commands?.length || !headSha) return;
 
     if (hasTestResultForSha(prNumber, repo, headSha)) {
-      console.log(
+      logger.info(
         `[ReviewOrchestrator] tests already ran for PR #${prNumber} SHA ${headSha.slice(0, 7)} — skipping`,
       );
       return;
     }
 
-    console.log(
+    logger.info(
       `[ReviewOrchestrator] running tests for PR #${prNumber} SHA ${headSha.slice(0, 7)} (timeout ${timeoutSec}s)`,
     );
 
@@ -488,15 +492,71 @@ export class ReviewOrchestrator {
       worktreePath,
       commands,
       timeoutSec,
-      (msg) => console.log(`[ReviewOrchestrator] test PR #${prNumber}: ${msg}`),
+      (msg) => logger.info(`[ReviewOrchestrator] test PR #${prNumber}: ${msg}`),
       { maxRssMb, failFast },
     );
 
     upsertTestResult(prNumber, repo, headSha, passed, output);
 
-    console.log(
+    logger.info(
       `[ReviewOrchestrator] tests ${passed ? 'PASSED' : 'FAILED'} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
     );
+  }
+
+  /**
+   * Run the configured analyze: commands for a PR's head SHA.
+   * Deduplicates: if a result already exists for this SHA, returns the cached result.
+   * Persists { passed, output } keyed by (prNumber, repo, sha).
+   * Returns { passed, output } so the caller can act on failure.
+   */
+  async runAnalyzePipeline(
+    prNumber: number,
+    repo: string,
+    headSha: string,
+    worktreePath: string,
+    commands: string[],
+    timeoutSec: number,
+    maxRssMb = 0,
+    failFast = true,
+  ): Promise<{ passed: boolean; output: string }> {
+    if (!commands.length || !headSha) return { passed: true, output: '' };
+
+    if (hasAnalyzeResultForSha(prNumber, repo, headSha)) {
+      logger.info(
+        `[ReviewOrchestrator] analyze already ran for PR #${prNumber} SHA ${headSha.slice(0, 7)} — returning cached result`,
+      );
+      const cached = getAnalyzeResult(prNumber, repo, headSha);
+      return { passed: cached?.passed === 1, output: cached?.output ?? '' };
+    }
+
+    logger.info(
+      `[ReviewOrchestrator] running analyze for PR #${prNumber} SHA ${headSha.slice(0, 7)} (timeout ${timeoutSec}s)`,
+    );
+
+    const result = await runTestCommands(
+      worktreePath,
+      commands,
+      timeoutSec,
+      (msg) =>
+        logger.info(`[ReviewOrchestrator] analyze PR #${prNumber}: ${msg}`),
+      { maxRssMb, failFast },
+    );
+    const { passed, output } = result;
+
+    upsertAnalyzeResult(
+      prNumber,
+      repo,
+      headSha,
+      passed,
+      output,
+      !!(result.timedOut || result.oomKilled),
+    );
+
+    logger.info(
+      `[ReviewOrchestrator] analyze ${passed ? 'PASSED' : 'FAILED'} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
+    );
+
+    return { passed, output };
   }
 
   private async executeLocalBranchReview(job: LocalBranchJob): Promise<void> {
@@ -516,7 +576,7 @@ export class ReviewOrchestrator {
               project.projectDir,
               autofixCommands,
               (msg) =>
-                console.log(
+                logger.info(
                   `[ReviewOrchestrator] autofix local branch ${job.branchName}: ${msg}`,
                 ),
             );
@@ -566,7 +626,7 @@ export class ReviewOrchestrator {
               return;
             }
           } catch (err) {
-            console.warn(
+            logger.warn(
               `[ReviewOrchestrator] autofix error for local branch ${job.branchName}:`,
               err,
             );
@@ -657,18 +717,63 @@ export class ReviewOrchestrator {
             error: String(e),
           },
         });
-        console.warn(
+        logger.warn(
           `[ReviewOrchestrator] verdict routing failed for local branch ${job.branchName}: ${e}`,
         );
       }
     }
   }
 
+  private onSessionEnded(sessionId: string): void {
+    const session = getSession(sessionId);
+    if (session?.session_type !== 'standard') return;
+
+    const pr = getPRBySessionId(sessionId);
+    if (!pr || !pr.review_result) return;
+
+    let verdict: string | undefined;
+    try {
+      verdict = (JSON.parse(pr.review_result) as { verdict?: string }).verdict;
+    } catch {
+      return;
+    }
+    if (verdict !== 'needs_changes') return;
+
+    const maxIter = getMaxReviewIterations();
+    if (pr.review_iteration >= maxIter) return;
+
+    // Debounce: skip if review already queued or in-flight for this PR
+    // (handles the case where push_detected already enqueued a review this turn)
+    const prKey = `${pr.pr_number}:${pr.repo}`;
+    if (
+      this.inFlightPRKeys.has(prKey) ||
+      this.queue.some((j) => this.prKey(j) === prKey)
+    ) {
+      logger.info(
+        `[ReviewOrchestrator] session_ended for session ${sessionId.slice(0, 8)}: re-review already queued/in-flight for PR #${pr.pr_number} — skipping`,
+      );
+      return;
+    }
+
+    logger.info(
+      `[ReviewOrchestrator] session_ended for session ${sessionId.slice(0, 8)} — PR #${pr.pr_number} (${pr.repo}) has verdict needs_changes (iter ${pr.review_iteration}/${maxIter}) — triggering re-review`,
+    );
+
+    const project = getProjectByGithubRepo(pr.repo);
+    this.enqueueReview({
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+      taskId: pr.task_id ?? '',
+      taskUrl: session.task_url ?? '',
+      contextUrl: project?.contextUrl ?? '',
+    });
+  }
+
   private consumePendingPushIfSet(prNumber: number, repo: string): void {
     const row = getPRByNumber(prNumber, repo);
     if (row?.pending_push && row.session_id) {
       setPendingPush(prNumber, repo, 0);
-      console.log(
+      logger.info(
         `[ReviewOrchestrator] pending_push detected for PR #${prNumber} — triggering re-review`,
       );
       this.sessionManager.emit('push_detected', {
@@ -677,67 +782,8 @@ export class ReviewOrchestrator {
     }
   }
 
-  private async routeGateFailureToSession(
-    job: ReviewJob,
-    kind: 'verify' | 'autofix',
-    detail: {
-      failedCommand?: string;
-      truncatedOutput?: string;
-      summary: string;
-    },
-  ): Promise<void> {
-    const prRow = getPRByNumber(job.prNumber, job.repo);
-
-    setPRReviewResult(
-      job.prNumber,
-      job.repo,
-      JSON.stringify({
-        verdict: kind === 'verify' ? 'verify_failed' : 'autofix_failed',
-        summary: detail.summary,
-        dimensions: [],
-      }),
-    );
-    // Set last_reviewed_sha so the next push is identified as new code and
-    // shouldAutoReview returns true instead of seeing null === null.
-    setLastReviewedSha(job.prNumber, job.repo, prRow?.head_sha ?? null);
-
-    this.sessionManager.emit('message', {
-      type: 'pr_review_blocked_by_gate',
-      prNumber: job.prNumber,
-      repo: job.repo,
-      kind,
-      failedCommand: detail.failedCommand,
-      summary: detail.summary,
-    });
-    setPreReviewStage(
-      job.prNumber,
-      job.repo,
-      kind === 'autofix' ? 'blocked_autofix' : 'blocked_verify',
-    );
-
-    const sessionId = prRow?.session_id;
-    if (!sessionId) return;
-
-    const message =
-      kind === 'verify'
-        ? formatCIFailureFeedback({
-            source: 'verify',
-            failedCommand: detail.failedCommand,
-            truncatedOutput: detail.truncatedOutput,
-          })
-        : `## Autofix Gate Failure\n\nThe autofix pipeline failed and could not produce a clean commit.\n\n**Error:** ${detail.summary}\n\nPlease fix the issue and re-push.`;
-
-    try {
-      await this.sessionManager.sendOrResume(sessionId, message);
-    } catch (e) {
-      console.warn(
-        `[ReviewOrchestrator] gate failure routing failed for PR #${job.prNumber}: ${e}`,
-      );
-    }
-  }
-
   private async executeReview(job: ReviewJob): Promise<void> {
-    console.log(
+    logger.info(
       `[ReviewOrchestrator] executeReview: entered for PR #${job.prNumber} (${job.repo}) taskId=${job.taskId ?? 'none'}`,
     );
 
@@ -746,7 +792,7 @@ export class ReviewOrchestrator {
     const syncKey = `${job.prNumber}:${job.repo}`;
     const pendingSync = this.pendingSyncs.get(syncKey);
     if (pendingSync) {
-      console.log(
+      logger.info(
         `[ReviewOrchestrator] executeReview: awaiting pending revert sync for PR #${job.prNumber}`,
       );
       this.pendingSyncs.delete(syncKey);
@@ -755,7 +801,7 @@ export class ReviewOrchestrator {
 
     const project = getProjectByGithubRepo(job.repo);
     if (!project) {
-      console.warn(
+      logger.warn(
         `[ReviewOrchestrator] PR #${job.prNumber}: no project found for repo ${job.repo} — skipping`,
       );
       return;
@@ -766,7 +812,7 @@ export class ReviewOrchestrator {
     const maxIterations = getMaxReviewIterations();
     if (prRow && prRow.review_iteration >= maxIterations) {
       const message = `Review loop for PR #${job.prNumber} reached ${maxIterations} iterations without approval. Manual intervention needed.`;
-      console.warn(`[ReviewOrchestrator] ${message}`);
+      logger.warn(`[ReviewOrchestrator] ${message}`);
       setPauseReason(job.prNumber, job.repo, 'max_reviews');
       this.sessionManager.emit('message', {
         type: 'review_escalated',
@@ -777,97 +823,11 @@ export class ReviewOrchestrator {
       return;
     }
 
-    // ── Gate 1: Autofix + file-pollution-check step ──────────────────────────
-    const autofixResult = await this.runAutofixPipeline(
-      job.prNumber,
-      job.repo,
-      job.taskId ?? null,
-    );
-    if (!autofixResult.success) {
-      console.log(
-        `[ReviewOrchestrator] executeReview: gate failure (kind=autofix) for PR #${job.prNumber}`,
-      );
-      await this.routeGateFailureToSession(job, 'autofix', {
-        summary: autofixResult.summary,
-      });
+    // ── Pre-review pipeline (autofix → verify → analyze → tests) ────────────
+    const pipelineResult = await this.preReviewPipeline.run(job, project);
+    if (!pipelineResult.passed) {
       this.consumePendingPushIfSet(job.prNumber, job.repo);
       return;
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
-    // ── Gate 2: Verify ───────────────────────────────────────────────────────
-    {
-      const gatePrRow = getPRByNumber(job.prNumber, job.repo);
-      const gateWorktreePath = gatePrRow?.session_id
-        ? (getSession(gatePrRow.session_id)?.worktree_path ?? '')
-        : '';
-      if (gateWorktreePath) {
-        this.sessionManager.emit('message', {
-          type: 'verify_pipeline_started',
-          prNumber: job.prNumber,
-          repo: job.repo,
-        });
-        setPreReviewStage(job.prNumber, job.repo, 'verify');
-        const verifyConfig = loadOrchestratorConfig(project.projectDir);
-        const verifyResult = await runVerifyAsGate(
-          gateWorktreePath,
-          verifyConfig.verify,
-        );
-        if (!verifyResult.passed) {
-          console.log(
-            `[ReviewOrchestrator] executeReview: gate failure (kind=verify) for PR #${job.prNumber}`,
-          );
-          await this.routeGateFailureToSession(job, 'verify', {
-            failedCommand: verifyResult.failedCommand,
-            truncatedOutput: verifyResult.truncatedOutput,
-            summary: verifyResult.failedCommand
-              ? `verify failed: ${verifyResult.failedCommand}`
-              : 'verify failed',
-          });
-          this.consumePendingPushIfSet(job.prNumber, job.repo);
-          return;
-        }
-        this.sessionManager.emit('message', {
-          type: 'verify_pipeline_complete',
-          prNumber: job.prNumber,
-          repo: job.repo,
-        });
-      }
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
-    // ── Orchestrator-run tests (per head-SHA, deduped) ────────────────────────
-    {
-      const freshPrRow = getPRByNumber(job.prNumber, job.repo);
-      const headSha = freshPrRow?.head_sha ?? '';
-      const worktreePath = freshPrRow?.session_id
-        ? (getSession(freshPrRow.session_id)?.worktree_path ?? '')
-        : '';
-      if (headSha && worktreePath) {
-        const config = loadOrchestratorConfig(project.projectDir);
-        this.sessionManager.emit('message', {
-          type: 'test_pipeline_started',
-          prNumber: job.prNumber,
-          repo: job.repo,
-        });
-        setPreReviewStage(job.prNumber, job.repo, 'tests');
-        await this.runTestPipeline(
-          job.prNumber,
-          job.repo,
-          headSha,
-          worktreePath,
-          config.test,
-          config.test_timeout_sec,
-          config.test_max_rss_mb,
-          config.test_fail_fast,
-        );
-        this.sessionManager.emit('message', {
-          type: 'test_pipeline_complete',
-          prNumber: job.prNumber,
-          repo: job.repo,
-        });
-        setPreReviewStage(job.prNumber, job.repo, 'awaiting_review');
-      }
     }
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -966,14 +926,14 @@ export class ReviewOrchestrator {
               error: String(e),
             },
           });
-          console.warn(
+          logger.warn(
             `[ReviewOrchestrator] verdict routing failed for PR #${job.prNumber}: ${e}`,
           );
         }
       }
     } else if (result.verdict === 'incomplete') {
       const message = `Review for PR #${job.prNumber} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
-      console.warn(`[ReviewOrchestrator] ${message}`);
+      logger.warn(`[ReviewOrchestrator] ${message}`);
       this.sessionManager.emit('message', {
         type: 'review_incomplete',
         prNumber: job.prNumber,
@@ -1000,7 +960,7 @@ export class ReviewOrchestrator {
               error: String(e),
             },
           });
-          console.warn(
+          logger.warn(
             `[ReviewOrchestrator] incomplete verdict routing failed for PR #${job.prNumber}: ${e}`,
           );
         }

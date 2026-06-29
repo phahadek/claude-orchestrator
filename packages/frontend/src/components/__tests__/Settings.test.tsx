@@ -1,9 +1,18 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Settings, validateField } from '../Settings';
+import { Settings } from '../Settings';
+import { validateField } from '../Settings.helpers';
 
 vi.mock('../Settings/ProjectsSettingsPanel', () => ({
   ProjectsSettingsPanel: () => <div>ProjectsSettingsPanel</div>,
+}));
+
+vi.mock('../../pages/SettingsSystemHealth', () => ({
+  SettingsSystemHealth: () => <div>SettingsSystemHealth</div>,
+}));
+
+vi.mock('../../hooks/useWebSocket', () => ({
+  useWebSocket: () => ({ send: vi.fn(), connectionState: 'connected' }),
 }));
 
 const defaultSettings = {
@@ -278,5 +287,48 @@ describe('Settings — non-numeric settings PATCH', () => {
       );
       expect(patchCall).toBeDefined();
     });
+  });
+});
+
+describe('Settings — System Health peer tab', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', makeFetch());
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn().mockReturnValue(null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+  });
+
+  it('renders the System Health tab in the nav', async () => {
+    render(<Settings />);
+    await screen.findByRole('button', { name: 'General' });
+    expect(screen.getByRole('button', { name: 'System Health' })).toBeDefined();
+  });
+
+  it('shows SettingsSystemHealth when System Health tab is selected', async () => {
+    render(<Settings />);
+    const tab = await screen.findByRole('button', { name: 'System Health' });
+    fireEvent.click(tab);
+    expect(screen.getByText('SettingsSystemHealth')).toBeDefined();
+  });
+
+  it('does not show SettingsSystemHealth when General tab is active', async () => {
+    render(<Settings />);
+    await screen.findByRole('button', { name: 'General' });
+    expect(screen.queryByText('SettingsSystemHealth')).toBeNull();
+  });
+
+  it('does not regress General tab after switching to System Health and back', async () => {
+    render(<Settings />);
+    await screen.findByRole('button', { name: 'General' });
+
+    const sysHealthTab = screen.getByRole('button', { name: 'System Health' });
+    fireEvent.click(sysHealthTab);
+    expect(screen.getByText('SettingsSystemHealth')).toBeDefined();
+
+    const generalTab = screen.getByRole('button', { name: 'General' });
+    fireEvent.click(generalTab);
+    expect(screen.queryByText('SettingsSystemHealth')).toBeNull();
   });
 });

@@ -1,6 +1,9 @@
+import { useState } from 'react';
+import { authedFetch } from '../api/projects';
 import type { TaskView, DisplayStatus, PauseReason } from '../types/taskView';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
+import { parsePauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
 import { useDispatch } from '../hooks/useDispatch';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { CIBadges, PipelineStageBadge } from './CIBadges';
@@ -16,6 +19,20 @@ interface Props {
   project: ProjectConfig | null;
 }
 
+function getProjectRepos(
+  project: { githubRepo?: string } | null | undefined,
+): string[] {
+  const raw = project?.githubRepo;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as string[];
+  } catch {
+    /* bare string */
+  }
+  return [raw];
+}
+
 const STATUS_LABELS: Record<DisplayStatus, string> = {
   needs_attention: '⚠️ Needs Attention',
   ready_to_merge: '✅ Ready to Merge',
@@ -23,7 +40,9 @@ const STATUS_LABELS: Record<DisplayStatus, string> = {
   in_review: '👀 In Review',
   ready: '🗂️ Ready',
   done: '✔️ Done',
-  backlog: '🗂️ Backlog',
+  backlog: '🔲 Backlog',
+  blocked: '🚫 Blocked',
+  deferred: '⏭️ Deferred',
 };
 
 const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
@@ -59,6 +78,18 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Launch failed repeatedly — fix the underlying issue (e.g. delete the stale branch) then restart the backend.',
   diverged_branch:
     'Branch has diverged from origin — manual reconciliation needed before auto-push can resume.',
+  diverged_branch_unresolved:
+    'Branch diverged and repeated rebase nudges failed — manual rebase required.',
+  analyze_failing:
+    'Static analysis gate failed — fix the reported issues and re-push.',
+  rate_limit:
+    'API rate limit reached — session paused. Will resume automatically.',
+  stalled_reconcile_cap:
+    'PR stalled — reconciler retry cap reached. Manual intervention required.',
+  needs_repo:
+    'No repo assigned — assign a target repository before this task can launch.',
+  autofix_git_infra_failure:
+    'Git infrastructure failure (exit 128) during autofix — likely a corrupted .git/config. The orchestrator attempted a repair; manual inspection may be needed.',
 };
 
 function verdictLabel(verdict: string): string {
@@ -77,9 +108,35 @@ function launchTooltip(task: TaskView): string {
 
 export function TaskCard({ task, selected, onClick, send, project }: Props) {
   const { codeSession, pr, review } = task;
-  const statusKey = task.displayStatus.replace(/_/g, '-') as string;
+  const isMultiRepo = getProjectRepos(project).length > 1;
+  const needsRepo = isMultiRepo && task.assignedRepo === null;
+  const [unblockInFlight, setUnblockInFlight] = useState(false);
+  const [unparkInFlight, setUnparkInFlight] = useState(false);
+  const [optimisticStatus, setOptimisticStatus] =
+    useState<DisplayStatus | null>(null);
+  const effectiveDisplayStatus = optimisticStatus ?? task.displayStatus;
+  const statusKey = effectiveDisplayStatus.replace(/_/g, '-') as string;
+
+  // Derive implementing/reviewing pre-stages when no post-PR pipeline stage is active.
+  // Post-PR stages (pr.preReviewStage) always take precedence.
+  const derivedPreStage: string | null = (() => {
+    if (
+      !pr &&
+      codeSession?.status === 'running' &&
+      (codeSession.sessionType === 'standard' || !codeSession.sessionType)
+    )
+      return 'implementing';
+    if (
+      pr &&
+      review?.status === 'running' &&
+      (review.verdict === null || review.iterationCount > 1)
+    )
+      return 'reviewing';
+    return null;
+  })();
   const dispatchTask = useDispatch(send, project);
   const isNonCode = !task.taskType.includes('💻');
+  const pauseStruct = parsePauseReason(task.pauseReason);
 
   // Only Ready code tasks that aren't blocked can be launched.
   // In Progress and In Review tasks already have an active session — launching
@@ -101,21 +158,58 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
     ]);
   };
 
+  const handleUnpark = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (unparkInFlight || !project?.id || !pr) return;
+    setUnparkInFlight(true);
+    try {
+      await authedFetch(
+        `/api/prs/${encodeURIComponent(pr.prNumber)}/unpark?projectId=${encodeURIComponent(project.id)}`,
+        { method: 'POST' },
+      );
+    } catch {
+      // state will be updated via WS broadcast
+    } finally {
+      setUnparkInFlight(false);
+    }
+  };
+
+  const handleUnblock = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (unblockInFlight || !project?.id) return;
+    setUnblockInFlight(true);
+    setOptimisticStatus('ready');
+    try {
+      await authedFetch(
+        `/api/tasks/${encodeURIComponent(task.taskId)}/unblock?projectId=${encodeURIComponent(project.id)}`,
+        { method: 'POST' },
+      );
+    } catch {
+      setOptimisticStatus(null);
+    } finally {
+      setUnblockInFlight(false);
+    }
+  };
+
   return (
     <div
       className={`${styles.card} ${selected ? styles.selected : ''} ${isNonCode ? styles.nonCode : ''}`}
       onClick={onClick}
-      data-status={task.displayStatus}
+      data-status={effectiveDisplayStatus}
     >
       <div className={styles.header}>
         <span className={styles.taskName}>{task.taskName}</span>
         <span
           className={`${styles.statusBadge} ${styles[`status-${statusKey}`] ?? ''}`}
           title={
-            task.pauseReason ? PAUSE_REASON_LABELS[task.pauseReason] : undefined
+            pauseStruct
+              ? `[${pauseStruct.source}] ${PAUSE_REASON_LABELS[pauseStruct.reason] ?? pauseStruct.reason}`
+              : undefined
           }
+          data-pause-severity={pauseStruct?.severity}
+          data-pause-source={pauseStruct?.source}
         >
-          {STATUS_LABELS[task.displayStatus]}
+          {STATUS_LABELS[effectiveDisplayStatus]}
         </span>
       </div>
 
@@ -188,10 +282,14 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
                 prState={pr.state}
               />
               <PipelineStageBadge
-                stage={pr.preReviewStage ?? null}
+                stage={pr.preReviewStage ?? derivedPreStage}
                 prState={pr.state}
                 compact
               />
+            </div>
+          ) : derivedPreStage ? (
+            <div className={styles.prRow}>
+              <PipelineStageBadge stage={derivedPreStage} compact />
             </div>
           ) : (
             <span className={styles.placeholder}>—</span>
@@ -217,20 +315,52 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
             tokens
           </span>
         )}
+        {needsRepo && (
+          <span
+            className={styles.needsRepoBadge}
+            title="Assign a target repository"
+          >
+            ⚠ Needs repo
+          </span>
+        )}
         {isNonCode ? (
           <span className={styles.taskTypeLabel}>{task.taskType}</span>
         ) : (
-          <button
-            className={styles.launchButton}
-            disabled={!isLaunchable}
-            onClick={handleLaunch}
-            title={tooltip || 'Launch session'}
-            aria-label={
-              isLaunchable ? `Launch session for ${task.taskName}` : tooltip
-            }
-          >
-            🚀
-          </button>
+          <>
+            {effectiveDisplayStatus === 'blocked' && (
+              <button
+                className={styles.unblockButton}
+                disabled={unblockInFlight}
+                onClick={(e) => void handleUnblock(e)}
+                title="Clear block and set to Ready"
+                aria-label={`Unblock ${task.taskName}`}
+              >
+                ↩ Unblock
+              </button>
+            )}
+            {pauseStruct?.reason === 'stalled_reconcile_cap' && pr && (
+              <button
+                className={styles.unblockButton}
+                disabled={unparkInFlight}
+                onClick={(e) => void handleUnpark(e)}
+                title="Clear cap-pause and re-run the pre-review pipeline"
+                aria-label={`Unpark ${task.taskName}`}
+              >
+                ↩ Unpark
+              </button>
+            )}
+            <button
+              className={styles.launchButton}
+              disabled={!isLaunchable}
+              onClick={handleLaunch}
+              title={tooltip || 'Launch session'}
+              aria-label={
+                isLaunchable ? `Launch session for ${task.taskName}` : tooltip
+              }
+            >
+              🚀
+            </button>
+          </>
         )}
       </div>
     </div>

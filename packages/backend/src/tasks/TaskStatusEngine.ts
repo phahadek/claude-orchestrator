@@ -1,11 +1,12 @@
 import {
   getPRByNotionTaskId,
   getLatestCodeSessionByNotionTaskId,
-  getSetting,
   getTaskCache,
   getTaskPauseReason,
 } from '../db/queries';
-import type { PauseReason } from '../db/types';
+import { parsePauseReason } from '../db/pauseReason';
+import { typedGetSetting } from '../config/settings';
+import type { PauseReasonStruct } from '../db/types';
 
 export type DisplayStatus =
   | 'ready'
@@ -14,7 +15,9 @@ export type DisplayStatus =
   | 'needs_attention'
   | 'ready_to_merge'
   | 'done'
-  | 'backlog';
+  | 'backlog'
+  | 'blocked'
+  | 'deferred';
 
 export interface TaskStatusInput {
   notionStatus: string; // raw Notion status string
@@ -24,7 +27,7 @@ export interface TaskStatusInput {
   reviewVerdict: string | null; // 'approved' | 'needs_changes' | 'incomplete' | null
   reviewIterationCount: number; // how many review cycles
   reviewIterationCap: number; // configurable cap from settings
-  pauseReason?: PauseReason | null; // non-null forces needs_attention (unless terminal/approved)
+  pauseReason?: PauseReasonStruct | null; // non-null forces needs_attention (unless terminal/approved)
 }
 
 /**
@@ -57,6 +60,12 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
     return 'in_review';
   }
 
+  // Explicit Notion status wins over pause_reason so a 🚫 Blocked task is never
+  // silently demoted to needs_attention or backlog. The pause detail still surfaces
+  // in the tooltip via the pauseReason field on the task view.
+  if (notionStatus.includes('Blocked')) return 'blocked';
+  if (notionStatus.includes('Deferred')) return 'deferred';
+
   // Any non-null pause_reason marks the task as needing attention.
   if (pauseReason) return 'needs_attention';
 
@@ -64,19 +73,16 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
 
   if (notionStatus.includes('Backlog')) return 'backlog';
 
-  // 3. ready — default (includes 🗂️ Ready and any unrecognized status)
-  return 'ready';
+  // 3. ready — only for explicitly recognized Ready status
+  if (notionStatus.includes('Ready')) return 'ready';
+
+  // Empty or unrecognized notionStatus (e.g. no task_cache row) must not surface
+  // as launchable. Default to backlog so stale/unknown tasks don't appear in Ready.
+  return 'backlog';
 }
 
-const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
-
 function getReviewIterationCap(): number {
-  const raw = getSetting('max_review_iterations');
-  if (!raw) return DEFAULT_MAX_REVIEW_ITERATIONS;
-  const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
-    : DEFAULT_MAX_REVIEW_ITERATIONS;
+  return typedGetSetting('max_review_iterations');
 }
 
 /**
@@ -117,6 +123,8 @@ export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
     reviewIterationCount: prRow?.review_iteration ?? 0,
     reviewIterationCap: getReviewIterationCap(),
     pauseReason:
-      prRow?.pause_reason ?? getTaskPauseReason(notionTaskId) ?? null,
+      parsePauseReason(prRow?.pause_reason ?? null) ??
+      getTaskPauseReason(notionTaskId) ??
+      null,
   });
 }

@@ -18,6 +18,17 @@ describe('CIBadges', () => {
     expect(screen.getByText('❌ CI failing')).toBeDefined();
   });
 
+  it('renders ❌ CI failing when pauseReason is a JSON struct with source ci', () => {
+    const jsonPauseReason = JSON.stringify({
+      reason: 'ci_failing',
+      source: 'ci',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
+    render(<CIBadges mergeState={null} pauseReason={jsonPauseReason} />);
+    expect(screen.getByText('❌ CI failing')).toBeDefined();
+  });
+
   it('renders nothing when mergeState is clean and pauseReason is null', () => {
     const { container } = render(
       <CIBadges mergeState="clean" pauseReason={null} />,
@@ -105,6 +116,11 @@ describe('PipelineStageBadge', () => {
     expect(screen.getByText(/Running verify/)).toBeDefined();
   });
 
+  it('renders running analyze badge', () => {
+    render(<PipelineStageBadge stage="analyzing" />);
+    expect(screen.getByText(/Running analyze/)).toBeDefined();
+  });
+
   it('renders running tests badge', () => {
     render(<PipelineStageBadge stage="tests" />);
     expect(screen.getByText(/Running tests/)).toBeDefined();
@@ -123,6 +139,11 @@ describe('PipelineStageBadge', () => {
   it('renders verify failed badge', () => {
     render(<PipelineStageBadge stage="blocked_verify" />);
     expect(screen.getByText(/Verify failed/)).toBeDefined();
+  });
+
+  it('renders analyze failed badge', () => {
+    render(<PipelineStageBadge stage="blocked_analyze" />);
+    expect(screen.getByText(/Analyze failed/)).toBeDefined();
   });
 
   it('does not render "Blocked" compact label for blocked_autofix', () => {
@@ -181,6 +202,42 @@ describe('PipelineStageBadge', () => {
   it('does not show spinner for awaiting_review stage', () => {
     render(<PipelineStageBadge stage="awaiting_review" />);
     expect(document.querySelector('[aria-hidden="true"]')).toBeNull();
+  });
+
+  it('renders implementing badge with spinner', () => {
+    render(<PipelineStageBadge stage="implementing" />);
+    expect(screen.getByText(/Implementing/)).toBeDefined();
+    expect(document.querySelector('[aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it('renders reviewing badge with spinner', () => {
+    render(<PipelineStageBadge stage="reviewing" />);
+    expect(screen.getByText(/Reviewing/)).toBeDefined();
+    expect(document.querySelector('[aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it('renders compact implementing badge', () => {
+    render(<PipelineStageBadge stage="implementing" compact />);
+    expect(screen.getByText(/💻 Implementing/)).toBeDefined();
+  });
+
+  it('renders compact reviewing badge', () => {
+    render(<PipelineStageBadge stage="reviewing" compact />);
+    expect(screen.getByText(/👀 Reviewing/)).toBeDefined();
+  });
+
+  it('suppresses implementing badge when prState is merged', () => {
+    const { container } = render(
+      <PipelineStageBadge stage="implementing" prState="merged" />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('suppresses reviewing badge when prState is closed', () => {
+    const { container } = render(
+      <PipelineStageBadge stage="reviewing" prState="closed" />,
+    );
+    expect(container.firstChild).toBeNull();
   });
 });
 

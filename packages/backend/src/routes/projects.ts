@@ -15,6 +15,8 @@ import { getMergeReadyPRs } from '../db/queries';
 import { NotionClient, normalizeNotionId } from '../notion/NotionClient';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { GitHubClient } from '../github/GitHubClient';
+import { JiraClient } from '../tasks/JiraClient';
+import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
 
 let _autoMerger: AutoMerger | null = null;
 export function setAutoMerger(merger: AutoMerger): void {
@@ -28,6 +30,33 @@ function isExistingDirectory(p: string): boolean {
     return fs.statSync(normalizePath(p)).isDirectory();
   } catch {
     return false;
+  }
+}
+
+const JIRA_EPIC_KEY_RE = /^[A-Z][A-Z0-9]*-\d+$/;
+
+/** Returns an error string if sourceId is malformed for the given taskSource, or null if valid. */
+function validateSourceIdFormat(
+  sourceId: string,
+  taskSource: string,
+): string | null {
+  switch (taskSource) {
+    case 'notion':
+      if (!normalizeNotionId(sourceId))
+        return 'sourceId is not a valid Notion database URL or ID';
+      return null;
+    case 'github': {
+      const n = parseInt(sourceId, 10);
+      if (isNaN(n) || n <= 0 || String(n) !== sourceId)
+        return 'sourceId must be a positive integer (GitHub milestone number)';
+      return null;
+    }
+    case 'jira':
+      if (!JIRA_EPIC_KEY_RE.test(sourceId))
+        return 'sourceId must be a Jira Epic key (e.g. PROJECT-123)';
+      return null;
+    default:
+      return null;
   }
 }
 
@@ -89,6 +118,44 @@ function parseGithubTaskSourceConfig(
   return { ok: true, config: { owner, repo, defaultMilestone } };
 }
 
+interface JiraTaskSourceConfig {
+  host: string;
+  project_key: string;
+  default_jql?: string;
+  ready_statuses?: string[];
+  status_mapping?: Record<string, string>;
+  type_mapping?: Record<string, string>;
+  epic_field?: string;
+}
+
+function parseJiraTaskSourceConfig(
+  raw: unknown,
+): { ok: true; config: JiraTaskSourceConfig } | { ok: false; error: string } {
+  if (typeof raw === 'string') {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { ok: false, error: 'task_source_config is not valid JSON' };
+    }
+    return parseJiraTaskSourceConfig(parsed);
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { ok: false, error: 'task_source_config must be a JSON object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj.project_key !== 'string') {
+    return {
+      ok: false,
+      error: 'task_source_config.project_key must be a string',
+    };
+  }
+  if (typeof obj.host !== 'string') {
+    return { ok: false, error: 'task_source_config.host must be a string' };
+  }
+  return { ok: true, config: raw as JiraTaskSourceConfig };
+}
+
 async function verifyGithubRepoAccess(
   ownerRepo: string,
 ): Promise<string | null> {
@@ -134,10 +201,11 @@ projectsRouter.post('/projects', async (req: Request, res: Response) => {
     rawTaskSource !== undefined &&
     rawTaskSource !== 'notion' &&
     rawTaskSource !== 'yaml' &&
-    rawTaskSource !== 'github'
+    rawTaskSource !== 'github' &&
+    rawTaskSource !== 'jira'
   ) {
     res.status(400).json({
-      error: `taskSource must be 'notion', 'yaml', or 'github'`,
+      error: `taskSource must be 'notion', 'yaml', 'github', or 'jira'`,
     });
     return;
   }
@@ -146,7 +214,9 @@ projectsRouter.post('/projects', async (req: Request, res: Response) => {
       ? 'yaml'
       : rawTaskSource === 'github'
         ? 'github'
-        : 'notion';
+        : rawTaskSource === 'jira'
+          ? 'jira'
+          : 'notion';
 
   let taskSourceConfig: string | null = null;
   if (taskSource === 'github') {
@@ -211,6 +281,7 @@ projectsRouter.post('/projects', async (req: Request, res: Response) => {
         ? body.autoLaunchMilestoneId
         : null,
     autoMergeEnabled: body.autoMergeEnabled === true,
+    dataResidencyConfirmed: body.dataResidencyConfirmed === true,
     baseBranch: typeof body.baseBranch === 'string' ? body.baseBranch : 'dev',
   });
   res.status(201).json(project);
@@ -244,7 +315,8 @@ projectsRouter.patch('/projects/:id', async (req: Request, res: Response) => {
   if (
     body.taskSource === 'notion' ||
     body.taskSource === 'yaml' ||
-    body.taskSource === 'github'
+    body.taskSource === 'github' ||
+    body.taskSource === 'jira'
   ) {
     patch.task_source = body.taskSource;
   }
@@ -341,21 +413,34 @@ projectsRouter.patch('/projects/:id', async (req: Request, res: Response) => {
     if (body.taskSourceConfig === null) {
       patch.task_source_config = null;
     } else {
-      const parsed = parseGithubTaskSourceConfig(body.taskSourceConfig);
-      if (!parsed.ok) {
-        res.status(400).json({ error: parsed.error });
-        return;
+      // Determine effective task_source: use the patched value if provided,
+      // otherwise look up the existing project's task_source.
+      const effectiveTaskSource =
+        patch.task_source ?? ProjectService.getById(id)?.taskSource;
+      if (effectiveTaskSource === 'jira') {
+        const result = parseJiraTaskSourceConfig(body.taskSourceConfig);
+        if (!result.ok) {
+          res.status(400).json({ error: result.error });
+          return;
+        }
+        patch.task_source_config = JSON.stringify(result.config);
+      } else {
+        const parsed = parseGithubTaskSourceConfig(body.taskSourceConfig);
+        if (!parsed.ok) {
+          res.status(400).json({ error: parsed.error });
+          return;
+        }
+        const repoError = await verifyGithubRepoAccess(
+          `${parsed.config.owner}/${parsed.config.repo}`,
+        );
+        if (repoError) {
+          res.status(400).json({ error: repoError });
+          return;
+        }
+        patch.task_source_config = JSON.stringify(parsed.config);
+        // derive github_repo from the validated GitHub task source config
+        patch.github_repo = `${parsed.config.owner}/${parsed.config.repo}`;
       }
-      const repoError = await verifyGithubRepoAccess(
-        `${parsed.config.owner}/${parsed.config.repo}`,
-      );
-      if (repoError) {
-        res.status(400).json({ error: repoError });
-        return;
-      }
-      patch.task_source_config = JSON.stringify(parsed.config);
-      // derive github_repo from the validated GitHub task source config
-      patch.github_repo = `${parsed.config.owner}/${parsed.config.repo}`;
     }
   }
 
@@ -426,7 +511,8 @@ projectsRouter.post(
   '/projects/:id/milestones',
   (req: Request, res: Response) => {
     const projectId = String(req.params.id);
-    if (!ProjectService.getById(projectId)) {
+    const project = ProjectService.getById(projectId);
+    if (!project) {
       res.status(404).json({ error: `Project '${projectId}' not found` });
       return;
     }
@@ -436,6 +522,16 @@ projectsRouter.post(
     if (!name) {
       res.status(400).json({ error: 'name is required' });
       return;
+    }
+
+    const rawSourceId =
+      typeof body.sourceId === 'string' ? body.sourceId : null;
+    if (rawSourceId) {
+      const fmtErr = validateSourceIdFormat(rawSourceId, project.taskSource);
+      if (fmtErr) {
+        res.status(400).json({ error: fmtErr });
+        return;
+      }
     }
 
     const id =
@@ -451,7 +547,7 @@ projectsRouter.post(
       id,
       projectId,
       name,
-      sourceId: typeof body.sourceId === 'string' ? body.sourceId : null,
+      sourceId: rawSourceId,
       displayOrder:
         typeof body.displayOrder === 'number' ? body.displayOrder : 0,
     });
@@ -461,7 +557,29 @@ projectsRouter.post(
 
 projectsRouter.patch('/milestones/:id', (req: Request, res: Response) => {
   const id = String(req.params.id);
+
+  const existing = ProjectService.getMilestone(id);
+  if (!existing) {
+    res.status(404).json({ error: `Milestone '${id}' not found` });
+    return;
+  }
+
   const body = (req.body as Record<string, unknown>) ?? {};
+
+  if (
+    'sourceId' in body &&
+    typeof body.sourceId === 'string' &&
+    body.sourceId
+  ) {
+    const project = ProjectService.getById(existing.projectId);
+    if (project) {
+      const fmtErr = validateSourceIdFormat(body.sourceId, project.taskSource);
+      if (fmtErr) {
+        res.status(400).json({ error: fmtErr });
+        return;
+      }
+    }
+  }
 
   const patch: MilestonePatch = {};
   if (typeof body.name === 'string') patch.name = body.name;
@@ -564,6 +682,145 @@ projectsRouter.get(
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Notion validation failed';
+      res.status(400).json({ error: message });
+    }
+  },
+);
+
+// ── GitHub milestone validation ──────────────────────────────────────────────
+
+projectsRouter.get(
+  '/projects/:id/github/validate-milestone',
+  async (req: Request, res: Response) => {
+    const projectId = String(req.params.id);
+    const project = ProjectService.getById(projectId);
+    if (!project) {
+      res.status(404).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
+    if (project.taskSource !== 'github') {
+      res.status(400).json({
+        error: `Project '${projectId}' does not use GitHub task source`,
+      });
+      return;
+    }
+
+    const rawNumber =
+      typeof req.query.number === 'string' ? req.query.number.trim() : '';
+    if (!rawNumber) {
+      res.status(400).json({ error: 'number query parameter is required' });
+      return;
+    }
+    const n = parseInt(rawNumber, 10);
+    if (isNaN(n) || n <= 0 || String(n) !== rawNumber) {
+      res.status(400).json({
+        error: 'number must be a positive integer (GitHub milestone number)',
+      });
+      return;
+    }
+
+    let ownerRepo: string;
+    try {
+      const cfg = project.taskSourceConfig
+        ? (JSON.parse(project.taskSourceConfig) as GithubTaskSourceConfig)
+        : null;
+      if (!cfg?.owner || !cfg?.repo) {
+        res
+          .status(400)
+          .json({ error: 'GitHub task source config is missing owner/repo' });
+        return;
+      }
+      ownerRepo = `${cfg.owner}/${cfg.repo}`;
+    } catch {
+      res.status(400).json({ error: 'GitHub task source config is malformed' });
+      return;
+    }
+
+    try {
+      const client = new GitHubClient();
+      const milestone = await client.getMilestone(ownerRepo, n);
+      res.json({
+        type: 'github-milestone',
+        number: milestone.id,
+        title: milestone.title,
+        state: milestone.state,
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'GitHub milestone validation failed';
+      res.status(400).json({ error: message });
+    }
+  },
+);
+
+// ── Jira Epic validation ──────────────────────────────────────────────────────
+
+projectsRouter.get(
+  '/projects/:id/jira/validate-epic',
+  async (req: Request, res: Response) => {
+    const projectId = String(req.params.id);
+    const project = ProjectService.getById(projectId);
+    if (!project) {
+      res.status(404).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
+    if (project.taskSource !== 'jira') {
+      res.status(400).json({
+        error: `Project '${projectId}' does not use Jira task source`,
+      });
+      return;
+    }
+    const rawKey =
+      typeof req.query.key === 'string' ? req.query.key.trim() : '';
+    if (!rawKey) {
+      res.status(400).json({ error: 'key query parameter is required' });
+      return;
+    }
+    if (!JIRA_EPIC_KEY_RE.test(rawKey)) {
+      res.status(400).json({
+        error: 'key must be a valid Jira Epic key (e.g. PROJECT-123)',
+      });
+      return;
+    }
+
+    let jiraHost: string;
+    try {
+      const cfg = project.taskSourceConfig
+        ? (JSON.parse(project.taskSourceConfig) as { host?: string })
+        : null;
+      jiraHost = cfg?.host || JIRA_HOST;
+    } catch {
+      jiraHost = JIRA_HOST;
+    }
+
+    if (!jiraHost || !JIRA_TOKEN) {
+      res.status(400).json({ error: 'Jira is not configured on this server' });
+      return;
+    }
+
+    try {
+      const client = new JiraClient(
+        jiraHost,
+        JIRA_TOKEN,
+        JIRA_EMAIL || undefined,
+      );
+      const issue = await client.getIssue(rawKey);
+      if (issue.fields.issuetype.name !== 'Epic') {
+        res.status(400).json({
+          error: `'${rawKey}' is a ${issue.fields.issuetype.name}, not an Epic`,
+        });
+        return;
+      }
+      res.json({
+        type: 'jira-epic',
+        key: issue.key,
+        summary: issue.fields.summary,
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Jira Epic validation failed';
       res.status(400).json({ error: message });
     }
   },

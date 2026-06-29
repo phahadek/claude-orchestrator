@@ -1,0 +1,121 @@
+.wrapper {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #313244;
+  border: 1px solid #45475a;
+  border-radius: 999px;
+  color: var(--text-muted, #a6adc8);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 4px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+
+.pill:hover {
+  border-color: #585b70;
+  color: var(--text-primary, #cdd6f4);
+}
+
+.pillDone {
+  background: var(--accent-dim, #313a55);
+  border-color: var(--accent, #89b4fa);
+  color: var(--accent, #89b4fa);
+}
+
+.pillLabel {
+  font-weight: 500;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 100;
+  background: #1e1e2e;
+  border: 1px solid #45475a;
+  border-radius: 8px;
+  padding: 8px 0;
+  min-width: 260px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.stepTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.stepRow {
+  color: var(--text-muted, #a6adc8);
+}
+
+.stepRow td {
+  padding: 3px 12px;
+}
+
+.step_completed {
+  color: var(--color-green, #a6e3a1);
+}
+
+.step_failed {
+  color: var(--color-red, #f38ba8);
+}
+
+.step_started {
+  color: var(--text-primary, #cdd6f4);
+}
+
+.stepIcon {
+  width: 16px;
+  text-align: center;
+  font-size: 0.75rem;
+}
+
+.stepName {
+  text-transform: capitalize;
+}
+
+.stepDuration {
+  text-align: right;
+  color: var(--text-faint, #6c7086);
+  font-size: 0.75rem;
+}
+
+.totalDuration {
+  border-top: 1px solid #313244;
+  margin-top: 4px;
+  padding: 6px 12px 2px;
+  font-size: 0.75rem;
+  color: var(--text-faint, #6c7086);
+  text-align: right;
+}

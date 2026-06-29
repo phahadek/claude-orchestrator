@@ -1,20 +1,27 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import { logger } from '../logger';
 import { getProjectById, runtimeSettings } from '../config';
-import { ProjectService } from '../projects/ProjectService';
+import { ProjectService, getProjectRepos } from '../projects/ProjectService';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   getTaskCache,
   getActiveTaskAggregates,
-  getSetting,
+  clearTaskPauseReason,
+  resetTaskCrashCount,
+  deleteTaskCacheRow,
+  getTaskRepoAssignment,
+  setTaskRepoAssignment,
 } from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
+import { typedGetSetting } from '../config/settings';
 import type { TaskAggregateRow } from '../db/queries';
 import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';
 import type { NotionTask } from '../notion/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
-import type { PauseReason } from '../db/types';
+import { parsePauseReason } from '../db/pauseReason';
 import yaml from 'js-yaml';
 export type { TaskView } from '../ws/types';
 
@@ -37,15 +44,8 @@ function resolveBoardCacheKey(boardId: string): string {
   return boardId;
 }
 
-const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
-
 function getReviewIterationCap(): number {
-  const raw = getSetting('max_review_iterations');
-  if (!raw) return DEFAULT_MAX_REVIEW_ITERATIONS;
-  const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
-    : DEFAULT_MAX_REVIEW_ITERATIONS;
+  return typedGetSetting('max_review_iterations');
 }
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
@@ -56,10 +56,12 @@ export function setTaskBroadcast(fn: (msg: ServerMessage) => void): void {
 }
 
 // ── TaskCacheRefresher hook ───────────────────────────────────────────────────
-let cacheRefresherFn: ((projectId: string) => Promise<void>) | null = null;
+let cacheRefresherFn:
+  | ((projectId: string, skipCache?: boolean) => Promise<void>)
+  | null = null;
 
 export function setTaskCacheRefresher(
-  fn: (projectId: string) => Promise<void>,
+  fn: (projectId: string, skipCache?: boolean) => Promise<void>,
 ): void {
   cacheRefresherFn = fn;
 }
@@ -72,7 +74,7 @@ export function emitTaskUpdated(notionTaskId: string): void {
 }
 
 /** Build a TaskView for a single notionTaskId from current DB state. Returns null if not found. */
-export function buildTaskView(notionTaskId: string): TaskView | null {
+function buildTaskView(notionTaskId: string): TaskView | null {
   const rows = getActiveTaskAggregates([notionTaskId]);
   if (rows.length === 0) return null;
   return buildTaskViewFromRow(rows[0], getReviewIterationCap());
@@ -99,6 +101,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     codeSession = {
       sessionId: row.code_session_id,
       status: row.code_session_status ?? '',
+      sessionType: row.code_session_type ?? 'standard',
       startedAt: row.code_session_started_at ?? 0,
       endedAt: row.code_session_ended_at ?? null,
       lastMessage,
@@ -152,9 +155,9 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     };
   }
 
-  const pauseReason = (row.pr_pause_reason ??
-    row.session_pr_creation_failed_pause_reason ??
-    null) as PauseReason | null;
+  const pauseStruct = parsePauseReason(
+    row.pr_pause_reason ?? row.session_pr_creation_failed_pause_reason ?? null,
+  );
 
   const displayStatus = deriveDisplayStatus({
     notionStatus,
@@ -164,7 +167,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     reviewVerdict,
     reviewIterationCount: row.pr_review_iteration ?? 0,
     reviewIterationCap: cap,
-    pauseReason,
+    pauseReason: pauseStruct,
   });
 
   const totalTokens = {
@@ -181,7 +184,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     taskName: notionTask?.title ?? row.task_id,
     notionStatus,
     displayStatus,
-    pauseReason,
+    pauseReason: pauseStruct?.reason ?? null,
     priority,
     notionUrl: notionTask?.notionUrl ?? '',
     taskType: notionTask?.type ?? '',
@@ -192,6 +195,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     pr,
     review,
     totalTokens,
+    assignedRepo: getTaskRepoAssignment(row.task_id)?.repo ?? null,
   };
 }
 
@@ -512,13 +516,107 @@ export function createTasksRouter(): Router {
     }
     // Trigger background refresh — returns 202 immediately; broadcasts task_cache_updated when done.
     if (cacheRefresherFn) {
-      void cacheRefresherFn(projectId).catch((err: unknown) => {
-        console.warn(
+      void cacheRefresherFn(projectId, true).catch((err: unknown) => {
+        logger.warn(
           `[tasks] /refresh background error for ${projectId}: ${String(err)}`,
         );
       });
     }
     res.status(202).json({ ok: true, message: 'Refresh queued' });
+  });
+
+  // ── POST /api/tasks/:taskId/unblock ─────────────────────────────────────
+  router.post('/tasks/:taskId/unblock', async (req: Request, res: Response) => {
+    const taskId = String(req.params.taskId);
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+
+    if (!projectId) {
+      res.status(422).json({ error: 'projectId is required' });
+      return;
+    }
+
+    let backend: Awaited<ReturnType<typeof getTaskBackend>>;
+    try {
+      backend = getTaskBackend(projectId);
+    } catch {
+      res
+        .status(422)
+        .json({ error: `Cannot resolve backend for project '${projectId}'` });
+      return;
+    }
+
+    clearTaskPauseReason(taskId);
+    resetTaskCrashCount(taskId);
+    deleteTaskCacheRow(taskId);
+
+    try {
+      await backend.updateStatus(taskId, '🗂️ Ready', {
+        source: 'orchestrator',
+      });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to update status',
+      });
+      return;
+    }
+
+    emitTaskUpdated(taskId);
+    if (taskBroadcastFn) {
+      taskBroadcastFn({
+        type: 'task_status_changed',
+        notionTaskId: taskId,
+        newStatus: '🗂️ Ready',
+      });
+    }
+
+    recordEvent({
+      event_type: 'task_unblocked',
+      actor_type: 'human',
+      project_id: projectId,
+      task_id: taskId,
+      payload: { taskId, projectId },
+    });
+
+    res.json({ ok: true, newStatus: '🗂️ Ready' });
+  });
+
+  // ── POST /api/tasks/:taskId/assign-repo ────────────────────────────────────
+  router.post('/tasks/:taskId/assign-repo', (req: Request, res: Response) => {
+    const taskId = String(req.params.taskId);
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+    const body = req.body as { repo?: unknown };
+    const repo = typeof body.repo === 'string' ? body.repo.trim() : null;
+
+    if (!projectId) {
+      res.status(422).json({ error: 'projectId is required' });
+      return;
+    }
+    if (!repo) {
+      res.status(422).json({ error: 'repo is required' });
+      return;
+    }
+
+    const project = getProjectById(projectId);
+    if (!project) {
+      res.status(422).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
+
+    const allowedRepos = getProjectRepos(project);
+    try {
+      setTaskRepoAssignment(taskId, projectId, repo, 'human', allowedRepos);
+    } catch (err) {
+      res
+        .status(422)
+        .json({ error: err instanceof Error ? err.message : 'Invalid repo' });
+      return;
+    }
+
+    emitTaskUpdated(taskId);
+
+    res.json({ ok: true, repo });
   });
 
   // ── PATCH /api/tasks/:id/status ──────────────────────────────────────────

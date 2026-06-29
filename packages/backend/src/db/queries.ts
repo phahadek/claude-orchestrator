@@ -1,5 +1,11 @@
 import { db } from './db';
+import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
+import {
+  pauseReasonFromCanonical,
+  serializePauseReason,
+  parsePauseReason,
+} from './pauseReason';
 import type {
   Session,
   NewSession,
@@ -8,12 +14,13 @@ import type {
   PermissionEvent,
   NewPermissionEvent,
   PermissionRule,
-  NewPermissionRule,
   PermissionDenialRow,
   NewPermissionDenialRow,
   TaskCache,
   PullRequestRow,
   PauseReason,
+  CanonicalPauseReason,
+  PauseReasonStruct,
   ProjectRow,
   NewProjectRow,
   MilestoneRow,
@@ -23,7 +30,7 @@ import type {
   DeviceRow,
   NewDeviceRow,
   SessionPauseInterval,
-  SessionPauseReason,
+  TaskRepoAssignmentRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -58,10 +65,6 @@ const stmtUpdateSessionWorktreePath = db.prepare<{
 
 const stmtGetSession = db.prepare<{ session_id: string }>(`
   SELECT * FROM sessions WHERE session_id = @session_id
-`);
-
-const stmtGetAllSessions = db.prepare(`
-  SELECT * FROM sessions ORDER BY started_at DESC
 `);
 
 const stmtGetAllSessionIds = db.prepare(`
@@ -215,7 +218,7 @@ export function markSessionDone(
     | { status: string; task_id: string | null }
     | undefined;
   if (current?.status === 'running') {
-    console.warn(
+    logger.warn(
       `[markSessionDone] running→done for ${sessionId.slice(0, 8)} call_site=${callSite ?? 'unknown'} — emitting audit event`,
     );
     recordEvent({
@@ -345,10 +348,6 @@ export function getRunningSessionsWithMergedOrClosedPR(): StuckResultSessionRow[
 
 export function getSession(sessionId: string): Session | undefined {
   return stmtGetSession.get({ session_id: sessionId }) as Session | undefined;
-}
-
-export function getAllSessions(): Session[] {
-  return stmtGetAllSessions.all() as Session[];
 }
 
 export function getAllSessionIds(): string[] {
@@ -707,7 +706,7 @@ export function upsertSessionEvent(
   }
   const sessionRow = stmtGetSession.get({ session_id: e.session_id });
   if (!sessionRow) {
-    console.error(
+    logger.error(
       `[upsertSessionEvent] no sessions row for ${e.session_id} — dropping event (type=${e.event_type})`,
     );
     return -1;
@@ -769,81 +768,8 @@ const stmtGetRules = db.prepare(`
   SELECT * FROM permission_rules WHERE enabled = 1 ORDER BY order_index ASC
 `);
 
-const stmtGetAllRules = db.prepare(`
-  SELECT * FROM permission_rules ORDER BY order_index ASC
-`);
-
-const stmtGetRuleById = db.prepare<{ id: number }>(`
-  SELECT * FROM permission_rules WHERE id = @id
-`);
-
-const stmtGetMaxOrderIndex = db.prepare(`
-  SELECT COALESCE(MAX(order_index), 0) AS max_idx FROM permission_rules
-`);
-
-const stmtInsertRule = db.prepare<NewPermissionRule>(`
-  INSERT INTO permission_rules
-    (order_index, pattern, match_type, decision, label, enabled)
-  VALUES
-    (@order_index, @pattern, @match_type, @decision, @label, @enabled)
-`);
-
-const stmtUpdateRule = db.prepare<{
-  id: number;
-  order_index?: number;
-  pattern?: string;
-  match_type?: string;
-  decision?: string;
-  label?: string | null;
-  enabled?: number;
-}>(`
-  UPDATE permission_rules
-  SET
-    order_index = COALESCE(@order_index, order_index),
-    pattern     = COALESCE(@pattern,     pattern),
-    match_type  = COALESCE(@match_type,  match_type),
-    decision    = COALESCE(@decision,    decision),
-    label       = CASE WHEN @label IS NULL AND @label IS NOT @label
-                       THEN label ELSE COALESCE(@label, label) END,
-    enabled     = COALESCE(@enabled,     enabled)
-  WHERE id = @id
-`);
-
-const stmtDeleteRule = db.prepare<{ id: number }>(`
-  DELETE FROM permission_rules WHERE id = @id
-`);
-
 export function getRules(): PermissionRule[] {
   return stmtGetRules.all() as PermissionRule[];
-}
-
-export function getAllRules(): PermissionRule[] {
-  return stmtGetAllRules.all() as PermissionRule[];
-}
-
-export function getRuleById(id: number): PermissionRule | undefined {
-  return stmtGetRuleById.get({ id }) as PermissionRule | undefined;
-}
-
-export function insertRule(r: NewPermissionRule): void {
-  stmtInsertRule.run(r);
-}
-
-export function insertRuleReturning(
-  body: Omit<NewPermissionRule, 'order_index'>,
-): PermissionRule {
-  const { max_idx } = stmtGetMaxOrderIndex.get() as { max_idx: number };
-  const r: NewPermissionRule = { ...body, order_index: max_idx + 1 };
-  const result = stmtInsertRule.run(r);
-  return getRuleById(result.lastInsertRowid as number)!;
-}
-
-export function updateRule(id: number, patch: Partial<PermissionRule>): void {
-  stmtUpdateRule.run({ id, ...patch });
-}
-
-export function deleteRule(id: number): void {
-  stmtDeleteRule.run({ id });
 }
 
 // ─── permission_denials ─────────────────────────────────────────────────────
@@ -905,14 +831,6 @@ const stmtGetTaskCache = db.prepare<{ task_id: string }>(`
   SELECT * FROM task_cache WHERE task_id = @task_id
 `);
 
-const stmtDeleteTaskCache = db.prepare<{ task_id: string }>(`
-  DELETE FROM task_cache WHERE task_id = @task_id
-`);
-
-export function deleteTaskCache(taskId: string): void {
-  stmtDeleteTaskCache.run({ task_id: taskId });
-}
-
 export function updateTaskCacheStatus(taskId: string, status: string): void {
   const row = getTaskCache(taskId);
   if (!row) return;
@@ -950,6 +868,10 @@ export function getCacheAge(taskId: string): number {
   const row = getTaskCache(taskId);
   if (!row) return Infinity;
   return Date.now() - row.fetched_at;
+}
+
+export function deleteTaskCacheRow(taskId: string): void {
+  db.prepare(`DELETE FROM task_cache WHERE task_id = ?`).run(taskId);
 }
 
 export function incrementTokens(
@@ -1040,6 +962,7 @@ export function upsertPullRequest(
     | 'pause_reason_set_at'
     | 'ci_remediation_attempted_sha'
     | 'pre_review_stage'
+    | 'stalled_pr_retry_count'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -1052,8 +975,19 @@ export function upsertPullRequest(
     pause_reason?: PullRequestRow['pause_reason'];
   },
 ): PullRequestRow | null {
-  if (!getProjectByGithubRepo(pr.repo)) {
-    console.warn(
+  const repoConfigured = listProjectRows().some((row) => {
+    const raw = row.github_repo;
+    if (!raw) return false;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return (parsed as string[]).includes(pr.repo);
+    } catch {
+      // bare string
+    }
+    return raw === pr.repo;
+  });
+  if (!repoConfigured) {
+    logger.warn(
       `[upsertPullRequest] rejected: repo "${pr.repo}" not configured in any project — skipping upsert to prevent phantom row (pr_url=${pr.pr_url})`,
     );
     return null;
@@ -1165,10 +1099,26 @@ export function setHeadSha(
   db.prepare<{ pr_number: number; repo: string; head_sha: string | null }>(
     `
     UPDATE pull_requests
-    SET head_sha = @head_sha
+    SET head_sha = @head_sha, stalled_pr_retry_count = 0
     WHERE pr_number = @pr_number AND repo = @repo
   `,
   ).run({ pr_number: prNumber, repo, head_sha: sha });
+}
+
+export function incrementStalledPRRetryCount(
+  prNumber: number,
+  repo: string,
+): number {
+  db.prepare<{ pr_number: number; repo: string }>(
+    `UPDATE pull_requests SET stalled_pr_retry_count = stalled_pr_retry_count + 1 WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo });
+  return getPRByNumber(prNumber, repo)?.stalled_pr_retry_count ?? 0;
+}
+
+export function clearReviewSessionId(prNumber: number, repo: string): void {
+  db.prepare<{ pr_number: number; repo: string }>(
+    `UPDATE pull_requests SET review_session_id = NULL WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo });
 }
 
 export function setPendingPush(
@@ -1193,7 +1143,7 @@ export function getPRBySessionId(sessionId: string): PullRequestRow | null {
     .get({ session_id: sessionId }) as PullRequestRow | null;
 }
 
-export function getPRByTaskId(taskId: string): PullRequestRow | null {
+function getPRByTaskId(taskId: string): PullRequestRow | null {
   return db
     .prepare<{ task_id: string }>(
       `
@@ -1203,7 +1153,6 @@ export function getPRByTaskId(taskId: string): PullRequestRow | null {
     .get({ task_id: taskId }) as PullRequestRow | null;
 }
 
-/** @deprecated Use getPRByTaskId instead */
 export const getPRByNotionTaskId = getPRByTaskId;
 
 /**
@@ -1219,16 +1168,6 @@ export function getMergedPRForTask(taskId: string): PullRequestRow | null {
       `SELECT * FROM pull_requests WHERE task_id = @task_id AND state = 'merged' ORDER BY pr_number DESC LIMIT 1`,
     )
     .get({ task_id: taskId }) as PullRequestRow | null;
-}
-
-export function getOpenPRs(repo: string): PullRequestRow[] {
-  return db
-    .prepare<{ repo: string }>(
-      `
-    SELECT * FROM pull_requests WHERE repo = @repo AND state = 'open' ORDER BY pr_number DESC
-  `,
-    )
-    .all({ repo }) as PullRequestRow[];
 }
 
 export function getPRs(repo: string): PullRequestRow[] {
@@ -1356,12 +1295,12 @@ export function lookupSessionByBranch(
     return rows[0];
   }
   if (rows.length === 0) {
-    console.warn(
+    logger.warn(
       `[lookupSessionByBranch] no session found for branch "${headBranch}"`,
     );
   } else {
     const ids = rows.map((r) => r.session_id.slice(0, 8)).join(', ');
-    console.warn(
+    logger.warn(
       `[lookupSessionByBranch] ambiguous: ${rows.length} sessions match branch "${headBranch}" (${ids}) — leaving session_id null`,
     );
   }
@@ -1416,18 +1355,6 @@ export function insertSessionAudit(row: Omit<SessionAuditRow, 'id'>): void {
       (@session_id, @pr_opened, @pr_targets, @task_status, @violations, @spec_mismatch, @audited_at)
   `,
   ).run(row);
-}
-
-export function getSessionAudit(
-  sessionId: string,
-): SessionAuditRow | undefined {
-  return db
-    .prepare<{ session_id: string }>(
-      `
-    SELECT * FROM session_audits WHERE session_id = @session_id ORDER BY id DESC LIMIT 1
-  `,
-    )
-    .get({ session_id: sessionId }) as SessionAuditRow | undefined;
 }
 
 export function updateMergeState(
@@ -1507,7 +1434,12 @@ export function setPauseReason(
   prNumber: number,
   repo: string,
   reason: PauseReason | null,
+  detail?: string,
 ): void {
+  const serialized =
+    reason !== null
+      ? serializePauseReason(pauseReasonFromCanonical(reason, detail))
+      : null;
   db.prepare<{
     pr_number: number;
     repo: string;
@@ -1523,8 +1455,26 @@ export function setPauseReason(
   ).run({
     pr_number: prNumber,
     repo,
-    pause_reason: reason,
+    pause_reason: serialized,
     pause_reason_set_at: reason !== null ? Date.now() : null,
+  });
+}
+
+/**
+ * Clear both pause_reason and pre_review_stage on terminal PR transitions
+ * (merged, closed, or approved verdict). Composes the existing setters so that
+ * pause_reason_set_at is also nulled correctly. Re-nulling already-null fields
+ * is a no-op in SQLite and is safe.
+ */
+export function clearTerminalPRFlags(prNumber: number, repo: string): void {
+  setPauseReason(prNumber, repo, null);
+  setPreReviewStage(prNumber, repo, null);
+  recordEvent({
+    event_type: 'pr_terminal_flags_cleared',
+    actor_type: 'system',
+    actor_id: null,
+    task_id: null,
+    payload: { pr_number: prNumber, repo },
   });
 }
 
@@ -1567,7 +1517,7 @@ export function getStaleAutoMergeFailedPRs(thresholdMs: number): Array<{
       `
     SELECT pr_number, repo FROM pull_requests
     WHERE state = 'open'
-      AND pause_reason = 'auto_merge_failed'
+      AND (pause_reason = 'auto_merge_failed' OR json_extract(pause_reason, '$.reason') = 'auto_merge_failed')
       AND pause_reason_set_at IS NOT NULL
       AND pause_reason_set_at < @cutoff
   `,
@@ -1598,6 +1548,7 @@ export function getConflictNudgeCandidates(): Array<{
       AND (conflict_nudge_sha IS NULL OR head_sha != conflict_nudge_sha)
       AND (
         pause_reason = 'auto_merge_failed'
+        OR json_extract(pause_reason, '$.reason') = 'auto_merge_failed'
         OR (pause_reason IS NULL AND merge_state IN ('dirty', 'blocked'))
       )
   `,
@@ -1610,7 +1561,9 @@ export function getConflictNudgeCandidates(): Array<{
  * or null if no PR exists or the PR is not paused. Used by auto-runner
  * components to skip tasks paused by stuck_timeout (or any other reason).
  */
-export function getPausedPrReasonForTask(taskId: string): PauseReason | null {
+export function getPausedPrReasonForTask(
+  taskId: string,
+): PauseReasonStruct | null {
   const row = db
     .prepare<{ task_id: string }>(
       `
@@ -1622,7 +1575,7 @@ export function getPausedPrReasonForTask(taskId: string): PauseReason | null {
   `,
     )
     .get({ task_id: taskId }) as { pause_reason: string | null } | undefined;
-  return (row?.pause_reason as PauseReason | null) ?? null;
+  return parsePauseReason(row?.pause_reason ?? null);
 }
 
 // ─── task_pause_reasons ────────────────────────────────────────────────────────
@@ -1636,6 +1589,9 @@ export function setTaskPauseReason(
   reason: PauseReason,
   detail: string,
 ): void {
+  const serialized = serializePauseReason(
+    pauseReasonFromCanonical(reason, detail || undefined),
+  );
   db.prepare<{
     task_id: string;
     pause_reason: string;
@@ -1644,17 +1600,22 @@ export function setTaskPauseReason(
   }>(
     `INSERT OR REPLACE INTO task_pause_reasons (task_id, pause_reason, detail, set_at)
      VALUES (@task_id, @pause_reason, @detail, @set_at)`,
-  ).run({ task_id: taskId, pause_reason: reason, detail, set_at: Date.now() });
+  ).run({
+    task_id: taskId,
+    pause_reason: serialized,
+    detail,
+    set_at: Date.now(),
+  });
 }
 
-/** Returns the task-level pause reason, or null if none is set. */
-export function getTaskPauseReason(taskId: string): PauseReason | null {
+/** Returns the task-level pause reason struct, or null if none is set. */
+export function getTaskPauseReason(taskId: string): PauseReasonStruct | null {
   const row = db
     .prepare<{
       task_id: string;
     }>(`SELECT pause_reason FROM task_pause_reasons WHERE task_id = @task_id`)
     .get({ task_id: taskId }) as { pause_reason: string } | undefined;
-  return (row?.pause_reason as PauseReason) ?? null;
+  return parsePauseReason(row?.pause_reason ?? null);
 }
 
 /** Clear a task-level pause reason (e.g. on successful launch). */
@@ -1692,6 +1653,27 @@ export function getAllOpenPRs(): PullRequestRow[] {
     .all() as PullRequestRow[];
 }
 
+export interface DeadSessionAtBoot {
+  session_id: string;
+  status: string;
+}
+
+/**
+ * Returns all sessions at a non-terminal, non-idle status (starting or running)
+ * that exist at boot time. After a server restart the entire process tree is gone,
+ * so these sessions are dead by definition and must be driven to a terminal state.
+ */
+export function getDeadSessionsAtBoot(): DeadSessionAtBoot[] {
+  return db
+    .prepare(
+      `
+    SELECT session_id, status FROM sessions
+    WHERE status IN ('starting', 'running')
+  `,
+    )
+    .all() as DeadSessionAtBoot[];
+}
+
 export interface IdleSessionWithResolvedPR {
   session_id: string;
   task_id: string | null;
@@ -1700,6 +1682,7 @@ export interface IdleSessionWithResolvedPR {
   pr_number: number;
   repo: string;
   pr_url: string | null;
+  review_session_id: string | null;
 }
 
 /**
@@ -1712,7 +1695,8 @@ export function getIdleSessionsWithResolvedPRs(): IdleSessionWithResolvedPR[] {
     .prepare(
       `
     SELECT s.session_id, s.task_id, s.project_id,
-           pr.state AS pr_state, pr.pr_number, pr.repo, pr.pr_url
+           pr.state AS pr_state, pr.pr_number, pr.repo, pr.pr_url,
+           pr.review_session_id
     FROM sessions s
     JOIN pull_requests pr ON pr.session_id = s.session_id
     WHERE s.status = 'idle'
@@ -1720,6 +1704,42 @@ export function getIdleSessionsWithResolvedPRs(): IdleSessionWithResolvedPR[] {
   `,
     )
     .all() as IdleSessionWithResolvedPR[];
+}
+
+export interface IdleReviewSessionWithTerminalCodingOrPR {
+  session_id: string;
+  task_id: string | null;
+  project_id: string | null;
+  pr_url: string | null;
+  pr_state: string;
+  coding_session_status: string | null;
+}
+
+/**
+ * Returns idle review sessions whose linked PR is already terminal (merged/closed)
+ * or whose paired coding session is already terminal (done/error/killed).
+ * Used by the boot-time reconciliation pass to conclude review sessions that were
+ * orphaned while the server was offline or that the closed-PR path left non-terminal.
+ */
+export function getIdleReviewSessionsWithTerminalCodingOrPR(): IdleReviewSessionWithTerminalCodingOrPR[] {
+  return db
+    .prepare(
+      `
+    SELECT s.session_id, s.task_id, s.project_id,
+           pr.pr_url, pr.state AS pr_state,
+           cs.status AS coding_session_status
+    FROM sessions s
+    JOIN pull_requests pr ON pr.review_session_id = s.session_id
+    LEFT JOIN sessions cs ON cs.session_id = pr.session_id
+    WHERE s.session_type = 'review'
+      AND s.status = 'idle'
+      AND (
+        cs.status IN ('done', 'error', 'killed')
+        OR pr.state IN ('merged', 'closed')
+      )
+  `,
+    )
+    .all() as IdleReviewSessionWithTerminalCodingOrPR[];
 }
 
 /**
@@ -1796,6 +1816,7 @@ export interface TaskAggregateRow {
   code_session_context_occupancy_tokens: number | null;
   code_session_compaction_count: number | null;
   code_session_model: string | null;
+  code_session_type: string | null;
   // review session (session_type = 'review')
   review_session_id: string | null;
   review_session_status: string | null;
@@ -1875,6 +1896,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       cs.context_occupancy_tokens  AS code_session_context_occupancy_tokens,
       cs.compaction_count          AS code_session_compaction_count,
       cs.model                     AS code_session_model,
+      cs.session_type              AS code_session_type,
       rs.session_id          AS review_session_id,
       rs.status              AS review_session_status,
       rs.total_input_tokens  AS review_session_input_tokens,
@@ -1907,32 +1929,6 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
   `,
     )
     .all(...taskIds) as TaskAggregateRow[];
-}
-
-export function getLatestNonSystemEventPayload(
-  sessionId: string,
-): string | null {
-  const row = db
-    .prepare(
-      `
-    SELECT payload FROM session_events
-    WHERE session_id = ?
-      AND event_type IN ('text', 'tool_use', 'tool_result', 'error')
-    ORDER BY id DESC
-    LIMIT 1
-  `,
-    )
-    .get(sessionId) as { payload: string } | undefined;
-  return row?.payload ?? null;
-}
-
-export function setSessionReviewResult(
-  sessionId: string,
-  result: string,
-): void {
-  db.prepare<{ session_id: string; review_result: string }>(
-    `UPDATE sessions SET review_result = @review_result WHERE session_id = @session_id`,
-  ).run({ session_id: sessionId, review_result: result });
 }
 
 /** Returns the most recent standard (non-review) session for a given task ID. */
@@ -1986,16 +1982,6 @@ export function getProjectRowById(id: string): ProjectRow | undefined {
   return db
     .prepare<{ id: string }>(`SELECT * FROM projects WHERE id = @id`)
     .get({ id }) as ProjectRow | undefined;
-}
-
-export function getProjectByGithubRepo(
-  githubRepo: string,
-): ProjectRow | undefined {
-  return db
-    .prepare<{
-      github_repo: string;
-    }>(`SELECT * FROM projects WHERE github_repo = @github_repo LIMIT 1`)
-    .get({ github_repo: githubRepo }) as ProjectRow | undefined;
 }
 
 export function listProjectRows(): ProjectRow[] {
@@ -2239,27 +2225,6 @@ export function getLocalBranchBySession(
     .get(sessionId) as LocalBranchRow | undefined;
 }
 
-export function getOpenLocalBranchesByProject(
-  projectId: string,
-): LocalBranchRow[] {
-  return db
-    .prepare(
-      `SELECT * FROM local_branches WHERE project_id = ? AND status = 'open' ORDER BY created_at DESC`,
-    )
-    .all(projectId) as LocalBranchRow[];
-}
-
-export function updateLocalBranchStatus(
-  id: number,
-  status: string,
-  reviewResult?: string | null,
-): void {
-  const now = new Date().toISOString();
-  db.prepare(
-    `UPDATE local_branches SET status = ?, review_result = COALESCE(?, review_result), updated_at = ? WHERE id = ?`,
-  ).run(status, reviewResult ?? null, now, id);
-}
-
 export function setLocalBranchReviewResult(
   id: number,
   reviewResult: string,
@@ -2273,11 +2238,16 @@ export function setLocalBranchReviewResult(
 export function setLocalBranchPauseReason(
   id: number,
   reason: PauseReason | null,
+  detail?: string,
 ): void {
+  const serialized =
+    reason !== null
+      ? serializePauseReason(pauseReasonFromCanonical(reason, detail))
+      : null;
   const now = new Date().toISOString();
   db.prepare(
     `UPDATE local_branches SET pause_reason = ?, updated_at = ? WHERE id = ?`,
-  ).run(reason, now, id);
+  ).run(serialized, now, id);
 }
 
 /**
@@ -2518,7 +2488,7 @@ export function bumpTaskNoOpAttempts(taskId: string): void {
 
 // ─── task_crash_counts ────────────────────────────────────────────────────────
 
-export function getTaskCrashCount(taskId: string): number {
+function getTaskCrashCount(taskId: string): number {
   const row = db
     .prepare<{
       task_id: string;
@@ -2550,12 +2520,15 @@ export function resetTaskCrashCount(taskId: string): void {
 
 export function insertPauseInterval(
   sessionId: string,
-  pauseReason: SessionPauseReason,
+  pauseReason: CanonicalPauseReason,
 ): void {
+  const serialized = serializePauseReason(
+    pauseReasonFromCanonical(pauseReason),
+  );
   db.prepare(
     `INSERT INTO session_pause_intervals (session_id, pause_reason, paused_at)
      VALUES (?, ?, ?)`,
-  ).run(sessionId, pauseReason, Date.now());
+  ).run(sessionId, serialized, Date.now());
 }
 
 export function closePauseInterval(sessionId: string): void {
@@ -2574,11 +2547,17 @@ export function closePauseInterval(sessionId: string): void {
 export function getPauseIntervalsBySession(
   sessionId: string,
 ): SessionPauseInterval[] {
-  return db
+  const rows = db
     .prepare(
       `SELECT * FROM session_pause_intervals WHERE session_id = ? ORDER BY paused_at ASC`,
     )
-    .all(sessionId) as SessionPauseInterval[];
+    .all(sessionId) as Array<
+    Omit<SessionPauseInterval, 'pause_reason'> & { pause_reason: string }
+  >;
+  return rows.map((row) => ({
+    ...row,
+    pause_reason: parsePauseReason(row.pause_reason)!,
+  }));
 }
 
 export function getTotalPausedMs(
@@ -2780,6 +2759,91 @@ export function getTestResult(
     .get({ pr_number: prNumber, repo, sha }) as TestResultRow | undefined;
 }
 
+// ─── orchestrator_analyze_results ───────────────────────────────────────────
+
+export interface AnalyzeResultRow {
+  pr_number: number;
+  repo: string;
+  sha: string;
+  passed: number;
+  output: string;
+  ran_at: string;
+  is_transient: number;
+}
+
+export function hasAnalyzeResultForSha(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): boolean {
+  const row = db
+    .prepare<{
+      pr_number: number;
+      repo: string;
+      sha: string;
+    }>(
+      `SELECT 1 FROM orchestrator_analyze_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+    )
+    .get({ pr_number: prNumber, repo, sha });
+  return row != null;
+}
+
+export function upsertAnalyzeResult(
+  prNumber: number,
+  repo: string,
+  sha: string,
+  passed: boolean,
+  output: string,
+  isTransient = false,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    sha: string;
+    passed: number;
+    output: string;
+    ran_at: string;
+    is_transient: number;
+  }>(
+    `INSERT OR REPLACE INTO orchestrator_analyze_results (pr_number, repo, sha, passed, output, ran_at, is_transient)
+     VALUES (@pr_number, @repo, @sha, @passed, @output, @ran_at, @is_transient)`,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    sha,
+    passed: passed ? 1 : 0,
+    output,
+    ran_at: new Date().toISOString(),
+    is_transient: isTransient ? 1 : 0,
+  });
+}
+
+export function deleteAnalyzeResult(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): void {
+  db.prepare<{ pr_number: number; repo: string; sha: string }>(
+    `DELETE FROM orchestrator_analyze_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+  ).run({ pr_number: prNumber, repo, sha });
+}
+
+export function getAnalyzeResult(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): AnalyzeResultRow | undefined {
+  return db
+    .prepare<{
+      pr_number: number;
+      repo: string;
+      sha: string;
+    }>(
+      `SELECT * FROM orchestrator_analyze_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+    )
+    .get({ pr_number: prNumber, repo, sha }) as AnalyzeResultRow | undefined;
+}
+
 // ─── session_events pruner ──────────────────────────────────────────────────
 
 export interface PruneEligibleSession {
@@ -2860,4 +2924,122 @@ export function markSessionEventsPruned(
   db.prepare<{ session_id: string; pruned_at: number }>(
     `UPDATE sessions SET events_pruned_at = @pruned_at WHERE session_id = @session_id`,
   ).run({ session_id: sessionId, pruned_at: prunedAt });
+}
+
+// ─── scheduler_audit ──────────────────────────────────────────────────────
+
+export interface NewSchedulerAuditRow {
+  job: string;
+  status: 'ok' | 'failed' | 'skipped';
+  started_at: string;
+  completed_at: string;
+  duration_ms: number;
+  items_processed?: number | null;
+  error?: string | null;
+}
+
+export function insertSchedulerAudit(row: NewSchedulerAuditRow): void {
+  db.prepare<NewSchedulerAuditRow>(
+    `INSERT INTO scheduler_audit (job, status, started_at, completed_at, duration_ms, items_processed, error)
+     VALUES (@job, @status, @started_at, @completed_at, @duration_ms, @items_processed, @error)`,
+  ).run({
+    items_processed: null,
+    error: null,
+    ...row,
+  });
+}
+
+export function pruneSchedulerAudit(keepPerJob = 1000): void {
+  const jobs = db.prepare(`SELECT DISTINCT job FROM scheduler_audit`).all() as {
+    job: string;
+  }[];
+  for (const { job } of jobs) {
+    db.prepare<{ job: string; keep: number }>(
+      `DELETE FROM scheduler_audit
+       WHERE job = @job AND id NOT IN (
+         SELECT id FROM scheduler_audit WHERE job = @job ORDER BY started_at DESC LIMIT @keep
+       )`,
+    ).run({ job, keep: keepPerJob });
+  }
+}
+
+export interface SchedulerAuditStats {
+  job: string;
+  lastDurationMs: number | null;
+  runCount24h: number;
+  errorCount24h: number;
+}
+
+const stmtSchedulerAuditStats = db.prepare(`
+  WITH ranked AS (
+    SELECT
+      job,
+      status,
+      duration_ms,
+      started_at,
+      ROW_NUMBER() OVER (PARTITION BY job ORDER BY started_at DESC) AS rn
+    FROM scheduler_audit
+  )
+  SELECT
+    job,
+    MAX(CASE WHEN rn = 1 THEN duration_ms END) AS last_duration_ms,
+    SUM(CASE WHEN status IN ('ok', 'failed') AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS run_count_24h,
+    SUM(CASE WHEN status = 'failed' AND started_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS error_count_24h
+  FROM ranked
+  GROUP BY job
+`);
+
+export function getSchedulerAuditStats(): SchedulerAuditStats[] {
+  const rows = stmtSchedulerAuditStats.all() as Array<{
+    job: string;
+    last_duration_ms: number | null;
+    run_count_24h: number;
+    error_count_24h: number;
+  }>;
+  return rows.map((r) => ({
+    job: r.job,
+    lastDurationMs: r.last_duration_ms,
+    runCount24h: r.run_count_24h,
+    errorCount24h: r.error_count_24h,
+  }));
+}
+
+// ─── task_repo_assignments ─────────────────────────────────────────────────────
+
+/**
+ * Write a repo assignment for a task. The `allowedRepos` list is the project's
+ * getProjectRepos() result — callers are responsible for passing the correct set.
+ * Throws if `repo` is not in `allowedRepos`.
+ */
+export function setTaskRepoAssignment(
+  taskId: string,
+  projectId: string,
+  repo: string,
+  assignedBy: string,
+  allowedRepos: string[],
+): void {
+  if (!allowedRepos.includes(repo)) {
+    throw new Error(
+      `Repo "${repo}" is not in the project's repo set: [${allowedRepos.join(', ')}]`,
+    );
+  }
+  db.prepare(
+    `INSERT OR REPLACE INTO task_repo_assignments (task_id, project_id, repo, assigned_by, assigned_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(taskId, projectId, repo, assignedBy, Date.now());
+}
+
+export function getTaskRepoAssignment(
+  taskId: string,
+): TaskRepoAssignmentRow | undefined {
+  return db
+    .prepare<{ task_id: string }>(
+      `SELECT task_id, project_id, repo, assigned_by, assigned_at
+       FROM task_repo_assignments WHERE task_id = @task_id`,
+    )
+    .get({ task_id: taskId }) as TaskRepoAssignmentRow | undefined;
+}
+
+export function deleteTaskRepoAssignment(taskId: string): void {
+  db.prepare(`DELETE FROM task_repo_assignments WHERE task_id = ?`).run(taskId);
 }

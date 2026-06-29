@@ -1,13 +1,21 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from 'react';
 import { EnrollmentFlow } from './auth/EnrollmentFlow';
 import { SetupWizard } from './wizard/SetupWizard';
 import type { ConnectionState } from './hooks/useWebSocket';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
+import { useBootReconciliation } from './hooks/useBootReconciliation';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useNotifications } from './hooks/useNotifications';
 import { useIsMobile } from './hooks/useIsMobile';
 import { useNavigationHistory } from './hooks/useNavigationHistory';
+import { apiRequest, authedFetch } from './api/projects';
 import { Header } from './components/Header';
 import type { TopView } from './components/Header';
 import { SessionGrid } from './components/SessionGrid';
@@ -17,6 +25,7 @@ import { PRPanel } from './components/PRPanel';
 import { DispatchModal } from './components/DispatchModal';
 import { PermissionEventLog } from './components/PermissionEventLog';
 import { TaskList } from './components/TaskList';
+import { BootLoadingBanner } from './components/BootLoadingBanner';
 import { TaskDetail } from './components/TaskDetail';
 import { Settings } from './components/Settings';
 import { UpdateBanner } from './components/UpdateBanner';
@@ -62,6 +71,39 @@ const ACTIVE_PROJECT_KEY = 'activeProjectId';
 const ACTIVE_MILESTONE_KEY_PREFIX = 'activeMilestone_';
 const NON_MILESTONE_BOARD_ID = '__non_milestone__';
 
+const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
+
+const loopbackErrorStyles: Record<string, React.CSSProperties> = {
+  overlay: {
+    position: 'fixed',
+    inset: 0,
+    background: '#11111b',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  card: {
+    background: '#1e1e2e',
+    border: '1px solid #313244',
+    borderRadius: 12,
+    padding: '32px 40px',
+    maxWidth: 440,
+    width: '90%',
+    textAlign: 'center',
+  },
+  title: {
+    color: '#cdd6f4',
+    margin: '0 0 16px',
+    fontSize: 20,
+    fontWeight: 600,
+  },
+  text: {
+    color: '#a6adc8',
+    marginBottom: 0,
+    lineHeight: 1.5,
+  },
+};
+
 function getMilestoneKey(projectId: string) {
   return `${ACTIVE_MILESTONE_KEY_PREFIX}${projectId}`;
 }
@@ -81,13 +123,13 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 
 export default function App() {
   const [needsEnrollment, setNeedsEnrollment] = useState(false);
+  const [bootstrapLoopbackOnly, setBootstrapLoopbackOnly] = useState(false);
   const [setupNeeded, setSetupNeeded] = useState(false);
   const [wizardGoToSettings, setWizardGoToSettings] = useState(false);
 
   useEffect(() => {
-    fetch('/api/setup/status')
-      .then((r) => r.json())
-      .then((data: { setupNeeded: boolean }) => {
+    apiRequest<{ setupNeeded: boolean }>('/api/setup/status')
+      .then((data) => {
         if (data.setupNeeded) setSetupNeeded(true);
       })
       .catch(() => {
@@ -100,6 +142,30 @@ export default function App() {
     window.addEventListener('device-unauthorized', handler);
     return () => window.removeEventListener('device-unauthorized', handler);
   }, []);
+
+  useEffect(() => {
+    const handler = () => setBootstrapLoopbackOnly(true);
+    window.addEventListener('device-bootstrap-loopback-only', handler);
+    return () =>
+      window.removeEventListener('device-bootstrap-loopback-only', handler);
+  }, []);
+
+  // On first load, check if bootstrap is needed before the WS even connects.
+  // On localhost with zero devices the WS succeeds in bootstrap mode (no 4001),
+  // so the device-unauthorized event never fires — this catches that case.
+  useEffect(() => {
+    fetch('/api/enrollment/needs-bootstrap')
+      .then((r) => r.json() as Promise<{ needsBootstrap: boolean }>)
+      .then(({ needsBootstrap }) => {
+        if (needsBootstrap) setNeedsEnrollment(true);
+      })
+      .catch(() => {
+        /* non-fatal — WS 4001 fallback still works for enrolled devices */
+      });
+  }, []);
+
+  const bootReconciliation = useBootReconciliation();
+  const bootReconciliationDispatch = bootReconciliation.dispatch;
 
   const {
     sessions,
@@ -135,6 +201,7 @@ export default function App() {
     lastSessionEndedEvent,
     lastCacheUpdatedEvent,
     prPipelineStages,
+    prPipelineFailedCommands,
   } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -170,6 +237,14 @@ export default function App() {
 
   const handleWsMessage = useCallback(
     (msg: Parameters<typeof dispatch>[0]) => {
+      if (
+        msg.type === 'boot_reconciliation_started' ||
+        msg.type === 'boot_reconciliation_step' ||
+        msg.type === 'boot_reconciliation_completed'
+      ) {
+        bootReconciliationDispatch(msg);
+        return;
+      }
       if (msg.type === 'error') {
         const notifId = crypto.randomUUID();
         setNotifications((prev) => [
@@ -198,7 +273,7 @@ export default function App() {
       }
       dispatch(msg);
     },
-    [dispatch, dismissNotification],
+    [dispatch, dismissNotification, bootReconciliationDispatch],
   );
 
   const { send, connectionState } = useWebSocket(handleWsMessage);
@@ -284,7 +359,7 @@ export default function App() {
   }, [connectionState, hasConnectedOnce]);
 
   const handleArchiveAll = useCallback(async () => {
-    await fetch('/api/sessions/archive-finished', { method: 'POST' });
+    await authedFetch('/api/sessions/archive-finished', { method: 'POST' });
     for (const s of sessions) {
       if (
         !s.archived &&
@@ -317,9 +392,8 @@ export default function App() {
   }, [sessions, send]);
 
   useEffect(() => {
-    fetch('/api/settings')
-      .then((r) => r.json())
-      .then((s: Record<string, string>) => {
+    apiRequest<Record<string, string>>('/api/settings')
+      .then((s) => {
         const lines = Number(s.card_preview_lines);
         if (lines > 0) setCardPreviewLines(lines);
         if (s.session_mode === 'api' || s.session_mode === 'cli')
@@ -335,9 +409,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    fetch('/api/config')
-      .then((r) => r.json())
-      .then((loaded: ProjectConfig[]) => {
+    apiRequest<ProjectConfig[]>('/api/config')
+      .then((loaded) => {
         if (loaded.length === 0) return;
         setProjects(loaded);
 
@@ -384,7 +457,7 @@ export default function App() {
       if (!projectId) return;
       void (async () => {
         try {
-          const res = await fetch(
+          const res = await authedFetch(
             `/api/projects/${encodeURIComponent(projectId)}`,
             {
               method: 'PATCH',
@@ -393,7 +466,7 @@ export default function App() {
             },
           );
           if (!res.ok) return;
-          const refreshed = await fetch('/api/config');
+          const refreshed = await authedFetch('/api/config');
           if (!refreshed.ok) return;
           const loaded = (await refreshed.json()) as ProjectConfig[];
           setProjects(loaded);
@@ -406,7 +479,7 @@ export default function App() {
   );
 
   const handleProjectsChanged = useCallback(() => {
-    fetch('/api/config')
+    authedFetch('/api/config')
       .then((r) => r.json())
       .then((loaded: ProjectConfig[]) => {
         setProjects(loaded);
@@ -429,7 +502,7 @@ export default function App() {
     let url: string;
     if (activeBoardId === NON_MILESTONE_BOARD_ID) {
       url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
-      fetch(url)
+      authedFetch(url)
         .then((r) =>
           r.ok ? (r.json() as Promise<TaskView[]>) : Promise.resolve([]),
         )
@@ -445,7 +518,7 @@ export default function App() {
       const params = new URLSearchParams({ projectId: activeProjectId });
       if (activeBoardId) params.set('boardId', activeBoardId);
       url = `/api/tasks/active?${params.toString()}`;
-      fetch(url)
+      authedFetch(url)
         .then((r) =>
           r.ok
             ? (r.json() as Promise<TasksActiveResponse>)
@@ -539,7 +612,7 @@ export default function App() {
       return;
     const params = new URLSearchParams({ projectId: activeProjectId });
     params.set('boardId', activeBoardId);
-    fetch(`/api/tasks/active?${params.toString()}`)
+    authedFetch(`/api/tasks/active?${params.toString()}`)
       .then((r) => (r.ok ? (r.json() as Promise<TasksActiveResponse>) : null))
       .then((data) => {
         if (data) {
@@ -575,11 +648,11 @@ export default function App() {
     try {
       if (activeBoardId === NON_MILESTONE_BOARD_ID) {
         const url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
-        const res = await fetch(url);
+        const res = await authedFetch(url);
         if (res.ok) setTaskViews((await res.json()) as TaskView[]);
       } else {
         // Trigger background refresh via POST — returns 202 immediately
-        await fetch('/api/tasks/refresh', {
+        await authedFetch('/api/tasks/refresh', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ projectId: activeProjectId }),
@@ -589,7 +662,7 @@ export default function App() {
         // Also re-read current cache to show any already-populated data
         const params = new URLSearchParams({ projectId: activeProjectId });
         if (activeBoardId) params.set('boardId', activeBoardId);
-        const res = await fetch(`/api/tasks/active?${params.toString()}`);
+        const res = await authedFetch(`/api/tasks/active?${params.toString()}`);
         if (res.ok) {
           const data = (await res.json()) as TasksActiveResponse;
           setTaskViews(data.tasks);
@@ -788,6 +861,11 @@ export default function App() {
   }, [activeProjectId]);
 
   const fetchedArchivedRef = useRef<Set<string>>(new Set());
+  // Kept current after every render so async fetch callbacks see the latest sessions state.
+  const sessionsRef = useRef(sessions);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  });
 
   useEffect(() => {
     if (!selectedId) return;
@@ -795,7 +873,7 @@ export default function App() {
     const inStore = sessions.find((s) => s.sessionId === selectedId);
     if (inStore) return;
     fetchedArchivedRef.current.add(selectedId);
-    fetch(`/api/sessions/${selectedId}/events`)
+    authedFetch(`/api/sessions/${selectedId}/events`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<ArchivedSessionResponse>;
@@ -812,11 +890,19 @@ export default function App() {
           favorited: session.favorited === 1,
           project_id: session.project_id,
         } as ServerMessage);
-        dispatch({
-          type: 'session_status',
-          sessionId: session.session_id,
-          status: session.status,
-        } as ServerMessage);
+        // Re-read latest sessions to avoid clobbering a live session that came
+        // online while the fetch was in-flight.
+        const live = sessionsRef.current.find(
+          (s) => s.sessionId === session.session_id,
+        );
+        if (!live || TERMINAL_STATUSES.has(live.status)) {
+          dispatch({
+            type: 'session_status',
+            sessionId: session.session_id,
+            status: session.status,
+            replay: true,
+          } as ServerMessage);
+        }
         for (const ev of events) {
           dispatch({
             type: 'session_event',
@@ -851,7 +937,7 @@ export default function App() {
       if (fetchedTaskSessionsRef.current.has(sessionId)) continue;
       if (sessions.find((s) => s.sessionId === sessionId)) continue;
       fetchedTaskSessionsRef.current.add(sessionId);
-      fetch(`/api/sessions/${sessionId}/events`)
+      authedFetch(`/api/sessions/${sessionId}/events`)
         .then((r) => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           return r.json() as Promise<ArchivedSessionResponse>;
@@ -868,11 +954,19 @@ export default function App() {
             favorited: session.favorited === 1,
             project_id: session.project_id,
           } as ServerMessage);
-          dispatch({
-            type: 'session_status',
-            sessionId: session.session_id,
-            status: session.status,
-          } as ServerMessage);
+          // Re-read latest sessions to avoid clobbering a live session that
+          // came online while the fetch was in-flight.
+          const live = sessionsRef.current.find(
+            (s) => s.sessionId === session.session_id,
+          );
+          if (!live || TERMINAL_STATUSES.has(live.status)) {
+            dispatch({
+              type: 'session_status',
+              sessionId: session.session_id,
+              status: session.status,
+              replay: true,
+            } as ServerMessage);
+          }
           for (const ev of events) {
             dispatch({
               type: 'session_event',
@@ -981,7 +1075,7 @@ export default function App() {
   );
 
   // taskViews is already fetched scoped to activeProjectId + activeBoardId;
-  // both are listed in the dep array to make the milestone scope explicit.
+  // its reference identity changes when either upstream value changes, so only taskViews is needed here.
   const autoLaunchQueuedCount = useMemo(
     () =>
       taskViews.filter(
@@ -991,7 +1085,7 @@ export default function App() {
           !t.blocked &&
           !t.pauseReason,
       ).length,
-    [taskViews, activeProjectId, activeBoardId],
+    [taskViews],
   );
 
   // Keyboard navigation: sorted active sessions (same order as SessionGrid)
@@ -1089,6 +1183,20 @@ export default function App() {
     },
   });
 
+  if (bootstrapLoopbackOnly) {
+    return (
+      <div style={loopbackErrorStyles.overlay}>
+        <div style={loopbackErrorStyles.card}>
+          <h2 style={loopbackErrorStyles.title}>Remote Access Restricted</h2>
+          <p style={loopbackErrorStyles.text}>
+            Setup must be initialized from localhost (127.0.0.1) — connect via
+            SSH tunnel or local access, then enroll this device.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (setupNeeded) {
     return (
       <SetupWizard
@@ -1132,6 +1240,7 @@ export default function App() {
           autoLaunchCap={autoLaunchCap}
           autoLaunchQueuedCount={autoLaunchQueuedCount}
           autoLaunchPollIntervalMs={autoLaunchPollIntervalMs}
+          bootReconciliation={bootReconciliation.state}
         />
       </ErrorBoundary>
       {updateInfo && (
@@ -1154,36 +1263,42 @@ export default function App() {
               className={`${styles.contentArea}${selectedTaskId ? ` ${styles.contentAreaHasDetail}` : ''}`}
             >
               <div className={styles.leftPanel}>
-                {taskCacheCold && !taskViewsLoading && (
-                  <div
-                    className={styles.coldCacheBanner}
-                    data-testid="cold-cache-banner"
-                  >
-                    Warming cache for{' '}
-                    {projects.find((p) => p.id === activeProjectId)?.name ??
-                      activeProjectId}
-                    …
-                  </div>
+                {bootReconciliation.state.phase === 'in_progress' ? (
+                  <BootLoadingBanner state={bootReconciliation.state} />
+                ) : (
+                  <>
+                    {taskCacheCold && !taskViewsLoading && (
+                      <div
+                        className={styles.coldCacheBanner}
+                        data-testid="cold-cache-banner"
+                      >
+                        Warming cache for{' '}
+                        {projects.find((p) => p.id === activeProjectId)?.name ??
+                          activeProjectId}
+                        …
+                      </div>
+                    )}
+                    <TaskList
+                      activeProjectId={activeProjectId}
+                      boardId={activeBoardId}
+                      selectedTaskId={selectedTaskId}
+                      onSelectTask={handleSelectTask}
+                      tasks={taskViews}
+                      loading={taskViewsLoading}
+                      onOptimisticDispatch={handleTaskOptimisticDispatch}
+                      onForceRefetch={handleForceRefetch}
+                      reviewRefreshTrigger={taskListRefreshTrigger}
+                      cacheUpdatedAt={
+                        lastCacheUpdatedEvent?.projectId === activeProjectId &&
+                        lastCacheUpdatedEvent?.boardId === activeBoardId
+                          ? lastCacheUpdatedEvent.refreshedAt
+                          : undefined
+                      }
+                      send={send}
+                      project={activeProject}
+                    />
+                  </>
                 )}
-                <TaskList
-                  activeProjectId={activeProjectId}
-                  boardId={activeBoardId}
-                  selectedTaskId={selectedTaskId}
-                  onSelectTask={handleSelectTask}
-                  tasks={taskViews}
-                  loading={taskViewsLoading}
-                  onOptimisticDispatch={handleTaskOptimisticDispatch}
-                  onForceRefetch={handleForceRefetch}
-                  reviewRefreshTrigger={taskListRefreshTrigger}
-                  cacheUpdatedAt={
-                    lastCacheUpdatedEvent?.projectId === activeProjectId &&
-                    lastCacheUpdatedEvent?.boardId === activeBoardId
-                      ? lastCacheUpdatedEvent.refreshedAt
-                      : undefined
-                  }
-                  send={send}
-                  project={activeProject}
-                />
               </div>
 
               <div
@@ -1420,6 +1535,7 @@ export default function App() {
                 autofixEvent={lastAutofixEvent}
                 reviewStartedEvent={lastReviewStartedEvent}
                 prPipelineStages={prPipelineStages}
+                prPipelineFailedCommands={prPipelineFailedCommands}
               />
             </div>
           </ErrorBoundary>

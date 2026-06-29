@@ -1,3 +1,4 @@
+import { logger } from '../logger';
 import { GITHUB_TOKEN, GITHUB_REPO } from '../config';
 import {
   GitHubApiError,
@@ -142,7 +143,7 @@ export class GitHubClient {
       result = await this.getMergeability(prNumber, repo);
     }
     if (result.mergeable === null) {
-      console.warn(
+      logger.warn(
         `[GitHubClient] getMergeability still null after retries for PR #${prNumber} in ${repo ?? GITHUB_REPO} — skipping`,
       );
     }
@@ -296,7 +297,7 @@ export class GitHubClient {
       }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
       checkRuns = data.check_runs;
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[GitHubClient] detectBillingBlock: check-runs fetch failed for ${sha}: ${(err as Error).message}`,
       );
       return { blocked: false, message: null };
@@ -338,6 +339,8 @@ export class GitHubClient {
         name: string;
         status: string;
         conclusion: string | null;
+        details_url?: string;
+        html_url?: string;
       }>;
     }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
     return data.check_runs
@@ -347,7 +350,11 @@ export class GitHubClient {
           c.conclusion !== null &&
           FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
       )
-      .map((c) => ({ name: c.name, conclusion: c.conclusion as string }));
+      .map((c) => ({
+        name: c.name,
+        conclusion: c.conclusion as string,
+        detailsUrl: c.details_url ?? c.html_url,
+      }));
   }
 
   /**
@@ -560,6 +567,8 @@ export class GitHubClient {
       name: string;
       status: string;
       conclusion: string | null;
+      details_url?: string;
+      html_url?: string;
     }>;
     try {
       const data = await this.request<{
@@ -567,11 +576,13 @@ export class GitHubClient {
           name: string;
           status: string;
           conclusion: string | null;
+          details_url?: string;
+          html_url?: string;
         }>;
       }>(`/repos/${repo}/commits/${sha}/check-runs?per_page=100`);
       allCheckRuns = data.check_runs;
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[GitHubClient] getFailingChecks failed for ${sha} in ${repo}:`,
         (err as Error).message,
       );
@@ -591,7 +602,11 @@ export class GitHubClient {
           c.conclusion !== null &&
           FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
       )
-      .map((c) => ({ name: c.name, conclusion: c.conclusion as string }));
+      .map((c) => ({
+        name: c.name,
+        conclusion: c.conclusion as string,
+        detailsUrl: c.details_url ?? c.html_url,
+      }));
 
     if (ciCheckNames.length === 0) {
       return {
@@ -1025,6 +1040,13 @@ export class GitHubClient {
         headers: { ...this.headers, 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
       },
+    );
+    return mapMilestone(data);
+  }
+
+  async getMilestone(repo: string, number: number): Promise<Milestone> {
+    const data = await this.request<GitHubRawMilestone>(
+      `/repos/${repo}/milestones/${number}`,
     );
     return mapMilestone(data);
   }

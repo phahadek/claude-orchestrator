@@ -1,7 +1,9 @@
+import { logger } from '../logger';
 import type { SessionManager } from '../session/SessionManager';
 import { WorktreeSetupError } from '../session/WorktreeSetupError';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { getTaskBackend } from '../tasks/TaskBackend';
+import type { Scheduler } from './Scheduler';
 import { getAllProjects, runtimeSettings } from '../config';
 import type { ProjectConfig } from '../config';
 import type { ResolvedTask } from '../notion/types';
@@ -11,11 +13,14 @@ import {
   getPausedPrReasonForTask,
   getMergedPRForTask,
   setPauseReason,
+  setTaskPauseReason,
   getTaskPauseReason,
   clearTaskPauseReason,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { runWithConcurrency } from '../utils/concurrency';
+import { getProjectRepos } from '../projects/ProjectService';
+import { getTaskRepoAssignment } from '../db/queries';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -58,14 +63,16 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * use the same code path as a manual UI launch.
  */
 export class AutoLauncher {
-  private timer: NodeJS.Timeout | null = null;
-  private polling = false;
-  private stopped = true;
   private pollLastStartedAt: number | null = null;
   private cycleCounter = 0;
   private notionUpdateAttempts = new Map<
     string,
     { count: number; nextRetryAt: number; lastError: string }
+  >();
+  /** Per-task in-memory cooldown for launch_failed events (separate from crash budget). */
+  private launchFailedAttempts = new Map<
+    string,
+    { count: number; nextRetryAt: number }
   >();
   private static readonly BACKOFF_SCHEDULE_MS = [
     60_000,
@@ -74,6 +81,14 @@ export class AutoLauncher {
     60 * 60_000,
   ];
   private static readonly MAX_ATTEMPTS_BEFORE_AUDIT = 5;
+  /** Backoff schedule for launch_failed cooldown (separate from crash budget). */
+  private static readonly LAUNCH_FAILED_BACKOFF_MS = [
+    30_000,
+    2 * 60_000,
+    10 * 60_000,
+  ];
+  /** After this many consecutive launch_failed events, escalate to needs_attention. */
+  private static readonly LAUNCH_FAILED_ESCALATE_AFTER = 3;
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -86,65 +101,84 @@ export class AutoLauncher {
       /** Whether to immediately run a poll cycle when start() is called. Defaults to true. */
       pollOnStart?: boolean;
     } = {},
-  ) {}
+  ) {
+    // Subscribe to SessionManager events so launch_failed notifications trigger
+    // per-task cooldown without relying on the crash budget counter.
+    const sm = sessionManager as unknown as {
+      on?: (event: string, handler: (msg: ServerMessage) => void) => void;
+    };
+    if (typeof sm.on === 'function') {
+      sm.on('message', (msg: ServerMessage) => {
+        if (msg.type === 'session_launch_failed') {
+          this.onSessionLaunchFailed(
+            (msg as { type: string; taskId: string }).taskId,
+          );
+        }
+      });
+    }
+  }
 
   /**
-   * Begin polling. Returns immediately. The first poll runs synchronously
-   * inside the start() body (after `await`) so callers can sequence it after
-   * SessionManager.resumeOrphanSessions() and avoid races on this.sessions.size.
+   * Called when a session_launch_failed event is received from SessionManager.
+   * Tracks consecutive pre-spawn failures per task and applies escalating
+   * cooldown so AutoLauncher backs off rather than hammering a flaky host.
+   * After LAUNCH_FAILED_ESCALATE_AFTER consecutive failures the task is
+   * escalated to needs_attention so a human can investigate.
    */
-  async start(): Promise<void> {
-    if (!this.stopped) return;
-    this.stopped = false;
-    if (this.options.pollOnStart !== false) {
-      await this.pollOnce();
-    }
-    this.scheduleNext();
-  }
+  private onSessionLaunchFailed(taskId: string): void {
+    const prev = this.launchFailedAttempts.get(taskId);
+    const count = (prev?.count ?? 0) + 1;
+    const backoffMs =
+      AutoLauncher.LAUNCH_FAILED_BACKOFF_MS[
+        Math.min(count - 1, AutoLauncher.LAUNCH_FAILED_BACKOFF_MS.length - 1)
+      ];
+    const nextRetryAt = Date.now() + backoffMs;
+    this.launchFailedAttempts.set(taskId, { count, nextRetryAt });
 
-  /** Stop polling and clear any pending timer. */
-  stop(): void {
-    this.stopped = true;
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-  }
-
-  private scheduleNext(): void {
-    if (this.stopped) return;
-    // Backstop: if a previous pollOnce silently hung past 2× interval, force-reset.
-    if (
-      this.polling &&
-      this.pollLastStartedAt !== null &&
-      Date.now() - this.pollLastStartedAt >
-        2 * runtimeSettings.auto_launch_poll_interval_ms
-    ) {
-      console.warn(
-        `[AutoLauncher] poll STALL DETECTED — force-resetting (age=${Date.now() - this.pollLastStartedAt}ms)`,
+    if (count >= AutoLauncher.LAUNCH_FAILED_ESCALATE_AFTER) {
+      logger.warn(
+        `[AutoLauncher] task ${taskId} hit ${count} consecutive launch failures — escalating to needs_attention`,
       );
-      this.polling = false;
+      // launch_failed canonical reason → severity: needs_attention, retry_strategy: manual_action
+      setTaskPauseReason(taskId, 'launch_failed', 'launch_failed_escalated');
+      recordEvent({
+        event_type: 'task_launch_escalated',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: taskId,
+        payload: { consecutiveFailures: count, reason: 'launch_failed' },
+      });
+    } else {
+      logger.warn(
+        `[AutoLauncher] task ${taskId} launch_failed (attempt ${count}) — cooldown ${backoffMs / 1000}s`,
+      );
     }
-    const interval = Math.max(
-      MIN_POLL_INTERVAL_MS,
-      runtimeSettings.auto_launch_poll_interval_ms,
-    );
-    this.timer = setTimeout(() => {
-      void this.pollOnce().finally(() => this.scheduleNext());
-    }, interval);
-    this.timer.unref?.();
+  }
+
+  register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'auto_launcher',
+      intervalMs: () =>
+        Math.max(
+          MIN_POLL_INTERVAL_MS,
+          runtimeSettings.auto_launch_poll_interval_ms,
+        ),
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.pollOnce();
+      },
+    });
   }
 
   /**
-   * Run a single poll cycle. Exposed for tests and for the initial in-line call
-   * from start(). Guarded against overlap so a slow Notion fetch can't pile up.
+   * Run a single poll cycle. Called directly on boot (after resumeOrphanSessions)
+   * and periodically by the Scheduler thereafter.
    */
   async pollOnce(): Promise<void> {
-    if (this.polling) return;
-    this.polling = true;
     const cycleId = ++this.cycleCounter;
     this.pollLastStartedAt = Date.now();
-    console.log(`[AutoLauncher] poll start cycle=${cycleId}`);
+    logger.info(`[AutoLauncher] poll start cycle=${cycleId}`);
     let eligibleCount = 0;
     let launchedCount = 0;
     let skippedCount = 0;
@@ -156,7 +190,7 @@ export class AutoLauncher {
         PROJECT_CONCURRENCY,
         (project) =>
           this.processProject(project).catch((err) => {
-            console.error(`[AutoLauncher] project ${project.id} failed:`, err);
+            logger.error(`[AutoLauncher] project ${project.id} failed:`, err);
             return { eligible: 0, launched: 0, skipped: 0 };
           }),
       );
@@ -166,9 +200,8 @@ export class AutoLauncher {
         skippedCount += counts.skipped;
       }
     } finally {
-      this.polling = false;
       const elapsedMs = Date.now() - (this.pollLastStartedAt ?? Date.now());
-      console.log(
+      logger.info(
         `[AutoLauncher] poll complete cycle=${cycleId} (eligible=${eligibleCount}, launched=${launchedCount}, skipped=${skippedCount}) durationMs=${elapsedMs}`,
       );
     }
@@ -188,7 +221,7 @@ export class AutoLauncher {
     if (backend.type === 'notion' || backend.type === 'github') {
       milestoneId = this.resolveMilestoneId(project);
       if (!milestoneId) {
-        console.warn(
+        logger.warn(
           `[AutoLauncher] project ${project.id}: no milestone configured — skipping`,
         );
         return { eligible: 0, launched: 0, skipped: 0 };
@@ -214,7 +247,7 @@ export class AutoLauncher {
           project.id,
         );
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[AutoLauncher] project ${project.id}: fetchNonMilestoneReadyTasks failed: ${err}`,
         );
       }
@@ -238,7 +271,7 @@ export class AutoLauncher {
       async (resolved) => {
         const mergedPR = getMergedPRForTask(resolved.task.id)!;
         const attempt = this.notionUpdateAttempts.get(resolved.task.id);
-        console.warn(
+        logger.warn(
           `[AutoLauncher] task "${resolved.task.title}" (${resolved.task.id}) skipped — PR #${mergedPR.pr_number} (${mergedPR.pr_url}) is already merged; updating task status to Done`,
         );
         try {
@@ -259,7 +292,7 @@ export class AutoLauncher {
             nextRetryAt: Date.now() + backoffMs,
             lastError: String(err),
           });
-          console.warn(
+          logger.warn(
             `[AutoLauncher] failed to update task ${resolved.task.id} to Done (attempt ${next}, next retry in ${backoffMs / 1000}s): ${err}`,
           );
           if (next === AutoLauncher.MAX_ATTEMPTS_BEFORE_AUDIT) {
@@ -338,8 +371,11 @@ export class AutoLauncher {
     const maybePauseReason = (task as { pause_reason?: string | null })
       .pause_reason;
     if (maybePauseReason != null && maybePauseReason !== '') return false;
-    // Skip tasks blocked by the crash budget (persisted, survives restarts).
+    // Skip tasks blocked by the crash budget or escalated to needs_attention (persisted).
     if (getTaskPauseReason(task.id) != null) return false;
+    // Skip tasks in launch_failed cooldown (in-memory, resets on process restart).
+    const launchFailed = this.launchFailedAttempts.get(task.id);
+    if (launchFailed && Date.now() < launchFailed.nextRetryAt) return false;
     // Also skip if the task's most recent PR is paused (e.g. stuck_timeout)
     // so we don't relaunch a session that was force-paused.
     if (getPausedPrReasonForTask(task.id) != null) return false;
@@ -389,6 +425,25 @@ export class AutoLauncher {
     if (this.sessionManager.hasLiveSessionForTask(task.id)) return false;
     if (hasActiveSessionForTask(task.id)) return false;
 
+    // Resolve the repo for this task launch.
+    // Single-repo project: auto-resolve to the sole repo (preserves existing behavior).
+    // Multi-repo project: look up task_repo_assignments; skip if no assignment exists.
+    const repos = getProjectRepos(project);
+    let resolvedRepo: string | undefined;
+    if (repos.length === 1) {
+      resolvedRepo = repos[0];
+    } else if (repos.length > 1) {
+      const assignment = getTaskRepoAssignment(task.id);
+      if (!assignment) {
+        logger.info(
+          `[AutoLauncher] task ${task.id} is in a multi-repo project with no repo assignment — marking needs_repo and skipping`,
+        );
+        setTaskPauseReason(task.id, 'needs_repo', '');
+        return false;
+      }
+      resolvedRepo = assignment.repo;
+    }
+
     try {
       const sessionId = await this.sessionManager.start(
         taskUrl,
@@ -399,11 +454,13 @@ export class AutoLauncher {
           milestoneId,
           taskKind,
           taskId: task.id,
+          repo: resolvedRepo,
         },
       );
       clearTaskPauseReason(task.id);
-      console.log(
-        `[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}`,
+      this.launchFailedAttempts.delete(task.id);
+      logger.info(
+        `[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}${resolvedRepo ? ` repo=${resolvedRepo}` : ''}`,
       );
       this.broadcast?.({
         type: 'auto_launch',
@@ -418,7 +475,7 @@ export class AutoLauncher {
         err instanceof WorktreeSetupError
           ? err.message
           : (err as Error).message;
-      console.warn(
+      logger.warn(
         `[AutoLauncher] failed to launch task ${task.id}: ${fullMsg}`,
       );
 

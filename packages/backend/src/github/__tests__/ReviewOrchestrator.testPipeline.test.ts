@@ -48,6 +48,11 @@ vi.mock('../../db/queries', () => ({
   deletePendingReviewSync: vi.fn(),
   getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
   setLocalBranchPauseReason: vi.fn(),
+  setPreReviewStage: vi.fn(),
+  setLastReviewedSha: vi.fn(),
+  hasAnalyzeResultForSha: vi.fn().mockReturnValue(false),
+  upsertAnalyzeResult: vi.fn(),
+  getAnalyzeResult: vi.fn().mockReturnValue(null),
   hasTestResultForSha: () => mockHasTestResultForSha(),
   upsertTestResult: (...args: unknown[]) => mockUpsertTestResult(...args),
 }));
@@ -74,6 +79,10 @@ const mockLoadOrchestratorConfig = vi.fn().mockReturnValue({
   test_timeout_sec: 300,
   test_max_rss_mb: 0,
   test_fail_fast: true,
+  analyze: [],
+  analyze_timeout_sec: 300,
+  analyze_max_rss_mb: 0,
+  analyze_fail_fast: true,
 });
 
 vi.mock('../../session/orchestrator-config', () => ({
@@ -121,6 +130,10 @@ beforeEach(() => {
     test_timeout_sec: 300,
     test_max_rss_mb: 0,
     test_fail_fast: true,
+    analyze: [],
+    analyze_timeout_sec: 300,
+    analyze_max_rss_mb: 0,
+    analyze_fail_fast: true,
   });
 });
 

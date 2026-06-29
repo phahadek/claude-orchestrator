@@ -13,6 +13,7 @@ import {
   setPauseReason,
 } from '../db/queries.js';
 import { deriveDisplayStatus } from '../tasks/TaskStatusEngine.js';
+import { pauseReasonFromCanonical } from '../db/pauseReason.js';
 
 const NOW = '2024-01-01T00:00:00Z';
 
@@ -127,7 +128,9 @@ describe('resetReviewIteration() — resume-mechanism contract', () => {
 
     // Pre-reset: blocked
     expect(getApprovedOpenPRs()).toHaveLength(0);
-    expect(getPausedPrReasonForTask('notion:task-abc')).toBe('stuck_timeout');
+    expect(getPausedPrReasonForTask('notion:task-abc')?.reason).toBe(
+      'stuck_timeout',
+    );
 
     // Reset (mirrors the re-review endpoint)
     resetReviewIteration(21, 'owner/repo');
@@ -142,15 +145,43 @@ describe('setPauseReason() round-trip', () => {
   it('a stuck_timeout pause set by the monitor flows through getPausedPrReasonForTask', () => {
     insertPR({ pr_number: 30, task_id: 'notion:task-xyz' });
     setPauseReason(30, 'owner/repo', 'stuck_timeout');
-    expect(getPausedPrReasonForTask('notion:task-xyz')).toBe('stuck_timeout');
+    const result = getPausedPrReasonForTask('notion:task-xyz');
+    expect(result).not.toBeNull();
+    expect(result!.reason).toBe('stuck_timeout');
+    expect(result!.source).toBe('session');
+    expect(result!.retry_strategy).toBe('automatic');
   });
 
   it('a review_failed pause set by the catch site flows through getPausedPrReasonForTask', () => {
     insertPR({ pr_number: 31, task_id: 'notion:task-review-failed' });
     setPauseReason(31, 'owner/repo', 'review_failed');
-    expect(getPausedPrReasonForTask('notion:task-review-failed')).toBe(
-      'review_failed',
-    );
+    const result = getPausedPrReasonForTask('notion:task-review-failed');
+    expect(result).not.toBeNull();
+    expect(result!.reason).toBe('review_failed');
+    expect(result!.source).toBe('review');
+    expect(result!.retry_strategy).toBe('manual_action');
+  });
+
+  it('detail round-trips through write→read', () => {
+    insertPR({ pr_number: 32, task_id: 'notion:task-detail' });
+    setPauseReason(32, 'owner/repo', 'ci_failing', 'lint failed on PR build');
+    const result = getPausedPrReasonForTask('notion:task-detail');
+    expect(result).not.toBeNull();
+    expect(result!.reason).toBe('ci_failing');
+    expect(result!.detail).toBe('lint failed on PR build');
+  });
+
+  it('a legacy bare-string row is parsed via fallback to the correct triple', () => {
+    insertPR({
+      pr_number: 33,
+      task_id: 'notion:task-legacy',
+      pause_reason: 'merge_conflict',
+    });
+    const result = getPausedPrReasonForTask('notion:task-legacy');
+    expect(result).not.toBeNull();
+    expect(result!.reason).toBe('merge_conflict');
+    expect(result!.source).toBe('merge');
+    expect(result!.retry_strategy).toBe('manual_action');
   });
 });
 
@@ -164,7 +195,7 @@ describe('TaskStatusEngine regression — review_failed resolves to needs_attent
       reviewVerdict: 'needs_changes',
       reviewIterationCount: 1,
       reviewIterationCap: 3,
-      pauseReason: 'review_failed',
+      pauseReason: pauseReasonFromCanonical('review_failed'),
     });
     expect(status).toBe('needs_attention');
   });
@@ -178,7 +209,7 @@ describe('TaskStatusEngine regression — review_failed resolves to needs_attent
       reviewVerdict: null,
       reviewIterationCount: 0,
       reviewIterationCap: 3,
-      pauseReason: 'review_failed',
+      pauseReason: pauseReasonFromCanonical('review_failed'),
     });
     expect(status).toBe('needs_attention');
   });
@@ -212,9 +243,9 @@ describe('resetReviewIteration() — review_failed reset coverage', () => {
 
     // Pre-reset: blocked
     expect(getApprovedOpenPRs()).toHaveLength(0);
-    expect(getPausedPrReasonForTask('notion:task-review-failed-2')).toBe(
-      'review_failed',
-    );
+    expect(
+      getPausedPrReasonForTask('notion:task-review-failed-2')?.reason,
+    ).toBe('review_failed');
 
     // Reset (mirrors the re-review endpoint)
     resetReviewIteration(41, 'owner/repo');

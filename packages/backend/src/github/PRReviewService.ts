@@ -1,8 +1,10 @@
+import { logger } from '../logger';
 import {
   getEventsBySession,
   setPRReviewResult,
   getPRByNumber,
   setReviewSessionId,
+  clearReviewSessionId,
   updatePRDraftStatus,
   incrementReviewIteration,
   setLastReviewedSha,
@@ -35,6 +37,10 @@ import type { AutoMerger } from './AutoMerger';
 const RETRY_DELAYS = [250, 500, 1000] as const;
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
+
+// Timeout for waitForVerdict — chosen below the 30-min stall-detector cutoff so the
+// promise always resolves before the orchestrator force-clears the slot.
+const VERDICT_TIMEOUT_MS = 25 * 60 * 1000;
 
 export class FetchRetryExhaustedError extends Error {
   constructor(public readonly cause: Error) {
@@ -131,6 +137,8 @@ export class PRReviewService {
     private sessionManager: SessionManager,
     private readonly defaultProjectId: string = '',
     private readonly defaultProjectContextUrl: string = '',
+    /** Override the verdict wait timeout (ms). For tests only — production uses VERDICT_TIMEOUT_MS. */
+    private readonly verdictTimeoutMs: number = VERDICT_TIMEOUT_MS,
   ) {}
 
   // Optional reference to PRMergeWatcher used to trigger an immediate mergeability
@@ -171,7 +179,7 @@ export class PRReviewService {
         expectedSize: parseExpectedSize(body),
       };
     } catch (e) {
-      console.warn(
+      logger.warn(
         `[PRReviewService] fetchTaskPage for size signal failed (task ${taskId}):`,
         e,
       );
@@ -313,36 +321,64 @@ export class PRReviewService {
         parseExpectedSize(taskBody),
       );
 
-      // Case 2: Dead existing review session — resume via sendOrResume with the
-      // original session ID (do NOT generate a new one here). The returned value
-      // is the actual session ID used (may be a new resumed session ID).
-      if (existingReviewSessionId) {
+      // Guard: determine whether the stored session is still resumable before
+      // entering Case 2. A session is resumable if its DB row exists and is not
+      // in a terminal state. Rows missing entirely (pruned) or terminal
+      // (done/error/killed) must not be passed to sendOrResume — that call
+      // returns the dead ID unchanged, re-stores it, and wedges waitForVerdict.
+      const existingSession = existingReviewSessionId
+        ? (getSession(existingReviewSessionId) ?? null)
+        : null;
+      const isResumable =
+        existingSession !== null &&
+        !['done', 'error', 'killed'].includes(existingSession.status);
+
+      if (existingReviewSessionId && !isResumable) {
+        logger.warn(
+          `[PRReviewService] Stale review_session_id ${existingReviewSessionId} for PR #${prNumber} ` +
+            `(${existingSession ? `status=${existingSession.status}` : 'no DB row'}) — clearing and spawning fresh.`,
+        );
+        clearReviewSessionId(prNumber, repo);
+        // Fall through to Case 3.
+      }
+
+      // Case 2: Dead-but-resumable existing review session — resume via
+      // sendOrResume. Only reached when the stored session row exists and is
+      // not in a terminal state.
+      if (existingReviewSessionId && isResumable) {
         const resumedSessionId = await this.sessionManager.sendOrResume(
           existingReviewSessionId,
           prompt,
         );
-        setReviewSessionId(prNumber, repo, resumedSessionId);
-        const aiResult = await this.waitForVerdict(
-          resumedSessionId,
-          prNumber,
-          repo,
-        );
-        const finalResult = this.appendSizeProportionalityDimension(
-          aiResult,
-          sizeSignal,
-        );
-        // Persist immediately after parse — before any side effects (GitHub/Notion).
-        setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-        setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
-        if (finalResult.verdict === 'approved') {
-          await this.handleApprovedVerdict(
+        if (resumedSessionId != null) {
+          setReviewSessionId(prNumber, repo, resumedSessionId);
+          const aiResult = await this.waitForVerdict(
+            resumedSessionId,
             prNumber,
             repo,
-            prRow.task_id,
-            projectId,
           );
+          const finalResult = this.appendSizeProportionalityDimension(
+            aiResult,
+            sizeSignal,
+          );
+          // Persist immediately after parse — before any side effects (GitHub/Notion).
+          setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+          setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
+          if (finalResult.verdict === 'approved') {
+            await this.handleApprovedVerdict(
+              prNumber,
+              repo,
+              prRow.task_id,
+              projectId,
+            );
+          }
+          return finalResult;
         }
-        return finalResult;
+        // Defensive: sendOrResume rejected despite appearing resumable — treat as stale.
+        logger.warn(
+          `[PRReviewService] sendOrResume returned null for ${existingReviewSessionId} — spawning fresh.`,
+        );
+        clearReviewSessionId(prNumber, repo);
       }
 
       // Case 3: No prior review session — spawn a fresh session.
@@ -438,7 +474,7 @@ export class PRReviewService {
       try {
         taskBody = await this.resolveBackend(projectId).fetchTaskPage(taskId);
       } catch (e) {
-        console.warn(
+        logger.warn(
           `[PRReviewService] fetchTaskPage failed for local branch review (task ${taskId}):`,
           e,
         );
@@ -526,13 +562,13 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     projectId?: string,
   ): Promise<boolean> {
     let draftTransitioned = false;
-    const resolvedProjectId = projectId ?? this.defaultProjectId;
+    const resolvedProjectId = projectId || this.defaultProjectId;
     try {
       await this.github.markPRReady(repo, prNumber);
       updatePRDraftStatus(prNumber, repo, 0);
       draftTransitioned = true;
     } catch (e) {
-      console.warn(
+      logger.warn(
         `[PRReviewService] markPRReady skipped for PR #${prNumber}:`,
         e,
       );
@@ -550,14 +586,14 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         },
       });
     }
-    if (taskId) {
+    if (taskId && resolvedProjectId) {
       try {
         await this.resolveBackend(resolvedProjectId).updateStatus(
           taskId,
           '👀 In Review',
         );
       } catch (e: unknown) {
-        console.error(`[PRReviewService] task backend updateStatus failed:`, e);
+        logger.error(`[PRReviewService] task backend updateStatus failed:`, e);
         recordEvent({
           event_type: 'review_side_effect_failed',
           actor_type: 'system',
@@ -579,7 +615,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       this.mergeWatcher
         .checkMergeabilityNow(prNumber, repo)
         .catch((err: unknown) =>
-          console.warn(
+          logger.warn(
             `[PRReviewService] checkMergeabilityNow failed for PR #${prNumber}:`,
             (err as Error).message,
           ),
@@ -626,7 +662,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     // before awaiting the verdict, so shouldAutoReview() in server.ts already
     // blocks same-SHA re-reviews via push_detected.
     if (prData.headSha && prData.headSha === pr.last_reviewed_sha) {
-      console.log(
+      logger.info(
         `[PRReviewService] reReviewPR PR #${prNumber}: headSha ${prData.headSha} matches last_reviewed_sha — skipping duplicate re-review`,
       );
       const stored = (() => {
@@ -719,6 +755,11 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       pr.review_session_id,
       followUp,
     );
+    if (resumedSessionId == null) {
+      throw new Error(
+        `reReviewPR: review session ${pr.review_session_id} is terminal or missing — cannot re-review PR #${prNumber}`,
+      );
+    }
     if (resumedSessionId !== pr.review_session_id) {
       setReviewSessionId(prNumber, repo, resumedSessionId);
     }
@@ -749,10 +790,17 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     sessionId: string,
     prNumber: number,
     repo: string,
+    timeoutMs: number = this.verdictTimeoutMs,
   ): Promise<PRReviewResult> {
     return new Promise<PRReviewResult>((resolve) => {
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
       const cleanup = () => {
         this.sessionManager.off('message', handler);
+        if (timeoutHandle !== null) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
       };
 
       const handler = (msg: ServerMessage) => {
@@ -787,7 +835,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
             });
             return;
           }
-          // Fallback: parse from stored events
+          // Fallback: parse from stored events (tolerant/repair parse included)
           const events = getEventsBySession(sessionId);
           const result = this.parseReviewResult(events, prNumber, repo);
           resolve(result);
@@ -795,6 +843,31 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       };
 
       this.sessionManager.on('message', handler);
+
+      timeoutHandle = setTimeout(() => {
+        cleanup();
+        logger.warn(
+          `[PRReviewService] waitForVerdict timed out after ${Math.round(timeoutMs / 60000)} min for session ${sessionId} (PR #${prNumber} ${repo}) — attempting lenient parse of stored events`,
+        );
+        // Try to recover the verdict from whatever events were stored before the hang.
+        // tryParseVerdict (called inside parseReviewResult) now includes a repair pass,
+        // so malformed-JSON verdicts (e.g. unescaped inner quotes) resolve here.
+        const events = getEventsBySession(sessionId);
+        const recovered = this.parseReviewResult(events, prNumber, repo);
+        if (recovered.verdict !== 'incomplete') {
+          resolve(recovered);
+          return;
+        }
+        // Could not recover a verdict — resolve as incomplete with a timeout summary.
+        resolve({
+          prNumber,
+          repo,
+          verdict: 'incomplete',
+          dimensions: [],
+          summary: `Review verdict timed out after ${Math.round(timeoutMs / 60000)} min — verdict JSON could not be parsed from stored events.`,
+          reviewedAt: new Date().toISOString(),
+        });
+      }, timeoutMs);
     });
   }
 
@@ -851,13 +924,36 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     if (!candidate) {
       return null;
     }
+    const repaired = this.repairTrailingCommas(candidate);
+    return (
+      this.parseVerdictObject(candidate) ??
+      this.parseVerdictObject(repaired) ??
+      this.parseVerdictObject(this.repairJsonStrings(candidate)) ??
+      this.parseVerdictObject(this.repairJsonStrings(repaired))
+    );
+  }
+
+  /**
+   * Attempt to parse a raw JSON string into a verdict object. Returns null if
+   * the string is not valid JSON or does not contain a verdict token.
+   * dimensions and summary are optional and default to [] / '' when absent
+   * so that near-miss reviewer output (verdict present, schema incomplete)
+   * is not incorrectly classified as incomplete.
+   */
+  private parseVerdictObject(json: string): {
+    verdict: PRReviewResult['verdict'];
+    dimensions: ReviewDimension[];
+    summary: string;
+    manualItemsForHuman?: string[];
+  } | null {
     try {
-      const parsed = JSON.parse(candidate) as Record<string, unknown>;
-      if (
-        typeof parsed.verdict === 'string' &&
-        Array.isArray(parsed.dimensions) &&
-        typeof parsed.summary === 'string'
-      ) {
+      const parsed = JSON.parse(json) as Record<string, unknown>;
+      if (typeof parsed.verdict === 'string') {
+        const dimensions = Array.isArray(parsed.dimensions)
+          ? (parsed.dimensions as ReviewDimension[])
+          : [];
+        const summary =
+          typeof parsed.summary === 'string' ? parsed.summary : '';
         const manualItems = Array.isArray(parsed.manualItemsForHuman)
           ? (parsed.manualItemsForHuman as string[]).filter(
               (item) => typeof item === 'string',
@@ -865,17 +961,91 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
           : undefined;
         return {
           verdict: parsed.verdict as PRReviewResult['verdict'],
-          dimensions: parsed.dimensions as ReviewDimension[],
-          summary: parsed.summary,
+          dimensions,
+          summary,
           ...(manualItems && manualItems.length > 0
             ? { manualItemsForHuman: manualItems }
             : {}),
         };
       }
     } catch {
-      // Not valid JSON — caller falls back to a default verdict
+      // Not valid JSON
     }
     return null;
+  }
+
+  /** Remove trailing commas before } or ] to repair common LLM JSON near-misses. */
+  private repairTrailingCommas(json: string): string {
+    return json.replace(/,(\s*[}\]])/g, '$1');
+  }
+
+  /**
+   * Heuristic JSON repair: escape unescaped double-quotes inside string values.
+   * Handles the LLM-common pattern of embedding human-readable text with inner
+   * quotes, e.g. `"manualItemsForHuman": ["the "term" here is visible"]`.
+   * A closing string-quote is one followed (after optional whitespace) by a JSON
+   * structural character: , ] } : or end-of-input.
+   */
+  private repairJsonStrings(json: string): string {
+    let result = '';
+    let inString = false;
+    let escape = false;
+
+    for (let i = 0; i < json.length; i++) {
+      const ch = json[i];
+
+      if (escape) {
+        result += ch;
+        escape = false;
+        continue;
+      }
+
+      if (ch === '\\' && inString) {
+        result += ch;
+        escape = true;
+        continue;
+      }
+
+      if (ch === '"') {
+        if (!inString) {
+          inString = true;
+          result += ch;
+          continue;
+        }
+        // Peek ahead past whitespace to determine if this quote closes the string.
+        let j = i + 1;
+        while (
+          j < json.length &&
+          (json[j] === ' ' ||
+            json[j] === '\t' ||
+            json[j] === '\r' ||
+            json[j] === '\n')
+        ) {
+          j++;
+        }
+        const next = j < json.length ? json[j] : '';
+        if (
+          next === ',' ||
+          next === ']' ||
+          next === '}' ||
+          next === ':' ||
+          next === '"' ||
+          next === ''
+        ) {
+          // This quote closes the string value.
+          inString = false;
+          result += ch;
+        } else {
+          // Inner quote — escape it.
+          result += '\\"';
+        }
+        continue;
+      }
+
+      result += ch;
+    }
+
+    return result;
   }
 
   /**
@@ -958,6 +1128,10 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     let verdict: PRReviewResult['verdict'];
     if (result.verdict === 'error' || result.verdict === 'incomplete') {
       verdict = result.verdict; // Never override error/incomplete
+    } else if (result.verdict === 'needs_changes' && otherDims.length === 0) {
+      // Reviewer explicitly declared needs_changes without providing dimension
+      // details (near-miss recovery). Size signal alone cannot upgrade this.
+      verdict = 'needs_changes';
     } else if (passedCount === dimensions.length) {
       verdict = 'approved';
     } else if (passedCount === 0) {
@@ -1053,6 +1227,11 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     // Only use text blocks from the LAST assistant message to avoid pollution
     // from earlier tool-call assistant events.
     let lastAssistantContent: Array<Record<string, unknown>> | null = null;
+    // Track whether the session ended with status_category:"review_ready" — a signal
+    // that the model completed its review turn even if the last assistant message was
+    // tool-call-only (no text block).
+    let hasReviewReadyResult = false;
+
     for (const ev of events) {
       try {
         const parsed = JSON.parse(ev.payload) as Record<string, unknown>;
@@ -1062,6 +1241,11 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
             | Array<Record<string, unknown>>
             | undefined;
           if (content) lastAssistantContent = content;
+        } else if (
+          parsed.type === 'result' &&
+          parsed.status_category === 'review_ready'
+        ) {
+          hasReviewReadyResult = true;
         }
       } catch {
         // Skip unparseable events
@@ -1091,6 +1275,21 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
           ? { manualItemsForHuman: parsed.manualItemsForHuman }
           : {}),
       };
+    }
+
+    // If the last assistant message was tool-call-only (no text blocks) or the
+    // session ended with status_category:"review_ready" (confirmed the review
+    // completed), scan all events in reverse to find the most recent text-block
+    // verdict from an earlier assistant turn.
+    if (textParts.length === 0 || hasReviewReadyResult) {
+      for (let i = events.length - 1; i >= 0; i--) {
+        const recovered = this.tryParseVerdictFromRawEvent(
+          events[i].payload,
+          prNumber,
+          repo,
+        );
+        if (recovered) return recovered;
+      }
     }
 
     return {

@@ -1,4 +1,6 @@
+import { logger } from '../logger';
 import { db } from '../db/db';
+import type { Scheduler } from './Scheduler';
 import {
   getPruneEligibleSessions,
   getSystemEventBatch,
@@ -13,39 +15,24 @@ const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_DAYS = 30;
 
 export class SessionEventsPruner {
-  private timer: NodeJS.Timeout | null = null;
-  private stopped = true;
-  private pruneRunning = false;
-
   constructor(
     private readonly options: {
       nowFn?: () => number;
       retentionDays?: number;
+      /** Unused after migration to Scheduler — kept for test compatibility. */
       intervalMs?: number;
     } = {},
   ) {}
 
-  start(): void {
-    if (!this.stopped) return;
-    this.stopped = false;
-    this.scheduleNext();
-  }
-
-  stop(): void {
-    this.stopped = true;
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-  }
-
-  private scheduleNext(): void {
-    if (this.stopped) return;
-    const intervalMs = this.options.intervalMs ?? PRUNE_INTERVAL_MS;
-    this.timer = setTimeout(() => {
-      void this.pruneOnce().finally(() => this.scheduleNext());
-    }, intervalMs);
-    this.timer.unref?.();
+  register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'session_events_pruner',
+      intervalMs: this.options.intervalMs ?? PRUNE_INTERVAL_MS,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.pruneOnce();
+      },
+    });
   }
 
   async runAtBoot(): Promise<void> {
@@ -53,8 +40,6 @@ export class SessionEventsPruner {
   }
 
   async pruneOnce(): Promise<void> {
-    if (this.pruneRunning) return;
-    this.pruneRunning = true;
     try {
       const now = this.options.nowFn ? this.options.nowFn() : Date.now();
       const retentionDays =
@@ -75,14 +60,12 @@ export class SessionEventsPruner {
       }
 
       if (totalPruned > 0) {
-        console.log(
+        logger.info(
           `[SessionEventsPruner] pruned ${totalPruned} system events across ${sessions.length} session(s)`,
         );
       }
     } catch (err) {
-      console.error('[SessionEventsPruner] pruneOnce error:', err);
-    } finally {
-      this.pruneRunning = false;
+      logger.error('[SessionEventsPruner] pruneOnce error:', err);
     }
   }
 

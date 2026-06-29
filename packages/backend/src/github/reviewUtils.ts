@@ -1,3 +1,4 @@
+import { logger } from '../logger';
 import type { PRReviewResult } from './PRReviewService';
 
 export interface GitHubCIFailureArgs {
@@ -16,16 +17,25 @@ export interface VerifyCIFailureArgs {
   truncatedOutput: string | undefined;
 }
 
-/** @deprecated Use GitHubCIFailureArgs directly */
-export type CIFailureResult = GitHubCIFailureArgs;
+export const CI_LOG_EXCERPT_CAP = 4000;
 
-const CI_LOG_EXCERPT_CAP = 800;
-
-function truncateLog(log: string, cap: number): string {
+export function truncateLog(log: string, cap: number): string {
   if (log.length <= cap) return log;
-  const truncated = log.slice(0, cap);
-  const remainingLines = log.slice(cap).split('\n').length - 1;
-  return `${truncated}\n… [${remainingLines} more line${remainingLines !== 1 ? 's' : ''}]`;
+
+  const lines = log.split('\n');
+  const head = lines.slice(0, 5).join('\n');
+  const tailStart = log.length - cap;
+
+  // If the tail already overlaps with the head, nothing meaningful to omit
+  if (tailStart <= head.length) {
+    return log;
+  }
+
+  const tail = log.slice(tailStart);
+  const omittedSection = log.slice(head.length, tailStart);
+  const omittedLineCount = omittedSection.split('\n').length - 1;
+
+  return `${head}\n… [${omittedLineCount} line${omittedLineCount !== 1 ? 's' : ''} omitted] …\n${tail}`;
 }
 
 const INSTRUCTION_BLOCK =
@@ -100,7 +110,7 @@ export function shouldAutoReview(
     // headSha is null — the caller must attempt to fetch it from GitHub before
     // calling this function. If it is still null (fetch failed), skip the review
     // so we don't store null as last_reviewed_sha and break future comparisons.
-    console.warn(
+    logger.warn(
       '[reviewUtils] shouldAutoReview: headSha is null after GitHub fetch — skipping re-review to avoid storing null SHA',
     );
     return false;

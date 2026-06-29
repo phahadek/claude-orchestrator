@@ -6,7 +6,7 @@ import type { Session } from '../db/types';
 
 export const analyticsRouter = Router();
 
-export interface TokenAnalyticsSession {
+interface TokenAnalyticsSession {
   sessionId: string;
   taskName: string | null;
   startedAt: number;
@@ -19,7 +19,7 @@ export interface TokenAnalyticsSession {
   cost: number;
 }
 
-export interface TokenAnalyticsResponse {
+interface TokenAnalyticsResponse {
   sessions: TokenAnalyticsSession[];
   totals: {
     inputTokens: number;

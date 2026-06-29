@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { SessionRunnerOptions } from '../SessionRunner';
 
 // vi.hoisted ensures these variables exist before the hoisted vi.mock factories run.
@@ -178,7 +178,8 @@ describe('AgentSession — large-model escalation on context overflow', () => {
     // Second call has autocompaction re-enabled (disableAutoCompact = false).
     expect(runCalls[1].options.disableAutoCompact).toBe(false);
 
-    // Continuation nudge sent via sendMessage on the first event of the escalated session.
+    // Continuation nudge sent via sendMessage (proactively — either via the 2s
+    // timer or when the first event from the escalated session clears the timer).
     expect(mockSendMessage).toHaveBeenCalledTimes(1);
     expect(mockSendMessage.mock.calls[0][0]).toContain('1M-context model');
 
@@ -585,5 +586,288 @@ describe('AgentSession — setPendingOverflowText re-delivery on escalation', ()
     // Session ends in error.
     const ended = messages.find((m) => m.type === 'session_ended');
     expect(ended).toBeDefined();
+  });
+});
+
+// ── Escalation watchdog + bounded retry ──────────────────────────────────────
+
+describe('AgentSession — escalation deadlock watchdog + bounded retry', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('watchdog fires when escalated run deadlocks, retries, succeeds on second attempt', async () => {
+    vi.useFakeTimers();
+    mockRuntimeSettings.large_task_model = LARGE_MODEL;
+
+    // Attempt 1 (escalated): deadlock — resolves only when kill() is called.
+    let killAttempt1!: (code: number) => void;
+    const attempt1Promise = new Promise<number>((r) => {
+      killAttempt1 = r;
+    });
+    const mockKill = vi.fn().mockImplementation(async () => {
+      killAttempt1(1);
+    });
+
+    vi.mocked(CliSessionRunner).mockImplementationOnce(() => ({
+      run: vi
+        .fn()
+        .mockImplementation(
+          (
+            _prompt: unknown,
+            _resume: unknown,
+            options: SessionRunnerOptions,
+            onEvent: (e: Record<string, unknown>) => void,
+          ) => {
+            const idx = runCalls.length;
+            runCalls.push({ options, onEvent });
+
+            if (idx === 0) {
+              // Normal run: overflow, exit 1.
+              onEvent({
+                type: 'result',
+                stop_reason: 'model_context_window_exceeded',
+                is_error: true,
+                result: '',
+                duration_ms: 100,
+                usage: { input_tokens: 0, output_tokens: 0 },
+              });
+              return Promise.resolve(1);
+            }
+            if (idx === 1) {
+              // First escalated run: deadlock (no events emitted).
+              return attempt1Promise;
+            }
+            // Second escalated run: success.
+            onEvent({ type: 'system', subtype: 'init' });
+            return Promise.resolve(0);
+          },
+        ),
+      sendMessage: mockSendMessage,
+      endSession: vi.fn(),
+      kill: mockKill,
+      hasSpawnError: false,
+    }));
+
+    const session = makeSession('standard');
+    const messages: ServerMessage[] = [];
+    session.on('message', (m: ServerMessage) => messages.push(m));
+
+    const runPromise = session.run();
+
+    // Advance past proactive nudge delay (2s): nudge must be sent even without events.
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
+    expect(mockSendMessage.mock.calls[0][0]).toContain('1M-context model');
+
+    // Advance past watchdog (30s): watchdog kills runner, attempt 1 resolves, retry spawns.
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    // Complete run.
+    await runPromise;
+
+    // 3 total spawns: initial + attempt1 (deadlock) + attempt2 (success).
+    expect(runCalls).toHaveLength(3);
+    expect(runCalls[2].options.model).toBe(LARGE_MODEL);
+
+    // kill() was called once to end the deadlocked attempt.
+    expect(mockKill).toHaveBeenCalledTimes(1);
+
+    // Second attempt also got a nudge (via first-event handler, before its 2s timer).
+    expect(mockSendMessage).toHaveBeenCalledTimes(2);
+
+    // Session completed cleanly (markSessionIdle called, no error broadcast).
+    expect(queries.markSessionIdle).toHaveBeenCalled();
+    expect(messages.find((m) => m.type === 'session_ended')).toBeUndefined();
+  });
+
+  it('all retries exhausted: session errors with escalation_deadlock', async () => {
+    vi.useFakeTimers();
+    mockRuntimeSettings.large_task_model = LARGE_MODEL;
+
+    const killResolvers: Array<(code: number) => void> = [];
+    const mockKill = vi.fn().mockImplementation(async () => {
+      const resolve = killResolvers.pop();
+      if (resolve) resolve(1);
+    });
+
+    vi.mocked(CliSessionRunner).mockImplementationOnce(() => ({
+      run: vi
+        .fn()
+        .mockImplementation(
+          (
+            _prompt: unknown,
+            _resume: unknown,
+            options: SessionRunnerOptions,
+            onEvent: (e: Record<string, unknown>) => void,
+          ) => {
+            const idx = runCalls.length;
+            runCalls.push({ options, onEvent });
+
+            if (idx === 0) {
+              // Normal run: overflow.
+              onEvent({
+                type: 'result',
+                stop_reason: 'model_context_window_exceeded',
+                is_error: true,
+                result: '',
+                duration_ms: 100,
+                usage: { input_tokens: 0, output_tokens: 0 },
+              });
+              return Promise.resolve(1);
+            }
+            // All escalated runs: deadlock.
+            return new Promise<number>((r) => killResolvers.push(r));
+          },
+        ),
+      sendMessage: mockSendMessage,
+      endSession: vi.fn(),
+      kill: mockKill,
+      hasSpawnError: false,
+    }));
+
+    const mockSessionManager = {
+      markSessionErrored: vi.fn(),
+      send: vi.fn(),
+    };
+
+    const session = new AgentSession(
+      'test-session-overflow',
+      'https://notion.so/task',
+      'https://notion.so/project',
+      {
+        attachPR: vi.fn().mockResolvedValue(undefined),
+        getTask: vi.fn().mockResolvedValue(null),
+      } as never,
+      '/tmp/worktree',
+      'task-123',
+      undefined,
+      undefined,
+      'standard',
+      mockSessionManager as never,
+    );
+    const messages: ServerMessage[] = [];
+    session.on('message', (m: ServerMessage) => messages.push(m));
+
+    const runPromise = session.run();
+
+    // Fire watchdog for all 3 attempts (initial + 2 retries).
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(32_100); // past nudge (2s) + watchdog (30s)
+    }
+
+    await runPromise;
+
+    // 4 total spawns: initial (overflow) + 3 escalated attempts (all deadlocked).
+    expect(runCalls).toHaveLength(4);
+
+    // kill() called 3 times (once per deadlocked attempt).
+    expect(mockKill).toHaveBeenCalledTimes(3);
+
+    // markSessionErrored called with escalation_deadlock reason.
+    expect(mockSessionManager.markSessionErrored).toHaveBeenCalledWith(
+      'test-session-overflow',
+      'error',
+      'escalation_deadlock',
+    );
+
+    // Session never ended as done.
+    expect(
+      messages.find(
+        (m) =>
+          m.type === 'session_ended' &&
+          (m as { status?: string }).status === 'done',
+      ),
+    ).toBeUndefined();
+  });
+
+  it('watchdog timer cleared on first event — healthy escalation has no spurious retry', async () => {
+    vi.useFakeTimers();
+    mockRuntimeSettings.large_task_model = LARGE_MODEL;
+
+    // Default mock: overflow on idx=0, init+success on idx=1.
+    const session = makeSession('standard');
+    const messages: ServerMessage[] = [];
+    session.on('message', (m: ServerMessage) => messages.push(m));
+
+    const runPromise = session.run();
+
+    // The escalated run emits init synchronously — watchdog should be cleared.
+    // Advance well past watchdog to confirm no spurious retry fires.
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await runPromise;
+
+    // Only 2 runs: initial + one healthy escalated run (no retry).
+    expect(runCalls).toHaveLength(2);
+
+    // Nudge sent once (via first-event handler, since init arrived before 2s timer).
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
+
+    // Session completed cleanly — no error, no spurious retry.
+    expect(queries.markSessionIdle).toHaveBeenCalled();
+    expect(messages.find((m) => m.type === 'session_ended')).toBeUndefined();
+  });
+
+  it('nudge sent proactively via timer when no first event arrives within 2s', async () => {
+    vi.useFakeTimers();
+    mockRuntimeSettings.large_task_model = LARGE_MODEL;
+
+    let killAttempt1!: (code: number) => void;
+    const attempt1Promise = new Promise<number>((r) => {
+      killAttempt1 = r;
+    });
+
+    vi.mocked(CliSessionRunner).mockImplementationOnce(() => ({
+      run: vi
+        .fn()
+        .mockImplementation(
+          (
+            _prompt: unknown,
+            _resume: unknown,
+            options: SessionRunnerOptions,
+            onEvent: (e: Record<string, unknown>) => void,
+          ) => {
+            const idx = runCalls.length;
+            runCalls.push({ options, onEvent });
+            if (idx === 0) {
+              onEvent({
+                type: 'result',
+                stop_reason: 'model_context_window_exceeded',
+                is_error: true,
+                result: '',
+                duration_ms: 100,
+                usage: { input_tokens: 0, output_tokens: 0 },
+              });
+              return Promise.resolve(1);
+            }
+            if (idx === 1) {
+              // No events emitted — deadlock.
+              return attempt1Promise;
+            }
+            onEvent({ type: 'system', subtype: 'init' });
+            return Promise.resolve(0);
+          },
+        ),
+      sendMessage: mockSendMessage,
+      endSession: vi.fn(),
+      kill: vi.fn().mockImplementation(async () => killAttempt1(1)),
+      hasSpawnError: false,
+    }));
+
+    const session = makeSession('standard');
+    session.run().catch(() => {});
+
+    // Before 2s: nudge not yet sent.
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(mockSendMessage).not.toHaveBeenCalled();
+
+    // After 2s: nudge sent proactively (no first event arrived).
+    await vi.advanceTimersByTimeAsync(700);
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
+    expect(mockSendMessage.mock.calls[0][0]).toContain('1M-context model');
+
+    // Advance past watchdog to clean up.
+    await vi.advanceTimersByTimeAsync(30_000);
   });
 });

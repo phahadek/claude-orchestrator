@@ -1,58 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
+import { authedFetch } from '../api/projects';
 import { ProjectsSettingsPanel } from './Settings/ProjectsSettingsPanel';
 import { SettingsDevices } from '../pages/SettingsDevices';
+import { SettingsSystemHealth } from '../pages/SettingsSystemHealth';
+import {
+  type SettingsValues,
+  validateField,
+  MIN_POLL_INTERVAL_MS,
+} from './Settings.helpers';
 import styles from './Settings.module.css';
 
 const NOTIFICATIONS_ENABLED_KEY = 'notificationsEnabled';
 
-type Tab = 'general' | 'projects' | 'devices';
-
-interface SettingsValues {
-  max_concurrent_code_sessions: string;
-  auto_review_concurrency: string;
-  auto_review: string;
-  card_preview_lines: string;
-  code_session_model: string;
-  review_session_model: string;
-  session_mode: string;
-  auto_launch_concurrency: string;
-  auto_launch_poll_interval_ms: string;
-  session_notify_threshold_seconds: string;
-  session_pause_threshold_seconds: string;
-  session_hard_stop_window_seconds: string;
-  ci_poll_interval_seconds: string;
-  ci_poll_max_minutes: string;
-  max_review_iterations: string;
-  auto_archive_enabled: string;
-  auto_archive_grace_minutes: string;
-  auto_archive_sweep_interval_minutes: string;
-  large_task_model: string;
-}
-
-const MIN_POLL_INTERVAL_MS = 5000;
-
-const NON_NUMERIC_KEYS = new Set<keyof SettingsValues>([
-  'code_session_model',
-  'review_session_model',
-  'session_mode',
-  'large_task_model',
-  'auto_review',
-  'auto_archive_enabled',
-]);
-
-export function validateField(
-  key: keyof SettingsValues,
-  value: string,
-): string | null {
-  if (NON_NUMERIC_KEYS.has(key)) return null;
-  const num = Number(value);
-  if (!Number.isInteger(num) || isNaN(num)) return 'Must be a whole number';
-  if (key === 'auto_launch_concurrency' && num < 1) return 'Minimum is 1';
-  if (key === 'max_review_iterations' && num < 1) return 'Minimum is 1';
-  if (key === 'auto_launch_poll_interval_ms' && num < MIN_POLL_INTERVAL_MS)
-    return `Minimum is ${MIN_POLL_INTERVAL_MS} ms`;
-  return null;
-}
+type Tab = 'general' | 'projects' | 'devices' | 'system_health';
 
 const MODEL_OPTIONS = [
   { label: '(CLI default)', value: '' },
@@ -75,13 +35,13 @@ interface Props {
 }
 
 async function fetchSettings(): Promise<SettingsValues> {
-  const res = await fetch('/api/settings');
+  const res = await authedFetch('/api/settings');
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json() as Promise<SettingsValues>;
 }
 
 async function patchSettings(patch: Partial<SettingsValues>): Promise<void> {
-  const res = await fetch('/api/settings', {
+  const res = await authedFetch('/api/settings', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
@@ -122,7 +82,7 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
   }, []);
 
   useEffect(() => {
-    fetch('/api/update/channel')
+    authedFetch('/api/update/channel')
       .then((r) => r.json() as Promise<{ channel: 'stable' | 'beta' }>)
       .then((body) => setReleaseChannel(body.channel))
       .catch(() => {});
@@ -131,7 +91,7 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
   async function handleChannelChange(channel: 'stable' | 'beta') {
     setReleaseChannel(channel);
     try {
-      await fetch('/api/update/channel', {
+      await authedFetch('/api/update/channel', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channel }),
@@ -222,7 +182,7 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
     setCheckingUpdate(true);
     setUpdateCheckResult(null);
     try {
-      const res = await fetch('/api/update/check', { method: 'POST' });
+      const res = await authedFetch('/api/update/check', { method: 'POST' });
       const body = (await res.json()) as {
         updateAvailable?: boolean;
         info?: { version: string };
@@ -242,20 +202,24 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
   return (
     <div className={styles.settings}>
       <div className={styles.tabs}>
-        {(['general', 'projects', 'devices'] as Tab[]).map((t) => (
-          <button
-            key={t}
-            type="button"
-            className={`${styles.tab}${activeTab === t ? ` ${styles.tabActive}` : ''}`}
-            onClick={() => setActiveTab(t)}
-          >
-            {t === 'general'
-              ? 'General'
-              : t === 'projects'
-                ? 'Projects'
-                : 'Devices'}
-          </button>
-        ))}
+        {(['general', 'projects', 'devices', 'system_health'] as Tab[]).map(
+          (t) => (
+            <button
+              key={t}
+              type="button"
+              className={`${styles.tab}${activeTab === t ? ` ${styles.tabActive}` : ''}`}
+              onClick={() => setActiveTab(t)}
+            >
+              {t === 'general'
+                ? 'General'
+                : t === 'projects'
+                  ? 'Projects'
+                  : t === 'devices'
+                    ? 'Devices'
+                    : 'System Health'}
+            </button>
+          ),
+        )}
       </div>
 
       <div className={styles.content}>
@@ -576,6 +540,12 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
         {activeTab === 'devices' && (
           <div className={styles.section}>
             <SettingsDevices />
+          </div>
+        )}
+
+        {activeTab === 'system_health' && (
+          <div>
+            <SettingsSystemHealth />
           </div>
         )}
       </div>

@@ -25,6 +25,7 @@ const EXPECTED_TABLES = new Set([
   'pending_review_sync',
   'session_pause_intervals',
   'stuck_session_timers',
+  'task_repo_assignments',
 ]);
 
 function getTableNames(db: Database.Database): Set<string> {

@@ -72,23 +72,6 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     gitMode,
   } = params;
 
-  // Read project-level local context (Notion URLs, board IDs, etc.) if present.
-  // Gitignored, populated per-host by the developer. Falls through silently
-  // when the file is absent — e.g. on a fresh clone before setup.
-  let localContext: string | undefined;
-  try {
-    const localContextPath = path.join(
-      projectDir,
-      '.claude',
-      'local-context.md',
-    );
-    if (fs.existsSync(localContextPath)) {
-      localContext = fs.readFileSync(localContextPath, 'utf-8');
-    }
-  } catch {
-    // Ignore — fall through without local context.
-  }
-
   // For GitHub-backed projects, read PROJECT.md from the project root if present.
   // Provides per-project context equivalent to what Notion project-context pages
   // provide for Notion-backed projects. No-op when the file is absent.
@@ -117,7 +100,6 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     bashRules,
     taskBackend,
     taskContent,
-    localContext,
     projectContextContent,
     gitMode,
   });

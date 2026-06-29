@@ -1,5 +1,6 @@
 import { WebSocket } from 'ws';
 import { ClientMessage } from './types';
+import { logger } from '../logger';
 import { SessionManager } from '../session/SessionManager';
 import { getProjectById } from '../config';
 import { approveEnrollment } from '../auth/Enrollment';
@@ -8,10 +9,12 @@ import { ProjectService } from '../projects/ProjectService';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import type { NotionTask } from '../notion/types';
 
-let refreshProjectFn: ((projectId: string) => Promise<void>) | null = null;
+let refreshProjectFn:
+  | ((projectId: string, skipCache?: boolean) => Promise<void>)
+  | null = null;
 
 export function setWsRouterRefreshFn(
-  fn: (projectId: string) => Promise<void>,
+  fn: (projectId: string, skipCache?: boolean) => Promise<void>,
 ): void {
   refreshProjectFn = fn;
 }
@@ -76,12 +79,12 @@ export async function handleMessage(
     case 'approve':
       // The claude CLI --print mode does not support mid-session permission approval.
       // Tools are pre-approved via --allowedTools at spawn time. This is a no-op.
-      console.log(
+      logger.info(
         `[router] approve ignored — CLI does not support mid-session approval`,
       );
       break;
     case 'deny':
-      console.log(
+      logger.info(
         `[router] deny ignored — CLI does not support mid-session denial`,
       );
       break;
@@ -89,7 +92,7 @@ export async function handleMessage(
       void sessions
         .sendOrResume(msg.sessionId, msg.message)
         .catch((err: unknown) => {
-          console.error(
+          logger.error(
             `[router] sendOrResume failed for session ${msg.sessionId}: ${String(err)}`,
           );
         });
@@ -143,7 +146,8 @@ export async function handleMessage(
       }
       // Serve from cache only — never block on a Notion round-trip.
       const milestone = ProjectService.getMilestone(msg.milestoneId);
-      if (!milestone?.sourceId) {
+      const isLocalTaskSource = project.taskSource === 'yaml';
+      if (!milestone || (!isLocalTaskSource && !milestone.sourceId)) {
         ws.send(
           JSON.stringify({
             type: 'tasks_ready',
@@ -152,11 +156,14 @@ export async function handleMessage(
         );
         break;
       }
-      const cacheRow = getTaskCache(`board:${milestone.sourceId}`);
+      const boardCacheKey = isLocalTaskSource
+        ? milestone.id
+        : (milestone.sourceId as string);
+      const cacheRow = getTaskCache(`board:${boardCacheKey}`);
       if (!cacheRow) {
         ws.send(JSON.stringify({ type: 'tasks_ready', tasks: [] }));
         if (msg.skipCache && refreshProjectFn) {
-          void refreshProjectFn(msg.projectId);
+          void refreshProjectFn(msg.projectId, true);
         }
         break;
       }
@@ -172,7 +179,7 @@ export async function handleMessage(
       // data from Notion. The refresher broadcasts task_cache_updated on completion,
       // which the frontend uses to re-render and clear the Sync spinner.
       if (msg.skipCache && refreshProjectFn) {
-        void refreshProjectFn(msg.projectId);
+        void refreshProjectFn(msg.projectId, true);
       }
       break;
     }

@@ -1,12 +1,18 @@
 // Thin REST wrapper for the Jira Cloud/Server v3 API.
 // Supports bearer token (JIRA_TOKEN only) or basic auth (JIRA_EMAIL + JIRA_TOKEN).
 
-export interface JiraIssueFields {
+interface JiraIssueFields {
   summary: string;
   status: { name: string };
   issuetype: { name: string };
   priority: { name: string } | null;
   description: string | { content?: unknown[] } | null;
+  issuelinks?: Array<{
+    type: { inward: string; outward: string };
+    inwardIssue?: { key: string };
+    outwardIssue?: { key: string };
+  }>;
+  parent?: { key: string };
 }
 
 export interface JiraIssue {
@@ -23,9 +29,7 @@ export interface JiraTransition {
 
 interface JiraSearchResponse {
   issues: JiraIssue[];
-  total: number;
-  maxResults: number;
-  startAt: number;
+  nextPageToken?: string;
 }
 
 interface JiraTransitionsResponse {
@@ -36,6 +40,7 @@ export class JiraApiError extends Error {
   constructor(
     public readonly statusCode: number,
     message: string,
+    public readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = 'JiraApiError';
@@ -73,7 +78,19 @@ export class JiraClient {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => res.statusText);
-      throw new JiraApiError(res.status, `Jira API ${method} ${path}: ${text}`);
+      let retryAfterMs: number | undefined;
+      if (res.status === 429) {
+        const retryAfter = res.headers.get('Retry-After');
+        if (retryAfter) {
+          const secs = Number(retryAfter);
+          if (Number.isFinite(secs) && secs > 0) retryAfterMs = secs * 1000;
+        }
+      }
+      throw new JiraApiError(
+        res.status,
+        `Jira API ${method} ${path}: ${text}`,
+        retryAfterMs,
+      );
     }
     if (res.status === 204) return undefined as T;
     return res.json() as Promise<T>;
@@ -85,24 +102,52 @@ export class JiraClient {
     return `project = "${projectKey}" AND status in (${statuses}) ORDER BY priority DESC`;
   }
 
-  /** Search issues using JQL, paginating through all results. */
+  /** Build JQL for direct children of an Epic via the next-gen parent field. */
+  buildEpicParentJql(epicKey: string): string {
+    return `parent = "${epicKey}" ORDER BY priority DESC`;
+  }
+
+  /** Build JQL for direct children of an Epic via the classic Epic Link field. */
+  buildEpicLinkJql(epicKey: string): string {
+    return `"Epic Link" = "${epicKey}" ORDER BY priority DESC`;
+  }
+
+  /** Build JQL for sub-tasks whose parent is one of the given keys. */
+  buildSubtaskJql(parentKeys: string[]): string {
+    return `parent in (${parentKeys.map((k) => `"${k}"`).join(', ')}) ORDER BY priority DESC`;
+  }
+
+  /** Build JQL to fetch a batch of issues by key. */
+  buildKeyInJql(keys: string[]): string {
+    return `key in (${keys.map((k) => `"${k}"`).join(', ')})`;
+  }
+
+  /** Search issues using JQL, paginating through all results via nextPageToken. */
   async searchIssues(jql: string): Promise<JiraIssue[]> {
     const all: JiraIssue[] = [];
-    let startAt = 0;
     const maxResults = 100;
+    const fields = [
+      'summary',
+      'status',
+      'issuetype',
+      'priority',
+      'description',
+      'issuelinks',
+      'parent',
+    ];
+    let nextPageToken: string | undefined;
 
     do {
-      const resp = await this.request<JiraSearchResponse>('POST', '/search', {
-        jql,
-        startAt,
-        maxResults,
-        fields: ['summary', 'status', 'issuetype', 'priority', 'description'],
-      });
+      const body: Record<string, unknown> = { jql, maxResults, fields };
+      if (nextPageToken !== undefined) body.nextPageToken = nextPageToken;
+      const resp = await this.request<JiraSearchResponse>(
+        'POST',
+        '/search/jql',
+        body,
+      );
       all.push(...resp.issues);
-      if (all.length >= resp.total) break;
-      startAt += resp.issues.length;
-      // eslint-disable-next-line no-constant-condition
-    } while (true);
+      nextPageToken = resp.nextPageToken;
+    } while (nextPageToken !== undefined);
 
     return all;
   }
@@ -145,5 +190,31 @@ export class JiraClient {
         ],
       },
     });
+  }
+
+  /** Probe-validate credentials by calling /rest/api/3/myself on the given host. */
+  static async probe(
+    host: string,
+    token: string,
+    email?: string,
+  ): Promise<{ displayName: string; emailAddress?: string }> {
+    const baseUrl = host.replace(/\/$/, '') + '/rest/api/3';
+    const authHeader = email
+      ? 'Basic ' + Buffer.from(`${email}:${token}`).toString('base64')
+      : `Bearer ${token}`;
+    const res = await fetch(`${baseUrl}/myself`, {
+      headers: {
+        Authorization: authHeader,
+        Accept: 'application/json',
+      },
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText);
+      throw new JiraApiError(res.status, `Jira API GET /myself: ${text}`);
+    }
+    return res.json() as Promise<{
+      displayName: string;
+      emailAddress?: string;
+    }>;
   }
 }

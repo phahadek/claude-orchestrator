@@ -37,6 +37,7 @@ function makeTask(
     pr: null,
     review: null,
     totalTokens: { input: 0, output: 0 },
+    assignedRepo: null,
     ...overrides,
   };
 }
@@ -1056,6 +1057,49 @@ describe('TaskList', () => {
         { boardId: 'ms-1' },
       );
       expect(screen.queryByTestId('merge-ready-btn')).toBeNull();
+    });
+
+    // ── Blocked / Deferred groups ──────────────────────────────────────────────
+
+    it('🚫 Blocked task renders in its own group, not under Backlog', () => {
+      renderList([
+        makeTask({
+          taskId: 'b1',
+          taskName: 'Blocked Task',
+          displayStatus: 'blocked',
+          notionStatus: '🚫 Blocked',
+        }),
+      ]);
+      expect(screen.getByTestId('group-header-blocked')).toBeDefined();
+      expect(screen.queryByTestId('backlog-section')).toBeNull();
+      expect(screen.getByText('Blocked Task')).toBeDefined();
+    });
+
+    it('⏭️ Deferred task renders in its own group, not under Backlog', () => {
+      renderList([
+        makeTask({
+          taskId: 'd1',
+          taskName: 'Deferred Task',
+          displayStatus: 'deferred',
+          notionStatus: '⏭️ Deferred',
+        }),
+      ]);
+      expect(screen.getByTestId('group-header-deferred')).toBeDefined();
+      expect(screen.queryByTestId('backlog-section')).toBeNull();
+      expect(screen.getByText('Deferred Task')).toBeDefined();
+    });
+
+    it('backlog section uses 🔲 Backlog label (not 🗂️)', () => {
+      renderList([
+        makeTask({
+          taskId: 'bg1',
+          taskName: 'Backlog Task',
+          displayStatus: 'backlog',
+        }),
+      ]);
+      const backlogHeader = screen.getByTestId('group-header-backlog');
+      expect(backlogHeader.textContent).toContain('🔲 Backlog');
+      expect(backlogHeader.textContent).not.toContain('🗂️');
     });
 
     it('switching to a different milestone re-evaluates visibility', () => {

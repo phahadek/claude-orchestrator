@@ -3,21 +3,35 @@ import type { RequestHandler } from 'express';
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { DataDirConfigSource } from '../config/DataDirConfigSource';
 import { getOrchestratorConfig } from '../config/appConfig';
+import { claudeCredentialsPath } from '../config/credentialsPath';
 import { countProjects } from '../db/queries';
 import type { DeepPartial, OrchestratorConfig } from '../config/types';
 import { GitHubClient } from '../github/GitHubClient';
 import { GitHubApiError } from '../github/types';
 import { probeNotionToken } from '../notion/NotionClient';
 import { NotionApiError } from '../notion/types';
+import { JiraClient, JiraApiError } from '../tasks/JiraClient';
 
 const router = Router();
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
-router.get('/setup/status', (_req, res) => {
+/**
+ * Shared logic for setup status — used by both the /setup/status route and
+ * isSetupRequired() so the two can never drift apart.
+ *
+ * missing[] lists all absent items for an informational Settings badge.
+ * setupNeeded is true only on genuine first-run (setupComplete not yet set)
+ * AND at least one hard requirement is absent (github.token or project).
+ * notion.apiKey is optional and is reported in missing[] but never gates
+ * the wizard by itself.
+ */
+export function computeSetupStatus(): {
+  setupNeeded: boolean;
+  missing: string[];
+} {
   const cfg = getOrchestratorConfig();
   const missing: string[] = [];
 
@@ -32,7 +46,14 @@ router.get('/setup/status', (_req, res) => {
   }
   if (projectCount === 0) missing.push('project');
 
-  res.json({ setupNeeded: missing.length > 0, missing });
+  if (cfg.setupComplete) return { setupNeeded: false, missing };
+
+  const hardMissing = missing.filter((k) => k !== 'notion.apiKey');
+  return { setupNeeded: hardMissing.length > 0, missing };
+}
+
+router.get('/setup/status', (_req, res) => {
+  res.json(computeSetupStatus());
 });
 
 // ── Env check ─────────────────────────────────────────────────────────────────
@@ -48,26 +69,18 @@ function checkInstalled(cmd: string): boolean {
   }
 }
 
-function claudeCredentialsPath(): string {
-  if (process.platform === 'win32') {
-    return path.join(
-      process.env.APPDATA ?? os.homedir(),
-      'Claude',
-      '.credentials.json',
-    );
-  }
-  return path.join(os.homedir(), '.claude', '.credentials.json');
-}
-
-function isClaudeAuthenticated(): boolean {
-  const credPath = claudeCredentialsPath();
+function isClaudeAuthenticated(credPathOverride?: string): boolean {
+  if (process.env.ANTHROPIC_API_KEY) return true;
+  const credPath = credPathOverride ?? claudeCredentialsPath();
   if (!fs.existsSync(credPath)) return false;
   try {
     const raw = JSON.parse(fs.readFileSync(credPath, 'utf8')) as Record<
       string,
       unknown
     >;
-    // Credentials file has a non-empty token when authenticated
+    // Real shape: claudeAiOauth is an object bundle
+    if (raw.claudeAiOauth && typeof raw.claudeAiOauth === 'object') return true;
+    // Back-compat: older claudeAiOauthToken string
     return (
       typeof raw.claudeAiOauthToken === 'string' &&
       raw.claudeAiOauthToken.length > 0
@@ -118,21 +131,55 @@ async function validateNotionToken(
   }
 }
 
+async function validateJiraToken(
+  host: string,
+  token: string,
+  email?: string,
+): Promise<{ valid: boolean; message: string }> {
+  try {
+    const data = await JiraClient.probe(host, token, email);
+    return {
+      valid: true,
+      message: `Authenticated as ${data.displayName ?? data.emailAddress ?? 'unknown'}`,
+    };
+  } catch (err) {
+    if (err instanceof JiraApiError) {
+      return { valid: false, message: `Jira API error: ${err.statusCode}` };
+    }
+    return { valid: false, message: `Request failed: ${String(err)}` };
+  }
+}
+
 router.post('/setup/validate', async (req, res) => {
-  const { type, token } = req.body as { type?: string; token?: string };
-  if (type !== 'github' && type !== 'notion') {
-    res.status(400).json({ error: 'type must be "github" or "notion"' });
+  const { type, token, host, email } = req.body as {
+    type?: string;
+    token?: string;
+    host?: string;
+    email?: string;
+  };
+  if (type !== 'github' && type !== 'notion' && type !== 'jira') {
+    res
+      .status(400)
+      .json({ error: 'type must be "github", "notion", or "jira"' });
     return;
   }
   if (typeof token !== 'string' || !token) {
     res.status(400).json({ error: 'token is required' });
     return;
   }
+  if (type === 'jira' && (typeof host !== 'string' || !host)) {
+    res.status(400).json({ error: 'host is required for jira validation' });
+    return;
+  }
 
-  const result =
-    type === 'github'
-      ? await validateGitHubToken(token)
-      : await validateNotionToken(token);
+  let result: { valid: boolean; message: string };
+  if (type === 'github') {
+    result = await validateGitHubToken(token);
+  } else if (type === 'notion') {
+    result = await validateNotionToken(token);
+  } else {
+    result = await validateJiraToken(host as string, token, email);
+  }
 
   res.json(result);
 });
@@ -223,14 +270,11 @@ router.post('/setup/save-credentials', (req, res) => {
     githubToken?: string;
     notionApiKey?: string;
   };
-  if (typeof githubToken !== 'string' || !githubToken) {
-    res.status(400).json({ error: 'githubToken is required' });
-    return;
-  }
   const src = new DataDirConfigSource();
-  const partial: Parameters<typeof src.write>[0] = {
-    github: { token: githubToken },
-  };
+  const partial: Parameters<typeof src.write>[0] = {};
+  if (typeof githubToken === 'string' && githubToken) {
+    partial.github = { token: githubToken };
+  }
   if (typeof notionApiKey === 'string' && notionApiKey) {
     partial.notion = { apiKey: notionApiKey };
   }
@@ -251,20 +295,12 @@ export default router;
 // ── Setup-mode guard ──────────────────────────────────────────────────────────
 
 /**
- * Returns true when the backend is in "setup mode": config.json lacks a GitHub
- * token or no projects have been configured yet.
- * Returns false when setup has been explicitly completed or skipped.
+ * Returns true when the backend is in "setup mode".
+ * Delegates to computeSetupStatus() so this function and /setup/status
+ * always agree.
  */
 export function isSetupRequired(): boolean {
-  const cfg = getOrchestratorConfig();
-  if (cfg.setupComplete) return false;
-  if (!cfg.github.token) return true;
-  try {
-    if (countProjects() === 0) return true;
-  } catch {
-    return true;
-  }
-  return false;
+  return computeSetupStatus().setupNeeded;
 }
 
 /**

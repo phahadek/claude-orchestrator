@@ -89,6 +89,7 @@ sequenceDiagram
 - [`claude`](https://docs.anthropic.com/en/docs/claude-code) CLI installed and authenticated (`claude login`)
 - Notion integration token (if using Notion as a task source)
 - GitHub PAT with `repo` scope (for PR tracking)
+- [`gitleaks`](https://github.com/gitleaks/gitleaks) ≥ 8.x (macOS: `brew install gitleaks` · Windows: `choco install gitleaks`) — used by the `analyze:` gate for secret scanning
 
 **Happy path**
 
@@ -113,6 +114,7 @@ Projects and milestones are managed entirely from the dashboard UI — there is 
 2. Fill in the project name, the absolute path to its local repo (`projectDir`), the GitHub `owner/repo`, and choose a **Task source**:
    - **Notion** — the Settings form labels Context URL as optional, but Notion projects in practice need it: paste the URL of the Project Context page. See [`docs/notion-template.md`](docs/notion-template.md) for the workspace structure the dashboard expects.
    - **GitHub** — tasks are GitHub Issues labeled and organized by milestone. See [`docs/github-template.md`](docs/github-template.md) for label vocabulary, issue body structure, and repo bootstrap steps.
+   - **Jira** — tasks are Jira issues organized under an Epic (the milestone). See [`docs/jira-template.md`](docs/jira-template.md) for issue type mapping, workflow status conventions, and project bootstrap steps.
    - **YAML** — tasks live in `<projectDir>/tasks.yaml` (gitignored by default). See [`docs/yaml-template.md`](docs/yaml-template.md) for the schema reference and conventions.
 3. Open **Settings → Milestones → Add milestone** and add as many milestones as you need. For Notion projects, paste the **database ID** of each milestone's task board (a 32-character hex string — pages and databases both have IDs, and they are not interchangeable; copy from the database URL, not a parent page).
 4. The Tasks panel shows the active milestone's tasks. The default active milestone is the first one in display order; if a project has more than one milestone, a milestone selector appears in the header next to the project switcher, and your choice is remembered per browser via `localStorage`. Click **Dispatch** on any `🗂️ Ready` task to spawn a Claude session in a worktree.
@@ -130,8 +132,91 @@ The Analytics tab tracks per-session token usage and per-model cost across the p
 - [Install guide](docs/install.md) — production setup and full env var reference
 - [Notion template](docs/notion-template.md) — set up a Notion workspace compatible with this orchestrator
 - [GitHub template](docs/github-template.md) — label vocabulary, issue body structure, and repo bootstrap for GitHub-backed projects
+- [Jira template](docs/jira-template.md) — issue type mapping, workflow statuses, Epic milestone semantics, and project bootstrap for Jira-backed projects
+- [Jira Task Writing Guidelines](docs/jira-task-writing.md) — how to scope and write Jira issues as orchestrator tasks
 - [YAML template](docs/yaml-template.md) — schema reference and conventions for YAML-backed projects
 - [Orchestrator project setup](docs/orchestrator-project-setup.md) — point the orchestrator at an external project (C#, Rust, Godot, …) via `.claude/orchestrator.json` and a bootstrap script
+
+## Grooming & design skills
+
+The `/groom` (Backlog Grooming) and `/design` (Design Execution) Claude Code skills are
+source-controlled here and deployed to `~/.claude` by a run-by-hand script:
+
+- **Vendored artifacts:** `scripts/{groom-load,design-load,groom-gate,notion-page}.mjs`,
+  `skills/{groom,design}/**`, and `config-template/**` (the Remote Control bootstrap — see
+  below).
+- **Deploy:** `node scripts/deploy-grooming.mjs` (add `--dry-run` to preview). Run it by hand
+  whenever a vendored artifact changes — there is no auto-sync. It copies the scripts into
+  `~/.claude/scripts/`, the skill trees into `~/.claude/skills/`, and the `config-template/*`
+  bootstrap into the central config tree (`load-procedures.mjs` overwritten each run;
+  `procedures.md` seeded only if absent).
+- **Manifest:** each managed repo's grooming manifest lives in the **central config tree** at
+  `config/projects/<repo-dir>/grooming.json` (outside the repo), not in `.claude/`. The loaders
+  resolve it by repo basename via `$ORCHESTRATOR_CONFIG_DIR` / `--config-dir` / a host-aware
+  default (a `config/` dir beside the projects root: dev `<repo>/../config`, prod
+  `<repo>/../../config`). See `skills/groom/reference/manifest.example.json`.
+- **One-time hook registration (manual):** the `groom-gate.mjs` promotion gate runs as a
+  `PreToolUse` hook on `mcp__claude_ai_Notion__notion-update-page` (it blocks promoting a task to
+  Ready without a recorded sign-off). The deploy script does **not** edit user-global settings, so
+  register it once in `~/.claude/settings.json`:
+
+  ```json
+  {
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "mcp__claude_ai_Notion__notion-update-page",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node ~/.claude/scripts/groom-gate.mjs"
+            }
+          ]
+        }
+      ]
+    }
+  }
+  ```
+
+### Remote Control bootstrap (config tree + SessionStart hook)
+
+Human-driven **Remote Control** sessions get the universal `procedures.md` (the project index
+
+- session flow grooming/design rely on) via a **SessionStart** hook. `deploy-grooming.mjs`
+  installs the hook script and a `procedures.md` to fill in (see `config-template/README.md`);
+  you then register the hook once and launch the server.
+
+* **Launch (durable, multi-session):**
+  `claude --permission-mode acceptEdits remote-control`, run from the **projects root**. Note
+  the `remote-control` _subcommand_ does **not** accept `--settings` — context delivery is via
+  the hook below, not a settings file. (The single-session `--remote-control` _flag_ does take
+  `--settings`, but that's not the durable server.)
+* **One-time hook registration (manual):** add a `SessionStart` hook in `~/.claude/settings.json`
+  pointing at the deployed hook (absolute path to your config tree). It self-gates on cwd —
+  it injects only at the projects root, so orchestrator-launched worktree sessions never
+  inherit it:
+
+  ```json
+  {
+    "hooks": {
+      "SessionStart": [
+        {
+          "matcher": "",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node /path/to/config/hooks/load-procedures.mjs"
+            }
+          ]
+        }
+      ]
+    }
+  }
+  ```
+
+* **Non-dev layouts:** if the config tree is not the parent of the projects root, set
+  `ORCHESTRATOR_CONFIG_DIR` (deploy + loaders) and `ORCHESTRATOR_PROJECTS_ROOT` (the hook's cwd
+  gate). The systemd unit shipped in the config tree sets both.
 
 ## License
 

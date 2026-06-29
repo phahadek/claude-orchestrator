@@ -6,10 +6,24 @@ import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import type { SessionState } from '../hooks/useSessionStore';
 import { SessionPanel } from './SessionPanel';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
-import { sessionsApi } from '../api/projects';
+import { sessionsApi, authedFetch } from '../api/projects';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import styles from './TaskDetail.module.css';
+
+function getProjectRepos(
+  project: { githubRepo?: string } | null | undefined,
+): string[] {
+  const raw = project?.githubRepo;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as string[];
+  } catch {
+    /* bare string */
+  }
+  return [raw];
+}
 
 // ── Display status helpers ─────────────────────────────────────────
 
@@ -20,7 +34,9 @@ const DISPLAY_STATUS_LABELS: Record<DisplayStatus, string> = {
   needs_attention: '⚠️ Needs Attention',
   ready_to_merge: '✅ Ready to Merge',
   done: '✓ Done',
-  backlog: '🗂️ Backlog',
+  backlog: '🔲 Backlog',
+  blocked: '🚫 Blocked',
+  deferred: '⏭️ Deferred',
 };
 
 const DISPLAY_STATUS_CSS_KEYS: Record<DisplayStatus, string> = {
@@ -31,6 +47,8 @@ const DISPLAY_STATUS_CSS_KEYS: Record<DisplayStatus, string> = {
   ready_to_merge: 'status--ready-to-merge',
   done: 'status--done',
   backlog: 'status--backlog',
+  blocked: 'status--blocked',
+  deferred: 'status--deferred',
 };
 
 const VERDICT_LABELS: Record<string, string> = {
@@ -113,9 +131,14 @@ export function TaskDetail({
   const [markMergedInFlight, setMarkMergedInFlight] = useState(false);
   const [fixConflictsInFlight, setFixConflictsInFlight] = useState(false);
   const [abortInFlight, setAbortInFlight] = useState(false);
+  const [unblockInFlight, setUnblockInFlight] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [optimisticDisplayStatus, setOptimisticDisplayStatus] =
     useState<DisplayStatus | null>(null);
+  const [assignedRepo, setAssignedRepo] = useState<string | null>(
+    task.assignedRepo,
+  );
+  const [assignRepoInFlight, setAssignRepoInFlight] = useState(false);
 
   // Reset state when task changes
   useEffect(() => {
@@ -123,8 +146,15 @@ export function TaskDetail({
     setMobileOpenSection('review');
     setReviewError(null);
     setFixConflictsInFlight(false);
+    setUnblockInFlight(false);
     setOptimisticDisplayStatus(null);
-  }, [task.taskId]);
+    setReviewInFlight(false);
+    setMergeInFlight(false);
+    setMarkMergedInFlight(false);
+    setAbortInFlight(false);
+    setAssignedRepo(task.assignedRepo);
+    setAssignRepoInFlight(false);
+  }, [task.taskId, task.assignedRepo]);
 
   // Look up live session state
   const codeSession = task.codeSession
@@ -149,7 +179,7 @@ export function TaskDetail({
       const url = projectId
         ? `/api/prs/${task.pr.prNumber}/review?projectId=${encodeURIComponent(projectId)}`
         : `/api/prs/${task.pr.prNumber}/review`;
-      const res = await fetch(url, { method: 'POST' });
+      const res = await authedFetch(url, { method: 'POST' });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         setReviewError(body.error ?? `HTTP ${res.status}`);
@@ -171,7 +201,7 @@ export function TaskDetail({
         setReviewError('Could not parse owner/repo from PR URL.');
         return;
       }
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/fix-conflicts`,
         { method: 'POST' },
       );
@@ -202,7 +232,7 @@ export function TaskDetail({
         setReviewError('Could not parse owner/repo from PR URL.');
         return;
       }
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/merge`,
         { method: 'POST' },
       );
@@ -276,6 +306,57 @@ export function TaskDetail({
     }
   }
 
+  async function handleUnblock() {
+    if (!projectId) return;
+    setUnblockInFlight(true);
+    setReviewError(null);
+    try {
+      const res = await authedFetch(
+        `/api/tasks/${encodeURIComponent(task.taskId)}/unblock?projectId=${encodeURIComponent(projectId)}`,
+        { method: 'POST' },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setReviewError(body.error ?? `HTTP ${res.status}`);
+      } else {
+        setOptimisticDisplayStatus('ready');
+      }
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setUnblockInFlight(false);
+    }
+  }
+
+  const projectRepos = getProjectRepos(project);
+  const isMultiRepo = projectRepos.length > 1;
+
+  async function handleAssignRepo(repo: string) {
+    if (!projectId || assignRepoInFlight) return;
+    setAssignRepoInFlight(true);
+    setReviewError(null);
+    try {
+      const res = await authedFetch(
+        `/api/tasks/${encodeURIComponent(task.taskId)}/assign-repo?projectId=${encodeURIComponent(projectId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo }),
+        },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setReviewError(body.error ?? `HTTP ${res.status}`);
+      } else {
+        setAssignedRepo(repo);
+      }
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setAssignRepoInFlight(false);
+    }
+  }
+
   // Accordion: on mobile, REVIEW and PULL REQUEST are mutually exclusive when both exist.
   const mobileAccordionActive = isMobile && !!task.review && !!task.pr;
   const isReviewExpanded = mobileAccordionActive
@@ -338,6 +419,25 @@ export function TaskDetail({
               {getTaskSourceLinkLabel(project?.taskSource ?? 'notion')}
             </a>
           )}
+          {isMultiRepo && (
+            <select
+              className={styles.repoSelect}
+              value={assignedRepo ?? ''}
+              disabled={assignRepoInFlight}
+              onChange={(e) => {
+                if (e.target.value) void handleAssignRepo(e.target.value);
+              }}
+              aria-label="Assign repository"
+              title="Assign target repository"
+            >
+              <option value="">⚠ Needs repo</option>
+              {projectRepos.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       </div>
 
@@ -376,6 +476,26 @@ export function TaskDetail({
                 title="Kill the session and reset the task to Ready. Work in progress will be discarded."
               >
                 {abortInFlight ? 'Aborting…' : 'Abort'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Unblock — clear pause/crash state and reset to Ready ── */}
+        {effectiveDisplayStatus === 'blocked' && (
+          <div className={styles.abortSection}>
+            {reviewError && (
+              <div className={styles.errorBanner}>{reviewError}</div>
+            )}
+            <div className={styles.abortActions}>
+              <button
+                className={styles.unblockButton}
+                disabled={unblockInFlight}
+                onClick={() => void handleUnblock()}
+                title="Clear the block and reset this task to 🗂️ Ready"
+                aria-label="Unblock task"
+              >
+                {unblockInFlight ? 'Unblocking…' : '↩ Unblock'}
               </button>
             </div>
           </div>

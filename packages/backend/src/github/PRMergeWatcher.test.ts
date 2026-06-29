@@ -20,6 +20,8 @@ vi.mock('../db/queries.js', () => ({
   getSetting: vi.fn().mockReturnValue(null),
   getTestResult: vi.fn().mockReturnValue(undefined),
   markSessionDone: vi.fn(),
+  updateSessionStatus: vi.fn(),
+  clearTerminalPRFlags: vi.fn(),
   setPreReviewStage: vi.fn(),
   setConflictNudgeSha: vi.fn(),
 }));
@@ -59,6 +61,7 @@ import {
   setHeadSha,
   getTestResult,
   markSessionDone,
+  updateSessionStatus,
   setPendingPush,
   setConflictNudgeSha,
 } from '../db/queries';
@@ -88,6 +91,10 @@ function makeMockGitHub(): GitHubClient {
       .mockResolvedValue({ mergeable: null, mergeableState: null }),
     getFailingChecks: vi.fn().mockResolvedValue([]),
     fetchPR: vi.fn().mockResolvedValue({ headSha: null }),
+    deleteBranch: vi.fn().mockResolvedValue(undefined),
+    detectBillingBlock: vi
+      .fn()
+      .mockResolvedValue({ blocked: false, message: null }),
     // Default: GitHub still computing — watcher should skip.
     categorizeMergeability: vi.fn().mockResolvedValue({
       category: 'unknown',
@@ -464,6 +471,23 @@ describe('PRMergeWatcher — idle→error session transition on PR close', () =>
     );
   });
 
+  it('applies error terminal transition to review session when PR is closed', async () => {
+    const pr = makePRRow({
+      session_id: 'coding-session',
+      review_session_id: 'review-session',
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = makeWatcherForClosedPR(pr, sessions);
+    await watcher.poll();
+
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      'review-session',
+      'error',
+      expect.any(Number),
+    );
+  });
+
   it('does not call markSessionErrored when closed PR has no session_id', async () => {
     const pr = makePRRow({ session_id: null });
     const sessions = makeMockSessions();
@@ -619,7 +643,11 @@ describe('PRMergeWatcher categorization branches', () => {
       mergeState: 'ci_failed',
       rawMergeableState: 'unstable',
       failingChecks: [
-        { name: 'lint', conclusion: 'failure' },
+        {
+          name: 'lint',
+          conclusion: 'failure',
+          detailsUrl: 'https://github.com/owner/repo/actions/runs/789/job/123',
+        },
         { name: 'unit', conclusion: 'failure' },
       ],
     });
@@ -640,10 +668,12 @@ describe('PRMergeWatcher categorization branches', () => {
     // Failing check names rendered as list items
     expect(sentMessage).toContain('- lint');
     expect(sentMessage).toContain('- unit');
-    // GitHub checks URL present
+    // Links to the real check-run URL (first failing check's detailsUrl)
     expect(sentMessage).toContain(
-      'https://github.com/owner/repo/pull/42/checks',
+      'https://github.com/owner/repo/actions/runs/789/job/123',
     );
+    // NOT the hardcoded /pull/N/checks page
+    expect(sentMessage).not.toContain('/pull/42/checks');
     // Instruction block present
     expect(sentMessage).toMatch(/investigate the failures and push a fix/i);
     // NOT the legacy plain-text format
@@ -656,6 +686,37 @@ describe('PRMergeWatcher categorization branches', () => {
       'ci_failed',
       ['lint', 'unit'],
     );
+  });
+
+  it('omits Run: line when no failing check has a detailsUrl', async () => {
+    const pr = makePRRow({
+      merge_state: 'clean',
+      session_id: 'coding-session',
+      head_sha: 'abc123',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [{ name: 'typecheck', conclusion: 'failure' }],
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    const sentMessage = vi.mocked(sessions.sendOrResume).mock
+      .calls[0][1] as string;
+    expect(sentMessage).toMatch(/## CI Failure — PR #42/);
+    expect(sentMessage).not.toContain('**Run:**');
+    expect(sentMessage).not.toContain('/pull/42/checks');
   });
 
   it('does NOT message session for blocked category (requires human action)', async () => {
@@ -874,11 +935,12 @@ describe('PRMergeWatcher.handleMerged()', () => {
       'sess-idle-123',
       expect.any(Number),
       'https://github.com/owner/repo/pull/42',
+      'pr_merge_watcher',
     );
   });
 
   it('does not call markSessionDone when session_id is null', async () => {
-    const pr = makePRRow({ session_id: null });
+    const pr = makePRRow({ session_id: null, review_session_id: null });
     const watcher = new PRMergeWatcher(
       makeMockGitHub(),
       makeMockSessions(),
@@ -888,6 +950,50 @@ describe('PRMergeWatcher.handleMerged()', () => {
     await watcher.handleMerged(pr, 'abc123');
 
     expect(vi.mocked(markSessionDone)).not.toHaveBeenCalled();
+  });
+
+  it('calls markSessionDone for the review session on merge (idle → done)', async () => {
+    const pr = makePRRow({
+      session_id: 'code-sess',
+      review_session_id: 'review-sess-456',
+      pr_url: 'https://github.com/owner/repo/pull/42',
+    });
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+      'review-sess-456',
+      expect.any(Number),
+      'https://github.com/owner/repo/pull/42',
+      'pr_merge_watcher',
+    );
+  });
+
+  it('does not call markSessionDone for review session when review_session_id is null', async () => {
+    const pr = makePRRow({
+      session_id: 'code-sess',
+      review_session_id: null,
+    });
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(markSessionDone)).not.toHaveBeenCalledWith(
+      null,
+      expect.any(Number),
+      expect.anything(),
+      expect.anything(),
+    );
   });
 });
 
@@ -2086,6 +2192,88 @@ describe('PRMergeWatcher — out-of-band head_sha refresh via poll()', () => {
   });
 });
 
+// ── Branch sites decide from pause-reason structure, not raw strings ──────────
+describe('PRMergeWatcher — branches on pause-reason structure', () => {
+  const serializedTerminal = JSON.stringify({
+    reason: 'auto_merge_failed',
+    source: 'merge',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  });
+
+  it('isTerminalMergePause: a JSON-serialized terminal pause skips mergeability polling', async () => {
+    const pr = makePRRow({ state: 'open', pause_reason: serializedTerminal });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    const github = makeMockGitHub();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.checkMergeabilityNow(42, 'owner/repo');
+
+    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+  });
+
+  it('isTerminalMergePause: a legacy bare-string terminal pause also skips polling', async () => {
+    const pr = makePRRow({ state: 'open', pause_reason: 'auto_merge_failed' });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    const github = makeMockGitHub();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.checkMergeabilityNow(42, 'owner/repo');
+
+    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+  });
+
+  it('handlePushDetected: clears a JSON-serialized human_changes_requested pause and restarts AutoMerger', async () => {
+    const pr = makePRRow({
+      session_id: 'coding-session',
+      pause_reason: JSON.stringify({
+        reason: 'human_changes_requested',
+        source: 'review',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+      }),
+    });
+    const reviewService = makeMockPRReviewService();
+    const autoMerger = makeMockAutoMerger();
+
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(makeMockReviewOrchestrator());
+    watcher.setAutoMerger(autoMerger);
+
+    await watcher.handlePushDetected(pr);
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      null,
+    );
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
+    // Pause-clear path returns early — no re-review is enqueued.
+    expect(
+      vi.mocked(reviewService.reReviewPR as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+  });
+});
+
 // ── handlePushDetected watcher-path push pipeline ─────────────────────────────
 
 describe('PRMergeWatcher.handlePushDetected() — push pipeline', () => {
@@ -2803,10 +2991,16 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       42,
       'owner/repo',
       'ci_failing',
+      'FAIL src/foo.test.ts\n  ● test name\n    expected 1 to equal 2',
     );
     const sent = vi.mocked(sessions.sendOrResume).mock.calls[0]?.[1] as string;
-    expect(sent).toMatch(/## CI Failure — PR #42/);
+    // verify-gate framing, not GitHub-check framing
+    expect(sent).toMatch(/## CI Failure — verify gate/);
+    expect(sent).toContain('npm test');
     expect(sent).toContain('FAIL src/foo.test.ts');
+    // No ### Failing checks section and no /checks URL
+    expect(sent).not.toContain('### Failing checks');
+    expect(sent).not.toContain('/pull/42/checks');
     // GitHub mergeability was NOT consulted — returned early after test gate
     expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
   });
@@ -2958,7 +3152,7 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
     );
     expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
       'coding-session',
-      expect.stringMatching(/## CI Failure — PR #42/),
+      expect.stringMatching(/## CI Failure — verify gate/),
     );
   });
 

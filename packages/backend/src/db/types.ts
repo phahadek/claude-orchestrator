@@ -1,6 +1,16 @@
+export type { CanonicalPauseReason, PauseReasonStruct } from './pauseReason';
+
+import type {
+  CanonicalPauseReason as _CanonicalPauseReason,
+  PauseReasonStruct,
+} from './pauseReason';
+/** Back-compat alias — canonical source of truth is CanonicalPauseReason in pauseReason.ts. */
+type PauseReason = _CanonicalPauseReason;
+export type { PauseReason };
+
 // ─── sessions ──────────────────────────────────────────────────────────────
 
-export type SessionStatus =
+type SessionStatus =
   | 'starting'
   | 'running'
   | 'needs_permission'
@@ -95,11 +105,7 @@ export type NewSessionEvent = Omit<SessionEvent, 'id'>;
 
 // ─── permission_events ─────────────────────────────────────────────────────
 
-export type PermissionDecision =
-  | 'auto_allow'
-  | 'auto_deny'
-  | 'approved'
-  | 'denied';
+type PermissionDecision = 'auto_allow' | 'auto_deny' | 'approved' | 'denied';
 
 export interface PermissionEvent {
   id: number;
@@ -115,8 +121,8 @@ export type NewPermissionEvent = Omit<PermissionEvent, 'id'>;
 
 // ─── permission_rules ──────────────────────────────────────────────────────
 
-export type MatchType = 'glob' | 'regex';
-export type RuleDecision = 'allow' | 'deny';
+type MatchType = 'glob' | 'regex';
+type RuleDecision = 'allow' | 'deny';
 
 export interface PermissionRule {
   id: number;
@@ -127,8 +133,6 @@ export interface PermissionRule {
   label: string | null;
   enabled: number; // 0 | 1 (SQLite boolean)
 }
-
-export type NewPermissionRule = Omit<PermissionRule, 'id'>;
 
 // ─── permission_denials ─────────────────────────────────────────────────────
 
@@ -227,7 +231,7 @@ export type NewMilestoneRow = Omit<
 
 // ─── local_branches ────────────────────────────────────────────────────────
 
-export type LocalBranchStatus = 'open' | 'merged' | 'abandoned';
+type LocalBranchStatus = 'open' | 'merged' | 'abandoned';
 
 export interface LocalBranchRow {
   id: number;
@@ -237,7 +241,7 @@ export interface LocalBranchRow {
   base_branch: string;
   status: LocalBranchStatus;
   review_result: string | null; // JSON verdict
-  pause_reason: PauseReason | null;
+  pause_reason: string | null; // JSON-serialized PauseReasonStruct or legacy bare string
   merge_commit_sha: string | null;
   created_at: string;
   updated_at: string;
@@ -247,7 +251,7 @@ export type NewLocalBranchRow = Omit<
   LocalBranchRow,
   'id' | 'pause_reason' | 'merge_commit_sha'
 > & {
-  pause_reason?: PauseReason | null;
+  pause_reason?: string | null;
   merge_commit_sha?: string | null;
 };
 
@@ -259,9 +263,6 @@ export interface WorktreeEscapeViolation {
   path: string;
   escapedTo: string;
 }
-
-/** Discriminated union of structured violation types stored in session_audits. */
-export type AuditViolation = WorktreeEscapeViolation;
 
 // ─── devices ────────────────────────────────────────────────────────────────
 
@@ -283,47 +284,15 @@ export type NewDeviceRow = Omit<DeviceRow, 'last_seen' | 'revoked'> & {
 
 // ─── session_pause_intervals ────────────────────────────────────────────────
 
-export type SessionPauseReason =
-  | 'rate_limit'
-  | 'stuck_timeout'
-  | 'api_overloaded';
-
 export interface SessionPauseInterval {
   id: number;
   session_id: string;
-  pause_reason: SessionPauseReason;
+  pause_reason: PauseReasonStruct;
   paused_at: number;
   resumed_at: number | null;
 }
 
-export type NewSessionPauseInterval = Omit<SessionPauseInterval, 'id'>;
-
 // ─── pull_requests ──────────────────────────────────────────────────────────
-
-/**
- * Closed set of reasons a task is paused awaiting human attention. Stored as
- * plain TEXT in SQLite; the union gives compile-time safety in TS code paths.
- */
-export type PauseReason =
-  | 'max_reviews'
-  | 'stuck_timeout'
-  | 'ci_failing'
-  | 'ci_billing_blocked'
-  | 'auto_merge_failed'
-  | 'pr_closed'
-  | 'review_failed'
-  | 'api_overloaded'
-  | 'merge_conflict'
-  | 'awaiting_human_approval'
-  | 'human_changes_requested'
-  | 'pr_body_invalid'
-  | 'attribution_missing'
-  | 'audit_findings'
-  | 'pr_creation_failed'
-  | 'stalled_idle'
-  | 'notion_done_update_stuck'
-  | 'launch_failed'
-  | 'diverged_branch';
 
 export interface PullRequestRow {
   id: number;
@@ -360,9 +329,20 @@ export interface PullRequestRow {
   /** JSON-encoded string[] of failing check-run names. Non-null only when merge_state = 'ci_failed'. */
   failing_checks: string | null;
   pending_push: number; // 0 | 1 — push arrived before initial review completed
-  pause_reason: PauseReason | null; // non-null marks the task as needs_attention
+  pause_reason: string | null; // JSON-serialized PauseReasonStruct or legacy bare string
   pause_reason_set_at: number | null; // Unix ms timestamp of when pause_reason was last set
   ci_remediation_attempted_sha: string | null; // last head_sha for which CI remediation was attempted
   pre_review_stage: string | null;
   conflict_nudge_sha: string | null; // SHA for which a conflict nudge was last sent (dedup key)
+  stalled_pr_retry_count: number; // reconciler attempt counter; resets when head_sha changes
+}
+
+// ─── task_repo_assignments ──────────────────────────────────────────────────
+
+export interface TaskRepoAssignmentRow {
+  task_id: string;
+  project_id: string;
+  repo: string;
+  assigned_by: string;
+  assigned_at: number;
 }

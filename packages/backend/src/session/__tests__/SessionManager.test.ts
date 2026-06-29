@@ -121,6 +121,7 @@ vi.mock('../../db/queries', () => ({
   getStuckResultSessionRows: vi.fn().mockReturnValue([]),
   hasActiveSessionForTask: vi.fn().mockReturnValue(false),
   incrementTaskCrashCount: vi.fn().mockReturnValue(1),
+  getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
   setSessionPauseReason: vi.fn(),
   setSessionLastErrorDetail: vi.fn(),
   setTaskPauseReason: vi.fn(),
@@ -135,7 +136,21 @@ vi.mock('../../config', () => ({
 
 vi.mock('child_process', () => ({
   execSync: vi.fn().mockReturnValue('dev\n'),
-  exec: vi.fn(),
+  // Default: call back immediately with success so promisify(exec) resolves.
+  exec: vi
+    .fn()
+    .mockImplementation(
+      (
+        _cmd: string,
+        _opts: unknown,
+        callback: (
+          err: Error | null,
+          result?: { stdout: string; stderr: string },
+        ) => void,
+      ) => {
+        callback(null, { stdout: '', stderr: '' });
+      },
+    ),
 }));
 
 vi.mock('fs', () => ({
@@ -151,6 +166,7 @@ vi.mock('fs', () => ({
     readFileSync: vi.fn().mockReturnValue(''),
     statSync: vi.fn().mockReturnValue({ isDirectory: () => true }),
     unlinkSync: vi.fn(),
+    rmSync: vi.fn(),
   },
   existsSync: vi
     .fn()
@@ -158,11 +174,12 @@ vi.mock('fs', () => ({
   mkdirSync: vi.fn(),
   writeFileSync: vi.fn(),
   unlinkSync: vi.fn(),
+  rmSync: vi.fn(),
 }));
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
-import { SessionManager } from '../SessionManager';
+import { SessionManager, gitWorktreeAddWithRetry } from '../SessionManager';
 import {
   updateSessionStatus,
   updateSessionWorktreePath,
@@ -171,10 +188,11 @@ import {
   getSessionsByStatus,
   getStuckResultSessionRows,
   insertSession,
+  incrementTaskCrashCount,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
-import { execSync } from 'child_process';
+import { execSync, exec as execCb } from 'child_process';
 import { recordEvent } from '../../audit/AuditLog';
 import * as fsModule from 'fs';
 
@@ -237,9 +255,10 @@ describe('sendOrResume — dead session path', () => {
   // Helper: start sendOrResume and emit first message to unblock firstEvent.
   async function doResume(text = 'hello'): Promise<string> {
     const p = sm.sendOrResume(SESSION_ID, text);
+    // Wait for AgentSession to be constructed (exec is now async).
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
     // Emit a boot message from the session to unblock the firstEvent promise.
-    const sess = capturedSessions[0];
-    sess.emit('message', {
+    capturedSessions[0].emit('message', {
       type: 'session_event',
       sessionId: SESSION_ID,
       eventType: 'system',
@@ -323,11 +342,13 @@ describe('sendOrResume — dead session path', () => {
     const p1 = sm.sendOrResume(SESSION_ID, 'first');
     const p2 = sm.sendOrResume(SESSION_ID, 'second');
 
+    // Wait for AgentSession to be constructed (exec is now async).
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+
     // Emit first message to unblock the firstEvent promise.
     // capturedSessions has only one entry because the second call reused the inflight
     // promise or saw the live session.
-    const sess = capturedSessions[0];
-    sess.emit('message', {
+    capturedSessions[0].emit('message', {
       type: 'session_event',
       sessionId: SESSION_ID,
       eventType: 'system',
@@ -343,9 +364,9 @@ describe('sendOrResume — dead session path', () => {
     // AgentSession must be constructed exactly once — no double-spawn.
     expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
 
-    // git worktree add must be called at most once.
+    // git worktree add must be called at most once (via async exec, not execSync).
     const worktreeAdds = vi
-      .mocked(execSync)
+      .mocked(execCb)
       .mock.calls.filter(
         ([cmd]) =>
           typeof cmd === 'string' && (cmd as string).includes('worktree add'),
@@ -370,6 +391,7 @@ describe('sendOrResume — live session fast path', () => {
   it('delivers via send() directly when session is live — no new spawn', async () => {
     // First: do a resume to get the session registered as live.
     const p = sm.sendOrResume(SESSION_ID, 'first');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
     capturedSessions[0].emit('message', {
       type: 'session_event',
       sessionId: SESSION_ID,
@@ -391,6 +413,65 @@ describe('sendOrResume — live session fast path', () => {
     expect(capturedSessions[0].sendMessage).toHaveBeenCalledWith(
       'live message',
     );
+  });
+
+  it('updates status to running and emits session_status when live session is idle', async () => {
+    // Establish the session as live (DB row has status 'idle' from beforeEach).
+    const p = sm.sendOrResume(SESSION_ID, 'first');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    await p;
+
+    vi.mocked(updateSessionStatus).mockClear();
+    const emittedMessages: unknown[] = [];
+    sm.on('message', (msg) => emittedMessages.push(msg));
+
+    await sm.sendOrResume(SESSION_ID, 'live message');
+
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
+    expect(emittedMessages).toContainEqual({
+      type: 'session_status',
+      sessionId: SESSION_ID,
+      status: 'running',
+    });
+  });
+
+  it('does not emit redundant status update when live session is already running', async () => {
+    // Establish the session as live.
+    const p = sm.sendOrResume(SESSION_ID, 'first');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    await p;
+
+    vi.mocked(updateSessionStatus).mockClear();
+    // Override: DB row already has status 'running'.
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'running',
+    } as any);
+
+    const emittedMessages: unknown[] = [];
+    sm.on('message', (msg) => emittedMessages.push(msg));
+
+    await sm.sendOrResume(SESSION_ID, 'live message');
+
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalled();
+    expect(
+      emittedMessages.filter((m: any) => m.type === 'session_status'),
+    ).toHaveLength(0);
   });
 });
 
@@ -415,6 +496,7 @@ describe('respawnSession shared helper — wires all three events', () => {
     sm.on('push_detected', pushHandler);
 
     const p = sm.sendOrResume(SESSION_ID, 'boot');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
     const sess = capturedSessions[0];
     const bootMsg = {
       type: 'session_event' as const,
@@ -510,8 +592,8 @@ describe('needs_changes verdict routing — synthetic integration', () => {
     const routingPromise = sm.sendOrResume(SESSION_ID, feedbackText);
 
     // CLI emits first event — unblocks firstEvent inside _doSendOrResume.
-    const sess = capturedSessions[0];
-    sess.emit('message', {
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
       type: 'session_event',
       sessionId: SESSION_ID,
       eventType: 'system',
@@ -634,9 +716,172 @@ describe('cleanupWorktree — worktree_remove_failed audit on removal error', ()
         actor_id: SESSION_ID,
         payload: expect.objectContaining({
           stderr: expect.stringContaining('fatal: not a worktree'),
+          fallbackOk: expect.any(Boolean),
         }),
       }),
     );
+  });
+});
+
+// ── cleanupWorktree — post-remove prune (Fix A) ───────────────────────────────
+
+describe('cleanupWorktree — git worktree prune always runs', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'done' });
+  });
+
+  it('calls git worktree prune after a successful worktree remove', () => {
+    vi.mocked(execSync).mockReturnValue('');
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      `${PROJECT_DIR}/.claude/worktrees/${SESSION_ID}`,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    const pruneCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree prune'),
+      );
+    expect(pruneCalls).toHaveLength(1);
+  });
+
+  it('calls git worktree prune after a failed worktree remove', () => {
+    const removeErr = Object.assign(new Error('remove failed'), {
+      stderr: Buffer.from('fatal: not a working tree'),
+    });
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd.includes('worktree remove')) throw removeErr;
+      return '';
+    });
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      `${PROJECT_DIR}/.claude/worktrees/${SESSION_ID}`,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    const pruneCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree prune'),
+      );
+    expect(pruneCalls).toHaveLength(1);
+  });
+});
+
+// ── cleanupWorktree — fs.rmSync fallback (Fix B) ─────────────────────────────
+
+describe('cleanupWorktree — fs.rmSync fallback on worktree remove failure', () => {
+  let sm: SessionManager;
+  const worktreePath = `${PROJECT_DIR}/.claude/worktrees/${SESSION_ID}`;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'done' });
+  });
+
+  it('attempts fs.rmSync when git worktree remove fails and dir exists', () => {
+    const removeErr = Object.assign(new Error('remove failed'), {
+      stderr: Buffer.from('Invalid argument'),
+    });
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd.includes('worktree remove')) throw removeErr;
+      return '';
+    });
+    // existsSync returns true for the worktree path (default mock behavior)
+    vi.mocked((fsModule as any).default.existsSync).mockReturnValue(true);
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      worktreePath,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked((fsModule as any).default.rmSync)).toHaveBeenCalledWith(
+      worktreePath,
+      { recursive: true, force: true, maxRetries: 3, retryDelay: 500 },
+    );
+  });
+
+  it('sets fallbackOk: true in audit event when fs.rmSync succeeds', () => {
+    const removeErr = Object.assign(new Error('remove failed'), {
+      stderr: Buffer.from('Invalid argument'),
+    });
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd.includes('worktree remove')) throw removeErr;
+      return '';
+    });
+    vi.mocked((fsModule as any).default.existsSync).mockReturnValue(true);
+    vi.mocked((fsModule as any).default.rmSync).mockReturnValue(undefined);
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      worktreePath,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'worktree_remove_failed',
+        payload: expect.objectContaining({ fallbackOk: true }),
+      }),
+    );
+  });
+
+  it('sets fallbackOk: false in audit event when fs.rmSync also fails', () => {
+    const removeErr = Object.assign(new Error('remove failed'), {
+      stderr: Buffer.from('Invalid argument'),
+    });
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd.includes('worktree remove')) throw removeErr;
+      return '';
+    });
+    vi.mocked((fsModule as any).default.existsSync).mockReturnValue(true);
+    vi.mocked((fsModule as any).default.rmSync).mockImplementation(() => {
+      throw new Error('EBUSY');
+    });
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      worktreePath,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'worktree_remove_failed',
+        payload: expect.objectContaining({ fallbackOk: false }),
+      }),
+    );
+  });
+
+  it('does NOT attempt fs.rmSync when git worktree remove succeeds', () => {
+    vi.mocked(execSync).mockReturnValue('');
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      worktreePath,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked((fsModule as any).default.rmSync)).not.toHaveBeenCalled();
   });
 });
 
@@ -671,6 +916,7 @@ describe('terminal cleanup for idle sessions (not live)', () => {
     vi.mocked(getSession).mockReturnValue(makeDeadRow()); // idle — can resume
     // Register a live session
     const p = sm.sendOrResume(SESSION_ID, 'boot');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
     capturedSessions[0].emit('message', {
       type: 'session_event' as const,
       sessionId: SESSION_ID,
@@ -785,6 +1031,7 @@ describe('sendOrResume — missing worktree falls through to recreation', () => 
 
   it('calls git worktree add when recorded worktree is missing', async () => {
     const p = sm.sendOrResume(SESSION_ID, 'hello');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
     capturedSessions[0].emit('message', {
       type: 'session_event' as const,
       sessionId: SESSION_ID,
@@ -793,11 +1040,195 @@ describe('sendOrResume — missing worktree falls through to recreation', () => 
     });
     await p;
 
+    // Worktree add now goes through async exec (gitWorktreeAddWithRetry), not execSync.
     const worktreeAdds = vi
-      .mocked(execSync)
+      .mocked(execCb)
       .mock.calls.filter(
         ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree add'),
       );
     expect(worktreeAdds.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ── gitWorktreeAddWithRetry — unit tests ──────────────────────────────────────
+
+const LOCK_STDERR =
+  'error: could not lock config file /project/.git/config: File exists';
+const BRANCH_EXISTS_STDERR =
+  "fatal: A branch named 'feature/my-task' already exists.";
+
+// Use zero-delay so retries are instant and no real/fake timer setup is needed.
+const NO_DELAY = () => 0;
+
+describe('gitWorktreeAddWithRetry — direct unit tests', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('resolves on first attempt when exec succeeds', async () => {
+    // Default mock already calls callback with success.
+    await expect(
+      gitWorktreeAddWithRetry(
+        'git worktree add /path branch',
+        { cwd: '/project' },
+        3,
+        NO_DELAY,
+      ),
+    ).resolves.toBeUndefined();
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries on lock-contention error and succeeds on second attempt', async () => {
+    let calls = 0;
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        calls++;
+        if (calls === 1) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr: LOCK_STDERR,
+          });
+          callback(err);
+        } else {
+          callback(null, { stdout: '', stderr: '' });
+        }
+      },
+    );
+
+    await expect(
+      gitWorktreeAddWithRetry(
+        'git worktree add /path branch',
+        { cwd: '/project' },
+        3,
+        NO_DELAY,
+      ),
+    ).resolves.toBeUndefined();
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT retry on non-lock error — fails immediately after one attempt', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        const err = Object.assign(new Error('cmd failed'), {
+          stderr: BRANCH_EXISTS_STDERR,
+        });
+        callback(err);
+      },
+    );
+
+    await expect(
+      gitWorktreeAddWithRetry(
+        'git worktree add /path branch',
+        { cwd: '/project' },
+        3,
+        NO_DELAY,
+      ),
+    ).rejects.toMatchObject({ stderr: BRANCH_EXISTS_STDERR });
+    // Only one attempt — no retry for non-lock errors.
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(1);
+  });
+
+  it('exhausts all retries on persistent lock error and rejects', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        const err = Object.assign(new Error('cmd failed'), {
+          stderr: LOCK_STDERR,
+        });
+        callback(err);
+      },
+    );
+
+    await expect(
+      gitWorktreeAddWithRetry(
+        'git worktree add /path branch',
+        { cwd: '/project' },
+        3,
+        NO_DELAY,
+      ),
+    ).rejects.toMatchObject({ stderr: LOCK_STDERR });
+    // 3 attempts (default maxAttempts).
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ── sendOrResume — lock-contention retry integration ─────────────────────────
+
+describe('sendOrResume — lock-contention retry in worktree creation', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    // .git file absent → falls through to worktree creation.
+    vi.mocked(fsModule.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+    vi.mocked((fsModule as any).default.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+  });
+
+  it('lock error once then success → session created, crash count NOT incremented', async () => {
+    let worktreeAddCalls = 0;
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        if (String(_cmd).includes('worktree add')) {
+          worktreeAddCalls++;
+          if (worktreeAddCalls === 1) {
+            const err = Object.assign(new Error('cmd failed'), {
+              stderr: LOCK_STDERR,
+            });
+            return callback(err);
+          }
+        }
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+
+    const p = sm.sendOrResume(SESSION_ID, 'hello');
+
+    // Session is constructed after the successful retry (real timer, ~100-300ms).
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0), {
+      timeout: 2000,
+    });
+
+    capturedSessions[0].emit('message', {
+      type: 'session_event' as const,
+      sessionId: SESSION_ID,
+      eventType: 'system' as const,
+      content: 'boot',
+    });
+
+    const result = await p;
+
+    expect(result).toBe(SESSION_ID);
+    // Two worktree add attempts: lock error → retry → success.
+    expect(worktreeAddCalls).toBe(2);
+    // No crash budget hit — worktree eventually succeeded.
+    expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
+  });
+
+  it('persistent lock error (all retries) → worktree_recreate_failed, crash count incremented', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        if (String(_cmd).includes('worktree add')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr: LOCK_STDERR,
+          });
+          return callback(err);
+        }
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+
+    // sendOrResume returns sessionId even on failure (errors are caught internally).
+    const result = await sm.sendOrResume(SESSION_ID, 'hello');
+
+    // sendOrResume returns sessionId even on failure.
+    expect(result).toBe(SESSION_ID);
+    // After exhausting retries, markSessionErrored is called → crash count incremented.
+    expect(vi.mocked(incrementTaskCrashCount)).toHaveBeenCalledWith('task-1');
   });
 });

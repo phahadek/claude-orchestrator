@@ -68,6 +68,15 @@ function write(level: string, args: unknown[]): void {
   if (currentBytes >= (_maxBytesOverride ?? MAX_BYTES)) rotate();
 }
 
+/** Structured logger — delegates to the (patched) console methods so output
+ *  reaches both stdout and the rotating log file after initLogger() runs. */
+export const logger = {
+  info: (...args: unknown[]) => console.log(...args),
+  warn: (...args: unknown[]) => console.warn(...args),
+  error: (...args: unknown[]) => console.error(...args),
+  debug: (...args: unknown[]) => console.debug(...args),
+};
+
 /**
  * Wire up rotating-file output for all console methods.
  * Log files land in <dataDir>/logs/orchestrator.log and rotate at 10 MB,

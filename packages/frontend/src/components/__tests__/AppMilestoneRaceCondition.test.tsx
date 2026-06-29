@@ -283,6 +283,7 @@ type FetchTaskView = {
   pr: null;
   review: null;
   totalTokens: { input: number; output: number };
+  assignedRepo: string | null;
 };
 
 function makeTaskView(taskId: string, taskName: string): FetchTaskView {
@@ -302,6 +303,7 @@ function makeTaskView(taskId: string, taskName: string): FetchTaskView {
     pr: null,
     review: null,
     totalTokens: { input: 0, output: 0 },
+    assignedRepo: null,
   };
 }
 

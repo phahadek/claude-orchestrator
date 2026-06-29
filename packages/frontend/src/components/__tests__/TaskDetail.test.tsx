@@ -25,6 +25,7 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     pr: null,
     review: null,
     totalTokens: { input: 0, output: 0 },
+    assignedRepo: null,
     ...overrides,
   };
 }
@@ -996,5 +997,284 @@ describe('TaskDetail', () => {
     rerender(<TaskDetail task={taskB} send={vi.fn()} onClose={vi.fn()} />);
     expect(screen.getByText('Task B')).toBeTruthy();
     expect(screen.queryByText('Task A')).toBeNull();
+  });
+
+  // ── In-flight state reset on task navigation ──
+
+  it('resets reviewInFlight when taskId changes — Run Review re-enables', async () => {
+    // Never-resolving fetch keeps reviewInFlight=true after click
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise(() => {})),
+    );
+
+    const pr = makePr({ state: 'open', prNumber: 42 });
+    const taskA = makeTask({ taskId: 'task-a', pr });
+    const taskB = makeTask({ taskId: 'task-b', pr });
+
+    const { rerender } = render(
+      <TaskDetail
+        task={taskA}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Run Review'));
+    expect(screen.getByText('Reviewing…')).toBeTruthy();
+    expect((screen.getByText('Reviewing…') as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+
+    // Navigate to a different task — leaked flag must be cleared
+    rerender(
+      <TaskDetail
+        task={taskB}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+    expect(screen.getByText('Run Review')).toBeTruthy();
+    expect((screen.getByText('Run Review') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+
+    vi.unstubAllGlobals();
+  });
+
+  it('resets mergeInFlight when taskId changes — Merge button re-enables', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise(() => {})),
+    );
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    const pr = makePr({ state: 'open', prNumber: 42 });
+    const review = makeReview({ verdict: 'approved' });
+    const taskA = makeTask({ taskId: 'task-a', pr, review });
+    const taskB = makeTask({ taskId: 'task-b', pr, review });
+
+    const { rerender } = render(
+      <TaskDetail
+        task={taskA}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Merge ↓'));
+    expect(screen.getByText('Merging…')).toBeTruthy();
+
+    rerender(
+      <TaskDetail
+        task={taskB}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+    expect(screen.getByText('Merge ↓')).toBeTruthy();
+    expect((screen.getByText('Merge ↓') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('resets markMergedInFlight when taskId changes — Mark Merged button re-enables', async () => {
+    const sessionsApi = await import('../../api/projects').then(
+      (m) => m.sessionsApi,
+    );
+    vi.spyOn(sessionsApi, 'markMerged').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    // isLocalOnly requires no pr; verdict approved enables the button
+    const review = makeReview({ verdict: 'approved' });
+    const taskA = makeTask({ taskId: 'task-a', pr: null, review });
+    const taskB = makeTask({ taskId: 'task-b', pr: null, review });
+
+    const { rerender } = render(
+      <TaskDetail
+        task={taskA}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        isLocalOnly={true}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Mark Merged ↓'));
+    expect(screen.getByText('Marking…')).toBeTruthy();
+
+    rerender(
+      <TaskDetail
+        task={taskB}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        isLocalOnly={true}
+      />,
+    );
+    expect(screen.getByText('Mark Merged ↓')).toBeTruthy();
+    expect(
+      (screen.getByText('Mark Merged ↓') as HTMLButtonElement).disabled,
+    ).toBe(false);
+
+    vi.restoreAllMocks();
+  });
+
+  it('resets abortInFlight when taskId changes — Abort button re-enables', async () => {
+    const sessionsApi = await import('../../api/projects').then(
+      (m) => m.sessionsApi,
+    );
+    vi.spyOn(sessionsApi, 'abort').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-a',
+      status: 'running',
+    });
+    const taskA = makeTask({ taskId: 'task-a', codeSession });
+    const taskB = makeTask({ taskId: 'task-b', codeSession });
+
+    const { rerender } = render(
+      <TaskDetail task={taskA} send={vi.fn()} onClose={vi.fn()} />,
+    );
+
+    fireEvent.click(screen.getByText('Abort'));
+    expect(screen.getByText('Aborting…')).toBeTruthy();
+
+    rerender(<TaskDetail task={taskB} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText('Abort')).toBeTruthy();
+    expect((screen.getByText('Abort') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+
+    vi.restoreAllMocks();
+  });
+
+  it('finally block clears reviewInFlight after review completes', async () => {
+    let resolveFetch!: (value: {
+      ok: boolean;
+      json: () => Promise<object>;
+    }) => void;
+    const fetchPromise = new Promise<{
+      ok: boolean;
+      json: () => Promise<object>;
+    }>((resolve) => {
+      resolveFetch = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => fetchPromise),
+    );
+
+    const pr = makePr({ state: 'open', prNumber: 42 });
+    render(
+      <TaskDetail
+        task={makeTask({ pr })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Run Review'));
+    expect(screen.getByText('Reviewing…')).toBeTruthy();
+
+    resolveFetch({ ok: true, json: async () => ({}) });
+    await waitFor(() => {
+      expect(screen.getByText('Run Review')).toBeTruthy();
+    });
+
+    vi.unstubAllGlobals();
+  });
+
+  // ── Repo dropdown ─────────────────────────────────────────────────────────
+
+  it('renders repo dropdown for multi-repo project with project repos as options', () => {
+    const repos = ['owner/repo-a', 'owner/repo-b'];
+    render(
+      <TaskDetail
+        task={makeTask({ assignedRepo: null })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+        project={makeProject({ githubRepo: JSON.stringify(repos) })}
+      />,
+    );
+    const select = screen.getByRole('combobox', { name: /assign repository/i });
+    expect(select).toBeTruthy();
+    const options = Array.from((select as HTMLSelectElement).options).map(
+      (o) => o.value,
+    );
+    expect(options).toContain('owner/repo-a');
+    expect(options).toContain('owner/repo-b');
+  });
+
+  it('does not render repo dropdown for single-repo project', () => {
+    render(
+      <TaskDetail
+        task={makeTask({ assignedRepo: null })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+        project={makeProject({ githubRepo: 'owner/repo-a' })}
+      />,
+    );
+    expect(
+      screen.queryByRole('combobox', { name: /assign repository/i }),
+    ).toBeNull();
+  });
+
+  it('shows assigned repo as selected value in dropdown', () => {
+    render(
+      <TaskDetail
+        task={makeTask({ assignedRepo: 'owner/repo-b' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+        project={makeProject({
+          githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']),
+        })}
+      />,
+    );
+    const select = screen.getByRole('combobox', {
+      name: /assign repository/i,
+    }) as HTMLSelectElement;
+    expect(select.value).toBe('owner/repo-b');
+  });
+
+  it('calls assign-repo endpoint when repo is selected', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, repo: 'owner/repo-b' }),
+    } as Response);
+
+    render(
+      <TaskDetail
+        task={makeTask({ assignedRepo: null })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+        project={makeProject({
+          githubRepo: JSON.stringify(['owner/repo-a', 'owner/repo-b']),
+        })}
+      />,
+    );
+
+    const select = screen.getByRole('combobox', { name: /assign repository/i });
+    fireEvent.change(select, { target: { value: 'owner/repo-b' } });
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/api/tasks/task-1/assign-repo'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    fetchSpy.mockRestore();
   });
 });

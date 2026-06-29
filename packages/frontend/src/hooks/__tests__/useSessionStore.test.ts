@@ -775,4 +775,197 @@ describe('useSessionStore', () => {
       expect(result.current.sessions).toHaveLength(before);
     });
   });
+
+  describe('session_started idempotency — late-fetch guard', () => {
+    it('does not wipe status/events when session is already live (running)', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      act(() =>
+        result.current.dispatch({
+          type: 'session_status',
+          sessionId: SESSION_ID,
+          status: 'running',
+        } as ServerMessage),
+      );
+      act(() => result.current.dispatch(msg.session_event()));
+
+      // Simulate the late fetch dispatching session_started again
+      act(() => result.current.dispatch(msg.session_started()));
+
+      const session = result.current.sessions[0];
+      expect(session.status).toBe('running');
+      expect(session.events).toHaveLength(1);
+    });
+
+    it('does not wipe status/events when session is needs_permission', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      act(() => result.current.dispatch(msg.permission_request()));
+      act(() => result.current.dispatch(msg.session_event()));
+
+      act(() => result.current.dispatch(msg.session_started()));
+
+      const session = result.current.sessions[0];
+      expect(session.status).toBe('needs_permission');
+      expect(session.events).toHaveLength(1);
+    });
+
+    it('replaces a terminal session (done) on session_started — cold-load path still works', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      act(() =>
+        result.current.dispatch({
+          type: 'session_status',
+          sessionId: SESSION_ID,
+          status: 'done',
+        } as ServerMessage),
+      );
+      act(() => result.current.dispatch(msg.session_event()));
+
+      // A second session_started for a terminal session re-hydrates it
+      act(() =>
+        result.current.dispatch({
+          type: 'session_started',
+          sessionId: SESSION_ID,
+          taskName: 'Re-hydrated Task',
+          notionTaskUrl: 'https://notion.so/task',
+        } as ServerMessage),
+      );
+
+      const session = result.current.sessions[0];
+      expect(session.status).toBe('starting');
+      expect(session.events).toHaveLength(0);
+      expect(session.taskName).toBe('Re-hydrated Task');
+    });
+
+    it('replaces a killed session on session_started', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      act(() =>
+        result.current.dispatch({
+          type: 'session_status',
+          sessionId: SESSION_ID,
+          status: 'killed',
+        } as ServerMessage),
+      );
+
+      act(() => result.current.dispatch(msg.session_started()));
+
+      expect(result.current.sessions[0].status).toBe('starting');
+    });
+
+    it('regression: late fetch with stale terminal status does not downgrade live session', () => {
+      const { result } = renderHook(() => useSessionStore());
+
+      // Session X goes live
+      act(() => result.current.dispatch(msg.session_started()));
+      act(() =>
+        result.current.dispatch({
+          type: 'session_status',
+          sessionId: SESSION_ID,
+          status: 'running',
+        } as ServerMessage),
+      );
+      act(() => result.current.dispatch(msg.session_event()));
+
+      // Late fetch resolves: App.tsx guard dispatches session_started (idempotent)
+      // but skips the stale session_status:done. Simulate that here.
+      act(() => result.current.dispatch(msg.session_started())); // idempotent no-op
+
+      // session_status:done is NOT dispatched (guarded in App.tsx)
+      // Events from the DB snapshot ARE appended
+      act(() =>
+        result.current.dispatch({
+          type: 'session_event',
+          sessionId: SESSION_ID,
+          eventType: 'text',
+          content: 'archived event',
+        } as ServerMessage),
+      );
+
+      const session = result.current.sessions[0];
+      expect(session.status).toBe('running');
+      expect(session.events).toHaveLength(2);
+    });
+
+    it('cold-load: session not in store is fully hydrated with terminal status and transcript', () => {
+      const { result } = renderHook(() => useSessionStore());
+
+      // Session is not yet in the store. App.tsx dispatches all three.
+      act(() => result.current.dispatch(msg.session_started()));
+      act(() =>
+        result.current.dispatch({
+          type: 'session_status',
+          sessionId: SESSION_ID,
+          status: 'done',
+          replay: true,
+        } as ServerMessage),
+      );
+      act(() =>
+        result.current.dispatch({
+          type: 'session_event',
+          sessionId: SESSION_ID,
+          eventType: 'text',
+          content: 'transcript line',
+        } as ServerMessage),
+      );
+
+      const session = result.current.sessions[0];
+      expect(session.status).toBe('done');
+      expect(session.events).toHaveLength(1);
+      expect(session.events[0].content).toBe('transcript line');
+    });
+  });
+
+  describe('session_status replay flag', () => {
+    it('sets lastStatusReplay to true when replay:true is present', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      act(() =>
+        result.current.dispatch({
+          type: 'session_status',
+          sessionId: SESSION_ID,
+          status: 'done',
+          replay: true,
+        } as ServerMessage),
+      );
+      expect(result.current.sessions[0].lastStatusReplay).toBe(true);
+    });
+
+    it('sets lastStatusReplay to false when replay is absent', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      act(() =>
+        result.current.dispatch({
+          type: 'session_status',
+          sessionId: SESSION_ID,
+          status: 'running',
+        } as ServerMessage),
+      );
+      expect(result.current.sessions[0].lastStatusReplay).toBe(false);
+    });
+
+    it('synthetic session_status from hydration with replay:true does not appear as a live transition', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      act(() =>
+        result.current.dispatch({
+          type: 'session_status',
+          sessionId: SESSION_ID,
+          status: 'done',
+          replay: true,
+        } as ServerMessage),
+      );
+      // A subsequent live status update clears the replay flag
+      act(() =>
+        result.current.dispatch({
+          type: 'session_status',
+          sessionId: SESSION_ID,
+          status: 'running',
+        } as ServerMessage),
+      );
+      expect(result.current.sessions[0].lastStatusReplay).toBe(false);
+      expect(result.current.sessions[0].status).toBe('running');
+    });
+  });
 });

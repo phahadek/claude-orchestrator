@@ -6,11 +6,20 @@ import {
 } from '../db/queries';
 import type { DeviceRow } from '../db/types';
 
-export function validateDeviceToken(token: string): DeviceRow | null {
+export function isLoopbackIp(addr: string): boolean {
+  return (
+    addr === '127.0.0.1' ||
+    addr === '::1' ||
+    addr === '::ffff:127.0.0.1' ||
+    addr.startsWith('127.')
+  );
+}
+
+function validateDeviceToken(token: string): DeviceRow | null {
   return getDeviceByToken(token);
 }
 
-export function getTokenFromRequest(req: Request): string | null {
+function getTokenFromRequest(req: Request): string | null {
   const auth = req.headers['authorization'];
   if (auth?.startsWith('Bearer ')) {
     return auth.slice(7);
@@ -20,19 +29,12 @@ export function getTokenFromRequest(req: Request): string | null {
 
 /** Express middleware — rejects requests without a valid device token.
  *  Bootstrap exception: when no devices are enrolled, passes through so
- *  the enrollment bootstrap endpoint can create the first device.
- *  Enrollment endpoints (/api/enrollment/*) are always permitted. */
+ *  the enrollment bootstrap endpoint can create the first device. */
 export function requireDeviceAuth(
   req: Request,
   res: Response,
   next: NextFunction,
 ): void {
-  // Enrollment endpoints are always accessible without auth
-  if (req.path.startsWith('/api/enrollment/')) {
-    next();
-    return;
-  }
-
   const token = getTokenFromRequest(req);
 
   if (!token) {
@@ -41,6 +43,14 @@ export function requireDeviceAuth(
     // We block all other endpoints until enrollment completes.
     const deviceCount = getActiveDeviceCount();
     if (deviceCount === 0) {
+      // Bootstrap window is loopback-only to prevent enrollment hijack from the network.
+      const remoteAddr = req.socket.remoteAddress ?? '';
+      if (!isLoopbackIp(remoteAddr)) {
+        res
+          .status(403)
+          .json({ error: 'forbidden', code: 'bootstrap_loopback_only' });
+        return;
+      }
       next();
       return;
     }

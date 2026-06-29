@@ -186,3 +186,5 @@ Every task — including the Manual Verification task — must use the two-subse
 For YAML-backed projects, the encoding of these conventions in YAML is documented in [yaml-template.md](./yaml-template.md).
 
 For GitHub-backed projects, the encoding of these conventions on GitHub (label vocabulary, issue body sections, Depends-On syntax, milestone semantics) is documented in [github-template.md](./github-template.md).
+
+For Jira-backed projects, the encoding of these conventions on Jira (issue types, workflow statuses, Story=Planning / Task=Code distinction, Depends-On links, Epic milestone semantics) is documented in [jira-template.md](./jira-template.md), and the Jira-specific authoring guidance — the Jira peer of this page — is in [jira-task-writing.md](./jira-task-writing.md).

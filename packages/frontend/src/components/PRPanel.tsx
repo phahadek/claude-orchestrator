@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { authedFetch } from '../api/projects';
 import { WorkItemCard } from './WorkItemCard';
 import type {
   WorkItemListItem,
@@ -44,6 +45,8 @@ interface Props {
   } | null;
   /** Live pipeline stage per PR number, driven by WS events from useSessionStore */
   prPipelineStages?: Map<number, string | null>;
+  /** Failed command per PR number for blocked stage hover tooltip */
+  prPipelineFailedCommands?: Map<number, string | undefined>;
 }
 
 export function PRPanel({
@@ -59,6 +62,7 @@ export function PRPanel({
   autofixEvent,
   reviewStartedEvent,
   prPipelineStages,
+  prPipelineFailedCommands,
 }: Props) {
   const [prs, setPRs] = useState<WorkItemListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -67,6 +71,9 @@ export function PRPanel({
   /** Local pipeline stage overrides: seeded from REST data, then updated by WS events */
   const [localPipelineStages, setLocalPipelineStages] = useState<
     Map<number, string | null>
+  >(new Map());
+  const [localFailedCommands, setLocalFailedCommands] = useState<
+    Map<number, string | undefined>
   >(new Map());
 
   const [reviewInFlight, setReviewInFlight] = useState<Set<number>>(new Set());
@@ -101,7 +108,7 @@ export function PRPanel({
     if (!activeProjectId) return;
     if (isInitialLoad.current) setIsLoading(true);
     try {
-      const prsRes = await fetch(
+      const prsRes = await authedFetch(
         `/api/prs?projectId=${encodeURIComponent(activeProjectId)}`,
       );
       if (prsRes.status === 422) {
@@ -184,6 +191,23 @@ export function PRPanel({
       return changed ? next : prev;
     });
   }, [prPipelineStages]);
+
+  // Merge WS-driven failed commands from store into local map
+  useEffect(() => {
+    if (!prPipelineFailedCommands || prPipelineFailedCommands.size === 0)
+      return;
+    setLocalFailedCommands((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [prNumber, cmd] of prPipelineFailedCommands) {
+        if (next.get(prNumber) !== cmd) {
+          next.set(prNumber, cmd);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [prPipelineFailedCommands]);
 
   useEffect(() => {
     fetchPRs();
@@ -293,7 +317,7 @@ export function PRPanel({
     setError(prNumber, null);
     startElapsed(prNumber);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${prNumber}/review?projectId=${encodeURIComponent(activeProjectId)}`,
         { method: 'POST' },
       );
@@ -331,7 +355,7 @@ export function PRPanel({
     // so the user gets immediate feedback instead of an opaque merge failure.
     setCheckingMergeability((prev) => new Set(prev).add(prNumber));
     try {
-      const checkRes = await fetch(
+      const checkRes = await authedFetch(
         `/api/prs/${owner}/${repoName}/${prNumber}/mergeability`,
       );
       if (checkRes.ok) {
@@ -360,7 +384,7 @@ export function PRPanel({
     }
     setMergeInFlight((prev) => new Set(prev).add(prNumber));
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${owner}/${repoName}/${prNumber}/merge`,
         { method: 'POST' },
       );
@@ -397,7 +421,7 @@ export function PRPanel({
     setReReviewInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${owner}/${repoName}/${prNumber}/re-review`,
         { method: 'POST' },
       );
@@ -434,7 +458,7 @@ export function PRPanel({
     setFixConflictsInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${owner}/${repoName}/${prNumber}/fix-conflicts`,
         { method: 'POST' },
       );
@@ -467,7 +491,7 @@ export function PRPanel({
     setApproveInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${owner}/${repoName}/${prNumber}/approve`,
         { method: 'POST' },
       );
@@ -495,7 +519,7 @@ export function PRPanel({
     setRemoveInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
     try {
-      const res = await fetch(
+      const res = await authedFetch(
         `/api/prs/${prNumber}?projectId=${encodeURIComponent(activeProjectId)}`,
         { method: 'DELETE' },
       );
@@ -624,6 +648,7 @@ export function PRPanel({
                       <PipelineStageBadge
                         stage={localPipelineStages.get(prNumber) ?? null}
                         prState={item.type === 'pr' ? item.state : undefined}
+                        failedCommand={localFailedCommands.get(prNumber)}
                       />
                     </div>
                   )}
