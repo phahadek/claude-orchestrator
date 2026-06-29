@@ -38,7 +38,7 @@ function walk(dir: string): string[] {
 const RAW_API_FETCH = /fetch\s*\(\s*['"`]\/api/;
 
 describe('no-raw-api-fetch guard', () => {
-  it('has no raw fetch([\'/api/...]) calls outside api/projects.ts', () => {
+  it("has no raw fetch(['/api/...]) calls outside api/projects.ts", () => {
     const files = walk(FRONTEND_SRC).filter((f) => !EXEMPT_FILES.has(f));
     const violations: string[] = [];
 

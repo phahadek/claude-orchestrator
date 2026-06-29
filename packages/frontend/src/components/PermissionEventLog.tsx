@@ -68,7 +68,9 @@ export function PermissionEventLog() {
 
   async function handleClear() {
     try {
-      const res = await authedFetch('/api/permission-denials', { method: 'DELETE' });
+      const res = await authedFetch('/api/permission-denials', {
+        method: 'DELETE',
+      });
       if (!res.ok) throw new Error(`${res.status}`);
       setRows([]);
     } catch {

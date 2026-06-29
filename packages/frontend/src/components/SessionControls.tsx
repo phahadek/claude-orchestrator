@@ -80,7 +80,9 @@ export function SessionControls({
     if (!confirm('Delete this session? This cannot be undone.')) return;
     setDeleting(true);
     try {
-      await authedFetch(`/api/sessions/${session.sessionId}`, { method: 'DELETE' });
+      await authedFetch(`/api/sessions/${session.sessionId}`, {
+        method: 'DELETE',
+      });
       onDeleted?.(session.sessionId);
     } catch {
       setDeleting(false);
