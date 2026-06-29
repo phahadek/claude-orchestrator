@@ -150,6 +150,11 @@ export function setEnrollmentBroadcast(fn: BroadcastFn): void {
 export function createEnrollmentRouter(): Router {
   const router = Router();
 
+  // GET /api/enrollment/needs-bootstrap — public, no token required
+  router.get('/needs-bootstrap', (_req: Request, res: Response) => {
+    res.json({ needsBootstrap: getActiveDeviceCount() === 0 });
+  });
+
   // POST /api/enrollment/bootstrap — first device only (no auth required)
   router.post('/bootstrap', (req: Request, res: Response) => {
     const userAgent = req.headers['user-agent'] ?? '';
