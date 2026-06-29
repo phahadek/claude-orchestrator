@@ -105,8 +105,10 @@ On success it has written, under `.skill-cache/design/<milestone>/`:
   survive; new questions in the task body are appended.
 
 Read the context-page bodies in `context/` — Master Context, Technical Architecture,
-Coding Guidelines, Research Goals, Task Writing Guidelines, Future Scope, Project
-Milestones. **This is non-negotiable**: executing a design task without the
+Coding Guidelines, Research Goals, Future Scope, Project Milestones. Also read the
+universal task-authoring standard at `config/task-writing.md` (no longer a context
+page — read it from local disk). **This is non-negotiable**: executing a design task
+without the
 architectural constraints loaded is how design sessions produce confidently-wrong
 decisions that cascade through every Code task that consumes them.
 
@@ -207,7 +209,7 @@ For the current Design task (in the approved order):
      (running a tool, wiring it, inspecting results) → 🛠️ **Tooling** / 🧪 **Testing**.
      If a single follow-on mixes both, **file two tasks** — never bury dispatchable
      code-gen inside a Tooling/Testing task, where no worker will pick it up.
-   - Draft the full body inline per the Task Writing Guidelines (Summary /
+   - Draft the full body inline per `config/task-writing.md` (Summary /
      Dependencies / Context / Files paths affected / Acceptance criteria /
      Implementation notes-placeholder).
    - **Create immediately** via `notion-create-pages` with `Status = "🔲 Backlog"`.

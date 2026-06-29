@@ -81,9 +81,11 @@ On success it has written, under `.skill-cache/grooming/<milestone>/`:
   gate will check); preserved across resumes.
 
 Read `context-bundle.json` and `worklist.json`. Read the context-page bodies in
-`context/` — the master context, research goals, architecture, coding guidelines,
-task-writing guidelines. **This is non-negotiable**: resolving a task without the
-architectural constraints loaded is how grooming produces confidently-wrong decisions.
+`context/` — the master context, research goals, architecture, coding guidelines.
+Also read the universal task-authoring standard at `config/task-writing.md` (it is no
+longer a context page — the skill reads it from local disk). **This is
+non-negotiable**: resolving a task without the architectural constraints loaded is how
+grooming produces confidently-wrong decisions.
 
 ---
 

@@ -109,6 +109,18 @@ drift is your responsibility.
 > ⚠️ Steps 6 and 7 are hard stops. The human merges the PR and marks the task Done.
 > Appending to the Session Log and updating the Master File Index are the human's job.
 
+### Status values
+
+| Status | Meaning |
+| --- | --- |
+| `🔲 Backlog` | Defined, not yet validated. Default for every new task. |
+| `🗂️ Ready` | Scoped, reviewed, ready to pick up. For 💻 Code this is what auto-dispatches it. |
+| `🔄 In Progress` | Actively being worked. |
+| `👀 In Review` | PR open (Code) / changes proposed (Design), awaiting the human. |
+| `✅ Done` | Merged + verified (Code) / pages locked (Design). |
+| `⏭️ Deferred` | Scope superseded by another task. Treated like Done by `/groom` + `/design`. |
+| `🚫 Blocked` | Rare. Set by the **orchestrator** when a task can't be implemented as-is; the blocker is documented in Notes. Not a grooming target — which is why the machine `status_vocab` in `grooming.json` omits it (grooming and auto-dispatch never set it). |
+
 ---
 
 ## PR format
@@ -259,6 +271,27 @@ not obvious which, ask the human.
 
 ---
 
+## Task authoring
+
+When you author or update a task — in a `/groom` or `/design` session, or in any
+remote-control / planning / debug session that ends up filing one — the **shape of the
+task body** follows one universal standard: **`config/task-writing.md`**. Read it at the
+moment you author (it is reference content, not a skim-once summary); it defines the
+required sections, the 🤖/👁️ acceptance-criteria split, the readiness gate, and the
+Manual Verification Gate pattern. Project-specific authoring slivers live in that
+project's `context.md`.
+
+Must-know rules even if you don't open the full standard:
+
+- **New tasks always start at `🔲 Backlog`** — never create one directly at Ready; only
+  a human review promotes to Ready. (Enforced by the `check-task-status.mjs` PreToolUse
+  hook.)
+- **Draft in conversation first; publishing to the task source is a separate,
+  human-approved step.** "Write a task" authorizes the intent, not the draft.
+- **The page body is the spec; Notes is one human-facing sentence.**
+
+---
+
 ## Task types — what 🗂️ Ready triggers, per type
 
 Every task carries a **Type**. The Type decides **what picks the task up once it is
@@ -294,8 +327,9 @@ Two structured session types run against a milestone's task board; both are dete
 skills with a per-repo manifest (`config/projects/<dir>/grooming.json`).
 
 - **Backlog Grooming** — bring `Backlog` tasks to `Ready`. Trigger: _"Let's groom
-  milestone X"_ / _"groom"_. Procedure + readiness criteria live in the task source (linked
-  from the project's `context.md` / master context page).
+  milestone X"_ / _"groom"_. Procedure lives in the **`/groom` skill**; the readiness bar
+  it enforces lives in **`config/task-writing.md`**. (No task-source procedure page — both
+  were retired into local logic.)
 - **Design Execution** — work the open questions on `Design` / `Planning` tasks, lock
   decisions, update architecture pages, file follow-on `Backlog` Code tasks. Trigger:
   _"Let's run a design session for milestone X"_ / _"design"_.
