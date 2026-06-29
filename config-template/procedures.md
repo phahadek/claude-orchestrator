@@ -95,6 +95,36 @@ drift is your responsibility.
 
 ---
 
+## Hard rule — a managed session's git / PR / worktree is out of bounds
+
+> Applies to **every investigation / remote-control / operator session** working *on or
+> against* the Orchestrator (or any project it manages). This is separate from the worktree
+> git-isolation rule above: there you are a coding session inside your own worktree; here you
+> are observing **other** sessions' territory from the outside.
+
+The branches, commits, worktrees, and pull requests of the Orchestrator's managed
+coding/review sessions are **never yours to change** — they belong exclusively to the session
+that owns them. Investigation is **read-only** over that state: observe, diagnose, report.
+
+**Never — under any circumstances, not to "help", not to finish obviously-complete work, not
+to unstick a session, not even after a read-only check seems to make it safe:**
+
+- `git push`, `gh pr create` / `gh pr merge`, or create / update / merge / close any managed PR;
+- commit, amend, reset, rebase, `checkout` / `switch`, stash, or edit files inside a session
+  worktree (`…/.claude/worktrees/…`);
+- hand-edit or "repair" a managed repo's git metadata (`.git/config`, refs, index, `HEAD`);
+- hand-mutate Orchestrator state (DB rows, pause flags, branches) to force a PR or session to
+  a different outcome.
+
+These actions can be **catastrophic and irreversible** — corrupting branches, silently losing
+committed work, or breaking every future resume of a worktree — in ways you cannot foresee from
+the outside. Deliver fixes **only** as code changes to the Orchestrator's own source through the
+normal task → PR flow, or surface them to the human. Orchestrator-native, explicitly
+human-authorized API actions (e.g. triggering a review via its own endpoint) are the human's
+call to make, never yours to initiate. **Do not even propose** doing any of the above.
+
+---
+
 ## Task lifecycle — end-to-end, every session
 
 1. **Move task to `In Progress`** in the task source as soon as you begin work.

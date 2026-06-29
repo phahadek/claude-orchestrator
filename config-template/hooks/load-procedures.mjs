@@ -12,12 +12,12 @@
 // equals the projects root. Worktree sessions, and plain sessions elsewhere,
 // get nothing.
 //
-// Path-portable: resolves procedures.md relative to this script. The projects
-// root defaults to the parent of the config tree (dev host: ~/IdeaProjects).
-// On the prod host the projects root is NOT the config parent
-// (/srv/orchestrator/projects vs /srv/orchestrator/config), so set
-// ORCHESTRATOR_PROJECTS_ROOT=/srv/orchestrator/projects there (e.g. in the
-// systemd unit's Environment=).
+// Path-portable: resolves procedures.md AND the projects root relative to this
+// script. The config tree lives INSIDE the projects root on every host (dev:
+// ~/IdeaProjects/config, prod: /srv/orchestrator/projects/config), so the projects
+// root is always config's parent — no host-specific override needed.
+// ORCHESTRATOR_PROJECTS_ROOT remains an optional escape hatch for the unusual case
+// of config deployed outside the projects root.
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
@@ -48,7 +48,7 @@ function main() {
   const configDir = fileURLToPath(new URL('..', import.meta.url)); // hooks/.. = config
   const projectsRoot = process.env.ORCHESTRATOR_PROJECTS_ROOT
     ? resolve(process.env.ORCHESTRATOR_PROJECTS_ROOT)
-    : resolve(configDir, '..'); // config/.. = projects root (dev)
+    : resolve(configDir, '..'); // config/.. = projects root (config lives inside it)
 
   // Gate: only inject at the projects root. Anywhere else (worktrees, repos,
   // unrelated dirs) → silent no-op, so automated sessions never inherit it.
@@ -60,9 +60,9 @@ function main() {
   if (!existsSync(proceduresPath)) return; // nothing to point at → fail closed
 
   // Keep additionalContext SMALL: the harness truncates a large SessionStart
-  // injection to a ~2KB preview. So emit a compact pointer that DIRECTS the
-  // session to Read procedures.md in full, rather than inlining its ~13KB
-  // (which would arrive truncated and unreliable).
+  // injection to a short preview. So emit a compact pointer that DIRECTS the
+  // session to Read procedures.md in full, rather than inlining the whole
+  // rulebook (which would arrive truncated and unreliable).
   const p = proceduresPath.replace(/\\/g, '/');
   const msg = [
     'You are in an Orchestrator Remote Control session (cwd = the projects root).',
@@ -88,7 +88,5 @@ try {
   main();
 } catch (err) {
   // Fail open: never block session start on a hook error. Surface to stderr only.
-  process.stderr.write(
-    `[load-procedures] could not load procedures.md: ${err.message}\n`,
-  );
+  process.stderr.write(`[load-procedures] could not load procedures.md: ${err.message}\n`);
 }
