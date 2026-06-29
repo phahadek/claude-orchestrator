@@ -1,10 +1,10 @@
 # config-template — central config tree bootstrap
 
 Source-of-truth copies of the **central config tree** pieces the orchestrator needs for
-human-driven **Remote Control** sessions. The live tree lives **outside** every managed
-repo (dev: `~/IdeaProjects/config/`; prod: `/srv/orchestrator/config/`); this directory is
-where those pieces are version-controlled, and `scripts/deploy-grooming.mjs` copies them
-into the live tree.
+human-driven **Remote Control** sessions. The live tree lives **inside the projects root**,
+beside the managed repos (dev: `~/IdeaProjects/config/`; prod: `/srv/orchestrator/projects/config/`);
+this directory is where those pieces are version-controlled, and `scripts/deploy-grooming.mjs`
+copies them into the live tree.
 
 ## Contents
 
@@ -14,8 +14,9 @@ into the live tree.
 | `procedures.md`             | `<config>/procedures.md`             | **Seed-only** — copied only if absent, never clobbered (it's deployment-edited; fill in the Project index). |
 
 `<config>` is resolved by the deploy script: `$ORCHESTRATOR_CONFIG_DIR`, else a `config/`
-dir beside the projects root (dev `<repo>/../config`, prod `<repo>/../../config`), else it
-defaults to `<repo>/../config` and creates it.
+dir inside the projects root, beside each repo (`<repo>/../config` on both hosts now that
+config lives inside the projects root; `<repo>/../../config` is probed only as a legacy
+fallback), else it defaults to `<repo>/../config` and creates it.
 
 ## What the hook does
 
@@ -36,6 +37,8 @@ pointer telling the session to `Read procedures.md` **only** when cwd is the pro
 4. Launch the durable server from the projects root:
    `claude --permission-mode acceptEdits remote-control`.
 
-> On non-dev layouts (where the config tree is not the parent of the projects root) set
-> both `ORCHESTRATOR_CONFIG_DIR` (for the deploy + loaders) and `ORCHESTRATOR_PROJECTS_ROOT`
-> (for the hook's cwd gate). The systemd unit in the config tree sets these.
+> Because config lives **inside** the projects root on every host, the projects root is
+> always config's parent — **no `ORCHESTRATOR_PROJECTS_ROOT` override is needed** (the prod
+> systemd unit sets none). Both env vars remain optional escape hatches for the unusual case
+> of config deployed **outside** the projects root: `ORCHESTRATOR_CONFIG_DIR` (for the deploy
+> + loaders) and `ORCHESTRATOR_PROJECTS_ROOT` (for the hook's cwd gate).

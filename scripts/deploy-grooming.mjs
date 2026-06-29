@@ -13,10 +13,11 @@
  *   config-template/task-writing.md           → <config-tree>/task-writing.md  (overwrite)
  *   config-template/procedures.md             → <config-tree>/procedures.md  (seed-only)
  *
- * The config-template/* artifacts go into the central config tree (outside every repo),
- * not ~/.claude — that's where the Remote Control SessionStart hook runs from. The config
- * tree is resolved via $ORCHESTRATOR_CONFIG_DIR, else a `config/` dir beside the projects
- * root (dev `<repo>/../config`, prod `<repo>/../../config`), else `<repo>/../config`.
+ * The config-template/* artifacts go into the central config tree (a `config/` dir inside
+ * the projects root, beside each managed repo), not ~/.claude — that's where the Remote
+ * Control SessionStart hook runs from. The config tree is resolved via
+ * $ORCHESTRATOR_CONFIG_DIR, else `<repo>/../config` (config-inside-projects, both hosts),
+ * with `<repo>/../../config` kept only as a legacy-layout fallback.
  * load-procedures.mjs + task-writing.md are overwritten each run (pure universal rules);
  * procedures.md is seeded only if absent (it's deployment-edited — fill in its Project index).
  *
@@ -77,9 +78,10 @@ function seedIfAbsent(src, dest, label) {
   cpSync(src, dest, { force: true });
 }
 
-// Resolve the central config tree (outside every repo). Same precedence the
-// loaders use: $ORCHESTRATOR_CONFIG_DIR, else a `config/` dir beside the projects
-// root (an established tree has a `projects/` subdir), else the dev-layout default.
+// Resolve the central config tree (a `config/` dir inside the projects root, beside
+// each repo). Same precedence the loaders use: $ORCHESTRATOR_CONFIG_DIR, else the first
+// candidate whose `projects/` subdir exists (`<repo>/../config` for config-inside-projects,
+// `<repo>/../../config` as a legacy fallback), else `<repo>/../config`.
 function resolveConfigDir(root) {
   const explicit = process.env.ORCHESTRATOR_CONFIG_DIR;
   if (explicit) return resolve(explicit);
