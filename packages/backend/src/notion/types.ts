@@ -2,7 +2,7 @@ export interface NotionTask {
   id: string;
   title: string;
   status: string;
-  type: string; // '📋 Planning' | '💻 Code' | '🧪 Testing'
+  type: string; // '📋 Planning' | '💻 Code' | '🧪 Testing' | '🚦 Gate'
   dependsOn: string[]; // array of Notion page IDs
   notionUrl: string;
   prUrl?: string; // value of the "PR" URL property on the Notion page, if present

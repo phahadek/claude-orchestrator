@@ -30,6 +30,7 @@ const LABEL_TO_TYPE: Record<string, string> = {
   'type:code': '💻 Code',
   'type:testing': '🧪 Testing',
   'type:planning': '📋 Planning',
+  'type:gate': '🚦 Gate',
 };
 
 const LABEL_TO_PRIORITY: Record<string, string> = {

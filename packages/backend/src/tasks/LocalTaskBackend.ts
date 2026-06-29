@@ -16,7 +16,7 @@ interface LocalTask {
   name: string;
   status: string; // Backlog | Ready | In Progress | In Review | Done
   priority?: string; // High | Medium | Low
-  type?: string; // Code | Planning | Testing
+  type?: string; // Code | Planning | Testing | Gate
   depends_on?: string[];
   pr_url?: string | null;
   context?: string;
@@ -66,6 +66,7 @@ const TYPE_DISPLAY: Record<string, string> = {
   Docs: '📝 Docs',
   Assets: '🎨 Assets',
   Bug: '🐛 Bug',
+  Gate: '🚦 Gate',
 };
 
 function toDisplayStatus(status: string): string {
