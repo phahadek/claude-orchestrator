@@ -22,8 +22,9 @@ vi.mock('../pollUtils', () => ({
 vi.mock('../reviewUtils', () => ({
   formatHumanReviewFeedback: vi
     .fn()
-    .mockImplementation((_prNum: number, comments: unknown[]) =>
-      `feedback(${comments.length} comments)`,
+    .mockImplementation(
+      (_prNum: number, comments: unknown[]) =>
+        `feedback(${comments.length} comments)`,
     ),
 }));
 
@@ -39,10 +40,7 @@ import { db } from '../../db/db.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function seedSession(
-  sessionId: string,
-  status: string = 'running',
-): void {
+function seedSession(sessionId: string, status: string = 'running'): void {
   db.prepare(
     `INSERT OR IGNORE INTO sessions (session_id, status, started_at) VALUES (?, ?, ?)`,
   ).run(sessionId, status, Date.now());
@@ -53,15 +51,21 @@ function seedPR(prNumber: number, repo: string, sessionId: string): void {
     `INSERT OR IGNORE INTO pull_requests
        (pr_number, pr_url, repo, session_id, state, draft, created_at, updated_at, synced_at)
      VALUES (?, ?, ?, ?, 'open', 0, '2024-01-01', '2024-01-01', '2024-01-01')`,
-  ).run(prNumber, `https://github.com/${repo}/pull/${prNumber}`, repo, sessionId);
+  ).run(
+    prNumber,
+    `https://github.com/${repo}/pull/${prNumber}`,
+    repo,
+    sessionId,
+  );
 }
 
 function pendingIds(prNumber: number, repo: string): string[] {
   return (
     db
-      .prepare<{ pr_number: number; repo: string }>(
-        `SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'pending'`,
-      )
+      .prepare<{
+        pr_number: number;
+        repo: string;
+      }>(`SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'pending'`)
       .all({ pr_number: prNumber, repo }) as { comment_id: string }[]
   ).map((r) => r.comment_id);
 }
@@ -69,9 +73,10 @@ function pendingIds(prNumber: number, repo: string): string[] {
 function ackedIds(prNumber: number, repo: string): string[] {
   return (
     db
-      .prepare<{ pr_number: number; repo: string }>(
-        `SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'acked'`,
-      )
+      .prepare<{
+        pr_number: number;
+        repo: string;
+      }>(`SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'acked'`)
       .all({ pr_number: prNumber, repo }) as { comment_id: string }[]
   ).map((r) => r.comment_id);
 }
@@ -122,9 +127,16 @@ function makeGitHubClient(commentId: string) {
   return {
     listPRReviews: vi.fn().mockResolvedValue([]),
     listPRReviewComments: vi.fn().mockResolvedValue([]),
-    listPRIssueComments: vi.fn().mockResolvedValue([
-      { id: commentId, author: 'human', authorType: 'User', body: 'please fix' },
-    ]),
+    listPRIssueComments: vi
+      .fn()
+      .mockResolvedValue([
+        {
+          id: commentId,
+          author: 'human',
+          authorType: 'User',
+          body: 'please fix',
+        },
+      ]),
   };
 }
 
