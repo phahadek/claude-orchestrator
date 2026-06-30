@@ -1377,6 +1377,10 @@ export class SessionManager extends EventEmitter {
     session.on('push_detected', (payload: unknown) =>
       this.emit('push_detected', payload),
     );
+    // Forward dispositions_parsed so ReviewOrchestrator can drive reply/resolve actions
+    session.on('dispositions_parsed', (payload: unknown) =>
+      this.emit('dispositions_parsed', payload),
+    );
 
     // Fire-and-forget — run() blocks until the subprocess exits, then clean up
     session

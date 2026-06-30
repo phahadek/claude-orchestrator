@@ -225,7 +225,12 @@ export function formatCoalescedHumanBatch(
         inline.path != null
           ? ` (\`${inline.path}${inline.line != null ? `:${inline.line}` : ''}\`)`
           : '';
-      lines.push(`#### Inline comment${loc}\n${inline.body.trim()}`);
+      const commentId = inline.id.startsWith('rc_')
+        ? ` [comment_id: ${inline.id.slice(3)}]`
+        : '';
+      lines.push(
+        `#### Inline comment${loc}${commentId}\n${inline.body.trim()}`,
+      );
     }
     inlinesByReview.delete(reviewId);
     blocks.push(lines.join('\n\n'));
@@ -238,7 +243,10 @@ export function formatCoalescedHumanBatch(
         inline.path != null
           ? ` (\`${inline.path}${inline.line != null ? `:${inline.line}` : ''}\`)`
           : '';
-      blocks.push(`### @${author}${loc}\n${inline.body.trim()}`);
+      const commentId = inline.id.startsWith('rc_')
+        ? ` [comment_id: ${inline.id.slice(3)}]`
+        : '';
+      blocks.push(`### @${author}${loc}${commentId}\n${inline.body.trim()}`);
     }
   }
 
