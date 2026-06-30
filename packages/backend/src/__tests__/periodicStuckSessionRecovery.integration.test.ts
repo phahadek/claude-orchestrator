@@ -39,7 +39,6 @@ vi.mock('../db/queries', async () => {
     deleteStuckSessionTimer: vi.fn(),
     getAllStuckSessionTimers: vi.fn(() => []),
   };
-  setSessionLastErrorDetail: vi.fn(),
 });
 
 import { StuckSessionMonitor } from '../orchestration/StuckSessionMonitor';
