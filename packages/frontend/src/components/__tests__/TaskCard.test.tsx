@@ -781,7 +781,9 @@ describe('TaskCard', () => {
         project={makeProject()}
       />,
     );
-    expect(screen.queryByRole('button', { name: /resume|rerun|redispatch/i })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: /resume|rerun|redispatch/i }),
+    ).toBeNull();
   });
 
   it('does not render recovery button when recoveryDescriptor is absent', () => {
@@ -797,7 +799,9 @@ describe('TaskCard', () => {
         project={makeProject()}
       />,
     );
-    expect(screen.queryByRole('button', { name: /resume|rerun|redispatch/i })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: /resume|rerun|redispatch/i }),
+    ).toBeNull();
   });
 
   it('recovery button label comes from recoveryDescriptor.label', () => {
@@ -870,7 +874,10 @@ describe('TaskCard', () => {
     const send = vi.fn();
     render(
       <TaskCard
-        task={makeTask({ displayStatus: 'needs_attention', taskType: '💻 Code' })}
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          taskType: '💻 Code',
+        })}
         selected={false}
         onClick={vi.fn()}
         send={send}
@@ -968,5 +975,4 @@ describe('TaskCard', () => {
     );
     expect(screen.queryByText('⚠ Needs repo')).toBeNull();
   });
-
 });
