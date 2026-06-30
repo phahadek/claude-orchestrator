@@ -231,6 +231,10 @@ export class AgentSession extends EventEmitter {
    *  Used as a loop guard: if the PR's HEAD equals this SHA, the check is skipped
    *  so we don't re-revert our own revert commit. */
   private lastFilePollutionRevertSha: string | null = null;
+  /** Local HEAD SHA at the time push_detected was last emitted. The turn-end
+   *  trigger skips push_detected when HEAD has not advanced since the last emission,
+   *  preventing redundant re-review cycles on read-only or chat-only turns. */
+  private lastSignalledHeadSha: string | null = null;
   /** Tracks message IDs whose <pr-body> marker has already been processed (deduplicate streaming chunks). */
   private readonly processedPRBodyMessageIds = new Set<string>();
   /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
@@ -843,11 +847,34 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     if (rawType === 'result') {
       const pr = getPRBySessionId(this.sessionId);
       if (pr?.review_session_id) {
-        sessionLog(
-          this.sessionId,
-          `turn complete — PR #${pr.pr_number} has review session, signalling push_detected`,
-        );
-        void this.handlePushDetected();
+        // Gate on actual HEAD SHA advance — skip when no new commits were made.
+        let currentHeadSha: string | null = null;
+        if (this.worktreePath) {
+          try {
+            currentHeadSha = execSync('git rev-parse HEAD', {
+              cwd: this.worktreePath,
+            })
+              .toString()
+              .trim();
+          } catch {
+            // git unavailable — proceed unconditionally
+          }
+        }
+        if (
+          currentHeadSha === null ||
+          currentHeadSha !== this.lastSignalledHeadSha
+        ) {
+          sessionLog(
+            this.sessionId,
+            `turn complete — PR #${pr.pr_number} has review session, signalling push_detected (head=${currentHeadSha?.slice(0, 7) ?? 'unknown'})`,
+          );
+          void this.handlePushDetected();
+        } else {
+          sessionLog(
+            this.sessionId,
+            `turn complete — PR #${pr.pr_number} has review session, skipping push_detected (head unchanged at ${currentHeadSha.slice(0, 7)})`,
+          );
+        }
       }
 
       const denials = event.permission_denials as
@@ -1771,6 +1798,20 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           this.sessionId,
           `auto-push check failed (non-fatal): ${(err as Error).message}`,
         );
+      }
+    }
+
+    // Record the HEAD SHA at emission time so the turn-end gate can skip
+    // redundant push_detected signals when no new commits were made.
+    if (this.worktreePath) {
+      try {
+        this.lastSignalledHeadSha = execSync('git rev-parse HEAD', {
+          cwd: this.worktreePath,
+        })
+          .toString()
+          .trim();
+      } catch {
+        // non-fatal — leave lastSignalledHeadSha unchanged
       }
     }
 
