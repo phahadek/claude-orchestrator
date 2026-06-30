@@ -43,6 +43,7 @@ export class CliSessionRunner implements ISessionRunner {
       model,
       allowedTools,
       mcpConfigPath,
+      systemPromptFilePath,
       disableAutoCompact,
     } = options;
 
@@ -64,6 +65,9 @@ export class CliSessionRunner implements ISessionRunner {
         : []),
       ...(mcpConfigPath
         ? ['--mcp-config', mcpConfigPath, '--strict-mcp-config']
+        : []),
+      ...(systemPromptFilePath
+        ? ['--append-system-prompt-file', systemPromptFilePath]
         : []),
       '--allowed-tools',
       ...allowedTools,
