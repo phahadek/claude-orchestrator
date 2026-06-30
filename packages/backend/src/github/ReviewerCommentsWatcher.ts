@@ -27,6 +27,17 @@ function getAIReviewerUsernames(): Set<string> {
   return new Set(typedGetSetting('ai_reviewer_usernames'));
 }
 
+export function isBotAuthor(
+  author: string,
+  authorType: string,
+  denyList: ReadonlySet<string>,
+  allowList: ReadonlySet<string>,
+): boolean {
+  if (allowList.has(author)) return false;
+  if (denyList.has(author)) return true;
+  return authorType === 'Bot' || author.endsWith('[bot]');
+}
+
 /**
  * Polls open PRs for new human reviewer comments and routes them to the
  * corresponding coding session via SessionManager.send(). Deduplicates via
@@ -112,7 +123,13 @@ export class ReviewerCommentsWatcher {
 
   private async pollPR(pr: PullRequestRow): Promise<void> {
     const aiUsernames = getAIReviewerUsernames();
+    const botDenyList = new Set(typedGetSetting('bot_comment_deny_list'));
+    const botAllowList = new Set(typedGetSetting('bot_comment_allow_list'));
     const routedIds = getRoutedCommentIds(pr.pr_number, pr.repo);
+
+    const shouldExclude = (author: string, authorType: string): boolean =>
+      aiUsernames.has(author) ||
+      isBotAuthor(author, authorType, botDenyList, botAllowList);
 
     const [reviews, reviewComments, issueComments] = await Promise.all([
       this.github.listPRReviews(pr.pr_number, pr.repo),
@@ -120,7 +137,9 @@ export class ReviewerCommentsWatcher {
       this.github.listPRIssueComments(pr.pr_number, pr.repo),
     ]);
 
-    const humanReviews = reviews.filter((r) => !aiUsernames.has(r.author));
+    const humanReviews = reviews.filter(
+      (r) => !shouldExclude(r.author, r.authorType),
+    );
 
     const hasChangesRequested = humanReviews.some(
       (r) => r.state === 'CHANGES_REQUESTED',
@@ -137,7 +156,7 @@ export class ReviewerCommentsWatcher {
     }
 
     for (const c of reviewComments) {
-      if (aiUsernames.has(c.author)) continue;
+      if (shouldExclude(c.author, c.authorType)) continue;
       const id = `rc_${c.id}`;
       if (!routedIds.has(id)) {
         newComments.push({
@@ -151,7 +170,7 @@ export class ReviewerCommentsWatcher {
     }
 
     for (const c of issueComments) {
-      if (aiUsernames.has(c.author)) continue;
+      if (shouldExclude(c.author, c.authorType)) continue;
       const id = `ic_${c.id}`;
       if (!routedIds.has(id)) {
         newComments.push({ id, author: c.author, body: c.body });

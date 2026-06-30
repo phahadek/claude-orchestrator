@@ -41,8 +41,10 @@ const SettingsSchema = z.object({
   release_channel: z.enum(['stable', 'beta']),
   corporate_mode: z.enum(['corporate', 'personal']),
 
-  // JSON-serialised string array
+  // JSON-serialised string arrays
   ai_reviewer_usernames: z.array(z.string()),
+  bot_comment_deny_list: z.array(z.string()),
+  bot_comment_allow_list: z.array(z.string()),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -72,6 +74,8 @@ export const SETTING_DEFAULTS: Settings = {
   release_channel: 'stable',
   corporate_mode: 'personal',
   ai_reviewer_usernames: [],
+  bot_comment_deny_list: [],
+  bot_comment_allow_list: [],
 };
 
 function deserializeField<K extends SettingKey>(
@@ -79,7 +83,7 @@ function deserializeField<K extends SettingKey>(
   raw: string,
 ): Settings[K] | null {
   let input: unknown = raw;
-  if (key === 'ai_reviewer_usernames') {
+  if (Array.isArray(SETTING_DEFAULTS[key])) {
     try {
       input = JSON.parse(raw);
     } catch {
