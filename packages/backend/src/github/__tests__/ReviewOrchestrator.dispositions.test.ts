@@ -347,7 +347,7 @@ describe('ReviewOrchestrator — dispositions_parsed event wiring', () => {
     const github = makeGitHubClient({ 55: 'PRRT_55' });
     const sm = makeSessionManager();
     const rs = makeReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, true, github as any);
+    new ReviewOrchestrator(rs, sm as any, true, github as any);
 
     const payload: DispositionsParsedPayload = {
       sessionId: 'session-xyz',
