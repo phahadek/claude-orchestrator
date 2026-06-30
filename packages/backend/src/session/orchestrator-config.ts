@@ -16,6 +16,10 @@ export interface OrchestratorConfig {
   bash_rules: string[];
   /** Path to a script run after worktree creation, relative to the project root. */
   bootstrap_script: string;
+  /** Env var names that must be set after bootstrap. Launch aborts if any are missing. */
+  required_env: string[];
+  /** Paths relative to the worktree root that must exist after bootstrap. Launch aborts if any are missing. */
+  required_files: string[];
   /**
    * MCP server definitions to restrict sessions to. When defined, sessions only
    * see the listed MCP servers instead of inheriting all user-level servers.
@@ -48,6 +52,8 @@ const DEFAULTS: OrchestratorConfig = {
   allowed_tools: [],
   bash_rules: [],
   bootstrap_script: '',
+  required_env: [],
+  required_files: [],
   test: [],
   test_timeout_sec: 300,
   test_max_rss_mb: 0,
@@ -92,6 +98,16 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.bootstrap_script === 'string'
           ? parsed.bootstrap_script
           : DEFAULTS.bootstrap_script,
+      required_env: Array.isArray(parsed.required_env)
+        ? (parsed.required_env as unknown[])
+            .filter((v) => typeof v === 'string')
+            .map((v) => v as string)
+        : DEFAULTS.required_env,
+      required_files: Array.isArray(parsed.required_files)
+        ? (parsed.required_files as unknown[])
+            .filter((v) => typeof v === 'string')
+            .map((v) => v as string)
+        : DEFAULTS.required_files,
       test: Array.isArray(parsed.test) ? parsed.test : DEFAULTS.test,
       test_timeout_sec:
         typeof parsed.test_timeout_sec === 'number' &&
