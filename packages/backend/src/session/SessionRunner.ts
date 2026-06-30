@@ -9,9 +9,9 @@ export interface SessionRunnerOptions {
   /** Tool names to auto-approve (Bash(git:*), mcp__github__*, etc.) */
   allowedTools: string[];
   /**
-   * System prompt content to inject.
-   * - CLI mode: this content is written to CLAUDE.md in the worktree before spawn.
-   * - API mode: this is passed as the `systemPrompt` option to the Agent SDK.
+   * System prompt content to inject (API mode only).
+   * In CLI mode the content is delivered via --append-system-prompt-file instead.
+   * In API mode this is passed as the `systemPrompt` option to the Agent SDK.
    */
   systemPrompt?: string;
   /**
@@ -21,6 +21,13 @@ export interface SessionRunnerOptions {
    * Undefined = no override (all user-level servers are inherited).
    */
   mcpConfigPath?: string;
+  /**
+   * Absolute path to a per-session orchestrator system-prompt file written
+   * outside the worktree. When set, CLI mode appends
+   * `--append-system-prompt-file <path>` to the spawn args so the session
+   * receives its task spec / rules without any worktree write.
+   */
+  systemPromptFilePath?: string;
   /**
    * When true, spawns the CLI with `--settings '{"autoCompactEnabled":false}'`
    * to disable automatic context compaction for this spawn.

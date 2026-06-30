@@ -274,9 +274,10 @@ export class AgentSession extends EventEmitter {
     private readonly githubClient?: GitHubClient,
     private readonly extraAllowedTools: string[] = [],
     /**
-     * System prompt content for API mode.
-     * In CLI mode this is written to CLAUDE.md in the worktree before spawn.
-     * In API mode this is passed directly to the Agent SDK as systemPrompt.
+     * System prompt content for API mode only.
+     * In CLI mode the content is delivered via --append-system-prompt-file
+     * (see systemPromptFilePath). In API mode this is passed directly to
+     * the Agent SDK as systemPrompt.
      */
     private readonly systemPromptContent?: string,
     /**
@@ -296,6 +297,13 @@ export class AgentSession extends EventEmitter {
      * Forwarded to the runner as `mcpConfigPath`.
      */
     private readonly mcpConfigPath?: string,
+    /**
+     * Absolute path to a per-session orchestrator system-prompt file written
+     * outside the worktree. When set, CLI mode passes
+     * --append-system-prompt-file <path> so the session receives its rules
+     * without any file written inside the managed git repo.
+     */
+    private readonly systemPromptFilePath?: string,
   ) {
     super();
     this.runner = runner ?? new CliSessionRunner(sessionId);
@@ -322,16 +330,14 @@ You are a Claude Code session managed by Claude Code Orchestrator.
 ## Task
 Task page: ${this.taskUrl}
 
-Read CLAUDE.md in the repo root — it contains the full task spec and all rules.
-Begin implementing the task immediately. Do NOT fetch Notion pages.
+The full task spec and all rules are in your system prompt. Begin implementing directly.
 
 ## Lifecycle
-1. Read CLAUDE.md for the task spec, orchestrator rules, and project conventions.
-2. Create a feature branch from the project's base branch.
-3. Implement the task per the acceptance criteria in the Task Spec section of CLAUDE.md.
-4. Pass the pre-PR gate as specified in CLAUDE.md.
-5. Open a draft PR as specified in CLAUDE.md.
-6. After the PR is open, WAIT. Do not merge.
+1. Verify your branch: \`git branch --show-current\` → it should match the task name.
+2. Implement the task per the acceptance criteria in your system prompt.
+3. Pass the pre-PR gate as specified in your system prompt.
+4. Open a draft PR targeting the base branch using the required body template.
+5. After the PR is open, WAIT. Do not merge.
    The dashboard will send review feedback as follow-up messages.
    Address findings by pushing additional commits, then wait again.
 
@@ -343,7 +349,6 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 - One task per session. No scope creep.
 - Never commit to the base branch directly.
 - Never merge your own PR.
-- Never fetch Notion pages — the task spec is already in CLAUDE.md.
 `.trim();
 
     // Backoff schedule for transient API errors: 5s, 10s, 20s, 40s, 80s (5 attempts).
@@ -442,6 +447,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           allowedTools: [...ALLOWED_TOOLS, ...this.extraAllowedTools],
           systemPrompt: this.systemPromptContent,
           mcpConfigPath: this.mcpConfigPath,
+          systemPromptFilePath: this.systemPromptFilePath,
           disableAutoCompact:
             this._escalationDisableAutoCompact !== null
               ? this._escalationDisableAutoCompact

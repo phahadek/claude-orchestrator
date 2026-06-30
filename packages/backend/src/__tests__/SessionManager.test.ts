@@ -46,39 +46,50 @@ describe('SessionManager.sendOrResume() — zombie reconciliation', () => {
   });
 });
 
-// ── AC: resumeSession re-pins the CLAUDE.md for the dispatched task ────────────
+// ── AC: resumeSession re-pins the system-prompt file for the dispatched task ───
 describe('SessionManager.resumeSession() — task re-pin on resume', () => {
   const source = fs.readFileSync(
     path.join(__dirname, '..', 'session', 'SessionManager.ts'),
     'utf-8',
   );
 
-  it('calls buildSessionContext in resumeSession to rebuild the orchestrator CLAUDE.md', () => {
+  it('calls _buildAndWriteResumeSystemPrompt in resumeSession to re-pin the task', () => {
     const resumeIdx = source.indexOf('private async resumeSession(');
     const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeIdx);
     const block = source.slice(resumeIdx, resumeOrphanIdx);
-    expect(block).toMatch(/buildSessionContext\s*\(/);
+    expect(block).toMatch(/_buildAndWriteResumeSystemPrompt\s*\(/);
   });
 
-  it('calls injectContextFile("CLAUDE.md", ...) in resumeSession to re-pin the task', () => {
-    const resumeIdx = source.indexOf('private async resumeSession(');
-    const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeIdx);
-    const block = source.slice(resumeIdx, resumeOrphanIdx);
-    expect(block).toMatch(/injectContextFile\s*\(\s*['"]CLAUDE\.md['"]/);
+  it('does NOT call injectContextFile("CLAUDE.md", ...) — worktree is not written', () => {
+    expect(source).not.toMatch(/injectContextFile\s*\(\s*['"]CLAUDE\.md['"]/);
+  });
+
+  it('_buildAndWriteResumeSystemPrompt calls buildSessionContext to assemble context', () => {
+    const helperIdx = source.indexOf('private async _buildAndWriteResumeSystemPrompt(');
+    const resumeIdx = source.indexOf('private async resumeSession(', helperIdx);
+    const block = source.slice(helperIdx, resumeIdx);
+    expect(block).toMatch(/buildSessionContext\s*\(/);
   });
 
   it('re-pin is guarded on CLI session mode', () => {
     const resumeIdx = source.indexOf('private async resumeSession(');
     const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeIdx);
     const block = source.slice(resumeIdx, resumeOrphanIdx);
-    expect(block).toMatch(/session_mode.*cli|cli.*session_mode/i);
+    expect(block).toMatch(/=== 'cli'/);
   });
 
-  it('attempts to pre-fetch task content before re-injecting', () => {
-    const resumeIdx = source.indexOf('private async resumeSession(');
-    const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeIdx);
-    const block = source.slice(resumeIdx, resumeOrphanIdx);
-    expect(block).toMatch(/fetchTaskPage[\s\S]*?row\.task_id/);
+  it('_buildAndWriteResumeSystemPrompt attempts to pre-fetch task content', () => {
+    const helperIdx = source.indexOf('private async _buildAndWriteResumeSystemPrompt(');
+    const resumeIdx = source.indexOf('private async resumeSession(', helperIdx);
+    const block = source.slice(helperIdx, resumeIdx);
+    expect(block).toMatch(/fetchTaskPage/);
+  });
+
+  it('_buildAndWriteResumeSystemPrompt calls writeSystemPromptFile', () => {
+    const helperIdx = source.indexOf('private async _buildAndWriteResumeSystemPrompt(');
+    const resumeIdx = source.indexOf('private async resumeSession(', helperIdx);
+    const block = source.slice(helperIdx, resumeIdx);
+    expect(block).toMatch(/writeSystemPromptFile\s*\(/);
   });
 });
 

@@ -183,6 +183,26 @@ export function writeMcpConfig(
 }
 
 /**
+ * Write the assembled orchestrator session rules + task spec to a per-session
+ * file that lives OUTSIDE the managed worktree, at
+ * `<projectDir>/.claude/session-prompts/<sessionId>.md`.
+ *
+ * The path is returned so it can be passed via --append-system-prompt-file.
+ * Exported for unit testing.
+ */
+export function writeSystemPromptFile(
+  projectDir: string,
+  sessionId: string,
+  content: string,
+): string {
+  const dir = path.join(projectDir, '.claude', 'session-prompts');
+  fs.mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `${sessionId}.md`);
+  fs.writeFileSync(filePath, content, 'utf-8');
+  return filePath;
+}
+
+/**
  * Context-occupancy fraction above which a resumed non-large session is proactively
  * escalated to large_task_model in _doSendOrResume rather than waiting for an
  * overflow event that may never fire (e.g. when the CLI is alive-but-inert at ceiling).
@@ -1141,6 +1161,18 @@ export class SessionManager extends EventEmitter {
       );
     }
 
+    let systemPromptFilePath: string | undefined;
+    if (sessionMode === 'cli' && sessionContextContent) {
+      systemPromptFilePath = writeSystemPromptFile(
+        projectDir,
+        sessionId,
+        sessionContextContent,
+      );
+      logger.info(
+        `[SessionManager] system prompt written to ${systemPromptFilePath} for ${sessionId.slice(0, 8)}`,
+      );
+    }
+
     const session = new AgentSession(
       sessionId,
       taskUrl,
@@ -1158,14 +1190,8 @@ export class SessionManager extends EventEmitter {
       runner,
       projectId,
       mcpConfigPath,
+      systemPromptFilePath,
     );
-
-    if (sessionMode === 'cli' && sessionContextContent) {
-      session.injectContextFile('CLAUDE.md', sessionContextContent);
-      logger.info(
-        `[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`,
-      );
-    }
 
     this.pendingStarts.delete(sessionId);
     this.sessions.set(sessionId, session);
@@ -1383,6 +1409,7 @@ export class SessionManager extends EventEmitter {
     orchConfig: ReturnType<typeof loadOrchestratorConfig>,
     runner: ISessionRunner,
     mcpConfigPath: string | undefined,
+    systemPromptFilePath?: string,
   ): AgentSession {
     const session = new AgentSession(
       row.session_id,
@@ -1401,6 +1428,7 @@ export class SessionManager extends EventEmitter {
       runner,
       row.project_id ?? '',
       mcpConfigPath,
+      systemPromptFilePath,
     );
     if (row.pr_url) session.prUrl = row.pr_url;
     this.sessions.set(row.session_id, session);
@@ -1413,6 +1441,67 @@ export class SessionManager extends EventEmitter {
       status: 'running',
     } satisfies ServerMessage);
     return session;
+  }
+
+  /**
+   * Fetch task content, build session context, write the system-prompt file
+   * outside the worktree, and return its path. Returns undefined when not in
+   * CLI mode, when task_url is absent, or when building fails.
+   */
+  private async _buildAndWriteResumeSystemPrompt(
+    row: Session,
+    project: NonNullable<ReturnType<typeof getProjectById>>,
+    orchConfig: ReturnType<typeof loadOrchestratorConfig>,
+    projectDir: string,
+    worktreePath: string,
+  ): Promise<string | undefined> {
+    try {
+      let taskContent: string | undefined;
+      if (row.task_id && row.project_id) {
+        try {
+          taskContent = await getTaskBackend(row.project_id).fetchTaskPage(
+            row.task_id,
+          );
+        } catch {
+          // best-effort — build without pre-loaded task content
+        }
+      }
+      const context = buildSessionContext({
+        taskName: row.task_name ?? row.task_url ?? '',
+        taskUrl: row.task_url ?? '',
+        projectContextUrl: row.project_context_url ?? '',
+        targetBranch: project.baseBranch ?? 'dev',
+        projectDir,
+        worktreePath,
+        verify: orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
+        bashRules:
+          orchConfig.bash_rules.length > 0
+            ? orchConfig.bash_rules
+            : undefined,
+        taskBackend:
+          project.taskSource === 'yaml'
+            ? 'local'
+            : project.taskSource === 'github'
+              ? 'github'
+              : 'notion',
+        taskContent,
+        gitMode: project.gitMode,
+      });
+      const filePath = writeSystemPromptFile(
+        projectDir,
+        row.session_id,
+        context,
+      );
+      logger.info(
+        `[SessionManager] system prompt written to ${filePath} for ${row.session_id.slice(0, 8)}`,
+      );
+      return filePath;
+    } catch (err) {
+      logger.warn(
+        `[SessionManager] _buildAndWriteResumeSystemPrompt failed for ${row.session_id.slice(0, 8)}: ${err}`,
+      );
+      return undefined;
+    }
   }
 
   /**
@@ -1471,6 +1560,19 @@ export class SessionManager extends EventEmitter {
       orchConfig.mcp_servers,
     );
 
+    // Re-pin: refresh the system-prompt file outside the worktree so the
+    // resumed session is bound to its original task.
+    const resumeSystemPromptFilePath =
+      resumeSessionMode === 'cli' && row.task_url
+        ? await this._buildAndWriteResumeSystemPrompt(
+            row,
+            project,
+            orchConfig,
+            projectDir,
+            worktreePath,
+          )
+        : undefined;
+
     // Shared helper: creates session with original ID, registers, updates DB, emits status.
     const session = this.respawnSession(
       row,
@@ -1478,55 +1580,8 @@ export class SessionManager extends EventEmitter {
       orchConfig,
       resumeRunner,
       resumeMcpConfigPath,
+      resumeSystemPromptFilePath,
     );
-
-    // Re-pin: re-inject CLAUDE.md with the dispatched task so the resumed session
-    // is bound to its original task and cannot self-select another task from the board.
-    if (runtimeSettings.session_mode === 'cli' && row.task_url) {
-      try {
-        let taskContent: string | undefined;
-        if (row.task_id && row.project_id) {
-          try {
-            taskContent = await getTaskBackend(row.project_id).fetchTaskPage(
-              row.task_id,
-            );
-          } catch (fetchErr) {
-            logger.warn(
-              `[SessionManager] resumeSession: task fetch failed for ${row.session_id.slice(0, 8)} (injecting without pre-loaded content): ${fetchErr}`,
-            );
-          }
-        }
-        const repinnedContext = buildSessionContext({
-          taskName: row.task_name ?? row.task_url,
-          taskUrl: row.task_url,
-          projectContextUrl: row.project_context_url ?? '',
-          targetBranch: project.baseBranch ?? 'dev',
-          projectDir,
-          worktreePath,
-          verify: orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
-          bashRules:
-            orchConfig.bash_rules.length > 0
-              ? orchConfig.bash_rules
-              : undefined,
-          taskBackend:
-            project.taskSource === 'yaml'
-              ? 'local'
-              : project.taskSource === 'github'
-                ? 'github'
-                : 'notion',
-          taskContent,
-          gitMode: project.gitMode,
-        });
-        session.injectContextFile('CLAUDE.md', repinnedContext);
-        logger.info(
-          `[SessionManager] resumeSession: re-pinned CLAUDE.md for ${row.session_id.slice(0, 8)}`,
-        );
-      } catch (err) {
-        logger.warn(
-          `[SessionManager] resumeSession: CLAUDE.md re-pin failed for ${row.session_id.slice(0, 8)}: ${err}`,
-        );
-      }
-    }
 
     // Detect mid-turn state: last event was a tool_result or tool_use with no
     // subsequent assistant/result response. Log a warning to aid diagnosis.
@@ -1808,6 +1863,23 @@ export class SessionManager extends EventEmitter {
     } catch (err) {
       logger.warn(
         `[SessionManager] failed to remove orchestrator-mcp.json for ${sessionId.slice(0, 8)}: ${err}`,
+      );
+    }
+
+    // Remove the per-session system-prompt file (written outside the worktree).
+    const systemPromptFile = path.join(
+      projectDir,
+      '.claude',
+      'session-prompts',
+      `${sessionId}.md`,
+    );
+    try {
+      if (fs.existsSync(systemPromptFile)) {
+        fs.unlinkSync(systemPromptFile);
+      }
+    } catch (err) {
+      logger.warn(
+        `[SessionManager] failed to remove system-prompt file for ${sessionId.slice(0, 8)}: ${err}`,
       );
     }
 
@@ -2200,6 +2272,16 @@ export class SessionManager extends EventEmitter {
         recordedPath,
         orchConfig.mcp_servers,
       );
+      const fastPathSystemPromptPath =
+        mode === 'cli' && row.task_url
+          ? await this._buildAndWriteResumeSystemPrompt(
+              row,
+              project,
+              orchConfig,
+              projectDir,
+              recordedPath,
+            )
+          : undefined;
       if (row.task_id) {
         const stale = getOtherRunningSessionsForTask(
           row.task_id,
@@ -2218,6 +2300,7 @@ export class SessionManager extends EventEmitter {
         orchConfig,
         runner,
         mcpConfigPath,
+        fastPathSystemPromptPath,
       );
 
       // Proactive ceiling-escalation: if the session's persisted context occupancy
@@ -2405,6 +2488,17 @@ export class SessionManager extends EventEmitter {
 
     const mcpConfigPath = writeMcpConfig(worktreePath, orchConfig.mcp_servers);
 
+    const slowPathSystemPromptPath =
+      mode === 'cli' && row.task_url
+        ? await this._buildAndWriteResumeSystemPrompt(
+            row,
+            project,
+            orchConfig,
+            projectDir,
+            worktreePath,
+          )
+        : undefined;
+
     // Reconcile zombie rows: mark any other running sessions for this task as
     // superseded before respawning, so no two live rows exist for the same task.
     if (row.task_id) {
@@ -2425,6 +2519,7 @@ export class SessionManager extends EventEmitter {
       orchConfig,
       runner,
       mcpConfigPath,
+      slowPathSystemPromptPath,
     );
 
     // Register the pending text on the session so that if the resumed context
