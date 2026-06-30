@@ -716,7 +716,7 @@ export class GitHubClient {
       Array<{
         id: number;
         state: string;
-        user: { login: string };
+        user: { login: string; type: string };
         body: string | null;
         submitted_at: string;
       }>
@@ -725,6 +725,7 @@ export class GitHubClient {
       id: review.id,
       state: review.state as PRReviewSummary['state'],
       author: review.user.login,
+      authorType: review.user.type,
       body: review.body,
       submittedAt: review.submitted_at,
     }));
@@ -738,7 +739,7 @@ export class GitHubClient {
     const data = await this.request<
       Array<{
         id: number;
-        user: { login: string };
+        user: { login: string; type: string };
         body: string;
         created_at: string;
         path: string;
@@ -749,6 +750,7 @@ export class GitHubClient {
     return data.map((c) => ({
       id: c.id,
       author: c.user.login,
+      authorType: c.user.type,
       body: c.body,
       createdAt: c.created_at,
       path: c.path,
@@ -764,7 +766,7 @@ export class GitHubClient {
     const data = await this.request<
       Array<{
         id: number;
-        user: { login: string };
+        user: { login: string; type: string };
         body: string;
         created_at: string;
       }>
@@ -772,6 +774,7 @@ export class GitHubClient {
     return data.map((c) => ({
       id: c.id,
       author: c.user.login,
+      authorType: c.user.type,
       body: c.body,
       createdAt: c.created_at,
     }));
@@ -1353,6 +1356,7 @@ export interface PRReviewSummary {
   id: number;
   state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED';
   author: string;
+  authorType: string;
   body: string | null;
   submittedAt: string;
 }
@@ -1360,6 +1364,7 @@ export interface PRReviewSummary {
 export interface PRCommentSummary {
   id: number;
   author: string;
+  authorType: string;
   body: string;
   createdAt: string;
   path?: string | null;

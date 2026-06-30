@@ -23,7 +23,10 @@ import {
   getSession,
   getSetting,
 } from '../db/queries.js';
-import { ReviewerCommentsWatcher } from '../github/ReviewerCommentsWatcher.js';
+import {
+  ReviewerCommentsWatcher,
+  isBotAuthor,
+} from '../github/ReviewerCommentsWatcher.js';
 import type { PullRequestRow } from '../db/types.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -134,6 +137,7 @@ describe('ReviewerCommentsWatcher', () => {
             id: 1,
             state: 'COMMENTED',
             author: 'alice',
+            authorType: 'User',
             body: 'Looks good overall',
             submittedAt: '',
           },
@@ -142,6 +146,7 @@ describe('ReviewerCommentsWatcher', () => {
           {
             id: 10,
             author: 'alice',
+            authorType: 'User',
             body: 'Fix this line',
             createdAt: '',
             path: 'src/foo.ts',
@@ -152,6 +157,7 @@ describe('ReviewerCommentsWatcher', () => {
           {
             id: 20,
             author: 'bob',
+            authorType: 'User',
             body: 'Please update the README',
             createdAt: '',
           },
@@ -199,6 +205,7 @@ describe('ReviewerCommentsWatcher', () => {
           {
             id: 1,
             author: 'alice',
+            authorType: 'User',
             body: 'hello',
             createdAt: '',
             path: null,
@@ -228,6 +235,7 @@ describe('ReviewerCommentsWatcher', () => {
             id: 1,
             state: 'COMMENTED',
             author: 'ai-reviewer-bot',
+            authorType: 'User',
             body: 'AI comment',
             submittedAt: '',
           },
@@ -235,6 +243,7 @@ describe('ReviewerCommentsWatcher', () => {
             id: 2,
             state: 'COMMENTED',
             author: 'human-dev',
+            authorType: 'User',
             body: 'Human comment',
             submittedAt: '',
           },
@@ -243,6 +252,7 @@ describe('ReviewerCommentsWatcher', () => {
           {
             id: 10,
             author: 'ai-reviewer-bot',
+            authorType: 'User',
             body: 'AI inline',
             createdAt: '',
             path: 'x.ts',
@@ -253,6 +263,7 @@ describe('ReviewerCommentsWatcher', () => {
           {
             id: 20,
             author: 'ai-reviewer-bot',
+            authorType: 'User',
             body: 'AI issue comment',
             createdAt: '',
           },
@@ -284,6 +295,7 @@ describe('ReviewerCommentsWatcher', () => {
             id: 1,
             state: 'COMMENTED',
             author: 'bot',
+            authorType: 'User',
             body: 'AI says hi',
             submittedAt: '',
           },
@@ -295,6 +307,150 @@ describe('ReviewerCommentsWatcher', () => {
         sessions as never,
       ).pollAll();
       expect(sessions.sendOrResume).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('bot-authored comments are filtered out', () => {
+    it('does not route a comment authored by github-actions[bot] (login ends with [bot])', async () => {
+      vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
+
+      const github = makeGitHub({
+        issueComments: [
+          {
+            id: 1,
+            author: 'github-actions[bot]',
+            authorType: 'Bot',
+            body: 'CI failed on branch',
+            createdAt: '',
+          },
+        ],
+      });
+      const sessions = makeSessionManager();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
+      expect(sessions.sendOrResume).not.toHaveBeenCalled();
+    });
+
+    it('does not route a comment authored by a Bot-type account', async () => {
+      vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
+
+      const github = makeGitHub({
+        reviewComments: [
+          {
+            id: 2,
+            author: 'some-automation',
+            authorType: 'Bot',
+            body: 'Automated check result',
+            createdAt: '',
+            path: 'src/index.ts',
+            line: 10,
+          },
+        ],
+      });
+      const sessions = makeSessionManager();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
+      expect(sessions.sendOrResume).not.toHaveBeenCalled();
+    });
+
+    it('still routes a human-authored comment while filtering bot comments', async () => {
+      vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
+
+      const github = makeGitHub({
+        issueComments: [
+          {
+            id: 1,
+            author: 'github-actions[bot]',
+            authorType: 'Bot',
+            body: 'Bot noise',
+            createdAt: '',
+          },
+          {
+            id: 2,
+            author: 'alice',
+            authorType: 'User',
+            body: 'Human feedback',
+            createdAt: '',
+          },
+        ],
+      });
+      const sessions = makeSessionManager();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
+
+      expect(sessions.sendOrResume).toHaveBeenCalledOnce();
+      const [, message] = sessions.sendOrResume.mock.calls[0] as [
+        string,
+        string,
+      ];
+      expect(message).toContain('Human feedback');
+      expect(message).not.toContain('Bot noise');
+    });
+
+    it('deny-list suppresses a named non-bot author', async () => {
+      vi.mocked(getSetting).mockImplementation((key: string) => {
+        if (key === 'bot_comment_deny_list')
+          return JSON.stringify(['renovate']);
+        return undefined;
+      });
+      vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
+
+      const github = makeGitHub({
+        issueComments: [
+          {
+            id: 1,
+            author: 'renovate',
+            authorType: 'User',
+            body: 'Dependency update available',
+            createdAt: '',
+          },
+        ],
+      });
+      const sessions = makeSessionManager();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
+      expect(sessions.sendOrResume).not.toHaveBeenCalled();
+    });
+
+    it('allow-list overrides bot filter for a bot-login author', async () => {
+      vi.mocked(getSetting).mockImplementation((key: string) => {
+        if (key === 'bot_comment_allow_list')
+          return JSON.stringify(['trusted-bot[bot]']);
+        return undefined;
+      });
+      vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
+
+      const github = makeGitHub({
+        issueComments: [
+          {
+            id: 1,
+            author: 'trusted-bot[bot]',
+            authorType: 'Bot',
+            body: 'Trusted automation comment',
+            createdAt: '',
+          },
+        ],
+      });
+      const sessions = makeSessionManager();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
+
+      expect(sessions.sendOrResume).toHaveBeenCalledOnce();
+      const [, message] = sessions.sendOrResume.mock.calls[0] as [
+        string,
+        string,
+      ];
+      expect(message).toContain('Trusted automation comment');
     });
   });
 
@@ -311,6 +467,7 @@ describe('ReviewerCommentsWatcher', () => {
             id: 1,
             state: 'COMMENTED',
             author: 'alice',
+            authorType: 'User',
             body: 'Already sent review',
             submittedAt: '',
           },
@@ -319,6 +476,7 @@ describe('ReviewerCommentsWatcher', () => {
           {
             id: 10,
             author: 'alice',
+            authorType: 'User',
             body: 'Already sent inline',
             createdAt: '',
             path: 'x.ts',
@@ -329,6 +487,7 @@ describe('ReviewerCommentsWatcher', () => {
           {
             id: 20,
             author: 'alice',
+            authorType: 'User',
             body: 'Already sent issue',
             createdAt: '',
           },
@@ -353,6 +512,7 @@ describe('ReviewerCommentsWatcher', () => {
             id: 1,
             state: 'COMMENTED',
             author: 'alice',
+            authorType: 'User',
             body: 'Old review body',
             submittedAt: '',
           },
@@ -360,6 +520,7 @@ describe('ReviewerCommentsWatcher', () => {
             id: 2,
             state: 'COMMENTED',
             author: 'alice',
+            authorType: 'User',
             body: 'New review body',
             submittedAt: '',
           },
@@ -395,6 +556,7 @@ describe('ReviewerCommentsWatcher', () => {
             id: 1,
             state: 'CHANGES_REQUESTED',
             author: 'alice',
+            authorType: 'User',
             body: 'Please fix tests',
             submittedAt: '',
           },
@@ -423,6 +585,7 @@ describe('ReviewerCommentsWatcher', () => {
             id: 1,
             state: 'COMMENTED',
             author: 'alice',
+            authorType: 'User',
             body: 'LGTM mostly',
             submittedAt: '',
           },
@@ -448,6 +611,7 @@ describe('ReviewerCommentsWatcher', () => {
             id: 1,
             state: 'CHANGES_REQUESTED',
             author: 'ai-bot',
+            authorType: 'User',
             body: 'AI says fix it',
             submittedAt: '',
           },
@@ -475,6 +639,7 @@ describe('ReviewerCommentsWatcher', () => {
           {
             id: 1,
             author: 'alice',
+            authorType: 'User',
             body: 'hi',
             createdAt: '',
             path: null,
@@ -506,6 +671,7 @@ describe('ReviewerCommentsWatcher', () => {
           {
             id: 1,
             author: 'alice',
+            authorType: 'User',
             body: 'Please fix the type error on line 42',
             createdAt: '',
             path: 'src/foo.ts',
@@ -546,6 +712,7 @@ describe('ReviewerCommentsWatcher', () => {
           {
             id: 5,
             author: 'bob',
+            authorType: 'User',
             body: 'Needs docs',
             createdAt: '',
           },
@@ -568,5 +735,37 @@ describe('ReviewerCommentsWatcher', () => {
       // Comments must NOT be marked routed because delivery failed
       expect(markCommentsRouted).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('isBotAuthor', () => {
+  const empty = new Set<string>();
+
+  it('returns true for login ending with [bot]', () => {
+    expect(isBotAuthor('github-actions[bot]', 'Bot', empty, empty)).toBe(true);
+  });
+
+  it('returns true for Bot-type account regardless of login', () => {
+    expect(isBotAuthor('some-service', 'Bot', empty, empty)).toBe(true);
+  });
+
+  it('returns false for a regular User account', () => {
+    expect(isBotAuthor('alice', 'User', empty, empty)).toBe(false);
+  });
+
+  it('deny-list suppresses a named author not otherwise flagged', () => {
+    const deny = new Set(['renovate']);
+    expect(isBotAuthor('renovate', 'User', deny, empty)).toBe(true);
+  });
+
+  it('allow-list overrides the bot filter for a bot-login', () => {
+    const allow = new Set(['trusted-bot[bot]']);
+    expect(isBotAuthor('trusted-bot[bot]', 'Bot', empty, allow)).toBe(false);
+  });
+
+  it('allow-list overrides the deny-list', () => {
+    const deny = new Set(['special']);
+    const allow = new Set(['special']);
+    expect(isBotAuthor('special', 'User', deny, allow)).toBe(false);
   });
 });
