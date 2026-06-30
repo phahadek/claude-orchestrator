@@ -87,7 +87,10 @@ describe('router: dispatch', () => {
 
     expect(sessions.start).not.toHaveBeenCalled();
     const sent = (ws.send as ReturnType<typeof vi.fn>).mock.calls;
-    const error = JSON.parse(sent[0][0] as string) as { type: string; message: string };
+    const error = JSON.parse(sent[0][0] as string) as {
+      type: string;
+      message: string;
+    };
     expect(error.type).toBe('error');
     expect(error.message).toMatch(/taskUrl or taskId/);
   });

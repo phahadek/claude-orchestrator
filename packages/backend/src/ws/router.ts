@@ -54,8 +54,7 @@ export async function handleMessage(
           continue;
         }
         const taskUrl =
-          t.taskUrl ||
-          `https://www.notion.so/${t.taskId!.replace(/-/g, '')}`;
+          t.taskUrl || `https://www.notion.so/${t.taskId!.replace(/-/g, '')}`;
         try {
           await sessions.start(taskUrl, t.projectContextUrl, {
             taskType: t.taskType,
