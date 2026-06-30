@@ -349,7 +349,10 @@ describe('<pr-body> marker — PR title sourcing', () => {
       message: {
         id: 'msg_pr_title_test',
         content: [
-          { type: 'text', text: `Done!\n\n<pr-body>\n${VALID_BODY}\n</pr-body>` },
+          {
+            type: 'text',
+            text: `Done!\n\n<pr-body>\n${VALID_BODY}\n</pr-body>`,
+          },
         ],
       },
     });
@@ -412,7 +415,10 @@ describe('<pr-body> marker — PR title sourcing', () => {
       message: {
         id: 'msg_pr_title_fallback',
         content: [
-          { type: 'text', text: `Done!\n\n<pr-body>\n${VALID_BODY}\n</pr-body>` },
+          {
+            type: 'text',
+            text: `Done!\n\n<pr-body>\n${VALID_BODY}\n</pr-body>`,
+          },
         ],
       },
     });
