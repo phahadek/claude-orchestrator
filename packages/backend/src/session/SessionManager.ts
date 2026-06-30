@@ -1475,9 +1475,7 @@ export class SessionManager extends EventEmitter {
         worktreePath,
         verify: orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
         bashRules:
-          orchConfig.bash_rules.length > 0
-            ? orchConfig.bash_rules
-            : undefined,
+          orchConfig.bash_rules.length > 0 ? orchConfig.bash_rules : undefined,
         taskBackend:
           project.taskSource === 'yaml'
             ? 'local'

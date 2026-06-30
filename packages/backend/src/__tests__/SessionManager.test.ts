@@ -65,7 +65,9 @@ describe('SessionManager.resumeSession() — task re-pin on resume', () => {
   });
 
   it('_buildAndWriteResumeSystemPrompt calls buildSessionContext to assemble context', () => {
-    const helperIdx = source.indexOf('private async _buildAndWriteResumeSystemPrompt(');
+    const helperIdx = source.indexOf(
+      'private async _buildAndWriteResumeSystemPrompt(',
+    );
     const resumeIdx = source.indexOf('private async resumeSession(', helperIdx);
     const block = source.slice(helperIdx, resumeIdx);
     expect(block).toMatch(/buildSessionContext\s*\(/);
@@ -79,14 +81,18 @@ describe('SessionManager.resumeSession() — task re-pin on resume', () => {
   });
 
   it('_buildAndWriteResumeSystemPrompt attempts to pre-fetch task content', () => {
-    const helperIdx = source.indexOf('private async _buildAndWriteResumeSystemPrompt(');
+    const helperIdx = source.indexOf(
+      'private async _buildAndWriteResumeSystemPrompt(',
+    );
     const resumeIdx = source.indexOf('private async resumeSession(', helperIdx);
     const block = source.slice(helperIdx, resumeIdx);
     expect(block).toMatch(/fetchTaskPage/);
   });
 
   it('_buildAndWriteResumeSystemPrompt calls writeSystemPromptFile', () => {
-    const helperIdx = source.indexOf('private async _buildAndWriteResumeSystemPrompt(');
+    const helperIdx = source.indexOf(
+      'private async _buildAndWriteResumeSystemPrompt(',
+    );
     const resumeIdx = source.indexOf('private async resumeSession(', helperIdx);
     const block = source.slice(helperIdx, resumeIdx);
     expect(block).toMatch(/writeSystemPromptFile\s*\(/);
