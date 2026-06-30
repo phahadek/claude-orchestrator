@@ -74,6 +74,7 @@ vi.mock('../db/queries', () => ({
   getStuckResultSessionRows: vi.fn().mockReturnValue([]),
   getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
   getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
+  setSessionLastErrorDetail: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog', () => ({

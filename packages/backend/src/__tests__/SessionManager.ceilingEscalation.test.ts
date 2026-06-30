@@ -103,6 +103,7 @@ vi.mock('../db/queries', () => ({
   updateSessionWorktreePath: vi.fn(),
   incrementTaskCrashCount: vi.fn().mockReturnValue(1),
   setTaskPauseReason: vi.fn(),
+  setSessionLastErrorDetail: vi.fn(),
 }));
 
 vi.mock('../tasks/TaskBackend', () => ({

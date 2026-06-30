@@ -65,6 +65,7 @@ vi.mock('../db/queries', () => ({
   setSessionTags: vi.fn(),
   resetTaskCrashCount: vi.fn(),
   incrementTaskCrashCount: vi.fn(() => 1),
+  setSessionLastErrorDetail: vi.fn(),
 }));
 
 // ── Mock other dependencies ────────────────────────────────────────────────

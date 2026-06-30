@@ -88,6 +88,7 @@ vi.mock('../db/queries', () => ({
   setPauseReason: vi.fn(),
   getProjectRowById: vi.fn(() => null),
   insertLocalBranch: vi.fn(),
+  setSessionLastErrorDetail: vi.fn(),
 }));
 
 // ── PR row shape used by push-detected tests ──────────────────────────────────

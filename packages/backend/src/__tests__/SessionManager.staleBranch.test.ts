@@ -455,6 +455,7 @@ describe('stale-branch abandonment: no terminal predecessor — deterministic fa
       expect.any(String),
       'error',
       'launch_failed',
+      expect.any(String),
     );
   });
 });
@@ -505,6 +506,7 @@ describe('stale-branch abandonment: single retry only', () => {
       expect.any(String),
       'error',
       'launch_failed',
+      expect.any(String),
     );
     // Audit event still emitted for the abandonment attempt
     expect(recordEvent).toHaveBeenCalledWith(

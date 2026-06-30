@@ -180,6 +180,7 @@ vi.mock('../db/queries', () => ({
   getSetting: vi.fn(() => null),
   hasActiveSessionForTask: vi.fn(() => false),
   getRules: vi.fn(() => []),
+  setSessionLastErrorDetail: vi.fn(),
 }));
 
 import { spawn, execSync } from 'child_process';

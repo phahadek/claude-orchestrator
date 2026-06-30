@@ -56,6 +56,7 @@ vi.mock('../db/queries', () => ({
   getSession: vi.fn(() => null),
   getProjectRowById: vi.fn(() => null),
   listMilestonesByProject: vi.fn(() => []),
+  setSessionLastErrorDetail: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog', () => ({

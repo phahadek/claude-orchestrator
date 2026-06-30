@@ -79,6 +79,7 @@ vi.mock('../db/queries', () => ({
   incrementTaskCrashCount: vi.fn().mockReturnValue(1),
   resetTaskCrashCount: vi.fn(),
   setTaskPauseReason: vi.fn(),
+  setSessionLastErrorDetail: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog', () => ({
