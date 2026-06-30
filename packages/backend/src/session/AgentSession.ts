@@ -499,6 +499,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             'error',
             'escalation_deadlock',
+            `context overflow: all ${MAX_ESCALATION_RETRIES + 1} escalation attempts exhausted`,
           );
           if (!this.hasEnded) {
             updateSessionStatus(this.sessionId, 'error', Date.now());
@@ -533,6 +534,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             'error',
             'context_overflow',
+            'context window full; no large-task model available to escalate',
           );
           if (!this.hasEnded) {
             updateSessionStatus(this.sessionId, 'error', Date.now());
@@ -589,6 +591,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             status,
             reason,
+            this.buildExitDetail(exitCode),
           );
           if (!this.hasEnded) {
             // Fallback when sessionManager is absent (e.g. unit tests without a manager)
@@ -622,6 +625,21 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     return (
       payload.includes('api_error') || payload.includes('overloaded_error')
     );
+  }
+
+  /**
+   * Build a concise one-line reason for a non-zero/null process exit, suitable for
+   * last_error_detail. Appends a short snippet of the last error event when present.
+   */
+  private buildExitDetail(exitCode: number | null): string {
+    if (exitCode === null) return 'process killed unexpectedly';
+    const base = `process exited with code ${exitCode}`;
+    const events = getEventsBySession(this.sessionId);
+    if (events.length === 0) return base;
+    const last = events[events.length - 1];
+    if (eventKind(last) !== 'error') return base;
+    const snippet = last.payload.slice(0, 120).replace(/\n/g, ' ');
+    return `${base}; last error: ${snippet}`;
   }
 
   /**
@@ -2157,6 +2175,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         this.sessionId,
         'killed',
         'user_kill',
+        'killed by user request',
       );
       if (!this.hasEnded) {
         // Fallback when sessionManager is absent (e.g. unit tests without a manager)
