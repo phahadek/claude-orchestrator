@@ -65,7 +65,9 @@ function pendingIds(prNumber: number, repo: string): string[] {
       .prepare<{
         pr_number: number;
         repo: string;
-      }>(`SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'pending'`)
+      }>(
+        `SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'pending'`,
+      )
       .all({ pr_number: prNumber, repo }) as { comment_id: string }[]
   ).map((r) => r.comment_id);
 }
@@ -76,7 +78,9 @@ function ackedIds(prNumber: number, repo: string): string[] {
       .prepare<{
         pr_number: number;
         repo: string;
-      }>(`SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'acked'`)
+      }>(
+        `SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'acked'`,
+      )
       .all({ pr_number: prNumber, repo }) as { comment_id: string }[]
   ).map((r) => r.comment_id);
 }
@@ -127,16 +131,14 @@ function makeGitHubClient(commentId: string) {
   return {
     listPRReviews: vi.fn().mockResolvedValue([]),
     listPRReviewComments: vi.fn().mockResolvedValue([]),
-    listPRIssueComments: vi
-      .fn()
-      .mockResolvedValue([
-        {
-          id: commentId,
-          author: 'human',
-          authorType: 'User',
-          body: 'please fix',
-        },
-      ]),
+    listPRIssueComments: vi.fn().mockResolvedValue([
+      {
+        id: commentId,
+        author: 'human',
+        authorType: 'User',
+        body: 'please fix',
+      },
+    ]),
   };
 }
 

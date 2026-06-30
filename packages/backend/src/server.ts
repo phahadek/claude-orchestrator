@@ -244,9 +244,11 @@ sessionManager.on(
       );
       return;
     }
-    void prMergeWatcher.handlePushDetected(prRow).catch((err: unknown) =>
-      logger.error('[server] push_detected: handlePushDetected failed:', err),
-    );
+    void prMergeWatcher
+      .handlePushDetected(prRow)
+      .catch((err: unknown) =>
+        logger.error('[server] push_detected: handlePushDetected failed:', err),
+      );
   },
 );
 

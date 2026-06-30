@@ -40,9 +40,9 @@ function wirePushHandler(
     ({ sessionId: codingSessionId }: { sessionId: string }) => {
       const prRow = getPRBySessionId(codingSessionId);
       if (!prRow || prRow.state !== 'open') return;
-      void prMergeWatcher.handlePushDetected(prRow).catch((err: unknown) =>
-        onError(err),
-      );
+      void prMergeWatcher
+        .handlePushDetected(prRow)
+        .catch((err: unknown) => onError(err));
     },
   );
 }
