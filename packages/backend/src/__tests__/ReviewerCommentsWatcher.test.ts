@@ -181,7 +181,13 @@ describe('quiescence buffer', () => {
 
     // Poll 1: alice leaves comment 1
     vi.mocked(github.listPRIssueComments).mockResolvedValueOnce([
-      { id: 1, author: 'alice', authorType: 'User', body: 'first', createdAt: '' },
+      {
+        id: 1,
+        author: 'alice',
+        authorType: 'User',
+        body: 'first',
+        createdAt: '',
+      },
     ]);
     await watcher.pollAll();
 
@@ -191,8 +197,20 @@ describe('quiescence buffer', () => {
 
     // Poll 2: alice leaves comment 2 — window resets
     vi.mocked(github.listPRIssueComments).mockResolvedValueOnce([
-      { id: 1, author: 'alice', authorType: 'User', body: 'first', createdAt: '' },
-      { id: 2, author: 'alice', authorType: 'User', body: 'second', createdAt: '' },
+      {
+        id: 1,
+        author: 'alice',
+        authorType: 'User',
+        body: 'first',
+        createdAt: '',
+      },
+      {
+        id: 2,
+        author: 'alice',
+        authorType: 'User',
+        body: 'second',
+        createdAt: '',
+      },
     ]);
     await watcher.pollAll();
 
@@ -226,13 +244,31 @@ describe('quiescence buffer', () => {
     );
 
     vi.mocked(github.listPRIssueComments).mockResolvedValueOnce([
-      { id: 10, author: 'bob', authorType: 'User', body: 'comment A', createdAt: '' },
+      {
+        id: 10,
+        author: 'bob',
+        authorType: 'User',
+        body: 'comment A',
+        createdAt: '',
+      },
     ]);
     await watcher.pollAll();
 
     vi.mocked(github.listPRIssueComments).mockResolvedValueOnce([
-      { id: 10, author: 'bob', authorType: 'User', body: 'comment A', createdAt: '' },
-      { id: 11, author: 'bob', authorType: 'User', body: 'comment B', createdAt: '' },
+      {
+        id: 10,
+        author: 'bob',
+        authorType: 'User',
+        body: 'comment A',
+        createdAt: '',
+      },
+      {
+        id: 11,
+        author: 'bob',
+        authorType: 'User',
+        body: 'comment B',
+        createdAt: '',
+      },
     ]);
     await watcher.pollAll();
 
@@ -240,11 +276,8 @@ describe('quiescence buffer', () => {
 
     // Exactly one inbox item — both comments in the same batch
     expect(enqueueFeedbackItem).toHaveBeenCalledOnce();
-    const [, source, payload] = vi.mocked(enqueueFeedbackItem).mock.calls[0] as [
-      string,
-      string,
-      string,
-    ];
+    const [, source, payload] = vi.mocked(enqueueFeedbackItem).mock
+      .calls[0] as [string, string, string];
     expect(source).toBe('human:bob');
     expect(payload).toContain('comment A');
     expect(payload).toContain('comment B');
@@ -258,8 +291,20 @@ describe('quiescence buffer', () => {
 
     const github = makeGitHub({
       issueComments: [
-        { id: 1, author: 'alice', authorType: 'User', body: 'Alice note', createdAt: '' },
-        { id: 2, author: 'bob', authorType: 'User', body: 'Bob note', createdAt: '' },
+        {
+          id: 1,
+          author: 'alice',
+          authorType: 'User',
+          body: 'Alice note',
+          createdAt: '',
+        },
+        {
+          id: 2,
+          author: 'bob',
+          authorType: 'User',
+          body: 'Bob note',
+          createdAt: '',
+        },
       ],
     });
     const watcher = new ReviewerCommentsWatcher(
@@ -331,11 +376,9 @@ describe('review grouping', () => {
     await vi.advanceTimersByTimeAsync(120_001);
 
     expect(enqueueFeedbackItem).toHaveBeenCalledOnce();
-    const payload = (vi.mocked(enqueueFeedbackItem).mock.calls[0] as [
-      string,
-      string,
-      string,
-    ])[2];
+    const payload = (
+      vi.mocked(enqueueFeedbackItem).mock.calls[0] as [string, string, string]
+    )[2];
     // Review body comes before inline comments
     const reviewIdx = payload.indexOf('Please fix the logic');
     const inline1Idx = payload.indexOf('This line is wrong');
@@ -358,7 +401,13 @@ describe('comments are marked pending only on flush', () => {
     vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
     const github = makeGitHub({
       issueComments: [
-        { id: 5, author: 'alice', authorType: 'User', body: 'hello', createdAt: '' },
+        {
+          id: 5,
+          author: 'alice',
+          authorType: 'User',
+          body: 'hello',
+          createdAt: '',
+        },
       ],
     });
     const watcher = new ReviewerCommentsWatcher(
@@ -371,7 +420,9 @@ describe('comments are marked pending only on flush', () => {
 
     await vi.advanceTimersByTimeAsync(120_001);
     expect(markCommentsPending).toHaveBeenCalledOnce();
-    expect(markCommentsPending).toHaveBeenCalledWith(42, 'owner/repo', ['ic_5']);
+    expect(markCommentsPending).toHaveBeenCalledWith(42, 'owner/repo', [
+      'ic_5',
+    ]);
 
     vi.useRealTimers();
   });
@@ -388,7 +439,13 @@ describe('comments are marked pending only on flush', () => {
 
     // Both polls see the same comment (not yet routed in DB)
     vi.mocked(github.listPRIssueComments).mockResolvedValue([
-      { id: 7, author: 'alice', authorType: 'User', body: 'please fix', createdAt: '' },
+      {
+        id: 7,
+        author: 'alice',
+        authorType: 'User',
+        body: 'please fix',
+        createdAt: '',
+      },
     ]);
 
     await watcher.pollAll();
@@ -398,7 +455,9 @@ describe('comments are marked pending only on flush', () => {
 
     // Still exactly ONE inbox item, with ONE comment (not duplicated)
     expect(enqueueFeedbackItem).toHaveBeenCalledOnce();
-    expect(markCommentsPending).toHaveBeenCalledWith(42, 'owner/repo', ['ic_7']);
+    expect(markCommentsPending).toHaveBeenCalledWith(42, 'owner/repo', [
+      'ic_7',
+    ]);
 
     vi.useRealTimers();
   });
@@ -563,11 +622,9 @@ describe('AI-authored comments are filtered out', () => {
     await vi.advanceTimersByTimeAsync(120_001);
 
     expect(enqueueFeedbackItem).toHaveBeenCalledOnce();
-    const payload = (vi.mocked(enqueueFeedbackItem).mock.calls[0] as [
-      string,
-      string,
-      string,
-    ])[2];
+    const payload = (
+      vi.mocked(enqueueFeedbackItem).mock.calls[0] as [string, string, string]
+    )[2];
     expect(payload).toContain('Human comment');
     expect(payload).not.toContain('AI comment');
     expect(payload).not.toContain('AI inline');
@@ -690,11 +747,9 @@ describe('bot-authored comments are filtered out', () => {
     await vi.advanceTimersByTimeAsync(120_001);
 
     expect(enqueueFeedbackItem).toHaveBeenCalledOnce();
-    const payload = (vi.mocked(enqueueFeedbackItem).mock.calls[0] as [
-      string,
-      string,
-      string,
-    ])[2];
+    const payload = (
+      vi.mocked(enqueueFeedbackItem).mock.calls[0] as [string, string, string]
+    )[2];
     expect(payload).toContain('Human feedback');
     expect(payload).not.toContain('Bot noise');
 
@@ -759,11 +814,9 @@ describe('bot-authored comments are filtered out', () => {
     await vi.advanceTimersByTimeAsync(120_001);
 
     expect(enqueueFeedbackItem).toHaveBeenCalledOnce();
-    const payload = (vi.mocked(enqueueFeedbackItem).mock.calls[0] as [
-      string,
-      string,
-      string,
-    ])[2];
+    const payload = (
+      vi.mocked(enqueueFeedbackItem).mock.calls[0] as [string, string, string]
+    )[2];
     expect(payload).toContain('Trusted automation comment');
 
     vi.useRealTimers();
@@ -856,14 +909,14 @@ describe('already-routed comments are not re-sent', () => {
     await vi.advanceTimersByTimeAsync(120_001);
 
     expect(enqueueFeedbackItem).toHaveBeenCalledOnce();
-    const payload = (vi.mocked(enqueueFeedbackItem).mock.calls[0] as [
-      string,
-      string,
-      string,
-    ])[2];
+    const payload = (
+      vi.mocked(enqueueFeedbackItem).mock.calls[0] as [string, string, string]
+    )[2];
     expect(payload).toContain('New review body');
     expect(payload).not.toContain('Old review body');
-    expect(markCommentsPending).toHaveBeenCalledWith(42, 'owner/repo', ['rv_2']);
+    expect(markCommentsPending).toHaveBeenCalledWith(42, 'owner/repo', [
+      'rv_2',
+    ]);
 
     vi.useRealTimers();
   });

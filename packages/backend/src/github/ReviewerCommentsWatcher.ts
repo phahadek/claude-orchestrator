@@ -14,10 +14,7 @@ import {
 import { typedGetSetting } from '../config/settings';
 import { getProjectByGithubRepo } from '../config';
 import { isTerminalStalePR } from './pollUtils';
-import {
-  formatCoalescedHumanBatch,
-  type HumanComment,
-} from './reviewUtils';
+import { formatCoalescedHumanBatch, type HumanComment } from './reviewUtils';
 import type { PullRequestRow } from '../db/types';
 import type { ServerMessage } from '../ws/types';
 
@@ -188,7 +185,8 @@ export class ReviewerCommentsWatcher {
       const entry = newByAuthor.get(author);
       if (entry) {
         entry.comments.push(comment);
-        entry.hasChangesRequested = entry.hasChangesRequested || changesRequested;
+        entry.hasChangesRequested =
+          entry.hasChangesRequested || changesRequested;
       } else {
         newByAuthor.set(author, {
           comments: [comment],
@@ -237,7 +235,10 @@ export class ReviewerCommentsWatcher {
 
     const quiescenceMs = typedGetSetting('reviewer_comment_quiescence_ms');
 
-    for (const [author, { comments, hasChangesRequested: authorCR }] of newByAuthor) {
+    for (const [
+      author,
+      { comments, hasChangesRequested: authorCR },
+    ] of newByAuthor) {
       const bufferKey = `${pr.pr_number}:${pr.repo}:${author}`;
       const existing = this.buffer.get(bufferKey);
 
@@ -248,8 +249,7 @@ export class ReviewerCommentsWatcher {
         for (const c of comments) {
           if (!existingIds.has(c.id)) existing.comments.push(c);
         }
-        existing.hasChangesRequested =
-          existing.hasChangesRequested || authorCR;
+        existing.hasChangesRequested = existing.hasChangesRequested || authorCR;
         existing.timer = this._setTimeout(
           () => void this.flush(bufferKey),
           quiescenceMs,
