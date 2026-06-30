@@ -588,16 +588,22 @@ export class StuckSessionMonitor {
   private persistTimerState(sessionId: string): void {
     const state = this.timers.get(sessionId);
     if (!state) return;
-    upsertStuckSessionTimer(
-      sessionId,
-      state.taskName,
-      state.notifyDeadline,
-      state.pauseDeadline,
-      state.hardStopDeadline,
-      state.hardStopArmed,
-      state.notifyRemainingMs,
-      state.pauseRemainingMs,
-      state.hardStopRemainingMs,
-    );
+    try {
+      upsertStuckSessionTimer(
+        sessionId,
+        state.taskName,
+        state.notifyDeadline,
+        state.pauseDeadline,
+        state.hardStopDeadline,
+        state.hardStopArmed,
+        state.notifyRemainingMs,
+        state.pauseRemainingMs,
+        state.hardStopRemainingMs,
+      );
+    } catch (err) {
+      logger.warn(
+        `[StuckSessionMonitor] persistTimerState skipped for ${sessionId.slice(0, 8)}: ${err}`,
+      );
+    }
   }
 }
