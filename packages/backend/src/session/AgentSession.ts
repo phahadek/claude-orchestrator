@@ -127,8 +127,7 @@ export function parseDispositionBlock(
     items.push({
       comment_id: d.comment_id as number,
       disposition: d.disposition as ParsedDispositionItem['disposition'],
-      reason:
-        typeof d.reason === 'string' ? d.reason : undefined,
+      reason: typeof d.reason === 'string' ? d.reason : undefined,
     });
   }
   return items.length > 0 ? items : null;
@@ -1000,7 +999,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       // Drive review-thread disposition actions (reply/resolve) for any
       // dispositions the session emitted this turn. Fires after ack so the
       // ack is never gated on disposition success.
-      if (pr && event.is_error !== true && this.pendingParsedDispositions !== null) {
+      if (
+        pr &&
+        event.is_error !== true &&
+        this.pendingParsedDispositions !== null
+      ) {
         const dispositions = this.pendingParsedDispositions;
         this.pendingParsedDispositions = null;
         let headSha: string | null = null;

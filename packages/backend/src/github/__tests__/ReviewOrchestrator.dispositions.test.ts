@@ -96,8 +96,8 @@ function makeGitHubClient(threadIdMap: Record<number, string | null> = {}) {
   return {
     findThreadByCommentId: vi
       .fn()
-      .mockImplementation(async (commentId: number) =>
-        threadIdMap[commentId] ?? null,
+      .mockImplementation(
+        async (commentId: number) => threadIdMap[commentId] ?? null,
       ),
     addPullRequestReviewThreadReply: vi.fn().mockResolvedValue(undefined),
     resolveReviewThread: vi.fn().mockResolvedValue(undefined),

@@ -228,7 +228,9 @@ export function formatCoalescedHumanBatch(
       const commentId = inline.id.startsWith('rc_')
         ? ` [comment_id: ${inline.id.slice(3)}]`
         : '';
-      lines.push(`#### Inline comment${loc}${commentId}\n${inline.body.trim()}`);
+      lines.push(
+        `#### Inline comment${loc}${commentId}\n${inline.body.trim()}`,
+      );
     }
     inlinesByReview.delete(reviewId);
     blocks.push(lines.join('\n\n'));

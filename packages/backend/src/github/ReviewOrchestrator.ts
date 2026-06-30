@@ -97,7 +97,8 @@ export class ReviewOrchestrator {
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
     sessionManager.on(
       'dispositions_parsed',
-      (payload: unknown) => void this.handleDispositions(payload as DispositionsParsedPayload),
+      (payload: unknown) =>
+        void this.handleDispositions(payload as DispositionsParsedPayload),
     );
     sessionManager.on(
       'revert_sync_registered',

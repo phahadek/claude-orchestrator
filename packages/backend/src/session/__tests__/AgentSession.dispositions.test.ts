@@ -349,7 +349,10 @@ describe('AgentSession — at-least-once ack unchanged by dispositions', () => {
     });
 
     await new Promise((r) => setTimeout(r, 10));
-    expect(vi.mocked(ackPendingComments)).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(vi.mocked(ackPendingComments)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
   });
 
   it('calls ackPendingComments even when no dispositions are emitted', async () => {
@@ -373,7 +376,10 @@ describe('AgentSession — at-least-once ack unchanged by dispositions', () => {
     });
 
     await new Promise((r) => setTimeout(r, 10));
-    expect(vi.mocked(ackPendingComments)).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(vi.mocked(ackPendingComments)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
   });
 
   it('does NOT call ackPendingComments when result is an error', async () => {
