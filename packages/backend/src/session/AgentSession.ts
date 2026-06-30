@@ -63,9 +63,76 @@ import {
   pauseReasonFromCanonical,
   serializePauseReason,
 } from '../db/pauseReason';
+import type {
+  ParsedDispositionItem,
+  DispositionsParsedPayload,
+} from '../github/types';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
+
+/**
+ * Extract and validate a dispositions block from session assistant text.
+ * Returns the array of parsed items on success, null when absent or malformed.
+ * Exported for unit testing.
+ */
+export function parseDispositionBlock(
+  text: string,
+): ParsedDispositionItem[] | null {
+  const idx = text.indexOf('"dispositions"');
+  if (idx === -1) return null;
+  // Walk back to find the opening brace
+  const openBrace = text.lastIndexOf('{', idx);
+  if (openBrace === -1) return null;
+  // Find the matching closing brace (brace-counting)
+  let depth = 0;
+  let closeBrace = -1;
+  for (let i = openBrace; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}') {
+      depth--;
+      if (depth === 0) {
+        closeBrace = i;
+        break;
+      }
+    }
+  }
+  if (closeBrace === -1) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(openBrace, closeBrace + 1));
+  } catch {
+    return null;
+  }
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    !Array.isArray((parsed as Record<string, unknown>).dispositions)
+  ) {
+    return null;
+  }
+  const items: ParsedDispositionItem[] = [];
+  for (const item of (parsed as { dispositions: unknown[] }).dispositions) {
+    if (
+      typeof item !== 'object' ||
+      item === null ||
+      typeof (item as Record<string, unknown>).comment_id !== 'number' ||
+      !['addressed', 'wont_fix', 'out_of_scope'].includes(
+        (item as Record<string, unknown>).disposition as string,
+      )
+    ) {
+      continue;
+    }
+    const d = item as Record<string, unknown>;
+    items.push({
+      comment_id: d.comment_id as number,
+      disposition: d.disposition as ParsedDispositionItem['disposition'],
+      reason:
+        typeof d.reason === 'string' ? d.reason : undefined,
+    });
+  }
+  return items.length > 0 ? items : null;
+}
 
 /** Maximum number of rebase nudges sent to a session before escalating to needs_attention. */
 export const MAX_REBASE_NUDGES = 3;
@@ -256,6 +323,10 @@ export class AgentSession extends EventEmitter {
   private lastSignalledHeadSha: string | null = null;
   /** Tracks message IDs whose <pr-body> marker has already been processed (deduplicate streaming chunks). */
   private readonly processedPRBodyMessageIds = new Set<string>();
+  /** Tracks message IDs whose disposition block has already been parsed (deduplicate streaming chunks). */
+  private readonly processedDispositionMessageIds = new Set<string>();
+  /** Dispositions parsed from the current turn's assistant text; cleared after result event. */
+  private pendingParsedDispositions: ParsedDispositionItem[] | null = null;
   /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
   private readonly warnedEscapeToolUseIds = new Set<string>();
   /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
@@ -926,6 +997,34 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         ackPendingComments(pr.pr_number, pr.repo);
       }
 
+      // Drive review-thread disposition actions (reply/resolve) for any
+      // dispositions the session emitted this turn. Fires after ack so the
+      // ack is never gated on disposition success.
+      if (pr && event.is_error !== true && this.pendingParsedDispositions !== null) {
+        const dispositions = this.pendingParsedDispositions;
+        this.pendingParsedDispositions = null;
+        let headSha: string | null = null;
+        if (this.worktreePath) {
+          try {
+            headSha = execSync('git rev-parse HEAD', {
+              cwd: this.worktreePath,
+            })
+              .toString()
+              .trim();
+          } catch {
+            // non-fatal
+          }
+        }
+        const payload: DispositionsParsedPayload = {
+          sessionId: this.sessionId,
+          prNumber: pr.pr_number,
+          repo: pr.repo,
+          headSha,
+          dispositions,
+        };
+        this.emit('dispositions_parsed', payload);
+      }
+
       // Deliver any undelivered inbox items at the turn boundary.
       if (event.is_error !== true) {
         void this.deliverInboxItems();
@@ -1009,19 +1108,31 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           message: { ...msg, content: mergedContent },
         });
 
-        // Detect <pr-body>…</pr-body> marker emitted by the session.
-        // Guard by message ID so streaming chunks don't trigger multiple times.
-        if (!this.processedPRBodyMessageIds.has(messageId)) {
+        // Detect <pr-body>…</pr-body> marker or disposition block in session text.
+        // Both are guarded by message ID so streaming chunks don't fire multiple times.
+        if (
+          !this.processedPRBodyMessageIds.has(messageId) ||
+          !this.processedDispositionMessageIds.has(messageId)
+        ) {
           const accumulatedText = mergedContent
             .filter((b) => b.type === 'text' && typeof b.text === 'string')
             .map((b) => b.text as string)
             .join('');
-          const markerMatch = accumulatedText.match(PR_BODY_MARKER_REGEX);
-          if (markerMatch) {
-            this.processedPRBodyMessageIds.add(messageId);
-            this.prBodyMarkerPromise = this.handlePRBodyMarker(
-              markerMatch[1].trim(),
-            );
+          if (!this.processedPRBodyMessageIds.has(messageId)) {
+            const markerMatch = accumulatedText.match(PR_BODY_MARKER_REGEX);
+            if (markerMatch) {
+              this.processedPRBodyMessageIds.add(messageId);
+              this.prBodyMarkerPromise = this.handlePRBodyMarker(
+                markerMatch[1].trim(),
+              );
+            }
+          }
+          if (!this.processedDispositionMessageIds.has(messageId)) {
+            const dispositions = parseDispositionBlock(accumulatedText);
+            if (dispositions !== null) {
+              this.processedDispositionMessageIds.add(messageId);
+              this.pendingParsedDispositions = dispositions;
+            }
           }
         }
       }

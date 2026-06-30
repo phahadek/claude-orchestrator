@@ -39,6 +39,7 @@ import type { GitHubClient } from './GitHubClient';
 import type { ReviewJob } from './types';
 import { GitHubDiffSource, LocalDiffSource } from './DiffSource';
 import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
+import type { DispositionsParsedPayload } from './types';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
@@ -94,6 +95,10 @@ export class ReviewOrchestrator {
     this.preReviewPipeline = new PreReviewPipeline(sessionManager, github);
     sessionManager.on('pr_opened', (job: ReviewJob) => this.onPrOpened(job));
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
+    sessionManager.on(
+      'dispositions_parsed',
+      (payload: unknown) => void this.handleDispositions(payload as DispositionsParsedPayload),
+    );
     sessionManager.on(
       'revert_sync_registered',
       (payload: {
@@ -563,6 +568,64 @@ export class ReviewOrchestrator {
     );
 
     return { passed, output };
+  }
+
+  /**
+   * Drive review-thread reply/resolve actions based on dispositions emitted by
+   * the coding session. Called when the session emits a `dispositions_parsed` event.
+   */
+  async handleDispositions(payload: DispositionsParsedPayload): Promise<void> {
+    if (!this.github) return;
+    const { prNumber, repo, headSha, dispositions } = payload;
+    const shaLabel = headSha ? headSha.slice(0, 7) : 'unknown';
+
+    for (const d of dispositions) {
+      let threadId: string | null;
+      try {
+        threadId = await this.github.findThreadByCommentId(
+          d.comment_id,
+          prNumber,
+          repo,
+        );
+      } catch (err) {
+        logger.warn(
+          `[ReviewOrchestrator] disposition: findThreadByCommentId failed for comment_id ${d.comment_id}: ${(err as Error).message}`,
+        );
+        continue;
+      }
+      if (!threadId) {
+        logger.warn(
+          `[ReviewOrchestrator] disposition: no thread found for comment_id ${d.comment_id} on PR #${prNumber} — skipping`,
+        );
+        continue;
+      }
+      try {
+        if (d.disposition === 'addressed') {
+          await this.github.addPullRequestReviewThreadReply(
+            threadId,
+            `Addressed in ${shaLabel}`,
+          );
+          await this.github.resolveReviewThread(threadId);
+        } else if (d.disposition === 'wont_fix') {
+          await this.github.addPullRequestReviewThreadReply(
+            threadId,
+            `Won't fix: ${d.reason ?? ''}`,
+          );
+        } else if (d.disposition === 'out_of_scope') {
+          await this.github.addPullRequestReviewThreadReply(
+            threadId,
+            `Out of scope for this PR: ${d.reason ?? ''}`,
+          );
+        }
+        logger.info(
+          `[ReviewOrchestrator] disposition: ${d.disposition} for comment_id ${d.comment_id} → thread ${threadId}`,
+        );
+      } catch (err) {
+        logger.warn(
+          `[ReviewOrchestrator] disposition action failed for comment_id ${d.comment_id}: ${(err as Error).message}`,
+        );
+      }
+    }
   }
 
   private async executeLocalBranchReview(job: LocalBranchJob): Promise<void> {
