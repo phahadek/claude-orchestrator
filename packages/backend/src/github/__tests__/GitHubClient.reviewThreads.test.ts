@@ -134,12 +134,12 @@ describe('GitHubClient.resolveReviewThread()', () => {
     vi.stubGlobal('fetch', fetchSpy);
 
     const client = new GitHubClient();
-    await expect(
-      client.resolveReviewThread('PRRT_bad'),
-    ).rejects.toMatchObject({ status: 422 });
-    await expect(
-      client.resolveReviewThread('PRRT_bad'),
-    ).rejects.toThrow('Cannot resolve; Already resolved');
+    await expect(client.resolveReviewThread('PRRT_bad')).rejects.toMatchObject({
+      status: 422,
+    });
+    await expect(client.resolveReviewThread('PRRT_bad')).rejects.toThrow(
+      'Cannot resolve; Already resolved',
+    );
   });
 });
 
@@ -198,7 +198,10 @@ describe('GitHubClient.getReviewThreads()', () => {
 
     const reqBody = JSON.parse(
       (fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as string,
-    ) as { query: string; variables: { owner: string; name: string; number: number } };
+    ) as {
+      query: string;
+      variables: { owner: string; name: string; number: number };
+    };
 
     expect(reqBody.variables.owner).toBe('myorg');
     expect(reqBody.variables.name).toBe('myrepo');
