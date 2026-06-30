@@ -83,7 +83,7 @@ vi.mock('../CliSessionRunner', () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
-import { AgentSession } from '../AgentSession';
+import { AgentSession, isWorkflowScopeDenied } from '../AgentSession';
 import {
   upsertPullRequest,
   getPRBySessionId,
@@ -604,5 +604,132 @@ describe('<pr-body> marker — createPR 422 diversion', () => {
       'test-session-id',
       'pr_creation_failed',
     );
+  });
+});
+
+// ── isWorkflowScopeDenied unit tests ─────────────────────────────────────────
+
+describe('isWorkflowScopeDenied', () => {
+  it('returns true for the exact GitHub refusal message', () => {
+    const msg =
+      "Command failed: git push -u origin feature/foo\n" +
+      "error: refusing to allow a Personal Access Token to create or update workflow " +
+      "`.github/workflows/release.yml` without `workflow` scope\n";
+    expect(isWorkflowScopeDenied(msg)).toBe(true);
+  });
+
+  it('returns true when only key tokens are present', () => {
+    expect(
+      isWorkflowScopeDenied('refusing to allow a PAT without `workflow` scope'),
+    ).toBe(true);
+  });
+
+  it('returns false for an ordinary push rejection', () => {
+    expect(
+      isWorkflowScopeDenied('remote: Repository not found.\nfatal: repository not found'),
+    ).toBe(false);
+  });
+
+  it('returns false for an empty string', () => {
+    expect(isWorkflowScopeDenied('')).toBe(false);
+  });
+});
+
+// ── Workflow-scope push rejection → immediate needs_attention pause ───────────
+
+describe('<pr-body> marker — workflow-scope push rejection', () => {
+  const WORKFLOW_SCOPE_ERROR =
+    "Command failed: git push -u origin feature/my-task\n" +
+    "error: refusing to allow a Personal Access Token to create or update workflow " +
+    "`.github/workflows/release.yml` without `workflow` scope\n";
+
+  beforeEach(() => {
+    vi.mocked(recordEvent).mockClear();
+    vi.mocked(setSessionPauseReason).mockClear();
+    vi.mocked(countPushFailureEvents).mockReturnValue(0);
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd === 'git symbolic-ref refs/remotes/origin/HEAD')
+        return 'refs/remotes/origin/dev\n';
+      if (cmd === 'git push -u origin feature/my-task')
+        throw new Error(WORKFLOW_SCOPE_ERROR);
+      throw new Error(`unexpected: ${cmd}`);
+    });
+  });
+
+  it('pauses as needs_attention with workflow_scope_denied reason — no retry nudge', async () => {
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    const runner = getRunner(session);
+
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+
+    // Must not attempt PR creation
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+
+    // Must record the push failure event
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_creation_failed',
+        payload: expect.objectContaining({ stage: 'push' }),
+      }),
+    );
+
+    // Must pause with workflow_scope_denied — stored as serialized JSON
+    expect(setSessionPauseReason).toHaveBeenCalledOnce();
+    const [sessionId, rawReason] = vi.mocked(setSessionPauseReason).mock.calls[0];
+    expect(sessionId).toBe('test-session-id');
+    const parsed = JSON.parse(rawReason);
+    expect(parsed.reason).toBe('workflow_scope_denied');
+    expect(parsed.severity).toBe('needs_attention');
+    expect(parsed.detail).toMatch(/workflow-scoped credential/);
+
+    // Must NOT send any retry nudge to the session
+    expect(runner.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not invoke the bounded retry path when workflow scope is denied', async () => {
+    // Even with 0 prior failures (within the normal retry bound), no nudge is sent.
+    vi.mocked(countPushFailureEvents).mockReturnValue(0);
+
+    const session = makeSession(makeGithubClient());
+    const runner = getRunner(session);
+
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+
+    expect(runner.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('ordinary push failure (non-scope) still uses bounded retry — no regression', async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd === 'git symbolic-ref refs/remotes/origin/HEAD')
+        return 'refs/remotes/origin/dev\n';
+      if (cmd === 'git push -u origin feature/my-task')
+        throw new Error('remote: Repository not found.\nfatal: repository not found');
+      throw new Error(`unexpected: ${cmd}`);
+    });
+    vi.mocked(countPushFailureEvents).mockReturnValue(1);
+
+    const session = makeSession(makeGithubClient());
+    const runner = getRunner(session);
+
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+
+    // Should send a retry nudge (ordinary failure, within bound)
+    expect(runner.sendMessage).toHaveBeenCalledWith(
+      expect.stringContaining('git push -u origin feature/my-task'),
+    );
+    // Must NOT set workflow_scope_denied
+    const calls = vi.mocked(setSessionPauseReason).mock.calls;
+    expect(calls.every(([, r]) => !r.includes('workflow_scope_denied'))).toBe(true);
   });
 });
