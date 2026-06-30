@@ -4,7 +4,14 @@ import yaml from 'js-yaml';
 import { logger } from '../logger';
 
 export interface OrchestratorConfig {
-  /** Commands run in the worktree before opening the PR (mechanical fixes only). */
+  /**
+   * Commands run in the worktree before opening the PR (mechanical fixes only).
+   * A command MAY contain `{{changed_files}}` — the runner replaces it with the
+   * session's changed files (`git diff --name-only <baseBranch>...HEAD`), quoted
+   * individually, so formatters only touch changed files. When the changed-file
+   * set is empty the command is skipped entirely (no whole-repo run). Commands
+   * without the placeholder run unchanged over the whole worktree.
+   */
   autofix: string[];
   /** Commands the session runs before opening the PR (injected into CLAUDE.md). */
   verify: string[];

@@ -93,7 +93,11 @@ function makeProc(exitCode: number, stdout = '', stderr = ''): MockProc {
 
 // ── subject ───────────────────────────────────────────────────────────────────
 
-import { loadAutofixCommands, runAutofix } from '../autofix-runner';
+import {
+  loadAutofixCommands,
+  runAutofix,
+  expandAutofixCommand,
+} from '../autofix-runner';
 import { recordEvent } from '../../audit/AuditLog';
 
 // ── test setup ────────────────────────────────────────────────────────────────
@@ -908,5 +912,119 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
     expect(result.summary).toContain('git add -A failed (exit 128)');
     expect(result.summary).toContain(stderr);
     expect(result.gitFailureReason).toBe(stderr);
+  });
+});
+
+// ── expandAutofixCommand — unit ───────────────────────────────────────────────
+
+describe('expandAutofixCommand', () => {
+  it('returns the command unchanged when no placeholder is present', () => {
+    expect(expandAutofixCommand('npm run fmt', [])).toBe('npm run fmt');
+    expect(expandAutofixCommand('npm run fmt', ['src/a.ts'])).toBe(
+      'npm run fmt',
+    );
+  });
+
+  it('replaces {{changed_files}} with individually-quoted paths', () => {
+    const result = expandAutofixCommand('fmt {{changed_files}}', [
+      'src/a.ts',
+      'src/b.ts',
+    ]);
+    expect(result).toBe("fmt 'src/a.ts' 'src/b.ts'");
+  });
+
+  it('returns null when placeholder present but changed-file set is empty', () => {
+    expect(expandAutofixCommand('fmt {{changed_files}}', [])).toBeNull();
+  });
+});
+
+// ── runAutofix — {{changed_files}} placeholder ────────────────────────────────
+
+describe('runAutofix — {{changed_files}} placeholder', () => {
+  it('replaces {{changed_files}} with the changed-file set before execution', async () => {
+    const shellCmds: string[] = [];
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      // git diff --name-only dev...HEAD → one changed file
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      ) {
+        return makeProc(0, 'src/foo.ts\n');
+      }
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      // shell command (spawnShell passes opts as second arg, not an array)
+      if (!Array.isArray(args)) shellCmds.push(cmd as string);
+      return makeProc(0, '');
+    };
+
+    await runAutofix(
+      '/worktree',
+      '/project',
+      ['fmt {{changed_files}}'],
+      () => {},
+    );
+
+    expect(shellCmds).toHaveLength(1);
+    expect(shellCmds[0]).toBe("fmt 'src/foo.ts'");
+  });
+
+  it('command without {{changed_files}} runs unchanged (no git diff call)', async () => {
+    const shellCmds: string[] = [];
+    const gitDiffCalls: string[][] = [];
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        typeof a[2] === 'string' &&
+        a[2].includes('...')
+      ) {
+        gitDiffCalls.push(a);
+      }
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      if (!Array.isArray(args)) shellCmds.push(cmd as string);
+      return makeProc(0, '');
+    };
+
+    await runAutofix('/worktree', '/project', ['npm run fmt'], () => {});
+
+    expect(gitDiffCalls).toHaveLength(0);
+    expect(shellCmds).toContain('npm run fmt');
+  });
+
+  it('skips command entirely when {{changed_files}} set is empty (no-op, not whole-repo run)', async () => {
+    const shellCmds: string[] = [];
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      ) {
+        return makeProc(0, ''); // empty changed-file set
+      }
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      if (!Array.isArray(args)) shellCmds.push(cmd as string);
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['fmt {{changed_files}}'],
+      () => {},
+    );
+
+    expect(shellCmds).toHaveLength(0); // formatter was never invoked
+    expect(result.success).toBe(true);
+    expect(result.commitSha).toBeUndefined();
   });
 });
