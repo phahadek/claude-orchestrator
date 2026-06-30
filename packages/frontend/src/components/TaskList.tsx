@@ -129,6 +129,7 @@ function ReadySection({
       .filter((t) => checkedIds.has(t.taskId))
       .map((t) => ({
         notionUrl: t.notionUrl,
+        taskId: t.taskId,
         taskType: t.taskType,
         taskName: t.taskName,
       }));

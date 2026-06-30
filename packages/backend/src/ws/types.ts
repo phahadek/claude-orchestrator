@@ -401,7 +401,8 @@ export type ClientMessage =
   | {
       type: 'dispatch';
       tasks: {
-        taskUrl: string;
+        taskUrl?: string;
+        taskId?: string;
         projectContextUrl: string;
         taskType?: string;
         projectId: string;

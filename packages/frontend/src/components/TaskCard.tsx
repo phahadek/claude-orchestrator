@@ -152,6 +152,7 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
     dispatchTask([
       {
         notionUrl: task.notionUrl,
+        taskId: task.taskId,
         taskType: task.taskType,
         taskName: task.taskName,
       },
