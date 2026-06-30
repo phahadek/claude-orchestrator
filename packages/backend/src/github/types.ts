@@ -137,11 +137,9 @@ export interface ReviewJob {
   projectId?: string;
 }
 
-export type DispositionKind = 'addressed' | 'wont_fix' | 'out_of_scope';
-
 export interface ParsedDispositionItem {
   comment_id: number;
-  disposition: DispositionKind;
+  disposition: 'addressed' | 'wont_fix' | 'out_of_scope';
   reason?: string;
 }
 
