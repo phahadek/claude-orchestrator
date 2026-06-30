@@ -167,15 +167,24 @@ export interface HumanComment {
   body: string;
   path?: string | null;
   line?: number | null;
+  pullRequestReviewId?: number | null;
 }
 
+const ROUTING_FOOTER =
+  `\n\nThe orchestrator will automatically resume the merge process once you push.\n\n` +
+  `**Important:** Do NOT rebase onto dev or merge dev into your branch. ` +
+  `Just commit your fixes and push directly to your feature branch. ` +
+  `Rebasing or merging would pull in unrelated changes from other merged PRs ` +
+  `and pollute the PR diff.`;
+
 /**
- * Format human reviewer comments into a message for the coding session.
- * Mirrors the structure of formatReviewFeedback() so the session doesn't
- * care whether feedback originated from AI or human review.
+ * Format a coalesced batch of comments from one reviewer after the quiescence
+ * buffer flushes. Groups inline review comments under their parent review via
+ * pullRequestReviewId so related feedback is co-located in the message.
  */
-export function formatHumanReviewFeedback(
+export function formatCoalescedHumanBatch(
   prNumber: number,
+  author: string,
   comments: HumanComment[],
   hasChangesRequested: boolean,
 ): string {
@@ -187,24 +196,58 @@ export function formatHumanReviewFeedback(
     ? `**The reviewer has requested changes. Please address all feedback below and push your changes.**`
     : `**The reviewer has left comments. Please review and address them as appropriate, then push your changes.**`;
 
-  const commentBlocks = comments.map((c) => {
-    const location =
-      c.path != null
-        ? ` (\`${c.path}${c.line != null ? `:${c.line}` : ''}\`)`
-        : '';
-    return `### @${c.author}${location}\n${c.body.trim()}`;
-  });
+  // Partition by comment type
+  const reviewBodies = new Map<number, string>(); // GitHub review id → body
+  const inlinesByReview = new Map<number | null, HumanComment[]>();
+  const issueComments: HumanComment[] = [];
 
-  return (
-    `${header}\n\n` +
-    `${verdict}\n\n` +
-    commentBlocks.join('\n\n') +
-    `\n\nThe orchestrator will automatically resume the merge process once you push.\n\n` +
-    `**Important:** Do NOT rebase onto dev or merge dev into your branch. ` +
-    `Just commit your fixes and push directly to your feature branch. ` +
-    `Rebasing or merging would pull in unrelated changes from other merged PRs ` +
-    `and pollute the PR diff.`
-  );
+  for (const c of comments) {
+    if (c.id.startsWith('rv_')) {
+      reviewBodies.set(parseInt(c.id.slice(3), 10), c.body);
+    } else if (c.id.startsWith('rc_')) {
+      const key = c.pullRequestReviewId ?? null;
+      const group = inlinesByReview.get(key) ?? [];
+      group.push(c);
+      inlinesByReview.set(key, group);
+    } else {
+      issueComments.push(c);
+    }
+  }
+
+  const blocks: string[] = [];
+
+  // Review bodies with their inline comments nested underneath
+  for (const [reviewId, body] of reviewBodies) {
+    const lines = [`### @${author} (review)\n${body.trim()}`];
+    const inlines = inlinesByReview.get(reviewId) ?? [];
+    for (const inline of inlines) {
+      const loc =
+        inline.path != null
+          ? ` (\`${inline.path}${inline.line != null ? `:${inline.line}` : ''}\`)`
+          : '';
+      lines.push(`#### Inline comment${loc}\n${inline.body.trim()}`);
+    }
+    inlinesByReview.delete(reviewId);
+    blocks.push(lines.join('\n\n'));
+  }
+
+  // Orphaned inline comments (parent review body not in this batch)
+  for (const [, inlines] of inlinesByReview) {
+    for (const inline of inlines) {
+      const loc =
+        inline.path != null
+          ? ` (\`${inline.path}${inline.line != null ? `:${inline.line}` : ''}\`)`
+          : '';
+      blocks.push(`### @${author}${loc}\n${inline.body.trim()}`);
+    }
+  }
+
+  // Issue / PR comments
+  for (const c of issueComments) {
+    blocks.push(`### @${author}\n${c.body.trim()}`);
+  }
+
+  return `${header}\n\n${verdict}\n\n${blocks.join('\n\n')}${ROUTING_FOOTER}`;
 }
 
 export interface NoOpInvestigationArgs {
