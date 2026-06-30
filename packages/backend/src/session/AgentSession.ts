@@ -31,7 +31,6 @@ import {
   ackPendingComments,
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
-  setSessionLastErrorDetail,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -496,15 +495,12 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           `escalation deadlock: all ${MAX_ESCALATION_RETRIES + 1} attempts exhausted — marking session as error`,
         );
         if (!this.hasEnded) {
-          const detail = `context overflow: all ${MAX_ESCALATION_RETRIES + 1} escalation attempts exhausted`;
           this.sessionManager?.markSessionErrored?.(
             this.sessionId,
             'error',
             'escalation_deadlock',
-            detail,
           );
           if (!this.hasEnded) {
-            setSessionLastErrorDetail(this.sessionId, detail);
             updateSessionStatus(this.sessionId, 'error', Date.now());
             this.broadcast({
               type: 'session_ended',
@@ -533,16 +529,12 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       // — error the session regardless of exit code.
       if (this.contextOverflowDetected) {
         if (!this.hasEnded) {
-          const detail =
-            'context window full; no large-task model available to escalate';
           this.sessionManager?.markSessionErrored?.(
             this.sessionId,
             'error',
             'context_overflow',
-            detail,
           );
           if (!this.hasEnded) {
-            setSessionLastErrorDetail(this.sessionId, detail);
             updateSessionStatus(this.sessionId, 'error', Date.now());
             this.broadcast({
               type: 'session_ended',
@@ -592,17 +584,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         const status = exitCode === null ? 'killed' : 'error';
         const reason =
           exitCode === null ? 'runner_killed_unexpected' : 'runner_non_zero';
-        const detail = this.buildExitDetail(exitCode);
         if (!this.hasEnded) {
           this.sessionManager?.markSessionErrored?.(
             this.sessionId,
             status,
             reason,
-            detail,
           );
           if (!this.hasEnded) {
             // Fallback when sessionManager is absent (e.g. unit tests without a manager)
-            setSessionLastErrorDetail(this.sessionId, detail);
             updateSessionStatus(this.sessionId, status, Date.now());
             this.broadcast({
               type: 'session_ended',
@@ -633,18 +622,6 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     return (
       payload.includes('api_error') || payload.includes('overloaded_error')
     );
-  }
-
-  /** Build a concise detail string for a non-zero or null exit code. */
-  private buildExitDetail(exitCode: number | null): string {
-    if (exitCode === null) return 'process killed unexpectedly';
-    const base = `process exited with code ${exitCode}`;
-    const events = getEventsBySession(this.sessionId);
-    if (events.length === 0) return base;
-    const last = events[events.length - 1];
-    if (eventKind(last) !== 'error') return base;
-    const snippet = last.payload.slice(0, 120).replace(/\n/g, ' ');
-    return `${base}; last error: ${snippet}`;
   }
 
   /**
@@ -2180,11 +2157,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         this.sessionId,
         'killed',
         'user_kill',
-        'killed by user request',
       );
       if (!this.hasEnded) {
         // Fallback when sessionManager is absent (e.g. unit tests without a manager)
-        setSessionLastErrorDetail(this.sessionId, 'killed by user request');
         updateSessionStatus(this.sessionId, 'killed', Date.now());
         this.broadcast({
           type: 'session_ended',

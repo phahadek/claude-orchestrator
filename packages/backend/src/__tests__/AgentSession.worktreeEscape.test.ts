@@ -58,7 +58,6 @@ vi.mock('../db/queries', () => ({
   setSessionPauseReason: vi.fn(),
   insertPauseInterval: vi.fn(),
   incrementCompactionCount: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
 }));
 
 vi.mock('../orchestration/localBranchHelpers', () => ({

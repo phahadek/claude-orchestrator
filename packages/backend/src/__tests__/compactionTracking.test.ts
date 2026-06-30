@@ -62,7 +62,6 @@ vi.mock('../db/queries', () => ({
   getProjectRowById: vi.fn(() => null),
   insertLocalBranch: vi.fn(),
   setSessionMetadata: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
 }));
 
 vi.mock('../orchestration/localBranchHelpers', () => ({

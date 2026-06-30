@@ -142,7 +142,6 @@ vi.mock('../db/queries', () => ({
   getPRByNotionTaskId: vi.fn(() => null),
   listMilestonesByProject: vi.fn(() => []),
   resetTaskCrashCount: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
 }));
 
 vi.mock('../orchestration/localBranchHelpers', () => ({

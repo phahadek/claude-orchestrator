@@ -71,8 +71,6 @@ vi.mock('../db/queries', () => ({
   getPRByNumber: vi.fn().mockReturnValue(null),
   hasActiveSessionForTask: vi.fn().mockReturnValue(false),
   getSetting: vi.fn().mockReturnValue(null),
-  setSessionPauseReason: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
 }));
 
 vi.mock('../tasks/TaskBackend', () => ({
@@ -272,7 +270,6 @@ describe('SessionManager.completeStart() failure handling', () => {
       expect.any(String),
       'error',
       'launch_failed',
-      expect.any(String),
     );
   });
 

@@ -56,7 +56,6 @@ vi.mock('../db/queries', () => ({
   getSession: vi.fn(() => null),
   getProjectRowById: vi.fn(() => null),
   insertLocalBranch: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
 }));
 
 // ── Mock config — getProjectById controlled per test ──────────────────────────

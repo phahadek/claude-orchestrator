@@ -496,17 +496,11 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     status: 'error' | 'killed',
     reason: string,
-    detail?: string,
   ): void {
     const endedAt = Date.now();
 
     // 1. Update DB status and ended_at
     updateSessionStatus(sessionId, status, endedAt);
-
-    // Persist error detail so failures are diagnosable without reading session_events.
-    if (detail) {
-      setSessionLastErrorDetail(sessionId, detail);
-    }
 
     // 2. Set hasEnded on live in-memory session to prevent double-broadcasts
     const liveSession = this.sessions.get(sessionId);
@@ -776,11 +770,12 @@ export class SessionManager extends EventEmitter {
       // real cause instead of the generic "no output to parse" fallback.
       try {
         setSessionPauseReason(sessionId, 'launch_failed');
+        setSessionLastErrorDetail(sessionId, errorDetail);
       } catch {
         // Best-effort — DB may be unavailable or mocked without these functions.
       }
       await this.cleanupPartialWorktree(sessionId);
-      this.markSessionErrored(sessionId, 'error', 'launch_failed', errorDetail);
+      this.markSessionErrored(sessionId, 'error', 'launch_failed');
       this.emit('message', {
         type: 'error',
         message: `Session launch failed: ${errorDetail}`,
@@ -1362,8 +1357,7 @@ export class SessionManager extends EventEmitter {
         // If run() threw before broadcasting session_ended, update SQLite and
         // notify the frontend so the session doesn't stay stuck at 'running'.
         if (!session.hasEnded) {
-          const detail = err instanceof Error ? err.message : String(err);
-          this.markSessionErrored(sessionId, 'error', 'run_error', detail);
+          this.markSessionErrored(sessionId, 'error', 'run_error');
         }
         return this.cleanupWorktree(
           sessionId,
@@ -1436,7 +1430,6 @@ export class SessionManager extends EventEmitter {
         row.session_id,
         'error',
         'orphan_project_not_found',
-        `project ${row.project_id ?? 'unknown'} not found`,
       );
       return;
     }
@@ -1453,12 +1446,7 @@ export class SessionManager extends EventEmitter {
       logger.warn(
         `[SessionManager] resumability pre-check failed for ${row.session_id}: worktree missing (${worktreePath}) — marking error`,
       );
-      this.markSessionErrored(
-        row.session_id,
-        'error',
-        'worktree_missing',
-        `worktree missing: ${worktreePath}`,
-      );
+      this.markSessionErrored(row.session_id, 'error', 'worktree_missing');
       return;
     }
 
@@ -1570,12 +1558,7 @@ export class SessionManager extends EventEmitter {
         logger.warn(
           `[SessionManager] resumeSession ${row.session_id}: no events within 30s after resume — marking as error`,
         );
-        this.markSessionErrored(
-          row.session_id,
-          'error',
-          'resume_timeout',
-          'no events within 30s of resume',
-        );
+        this.markSessionErrored(row.session_id, 'error', 'resume_timeout');
         session.kill().catch(() => {});
       }
     }, RESUME_TIMEOUT_MS);
@@ -1751,12 +1734,7 @@ export class SessionManager extends EventEmitter {
           `[SessionManager] failed to resume ${row.session_id}: ${err}`,
         );
         // Mark as error so it doesn't retry forever on subsequent restarts.
-        this.markSessionErrored(
-          row.session_id,
-          'error',
-          'resume_failed',
-          err instanceof Error ? err.message : String(err),
-        );
+        this.markSessionErrored(row.session_id, 'error', 'resume_failed');
       }
     }
 
@@ -1764,12 +1742,7 @@ export class SessionManager extends EventEmitter {
       logger.warn(
         `[SessionManager] max concurrent code sessions reached — marking orphan ${row.session_id} as error`,
       );
-      this.markSessionErrored(
-        row.session_id,
-        'error',
-        'max_concurrent',
-        'max concurrent code sessions reached',
-      );
+      this.markSessionErrored(row.session_id, 'error', 'max_concurrent');
     }
   }
 
@@ -2396,12 +2369,7 @@ export class SessionManager extends EventEmitter {
       const msg = `sendOrResume: worktree recreation failed for session ${sessionId.slice(0, 8)}: ${(err as Error).message}\nstderr: ${stderr}`;
       logger.error(`[SessionManager] ${msg}`);
 
-      this.markSessionErrored(
-        sessionId,
-        'error',
-        'worktree_recreate_failed',
-        `worktree recreation failed: ${(err as Error).message}`,
-      );
+      this.markSessionErrored(sessionId, 'error', 'worktree_recreate_failed');
 
       this.emit('message', {
         type: 'session_action_failed',

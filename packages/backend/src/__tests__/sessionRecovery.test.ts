@@ -11,7 +11,6 @@ vi.mock('../db/queries', () => ({
   insertSessionAudit: vi.fn(),
   getPRByNotionTaskId: vi.fn(() => null),
   getEventsBySession: vi.fn(() => []),
-  setSessionLastErrorDetail: vi.fn(),
 }));
 
 vi.mock('../orchestration/localBranchHelpers', () => ({

@@ -42,7 +42,6 @@ vi.mock('../db/queries', () => ({
   setSessionModel: vi.fn(),
   getPRBySessionId: vi.fn(() => null),
   getPRByNotionTaskId: vi.fn(() => null),
-  setSessionLastErrorDetail: vi.fn(),
 }));
 
 import { AgentSession, isPushCommand } from '../session/AgentSession';

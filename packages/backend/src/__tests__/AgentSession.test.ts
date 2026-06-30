@@ -58,7 +58,6 @@ vi.mock('../db/queries', () => ({
   getProjectRowById: vi.fn(() => null),
   insertLocalBranch: vi.fn(),
   setSessionMetadata: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
 }));
 
 // Mock local branch helpers to avoid real git calls in tests

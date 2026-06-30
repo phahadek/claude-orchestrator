@@ -26,7 +26,6 @@ vi.mock('child_process', async (importOriginal) => {
 vi.mock('../db/queries', () => ({
   getSession: vi.fn(),
   getPRBySessionId: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
 }));
 
 import { pruneSessionBranch } from '../session/SessionManager';

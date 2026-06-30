@@ -182,7 +182,6 @@ vi.mock('../db/queries', () => ({
   // Returning null makes it fall through to the default personal-mode config (no dockerMandatory).
   getSetting: vi.fn(() => null),
   hasActiveSessionForTask: vi.fn(() => false),
-  setSessionLastErrorDetail: vi.fn(),
 }));
 
 vi.mock('../session/sessionRecovery', () => ({

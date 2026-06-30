@@ -157,7 +157,6 @@ vi.mock('../db/queries', () => ({
   setHeadSha: vi.fn(),
   hasActiveSessionForTask: vi.fn(() => false),
   getSetting: vi.fn().mockReturnValue(null),
-  setSessionLastErrorDetail: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog', () => ({
