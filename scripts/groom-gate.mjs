@@ -101,7 +101,13 @@ const gateRecorded =
         Array.isArray(gc.items) &&
         typeof gc.appended_at === 'string')));
 
-if (signedOff && depsClassified && sizeClassified && repoAssigned && gateRecorded)
+if (
+  signedOff &&
+  depsClassified &&
+  sizeClassified &&
+  repoAssigned &&
+  gateRecorded
+)
   process.exit(0); // fully gated → allow
 
 const reasons = [];

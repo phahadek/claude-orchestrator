@@ -1,6 +1,12 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, mkdtempSync } from 'fs';
+import {
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  mkdtempSync,
+} from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 
@@ -13,10 +19,42 @@ const TOOL_TASK_ID = 'toolabc12345678901234567890abcd';
 const DSGN_TASK_ID = 'dsgnaabc12345678901234567890abc';
 
 const FIXTURE_ROWS = [
-  { id: CODE_TASK_ID, 'Task Name': 'Implement feature A', Type: '💻 Code', Status: '🔲 Backlog', 'Depends On': '', Priority: '', url: 'n/a' },
-  { id: TOOL_TASK_ID, 'Task Name': 'Set up CI pipeline', Type: '🛠️ Tooling', Status: '🔲 Backlog', 'Depends On': '', Priority: '', url: 'n/a' },
-  { id: GATE_TASK_ID, 'Task Name': 'M-test Manual Verification Gate', Type: '🚦 Gate', Status: '🗂️ Ready', 'Depends On': '', Priority: '', url: 'n/a' },
-  { id: DSGN_TASK_ID, 'Task Name': 'Design auth flow', Type: '📐 Design', Status: '🔲 Backlog', 'Depends On': '', Priority: '', url: 'n/a' },
+  {
+    id: CODE_TASK_ID,
+    'Task Name': 'Implement feature A',
+    Type: '💻 Code',
+    Status: '🔲 Backlog',
+    'Depends On': '',
+    Priority: '',
+    url: 'n/a',
+  },
+  {
+    id: TOOL_TASK_ID,
+    'Task Name': 'Set up CI pipeline',
+    Type: '🛠️ Tooling',
+    Status: '🔲 Backlog',
+    'Depends On': '',
+    Priority: '',
+    url: 'n/a',
+  },
+  {
+    id: GATE_TASK_ID,
+    'Task Name': 'M-test Manual Verification Gate',
+    Type: '🚦 Gate',
+    Status: '🗂️ Ready',
+    'Depends On': '',
+    Priority: '',
+    url: 'n/a',
+  },
+  {
+    id: DSGN_TASK_ID,
+    'Task Name': 'Design auth flow',
+    Type: '📐 Design',
+    Status: '🔲 Backlog',
+    'Depends On': '',
+    Priority: '',
+    url: 'n/a',
+  },
 ];
 
 function setupEnv(tmpDir: string) {
@@ -37,10 +75,19 @@ function setupEnv(tmpDir: string) {
   mkdirSync(repoDir);
   writeFileSync(join(repoDir, 'README.md'), 'test');
   spawnSync('git', ['init'], { cwd: repoDir, encoding: 'utf8' });
-  spawnSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repoDir, encoding: 'utf8' });
-  spawnSync('git', ['config', 'user.name', 'Test'], { cwd: repoDir, encoding: 'utf8' });
+  spawnSync('git', ['config', 'user.email', 'test@test.com'], {
+    cwd: repoDir,
+    encoding: 'utf8',
+  });
+  spawnSync('git', ['config', 'user.name', 'Test'], {
+    cwd: repoDir,
+    encoding: 'utf8',
+  });
   spawnSync('git', ['add', '.'], { cwd: repoDir, encoding: 'utf8' });
-  spawnSync('git', ['commit', '-m', 'init'], { cwd: repoDir, encoding: 'utf8' });
+  spawnSync('git', ['commit', '-m', 'init'], {
+    cwd: repoDir,
+    encoding: 'utf8',
+  });
   spawnSync('git', ['branch', '-m', 'dev'], { cwd: repoDir, encoding: 'utf8' });
 
   // Manifest
@@ -50,7 +97,12 @@ function setupEnv(tmpDir: string) {
   const manifest = {
     integration_branch: 'dev',
     milestones: { 'M-test': { board: 'fake-board-id', neighbours: [] } },
-    status_vocab: { backlog: '🔲 Backlog', ready: '🗂️ Ready', done: '✅ Done', deferred: '⏭️ Deferred' },
+    status_vocab: {
+      backlog: '🔲 Backlog',
+      ready: '🗂️ Ready',
+      done: '✅ Done',
+      deferred: '⏭️ Deferred',
+    },
     context_pages: [],
     packages: [],
     area_aliases: {},
@@ -64,7 +116,15 @@ function setupEnv(tmpDir: string) {
 function runLoader(repoDir: string, manifestPath: string, stubDir: string) {
   return spawnSync(
     process.execPath,
-    [LOADER, '--milestone', 'M-test', '--repo', repoDir, '--manifest', manifestPath],
+    [
+      LOADER,
+      '--milestone',
+      'M-test',
+      '--repo',
+      repoDir,
+      '--manifest',
+      manifestPath,
+    ],
     {
       encoding: 'utf8',
       env: { ...process.env, GROOM_SCRIPTS_DIR_OVERRIDE: stubDir },
@@ -85,7 +145,13 @@ describe('groom-load.mjs — gate_contribution seeding', () => {
     const r = runLoader(repoDir, manifestPath, stubDir);
     expect(r.status).toBe(0);
 
-    const bundlePath = join(repoDir, '.skill-cache', 'grooming', 'M-test', 'context-bundle.json');
+    const bundlePath = join(
+      repoDir,
+      '.skill-cache',
+      'grooming',
+      'M-test',
+      'context-bundle.json',
+    );
     const bundle = JSON.parse(readFileSync(bundlePath, 'utf8'));
     expect(bundle.milestone_gate_task_id).toBe(GATE_TASK_ID);
   });
@@ -96,7 +162,13 @@ describe('groom-load.mjs — gate_contribution seeding', () => {
     const r = runLoader(repoDir, manifestPath, stubDir);
     expect(r.status).toBe(0);
 
-    const statePath = join(repoDir, '.skill-cache', 'grooming', 'M-test', 'grooming-state.json');
+    const statePath = join(
+      repoDir,
+      '.skill-cache',
+      'grooming',
+      'M-test',
+      'grooming-state.json',
+    );
     const state = JSON.parse(readFileSync(statePath, 'utf8'));
     const codeEntry = state[CODE_TASK_ID];
     expect(codeEntry).toBeDefined();
@@ -110,7 +182,13 @@ describe('groom-load.mjs — gate_contribution seeding', () => {
     const r = runLoader(repoDir, manifestPath, stubDir);
     expect(r.status).toBe(0);
 
-    const statePath = join(repoDir, '.skill-cache', 'grooming', 'M-test', 'grooming-state.json');
+    const statePath = join(
+      repoDir,
+      '.skill-cache',
+      'grooming',
+      'M-test',
+      'grooming-state.json',
+    );
     const state = JSON.parse(readFileSync(statePath, 'utf8'));
     const toolEntry = state[TOOL_TASK_ID];
     expect(toolEntry).toBeDefined();
@@ -124,7 +202,13 @@ describe('groom-load.mjs — gate_contribution seeding', () => {
     const r = runLoader(repoDir, manifestPath, stubDir);
     expect(r.status).toBe(0);
 
-    const statePath = join(repoDir, '.skill-cache', 'grooming', 'M-test', 'grooming-state.json');
+    const statePath = join(
+      repoDir,
+      '.skill-cache',
+      'grooming',
+      'M-test',
+      'grooming-state.json',
+    );
     const state = JSON.parse(readFileSync(statePath, 'utf8'));
     const dsgnEntry = state[DSGN_TASK_ID];
     expect(dsgnEntry).toBeDefined();

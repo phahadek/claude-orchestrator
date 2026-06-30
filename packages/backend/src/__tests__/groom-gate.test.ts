@@ -144,7 +144,11 @@ describe('groom-gate.mjs — gate_contribution check (4th artifact)', () => {
   it('blocks a Tooling task when gate_contribution is null', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
     makeStateFile(tmpDir, {
-      [PAGE_ID]: { ...VALID_CODE_BASE, type: '🛠️ Tooling', gate_contribution: null },
+      [PAGE_ID]: {
+        ...VALID_CODE_BASE,
+        type: '🛠️ Tooling',
+        gate_contribution: null,
+      },
     });
     const r = runGate(tmpDir, PAGE_ID);
     expect(r.status).toBe(2);
@@ -154,7 +158,10 @@ describe('groom-gate.mjs — gate_contribution check (4th artifact)', () => {
   it('allows a Code task when gate_contribution is {"decision":"none"}', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
     makeStateFile(tmpDir, {
-      [PAGE_ID]: { ...VALID_CODE_BASE, gate_contribution: { decision: 'none' } },
+      [PAGE_ID]: {
+        ...VALID_CODE_BASE,
+        gate_contribution: { decision: 'none' },
+      },
     });
     const r = runGate(tmpDir, PAGE_ID);
     expect(r.status).toBe(0);

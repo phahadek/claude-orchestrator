@@ -48,7 +48,9 @@ import { resolve, join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
 
-const SCRIPT_DIR = process.env.GROOM_SCRIPTS_DIR_OVERRIDE ?? dirname(fileURLToPath(import.meta.url));
+const SCRIPT_DIR =
+  process.env.GROOM_SCRIPTS_DIR_OVERRIDE ??
+  dirname(fileURLToPath(import.meta.url));
 
 // ── Arg parsing (same idiom as the sibling scripts) ──────────────────
 const args = process.argv.slice(2);
@@ -569,9 +571,12 @@ for (const t of targetTasks) {
     );
     if (!('hard_block_deps' in state[t.id])) state[t.id].hard_block_deps = null; // back-compat
     if (!('size_check' in state[t.id])) state[t.id].size_check = null; // back-compat
-    if (!('gate_contribution' in state[t.id])) { // back-compat
+    if (!('gate_contribution' in state[t.id])) {
+      // back-compat
       const isCodeOrTooling = t.type === '💻 Code' || t.type === '🛠️ Tooling';
-      state[t.id].gate_contribution = isCodeOrTooling ? null : { decision: 'n/a' };
+      state[t.id].gate_contribution = isCodeOrTooling
+        ? null
+        : { decision: 'n/a' };
     }
   }
 }
