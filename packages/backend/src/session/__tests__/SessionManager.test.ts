@@ -1372,9 +1372,7 @@ describe('start() — bootstrap gate', () => {
     // Default config has no bootstrap_script and empty required_* — already set in beforeEach.
     sm.start('https://notion.so/task', 'https://notion.so/project', START_OPTS);
 
-    await vi.waitFor(() =>
-      expect(vi.mocked(AgentSession)).toHaveBeenCalled(),
-    );
+    await vi.waitFor(() => expect(vi.mocked(AgentSession)).toHaveBeenCalled());
 
     // Bootstrap gate must not have fired — no bootstrap-related error detail set
     const calls = vi.mocked(setSessionLastErrorDetail).mock.calls;
