@@ -6,6 +6,7 @@ import type {
   DisplayStatus,
   PauseReason,
 } from '../../types/taskView';
+import type { RecoveryDescriptor } from '@claude-orchestrator/backend/src/db/pauseReason';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 
 function makeTask(overrides?: Partial<TaskView>): TaskView {
@@ -741,46 +742,109 @@ describe('TaskCard', () => {
     expect(badge.getAttribute('data-pause-source')).toBe('merge');
   });
 
-  // ── Unblock button ────────────────────────────────────────────────────────
+  // ── Recovery control (descriptor-driven) ─────────────────────────────────
 
-  it('renders Unblock button for blocked tasks', () => {
+  it('renders recovery button when recoveryDescriptor.available is true', () => {
+    const recovery: RecoveryDescriptor = {
+      available: true,
+      action: 'resume',
+      label: 'Resume',
+    };
     render(
       <TaskCard
-        task={makeTask({ displayStatus: 'blocked', taskType: '💻 Code' })}
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          taskType: '💻 Code',
+          recoveryDescriptor: recovery,
+        })}
         selected={false}
         onClick={vi.fn()}
         send={noop}
         project={makeProject()}
       />,
     );
-    expect(screen.getByRole('button', { name: /unblock/i })).toBeDefined();
+    expect(screen.getByRole('button', { name: /resume/i })).toBeDefined();
   });
 
-  it('does not render Unblock button for non-blocked tasks', () => {
+  it('does not render recovery button when recoveryDescriptor.available is false', () => {
+    const recovery: RecoveryDescriptor = { available: false };
     render(
       <TaskCard
-        task={makeTask({ displayStatus: 'ready', taskType: '💻 Code' })}
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          taskType: '💻 Code',
+          recoveryDescriptor: recovery,
+        })}
         selected={false}
         onClick={vi.fn()}
         send={noop}
         project={makeProject()}
       />,
     );
-    expect(screen.queryByRole('button', { name: /unblock/i })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: /resume|rerun|redispatch/i }),
+    ).toBeNull();
   });
 
-  it('Unblock button POSTs to the unblock route and optimistically sets status to ready', async () => {
+  it('does not render recovery button when recoveryDescriptor is absent', () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          taskType: '💻 Code',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(
+      screen.queryByRole('button', { name: /resume|rerun|redispatch/i }),
+    ).toBeNull();
+  });
+
+  it('recovery button label comes from recoveryDescriptor.label', () => {
+    const recovery: RecoveryDescriptor = {
+      available: true,
+      action: 'rerun',
+      label: 'Rerun',
+    };
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          taskType: '💻 Code',
+          recoveryDescriptor: recovery,
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /rerun/i })).toBeDefined();
+  });
+
+  it('recovery button POSTs to the recover route with correct taskId and projectId', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
-      json: async () => ({ ok: true, newStatus: '🗂️ Ready' }),
+      json: async () => ({ ok: true }),
     } as Response);
+
+    const recovery: RecoveryDescriptor = {
+      available: true,
+      action: 'resume',
+      label: 'Resume',
+    };
 
     render(
       <TaskCard
         task={makeTask({
-          taskId: 'task-blocked',
-          displayStatus: 'blocked',
+          taskId: 'task-paused',
+          displayStatus: 'needs_attention',
           taskType: '💻 Code',
+          recoveryDescriptor: recovery,
         })}
         selected={false}
         onClick={vi.fn()}
@@ -789,16 +853,44 @@ describe('TaskCard', () => {
       />,
     );
 
-    const btn = screen.getByRole('button', { name: /unblock/i });
+    const btn = screen.getByRole('button', { name: /resume/i });
     await act(async () => {
       fireEvent.click(btn);
     });
 
     expect(fetchSpy).toHaveBeenCalledWith(
-      expect.stringContaining('/api/tasks/task-blocked/unblock'),
+      expect.stringContaining('/api/tasks/task-paused/recover'),
       expect.objectContaining({ method: 'POST' }),
     );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('projectId=proj-1'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+
     fetchSpy.mockRestore();
+  });
+
+  it('send_message is not blocked for needs_attention card — send prop remains callable', () => {
+    const send = vi.fn();
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          taskType: '💻 Code',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={send}
+        project={makeProject()}
+      />,
+    );
+    // The recovery control uses the REST API; the send prop is never gated on displayStatus
+    send({ type: 'send_message', sessionId: 'sess-1', message: 'hello' });
+    expect(send).toHaveBeenCalledWith({
+      type: 'send_message',
+      sessionId: 'sess-1',
+      message: 'hello',
+    });
   });
 
   it('derives source tag and severity from JSON struct pauseReason', () => {
@@ -882,118 +974,5 @@ describe('TaskCard', () => {
       />,
     );
     expect(screen.queryByText('⚠ Needs repo')).toBeNull();
-  });
-
-  // ── Unpark button ─────────────────────────────────────────────────────────
-
-  it('renders Unpark button for cap-escalated tasks with a PR', () => {
-    const capPauseReason = JSON.stringify({
-      reason: 'stalled_reconcile_cap',
-      source: 'review',
-      severity: 'needs_attention',
-      retry_strategy: 'manual_action',
-    });
-    render(
-      <TaskCard
-        task={makeTask({
-          displayStatus: 'needs_attention',
-          pauseReason: capPauseReason as unknown as PauseReason,
-          pr: makePr(),
-          taskType: '💻 Code',
-        })}
-        selected={false}
-        onClick={vi.fn()}
-        send={noop}
-        project={makeProject()}
-      />,
-    );
-    expect(screen.getByRole('button', { name: /unpark/i })).toBeDefined();
-  });
-
-  it('does not render Unpark button when PR is absent', () => {
-    const capPauseReason = JSON.stringify({
-      reason: 'stalled_reconcile_cap',
-      source: 'review',
-      severity: 'needs_attention',
-      retry_strategy: 'manual_action',
-    });
-    render(
-      <TaskCard
-        task={makeTask({
-          displayStatus: 'needs_attention',
-          pauseReason: capPauseReason as unknown as PauseReason,
-          pr: null,
-          taskType: '💻 Code',
-        })}
-        selected={false}
-        onClick={vi.fn()}
-        send={noop}
-        project={makeProject()}
-      />,
-    );
-    expect(screen.queryByRole('button', { name: /unpark/i })).toBeNull();
-  });
-
-  it('does not render Unpark button for non-cap pause reasons', () => {
-    render(
-      <TaskCard
-        task={makeTask({
-          displayStatus: 'needs_attention',
-          pauseReason: 'max_reviews',
-          pr: makePr(),
-          taskType: '💻 Code',
-        })}
-        selected={false}
-        onClick={vi.fn()}
-        send={noop}
-        project={makeProject()}
-      />,
-    );
-    expect(screen.queryByRole('button', { name: /unpark/i })).toBeNull();
-  });
-
-  it('Unpark button POSTs to the unpark route with correct prNumber and projectId', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({ ok: true }),
-    } as Response);
-
-    const capPauseReason = JSON.stringify({
-      reason: 'stalled_reconcile_cap',
-      source: 'review',
-      severity: 'needs_attention',
-      retry_strategy: 'manual_action',
-    });
-
-    render(
-      <TaskCard
-        task={makeTask({
-          displayStatus: 'needs_attention',
-          pauseReason: capPauseReason as unknown as PauseReason,
-          pr: makePr({ prNumber: 570 }),
-          taskType: '💻 Code',
-        })}
-        selected={false}
-        onClick={vi.fn()}
-        send={noop}
-        project={makeProject({ id: 'proj-1' })}
-      />,
-    );
-
-    const btn = screen.getByRole('button', { name: /unpark/i });
-    await act(async () => {
-      fireEvent.click(btn);
-    });
-
-    expect(fetchSpy).toHaveBeenCalledWith(
-      expect.stringContaining('/api/prs/570/unpark'),
-      expect.objectContaining({ method: 'POST' }),
-    );
-    expect(fetchSpy).toHaveBeenCalledWith(
-      expect.stringContaining('projectId=proj-1'),
-      expect.objectContaining({ method: 'POST' }),
-    );
-
-    fetchSpy.mockRestore();
   });
 });
