@@ -150,11 +150,12 @@ export function runMigrations(target: Database.Database): void {
     );
 
     CREATE TABLE IF NOT EXISTS pr_review_comments_routed (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      pr_number  INTEGER NOT NULL,
-      repo       TEXT    NOT NULL,
-      comment_id TEXT    NOT NULL,
-      routed_at  INTEGER NOT NULL,
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      pr_number    INTEGER NOT NULL,
+      repo         TEXT    NOT NULL,
+      comment_id   TEXT    NOT NULL,
+      routed_at    INTEGER NOT NULL,
+      routed_state TEXT    NOT NULL DEFAULT 'pending',
       UNIQUE(pr_number, repo, comment_id)
     );
     CREATE INDEX IF NOT EXISTS idx_pr_review_comments_routed_pr ON pr_review_comments_routed(pr_number, repo);
@@ -823,6 +824,25 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  {
+    let routedStateColAdded = false;
+    try {
+      target.exec(
+        `ALTER TABLE pr_review_comments_routed ADD COLUMN routed_state TEXT NOT NULL DEFAULT 'pending'`,
+      );
+      routedStateColAdded = true;
+    } catch {
+      /* already exists */
+    }
+    if (routedStateColAdded) {
+      // Backfill rows that existed before this migration — they were already
+      // delivered, so mark them acked so they are never re-sent.
+      target.exec(
+        `UPDATE pr_review_comments_routed SET routed_state = 'acked' WHERE routed_state = 'pending'`,
+      );
+    }
+  }
+
   try {
     target.exec(`ALTER TABLE pull_requests ADD COLUMN conflict_nudge_sha TEXT`);
   } catch {

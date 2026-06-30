@@ -2282,6 +2282,12 @@ export function markLocalBranchMerged(
 
 // ─── pr_review_comments_routed ────────────────────────────────────────────────
 
+/**
+ * Returns comment IDs that have been fully acknowledged (routed_state='acked').
+ * Used by ReviewerCommentsWatcher as the dedup filter — acked comments are
+ * never re-delivered. Pending comments are NOT included so they can be
+ * re-delivered on the next poll if the consuming session died before acking.
+ */
 export function getRoutedCommentIds(
   prNumber: number,
   repo: string,
@@ -2291,13 +2297,19 @@ export function getRoutedCommentIds(
       pr_number: number;
       repo: string;
     }>(
-      `SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo`,
+      `SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'acked'`,
     )
     .all({ pr_number: prNumber, repo }) as { comment_id: string }[];
   return new Set(rows.map((r) => r.comment_id));
 }
 
-export function markCommentsRouted(
+/**
+ * Insert comment IDs as pending (at-least-once delivery record). Must be
+ * called BEFORE sendOrResume so the record survives a crash between marking
+ * and delivery. INSERT OR IGNORE preserves any existing pending row and never
+ * flips an already-acked row back to pending.
+ */
+export function markCommentsPending(
   prNumber: number,
   repo: string,
   commentIds: string[],
@@ -2310,12 +2322,23 @@ export function markCommentsRouted(
     comment_id: string;
     routed_at: number;
   }>(
-    `INSERT OR IGNORE INTO pr_review_comments_routed (pr_number, repo, comment_id, routed_at)
-     VALUES (@pr_number, @repo, @comment_id, @routed_at)`,
+    `INSERT OR IGNORE INTO pr_review_comments_routed (pr_number, repo, comment_id, routed_at, routed_state)
+     VALUES (@pr_number, @repo, @comment_id, @routed_at, 'pending')`,
   );
   for (const comment_id of commentIds) {
     stmt.run({ pr_number: prNumber, repo, comment_id, routed_at: now });
   }
+}
+
+/**
+ * Flip all pending comment rows for a PR to acked. Called on successful
+ * turn completion in AgentSession to signal that the consuming session has
+ * processed the feedback.
+ */
+export function ackPendingComments(prNumber: number, repo: string): void {
+  db.prepare<{ pr_number: number; repo: string }>(
+    `UPDATE pr_review_comments_routed SET routed_state = 'acked' WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'pending'`,
+  ).run({ pr_number: prNumber, repo });
 }
 
 // ─── devices ────────────────────────────────────────────────────────────────
