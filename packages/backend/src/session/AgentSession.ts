@@ -59,12 +59,26 @@ import {
 import { eventKind } from './eventKind';
 import { isContextOverflow } from './contextOverflow';
 import { logger } from '../logger';
+import {
+  pauseReasonFromCanonical,
+  serializePauseReason,
+} from '../db/pauseReason';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
 
 /** Maximum number of rebase nudges sent to a session before escalating to needs_attention. */
 export const MAX_REBASE_NUDGES = 3;
+
+/**
+ * Returns true when the git push error message contains GitHub's workflow-scope
+ * refusal signature. The PAT deliberately lacks the `workflow` scope so code
+ * sessions cannot modify .github/workflows/ files.
+ * Exported for unit testing.
+ */
+export function isWorkflowScopeDenied(msg: string): boolean {
+  return /refusing to allow.*without `workflow` scope/.test(msg);
+}
 
 /**
  * Returns true if the tool call represents a git push operation.
@@ -1317,6 +1331,21 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         task_id: this.taskId || null,
         payload: { stage: 'push', error: msg },
       });
+      // Workflow-scope rejection: the PAT cannot push .github/workflows/ files.
+      // No retry can fix this credential gap — pause immediately as needs_attention.
+      if (isWorkflowScopeDenied(msg)) {
+        setSessionPauseReason(
+          this.sessionId,
+          serializePauseReason(
+            pauseReasonFromCanonical(
+              'workflow_scope_denied',
+              'This task edits .github/workflows/ but the auto-dispatch PAT lacks the `workflow` scope. ' +
+                'Push requires a workflow-scoped credential; such tasks should be typed as 🛠️ Tooling and landed interactively.',
+            ),
+          ),
+        );
+        return;
+      }
       // Bounded retry: derive count from persisted events so it survives re-prompts.
       // The event recorded above is already included, so priorCount >= 1 here.
       const priorCount = countPushFailureEvents(this.sessionId);

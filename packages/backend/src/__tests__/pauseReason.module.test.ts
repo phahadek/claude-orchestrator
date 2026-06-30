@@ -12,8 +12,8 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 21 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(21);
+  it('contains exactly 26 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(26);
   });
 
   it('covers all 20 legacy PauseReason values', () => {
