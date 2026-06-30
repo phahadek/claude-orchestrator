@@ -745,6 +745,7 @@ export class GitHubClient {
         path: string;
         line: number | null;
         original_line: number | null;
+        pull_request_review_id: number | null;
       }>
     >(`/repos/${r}/pulls/${prNumber}/comments?per_page=100`);
     return data.map((c) => ({
@@ -755,6 +756,7 @@ export class GitHubClient {
       createdAt: c.created_at,
       path: c.path,
       line: c.line ?? c.original_line ?? null,
+      pullRequestReviewId: c.pull_request_review_id ?? null,
     }));
   }
 
@@ -1369,6 +1371,7 @@ export interface PRCommentSummary {
   createdAt: string;
   path?: string | null;
   line?: number | null;
+  pullRequestReviewId?: number | null;
 }
 
 export interface SizeSignal {

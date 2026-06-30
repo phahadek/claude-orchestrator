@@ -14,16 +14,19 @@ vi.mock('../../config', () => ({
   getProjectByGithubRepo: vi.fn().mockReturnValue({ id: 'proj-1' }),
 }));
 vi.mock('../../config/settings', () => ({
-  typedGetSetting: vi.fn().mockReturnValue([]),
+  typedGetSetting: vi.fn((key: string) => {
+    if (key === 'reviewer_comment_quiescence_ms') return 120_000;
+    return [];
+  }),
 }));
 vi.mock('../pollUtils', () => ({
   isTerminalStalePR: vi.fn().mockReturnValue(false),
 }));
 vi.mock('../reviewUtils', () => ({
-  formatHumanReviewFeedback: vi
+  formatCoalescedHumanBatch: vi
     .fn()
     .mockImplementation(
-      (_prNum: number, comments: unknown[]) =>
+      (_prNum: number, _author: string, comments: unknown[]) =>
         `feedback(${comments.length} comments)`,
     ),
 }));
@@ -34,6 +37,7 @@ import {
   getRoutedCommentIds,
   markCommentsPending,
   ackPendingComments,
+  listUndeliveredInboxItems,
 } from '../../db/queries.js';
 import { ReviewerCommentsWatcher } from '../ReviewerCommentsWatcher.js';
 import { db } from '../../db/db.js';
@@ -93,8 +97,10 @@ beforeEach(() => {
   db.prepare(`DELETE FROM pr_review_comments_routed`).run();
   db.prepare(`DELETE FROM pull_requests`).run();
   db.prepare(`DELETE FROM sessions`).run();
+  db.prepare(`DELETE FROM session_feedback_inbox`).run();
   seedSession(SESSION_ID, 'idle');
   seedPR(PR_NUMBER, REPO, SESSION_ID);
+  vi.clearAllMocks();
 });
 
 // ── Tests for DB helpers ───────────────────────────────────────────────────────
@@ -125,9 +131,9 @@ describe('markCommentsPending / getRoutedCommentIds / ackPendingComments', () =>
   });
 });
 
-// ── Integration tests for at-least-once delivery ──────────────────────────────
+// ── Integration tests for quiescence + at-least-once delivery ────────────────
 
-function makeGitHubClient(commentId: string) {
+function makeGitHubClient(commentId: string | number) {
   return {
     listPRReviews: vi.fn().mockResolvedValue([]),
     listPRReviewComments: vi.fn().mockResolvedValue([]),
@@ -142,83 +148,103 @@ function makeGitHubClient(commentId: string) {
   };
 }
 
-function makeSessionManager() {
-  return { sendOrResume: vi.fn().mockResolvedValue(undefined) };
-}
-
-describe('ReviewerCommentsWatcher at-least-once delivery', () => {
-  it('comment delivered, session dies before turn completes → re-delivered on next poll', async () => {
-    const COMMENT_ID = '101';
+describe('ReviewerCommentsWatcher quiescence + at-least-once delivery', () => {
+  it('comment is not in DB before quiescence flush — restart re-discovers it', async () => {
+    vi.useFakeTimers();
+    const COMMENT_ID = 101;
     const github = makeGitHubClient(COMMENT_ID) as any;
-    const sessions = makeSessionManager() as any;
-    const watcher = new ReviewerCommentsWatcher(github, sessions);
+    const watcher = new ReviewerCommentsWatcher(github, {} as any);
+    const pr = db
+      .prepare(`SELECT * FROM pull_requests WHERE pr_number = ? AND repo = ?`)
+      .get(PR_NUMBER, REPO) as any;
 
-    // First poll: delivers the comment
-    await (watcher as any).pollPR(
-      db
-        .prepare(`SELECT * FROM pull_requests WHERE pr_number = ? AND repo = ?`)
-        .get(PR_NUMBER, REPO),
-    );
-    expect(sessions.sendOrResume).toHaveBeenCalledTimes(1);
+    // Poll — comment is buffered but NOT yet in DB
+    await (watcher as any).pollPR(pr);
+    expect(pendingIds(PR_NUMBER, REPO)).toHaveLength(0);
+    expect(listUndeliveredInboxItems(SESSION_ID)).toHaveLength(0);
+
+    // After quiescence window: comment is marked pending + enqueued in inbox
+    await vi.advanceTimersByTimeAsync(120_001);
     expect(pendingIds(PR_NUMBER, REPO)).toContain(`ic_${COMMENT_ID}`);
-    expect(ackedIds(PR_NUMBER, REPO)).toHaveLength(0);
+    expect(listUndeliveredInboxItems(SESSION_ID)).toHaveLength(1);
 
-    // Simulate session death — no ack fires; comment stays pending
-
-    // Second poll: re-delivers because comment is still pending (not in acked set)
-    sessions.sendOrResume.mockClear();
-    await (watcher as any).pollPR(
-      db
-        .prepare(`SELECT * FROM pull_requests WHERE pr_number = ? AND repo = ?`)
-        .get(PR_NUMBER, REPO),
-    );
-    expect(sessions.sendOrResume).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 
-  it('comment delivered, turn completes → acked and not re-delivered on next poll', async () => {
-    const COMMENT_ID = '102';
+  it('comment re-discovered on second poll (pending, not acked) → second inbox item after quiescence', async () => {
+    vi.useFakeTimers();
+    const COMMENT_ID = 102;
     const github = makeGitHubClient(COMMENT_ID) as any;
-    const sessions = makeSessionManager() as any;
-    const watcher = new ReviewerCommentsWatcher(github, sessions);
+    const watcher = new ReviewerCommentsWatcher(github, {} as any);
+    const pr = db
+      .prepare(`SELECT * FROM pull_requests WHERE pr_number = ? AND repo = ?`)
+      .get(PR_NUMBER, REPO) as any;
 
-    // First poll: delivers the comment
-    await (watcher as any).pollPR(
-      db
-        .prepare(`SELECT * FROM pull_requests WHERE pr_number = ? AND repo = ?`)
-        .get(PR_NUMBER, REPO),
-    );
-    expect(sessions.sendOrResume).toHaveBeenCalledTimes(1);
+    // First poll → buffer → flush
+    await (watcher as any).pollPR(pr);
+    await vi.advanceTimersByTimeAsync(120_001);
+    expect(listUndeliveredInboxItems(SESSION_ID)).toHaveLength(1);
+
+    // Simulate session death — no ack fires; comment stays pending
+    // Second poll: comment is pending (not acked) → getRoutedCommentIds returns empty
+    // → re-buffered → re-flush = second inbox item (at-least-once)
+    const watcher2 = new ReviewerCommentsWatcher(github, {} as any);
+    await (watcher2 as any).pollPR(pr);
+    await vi.advanceTimersByTimeAsync(120_001);
+
+    expect(listUndeliveredInboxItems(SESSION_ID)).toHaveLength(2);
+
+    vi.useRealTimers();
+  });
+
+  it('comment delivered, turn completes (acked) → not re-enqueued on next poll', async () => {
+    vi.useFakeTimers();
+    const COMMENT_ID = 103;
+    const github = makeGitHubClient(COMMENT_ID) as any;
+    const watcher = new ReviewerCommentsWatcher(github, {} as any);
+    const pr = db
+      .prepare(`SELECT * FROM pull_requests WHERE pr_number = ? AND repo = ?`)
+      .get(PR_NUMBER, REPO) as any;
+
+    // First poll → buffer → flush
+    await (watcher as any).pollPR(pr);
+    await vi.advanceTimersByTimeAsync(120_001);
+    expect(listUndeliveredInboxItems(SESSION_ID)).toHaveLength(1);
 
     // Simulate successful turn completion (ack)
     ackPendingComments(PR_NUMBER, REPO);
     expect(ackedIds(PR_NUMBER, REPO)).toContain(`ic_${COMMENT_ID}`);
 
-    // Second poll: comment is acked → not re-delivered
-    sessions.sendOrResume.mockClear();
-    await (watcher as any).pollPR(
-      db
-        .prepare(`SELECT * FROM pull_requests WHERE pr_number = ? AND repo = ?`)
-        .get(PR_NUMBER, REPO),
-    );
-    expect(sessions.sendOrResume).not.toHaveBeenCalled();
+    // Second poll: comment is acked → not re-buffered
+    const watcher2 = new ReviewerCommentsWatcher(github, {} as any);
+    await (watcher2 as any).pollPR(pr);
+    await vi.advanceTimersByTimeAsync(120_001);
+
+    // Still only 1 inbox item — not re-enqueued
+    expect(listUndeliveredInboxItems(SESSION_ID)).toHaveLength(1);
+
+    vi.useRealTimers();
   });
 
-  it('already-acked comment is never sent twice', async () => {
-    const COMMENT_ID = '103';
+  it('already-acked comment is never buffered', async () => {
+    vi.useFakeTimers();
+    const COMMENT_ID = 104;
     // Pre-seed as acked (already delivered in a prior session)
     db.prepare(
       `INSERT INTO pr_review_comments_routed (pr_number, repo, comment_id, routed_at, routed_state) VALUES (?, ?, ?, ?, 'acked')`,
     ).run(PR_NUMBER, REPO, `ic_${COMMENT_ID}`, Date.now());
 
     const github = makeGitHubClient(COMMENT_ID) as any;
-    const sessions = makeSessionManager() as any;
-    const watcher = new ReviewerCommentsWatcher(github, sessions);
+    const watcher = new ReviewerCommentsWatcher(github, {} as any);
+    const pr = db
+      .prepare(`SELECT * FROM pull_requests WHERE pr_number = ? AND repo = ?`)
+      .get(PR_NUMBER, REPO) as any;
 
-    await (watcher as any).pollPR(
-      db
-        .prepare(`SELECT * FROM pull_requests WHERE pr_number = ? AND repo = ?`)
-        .get(PR_NUMBER, REPO),
-    );
-    expect(sessions.sendOrResume).not.toHaveBeenCalled();
+    await (watcher as any).pollPR(pr);
+    await vi.advanceTimersByTimeAsync(120_001);
+
+    expect(listUndeliveredInboxItems(SESSION_ID)).toHaveLength(0);
+
+    vi.useRealTimers();
   });
 });
