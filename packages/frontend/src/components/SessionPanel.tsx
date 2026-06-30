@@ -47,7 +47,8 @@ export function SessionPanel({
   const isActive =
     session.status === 'running' ||
     session.status === 'needs_permission' ||
-    session.status === 'idle';
+    session.status === 'idle' ||
+    session.status === 'paused';
 
   return (
     <div className={styles.panel}>

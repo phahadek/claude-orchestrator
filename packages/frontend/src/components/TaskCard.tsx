@@ -112,12 +112,8 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
   const { codeSession, pr, review } = task;
   const isMultiRepo = getProjectRepos(project).length > 1;
   const needsRepo = isMultiRepo && task.assignedRepo === null;
-  const [unblockInFlight, setUnblockInFlight] = useState(false);
-  const [unparkInFlight, setUnparkInFlight] = useState(false);
-  const [optimisticStatus, setOptimisticStatus] =
-    useState<DisplayStatus | null>(null);
-  const effectiveDisplayStatus = optimisticStatus ?? task.displayStatus;
-  const statusKey = effectiveDisplayStatus.replace(/_/g, '-') as string;
+  const [recoveryInFlight, setRecoveryInFlight] = useState(false);
+  const statusKey = task.displayStatus.replace(/_/g, '-') as string;
 
   // Derive implementing/reviewing pre-stages when no post-PR pipeline stage is active.
   // Post-PR stages (pr.preReviewStage) always take precedence.
@@ -161,36 +157,19 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
     ]);
   };
 
-  const handleUnpark = async (e: React.MouseEvent) => {
+  const handleRecover = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (unparkInFlight || !project?.id || !pr) return;
-    setUnparkInFlight(true);
+    if (recoveryInFlight || !project?.id) return;
+    setRecoveryInFlight(true);
     try {
       await authedFetch(
-        `/api/prs/${encodeURIComponent(pr.prNumber)}/unpark?projectId=${encodeURIComponent(project.id)}`,
+        `/api/tasks/${encodeURIComponent(task.taskId)}/recover?projectId=${encodeURIComponent(project.id)}`,
         { method: 'POST' },
       );
     } catch {
       // state will be updated via WS broadcast
     } finally {
-      setUnparkInFlight(false);
-    }
-  };
-
-  const handleUnblock = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (unblockInFlight || !project?.id) return;
-    setUnblockInFlight(true);
-    setOptimisticStatus('ready');
-    try {
-      await authedFetch(
-        `/api/tasks/${encodeURIComponent(task.taskId)}/unblock?projectId=${encodeURIComponent(project.id)}`,
-        { method: 'POST' },
-      );
-    } catch {
-      setOptimisticStatus(null);
-    } finally {
-      setUnblockInFlight(false);
+      setRecoveryInFlight(false);
     }
   };
 
@@ -198,7 +177,7 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
     <div
       className={`${styles.card} ${selected ? styles.selected : ''} ${isNonCode ? styles.nonCode : ''}`}
       onClick={onClick}
-      data-status={effectiveDisplayStatus}
+      data-status={task.displayStatus}
     >
       <div className={styles.header}>
         <span className={styles.taskName}>{task.taskName}</span>
@@ -212,7 +191,7 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
           data-pause-severity={pauseStruct?.severity}
           data-pause-source={pauseStruct?.source}
         >
-          {STATUS_LABELS[effectiveDisplayStatus]}
+          {STATUS_LABELS[task.displayStatus]}
         </span>
       </div>
 
@@ -330,26 +309,15 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
           <span className={styles.taskTypeLabel}>{task.taskType}</span>
         ) : (
           <>
-            {effectiveDisplayStatus === 'blocked' && (
+            {task.recoveryDescriptor?.available && (
               <button
                 className={styles.unblockButton}
-                disabled={unblockInFlight}
-                onClick={(e) => void handleUnblock(e)}
-                title="Clear block and set to Ready"
-                aria-label={`Unblock ${task.taskName}`}
+                disabled={recoveryInFlight}
+                onClick={(e) => void handleRecover(e)}
+                title={task.recoveryDescriptor.label}
+                aria-label={`${task.recoveryDescriptor.label} ${task.taskName}`}
               >
-                ↩ Unblock
-              </button>
-            )}
-            {pauseStruct?.reason === 'stalled_reconcile_cap' && pr && (
-              <button
-                className={styles.unblockButton}
-                disabled={unparkInFlight}
-                onClick={(e) => void handleUnpark(e)}
-                title="Clear cap-pause and re-run the pre-review pipeline"
-                aria-label={`Unpark ${task.taskName}`}
-              >
-                ↩ Unpark
+                ↩ {task.recoveryDescriptor.label}
               </button>
             )}
             <button

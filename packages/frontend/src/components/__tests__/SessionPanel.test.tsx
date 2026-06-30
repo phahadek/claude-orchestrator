@@ -79,6 +79,18 @@ describe('SessionPanel — code session', () => {
     ).toBeTruthy();
   });
 
+  it('renders the Composer for paused (needs_attention) session', () => {
+    render(
+      <SessionPanel
+        session={makeSession({ status: 'paused' })}
+        {...defaultProps}
+      />,
+    );
+    expect(
+      screen.getByPlaceholderText('Send a message to the session…'),
+    ).toBeTruthy();
+  });
+
   it('hides the Composer for terminal sessions', () => {
     for (const status of ['done', 'error', 'killed']) {
       const { unmount } = render(
