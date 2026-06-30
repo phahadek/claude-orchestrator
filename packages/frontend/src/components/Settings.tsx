@@ -17,6 +17,7 @@ type Tab = 'general' | 'projects' | 'devices' | 'system_health';
 const MODEL_OPTIONS = [
   { label: '(CLI default)', value: '' },
   { label: 'claude-opus-4-6', value: 'claude-opus-4-6' },
+  { label: 'claude-sonnet-5', value: 'claude-sonnet-5' },
   { label: 'claude-sonnet-4-6', value: 'claude-sonnet-4-6' },
   { label: 'claude-haiku-4-5', value: 'claude-haiku-4-5' },
 ];
@@ -26,6 +27,7 @@ const LARGE_TASK_MODEL_OPTIONS = [
   { label: 'claude-opus-4-8[1m]', value: 'claude-opus-4-8[1m]' },
   { label: 'claude-opus-4-7[1m]', value: 'claude-opus-4-7[1m]' },
   { label: 'claude-opus-4-6[1m]', value: 'claude-opus-4-6[1m]' },
+  { label: 'claude-sonnet-5[1m]', value: 'claude-sonnet-5[1m]' },
   { label: 'claude-sonnet-4-6[1m]', value: 'claude-sonnet-4-6[1m]' },
 ];
 
