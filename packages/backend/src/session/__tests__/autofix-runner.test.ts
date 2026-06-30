@@ -93,7 +93,11 @@ function makeProc(exitCode: number, stdout = '', stderr = ''): MockProc {
 
 // ── subject ───────────────────────────────────────────────────────────────────
 
-import { loadAutofixCommands, runAutofix, expandAutofixCommand } from '../autofix-runner';
+import {
+  loadAutofixCommands,
+  runAutofix,
+  expandAutofixCommand,
+} from '../autofix-runner';
 import { recordEvent } from '../../audit/AuditLog';
 
 // ── test setup ────────────────────────────────────────────────────────────────
@@ -916,7 +920,9 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
 describe('expandAutofixCommand', () => {
   it('returns the command unchanged when no placeholder is present', () => {
     expect(expandAutofixCommand('npm run fmt', [])).toBe('npm run fmt');
-    expect(expandAutofixCommand('npm run fmt', ['src/a.ts'])).toBe('npm run fmt');
+    expect(expandAutofixCommand('npm run fmt', ['src/a.ts'])).toBe(
+      'npm run fmt',
+    );
   });
 
   it('replaces {{changed_files}} with individually-quoted paths', () => {
