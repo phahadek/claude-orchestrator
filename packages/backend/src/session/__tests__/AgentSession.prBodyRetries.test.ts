@@ -612,9 +612,9 @@ describe('<pr-body> marker — createPR 422 diversion', () => {
 describe('isWorkflowScopeDenied', () => {
   it('returns true for the exact GitHub refusal message', () => {
     const msg =
-      "Command failed: git push -u origin feature/foo\n" +
-      "error: refusing to allow a Personal Access Token to create or update workflow " +
-      "`.github/workflows/release.yml` without `workflow` scope\n";
+      'Command failed: git push -u origin feature/foo\n' +
+      'error: refusing to allow a Personal Access Token to create or update workflow ' +
+      '`.github/workflows/release.yml` without `workflow` scope\n';
     expect(isWorkflowScopeDenied(msg)).toBe(true);
   });
 
@@ -626,7 +626,9 @@ describe('isWorkflowScopeDenied', () => {
 
   it('returns false for an ordinary push rejection', () => {
     expect(
-      isWorkflowScopeDenied('remote: Repository not found.\nfatal: repository not found'),
+      isWorkflowScopeDenied(
+        'remote: Repository not found.\nfatal: repository not found',
+      ),
     ).toBe(false);
   });
 
@@ -639,9 +641,9 @@ describe('isWorkflowScopeDenied', () => {
 
 describe('<pr-body> marker — workflow-scope push rejection', () => {
   const WORKFLOW_SCOPE_ERROR =
-    "Command failed: git push -u origin feature/my-task\n" +
-    "error: refusing to allow a Personal Access Token to create or update workflow " +
-    "`.github/workflows/release.yml` without `workflow` scope\n";
+    'Command failed: git push -u origin feature/my-task\n' +
+    'error: refusing to allow a Personal Access Token to create or update workflow ' +
+    '`.github/workflows/release.yml` without `workflow` scope\n';
 
   beforeEach(() => {
     vi.mocked(recordEvent).mockClear();
@@ -681,7 +683,8 @@ describe('<pr-body> marker — workflow-scope push rejection', () => {
 
     // Must pause with workflow_scope_denied — stored as serialized JSON
     expect(setSessionPauseReason).toHaveBeenCalledOnce();
-    const [sessionId, rawReason] = vi.mocked(setSessionPauseReason).mock.calls[0];
+    const [sessionId, rawReason] = vi.mocked(setSessionPauseReason).mock
+      .calls[0];
     expect(sessionId).toBe('test-session-id');
     const parsed = JSON.parse(rawReason);
     expect(parsed.reason).toBe('workflow_scope_denied');
@@ -713,7 +716,9 @@ describe('<pr-body> marker — workflow-scope push rejection', () => {
       if (cmd === 'git symbolic-ref refs/remotes/origin/HEAD')
         return 'refs/remotes/origin/dev\n';
       if (cmd === 'git push -u origin feature/my-task')
-        throw new Error('remote: Repository not found.\nfatal: repository not found');
+        throw new Error(
+          'remote: Repository not found.\nfatal: repository not found',
+        );
       throw new Error(`unexpected: ${cmd}`);
     });
     vi.mocked(countPushFailureEvents).mockReturnValue(1);
@@ -730,6 +735,8 @@ describe('<pr-body> marker — workflow-scope push rejection', () => {
     );
     // Must NOT set workflow_scope_denied
     const calls = vi.mocked(setSessionPauseReason).mock.calls;
-    expect(calls.every(([, r]) => !r.includes('workflow_scope_denied'))).toBe(true);
+    expect(calls.every(([, r]) => !r.includes('workflow_scope_denied'))).toBe(
+      true,
+    );
   });
 });
