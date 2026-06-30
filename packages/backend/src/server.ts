@@ -244,7 +244,11 @@ sessionManager.on(
       );
       return;
     }
-    void prMergeWatcher.handlePushDetected(prRow);
+    void prMergeWatcher
+      .handlePushDetected(prRow)
+      .catch((err: unknown) =>
+        logger.error('[server] push_detected: handlePushDetected failed:', err),
+      );
   },
 );
 
@@ -377,3 +381,6 @@ function shutdownWithTimeout(signal: string) {
 
 process.on('SIGTERM', () => shutdownWithTimeout('SIGTERM'));
 process.on('SIGINT', () => shutdownWithTimeout('SIGINT'));
+process.on('unhandledRejection', (err) => {
+  logger.error('[server] unhandledRejection:', err);
+});

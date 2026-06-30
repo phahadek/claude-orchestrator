@@ -259,6 +259,37 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
     expect(queries.clearTerminalPRFlags).not.toHaveBeenCalled();
     expect(runAutofixPipeline).not.toHaveBeenCalled();
   });
+
+  it('still returns 200 when runAutofixPipeline rejects on cap-escalated approve', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      makeCapPRRow({ task_id: 'task-abc' }) as never,
+    );
+
+    const runAutofixPipeline = vi
+      .fn()
+      .mockRejectedValue(new Error('pipeline exploded'));
+    const reviewOrchestrator = { runAutofixPipeline };
+
+    const app = express();
+    app.use(express.json());
+    app.use(
+      '/api',
+      createPrsRouter(
+        makeGithub(),
+        makePRReviewService(),
+        makeSessionManager(),
+        undefined,
+        undefined,
+        undefined,
+        reviewOrchestrator,
+      ),
+    );
+
+    await supertest(app).post('/api/prs/owner/repo/42/approve').expect(200);
+
+    // Allow the rejected promise to settle — no unhandled rejection should propagate
+    await new Promise((r) => setTimeout(r, 20));
+  });
 });
 
 // ── POST /api/prs/:prNumber/unpark ────────────────────────────────────────────
@@ -389,5 +420,40 @@ describe('POST /prs/:prNumber/unpark', () => {
         task_id: 'task-xyz',
       }),
     );
+  });
+
+  it('still returns 200 when runAutofixPipeline rejects', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      makeCapPRRow({ task_id: 'task-xyz' }) as never,
+    );
+
+    const runAutofixPipeline = vi
+      .fn()
+      .mockRejectedValue(new Error('pipeline exploded'));
+    const reviewOrchestrator = { runAutofixPipeline };
+
+    const app = express();
+    app.use(express.json());
+    app.use(
+      '/api',
+      createPrsRouter(
+        makeGithub(),
+        makePRReviewService(),
+        makeSessionManager(),
+        undefined,
+        undefined,
+        undefined,
+        reviewOrchestrator,
+      ),
+    );
+
+    const res = await supertest(app)
+      .post('/api/prs/42/unpark?projectId=proj-1')
+      .expect(200);
+
+    expect(res.body).toEqual({ ok: true });
+
+    // Allow the rejected promise to settle — no unhandled rejection should propagate
+    await new Promise((r) => setTimeout(r, 20));
   });
 });
