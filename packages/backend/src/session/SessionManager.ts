@@ -1027,10 +1027,36 @@ export class SessionManager extends EventEmitter {
           `[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`,
         );
       } catch (err) {
-        logger.warn(
-          `[SessionManager] bootstrap script failed for ${sessionId.slice(0, 8)} (continuing): ${err}`,
+        const e = err as { stderr?: string | Buffer; message?: string };
+        const stderr = e.stderr ? e.stderr.toString().slice(0, 500) : '';
+        const detail = `bootstrap failed: ${stderr || String(err)}`;
+        logger.error(
+          `[SessionManager] ${detail} for ${sessionId.slice(0, 8)} — aborting launch`,
         );
+        throw Object.assign(new Error(detail), { cause: err });
       }
+    }
+
+    const missingEnv = orchConfig.required_env.filter(
+      (varName) => !(varName in process.env),
+    );
+    if (missingEnv.length > 0) {
+      const detail = `bootstrap gate: missing required env var(s): ${missingEnv.join(', ')}`;
+      logger.error(
+        `[SessionManager] ${detail} for ${sessionId.slice(0, 8)} — aborting launch`,
+      );
+      throw new Error(detail);
+    }
+
+    const missingFiles = orchConfig.required_files.filter(
+      (filePath) => !fs.existsSync(path.join(worktreePath, filePath)),
+    );
+    if (missingFiles.length > 0) {
+      const detail = `bootstrap gate: missing required file(s): ${missingFiles.join(', ')}`;
+      logger.error(
+        `[SessionManager] ${detail} for ${sessionId.slice(0, 8)} — aborting launch`,
+      );
+      throw new Error(detail);
     }
 
     const sessionMode = runtimeSettings.session_mode;
