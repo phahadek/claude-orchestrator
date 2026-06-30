@@ -760,11 +760,11 @@ export function createPrsRouter(
       if (pauseStruct?.reason === 'stalled_reconcile_cap') {
         clearTerminalPRFlags(prNumber, repo);
         if (reviewOrchestrator) {
-          void reviewOrchestrator.runAutofixPipeline(
-            prNumber,
-            repo,
-            prRow.task_id,
-          );
+          void reviewOrchestrator
+            .runAutofixPipeline(prNumber, repo, prRow.task_id)
+            .catch((err: unknown) =>
+              logger.error('[prs] approve runAutofixPipeline failed:', err),
+            );
         }
       }
 
@@ -957,7 +957,11 @@ export function createPrsRouter(
     clearTerminalPRFlags(prNumber, repo);
 
     if (reviewOrchestrator) {
-      void reviewOrchestrator.runAutofixPipeline(prNumber, repo, prRow.task_id);
+      void reviewOrchestrator
+        .runAutofixPipeline(prNumber, repo, prRow.task_id)
+        .catch((err: unknown) =>
+          logger.error('[prs] unpark runAutofixPipeline failed:', err),
+        );
     }
 
     if (prRow.task_id) emitTaskUpdated(prRow.task_id);
