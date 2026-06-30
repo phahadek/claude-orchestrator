@@ -346,3 +346,14 @@ export interface TaskRepoAssignmentRow {
   assigned_by: string;
   assigned_at: number;
 }
+
+// ─── session_feedback_inbox ─────────────────────────────────────────────────
+
+export interface FeedbackInboxRow {
+  id: number;
+  session_id: string;
+  source: string;
+  payload: string;
+  enqueued_at: number;
+  delivered_at: number | null;
+}

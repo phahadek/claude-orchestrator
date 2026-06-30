@@ -37,6 +37,7 @@ export interface BootDeps {
   };
   sessionManager: {
     resumeOrphanSessions(): Promise<void>;
+    reconcileInboxAtBoot(): Promise<void>;
   };
   stuckSessionMonitor: {
     rehydrate(): void;
@@ -180,6 +181,7 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'auto_merger_rehydrate',
     'pr_boot_sweep',
     'boot_idle_reconciliation',
+    'feedback_inbox_reconciliation',
     'stalled_pr_reconciliation',
     'auto_launcher_start',
   ]);
@@ -209,6 +211,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   );
   await tracker.runStep('boot_idle_reconciliation', () =>
     runBootIdleReconciliation(),
+  );
+  await tracker.runStep('feedback_inbox_reconciliation', () =>
+    deps.sessionManager.reconcileInboxAtBoot(),
   );
   await tracker.runStep('stalled_pr_reconciliation', () =>
     deps.stalledPRReconciler.reconcileOnce(),

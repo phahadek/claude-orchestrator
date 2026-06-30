@@ -29,6 +29,8 @@ import {
   setSessionTags,
   resetTaskCrashCount,
   ackPendingComments,
+  listUndeliveredInboxItems,
+  markInboxItemsDelivered,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -882,6 +884,11 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       // next poll doesn't re-deliver already-consumed feedback.
       if (pr && event.is_error !== true) {
         ackPendingComments(pr.pr_number, pr.repo);
+      }
+
+      // Deliver any undelivered inbox items at the turn boundary.
+      if (event.is_error !== true) {
+        void this.deliverInboxItems();
       }
 
       const denials = event.permission_denials as
@@ -1894,6 +1901,28 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    */
   setPendingOverflowText(text: string): void {
     this._pendingOverflowText = text;
+  }
+
+  /**
+   * Coalesce all undelivered inbox items for this session and deliver them
+   * as a single combined message via sendOrResume. Called at each successful
+   * turn-completion boundary so feedback never interrupts an in-progress turn.
+   */
+  private async deliverInboxItems(): Promise<void> {
+    const items = listUndeliveredInboxItems(this.sessionId);
+    if (items.length === 0) return;
+    const combined = items
+      .map((item) => `[${item.source}]\n${item.payload}`)
+      .join('\n\n');
+    markInboxItemsDelivered(items.map((item) => item.id));
+    try {
+      await this.sessionManager?.sendOrResume?.(this.sessionId, combined);
+    } catch (err) {
+      sessionLog(
+        this.sessionId,
+        `deliverInboxItems: sendOrResume failed: ${err}`,
+      );
+    }
   }
 
   /**

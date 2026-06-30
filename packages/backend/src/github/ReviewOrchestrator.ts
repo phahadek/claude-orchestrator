@@ -25,6 +25,7 @@ import {
   upsertAnalyzeResult,
   getAnalyzeResult,
   setPreReviewStage,
+  enqueueFeedbackItem,
 } from '../db/queries';
 import { syncToOrigin } from './PRFileReverter';
 import type {
@@ -699,28 +700,11 @@ export class ReviewOrchestrator {
     });
 
     if (result.verdict === 'needs_changes') {
-      try {
-        await this.sessionManager.sendOrResume(
-          job.sessionId,
-          formatReviewFeedback(result, 0),
-        );
-      } catch (e) {
-        recordEvent({
-          event_type: 'verdict_routing_failed',
-          actor_type: 'system',
-          actor_id: job.sessionId,
-          project_id: job.projectId ?? null,
-          task_id: job.taskId ?? null,
-          payload: {
-            pr_number: job.localBranchId,
-            repo: `local/${job.branchName}`,
-            error: String(e),
-          },
-        });
-        logger.warn(
-          `[ReviewOrchestrator] verdict routing failed for local branch ${job.branchName}: ${e}`,
-        );
-      }
+      enqueueFeedbackItem(
+        job.sessionId,
+        'ai-reviewer',
+        formatReviewFeedback(result, 0),
+      );
     }
   }
 
@@ -904,32 +888,15 @@ export class ReviewOrchestrator {
       ...(draftTransitioned && { draft: false }),
     });
 
-    // Route feedback to coding session if verdict requires changes
+    // Route feedback to coding session via the inbox — delivered at next turn boundary
     if (result.verdict === 'needs_changes') {
       const prRow = getPRByNumber(job.prNumber, job.repo);
       if (prRow?.session_id) {
-        try {
-          await this.sessionManager.sendOrResume(
-            prRow.session_id,
-            formatReviewFeedback(result, 0),
-          );
-        } catch (e) {
-          recordEvent({
-            event_type: 'verdict_routing_failed',
-            actor_type: 'system',
-            actor_id: prRow.session_id,
-            project_id: project.id ?? null,
-            task_id: prRow.task_id ?? null,
-            payload: {
-              pr_number: job.prNumber,
-              repo: job.repo,
-              error: String(e),
-            },
-          });
-          logger.warn(
-            `[ReviewOrchestrator] verdict routing failed for PR #${job.prNumber}: ${e}`,
-          );
-        }
+        enqueueFeedbackItem(
+          prRow.session_id,
+          'ai-reviewer',
+          formatReviewFeedback(result, 0),
+        );
       }
     } else if (result.verdict === 'incomplete') {
       const message = `Review for PR #${job.prNumber} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
@@ -940,30 +907,12 @@ export class ReviewOrchestrator {
         repo: job.repo,
         message,
       });
-      // Notify the implementing session so it knows to push a clearer version.
       if (prRow?.session_id) {
-        try {
-          await this.sessionManager.sendOrResume(
-            prRow.session_id,
-            formatReviewFeedback(result, 0),
-          );
-        } catch (e) {
-          recordEvent({
-            event_type: 'verdict_routing_failed',
-            actor_type: 'system',
-            actor_id: prRow.session_id,
-            project_id: project.id ?? null,
-            task_id: prRow.task_id ?? null,
-            payload: {
-              pr_number: job.prNumber,
-              repo: job.repo,
-              error: String(e),
-            },
-          });
-          logger.warn(
-            `[ReviewOrchestrator] incomplete verdict routing failed for PR #${job.prNumber}: ${e}`,
-          );
-        }
+        enqueueFeedbackItem(
+          prRow.session_id,
+          'ai-reviewer',
+          formatReviewFeedback(result, 0),
+        );
       }
     }
 

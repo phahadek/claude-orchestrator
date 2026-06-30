@@ -58,6 +58,9 @@ import {
   incrementTaskCrashCount,
   setTaskPauseReason,
   getTerminalSessionsForTask,
+  listSessionsWithUndeliveredInboxItems,
+  listUndeliveredInboxItems,
+  markInboxItemsDelivered,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import { eventKind } from './eventKind';
@@ -2472,5 +2475,51 @@ export class SessionManager extends EventEmitter {
   async shutdownAll(): Promise<void> {
     const pauses = [...this.sessions.values()].map((s) => s.gracefulPause());
     await Promise.allSettled(pauses);
+  }
+
+  /**
+   * At boot, find all sessions with undelivered inbox items and deliver them
+   * via sendOrResume so idle/exited sessions receive pending feedback.
+   */
+  async reconcileInboxAtBoot(): Promise<void> {
+    const sessionIds = listSessionsWithUndeliveredInboxItems();
+    if (sessionIds.length === 0) return;
+
+    logger.info(
+      `[SessionManager] inbox boot reconciliation: ${sessionIds.length} session(s) with undelivered items`,
+    );
+
+    await Promise.allSettled(
+      sessionIds.map(async (sessionId) => {
+        const row = getSession(sessionId);
+        if (!row) return;
+        if (
+          row.status === 'done' ||
+          row.status === 'error' ||
+          row.status === 'killed'
+        ) {
+          // Terminal sessions: mark items delivered without resending
+          const items = listUndeliveredInboxItems(sessionId);
+          if (items.length > 0) markInboxItemsDelivered(items.map((i) => i.id));
+          return;
+        }
+
+        const items = listUndeliveredInboxItems(sessionId);
+        if (items.length === 0) return;
+
+        const combined = items
+          .map((item) => `[${item.source}]\n${item.payload}`)
+          .join('\n\n');
+        markInboxItemsDelivered(items.map((i) => i.id));
+
+        try {
+          await this.sendOrResume(sessionId, combined);
+        } catch (err) {
+          logger.warn(
+            `[SessionManager] inbox boot reconciliation: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
+          );
+        }
+      }),
+    );
   }
 }
