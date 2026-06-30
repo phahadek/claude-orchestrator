@@ -313,7 +313,7 @@ interface ReviewOrchestratorLike {
  * row, and set the task back to Ready. This is the clear-pause primitive the
  * legacy `unblock` endpoint performed. Rejects if `backend.updateStatus` rejects.
  */
-export async function executeRedispatch(
+async function executeRedispatch(
   backend: Awaited<ReturnType<typeof getTaskBackend>>,
   taskId: string,
 ): Promise<void> {
