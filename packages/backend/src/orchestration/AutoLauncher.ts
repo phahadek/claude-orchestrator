@@ -16,11 +16,13 @@ import {
   setTaskPauseReason,
   getTaskPauseReason,
   clearTaskPauseReason,
+  clearPausedPrReasonForTask,
+  resetTaskCrashCount,
+  getTaskRepoAssignment,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { runWithConcurrency } from '../utils/concurrency';
 import { getProjectRepos } from '../projects/ProjectService';
-import { getTaskRepoAssignment } from '../db/queries';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -74,6 +76,15 @@ export class AutoLauncher {
     string,
     { count: number; nextRetryAt: number }
   >();
+  /**
+   * Task IDs observed as Ready in the previous poll cycle. Null until the first
+   * poll completes — used to skip transition-based clearing on the very first
+   * cycle (no prior state available). After the first poll it is a Set of task
+   * IDs seen as Ready; tasks absent from this set that appear in a subsequent
+   * cycle are treated as external → Ready transitions and have stale pauses
+   * cleared (the loop-safety guard for launch_failed escalation).
+   */
+  private lastPollReadyTaskIds: Set<string> | null = null;
   private static readonly BACKOFF_SCHEDULE_MS = [
     60_000,
     5 * 60_000,
@@ -191,14 +202,24 @@ export class AutoLauncher {
         (project) =>
           this.processProject(project).catch((err) => {
             logger.error(`[AutoLauncher] project ${project.id} failed:`, err);
-            return { eligible: 0, launched: 0, skipped: 0 };
+            return {
+              eligible: 0,
+              launched: 0,
+              skipped: 0,
+              readyTaskIds: [] as string[],
+            };
           }),
       );
+      const newReadyTaskIds = new Set<string>();
       for (const counts of projectResults) {
         eligibleCount += counts.eligible;
         launchedCount += counts.launched;
         skippedCount += counts.skipped;
+        for (const id of counts.readyTaskIds) {
+          newReadyTaskIds.add(id);
+        }
       }
+      this.lastPollReadyTaskIds = newReadyTaskIds;
     } finally {
       const elapsedMs = Date.now() - (this.pollLastStartedAt ?? Date.now());
       logger.info(
@@ -207,14 +228,17 @@ export class AutoLauncher {
     }
   }
 
-  private async processProject(
-    project: ProjectConfig,
-  ): Promise<{ eligible: number; launched: number; skipped: number }> {
+  private async processProject(project: ProjectConfig): Promise<{
+    eligible: number;
+    launched: number;
+    skipped: number;
+    readyTaskIds: string[];
+  }> {
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     const backend = resolveBackend(project.id);
 
     if (backend.type === 'local') {
-      return { eligible: 0, launched: 0, skipped: 0 };
+      return { eligible: 0, launched: 0, skipped: 0, readyTaskIds: [] };
     }
 
     let milestoneId: string | null = null;
@@ -224,7 +248,7 @@ export class AutoLauncher {
         logger.warn(
           `[AutoLauncher] project ${project.id}: no milestone configured — skipping`,
         );
-        return { eligible: 0, launched: 0, skipped: 0 };
+        return { eligible: 0, launched: 0, skipped: 0, readyTaskIds: [] };
       }
     }
 
@@ -318,9 +342,21 @@ export class AutoLauncher {
       },
     );
 
+    const readyTaskIds = allTasks.map((r) => r.task.id);
+
+    // Transition detection: clear stale pause state for tasks that just moved
+    // into Ready from a non-Ready status. Only fires when the task was NOT in
+    // lastPollReadyTaskIds (i.e. it wasn't Ready last cycle), which means either
+    // the operator changed the Notion status or this is the first poll after
+    // startup. Steady-state Ready tasks (already in the set) are intentionally
+    // skipped to avoid wiping launch_failed escalations → relaunch loop.
+    for (const resolved of allTasks) {
+      this.maybeClearStaleReadyTransitionPauses(resolved.task.id);
+    }
+
     const candidates = allTasks.filter((t) => this.isLaunchCandidate(t));
     if (candidates.length === 0)
-      return { eligible: 0, launched: 0, skipped: 0 };
+      return { eligible: 0, launched: 0, skipped: 0, readyTaskIds };
 
     let launched = 0;
     for (const candidate of candidates) {
@@ -345,7 +381,33 @@ export class AutoLauncher {
       eligible: candidates.length,
       launched,
       skipped: candidates.length - launched,
+      readyTaskIds,
     };
+  }
+
+  /**
+   * Clear stale pause state when a task transitions into Ready from a non-Ready
+   * Notion status. Skipped on the first poll cycle (lastPollReadyTaskIds === null)
+   * because no prior state is available — all existing pauses on startup are
+   * treated as legitimate. After the first cycle, fires only when the task was
+   * absent from lastPollReadyTaskIds (not Ready last cycle), which is the
+   * operator's "I cleaned this up and changed it to Ready" signal. Tasks already
+   * in the set are steady-state Ready and must NOT be cleared (loop-safety guard
+   * for launch_failed escalation).
+   */
+  private maybeClearStaleReadyTransitionPauses(taskId: string): void {
+    if (this.lastPollReadyTaskIds === null) return; // First cycle — no prior state
+    if (this.lastPollReadyTaskIds.has(taskId)) return; // Steady-state Ready
+    const hadPause = getTaskPauseReason(taskId) != null;
+    const hadPrPause = getPausedPrReasonForTask(taskId) != null;
+    if (!hadPause && !hadPrPause) return;
+    clearTaskPauseReason(taskId);
+    clearPausedPrReasonForTask(taskId);
+    resetTaskCrashCount(taskId);
+    this.launchFailedAttempts.delete(taskId);
+    logger.info(
+      `[AutoLauncher] task ${taskId} transitioned to Ready — cleared stale pause state (task_pause=${hadPause}, pr_pause=${hadPrPause})`,
+    );
   }
 
   /**
