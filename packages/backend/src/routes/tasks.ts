@@ -302,6 +302,58 @@ interface ReviewOrchestratorLike {
   ): Promise<{ success: boolean; summary: string }>;
 }
 
+// ── Shared recovery executors ────────────────────────────────────────────────
+// Single implementation of each Needs-Attention recovery action. Used by the
+// unified POST /tasks/:taskId/recover endpoint and by the deprecated
+// POST /tasks/:taskId/unblock + POST /prs/:prNumber/unpark aliases, so there is
+// exactly one code path per action instead of duplicated logic.
+
+/**
+ * redispatch — clear the sticky pause + crash count, drop the stale task-cache
+ * row, and set the task back to Ready. This is the clear-pause primitive the
+ * legacy `unblock` endpoint performed. Rejects if `backend.updateStatus` rejects.
+ */
+export async function executeRedispatch(
+  backend: Awaited<ReturnType<typeof getTaskBackend>>,
+  taskId: string,
+): Promise<void> {
+  clearTaskPauseReason(taskId);
+  resetTaskCrashCount(taskId);
+  deleteTaskCacheRow(taskId);
+  await backend.updateStatus(taskId, '🗂️ Ready', { source: 'orchestrator' });
+  emitTaskUpdated(taskId);
+  if (taskBroadcastFn) {
+    taskBroadcastFn({
+      type: 'task_status_changed',
+      notionTaskId: taskId,
+      newStatus: '🗂️ Ready',
+    });
+  }
+}
+
+/**
+ * rerun — clear terminal PR flags (pause + pre-review stage) and re-enqueue the
+ * pre-review/autofix pipeline so the PR can recover without being merged. This
+ * is the primitive the legacy `unpark` endpoint performed. The pipeline runs
+ * fire-and-forget.
+ */
+export function executeRerunPipeline(
+  prNumber: number,
+  repo: string,
+  taskId: string | null,
+  reviewOrchestrator?: ReviewOrchestratorLike,
+): void {
+  clearTerminalPRFlags(prNumber, repo);
+  if (reviewOrchestrator) {
+    void reviewOrchestrator
+      .runAutofixPipeline(prNumber, repo, taskId)
+      .catch((err: unknown) =>
+        logger.error('[recover] rerun pipeline failed:', err),
+      );
+  }
+  if (taskId) emitTaskUpdated(taskId);
+}
+
 export function createTasksRouter(
   sessionManager?: SessionManagerLike,
   reviewOrchestrator?: ReviewOrchestratorLike,
@@ -544,6 +596,9 @@ export function createTasksRouter(
   });
 
   // ── POST /api/tasks/:taskId/unblock ─────────────────────────────────────
+  // @deprecated Superseded by POST /tasks/:taskId/recover (redispatch action).
+  // Retained as a thin alias over the shared redispatch executor for the current
+  // frontend; the unified /recover endpoint is the canonical recovery interface.
   router.post('/tasks/:taskId/unblock', async (req: Request, res: Response) => {
     const taskId = String(req.params.taskId);
     const projectId =
@@ -564,28 +619,13 @@ export function createTasksRouter(
       return;
     }
 
-    clearTaskPauseReason(taskId);
-    resetTaskCrashCount(taskId);
-    deleteTaskCacheRow(taskId);
-
     try {
-      await backend.updateStatus(taskId, '🗂️ Ready', {
-        source: 'orchestrator',
-      });
+      await executeRedispatch(backend, taskId);
     } catch (err) {
       res.status(500).json({
         error: err instanceof Error ? err.message : 'Failed to update status',
       });
       return;
-    }
-
-    emitTaskUpdated(taskId);
-    if (taskBroadcastFn) {
-      taskBroadcastFn({
-        type: 'task_status_changed',
-        notionTaskId: taskId,
-        newStatus: '🗂️ Ready',
-      });
     }
 
     recordEvent({
@@ -685,22 +725,7 @@ export function createTasksRouter(
           return;
         }
 
-        clearTaskPauseReason(taskId);
-        resetTaskCrashCount(taskId);
-        deleteTaskCacheRow(taskId);
-
-        await backend.updateStatus(taskId, '🗂️ Ready', {
-          source: 'orchestrator',
-        });
-
-        emitTaskUpdated(taskId);
-        if (taskBroadcastFn) {
-          taskBroadcastFn({
-            type: 'task_status_changed',
-            notionTaskId: taskId,
-            newStatus: '🗂️ Ready',
-          });
-        }
+        await executeRedispatch(backend, taskId);
       } else if (action === 'rerun') {
         const prRow = getPRByNotionTaskId(taskId);
         if (!prRow) {
@@ -710,17 +735,12 @@ export function createTasksRouter(
           return;
         }
 
-        clearTerminalPRFlags(prRow.pr_number, prRow.repo);
-
-        if (reviewOrchestrator) {
-          void reviewOrchestrator
-            .runAutofixPipeline(prRow.pr_number, prRow.repo, taskId)
-            .catch((err: unknown) =>
-              logger.error('[tasks] recover rerun pipeline failed:', err),
-            );
-        }
-
-        emitTaskUpdated(taskId);
+        executeRerunPipeline(
+          prRow.pr_number,
+          prRow.repo,
+          taskId,
+          reviewOrchestrator,
+        );
       } else if (action === 'resume') {
         const sessionId = row?.code_session_id ?? null;
         if (!sessionId) {
