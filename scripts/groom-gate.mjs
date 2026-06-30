@@ -88,7 +88,26 @@ const repoAssigned =
   !ra.multi_repo ||
   (typeof ra.repo === 'string' && ra.repo.trim() !== '');
 
-if (signedOff && depsClassified && sizeClassified && repoAssigned)
+// gate_contribution: required for 💻 Code / 🛠️ Tooling tasks; exempt for others.
+// Absent entry.type (pre-migration cache or non-groomed task) → fail-open (allow).
+const needsGate = entry.type === '💻 Code' || entry.type === '🛠️ Tooling';
+const gc = entry.gate_contribution;
+const gateRecorded =
+  !needsGate ||
+  (gc &&
+    typeof gc === 'object' &&
+    (gc.decision === 'none' ||
+      (typeof gc.gate_task_id === 'string' &&
+        Array.isArray(gc.items) &&
+        typeof gc.appended_at === 'string')));
+
+if (
+  signedOff &&
+  depsClassified &&
+  sizeClassified &&
+  repoAssigned &&
+  gateRecorded
+)
   process.exit(0); // fully gated → allow
 
 const reasons = [];
@@ -110,6 +129,16 @@ if (!sizeClassified) {
 if (!repoAssigned) {
   reasons.push(
     `this task belongs to a multi-repo project but has no repo assigned — set repo_assignment: {"multi_repo": true, "repo": "<repo-name>"} in grooming-state.json before promotion. Assign the target repo during the grooming session and confirm it in the state file`,
+  );
+}
+if (!gateRecorded) {
+  reasons.push(
+    `gate_contribution is not recorded — for 💻 Code and 🛠️ Tooling tasks, the groomer must ` +
+      `append the task's stripped runtime/launch-and-observe items to the milestone 🚦 Gate task, ` +
+      `then write gate_contribution: {"gate_task_id":"<id>","items":[...],"appended_at":"<iso>"} to ` +
+      `grooming-state.json before promotion (or {"decision":"none"} if the task has no standalone ` +
+      `runtime item). The gate task id is in context-bundle.json as milestone_gate_task_id. ` +
+      `See the /groom skill's Step 4`,
   );
 }
 

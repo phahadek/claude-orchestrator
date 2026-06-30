@@ -48,7 +48,9 @@ import { resolve, join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { spawnSync } from 'child_process';
 
-const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const SCRIPT_DIR =
+  process.env.GROOM_SCRIPTS_DIR_OVERRIDE ??
+  dirname(fileURLToPath(import.meta.url));
 
 // ── Arg parsing (same idiom as the sibling scripts) ──────────────────
 const args = process.argv.slice(2);
@@ -411,6 +413,12 @@ const titleOf = (row) =>
 
 const targetRows = queryBoard(milestoneCfg.board);
 
+// Identify the milestone's 🚦 Gate task — stored in context-bundle.json so the skill
+// knows where to accrete manual-verification items for each Code/Tooling task it promotes.
+// Fail-open: null if the milestone has no Gate task yet (surfaced in the summary).
+const gateTaskRow = targetRows.find((r) => (r['Type'] ?? '') === '🚦 Gate');
+const milestoneGateTaskId = gateTaskRow?.id ?? null;
+
 const targetTasks = [];
 const pkgMap = {}; // pkgPath → Set(taskId)
 const unresolved = [];
@@ -538,9 +546,11 @@ for (const t of targetTasks) {
     // No prior entry: only Backlog tasks need a skeleton (the ones grooming acts
     // on). A live non-Backlog task gets none until it returns to Backlog.
     if (t.status !== vocab.backlog) continue;
+    const isCodeOrTooling = t.type === '💻 Code' || t.type === '🛠️ Tooling';
     state[t.id] = {
       title: t.title,
       status: t.status,
+      type: t.type,
       achieves: null,
       open_questions: null,
       tests: null,
@@ -548,17 +558,26 @@ for (const t of targetTasks) {
       regions: t.packages,
       hard_block_deps: null,
       size_check: null,
+      gate_contribution: isCodeOrTooling ? null : { decision: 'n/a' },
       signoff: null,
     };
   } else {
     state[t.id] = { ...prior }; // keep human-entered fields (signoff, achieves, …)
     state[t.id].title = t.title; // refresh — tasks get renamed during grooming
     state[t.id].status = t.status; // ALWAYS refresh from the live board
+    state[t.id].type = t.type; // refresh — type is read by the gate hook
     state[t.id].regions = Array.from(
       new Set([...(prior.regions ?? []), ...t.packages]),
     );
     if (!('hard_block_deps' in state[t.id])) state[t.id].hard_block_deps = null; // back-compat
     if (!('size_check' in state[t.id])) state[t.id].size_check = null; // back-compat
+    if (!('gate_contribution' in state[t.id])) {
+      // back-compat
+      const isCodeOrTooling = t.type === '💻 Code' || t.type === '🛠️ Tooling';
+      state[t.id].gate_contribution = isCodeOrTooling
+        ? null
+        : { decision: 'n/a' };
+    }
   }
 }
 const prunedStateIds = Object.keys(priorState).filter((id) => !(id in state));
@@ -571,6 +590,7 @@ const bundle = {
     baseline_sha: baselineSha,
     repo,
   },
+  milestone_gate_task_id: milestoneGateTaskId,
   context_pages: contextPages,
   boards: {
     target: { milestone, board: milestoneCfg.board, tasks: targetTasks },
@@ -627,6 +647,11 @@ if (unresolved.length) {
 if (prunedStateIds.length) {
   console.log(
     `  pruned ${prunedStateIds.length} stale grooming-state entr${prunedStateIds.length === 1 ? 'y' : 'ies'} (task completed/deferred/removed since last groom)`,
+  );
+}
+if (!milestoneGateTaskId) {
+  console.log(
+    `  ⚠ no 🚦 Gate task found on the milestone board — gate_contribution accretion will have no target; create the Gate task before the first Code/Tooling task is promoted.`,
   );
 }
 if (unregisteredNote) {

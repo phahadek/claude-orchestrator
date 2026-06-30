@@ -115,6 +115,100 @@ describe('groom-gate.mjs — repo_assignment check', () => {
   });
 });
 
+describe('groom-gate.mjs — gate_contribution check (4th artifact)', () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // A fully-valid Code task entry satisfying all four gates
+  const VALID_CODE_BASE = {
+    type: '💻 Code',
+    signoff: { by: 'test-user', at: '2026-06-26T00:00:00.000Z' },
+    hard_block_deps: [],
+    size_check: { decision: 'no_split', loc: 120 },
+    gate_contribution: { decision: 'none' },
+  };
+
+  it('blocks a Code task when gate_contribution is null', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
+    makeStateFile(tmpDir, {
+      [PAGE_ID]: { ...VALID_CODE_BASE, gate_contribution: null },
+    });
+    const r = runGate(tmpDir, PAGE_ID);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('gate_contribution');
+  });
+
+  it('blocks a Tooling task when gate_contribution is null', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
+    makeStateFile(tmpDir, {
+      [PAGE_ID]: {
+        ...VALID_CODE_BASE,
+        type: '🛠️ Tooling',
+        gate_contribution: null,
+      },
+    });
+    const r = runGate(tmpDir, PAGE_ID);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('gate_contribution');
+  });
+
+  it('allows a Code task when gate_contribution is {"decision":"none"}', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
+    makeStateFile(tmpDir, {
+      [PAGE_ID]: {
+        ...VALID_CODE_BASE,
+        gate_contribution: { decision: 'none' },
+      },
+    });
+    const r = runGate(tmpDir, PAGE_ID);
+    expect(r.status).toBe(0);
+  });
+
+  it('allows a Code task with fully populated gate_contribution', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
+    makeStateFile(tmpDir, {
+      [PAGE_ID]: {
+        ...VALID_CODE_BASE,
+        gate_contribution: {
+          gate_task_id: 'gate-page-abc123',
+          items: ['Launch app and verify startup log shows version'],
+          appended_at: '2026-06-30T10:00:00.000Z',
+        },
+      },
+    });
+    const r = runGate(tmpDir, PAGE_ID);
+    expect(r.status).toBe(0);
+  });
+
+  it('allows a Design task with no gate_contribution (exempt by type)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
+    makeStateFile(tmpDir, {
+      [PAGE_ID]: { ...VALID_BASE, type: '📐 Design' },
+    });
+    const r = runGate(tmpDir, PAGE_ID);
+    expect(r.status).toBe(0);
+  });
+
+  it('allows a Planning task with no gate_contribution (exempt by type)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
+    makeStateFile(tmpDir, {
+      [PAGE_ID]: { ...VALID_BASE, type: '📋 Planning' },
+    });
+    const r = runGate(tmpDir, PAGE_ID);
+    expect(r.status).toBe(0);
+  });
+
+  it('fails open when type is absent (pre-migration entry with no type field)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
+    makeStateFile(tmpDir, { [PAGE_ID]: { ...VALID_BASE } }); // no type, no gate_contribution
+    const r = runGate(tmpDir, PAGE_ID);
+    expect(r.status).toBe(0);
+  });
+});
+
 describe('groom-gate.mjs — regression: pre-existing gate checks', () => {
   let tmpDir: string;
 
