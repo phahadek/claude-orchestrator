@@ -1033,7 +1033,7 @@ export class SessionManager extends EventEmitter {
         logger.error(
           `[SessionManager] ${detail} for ${sessionId.slice(0, 8)} — aborting launch`,
         );
-        throw new Error(detail);
+        throw new Error(detail, { cause: err });
       }
     }
 
