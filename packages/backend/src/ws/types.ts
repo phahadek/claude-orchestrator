@@ -2,6 +2,7 @@ import type { ResolvedTask } from '../notion/types';
 import type { DisplayStatus } from '../tasks/TaskStatusEngine';
 import type { PauseReason } from '../db/types';
 import type { EventKind } from '../session/eventKind';
+import type { RecoveryDescriptor } from '../db/pauseReason';
 
 // ── Server → Client ──────────────────────────────────────────────
 export interface PermissionDenial {
@@ -91,6 +92,8 @@ export interface TaskView {
   totalTokens: { input: number; output: number };
   /** Assigned target repo slug for multi-repo projects, e.g. "owner/repo". Null when unassigned. */
   assignedRepo: string | null;
+  /** Recovery action available for this task when paused. */
+  recoveryDescriptor?: RecoveryDescriptor;
 }
 
 export type ServerMessage =

@@ -178,7 +178,7 @@ app.use(
     reviewOrchestrator,
   ),
 );
-app.use('/api', createTasksRouter());
+app.use('/api', createTasksRouter(sessionManager, reviewOrchestrator));
 app.use('/api/analytics', analyticsRouter);
 app.use('/api', projectsRouter);
 app.use('/api', configRouter);
