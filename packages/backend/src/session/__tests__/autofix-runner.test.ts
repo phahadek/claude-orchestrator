@@ -46,7 +46,7 @@ vi.mock('../../audit/AuditLog', () => ({
 interface MockProc {
   stdout: { on: (e: string, cb: (d: Buffer) => void) => void } | null;
   stderr: { on: (e: string, cb: (d: Buffer) => void) => void } | null;
-  on: (e: string, cb: (code: number | null) => void) => void;
+  on: (e: string, cb: (arg: unknown) => void) => void;
 }
 
 type SpawnHook = (cmd: string, args: unknown, opts: unknown) => MockProc;
@@ -78,7 +78,7 @@ function makeProc(exitCode: number, stdout = '', stderr = ''): MockProc {
       },
     },
     on: (e, cb) => {
-      if (e === 'close') closeCbs.push(cb);
+      if (e === 'close') closeCbs.push(cb as (c: number | null) => void);
     },
   };
 
@@ -86,6 +86,25 @@ function makeProc(exitCode: number, stdout = '', stderr = ''): MockProc {
     if (stdout) outCbs.forEach((cb) => cb(Buffer.from(stdout)));
     if (stderr) errCbs.forEach((cb) => cb(Buffer.from(stderr)));
     closeCbs.forEach((cb) => cb(exitCode));
+  });
+
+  return proc;
+}
+
+/** makeErrorProc emits an 'error' event instead of 'close', simulating ENOENT. */
+function makeErrorProc(err: Error): MockProc {
+  const errorCbs: Array<(e: Error) => void> = [];
+
+  const proc: MockProc = {
+    stdout: { on: () => {} },
+    stderr: { on: () => {} },
+    on: (e, cb) => {
+      if (e === 'error') errorCbs.push(cb as (e: Error) => void);
+    },
+  };
+
+  setImmediate(() => {
+    errorCbs.forEach((cb) => cb(err));
   });
 
   return proc;
@@ -105,7 +124,9 @@ import { recordEvent } from '../../audit/AuditLog';
 beforeEach(() => {
   vi.clearAllMocks();
   _spawnHook = null;
-  mockExistsSync.mockReturnValue(false);
+  // Default true so runAutofix's cwd-missing guard doesn't short-circuit most tests.
+  // loadAutofixCommands tests that need false set it explicitly in each case.
+  mockExistsSync.mockReturnValue(true);
   mockReadFileSync.mockReturnValue('');
   mockYamlLoad.mockReturnValue(null);
 });
@@ -1073,5 +1094,101 @@ describe('runAutofix — {{changed_files}} placeholder', () => {
     expect(shellCmds).toHaveLength(0); // formatter was never invoked
     expect(result.success).toBe(true);
     expect(result.commitSha).toBeUndefined();
+  });
+});
+
+// ── spawnCmd / spawnShell — 'error' event handler ─────────────────────────────
+
+describe('spawnCmd / spawnShell — error event resolves instead of throwing', () => {
+  it('resolves with exitCode=1 and error text when spawn emits an error (non-existent cwd)', async () => {
+    const enoentErr = Object.assign(new Error('spawn /bin/sh ENOENT'), {
+      code: 'ENOENT',
+    });
+
+    _spawnHook = () => makeErrorProc(enoentErr);
+
+    // runAutofix internally calls spawnShell (the autofix command) — the error
+    // must NOT propagate as an unhandled throw. Verify the result resolves cleanly.
+    mockExistsSync.mockReturnValue(true); // worktree dir "exists" so we reach the spawn
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run lint'],
+      () => {},
+    );
+
+    // The shell command errored (exitCode=1, no output) → treated as a hard
+    // failure (empty output, not a lint-violation exit-1-with-output).
+    expect(result.success).toBe(false);
+    expect(result.commitSha).toBeUndefined();
+  });
+
+  it('does not throw or produce an unhandled rejection when spawnCmd emits error', async () => {
+    const enoentErr = Object.assign(new Error('spawn git ENOENT'), {
+      code: 'ENOENT',
+    });
+    let unhandled: Error | undefined;
+    const onUnhandled = (e: Error) => {
+      unhandled = e;
+    };
+    process.on('unhandledRejection', onUnhandled);
+
+    _spawnHook = () => makeErrorProc(enoentErr);
+    mockExistsSync.mockReturnValue(true);
+
+    let threw = false;
+    try {
+      await runAutofix('/worktree', '/project', ['npm run lint'], () => {});
+    } catch {
+      threw = true;
+    }
+
+    // Allow microtasks to flush before checking
+    await new Promise((r) => setTimeout(r, 20));
+
+    process.off('unhandledRejection', onUnhandled);
+
+    expect(threw).toBe(false);
+    expect(unhandled).toBeUndefined();
+  });
+});
+
+// ── runAutofix — cwd-missing guard ────────────────────────────────────────────
+
+describe('runAutofix — cwd-missing guard', () => {
+  it('returns success:true with skip summary when worktreePath does not exist', async () => {
+    mockExistsSync.mockReturnValue(false);
+
+    const logged: string[] = [];
+    const result = await runAutofix(
+      '/gone/worktree',
+      '/project',
+      ['npm run lint'],
+      (m) => logged.push(m),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.summary).toContain('worktree path no longer exists');
+    expect(result.commitSha).toBeUndefined();
+    expect(logged.some((l) => l.includes('no longer exists'))).toBe(true);
+  });
+
+  it('proceeds normally when worktreePath exists', async () => {
+    mockExistsSync.mockReturnValue(true);
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run fmt'],
+      () => {},
+    );
+
+    expect(result.summary).not.toContain('no longer exists');
   });
 });

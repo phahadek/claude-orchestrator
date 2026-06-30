@@ -1,10 +1,11 @@
 /**
- * Tests for the process-level unhandledRejection guard and the
- * handlePushDetected .catch guard added in server.ts.
+ * Tests for the process-level unhandledRejection + uncaughtException guards
+ * and the handlePushDetected .catch guard added in server.ts.
  *
  * 1. The unhandledRejection handler pattern (as wired in server.ts) logs and
  *    does not call process.exit.
- * 2. The push_detected → handlePushDetected kick is .catch-guarded; a rejecting
+ * 2. The uncaughtException handler logs a structured stack and calls shutdown.
+ * 3. The push_detected → handlePushDetected kick is .catch-guarded; a rejecting
  *    handlePushDetected does not produce an unhandled rejection.
  */
 
@@ -69,6 +70,45 @@ describe('unhandledRejection handler (as defined in server.ts)', () => {
     expect(exitSpy).not.toHaveBeenCalled();
 
     exitSpy.mockRestore();
+  });
+});
+
+// ── tests: uncaughtException handler behavior ──────────────────────────────────
+
+describe('uncaughtException handler (as defined in server.ts)', () => {
+  it('logs a structured stack and initiates shutdown', () => {
+    const logged: unknown[] = [];
+    const fakeLogger = {
+      error: (...args: unknown[]) => logged.push(args),
+      info: () => {},
+    };
+    let shutdownCalled = false;
+    const fakeShutdownWithTimeout = (_signal: string) => {
+      shutdownCalled = true;
+    };
+
+    // Simulate the handler as written in server.ts
+    const handler = (err: Error) => {
+      fakeLogger.error(
+        '[server] uncaughtException — initiating graceful shutdown',
+        {
+          message: err.message,
+          stack: err.stack,
+          name: err.name,
+        },
+      );
+      fakeShutdownWithTimeout('uncaughtException');
+    };
+
+    const testErr = new Error('something blew up');
+    handler(testErr);
+
+    expect(logged).toHaveLength(1);
+    const [msg, meta] = logged[0] as [string, Record<string, unknown>];
+    expect(msg).toContain('uncaughtException');
+    expect(meta.message).toBe('something blew up');
+    expect(meta.name).toBe('Error');
+    expect(shutdownCalled).toBe(true);
   });
 });
 

@@ -384,3 +384,11 @@ process.on('SIGINT', () => shutdownWithTimeout('SIGINT'));
 process.on('unhandledRejection', (err) => {
   logger.error('[server] unhandledRejection:', err);
 });
+process.on('uncaughtException', (err) => {
+  logger.error('[server] uncaughtException — initiating graceful shutdown', {
+    message: err.message,
+    stack: err.stack,
+    name: err.name,
+  });
+  shutdownWithTimeout('uncaughtException');
+});
