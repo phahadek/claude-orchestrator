@@ -108,6 +108,7 @@ export class PreReviewPipeline {
         let summary = 'no worktree available — autofix skipped';
 
         if (ctx.worktreePath) {
+          const autofixCfg = loadOrchestratorConfig(ctx.project.projectDir);
           try {
             const result = await runAutofix(
               ctx.worktreePath,
@@ -117,6 +118,8 @@ export class PreReviewPipeline {
                 logger.info(
                   `[PreReviewPipeline] autofix PR #${ctx.prNumber}: ${msg}`,
                 ),
+              'dev',
+              autofixCfg.autofix_skip_ci,
             );
 
             if (result.isGitInfraFailure) {
@@ -182,6 +185,7 @@ export class PreReviewPipeline {
                     getPRByNumber(ctx.prNumber, ctx.repo)?.session_id ?? null,
                   projectId: ctx.project.id,
                   taskId: ctx.job.taskId,
+                  skipCi: autofixCfg.autofix_skip_ci,
                   onReverted: (files) => {
                     const row = getPRByNumber(ctx.prNumber, ctx.repo);
                     if (row?.session_id) {

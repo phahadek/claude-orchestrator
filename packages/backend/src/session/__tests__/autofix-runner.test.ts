@@ -201,7 +201,44 @@ describe('runAutofix — no diff produced', () => {
 // ── runAutofix — diff produced → commit ──────────────────────────────────────
 
 describe('runAutofix — diff produced → commit + push', () => {
-  it('creates a commit with message "chore: apply autofix [orchestrator]"', async () => {
+  it('creates commit with [skip ci] by default (skipCi = true)', async () => {
+    const commitArgs: string[] = [];
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  src/foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, 'src/foo.ts\n');
+      if (cmd === 'git' && a[0] === 'commit') {
+        commitArgs.push(...a);
+        return makeProc(
+          0,
+          '[branch abc1234] chore: apply autofix [orchestrator] [skip ci]',
+        );
+      }
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'rev-parse')
+        return makeProc(0, 'abc1234567\n');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run lint'],
+      () => {},
+    );
+
+    expect(commitArgs).toContain(
+      'chore: apply autofix [orchestrator] [skip ci]',
+    );
+    expect(result.commitSha).toBe('abc1234567');
+    expect(result.success).toBe(true);
+  });
+
+  it('omits [skip ci] from commit message when skipCi = false', async () => {
     const commitArgs: string[] = [];
 
     _spawnHook = (cmd, args) => {
@@ -229,9 +266,14 @@ describe('runAutofix — diff produced → commit + push', () => {
       '/project',
       ['npm run lint'],
       () => {},
+      'dev',
+      false,
     );
 
     expect(commitArgs).toContain('chore: apply autofix [orchestrator]');
+    expect(commitArgs).not.toContain(
+      'chore: apply autofix [orchestrator] [skip ci]',
+    );
     expect(result.commitSha).toBe('abc1234567');
     expect(result.success).toBe(true);
   });
@@ -268,12 +310,12 @@ describe('runAutofix — diff produced → commit + push', () => {
 // ── runAutofix — fail open ─────────────────────────────────────────────────────
 
 describe('runAutofix — fail open on non-zero exit', () => {
-  it('returns success:false when a command exits non-zero with no diff', async () => {
+  it('returns success:true with unfixableViolations when a command exits 1 with output and no diff', async () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
-      // autofix shell command fails
-      return makeProc(1, '', 'lint error');
+      // autofix shell command exits 1 with output (treated as unfixable violations)
+      return makeProc(1, 'lint error', '');
     };
 
     const logged: string[] = [];
@@ -284,26 +326,29 @@ describe('runAutofix — fail open on non-zero exit', () => {
       (m) => logged.push(m),
     );
 
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
     expect(result.commitSha).toBeUndefined();
+    expect(result.unfixableViolations).toBe('lint error');
     expect(logged.some((l) => l.includes('WARN'))).toBe(true);
   });
 
-  it('commits whatever changes were produced even when a command fails', async () => {
+  it('commits changes and reports unfixableViolations when a command exits 1 with output', async () => {
     let committed = false;
 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'commit') {
         committed = true;
         return makeProc(0, '');
       }
       if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'rev-parse') return makeProc(0, 'abc\n');
-      // autofix shell command exits non-zero
-      return makeProc(1, '', 'error');
+      // autofix shell command exits 1 with output (unfixable violations)
+      return makeProc(1, 'error', '');
     };
 
     const result = await runAutofix(
@@ -315,7 +360,9 @@ describe('runAutofix — fail open on non-zero exit', () => {
 
     expect(committed).toBe(true);
     expect(result.commitSha).toBe('abc');
-    expect(result.success).toBe(false);
+    // Exit 1 with output is treated as unfixable violations, not a hard failure
+    expect(result.success).toBe(true);
+    expect(result.unfixableViolations).toBe('error');
   });
 });
 

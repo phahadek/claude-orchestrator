@@ -41,6 +41,7 @@ import {
   buildValidationComment,
 } from '../github/PRBodyValidator';
 import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCheck';
+import { loadOrchestratorConfig } from './orchestrator-config';
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
 import { recordEvent, countPushFailureEvents } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
@@ -1873,6 +1874,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     baseBranch: string,
   ): Promise<void> {
     if (!this.githubClient) return;
+    const project = getProjectById(this.projectId);
+    const sessionConfig = project
+      ? loadOrchestratorConfig(project.projectDir)
+      : null;
     const { revertCommitSha } = await filePollutionCheckFn({
       github: this.githubClient,
       worktreePath: this.worktreePath,
@@ -1882,6 +1887,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       sessionId: this.sessionId,
       projectId: this.projectId || null,
       taskId: this.taskId || null,
+      skipCi: sessionConfig?.autofix_skip_ci ?? true,
       onReverted: (files) => {
         for (const f of files) this._revertLock.add(f);
       },

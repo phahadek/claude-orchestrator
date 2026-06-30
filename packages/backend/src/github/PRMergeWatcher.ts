@@ -522,6 +522,9 @@ export class PRMergeWatcher {
         : [];
 
       if (worktreePath && autofixCommands.length > 0) {
+        const mergeWatcherConfig = project
+          ? loadOrchestratorConfig(project.projectDir)
+          : null;
         try {
           const result = await runAutofix(
             worktreePath,
@@ -531,6 +534,8 @@ export class PRMergeWatcher {
               logger.info(
                 `[PRMergeWatcher] autofix PR #${pr.pr_number}: ${msg}`,
               ),
+            'dev',
+            mergeWatcherConfig?.autofix_skip_ci ?? true,
           );
           if (result.commitSha) {
             addAutofixSha(pr.pr_number, pr.repo, result.commitSha);

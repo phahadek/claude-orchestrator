@@ -19,6 +19,13 @@ verify:
 ci_check_name:
   - build
 
+# Whether orchestrator autofix / file-revert commits carry [skip ci].
+# This repo has a *required* "build" status check (above): a [skip ci] commit
+# skips the pull_request workflow, so the required check never reports on the
+# new head SHA and the PR's required check stays starved forever. Set false so
+# autofix/revert pushes still trigger the build and the required check resolves.
+autofix_skip_ci: false
+
 # Commands the orchestrator runs as authoritative tests per head-SHA.
 # Empty list = feature off (no-op). Each command is run with a per-command timeout.
 test: []
