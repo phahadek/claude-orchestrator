@@ -147,8 +147,13 @@ export async function runAutofix(
   }
 
   if (!fs.existsSync(worktreePath)) {
-    log(`[autofix] worktree path no longer exists, skipping: ${worktreePath}\n`);
-    return { success: true, summary: 'autofix skipped: worktree path no longer exists' };
+    log(
+      `[autofix] worktree path no longer exists, skipping: ${worktreePath}\n`,
+    );
+    return {
+      success: true,
+      summary: 'autofix skipped: worktree path no longer exists',
+    };
   }
 
   // Resolve {{changed_files}} once upfront if any command uses the placeholder.

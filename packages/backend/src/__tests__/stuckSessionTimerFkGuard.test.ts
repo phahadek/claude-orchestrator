@@ -74,10 +74,10 @@ beforeEach(() => {
 
 describe('StuckSessionMonitor.persistTimerState — FK guard', () => {
   it('does not throw when upsertStuckSessionTimer raises a FOREIGN KEY constraint error', () => {
-    const fkErr = Object.assign(
-      new Error('FOREIGN KEY constraint failed'),
-      { name: 'SqliteError', code: 'SQLITE_CONSTRAINT_FOREIGNKEY' },
-    );
+    const fkErr = Object.assign(new Error('FOREIGN KEY constraint failed'), {
+      name: 'SqliteError',
+      code: 'SQLITE_CONSTRAINT_FOREIGNKEY',
+    });
     mockUpsertStuckSessionTimer.mockImplementation(() => {
       throw fkErr;
     });
