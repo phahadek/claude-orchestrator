@@ -138,6 +138,7 @@ export async function runAutofix(
   commands: string[],
   log: (msg: string) => void,
   baseBranch = 'dev',
+  skipCi = true,
 ): Promise<AutofixResult> {
   if (commands.length === 0) {
     return { success: true, summary: 'no autofix commands configured' };
@@ -265,14 +266,11 @@ export async function runAutofix(
   // on the orchestrator's internal autofix commit. The orchestrator runs its own
   // verify/analyze gate — redundant hook invocations here only cause spurious
   // exit-1 failures (e.g. polimarket E501).
+  const commitMsg =
+    'chore: apply autofix [orchestrator]' + (skipCi ? ' [skip ci]' : '');
   const commitResult = await spawnCmd(
     'git',
-    [
-      'commit',
-      '--no-verify',
-      '-m',
-      'chore: apply autofix [orchestrator] [skip ci]',
-    ],
+    ['commit', '--no-verify', '-m', commitMsg],
     { cwd: worktreePath, env },
   );
   if (commitResult.exitCode !== 0) {

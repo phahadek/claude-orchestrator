@@ -50,6 +50,13 @@ export interface OrchestratorConfig {
   analyze_max_rss_mb: number;
   /** Stop running subsequent analyze commands after the first failure. Default true. */
   analyze_fail_fast: boolean;
+  /**
+   * When true (default), orchestrator autofix and file-revert commits include
+   * [skip ci] so GitHub skips pull_request workflows, saving CI minutes.
+   * Set to false on projects with required GitHub status checks — [skip ci]
+   * prevents those checks from reporting, permanently blocking the PR.
+   */
+  autofix_skip_ci: boolean;
 }
 
 const DEFAULTS: OrchestratorConfig = {
@@ -69,6 +76,7 @@ const DEFAULTS: OrchestratorConfig = {
   analyze_timeout_sec: 300,
   analyze_max_rss_mb: 0,
   analyze_fail_fast: true,
+  autofix_skip_ci: true,
 };
 
 /**
@@ -151,6 +159,10 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.analyze_fail_fast === 'boolean'
           ? parsed.analyze_fail_fast
           : DEFAULTS.analyze_fail_fast,
+      autofix_skip_ci:
+        typeof parsed.autofix_skip_ci === 'boolean'
+          ? parsed.autofix_skip_ci
+          : DEFAULTS.autofix_skip_ci,
       mcp_servers:
         parsed.mcp_servers !== null &&
         typeof parsed.mcp_servers === 'object' &&

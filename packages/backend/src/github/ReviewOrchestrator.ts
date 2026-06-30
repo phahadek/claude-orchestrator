@@ -350,6 +350,8 @@ export class ReviewOrchestrator {
     if (autofixCommands.length === 0)
       return { success: true, summary: 'no autofix commands — skipped' };
 
+    const autofixConfig = loadOrchestratorConfig(project.projectDir);
+
     this.sessionManager.emit('message', {
       type: 'autofix_started',
       prNumber,
@@ -373,6 +375,8 @@ export class ReviewOrchestrator {
           autofixCommands,
           (msg) =>
             logger.info(`[ReviewOrchestrator] autofix PR #${prNumber}: ${msg}`),
+          'dev',
+          autofixConfig.autofix_skip_ci,
         );
         autofixSuccess = result.success;
         autofixSummary = result.summary;
@@ -394,6 +398,7 @@ export class ReviewOrchestrator {
               sessionId: prRow?.session_id ?? null,
               projectId: project.id,
               taskId,
+              skipCi: autofixConfig.autofix_skip_ci,
               onReverted: (files) => {
                 if (prRow?.session_id) {
                   this.sessionManager.addToRevertLock(prRow.session_id, files);
@@ -580,6 +585,8 @@ export class ReviewOrchestrator {
                 logger.info(
                   `[ReviewOrchestrator] autofix local branch ${job.branchName}: ${msg}`,
                 ),
+              'dev',
+              config.autofix_skip_ci,
             );
             if (autofixResult.commitSha) {
               recordEvent({

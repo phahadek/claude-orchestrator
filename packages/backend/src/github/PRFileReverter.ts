@@ -16,12 +16,13 @@ export async function revertBannedFiles(opts: {
   bannedFiles: string[];
   prNumber: number;
   repo: string;
+  skipCi?: boolean;
 }): Promise<{
   commitSha: string | null;
   reverted: string[];
   syncedTo: string | null;
 }> {
-  const { worktreePath, baseBranch, bannedFiles } = opts;
+  const { worktreePath, baseBranch, bannedFiles, skipCi = true } = opts;
 
   if (bannedFiles.length === 0) {
     return { commitSha: null, reverted: [], syncedTo: null };
@@ -89,7 +90,9 @@ export async function revertBannedFiles(opts: {
   }
 
   const fileList = reverted.join(', ');
-  const message = `chore: orchestrator-revert: restore ${fileList} [auto-revert] [skip ci]`;
+  const message =
+    `chore: orchestrator-revert: restore ${fileList} [auto-revert]` +
+    (skipCi ? ' [skip ci]' : '');
 
   await git(
     [
