@@ -23,6 +23,7 @@ vi.mock('../../db/queries', () => ({
   getSessionTags: vi.fn().mockReturnValue([]),
   setSessionTags: vi.fn(),
   resetTaskCrashCount: vi.fn(),
+  getSession: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('../../config', () => ({
@@ -93,6 +94,7 @@ import {
   markSessionDone,
   markSessionIdle,
   setPauseReason,
+  getSession,
 } from '../../db/queries';
 import { validatePRBody } from '../../github/PRBodyValidator';
 import { recordEvent } from '../../audit/AuditLog';
@@ -270,6 +272,166 @@ describe('<pr-body> marker — createPR path', () => {
     // createPR only called once; second emission hits the updatePR path
     expect(ghClient.createPR).toHaveBeenCalledTimes(1);
     expect(ghClient.updatePR).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('<pr-body> marker — PR title sourcing', () => {
+  beforeEach(() => {
+    vi.mocked(upsertPullRequest).mockClear();
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+    });
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getSession).mockReturnValue(null);
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current')
+        return 'feature/wire-prune-resolution-review-into-the-post-ops-commands-api-surface\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd === 'git symbolic-ref refs/remotes/origin/HEAD')
+        return 'refs/remotes/origin/dev\n';
+      if (
+        cmd ===
+        'git push -u origin feature/wire-prune-resolution-review-into-the-post-ops-commands-api-surface'
+      )
+        return '';
+      throw new Error(`unexpected execSync: ${cmd}`);
+    });
+  });
+
+  it('uses persisted task_name from DB when available', async () => {
+    const realTaskName =
+      'Wire prune_resolution_review into the POST /ops/commands API surface';
+    vi.mocked(getSession).mockReturnValue({ task_name: realTaskName } as never);
+
+    const ghClient = makeGithubClient({
+      createPR: vi.fn().mockResolvedValue({
+        number: 99,
+        html_url: PR_URL,
+        title: `feat: ${realTaskName}`,
+        body: VALID_BODY,
+        head: {
+          ref: 'feature/wire-prune-resolution-review-into-the-post-ops-commands-api-surface',
+          sha: 'abc123',
+        },
+        base: { ref: 'dev' },
+        state: 'open',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        draft: true,
+      }),
+    });
+    const taskBackend = {
+      attachPR: vi.fn().mockResolvedValue(undefined),
+      getTask: vi.fn().mockResolvedValue(null),
+    };
+    const session = new AgentSession(
+      'test-session-id',
+      'https://notion.so/task',
+      'https://notion.so/project',
+      taskBackend as never,
+      '/tmp/worktree',
+      'task-123',
+      undefined,
+      undefined,
+      'standard',
+      undefined,
+      ghClient as never,
+    );
+
+    (
+      session as unknown as {
+        handleRawEvent: (e: Record<string, unknown>) => void;
+      }
+    ).handleRawEvent({
+      type: 'assistant',
+      message: {
+        id: 'msg_pr_title_test',
+        content: [
+          {
+            type: 'text',
+            text: `Done!\n\n<pr-body>\n${VALID_BODY}\n</pr-body>`,
+          },
+        ],
+      },
+    });
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalledWith(
+      'owner/repo',
+      expect.objectContaining({
+        title: `feat: ${realTaskName}`,
+      }),
+    );
+  });
+
+  it('falls back to branch-derived slug when no task_name is persisted', async () => {
+    vi.mocked(getSession).mockReturnValue(null);
+
+    const ghClient = makeGithubClient({
+      createPR: vi.fn().mockResolvedValue({
+        number: 99,
+        html_url: PR_URL,
+        title:
+          'feat: wire-prune-resolution-review-into-the-post-ops-commands-api-surface',
+        body: VALID_BODY,
+        head: {
+          ref: 'feature/wire-prune-resolution-review-into-the-post-ops-commands-api-surface',
+          sha: 'abc123',
+        },
+        base: { ref: 'dev' },
+        state: 'open',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        draft: true,
+      }),
+    });
+    const taskBackend = {
+      attachPR: vi.fn().mockResolvedValue(undefined),
+      getTask: vi.fn().mockResolvedValue(null),
+    };
+    const session = new AgentSession(
+      'test-session-id',
+      'https://notion.so/task',
+      'https://notion.so/project',
+      taskBackend as never,
+      '/tmp/worktree',
+      'task-123',
+      undefined,
+      undefined,
+      'standard',
+      undefined,
+      ghClient as never,
+    );
+
+    (
+      session as unknown as {
+        handleRawEvent: (e: Record<string, unknown>) => void;
+      }
+    ).handleRawEvent({
+      type: 'assistant',
+      message: {
+        id: 'msg_pr_title_fallback',
+        content: [
+          {
+            type: 'text',
+            text: `Done!\n\n<pr-body>\n${VALID_BODY}\n</pr-body>`,
+          },
+        ],
+      },
+    });
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalledWith(
+      'owner/repo',
+      expect.objectContaining({
+        title:
+          'feat: wire-prune-resolution-review-into-the-post-ops-commands-api-surface',
+      }),
+    );
   });
 });
 

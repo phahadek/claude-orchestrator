@@ -31,6 +31,7 @@ import {
   ackPendingComments,
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
+  getSession,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -1332,7 +1333,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       return;
     }
 
-    const taskName = branch.replace(/^feature\//, '');
+    const persistedTaskName = getSession(this.sessionId)?.task_name;
+    const taskName = persistedTaskName || branch.replace(/^feature\//, '');
     const title = `feat: ${taskName}`;
 
     await this.createPRWithRetry(
