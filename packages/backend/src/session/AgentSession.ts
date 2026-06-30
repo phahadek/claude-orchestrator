@@ -533,7 +533,8 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       // — error the session regardless of exit code.
       if (this.contextOverflowDetected) {
         if (!this.hasEnded) {
-          const detail = 'context window full; no large-task model available to escalate';
+          const detail =
+            'context window full; no large-task model available to escalate';
           this.sessionManager?.markSessionErrored?.(
             this.sessionId,
             'error',

@@ -41,16 +41,18 @@ vi.mock('child_process', async (importOriginal) => {
     spawn: vi.fn(() => mockProc.proc),
     execFile: vi.fn(),
     execSync: vi.fn(() => 'feature/task\n'),
-    exec: vi.fn().mockImplementation(
-      (
-        _cmd: string,
-        _opts: unknown,
-        cb: (err: null, result: { stdout: string; stderr: string }) => void,
-      ) => {
-        const callback = typeof _opts === 'function' ? _opts : cb;
-        process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
-      },
-    ),
+    exec: vi
+      .fn()
+      .mockImplementation(
+        (
+          _cmd: string,
+          _opts: unknown,
+          cb: (err: null, result: { stdout: string; stderr: string }) => void,
+        ) => {
+          const callback = typeof _opts === 'function' ? _opts : cb;
+          process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+        },
+      ),
   };
 });
 
@@ -284,54 +286,46 @@ describe('last_error_detail — AgentSession exit paths', () => {
     );
   });
 
-  it(
-    'sets last_error_detail to "process killed unexpectedly" on null exit code',
-    async () => {
-      const session = makeSession();
-      const runPromise = session.run();
+  it('sets last_error_detail to "process killed unexpectedly" on null exit code', async () => {
+    const session = makeSession();
+    const runPromise = session.run();
 
-      await new Promise((r) => setTimeout(r, 10));
-      // Push EOF first and wait long enough for readline to close.
-      mockProc.stdout.push(null);
-      await new Promise((r) => setTimeout(r, 200));
-      mockProc.proc.emit('exit', null);
-      await runPromise;
+    await new Promise((r) => setTimeout(r, 10));
+    // Push EOF first and wait long enough for readline to close.
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 200));
+    mockProc.proc.emit('exit', null);
+    await runPromise;
 
-      expect(setSessionLastErrorDetail).toHaveBeenCalledWith(
-        'sess-err-detail',
-        'process killed unexpectedly',
-      );
-    },
-    10_000,
-  );
+    expect(setSessionLastErrorDetail).toHaveBeenCalledWith(
+      'sess-err-detail',
+      'process killed unexpectedly',
+    );
+  }, 10_000);
 
-  it(
-    'sets last_error_detail to "killed by user request" when kill() is called',
-    async () => {
-      const session = makeSession();
-      const runPromise = session.run();
+  it('sets last_error_detail to "killed by user request" when kill() is called', async () => {
+    const session = makeSession();
+    const runPromise = session.run();
 
-      // Wait for session to start.
-      await new Promise((r) => setTimeout(r, 10));
+    // Wait for session to start.
+    await new Promise((r) => setTimeout(r, 10));
 
-      // Start kill() — it sets isKilling=true and waits for proc exit.
-      const killPromise = session.kill();
+    // Start kill() — it sets isKilling=true and waits for proc exit.
+    const killPromise = session.kill();
 
-      // Give kill() a moment to register the exit listener, then emit exit.
-      await new Promise((r) => setTimeout(r, 10));
-      mockProc.stdout.push(null);
-      await new Promise((r) => setTimeout(r, 200));
-      mockProc.proc.emit('exit', null);
+    // Give kill() a moment to register the exit listener, then emit exit.
+    await new Promise((r) => setTimeout(r, 10));
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 200));
+    mockProc.proc.emit('exit', null);
 
-      await Promise.all([runPromise, killPromise]);
+    await Promise.all([runPromise, killPromise]);
 
-      expect(setSessionLastErrorDetail).toHaveBeenCalledWith(
-        'sess-err-detail',
-        'killed by user request',
-      );
-    },
-    10_000,
-  );
+    expect(setSessionLastErrorDetail).toHaveBeenCalledWith(
+      'sess-err-detail',
+      'killed by user request',
+    );
+  }, 10_000);
 });
 
 // ── Tests — SessionManager.markSessionErrored ─────────────────────────────
@@ -354,7 +348,12 @@ describe('last_error_detail — SessionManager.markSessionErrored', () => {
       worktree_path: null,
     } as never);
 
-    sm.markSessionErrored('sess-sm-test', 'error', 'run_error', 'subprocess crashed: SIGSEGV');
+    sm.markSessionErrored(
+      'sess-sm-test',
+      'error',
+      'run_error',
+      'subprocess crashed: SIGSEGV',
+    );
 
     expect(setSessionLastErrorDetail).toHaveBeenCalledWith(
       'sess-sm-test',
@@ -407,7 +406,10 @@ describe('last_error_detail — SessionManager.markSessionErrored', () => {
     for (const detail of details) {
       vi.mocked(setSessionLastErrorDetail).mockClear();
       sm.markSessionErrored('sess-reasons', 'error', 'test_reason', detail);
-      expect(setSessionLastErrorDetail).toHaveBeenCalledWith('sess-reasons', detail);
+      expect(setSessionLastErrorDetail).toHaveBeenCalledWith(
+        'sess-reasons',
+        detail,
+      );
     }
   });
 });
