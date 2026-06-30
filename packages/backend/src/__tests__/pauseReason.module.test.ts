@@ -210,26 +210,20 @@ describe('deriveRecoveryDescriptor', () => {
     ['launch_failed', 'redispatch', 'Redispatch'],
     ['needs_repo', 'redispatch', 'Redispatch'],
     ['stalled_idle', 'redispatch', 'Redispatch'],
-  ] as const)(
-    '%s → redispatch',
-    (reason, action, label) => {
-      const d = deriveRecoveryDescriptor(reason);
-      expect(d).toEqual({ available: true, action, label });
-    },
-  );
+  ] as const)('%s → redispatch', (reason, action, label) => {
+    const d = deriveRecoveryDescriptor(reason);
+    expect(d).toEqual({ available: true, action, label });
+  });
 
   it.each([
     ['autofix_git_infra_failure', 'rerun', 'Rerun'],
     ['ci_billing_blocked', 'rerun', 'Rerun'],
     ['stalled_reconcile_cap', 'rerun', 'Rerun'],
     ['auto_merge_failed', 'rerun', 'Rerun'],
-  ] as const)(
-    '%s → rerun',
-    (reason, action, label) => {
-      const d = deriveRecoveryDescriptor(reason);
-      expect(d).toEqual({ available: true, action, label });
-    },
-  );
+  ] as const)('%s → rerun', (reason, action, label) => {
+    const d = deriveRecoveryDescriptor(reason);
+    expect(d).toEqual({ available: true, action, label });
+  });
 
   it.each([
     ['review_failed', 'resume', 'Resume'],
@@ -241,13 +235,10 @@ describe('deriveRecoveryDescriptor', () => {
     ['pr_body_invalid', 'resume', 'Resume'],
     ['attribution_missing', 'resume', 'Resume'],
     ['audit_findings', 'resume', 'Resume'],
-  ] as const)(
-    '%s → resume',
-    (reason, action, label) => {
-      const d = deriveRecoveryDescriptor(reason);
-      expect(d).toEqual({ available: true, action, label });
-    },
-  );
+  ] as const)('%s → resume', (reason, action, label) => {
+    const d = deriveRecoveryDescriptor(reason);
+    expect(d).toEqual({ available: true, action, label });
+  });
 
   it('awaiting_human_approval → available:false (no action)', () => {
     expect(deriveRecoveryDescriptor('awaiting_human_approval')).toEqual({

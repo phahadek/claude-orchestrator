@@ -197,7 +197,9 @@ export interface RecoveryDescriptor {
   label?: string;
 }
 
-const RECOVERY_ACTION_MAP: Partial<Record<CanonicalPauseReason, RecoveryAction>> = {
+const RECOVERY_ACTION_MAP: Partial<
+  Record<CanonicalPauseReason, RecoveryAction>
+> = {
   // redispatch: clear pause + reset crash count + set Ready
   launch_failed: 'redispatch',
   needs_repo: 'redispatch',

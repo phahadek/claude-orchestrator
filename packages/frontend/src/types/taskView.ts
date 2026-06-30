@@ -1,4 +1,7 @@
-import type { CanonicalPauseReason, RecoveryDescriptor } from '@claude-orchestrator/backend/src/db/pauseReason';
+import type {
+  CanonicalPauseReason,
+  RecoveryDescriptor,
+} from '@claude-orchestrator/backend/src/db/pauseReason';
 
 export type DisplayStatus =
   | 'ready'

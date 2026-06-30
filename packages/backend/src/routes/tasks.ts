@@ -640,131 +640,128 @@ export function createTasksRouter(
   // ── POST /api/tasks/:taskId/recover ─────────────────────────────────────────
   // Generalized recovery endpoint: derives the action from the current pause reason
   // and executes redispatch / rerun / resume accordingly.
-  router.post(
-    '/tasks/:taskId/recover',
-    async (req: Request, res: Response) => {
-      const taskId = String(req.params.taskId);
-      const projectId =
-        typeof req.query.projectId === 'string' ? req.query.projectId : null;
+  router.post('/tasks/:taskId/recover', async (req: Request, res: Response) => {
+    const taskId = String(req.params.taskId);
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
 
-      if (!projectId) {
-        res.status(422).json({ error: 'projectId is required' });
-        return;
-      }
+    if (!projectId) {
+      res.status(422).json({ error: 'projectId is required' });
+      return;
+    }
 
-      // Load current task state to read pause reason
-      const rows = getActiveTaskAggregates([taskId]);
-      const row = rows[0] ?? null;
-      const pauseStruct = row
-        ? parsePauseReason(
-            row.pr_pause_reason ??
-              row.session_pr_creation_failed_pause_reason ??
-              null,
-          )
-        : null;
+    // Load current task state to read pause reason
+    const rows = getActiveTaskAggregates([taskId]);
+    const row = rows[0] ?? null;
+    const pauseStruct = row
+      ? parsePauseReason(
+          row.pr_pause_reason ??
+            row.session_pr_creation_failed_pause_reason ??
+            null,
+        )
+      : null;
 
-      const descriptor = deriveRecoveryDescriptor(pauseStruct?.reason ?? null);
+    const descriptor = deriveRecoveryDescriptor(pauseStruct?.reason ?? null);
 
-      if (!descriptor.available || !descriptor.action) {
-        res.status(422).json({
-          error: 'No recovery action available for this task',
-          pauseReason: pauseStruct?.reason ?? null,
-        });
-        return;
-      }
-
-      const action = descriptor.action;
-
-      try {
-        if (action === 'redispatch') {
-          let backend: Awaited<ReturnType<typeof getTaskBackend>>;
-          try {
-            backend = getTaskBackend(projectId);
-          } catch {
-            res.status(422).json({
-              error: `Cannot resolve backend for project '${projectId}'`,
-            });
-            return;
-          }
-
-          clearTaskPauseReason(taskId);
-          resetTaskCrashCount(taskId);
-          deleteTaskCacheRow(taskId);
-
-          await backend.updateStatus(taskId, '🗂️ Ready', {
-            source: 'orchestrator',
-          });
-
-          emitTaskUpdated(taskId);
-          if (taskBroadcastFn) {
-            taskBroadcastFn({
-              type: 'task_status_changed',
-              notionTaskId: taskId,
-              newStatus: '🗂️ Ready',
-            });
-          }
-        } else if (action === 'rerun') {
-          const prRow = getPRByNotionTaskId(taskId);
-          if (!prRow) {
-            res.status(422).json({
-              error: 'No PR found for this task — cannot rerun pipeline',
-            });
-            return;
-          }
-
-          clearTerminalPRFlags(prRow.pr_number, prRow.repo);
-
-          if (reviewOrchestrator) {
-            void reviewOrchestrator
-              .runAutofixPipeline(prRow.pr_number, prRow.repo, taskId)
-              .catch((err: unknown) =>
-                logger.error('[tasks] recover rerun pipeline failed:', err),
-              );
-          }
-
-          emitTaskUpdated(taskId);
-        } else if (action === 'resume') {
-          const sessionId = row?.code_session_id ?? null;
-          if (!sessionId) {
-            res.status(422).json({
-              error: 'No code session found for this task — cannot resume',
-            });
-            return;
-          }
-
-          // Clear PR-level pause so the task transitions away from needs_attention
-          const prRow = getPRByNotionTaskId(taskId);
-          if (prRow) {
-            clearTerminalPRFlags(prRow.pr_number, prRow.repo);
-          }
-
-          if (sessionManager) {
-            await sessionManager.sendOrResume(
-              sessionId,
-              'Recovery requested. Please review the current state and continue working on the task.',
-            );
-          }
-
-          emitTaskUpdated(taskId);
-        }
-      } catch (err) {
-        res.status(500).json({
-          error: err instanceof Error ? err.message : 'Recovery action failed',
-        });
-        return;
-      }
-
-      recordEvent({
-        event_type: 'task_recovered',
-        actor_type: 'human',
-        project_id: projectId,
-        task_id: taskId,
-        payload: { taskId, projectId, action },
+    if (!descriptor.available || !descriptor.action) {
+      res.status(422).json({
+        error: 'No recovery action available for this task',
+        pauseReason: pauseStruct?.reason ?? null,
       });
+      return;
+    }
 
-      res.json({ ok: true, action });
-    },
-  );
+    const action = descriptor.action;
+
+    try {
+      if (action === 'redispatch') {
+        let backend: Awaited<ReturnType<typeof getTaskBackend>>;
+        try {
+          backend = getTaskBackend(projectId);
+        } catch {
+          res.status(422).json({
+            error: `Cannot resolve backend for project '${projectId}'`,
+          });
+          return;
+        }
+
+        clearTaskPauseReason(taskId);
+        resetTaskCrashCount(taskId);
+        deleteTaskCacheRow(taskId);
+
+        await backend.updateStatus(taskId, '🗂️ Ready', {
+          source: 'orchestrator',
+        });
+
+        emitTaskUpdated(taskId);
+        if (taskBroadcastFn) {
+          taskBroadcastFn({
+            type: 'task_status_changed',
+            notionTaskId: taskId,
+            newStatus: '🗂️ Ready',
+          });
+        }
+      } else if (action === 'rerun') {
+        const prRow = getPRByNotionTaskId(taskId);
+        if (!prRow) {
+          res.status(422).json({
+            error: 'No PR found for this task — cannot rerun pipeline',
+          });
+          return;
+        }
+
+        clearTerminalPRFlags(prRow.pr_number, prRow.repo);
+
+        if (reviewOrchestrator) {
+          void reviewOrchestrator
+            .runAutofixPipeline(prRow.pr_number, prRow.repo, taskId)
+            .catch((err: unknown) =>
+              logger.error('[tasks] recover rerun pipeline failed:', err),
+            );
+        }
+
+        emitTaskUpdated(taskId);
+      } else if (action === 'resume') {
+        const sessionId = row?.code_session_id ?? null;
+        if (!sessionId) {
+          res.status(422).json({
+            error: 'No code session found for this task — cannot resume',
+          });
+          return;
+        }
+
+        // Clear PR-level pause so the task transitions away from needs_attention
+        const prRow = getPRByNotionTaskId(taskId);
+        if (prRow) {
+          clearTerminalPRFlags(prRow.pr_number, prRow.repo);
+        }
+
+        if (sessionManager) {
+          await sessionManager.sendOrResume(
+            sessionId,
+            'Recovery requested. Please review the current state and continue working on the task.',
+          );
+        }
+
+        emitTaskUpdated(taskId);
+      }
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Recovery action failed',
+      });
+      return;
+    }
+
+    recordEvent({
+      event_type: 'task_recovered',
+      actor_type: 'human',
+      project_id: projectId,
+      task_id: taskId,
+      payload: { taskId, projectId, action },
+    });
+
+    res.json({ ok: true, action });
+  });
 
   // ── PATCH /api/tasks/:id/status ──────────────────────────────────────────
   router.patch('/tasks/:id/status', async (req: Request, res: Response) => {

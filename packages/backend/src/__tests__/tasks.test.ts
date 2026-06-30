@@ -1179,10 +1179,17 @@ describe('POST /api/tasks/:taskId/recover', () => {
       );
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ ok: true, action: 'rerun' });
-      expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(42, 'owner/repo');
+      expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+      );
       // runAutofixPipeline is fire-and-forget; wait a tick for it
       await new Promise((r) => setTimeout(r, 10));
-      expect(runAutofixPipeline).toHaveBeenCalledWith(42, 'owner/repo', 'task-1');
+      expect(runAutofixPipeline).toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        'task-1',
+      );
     });
 
     it('records a task_recovered audit event with rerun action', async () => {
@@ -1243,7 +1250,10 @@ describe('POST /api/tasks/:taskId/recover', () => {
       );
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ ok: true, action: 'resume' });
-      expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(99, 'owner/repo');
+      expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(
+        99,
+        'owner/repo',
+      );
       expect(sendOrResume).toHaveBeenCalledWith(
         'sess-1',
         expect.stringContaining('Recovery requested'),
