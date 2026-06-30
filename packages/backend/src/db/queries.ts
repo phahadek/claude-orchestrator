@@ -1627,6 +1627,19 @@ export function clearTaskPauseReason(taskId: string): void {
 }
 
 /**
+ * Clear the pause_reason on all PRs associated with a task (used when the task
+ * transitions back to Ready so the next launch attempt is not blocked by a
+ * stale PR-level pause such as stuck_timeout).
+ */
+export function clearPausedPrReasonForTask(taskId: string): void {
+  db.prepare<{ task_id: string }>(
+    `UPDATE pull_requests
+     SET pause_reason = NULL, pause_reason_set_at = NULL
+     WHERE task_id = @task_id AND pause_reason IS NOT NULL`,
+  ).run({ task_id: taskId });
+}
+
+/**
  * Approved + open PRs that are eligible to be auto-merged. Excludes PRs paused
  * via any pause_reason (e.g. stuck_timeout) so the Auto-merger skips tasks that
  * a human needs to look at first — see AC under "Stuck session timer".

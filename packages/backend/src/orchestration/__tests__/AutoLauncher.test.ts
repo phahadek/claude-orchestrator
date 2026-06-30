@@ -25,6 +25,8 @@ vi.mock('../../db/queries.js', () => ({
   setTaskPauseReason: vi.fn(),
   getTaskPauseReason: vi.fn().mockReturnValue(null),
   clearTaskPauseReason: vi.fn(),
+  clearPausedPrReasonForTask: vi.fn(),
+  resetTaskCrashCount: vi.fn(),
   getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
 }));
 
@@ -45,6 +47,8 @@ import {
   setTaskPauseReason,
   getTaskPauseReason,
   clearTaskPauseReason,
+  clearPausedPrReasonForTask,
+  resetTaskCrashCount,
 } from '../../db/queries.js';
 import { recordEvent } from '../../audit/AuditLog.js';
 import {
@@ -1591,5 +1595,137 @@ describe('AutoLauncher.pollOnce() — fire-and-forget timing regression guard', 
     // Poll cycle must complete well under 1 second — start() is fire-and-forget
     // so the poll loop does not wait for git/bootstrap/spawn to complete.
     expect(elapsed).toBeLessThan(1_000);
+  });
+});
+
+// ── Ready-transition pause-clear tests ───────────────────────────────────────
+//
+// AC: when a task's Notion status transitions from non-Ready → Ready, any stale
+// DB task pause and PR-level pause must be cleared so isLaunchCandidate passes.
+// Steady-state Ready tasks (no status change) must NOT have their pauses wiped
+// — this is the loop-safety guard for launch_failed escalation.
+
+describe('AutoLauncher — ready-transition pause clearing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+  });
+
+  it('clears task-pause and PR-pause on transition to Ready, then launches the task', async () => {
+    const task = makeResolvedTask({ id: 'task-transition' });
+
+    // Simulate stale pause from a previous needs_attention state
+    vi.mocked(getTaskPauseReason).mockReturnValue(
+      'needs_attention' as unknown as ReturnType<typeof getTaskPauseReason>,
+    );
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(
+      'stuck_timeout' as unknown as ReturnType<typeof getPausedPrReasonForTask>,
+    );
+
+    // After clearing, unblock isLaunchCandidate
+    vi.mocked(clearTaskPauseReason).mockImplementation(() => {
+      vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    });
+    vi.mocked(clearPausedPrReasonForTask).mockImplementation(() => {
+      vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    });
+
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => notionBackend as never,
+      pollOnStart: false,
+    });
+
+    // Simulate post-first-poll state: lastPollReadyTaskIds is a non-null Set
+    // that does NOT contain task-transition (the task just transitioned to Ready)
+    (
+      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
+    ).lastPollReadyTaskIds = new Set(['some-other-task']);
+
+    await launcher.pollOnce();
+
+    expect(clearTaskPauseReason).toHaveBeenCalledWith('task-transition');
+    expect(clearPausedPrReasonForTask).toHaveBeenCalledWith('task-transition');
+    expect(resetTaskCrashCount).toHaveBeenCalledWith('task-transition');
+    expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+
+  it('does not clear task-pause for steady-state Ready task (no-transition loop-safety)', async () => {
+    const task = makeResolvedTask({ id: 'task-steady' });
+
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => notionBackend as never,
+      pollOnStart: false,
+    });
+
+    // Simulate post-first-poll state with task-steady already in the set
+    (
+      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
+    ).lastPollReadyTaskIds = new Set(['task-steady']);
+
+    // Now simulate launch_failed escalation set while task is steady-state Ready
+    vi.mocked(getTaskPauseReason).mockReturnValue(
+      'needs_attention' as unknown as ReturnType<typeof getTaskPauseReason>,
+    );
+
+    // Poll: task already in lastPollReadyTaskIds → no transition → pause must NOT be cleared
+    await launcher.pollOnce();
+
+    expect(clearTaskPauseReason).not.toHaveBeenCalled();
+    expect(clearPausedPrReasonForTask).not.toHaveBeenCalled();
+    expect(sessionManager.start).not.toHaveBeenCalled();
+  });
+
+  it('clears PR-level pause on transition to Ready even when no task-pause exists', async () => {
+    const task = makeResolvedTask({ id: 'task-pr-pause' });
+
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(
+      'stuck_timeout' as unknown as ReturnType<typeof getPausedPrReasonForTask>,
+    );
+    vi.mocked(clearPausedPrReasonForTask).mockImplementation(() => {
+      vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    });
+
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => notionBackend as never,
+      pollOnStart: false,
+    });
+
+    // Simulate post-first-poll state without task-pr-pause (it just transitioned to Ready)
+    (
+      launcher as unknown as { lastPollReadyTaskIds: Set<string> }
+    ).lastPollReadyTaskIds = new Set(['some-other-task']);
+
+    await launcher.pollOnce();
+
+    expect(clearPausedPrReasonForTask).toHaveBeenCalledWith('task-pr-pause');
+    expect(sessionManager.start).toHaveBeenCalledOnce();
   });
 });
