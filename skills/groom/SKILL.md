@@ -184,10 +184,29 @@ Only after explicit sign-off on the batch (_"looks good"_, _"ship it"_, _"next"_
 "decision": "no_split" }` for ≤500 LoC tasks, `{ "loc": <number>, "decision":
 "split_now", "split_into": ["<task-id>", …] }` after splitting, `{ "loc":
 <number>, "decision": "unsplittable", "reason": "<one-line>" }` for the atomic
-   case, or `{ "decision": "n/a" }` for Design/Planning tasks), and set
-   `signoff: { "by": "<human>", "at": "<iso>" }`. _(All three — `signoff`,
-   `hard_block_deps`, and `size_check` — are gated by the promotion hook. They
-   must be written **before** the status flip, or the gate blocks the update.)_
+   case, or `{ "decision": "n/a" }` for Design/Planning tasks), fill
+   `gate_contribution` for 💻 Code / 🛠️ Tooling tasks (see _Gate accretion_ below;
+   write `{ "decision": "n/a" }` for exempt types), and set
+   `signoff: { "by": "<human>", "at": "<iso>" }`. _(All four — `signoff`,
+   `hard_block_deps`, `size_check`, and `gate_contribution` — are gated by the
+   promotion hook. They must be written **before** the status flip, or the gate
+   blocks the update.)_
+
+**Gate accretion (💻 Code / 🛠️ Tooling tasks):** Before writing `gate_contribution`
+and flipping to Ready, append the task's stripped runtime/launch-and-observe items to
+the milestone 🚦 Gate task body. The Gate task id is in `context-bundle.json` as
+`milestone_gate_task_id`. Read the task body's `### 👁️ Manual verification` section —
+these are the items the task spec says are _"Covered by the Manual Verification Gate."_
+Append them to the Gate under a `#### <source-task-title>` heading, grouped by source
+task. Then write to `grooming-state.json`:
+
+- Items accreted: `{ "gate_task_id": "<id>", "items": ["<item 1>", "…"], "appended_at": "<iso>" }`
+- No standalone runtime item: `{ "decision": "none" }`
+
+Confirm the accretion in chat before the Ready-flip. If the milestone has no Gate task
+yet (`milestone_gate_task_id: null` in context-bundle.json), surface it — do not
+silently skip accretion.
+
 2. **Then**, in a **single** `notion-update-page` call (`command:
 "update_properties"`) per task, write **both** the canonical hard-block deps
    into the `Depends On` property **and** set `Status → 🗂️ Ready`. The
@@ -204,10 +223,12 @@ Only after explicit sign-off on the batch (_"looks good"_, _"ship it"_, _"next"_
 3. Confirm in chat what was marked Ready **and** what `Depends On` value was
    written for each task. Then present the next batch.
 
-**Gates last**: the milestone's **🚦 Gate** task (the Manual Verification Gate) is the
-final batch, after all code tasks are signed off. The Gate rests at 🗂️ Ready and
-**accretes** — as each code task is groomed, append its stripped manual-verification
-items to the Gate. That is the Gate type's defined lifecycle, not editing a Ready task.
+**Gates last**: the milestone's **🚦 Gate** task is the final batch, after all code
+tasks are signed off. Accretion happens incrementally — as each 💻 Code / 🛠️ Tooling
+task is promoted (Gate accretion above), its stripped items are appended to the Gate.
+The final Gate batch confirms that all stripped items landed on the Gate body and
+presents the Gate for sign-off. The Gate type's defined lifecycle is accumulation while
+at 🗂️ Ready — appending to it is not editing a Ready task.
 
 When every batch is signed off, confirm the milestone board is fully groomed.
 

@@ -68,6 +68,21 @@ the classification down and not naming it in the header. The 500-LoC bound only
 constrains behavior when sessions present and lock the estimate; otherwise it
 silently dilutes.
 
+**Stripping a task's runtime item from the body but never accreting it to the Gate
+(the "stripped-then-dropped" pattern).** Code/Tooling tasks are required to strip their
+runtime / launch-and-observe manual items and note _"Covered by the Manual Verification
+Gate."_ But stripping is only half the contract — the stripped items must **land on the
+milestone 🚦 Gate** during grooming (Step 4 — Gate accretion). When the groomer strips
+without accreting, the item vanishes entirely: absent from the task body (which now says
+"Covered by gate") and absent from the Gate (never appended). No coverage audit can find
+it; the manual tester never runs it. This already produced a real gap: an M9
+PowerShell-5.1 launch-script check was stripped from a task body but never landed on the
+Gate — discovered only by a 2026-06-29 coverage audit. The promotion hook now blocks
+this: `gate_contribution: null` on a Code/Tooling task prevents the Ready-flip until the
+groomer either records the accreted items (`{ "gate_task_id": "…", "items": […],
+"appended_at": "…" }`) or explicitly records `{ "decision": "none" }` to confirm the
+task has no standalone runtime item.
+
 **Promoting oversized Code/Tooling tasks without splitting.** The temptation is
 to wave a 1,200-LoC task through because it _"feels coherent"_ — but a Code task
 that big is one no one can review, and the implementation session that picks it

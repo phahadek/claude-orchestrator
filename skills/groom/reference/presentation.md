@@ -201,8 +201,13 @@ Then the four points:
    alone. Write **_None._** if genuinely clean. A `# TODO` / `pass` placeholder upstream
    means the chain is contaminated — surface it, don't paper over it.
 3. **Automated tests** — what the task's `### 🤖 Automated tests` section will verify.
-4. **Manual verification** — what this task contributes to the Manual Verification Gate
-   (write _Covered by gate only_ if nothing standalone).
+4. **Manual verification** — enumerate the stripped runtime / launch-and-observe items
+   this task contributes to the milestone 🚦 Gate. These are the items removed from the
+   task body with _"Covered by the Manual Verification Gate."_ If the task has no
+   standalone runtime item, write _None._ The groomer accretes these items to the Gate
+   and records `gate_contribution` in `grooming-state.json` before the Ready-flip (see
+   Step 4 — Gate accretion). Omitting accretion loses the test permanently: the item is
+   stripped from the body and never lands on the Gate.
 
 Then, at the end of the batch, under a **Context (no action needed)** heading, list
 the non-Backlog tasks by name + type + status — same Type-first convention as the
