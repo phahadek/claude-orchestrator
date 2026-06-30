@@ -1,4 +1,7 @@
-import type { CanonicalPauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
+import type {
+  CanonicalPauseReason,
+  RecoveryDescriptor,
+} from '@claude-orchestrator/backend/src/db/pauseReason';
 
 export type DisplayStatus =
   | 'ready'
@@ -61,4 +64,6 @@ export interface TaskView {
   totalTokens: { input: number; output: number };
   /** Assigned target repo slug for multi-repo projects. Null when unassigned. */
   assignedRepo: string | null;
+  /** Recovery action available for this task when paused. */
+  recoveryDescriptor?: RecoveryDescriptor;
 }

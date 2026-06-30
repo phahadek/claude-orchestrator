@@ -9,9 +9,14 @@ import supertest from 'supertest';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────────
 
-vi.mock('../routes/tasks.js', () => ({
-  emitTaskUpdated: vi.fn(),
-}));
+// Keep the real `executeRerunPipeline` (the shared rerun executor the deprecated
+// unpark route now delegates to) while stubbing `emitTaskUpdated`. The real
+// executeRerunPipeline calls the module-local emitTaskUpdated, which no-ops when
+// no broadcast fn is registered, so this stays free of DB access.
+vi.mock('../routes/tasks.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../routes/tasks.js')>();
+  return { ...actual, emitTaskUpdated: vi.fn() };
+});
 
 vi.mock('../db/queries.js', () => ({
   getPRs: vi.fn(),

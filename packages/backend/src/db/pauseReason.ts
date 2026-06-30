@@ -187,6 +187,56 @@ export const PAUSE_REASON_REGISTRY: Record<
   },
 };
 
+// ── Recovery descriptor ──────────────────────────────────────────────────────
+
+type RecoveryAction = 'redispatch' | 'rerun' | 'resume';
+
+export interface RecoveryDescriptor {
+  available: boolean;
+  action?: RecoveryAction;
+  label?: string;
+}
+
+const RECOVERY_ACTION_MAP: Partial<
+  Record<CanonicalPauseReason, RecoveryAction>
+> = {
+  // redispatch: clear pause + reset crash count + set Ready
+  launch_failed: 'redispatch',
+  needs_repo: 'redispatch',
+  stalled_idle: 'redispatch',
+  // rerun: clear pause + re-run the pre-review pipeline
+  autofix_git_infra_failure: 'rerun',
+  ci_billing_blocked: 'rerun',
+  stalled_reconcile_cap: 'rerun',
+  auto_merge_failed: 'rerun',
+  // resume: sendOrResume + nudge
+  review_failed: 'resume',
+  human_changes_requested: 'resume',
+  ci_failing: 'resume',
+  analyze_failing: 'resume',
+  merge_conflict: 'resume',
+  diverged_branch: 'resume',
+  pr_body_invalid: 'resume',
+  attribution_missing: 'resume',
+  audit_findings: 'resume',
+  // awaiting_human_approval, max_reviews → available: false (omitted from map)
+};
+
+const RECOVERY_LABELS: Record<RecoveryAction, string> = {
+  redispatch: 'Redispatch',
+  rerun: 'Rerun',
+  resume: 'Resume',
+};
+
+export function deriveRecoveryDescriptor(
+  reason: CanonicalPauseReason | null | undefined,
+): RecoveryDescriptor {
+  if (reason == null) return { available: false };
+  const action = RECOVERY_ACTION_MAP[reason];
+  if (action == null) return { available: false };
+  return { available: true, action, label: RECOVERY_LABELS[action] };
+}
+
 const CANONICAL_SET = new Set<string>(Object.keys(PAUSE_REASON_REGISTRY));
 
 const UNKNOWN_FALLBACK: RegistryEntry = {

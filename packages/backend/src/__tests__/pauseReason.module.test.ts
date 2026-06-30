@@ -4,6 +4,7 @@ import {
   parsePauseReason,
   serializePauseReason,
   pauseReasonFromCanonical,
+  deriveRecoveryDescriptor,
 } from '../db/pauseReason.js';
 import type { CanonicalPauseReason } from '../db/pauseReason.js';
 
@@ -191,6 +192,70 @@ describe('round-trip identity', () => {
     const original = pauseReasonFromCanonical('ci_failing', 'tests timed out');
     const restored = parsePauseReason(serializePauseReason(original));
     expect(restored).toEqual(original);
+  });
+});
+
+// ── deriveRecoveryDescriptor ──────────────────────────────────────────────────
+
+describe('deriveRecoveryDescriptor', () => {
+  it('returns available:false for null reason', () => {
+    expect(deriveRecoveryDescriptor(null)).toEqual({ available: false });
+  });
+
+  it('returns available:false for undefined reason', () => {
+    expect(deriveRecoveryDescriptor(undefined)).toEqual({ available: false });
+  });
+
+  it.each([
+    ['launch_failed', 'redispatch', 'Redispatch'],
+    ['needs_repo', 'redispatch', 'Redispatch'],
+    ['stalled_idle', 'redispatch', 'Redispatch'],
+  ] as const)('%s → redispatch', (reason, action, label) => {
+    const d = deriveRecoveryDescriptor(reason);
+    expect(d).toEqual({ available: true, action, label });
+  });
+
+  it.each([
+    ['autofix_git_infra_failure', 'rerun', 'Rerun'],
+    ['ci_billing_blocked', 'rerun', 'Rerun'],
+    ['stalled_reconcile_cap', 'rerun', 'Rerun'],
+    ['auto_merge_failed', 'rerun', 'Rerun'],
+  ] as const)('%s → rerun', (reason, action, label) => {
+    const d = deriveRecoveryDescriptor(reason);
+    expect(d).toEqual({ available: true, action, label });
+  });
+
+  it.each([
+    ['review_failed', 'resume', 'Resume'],
+    ['human_changes_requested', 'resume', 'Resume'],
+    ['ci_failing', 'resume', 'Resume'],
+    ['analyze_failing', 'resume', 'Resume'],
+    ['merge_conflict', 'resume', 'Resume'],
+    ['diverged_branch', 'resume', 'Resume'],
+    ['pr_body_invalid', 'resume', 'Resume'],
+    ['attribution_missing', 'resume', 'Resume'],
+    ['audit_findings', 'resume', 'Resume'],
+  ] as const)('%s → resume', (reason, action, label) => {
+    const d = deriveRecoveryDescriptor(reason);
+    expect(d).toEqual({ available: true, action, label });
+  });
+
+  it('awaiting_human_approval → available:false (no action)', () => {
+    expect(deriveRecoveryDescriptor('awaiting_human_approval')).toEqual({
+      available: false,
+    });
+  });
+
+  it('max_reviews → available:false (no action)', () => {
+    expect(deriveRecoveryDescriptor('max_reviews')).toEqual({
+      available: false,
+    });
+  });
+
+  it('recoverable reason (stuck_timeout) → available:false', () => {
+    expect(deriveRecoveryDescriptor('stuck_timeout')).toEqual({
+      available: false,
+    });
   });
 });
 
