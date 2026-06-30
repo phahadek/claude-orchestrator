@@ -28,6 +28,7 @@ import {
   getSessionTags,
   setSessionTags,
   resetTaskCrashCount,
+  ackPendingComments,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -875,6 +876,12 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             `turn complete — PR #${pr.pr_number} has review session, skipping push_detected (head unchanged at ${currentHeadSha.slice(0, 7)})`,
           );
         }
+      }
+
+      // Ack pending review comments on successful turn completion so the
+      // next poll doesn't re-deliver already-consumed feedback.
+      if (pr && event.is_error !== true) {
+        ackPendingComments(pr.pr_number, pr.repo);
       }
 
       const denials = event.permission_denials as

@@ -6,7 +6,7 @@ import type { Scheduler } from '../orchestration/Scheduler';
 import {
   getAllOpenPRs,
   getRoutedCommentIds,
-  markCommentsRouted,
+  markCommentsPending,
   setPauseReason,
   getSession,
 } from '../db/queries';
@@ -205,15 +205,17 @@ export class ReviewerCommentsWatcher {
       newComments,
       hasChangesRequested,
     );
-    // Use sendOrResume so idle sessions (submitted PR and exited) are respawned
-    // to receive the feedback. send() is a no-op for non-live sessions and would
-    // silently drop the comments even though they get marked as routed below.
-    await this.sessions.sendOrResume(sessionId, feedback);
-    markCommentsRouted(
+    // Mark as pending BEFORE sending — preserves the dedup record if the
+    // process crashes between here and sendOrResume, guaranteeing at-least-once
+    // delivery. INSERT OR IGNORE means acked rows are never flipped back.
+    markCommentsPending(
       pr.pr_number,
       pr.repo,
       newComments.map((c) => c.id),
     );
+    // Use sendOrResume so idle sessions (submitted PR and exited) are respawned
+    // to receive the feedback.
+    await this.sessions.sendOrResume(sessionId, feedback);
 
     logger.info(
       `[ReviewerCommentsWatcher] routed ${newComments.length} new human comment(s) to session ${sessionId.slice(0, 8)} for PR #${pr.pr_number}`,
