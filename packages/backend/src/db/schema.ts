@@ -290,6 +290,17 @@ export function runMigrations(target: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_scheduler_audit_job ON scheduler_audit(job, started_at DESC);
 
+    CREATE TABLE IF NOT EXISTS session_feedback_inbox (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id   TEXT    NOT NULL,
+      source       TEXT    NOT NULL,
+      payload      TEXT    NOT NULL,
+      enqueued_at  INTEGER NOT NULL,
+      delivered_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_feedback_inbox_session_delivered
+      ON session_feedback_inbox(session_id, delivered_at);
+
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);

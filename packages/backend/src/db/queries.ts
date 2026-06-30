@@ -31,6 +31,7 @@ import type {
   NewDeviceRow,
   SessionPauseInterval,
   TaskRepoAssignmentRow,
+  FeedbackInboxRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -3065,4 +3066,47 @@ export function getTaskRepoAssignment(
 
 export function deleteTaskRepoAssignment(taskId: string): void {
   db.prepare(`DELETE FROM task_repo_assignments WHERE task_id = ?`).run(taskId);
+}
+
+// ─── session_feedback_inbox ─────────────────────────────────────────────────
+
+export function enqueueFeedbackItem(
+  sessionId: string,
+  source: string,
+  payload: string,
+): void {
+  db.prepare(
+    `INSERT INTO session_feedback_inbox (session_id, source, payload, enqueued_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(sessionId, source, payload, Date.now());
+}
+
+export function listUndeliveredInboxItems(
+  sessionId: string,
+): FeedbackInboxRow[] {
+  return db
+    .prepare(
+      `SELECT id, session_id, source, payload, enqueued_at, delivered_at
+       FROM session_feedback_inbox
+       WHERE session_id = ? AND delivered_at IS NULL
+       ORDER BY enqueued_at ASC`,
+    )
+    .all(sessionId) as FeedbackInboxRow[];
+}
+
+export function markInboxItemsDelivered(ids: number[]): void {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => '?').join(', ');
+  db.prepare(
+    `UPDATE session_feedback_inbox SET delivered_at = ? WHERE id IN (${placeholders})`,
+  ).run(Date.now(), ...ids);
+}
+
+export function listSessionsWithUndeliveredInboxItems(): string[] {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT session_id FROM session_feedback_inbox WHERE delivered_at IS NULL`,
+    )
+    .all() as { session_id: string }[];
+  return rows.map((r) => r.session_id);
 }
