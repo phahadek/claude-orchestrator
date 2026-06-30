@@ -56,7 +56,7 @@ vi.mock('../github/reviewUtils.js', () => ({
   formatCIFailureFeedback: vi.fn().mockReturnValue('ci feedback'),
   shouldAutoReview: vi.fn().mockReturnValue(false),
   formatReviewFeedback: vi.fn().mockReturnValue('review feedback'),
-  formatHumanReviewFeedback: vi.fn().mockReturnValue('human feedback'),
+  formatCoalescedHumanBatch: vi.fn().mockReturnValue('human feedback'),
 }));
 
 import { GitHubClient } from '../github/GitHubClient.js';
