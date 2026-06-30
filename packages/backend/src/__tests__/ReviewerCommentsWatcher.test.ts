@@ -395,7 +395,8 @@ describe('ReviewerCommentsWatcher', () => {
 
     it('deny-list suppresses a named non-bot author', async () => {
       vi.mocked(getSetting).mockImplementation((key: string) => {
-        if (key === 'bot_comment_deny_list') return JSON.stringify(['renovate']);
+        if (key === 'bot_comment_deny_list')
+          return JSON.stringify(['renovate']);
         return undefined;
       });
       vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
