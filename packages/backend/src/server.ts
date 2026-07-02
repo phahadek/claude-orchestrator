@@ -360,7 +360,7 @@ void runBootSequence({
   broadcast,
 });
 
-async function gracefulShutdown(signal: string) {
+async function gracefulShutdown(signal: string, exitCode = 0) {
   logger.info(`[server] ${signal} received — shutting down`);
   stuckSessionMonitor.stop();
   await scheduler.stopAll({ drain: true, timeoutMs: 15_000 });
@@ -368,11 +368,11 @@ async function gracefulShutdown(signal: string) {
   await sessionManager.shutdownAll();
   server.close();
   db.close();
-  process.exit(0);
+  process.exit(exitCode);
 }
 
-function shutdownWithTimeout(signal: string) {
-  gracefulShutdown(signal).catch(logger.error);
+function shutdownWithTimeout(signal: string, exitCode = 0) {
+  gracefulShutdown(signal, exitCode).catch(logger.error);
   setTimeout(() => {
     logger.error('[server] Graceful shutdown timed out — forcing exit');
     process.exit(1);
@@ -390,5 +390,5 @@ process.on('uncaughtException', (err) => {
     stack: err.stack,
     name: err.name,
   });
-  shutdownWithTimeout('uncaughtException');
+  shutdownWithTimeout('uncaughtException', 1);
 });

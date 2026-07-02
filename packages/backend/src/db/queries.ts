@@ -2559,6 +2559,13 @@ export function insertPauseInterval(
   sessionId: string,
   pauseReason: CanonicalPauseReason,
 ): void {
+  if (!stmtGetSession.get({ session_id: sessionId })) {
+    // Parent row is gone — inserting would violate the FK on session_pause_intervals.
+    logger.warn(
+      `[insertPauseInterval] skipped — session ${sessionId} no longer exists`,
+    );
+    return;
+  }
   const serialized = serializePauseReason(
     pauseReasonFromCanonical(pauseReason),
   );
