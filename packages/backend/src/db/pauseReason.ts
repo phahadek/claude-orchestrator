@@ -39,7 +39,8 @@ export type CanonicalPauseReason =
   | 'stalled_reconcile_cap'
   | 'needs_repo'
   | 'autofix_git_infra_failure'
-  | 'workflow_scope_denied';
+  | 'workflow_scope_denied'
+  | 'resume_failed';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -185,6 +186,11 @@ export const PAUSE_REASON_REGISTRY: Record<
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },
+  resume_failed: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
 };
 
 // ── Recovery descriptor ──────────────────────────────────────────────────────
@@ -204,6 +210,7 @@ const RECOVERY_ACTION_MAP: Partial<
   launch_failed: 'redispatch',
   needs_repo: 'redispatch',
   stalled_idle: 'redispatch',
+  resume_failed: 'redispatch',
   // rerun: clear pause + re-run the pre-review pipeline
   autofix_git_infra_failure: 'rerun',
   ci_billing_blocked: 'rerun',

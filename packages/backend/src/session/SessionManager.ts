@@ -1519,6 +1519,67 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * A session resume couldn't continue: resumeSession threw, the worktree was
+   * missing, or the resumed process re-failed immediately (no events within
+   * the resume timeout). Per policy a running/resuming session must never be
+   * silently auto-disposed — flag the task needs_attention (resume_failed) so
+   * an operator decides, instead of routing through markSessionErrored's
+   * crash-budget/Notion-flip path which would silently re-Ready or Block it.
+   * The session itself is still driven to a terminal DB status ('error') since
+   * its process is gone, but the row is never deleted.
+   */
+  private flagResumeFailure(row: Session, detail: string): void {
+    const endedAt = Date.now();
+    updateSessionStatus(row.session_id, 'error', endedAt);
+    try {
+      setSessionLastErrorDetail(row.session_id, detail);
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
+
+    const liveSession = this.sessions.get(row.session_id);
+    if (liveSession) {
+      liveSession.hasEnded = true;
+    }
+
+    this.emit('message', {
+      type: 'session_ended',
+      sessionId: row.session_id,
+      status: 'error',
+      ...(row.task_id && { taskId: row.task_id }),
+    } satisfies ServerMessage);
+
+    recordEvent({
+      event_type: 'session_errored',
+      actor_type: 'system',
+      actor_id: row.session_id,
+      project_id: null,
+      task_id: null,
+      payload: {
+        sessionId: row.session_id,
+        status: 'error',
+        reason: 'resume_failed',
+      },
+    });
+
+    if (row.task_id) {
+      setTaskPauseReason(row.task_id, 'resume_failed', detail);
+      recordEvent({
+        event_type: 'auto_launch_paused',
+        actor_type: 'system',
+        actor_id: row.session_id,
+        project_id: row.project_id ?? null,
+        task_id: row.task_id,
+        payload: { reason: 'resume_failed', sessionId: row.session_id, detail },
+      });
+    }
+
+    logger.warn(
+      `[SessionManager] ${row.session_id.slice(0, 8)} resume failed — flagged needs_attention (resume_failed): ${detail}`,
+    );
+  }
+
+  /**
    * Re-attach to a session that was running when the server last shut down.
    * Unlike sendOrResume(), this keeps the original session_id so the UI shows
    * continuity — same card, same transcript.
@@ -1527,12 +1588,10 @@ export class SessionManager extends EventEmitter {
     const project = getProjectById(row.project_id ?? '');
     if (!project) {
       logger.warn(
-        `[SessionManager] orphan ${row.session_id}: project not found, marking error`,
+        `[SessionManager] orphan ${row.session_id}: project not found — cannot resume`,
       );
-      this.markSessionErrored(
-        row.session_id,
-        'error',
-        'orphan_project_not_found',
+      this.flagResumeFailure(
+        row,
         `project ${row.project_id ?? 'unknown'} not found`,
       );
       return;
@@ -1548,14 +1607,9 @@ export class SessionManager extends EventEmitter {
     // without spawning anything.
     if (!worktreePath || !fs.existsSync(worktreePath)) {
       logger.warn(
-        `[SessionManager] resumability pre-check failed for ${row.session_id}: worktree missing (${worktreePath}) — marking error`,
+        `[SessionManager] resumability pre-check failed for ${row.session_id}: worktree missing (${worktreePath}) — cannot resume`,
       );
-      this.markSessionErrored(
-        row.session_id,
-        'error',
-        'worktree_missing',
-        `worktree missing: ${worktreePath}`,
-      );
+      this.flagResumeFailure(row, `worktree missing: ${worktreePath}`);
       return;
     }
 
@@ -1631,14 +1685,9 @@ export class SessionManager extends EventEmitter {
     const errorTimer = setTimeout(() => {
       if (!session.hasEnded) {
         logger.warn(
-          `[SessionManager] resumeSession ${row.session_id}: no events within 30s after resume — marking as error`,
+          `[SessionManager] resumeSession ${row.session_id}: no events within 30s after resume — flagging needs_attention`,
         );
-        this.markSessionErrored(
-          row.session_id,
-          'error',
-          'resume_timeout',
-          'no events within 30s of resume',
-        );
+        this.flagResumeFailure(row, 'no events within 30s of resume');
         session.kill().catch(() => {});
       }
     }, RESUME_TIMEOUT_MS);
@@ -1813,11 +1862,10 @@ export class SessionManager extends EventEmitter {
         logger.error(
           `[SessionManager] failed to resume ${row.session_id}: ${err}`,
         );
-        // Mark as error so it doesn't retry forever on subsequent restarts.
-        this.markSessionErrored(
-          row.session_id,
-          'error',
-          'resume_failed',
+        // Flag needs_attention rather than silently disposing — an operator
+        // decides whether to redispatch (see policy in flagResumeFailure).
+        this.flagResumeFailure(
+          row,
           err instanceof Error ? err.message : String(err),
         );
       }
@@ -2027,13 +2075,18 @@ export class SessionManager extends EventEmitter {
 
   /** Returns true if a live session exists for the given task id. */
   hasLiveSessionForTask(taskId: string): boolean {
+    return this.findLiveSessionIdForTask(taskId) !== undefined;
+  }
+
+  /** Returns the live (non-review) session id for the given task id, if any. */
+  findLiveSessionIdForTask(taskId: string): string | undefined {
     const norm = taskId.replace(/-/g, '');
     for (const s of this.sessions.values()) {
       if (s.sessionType === 'review') continue;
       const tid = s.taskId?.replace(/-/g, '');
-      if (tid && tid === norm) return true;
+      if (tid && tid === norm) return s.sessionId;
     }
-    return false;
+    return undefined;
   }
 
   async kill(sessionId: string): Promise<void> {

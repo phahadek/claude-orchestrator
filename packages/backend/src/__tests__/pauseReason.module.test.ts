@@ -13,8 +13,8 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 26 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(26);
+  it('contains exactly 27 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(27);
   });
 
   it('covers all 20 legacy PauseReason values', () => {
@@ -210,6 +210,7 @@ describe('deriveRecoveryDescriptor', () => {
     ['launch_failed', 'redispatch', 'Redispatch'],
     ['needs_repo', 'redispatch', 'Redispatch'],
     ['stalled_idle', 'redispatch', 'Redispatch'],
+    ['resume_failed', 'redispatch', 'Redispatch'],
   ] as const)('%s → redispatch', (reason, action, label) => {
     const d = deriveRecoveryDescriptor(reason);
     expect(d).toEqual({ available: true, action, label });

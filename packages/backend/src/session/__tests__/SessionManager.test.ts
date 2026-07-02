@@ -190,6 +190,7 @@ import {
   insertSession,
   incrementTaskCrashCount,
   setSessionLastErrorDetail,
+  setTaskPauseReason,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
@@ -573,6 +574,103 @@ describe('resumeOrphanSessions — boot recovery regression', () => {
     const sess = capturedSessions[0];
     sess.emit('push_detected', { sha: 'xyz' });
     expect(pushHandler).toHaveBeenCalledWith({ sha: 'xyz' });
+  });
+
+  it('does not flag resume_failed on a successful resume', async () => {
+    const orphanRow = { ...makeDeadRow(), status: 'running' };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(setTaskPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      'error',
+      expect.any(Number),
+    );
+  });
+});
+
+// ── resumeOrphanSessions — resume failure flags needs_attention ──────────────
+//
+// Policy: a session resume can't continue must never be silently disposed
+// (silent error + crash-count Notion flip). It must flag the task
+// needs_attention via setTaskPauseReason(taskId, 'resume_failed', detail)
+// instead, and the session row must not be deleted.
+
+describe('resumeOrphanSessions — resume failure flags needs_attention (resume_failed)', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getStuckResultSessionRows).mockReturnValue([]);
+  });
+
+  it('worktree missing at resume time: flags resume_failed, does not spawn, session row not deleted', async () => {
+    const orphanRow = { ...makeDeadRow(), status: 'running' };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+    // Once-only override so the default existsSync behavior (relied on by
+    // later describe blocks in this file) is restored after this call.
+    vi.mocked(fsModule.existsSync).mockImplementationOnce(() => false);
+    vi.mocked((fsModule as any).default.existsSync).mockImplementationOnce(
+      () => false,
+    );
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'error',
+      expect.any(Number),
+    );
+    expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
+      'task-1',
+      'resume_failed',
+      expect.stringContaining('worktree missing'),
+    );
+    // Bypasses markSessionErrored's crash-budget/Notion-flip path entirely.
+    expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
+  });
+
+  it('resumeSession throws unexpectedly: flags resume_failed instead of the silent crash-count flow', async () => {
+    const orphanRow = { ...makeDeadRow(), status: 'running' };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+    vi.mocked(loadOrchestratorConfig).mockImplementationOnce(() => {
+      throw new Error('config boom');
+    });
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
+      'task-1',
+      'resume_failed',
+      expect.stringContaining('config boom'),
+    );
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'error',
+      expect.any(Number),
+    );
+    expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
+  });
+
+  it('project not found at resume time: flags resume_failed', async () => {
+    const orphanRow = { ...makeDeadRow(), status: 'running' };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+    vi.mocked(getProjectById).mockReturnValue(undefined);
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
+      'task-1',
+      'resume_failed',
+      expect.stringContaining('not found'),
+    );
+    expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
   });
 });
 

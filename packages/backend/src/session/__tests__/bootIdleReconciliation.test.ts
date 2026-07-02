@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../db/queries', () => ({
-  getIdleSessionsWithResolvedPRs: vi.fn(),
+  getDeadSessionsAtBoot: vi.fn().mockReturnValue([]),
+  getIdleSessionsWithResolvedPRs: vi.fn().mockReturnValue([]),
+  getIdleReviewSessionsWithTerminalCodingOrPR: vi.fn().mockReturnValue([]),
   markSessionDone: vi.fn(),
   updateSessionStatus: vi.fn(),
 }));
@@ -11,12 +13,16 @@ vi.mock('../../logger', () => ({
 }));
 
 import {
+  getDeadSessionsAtBoot,
   getIdleSessionsWithResolvedPRs,
   markSessionDone,
   updateSessionStatus,
 } from '../../db/queries';
 import { runBootIdleReconciliation } from '../bootIdleReconciliation';
-import type { IdleSessionWithResolvedPR } from '../../db/queries';
+import type {
+  IdleSessionWithResolvedPR,
+  DeadSessionAtBoot,
+} from '../../db/queries';
 
 function makeRow(
   overrides: Partial<IdleSessionWithResolvedPR> = {},
@@ -34,11 +40,78 @@ function makeRow(
   };
 }
 
+function makeDeadRow(
+  overrides: Partial<DeadSessionAtBoot> = {},
+): DeadSessionAtBoot {
+  return {
+    session_id: 'dead-session-id',
+    status: 'starting',
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getDeadSessionsAtBoot).mockReturnValue([]);
+  vi.mocked(getIdleSessionsWithResolvedPRs).mockReturnValue([]);
 });
 
-describe('runBootIdleReconciliation', () => {
+describe('runBootIdleReconciliation — Pass 0 (dead-at-boot)', () => {
+  it('does nothing when there are no starting/running sessions at boot', () => {
+    vi.mocked(getDeadSessionsAtBoot).mockReturnValue([]);
+    runBootIdleReconciliation();
+    expect(updateSessionStatus).not.toHaveBeenCalled();
+  });
+
+  it('errors a dead session that is not live in SessionManager.sessions', () => {
+    vi.mocked(getDeadSessionsAtBoot).mockReturnValue([
+      makeDeadRow({ session_id: 'dead-1', status: 'starting' }),
+    ]);
+    runBootIdleReconciliation(() => false);
+    expect(updateSessionStatus).toHaveBeenCalledWith(
+      'dead-1',
+      'error',
+      expect.any(Number),
+    );
+  });
+
+  it('never transitions a session that is live in SessionManager.sessions to error', () => {
+    vi.mocked(getDeadSessionsAtBoot).mockReturnValue([
+      makeDeadRow({ session_id: 'resumed-session', status: 'running' }),
+    ]);
+    // Simulates a session resumeOrphanSessions() just respawned — live in memory.
+    runBootIdleReconciliation((sessionId) => sessionId === 'resumed-session');
+    expect(updateSessionStatus).not.toHaveBeenCalled();
+  });
+
+  it('defaults to treating every row as not-live when no predicate is supplied', () => {
+    vi.mocked(getDeadSessionsAtBoot).mockReturnValue([
+      makeDeadRow({ session_id: 'dead-2', status: 'starting' }),
+    ]);
+    runBootIdleReconciliation();
+    expect(updateSessionStatus).toHaveBeenCalledWith(
+      'dead-2',
+      'error',
+      expect.any(Number),
+    );
+  });
+
+  it('errors only the not-live rows out of a mixed batch', () => {
+    vi.mocked(getDeadSessionsAtBoot).mockReturnValue([
+      makeDeadRow({ session_id: 'live-1', status: 'running' }),
+      makeDeadRow({ session_id: 'dead-3', status: 'starting' }),
+    ]);
+    runBootIdleReconciliation((sessionId) => sessionId === 'live-1');
+    expect(updateSessionStatus).toHaveBeenCalledTimes(1);
+    expect(updateSessionStatus).toHaveBeenCalledWith(
+      'dead-3',
+      'error',
+      expect.any(Number),
+    );
+  });
+});
+
+describe('runBootIdleReconciliation — Pass 1/2 (idle sessions with resolved PRs)', () => {
   it('does nothing when no idle sessions with resolved PRs', () => {
     vi.mocked(getIdleSessionsWithResolvedPRs).mockReturnValue([]);
     runBootIdleReconciliation();
