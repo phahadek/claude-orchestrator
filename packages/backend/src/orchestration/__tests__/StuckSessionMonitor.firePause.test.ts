@@ -67,9 +67,9 @@ function seedTimerState(monitor: StuckSessionMonitor, sessionId: string) {
 }
 
 function callFirePause(monitor: StuckSessionMonitor, sessionId: string) {
-  (
-    monitor as unknown as { firePause: (id: string) => void }
-  ).firePause(sessionId);
+  (monitor as unknown as { firePause: (id: string) => void }).firePause(
+    sessionId,
+  );
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
