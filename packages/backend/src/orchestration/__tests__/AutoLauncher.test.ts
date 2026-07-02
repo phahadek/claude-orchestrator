@@ -96,6 +96,7 @@ function makeSessionManager(liveCount = 0) {
   return {
     getLiveCodeSessionCount: vi.fn().mockReturnValue(liveCount),
     hasLiveSessionForTask: vi.fn().mockReturnValue(false),
+    findLiveSessionIdForTask: vi.fn().mockReturnValue(undefined),
     start: vi.fn().mockReturnValue('session-id-abc123'),
   };
 }
@@ -376,7 +377,9 @@ describe('AutoLauncher — project-driven polling', () => {
     };
     const resolveBackend = vi.fn().mockReturnValue(localBackend);
     const sessionManager = makeSessionManager(0);
-    sessionManager.hasLiveSessionForTask = vi.fn().mockReturnValue(true);
+    sessionManager.findLiveSessionIdForTask = vi
+      .fn()
+      .mockReturnValue('live-session-xyz');
 
     const launcher = new AutoLauncher(sessionManager as never, undefined, {
       listProjects: () => [
@@ -393,6 +396,47 @@ describe('AutoLauncher — project-driven polling', () => {
     await launcher.pollOnce();
 
     expect(sessionManager.start).not.toHaveBeenCalled();
+  });
+
+  it('logs task id and live session id when skipping a candidate due to an existing live session', async () => {
+    // Use a notion-mode backend (not 'local') so processProject reaches
+    // isLaunchCandidate/launchTask instead of short-circuiting at the
+    // backend.type === 'local' guard.
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi
+        .fn()
+        .mockResolvedValue([makeResolvedTask({ id: 'task-active' })]),
+    };
+    const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+    const sessionManager = makeSessionManager(0);
+    sessionManager.findLiveSessionIdForTask = vi
+      .fn()
+      .mockReturnValue('live-session-xyz');
+
+    const { logger } = await import('../../logger.js');
+    const infoSpy = vi.spyOn(logger, 'info');
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [
+        makeProject({
+          taskSource: 'notion',
+          autoLaunchMilestoneId: 'milestone-1',
+        }),
+      ],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).not.toHaveBeenCalled();
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining('task-active'),
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining('live-session-xyz'),
+    );
   });
 
   it('does not launch if session already active for task (DB check)', async () => {

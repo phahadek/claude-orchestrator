@@ -38,6 +38,7 @@ export interface BootDeps {
   sessionManager: {
     resumeOrphanSessions(): Promise<void>;
     reconcileInboxAtBoot(): Promise<void>;
+    isAlive(sessionId: string): boolean;
   };
   stuckSessionMonitor: {
     rehydrate(): void;
@@ -210,7 +211,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     runPRBootSweep(deps.githubClient),
   );
   await tracker.runStep('boot_idle_reconciliation', () =>
-    runBootIdleReconciliation(),
+    runBootIdleReconciliation((sessionId) =>
+      deps.sessionManager.isAlive(sessionId),
+    ),
   );
   await tracker.runStep('feedback_inbox_reconciliation', () =>
     deps.sessionManager.reconcileInboxAtBoot(),

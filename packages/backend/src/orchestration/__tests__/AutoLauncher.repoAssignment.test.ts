@@ -98,6 +98,7 @@ function makeSessionManager() {
   return {
     getLiveCodeSessionCount: vi.fn().mockReturnValue(0),
     hasLiveSessionForTask: vi.fn().mockReturnValue(false),
+    findLiveSessionIdForTask: vi.fn().mockReturnValue(undefined),
     start: vi.fn().mockResolvedValue('session-abc'),
     on: vi.fn(),
   };

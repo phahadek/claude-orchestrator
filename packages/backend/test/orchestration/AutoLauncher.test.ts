@@ -87,6 +87,7 @@ function makeMockSessionManager(): SessionManager {
   });
   (sm as any).getLiveCodeSessionCount = vi.fn(() => liveCount);
   (sm as any).hasLiveSessionForTask = vi.fn(() => false);
+  (sm as any).findLiveSessionIdForTask = vi.fn(() => undefined);
   return sm;
 }
 
@@ -336,6 +337,9 @@ describe('AutoLauncher', () => {
     (
       sm as unknown as { hasLiveSessionForTask: ReturnType<typeof vi.fn> }
     ).hasLiveSessionForTask = vi.fn(() => true);
+    (
+      sm as unknown as { findLiveSessionIdForTask: ReturnType<typeof vi.fn> }
+    ).findLiveSessionIdForTask = vi.fn(() => 'live-session-id');
     const backend = makeMockBackend([makeResolved(makeTask())]);
 
     const launcher = new AutoLauncher(sm, undefined, {
@@ -556,6 +560,9 @@ describe('AutoLauncher', () => {
     (sm as unknown as Record<string, unknown>).hasLiveSessionForTask = vi.fn(
       () => false,
     );
+    (
+      sm as unknown as Record<string, unknown>
+    ).findLiveSessionIdForTask = vi.fn(() => undefined);
 
     const backend = makeMockBackend([
       makeResolved(makeTask({ id: 'first' })),

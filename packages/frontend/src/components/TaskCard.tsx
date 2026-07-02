@@ -92,6 +92,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Git infrastructure failure (exit 128) during autofix — likely a corrupted .git/config. The orchestrator attempted a repair; manual inspection may be needed.',
   workflow_scope_denied:
     'Push rejected: the auto-dispatch PAT lacks the `workflow` scope and cannot modify .github/workflows/. Re-type this task as 🛠️ Tooling and land it interactively with a workflow-scoped credential.',
+  resume_failed:
+    'Session could not be resumed at boot (missing worktree, or the resumed process failed immediately) — review and redispatch when ready.',
 };
 
 function verdictLabel(verdict: string): string {
