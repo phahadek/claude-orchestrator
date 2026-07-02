@@ -484,9 +484,7 @@ export class AutoLauncher {
     // in-memory SessionManager (catches launches whose Notion status update
     // hasn't propagated back yet) and the DB (catches sessions in any
     // non-terminal state, including ones temporarily missing from memory).
-    const liveSessionId = this.sessionManager.findLiveSessionIdForTask(
-      task.id,
-    );
+    const liveSessionId = this.sessionManager.findLiveSessionIdForTask(task.id);
     if (liveSessionId) {
       logger.info(
         `[AutoLauncher] skip launch for task ${task.id} — live session ${liveSessionId} already exists`,

@@ -1555,7 +1555,11 @@ export class SessionManager extends EventEmitter {
       actor_id: row.session_id,
       project_id: null,
       task_id: null,
-      payload: { sessionId: row.session_id, status: 'error', reason: 'resume_failed' },
+      payload: {
+        sessionId: row.session_id,
+        status: 'error',
+        reason: 'resume_failed',
+      },
     });
 
     if (row.task_id) {

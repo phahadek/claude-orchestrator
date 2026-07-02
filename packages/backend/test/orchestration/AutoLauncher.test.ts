@@ -560,9 +560,9 @@ describe('AutoLauncher', () => {
     (sm as unknown as Record<string, unknown>).hasLiveSessionForTask = vi.fn(
       () => false,
     );
-    (
-      sm as unknown as Record<string, unknown>
-    ).findLiveSessionIdForTask = vi.fn(() => undefined);
+    (sm as unknown as Record<string, unknown>).findLiveSessionIdForTask = vi.fn(
+      () => undefined,
+    );
 
     const backend = makeMockBackend([
       makeResolved(makeTask({ id: 'first' })),
