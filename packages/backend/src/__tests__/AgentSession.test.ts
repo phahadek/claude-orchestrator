@@ -58,6 +58,8 @@ vi.mock('../db/queries', () => ({
   getProjectRowById: vi.fn(() => null),
   insertLocalBranch: vi.fn(),
   setSessionMetadata: vi.fn(),
+  listUndeliveredInboxItems: vi.fn(() => []),
+  markInboxItemsDelivered: vi.fn(),
 }));
 
 // Mock local branch helpers to avoid real git calls in tests
@@ -90,6 +92,8 @@ import {
   getPRBySessionId,
   getPRByNumber,
   setPauseReason,
+  listUndeliveredInboxItems,
+  markInboxItemsDelivered,
 } from '../db/queries';
 import { parseNotionPageIdDashed } from '../session/AgentSession';
 import { NoOpInvestigator } from '../github/NoOpInvestigator';
@@ -1891,5 +1895,104 @@ describe('parseNotionPageIdDashed', () => {
     const ended = messages.find((m) => m.type === 'session_ended');
     expect(ended).toBeDefined();
     expect((ended as { status: string }).status).toBe('idle');
+  });
+});
+
+// ── AC: deliverInboxItems only marks rows delivered after a successful send ──
+// Marking rows delivered before the send resolves means a throwing send
+// silently and permanently loses the feedback (boot reconciliation only
+// re-picks-up rows with delivered_at IS NULL). Both success and failure
+// paths must gate the mark on send outcome.
+describe('deliverInboxItems', () => {
+  function getPrivateDeliverInboxItems(session: AgentSession) {
+    return (
+      session as unknown as { deliverInboxItems: () => Promise<void> }
+    ).deliverInboxItems.bind(session);
+  }
+
+  it('leaves inbox rows undelivered when sendOrResume throws, for redelivery next time', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'sess-inbox-fail',
+        source: 'ai-reviewer',
+        payload: 'verdict text',
+        enqueued_at: 0,
+        delivered_at: null,
+      },
+    ] as never);
+
+    const sendOrResume = vi.fn().mockRejectedValue(new Error('send failed'));
+    const sessionManager = { send: vi.fn(), sendOrResume };
+
+    const session = new AgentSession(
+      'sess-inbox-fail',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+      undefined,
+      undefined,
+      'standard',
+      sessionManager as never,
+    );
+
+    await getPrivateDeliverInboxItems(session)();
+
+    expect(sendOrResume).toHaveBeenCalledWith(
+      'sess-inbox-fail',
+      expect.stringContaining('verdict text'),
+    );
+    expect(vi.mocked(markInboxItemsDelivered)).not.toHaveBeenCalled();
+  });
+
+  it('marks exactly the delivered rows after a successful sendOrResume', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([
+      {
+        id: 5,
+        session_id: 'sess-inbox-ok',
+        source: 'ai-reviewer',
+        payload: 'looks good',
+        enqueued_at: 0,
+        delivered_at: null,
+      },
+      {
+        id: 6,
+        session_id: 'sess-inbox-ok',
+        source: 'human:alice',
+        payload: 'please fix x',
+        enqueued_at: 1,
+        delivered_at: null,
+      },
+    ] as never);
+
+    const sendOrResume = vi.fn().mockResolvedValue('sess-inbox-ok');
+    const sessionManager = { send: vi.fn(), sendOrResume };
+
+    const session = new AgentSession(
+      'sess-inbox-ok',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+      undefined,
+      undefined,
+      'standard',
+      sessionManager as never,
+    );
+
+    await getPrivateDeliverInboxItems(session)();
+
+    expect(sendOrResume).toHaveBeenCalledWith(
+      'sess-inbox-ok',
+      expect.stringContaining('looks good'),
+    );
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([5, 6]);
   });
 });
