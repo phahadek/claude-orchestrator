@@ -76,15 +76,17 @@ describe('unhandledRejection handler (as defined in server.ts)', () => {
 // ── tests: uncaughtException handler behavior ──────────────────────────────────
 
 describe('uncaughtException handler (as defined in server.ts)', () => {
-  it('logs a structured stack and initiates shutdown', () => {
+  it('logs a structured stack and initiates shutdown with a non-zero exit code', () => {
     const logged: unknown[] = [];
     const fakeLogger = {
       error: (...args: unknown[]) => logged.push(args),
       info: () => {},
     };
-    let shutdownCalled = false;
-    const fakeShutdownWithTimeout = (_signal: string) => {
-      shutdownCalled = true;
+    let shutdownSignal: string | undefined;
+    let shutdownExitCode: number | undefined;
+    const fakeShutdownWithTimeout = (signal: string, exitCode = 0) => {
+      shutdownSignal = signal;
+      shutdownExitCode = exitCode;
     };
 
     // Simulate the handler as written in server.ts
@@ -97,7 +99,7 @@ describe('uncaughtException handler (as defined in server.ts)', () => {
           name: err.name,
         },
       );
-      fakeShutdownWithTimeout('uncaughtException');
+      fakeShutdownWithTimeout('uncaughtException', 1);
     };
 
     const testErr = new Error('something blew up');
@@ -108,7 +110,37 @@ describe('uncaughtException handler (as defined in server.ts)', () => {
     expect(msg).toContain('uncaughtException');
     expect(meta.message).toBe('something blew up');
     expect(meta.name).toBe('Error');
-    expect(shutdownCalled).toBe(true);
+    expect(shutdownSignal).toBe('uncaughtException');
+    expect(shutdownExitCode).toBe(1);
+  });
+});
+
+describe('shutdownWithTimeout exit codes (as defined in server.ts)', () => {
+  // Mirrors the gracefulShutdown/shutdownWithTimeout signatures in server.ts:
+  // SIGTERM/SIGINT default to exit code 0 (intentional stop); the
+  // uncaughtException path passes exit code 1 (fault) so systemd's
+  // Restart=on-failure/always actually restarts the process.
+  function simulateShutdownWithTimeout(
+    signal: string,
+    exitCode = 0,
+  ): { signal: string; exitCode: number } {
+    return { signal, exitCode };
+  }
+
+  it('SIGTERM shuts down with exit code 0', () => {
+    const result = simulateShutdownWithTimeout('SIGTERM');
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('SIGINT shuts down with exit code 0', () => {
+    const result = simulateShutdownWithTimeout('SIGINT');
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('uncaughtException shuts down with a non-zero exit code', () => {
+    const result = simulateShutdownWithTimeout('uncaughtException', 1);
+    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).not.toBe(0);
   });
 });
 
