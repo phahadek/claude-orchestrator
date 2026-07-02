@@ -288,7 +288,7 @@ ${(() => {
 Run in order — all must pass before opening the PR:
 
 1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
-2. Rebase onto \`${targetBranch}\` and resolve any conflicts.
+2. Rebase onto \`${targetBranch}\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
 3. Restore CLAUDE.md: \`git stash pop\`
 ${verifySteps}
 ${stageNum}. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.`;
@@ -299,7 +299,9 @@ ${stageNum}. Stage only your implementation files for commit — never stage \`C
 ## Forbidden Actions
 
 - Never push directly to \`main\`
-- Never force push (\`--force\`)
+- Never bare force push (\`git push --force\`)
+- Never force-push \`main\`, \`${targetBranch}\`, or any branch outside this worktree's own feature branch
+- \`git push --force-with-lease origin <your feature branch>\` **is allowed** — use it to update your own PR branch after a rebase (see Pre-PR Gate)
 - Never delete branches that live outside this worktree
 - Never run \`git reset --hard\` on the main repository directory
 - Never skip pre-commit hooks (\`--no-verify\`)

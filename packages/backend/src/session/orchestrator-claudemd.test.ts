@@ -63,7 +63,7 @@ describe('buildOrchestratorClaudeMd', () => {
     // Section 8: Forbidden actions
     expect(result).toContain('## Forbidden Actions');
     expect(result).toContain('Never push directly to');
-    expect(result).toContain('Never force push');
+    expect(result).toContain('Never bare force push');
 
     // Section 9: Git isolation
     expect(result).toContain('## Git Isolation');
@@ -88,6 +88,39 @@ describe('buildOrchestratorClaudeMd', () => {
     // Old scratch-file approach must NOT be present
     expect(result).not.toContain('.claude/.commit-msg');
     expect(result).not.toContain('git commit -F');
+  });
+
+  it('permits --force-with-lease on the session own feature branch while still forbidding bare/other force pushes', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const forbiddenSection = result.slice(
+      result.indexOf('## Forbidden Actions'),
+      result.indexOf('## Git Isolation'),
+    );
+    // Guards retained
+    expect(forbiddenSection).toContain(
+      'Never bare force push (`git push --force`)',
+    );
+    expect(forbiddenSection).toContain(
+      `Never force-push \`main\`, \`${defaultParams.targetBranch}\`, or any branch outside this worktree's own feature branch`,
+    );
+    // Allowance for the session's own branch
+    expect(forbiddenSection).toContain(
+      '`git push --force-with-lease origin <your feature branch>` **is allowed**',
+    );
+  });
+
+  it('Pre-PR Gate rebase step instructs the safe force-with-lease push, not a bare push', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const prGateSection = result.slice(
+      result.indexOf('## Pre-PR Gate'),
+      result.indexOf('## Forbidden Actions'),
+    );
+    expect(prGateSection).toContain(
+      'git push --force-with-lease origin <your feature branch>',
+    );
+    expect(prGateSection).not.toContain(
+      'Rebase onto `dev` and resolve any conflicts.\n3.',
+    );
   });
 
   it('lists each verify command in the Pre-PR Gate when verify is non-empty', () => {
