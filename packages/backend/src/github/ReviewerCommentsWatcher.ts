@@ -93,6 +93,15 @@ export class ReviewerCommentsWatcher {
     });
   }
 
+  private getBufferedIds(prNumber: number, repo: string): Set<string> {
+    const ids = new Set<string>();
+    for (const entry of this.buffer.values()) {
+      if (entry.prNumber !== prNumber || entry.repo !== repo) continue;
+      for (const c of entry.comments) ids.add(c.id);
+    }
+    return ids;
+  }
+
   private handleRateLimit(err: GitHubRateLimitError): void {
     this.pausedUntil = err.resetAt;
     if (!this.rateLimitBroadcasted) {
@@ -145,6 +154,9 @@ export class ReviewerCommentsWatcher {
     const botDenyList = new Set(typedGetSetting('bot_comment_deny_list'));
     const botAllowList = new Set(typedGetSetting('bot_comment_allow_list'));
     const routedIds = getRoutedCommentIds(pr.pr_number, pr.repo);
+    const bufferedIds = this.getBufferedIds(pr.pr_number, pr.repo);
+    const isKnown = (id: string): boolean =>
+      routedIds.has(id) || bufferedIds.has(id);
 
     const shouldExclude = (author: string, authorType: string): boolean =>
       aiUsernames.has(author) ||
@@ -198,7 +210,7 @@ export class ReviewerCommentsWatcher {
     for (const review of humanReviews) {
       if (!review.body?.trim()) continue;
       const id = `rv_${review.id}`;
-      if (routedIds.has(id)) continue;
+      if (isKnown(id)) continue;
       addToAuthor(
         review.author,
         { id, author: review.author, body: review.body },
@@ -209,7 +221,7 @@ export class ReviewerCommentsWatcher {
     for (const c of reviewComments) {
       if (shouldExclude(c.author, c.authorType)) continue;
       const id = `rc_${c.id}`;
-      if (routedIds.has(id)) continue;
+      if (isKnown(id)) continue;
       addToAuthor(
         c.author,
         {
@@ -227,7 +239,7 @@ export class ReviewerCommentsWatcher {
     for (const c of issueComments) {
       if (shouldExclude(c.author, c.authorType)) continue;
       const id = `ic_${c.id}`;
-      if (routedIds.has(id)) continue;
+      if (isKnown(id)) continue;
       addToAuthor(c.author, { id, author: c.author, body: c.body }, false);
     }
 

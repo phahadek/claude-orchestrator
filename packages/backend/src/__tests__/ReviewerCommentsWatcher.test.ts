@@ -285,6 +285,106 @@ describe('quiescence buffer', () => {
     vi.useRealTimers();
   });
 
+  it('flushes exactly once after quiescenceMs even when the scheduler re-polls every 10s and re-discovers the same un-flushed comment (starvation regression)', async () => {
+    vi.useFakeTimers();
+    vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
+
+    const github = makeGitHub({
+      issueComments: [
+        {
+          id: 1,
+          author: 'alice',
+          authorType: 'User',
+          body: 'LGTM',
+          createdAt: '',
+        },
+      ],
+    });
+    const watcher = new ReviewerCommentsWatcher(
+      github as never,
+      makeSessionManager() as never,
+    );
+
+    // Simulate the scheduler's 10s poll cadence for well over the 120s
+    // quiescence window, with GitHub returning the same un-flushed comment
+    // every time (it isn't marked routed until flush). Prior to the fix,
+    // each poll saw it as "new" and reset the sliding timer forever.
+    for (let i = 0; i < 20; i++) {
+      await watcher.pollAll();
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+
+    expect(enqueueFeedbackItem).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
+  it('still extends the sliding window when a genuinely new comment from the same author arrives mid-window, amid repeated re-polls of the old comment', async () => {
+    vi.useFakeTimers();
+    vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
+
+    const github = makeGitHub();
+    const watcher = new ReviewerCommentsWatcher(
+      github as never,
+      makeSessionManager() as never,
+    );
+
+    vi.mocked(github.listPRIssueComments).mockResolvedValue([
+      {
+        id: 1,
+        author: 'alice',
+        authorType: 'User',
+        body: 'first',
+        createdAt: '',
+      },
+    ]);
+
+    // Poll every 10s for 100s (< 120s quiescence) — no flush yet.
+    for (let i = 0; i < 10; i++) {
+      await watcher.pollAll();
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(enqueueFeedbackItem).not.toHaveBeenCalled();
+
+    // A genuinely new comment from alice arrives — must extend the window.
+    vi.mocked(github.listPRIssueComments).mockResolvedValue([
+      {
+        id: 1,
+        author: 'alice',
+        authorType: 'User',
+        body: 'first',
+        createdAt: '',
+      },
+      {
+        id: 2,
+        author: 'alice',
+        authorType: 'User',
+        body: 'second',
+        createdAt: '',
+      },
+    ]);
+    await watcher.pollAll();
+
+    // Continue re-polling the now-static pair of comments every 10s.
+    for (let i = 0; i < 10; i++) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      await watcher.pollAll();
+    }
+
+    // Full window from the last genuinely-new comment must eventually flush.
+    await vi.advanceTimersByTimeAsync(120_001);
+
+    expect(enqueueFeedbackItem).toHaveBeenCalledOnce();
+    const [, , payload] = vi.mocked(enqueueFeedbackItem).mock.calls[0] as [
+      string,
+      string,
+      string,
+    ];
+    expect(payload).toContain('first');
+    expect(payload).toContain('second');
+
+    vi.useRealTimers();
+  });
+
   it('sends separate inbox items for different sources', async () => {
     vi.useFakeTimers();
     vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
