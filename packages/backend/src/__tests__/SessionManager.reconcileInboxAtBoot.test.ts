@@ -212,9 +212,7 @@ describe('reconcileInboxAtBoot()', () => {
     );
     // Item remains undelivered — available for retry at the next boundary/boot
     expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
-    expect(
-      queries.listUndeliveredInboxItems('sess-running'),
-    ).toHaveLength(1);
+    expect(queries.listUndeliveredInboxItems('sess-running')).toHaveLength(1);
   });
 
   it('marks rows delivered only after a successful sendOrResume', async () => {
