@@ -97,7 +97,9 @@ describe('buildOrchestratorClaudeMd', () => {
       result.indexOf('## Git Isolation'),
     );
     // Guards retained
-    expect(forbiddenSection).toContain('Never bare force push (`git push --force`)');
+    expect(forbiddenSection).toContain(
+      'Never bare force push (`git push --force`)',
+    );
     expect(forbiddenSection).toContain(
       `Never force-push \`main\`, \`${defaultParams.targetBranch}\`, or any branch outside this worktree's own feature branch`,
     );
