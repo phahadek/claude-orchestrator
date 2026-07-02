@@ -2698,7 +2698,6 @@ export class SessionManager extends EventEmitter {
         const combined = items
           .map((item) => `[${item.source}]\n${item.payload}`)
           .join('\n\n');
-        markInboxItemsDelivered(items.map((i) => i.id));
 
         try {
           await this.sendOrResume(sessionId, combined);
@@ -2706,7 +2705,9 @@ export class SessionManager extends EventEmitter {
           logger.warn(
             `[SessionManager] inbox boot reconciliation: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
           );
+          return;
         }
+        markInboxItemsDelivered(items.map((i) => i.id));
       }),
     );
   }

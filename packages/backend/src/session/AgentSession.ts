@@ -2090,7 +2090,6 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     const combined = items
       .map((item) => `[${item.source}]\n${item.payload}`)
       .join('\n\n');
-    markInboxItemsDelivered(items.map((item) => item.id));
     try {
       await this.sessionManager?.sendOrResume?.(this.sessionId, combined);
     } catch (err) {
@@ -2098,7 +2097,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         this.sessionId,
         `deliverInboxItems: sendOrResume failed: ${err}`,
       );
+      return;
     }
+    markInboxItemsDelivered(items.map((item) => item.id));
   }
 
   /**
