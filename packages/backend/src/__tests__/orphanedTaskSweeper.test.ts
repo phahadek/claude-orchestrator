@@ -527,10 +527,10 @@ describe('OrphanedTaskSweeper', () => {
 
     await sweeper.sweepOnce();
 
-    // Must nudge, not revert
+    // Must nudge, not revert — no-PR path keeps the "open a draft PR" wording
     expect(sendOrResume).toHaveBeenCalledWith(
       'sess-1',
-      expect.stringContaining('PR'),
+      expect.stringContaining('no PR was opened'),
     );
     expect(backend.updateStatus).not.toHaveBeenCalled();
     expect(recordEvent).toHaveBeenCalledWith(
@@ -1170,8 +1170,14 @@ describe('OrphanedTaskSweeper', () => {
 
     await sweeper.sweepOnce();
 
-    // Stalled-PR idle path: session IS nudged (to act on review feedback)
-    expect(sendOrResume).toHaveBeenCalledWith('sess-1', expect.any(String));
+    // Stalled-PR idle path: session IS nudged (to act on review feedback),
+    // referencing the existing PR rather than claiming none was opened.
+    expect(sendOrResume).toHaveBeenCalledWith(
+      'sess-1',
+      expect.stringContaining('#510'),
+    );
+    const [, message] = sendOrResume.mock.calls[0];
+    expect(message).not.toContain('no PR was opened');
     // Task is NOT reverted — open PR means session did its job
     expect(backend.updateStatus).not.toHaveBeenCalled();
   });
