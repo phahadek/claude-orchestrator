@@ -1727,7 +1727,10 @@ export class SessionManager extends EventEmitter {
         result.verdict === 'needs_changes' ||
         result.verdict === 'incomplete'
       ) {
-        return formatReviewFeedback(result, pr.review_iteration ?? 0);
+        return formatReviewFeedback(result, pr.review_iteration ?? 0, {
+          conflicted: pr.merge_state === 'dirty',
+          baseBranch: pr.base_branch ?? undefined,
+        });
       }
       if (result.verdict === 'approved') {
         return formatApprovedVerdictMessage(result);
