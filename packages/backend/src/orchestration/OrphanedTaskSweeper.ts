@@ -21,7 +21,7 @@ import {
   countNudgeEvents,
   getLatestNudgeTimestamp,
 } from '../audit/AuditLog';
-import type { Session } from '../db/types';
+import type { Session, PullRequestRow } from '../db/types';
 import { GitHubClient } from '../github/GitHubClient';
 import type { PullRequest } from '../github/types';
 
@@ -38,8 +38,13 @@ const RECENCY_GATE_MS = 10 * 60 * 1000;
 /** Skip nudge if the previous nudge was less than this many ms ago. */
 const MIN_NUDGE_SPACING_MS = 15 * 60 * 1000;
 /** Nudge message sent to a stalled idle session that hasn't opened a PR. */
-const IDLE_NUDGE_MESSAGE =
+const NO_PR_NUDGE_MESSAGE =
   'You appear to have finished your work but no PR was opened. Please open a draft PR now so your changes can be reviewed. If you are done with your task, follow the PR format in CLAUDE.md and emit the <pr-body>…</pr-body> marker.';
+
+/** Nudge message sent to a stalled idle session that already has an open PR. */
+function openPrNudgeMessage(pr: PullRequestRow): string {
+  return `Your PR #${pr.pr_number} appears stalled — check for and address any pending review feedback, then wait.`;
+}
 
 /**
  * Periodic sweep that detects tasks stuck at "🔄 In Progress" in Notion with no
@@ -184,6 +189,7 @@ export class OrphanedTaskSweeper {
             latestSession,
             taskId,
             effectiveProjectId,
+            openPrNudgeMessage(pr),
           );
         }
         return;
@@ -225,6 +231,7 @@ export class OrphanedTaskSweeper {
         latestSession,
         taskId,
         effectiveProjectId,
+        NO_PR_NUDGE_MESSAGE,
       );
       return;
     }
@@ -245,6 +252,7 @@ export class OrphanedTaskSweeper {
     session: Session,
     taskId: string,
     effectiveProjectId: string,
+    nudgeMessage: string,
   ): Promise<void> {
     const { session_id, worktree_path } = session;
 
@@ -306,7 +314,7 @@ export class OrphanedTaskSweeper {
     }
 
     try {
-      await sendOrResume(session_id, IDLE_NUDGE_MESSAGE);
+      await sendOrResume(session_id, nudgeMessage);
     } catch (err) {
       logger.warn(
         `[OrphanedTaskSweeper] sendOrResume failed for session ${session_id}: ${(err as Error).message}`,
