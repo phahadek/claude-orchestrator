@@ -94,7 +94,9 @@ describe('buildOrchestratorClaudeMd', () => {
       result.indexOf('## Forbidden Actions'),
       result.indexOf('## Git Isolation'),
     );
-    expect(forbiddenSection).toContain('Never run `gh pr close` or `gh pr reopen`');
+    expect(forbiddenSection).toContain(
+      'Never run `gh pr close` or `gh pr reopen`',
+    );
     expect(forbiddenSection).toContain(
       'never close or recreate your own PR to "redo" it',
     );
