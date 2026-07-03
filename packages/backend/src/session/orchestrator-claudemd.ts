@@ -232,7 +232,7 @@ ${
     : `## PR Format Standards
 
 - **Title**: \`feat: <task-name>\` — no scope prefix, no milestone tags.
-- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only path.
+- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message — this is the sanctioned path. Do NOT use the MCP \`mcp__github__create_pull_request\` tool. If a PR was already opened another way (e.g. you ran \`gh pr create\` directly), that is fine and does not need to be undone — the orchestrator detects and tracks it too; just re-emit the \`<pr-body>\` marker if the body still needs to match the template below.
 - **Required body sections**:
 
 \`\`\`
@@ -306,7 +306,12 @@ ${stageNum}. Stage only your implementation files for commit — never stage \`C
 - Never run \`git reset --hard\` on the main repository directory
 - Never skip pre-commit hooks (\`--no-verify\`)
 - Never stage or commit \`CLAUDE.md\` — it contains orchestrator-injected content that must not appear in PRs. Use \`git add <specific files>\` instead of \`git add .\`.
-
+${
+  gitMode === 'local-only'
+    ? ''
+    : `- Never run \`gh pr close\` or \`gh pr reopen\`, and never close or recreate your own PR to "redo" it — the orchestrator tracks whatever PR is currently open. If it was opened the wrong way, leave it open; just re-emit the \`<pr-body>\` marker if the body needs updating.
+`
+}
 ---
 
 ## Git Isolation

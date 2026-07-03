@@ -77,7 +77,39 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain(
       'Do NOT use the MCP `mcp__github__create_pull_request`',
     );
-    expect(result).not.toContain('gh pr create');
+  });
+
+  it('PR Format Standards no longer claims the marker is the only way to open a PR', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    expect(result).not.toContain('the marker is the only path');
+    expect(result).toContain('this is the sanctioned path');
+    expect(result).toContain(
+      'If a PR was already opened another way (e.g. you ran `gh pr create` directly), that is fine and does not need to be undone',
+    );
+  });
+
+  it('Forbidden Actions forbid closing/reopening the session own PR', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const forbiddenSection = result.slice(
+      result.indexOf('## Forbidden Actions'),
+      result.indexOf('## Git Isolation'),
+    );
+    expect(forbiddenSection).toContain('Never run `gh pr close` or `gh pr reopen`');
+    expect(forbiddenSection).toContain(
+      'never close or recreate your own PR to "redo" it',
+    );
+    expect(forbiddenSection).toContain('just re-emit the `<pr-body>` marker');
+  });
+
+  it('local-only mode omits the gh pr close/reopen forbidden action (no PR exists)', () => {
+    const result = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      gitMode: 'local-only',
+    });
+    expect(result).not.toContain('gh pr close');
+    expect(result).not.toContain('gh pr reopen');
+    // Local-only mode still omits the PR section entirely
+    expect(result).not.toContain('## PR Format Standards');
   });
 
   it('Bash Rule 3 instructs repeated -m flags for multi-line commit messages', () => {
