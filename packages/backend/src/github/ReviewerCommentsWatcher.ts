@@ -10,6 +10,7 @@ import {
   enqueueFeedbackItem,
   setPauseReason,
   getSession,
+  getPRByNumber,
 } from '../db/queries';
 import { typedGetSetting } from '../config/settings';
 import { getProjectByGithubRepo } from '../config';
@@ -309,11 +310,16 @@ export class ReviewerCommentsWatcher {
       return;
     }
 
+    const prRow = getPRByNumber(prNumber, repo);
     const payload = formatCoalescedHumanBatch(
       prNumber,
       author,
       comments,
       hasChangesRequested,
+      {
+        conflicted: prRow?.merge_state === 'dirty',
+        baseBranch: prRow?.base_branch ?? undefined,
+      },
     );
     markCommentsPending(
       prNumber,

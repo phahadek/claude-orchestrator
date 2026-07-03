@@ -2,8 +2,12 @@ import { describe, it, expect } from 'vitest';
 import {
   shouldAutoReview,
   formatCIFailureFeedback,
+  formatReviewFeedback,
+  formatCoalescedHumanBatch,
   CI_LOG_EXCERPT_CAP,
+  type HumanComment,
 } from './reviewUtils';
+import type { PRReviewResult } from './PRReviewService';
 
 describe('shouldAutoReview()', () => {
   const withCap = (
@@ -286,5 +290,145 @@ describe('formatCIFailureFeedback() — source: verify', () => {
       truncatedOutput: undefined,
     });
     expect(result).toContain('(unknown)');
+  });
+});
+
+describe('formatCIFailureFeedback() — conflict state', () => {
+  it('source: github — non-conflicted PR keeps the do-not-rebase guidance', () => {
+    const result = formatCIFailureFeedback({
+      prNumber: 42,
+      failingCheckNames: ['lint'],
+      runUrl: null,
+      logExcerpt: null,
+      conflicted: false,
+    });
+    expect(result).toContain('Do NOT rebase onto dev');
+    expect(result).toContain('push directly to your feature branch');
+    expect(result).not.toContain('force-with-lease');
+  });
+
+  it('source: github — conflicted PR instructs rebase + force-with-lease', () => {
+    const result = formatCIFailureFeedback({
+      prNumber: 42,
+      failingCheckNames: ['lint'],
+      runUrl: null,
+      logExcerpt: null,
+      conflicted: true,
+      baseBranch: 'dev',
+    });
+    expect(result).toContain('git rebase dev');
+    expect(result).toContain('git push --force-with-lease');
+    expect(result).not.toContain('Do NOT rebase');
+  });
+
+  it('source: github — conflicted PR uses the PR-specific base branch', () => {
+    const result = formatCIFailureFeedback({
+      prNumber: 42,
+      failingCheckNames: ['lint'],
+      runUrl: null,
+      logExcerpt: null,
+      conflicted: true,
+      baseBranch: 'release',
+    });
+    expect(result).toContain('git rebase release');
+  });
+
+  it('source: verify — non-conflicted PR keeps the do-not-rebase guidance', () => {
+    const result = formatCIFailureFeedback({
+      source: 'verify',
+      failedCommand: 'npm test',
+      truncatedOutput: undefined,
+      conflicted: false,
+    });
+    expect(result).toContain('Do NOT rebase onto dev');
+    expect(result).not.toContain('force-with-lease');
+  });
+
+  it('source: verify — conflicted PR instructs rebase + force-with-lease', () => {
+    const result = formatCIFailureFeedback({
+      source: 'verify',
+      failedCommand: 'npm test',
+      truncatedOutput: undefined,
+      conflicted: true,
+      baseBranch: 'dev',
+    });
+    expect(result).toContain('git rebase dev');
+    expect(result).toContain('git push --force-with-lease');
+    expect(result).not.toContain('Do NOT rebase');
+  });
+
+  it('defaults to non-conflicted when conflicted is omitted (backward compat)', () => {
+    const result = formatCIFailureFeedback({
+      prNumber: 42,
+      failingCheckNames: ['lint'],
+      runUrl: null,
+      logExcerpt: null,
+    });
+    expect(result).toContain('Do NOT rebase onto dev');
+  });
+});
+
+describe('formatReviewFeedback() — conflict state', () => {
+  const makeResult = (
+    overrides: Partial<PRReviewResult> = {},
+  ): PRReviewResult => ({
+    prNumber: 42,
+    repo: 'owner/repo',
+    verdict: 'needs_changes',
+    summary: 'Fix the lint errors.',
+    dimensions: [],
+    ...overrides,
+  });
+
+  it('non-conflicted PR keeps the do-not-rebase guidance', () => {
+    const result = formatReviewFeedback(makeResult(), 1, {
+      conflicted: false,
+    });
+    expect(result).toContain('Do NOT rebase onto dev');
+    expect(result).not.toContain('force-with-lease');
+  });
+
+  it('conflicted PR instructs rebase + force-with-lease', () => {
+    const result = formatReviewFeedback(makeResult(), 1, {
+      conflicted: true,
+      baseBranch: 'dev',
+    });
+    expect(result).toContain('git rebase dev');
+    expect(result).toContain('git push --force-with-lease');
+    expect(result).not.toContain('Do NOT rebase');
+  });
+
+  it('defaults to non-conflicted when opts is omitted (backward compat)', () => {
+    const result = formatReviewFeedback(makeResult(), 1);
+    expect(result).toContain('Do NOT rebase onto dev');
+  });
+});
+
+describe('formatCoalescedHumanBatch() — conflict state', () => {
+  const comments: HumanComment[] = [
+    { id: 'ic_1', author: 'reviewer1', body: 'Please fix this.' },
+  ];
+
+  it('non-conflicted PR keeps the do-not-rebase guidance', () => {
+    const result = formatCoalescedHumanBatch(42, 'reviewer1', comments, false, {
+      conflicted: false,
+    });
+    expect(result).toContain('Do NOT rebase onto dev');
+    expect(result).not.toContain('force-with-lease');
+  });
+
+  it('conflicted PR instructs rebase + force-with-lease', () => {
+    const result = formatCoalescedHumanBatch(42, 'reviewer1', comments, false, {
+      conflicted: true,
+      baseBranch: 'dev',
+    });
+    expect(result).toContain('git rebase dev');
+    expect(result).toContain('git push --force-with-lease');
+    expect(result).not.toContain('Do NOT rebase');
+  });
+
+  it('defaults to non-conflicted when opts is omitted (backward compat)', () => {
+    const result = formatCoalescedHumanBatch(42, 'reviewer1', comments, false);
+    expect(result).toContain('Do NOT rebase onto dev');
   });
 });

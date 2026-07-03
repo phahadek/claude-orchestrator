@@ -966,7 +966,10 @@ export class ReviewOrchestrator {
         enqueueFeedbackItem(
           prRow.session_id,
           'ai-reviewer',
-          formatReviewFeedback(result, 0),
+          formatReviewFeedback(result, 0, {
+            conflicted: prRow?.merge_state === 'dirty',
+            baseBranch: prRow?.base_branch ?? undefined,
+          }),
         );
       }
     } else if (result.verdict === 'incomplete') {
@@ -982,7 +985,10 @@ export class ReviewOrchestrator {
         enqueueFeedbackItem(
           prRow.session_id,
           'ai-reviewer',
-          formatReviewFeedback(result, 0),
+          formatReviewFeedback(result, 0, {
+            conflicted: prRow?.merge_state === 'dirty',
+            baseBranch: prRow?.base_branch ?? undefined,
+          }),
         );
       }
     }

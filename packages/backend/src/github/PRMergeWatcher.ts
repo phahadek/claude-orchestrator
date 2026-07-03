@@ -350,6 +350,8 @@ export class PRMergeWatcher {
             truncatedOutput: testResult.output
               ? truncateLog(testResult.output, CI_LOG_EXCERPT_CAP)
               : undefined,
+            conflicted: pr.merge_state === 'dirty',
+            baseBranch: pr.base_branch ?? undefined,
           });
           this.sessions
             .sendOrResume(pr.session_id!, verifyMsg)
@@ -919,7 +921,10 @@ export class PRMergeWatcher {
             try {
               await this.sessions.sendOrResume(
                 sessionId,
-                formatReviewFeedback(result, iteration),
+                formatReviewFeedback(result, iteration, {
+                  conflicted: prRow.merge_state === 'dirty',
+                  baseBranch: prRow.base_branch ?? undefined,
+                }),
               );
             } catch (e) {
               logger.warn(
@@ -940,7 +945,10 @@ export class PRMergeWatcher {
             try {
               await this.sessions.sendOrResume(
                 sessionId,
-                formatReviewFeedback(result, iteration),
+                formatReviewFeedback(result, iteration, {
+                  conflicted: prRow.merge_state === 'dirty',
+                  baseBranch: prRow.base_branch ?? undefined,
+                }),
               );
             } catch (e) {
               logger.warn(
