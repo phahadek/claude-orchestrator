@@ -70,7 +70,10 @@ function buildRebaseGuidance(conflicted: boolean, baseBranch: string): string {
   );
 }
 
-function buildInstructionBlock(conflicted: boolean, baseBranch: string): string {
+function buildInstructionBlock(
+  conflicted: boolean,
+  baseBranch: string,
+): string {
   return (
     `Please investigate the failures and push a fix. ` +
     `The orchestrator will automatically re-check once you push.\n\n` +

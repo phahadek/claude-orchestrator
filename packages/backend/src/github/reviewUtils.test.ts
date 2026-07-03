@@ -410,25 +410,18 @@ describe('formatCoalescedHumanBatch() — conflict state', () => {
   ];
 
   it('non-conflicted PR keeps the do-not-rebase guidance', () => {
-    const result = formatCoalescedHumanBatch(
-      42,
-      'reviewer1',
-      comments,
-      false,
-      { conflicted: false },
-    );
+    const result = formatCoalescedHumanBatch(42, 'reviewer1', comments, false, {
+      conflicted: false,
+    });
     expect(result).toContain('Do NOT rebase onto dev');
     expect(result).not.toContain('force-with-lease');
   });
 
   it('conflicted PR instructs rebase + force-with-lease', () => {
-    const result = formatCoalescedHumanBatch(
-      42,
-      'reviewer1',
-      comments,
-      false,
-      { conflicted: true, baseBranch: 'dev' },
-    );
+    const result = formatCoalescedHumanBatch(42, 'reviewer1', comments, false, {
+      conflicted: true,
+      baseBranch: 'dev',
+    });
     expect(result).toContain('git rebase dev');
     expect(result).toContain('git push --force-with-lease');
     expect(result).not.toContain('Do NOT rebase');
