@@ -268,7 +268,8 @@ export class StalledPRReconciler {
       `[StalledPRReconciler] PR #${prNumber} (${repo}): escalating to needs_attention (kind=${kind}, retryCount=${retryCount})`,
     );
 
-    setPauseReason(prNumber, repo, 'stalled_reconcile_cap');
+    const detail = `${kind} — ${retryCount} fixer attempts exhausted`;
+    setPauseReason(prNumber, repo, 'stalled_reconcile_cap', detail);
 
     recordEvent({
       event_type: 'stalled_pr_escalated',

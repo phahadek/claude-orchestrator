@@ -194,7 +194,11 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
 
     await supertest(app).post('/api/prs/owner/repo/42/approve').expect(200);
 
-    expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'human_unpark',
+    );
   });
 
   it('calls runAutofixPipeline with correct args when PR is cap-escalated', async () => {
@@ -357,7 +361,11 @@ describe('POST /prs/:prNumber/unpark', () => {
       .expect(200);
 
     expect(res.body).toEqual({ ok: true });
-    expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'human_unpark',
+    );
   });
 
   it('calls runAutofixPipeline with correct args', async () => {

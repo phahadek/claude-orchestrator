@@ -255,7 +255,7 @@ export class PRMergeWatcher {
       await this.handleMerged(pr, null, { silent: silentMerges });
     } else if (state === 'closed') {
       updatePRState(pr.pr_number, pr.repo, 'closed');
-      clearTerminalPRFlags(pr.pr_number, pr.repo);
+      clearTerminalPRFlags(pr.pr_number, pr.repo, 'closed');
       deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
       // Transition coding session idle → error on close-without-merge
       if (pr.session_id) {
@@ -286,6 +286,11 @@ export class PRMergeWatcher {
         `[PRMergeWatcher] PR #${pr.pr_number} head_sha changed: ${pr.head_sha?.slice(0, 7) ?? 'null'} → ${githubHeadSha.slice(0, 7)} — triggering push pipeline`,
       );
       setHeadSha(pr.pr_number, pr.repo, githubHeadSha);
+      // A fix was actually pushed — the load-bearing signal that un-sticks a
+      // stalled_reconcile_cap escalation. No-op for any other pause reason.
+      if (parsePauseReason(pr.pause_reason)?.reason === 'stalled_reconcile_cap') {
+        clearTerminalPRFlags(pr.pr_number, pr.repo, 'head_sha_advance');
+      }
       const refreshedPr = getPRByNumber(pr.pr_number, pr.repo);
       if (refreshedPr) {
         void this.handlePushDetected(refreshedPr);
@@ -717,6 +722,19 @@ export class PRMergeWatcher {
             fetchError = undefined;
             if (headSha !== prRow.head_sha) {
               setHeadSha(prRow.pr_number, prRow.repo, headSha);
+              // A fix was actually pushed — the load-bearing signal that
+              // un-sticks a stalled_reconcile_cap escalation, independent of
+              // whatever verdict the re-review below produces.
+              if (
+                parsePauseReason(prRow.pause_reason)?.reason ===
+                'stalled_reconcile_cap'
+              ) {
+                clearTerminalPRFlags(
+                  prRow.pr_number,
+                  prRow.repo,
+                  'head_sha_advance',
+                );
+              }
             }
             break;
           } catch (e) {
@@ -906,7 +924,7 @@ export class PRMergeWatcher {
 
           setLastReviewedSha(prRow.pr_number, prRow.repo, headSha);
           if (result.verdict === 'approved') {
-            clearTerminalPRFlags(prRow.pr_number, prRow.repo);
+            clearTerminalPRFlags(prRow.pr_number, prRow.repo, 'review_verdict');
           }
           this.broadcast({
             type: 'review_verdict',
@@ -1037,7 +1055,7 @@ export class PRMergeWatcher {
     options: { silent?: boolean } = {},
   ): Promise<void> {
     updatePRState(pr.pr_number, pr.repo, 'merged');
-    clearTerminalPRFlags(pr.pr_number, pr.repo);
+    clearTerminalPRFlags(pr.pr_number, pr.repo, 'merged');
     deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
 
     // Delete the origin branch for feature/* branches.

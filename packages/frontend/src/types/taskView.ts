@@ -22,6 +22,8 @@ export interface TaskView {
   notionStatus: string;
   displayStatus: DisplayStatus;
   pauseReason: PauseReason | null;
+  /** Optional free-text detail for the pause reason (e.g. stall kind + attempt count). */
+  pauseDetail?: string | null;
   priority: string;
   notionUrl: string;
   taskType: string;

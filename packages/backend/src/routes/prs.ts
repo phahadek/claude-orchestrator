@@ -471,7 +471,7 @@ export function createPrsRouter(
 
         const result = await github.mergePR(prNumber, commitTitle, repo);
         updatePRState(prNumber, repo, 'merged');
-        clearTerminalPRFlags(prNumber, repo);
+        clearTerminalPRFlags(prNumber, repo, 'merged');
 
         // Transition session DB status idle → done (must precede endSession subprocess cleanup)
         if (prRow?.session_id) {
@@ -758,7 +758,7 @@ export function createPrsRouter(
       // If the PR is cap-escalated, clear the pause and re-run the pre-review gate
       const pauseStruct = parsePauseReason(prRow.pause_reason ?? null);
       if (pauseStruct?.reason === 'stalled_reconcile_cap') {
-        clearTerminalPRFlags(prNumber, repo);
+        clearTerminalPRFlags(prNumber, repo, 'human_unpark');
         if (reviewOrchestrator) {
           void reviewOrchestrator
             .runAutofixPipeline(prNumber, repo, prRow.task_id)

@@ -742,6 +742,45 @@ describe('TaskCard', () => {
     expect(badge.getAttribute('data-pause-source')).toBe('merge');
   });
 
+  // ── stalled_reconcile_cap: pauseDetail rendering ──────────────────────────
+
+  it('appends pauseDetail to the badge title for stalled_reconcile_cap', () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: 'stalled_reconcile_cap',
+          pauseDetail: 'gate_failed — 2 fixer attempts exhausted',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    const badge = screen.getByText('⚠️ Needs Attention');
+    expect(badge.getAttribute('title')).toContain(
+      'gate_failed — 2 fixer attempts exhausted',
+    );
+  });
+
+  it('does not append a detail suffix when pauseDetail is absent', () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: 'stalled_reconcile_cap',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    const badge = screen.getByText('⚠️ Needs Attention');
+    expect(badge.getAttribute('title')).not.toContain('(');
+  });
+
   // ── Recovery control (descriptor-driven) ─────────────────────────────────
 
   it('renders recovery button when recoveryDescriptor.available is true', () => {

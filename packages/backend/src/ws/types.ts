@@ -50,6 +50,8 @@ export interface TaskView {
   displayStatus: DisplayStatus;
   /** Non-null when the task is paused (e.g. 'max_reviews', 'stuck_timeout'). */
   pauseReason: PauseReason | null;
+  /** Optional free-text detail for the pause reason (e.g. stall kind + attempt count). */
+  pauseDetail?: string | null;
   priority: string;
   notionUrl: string;
   taskType: string;
