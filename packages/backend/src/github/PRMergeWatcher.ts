@@ -315,8 +315,7 @@ export class PRMergeWatcher {
       ? (getSession(pr.session_id)?.status ?? null)
       : null;
     if (isSessionTerminal(codingSessionStatus)) return false;
-    const graceMs =
-      typedGetSetting('session_pr_close_grace_minutes') * 60_000;
+    const graceMs = typedGetSetting('session_pr_close_grace_minutes') * 60_000;
     const elapsedMs = Date.now() - pr.session_initiated_close_at;
     if (elapsedMs >= graceMs) {
       logger.info(

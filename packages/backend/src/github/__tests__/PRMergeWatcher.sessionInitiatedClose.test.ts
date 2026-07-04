@@ -218,21 +218,14 @@ describe('PRMergeWatcher — session-initiated PR close churn recovery', () => {
     await watcher.poll();
 
     expect(updatePRState).toHaveBeenCalledWith(PR_NUMBER, REPO, 'open');
-    expect(setHeadBranch).toHaveBeenCalledWith(
-      PR_NUMBER,
-      REPO,
-      'feature/test',
-    );
+    expect(setHeadBranch).toHaveBeenCalledWith(PR_NUMBER, REPO, 'feature/test');
     expect(setHeadSha).toHaveBeenCalledWith(PR_NUMBER, REPO, 'new-sha');
     expect(clearTerminalPRFlags).toHaveBeenCalledWith(
       PR_NUMBER,
       REPO,
       'session_reconciled',
     );
-    expect(clearSessionInitiatedPRClose).toHaveBeenCalledWith(
-      PR_NUMBER,
-      REPO,
-    );
+    expect(clearSessionInitiatedPRClose).toHaveBeenCalledWith(PR_NUMBER, REPO);
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'pr_reconciled', prNumber: PR_NUMBER }),
     );
@@ -261,10 +254,7 @@ describe('PRMergeWatcher — session-initiated PR close churn recovery', () => {
       'error',
       'pr_closed',
     );
-    expect(clearSessionInitiatedPRClose).toHaveBeenCalledWith(
-      PR_NUMBER,
-      REPO,
-    );
+    expect(clearSessionInitiatedPRClose).toHaveBeenCalledWith(PR_NUMBER, REPO);
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'pr_closed', prNumber: PR_NUMBER }),
     );
@@ -292,10 +282,7 @@ describe('PRMergeWatcher — session-initiated PR close churn recovery', () => {
       'error',
       'pr_closed',
     );
-    expect(clearSessionInitiatedPRClose).toHaveBeenCalledWith(
-      PR_NUMBER,
-      REPO,
-    );
+    expect(clearSessionInitiatedPRClose).toHaveBeenCalledWith(PR_NUMBER, REPO);
   });
 
   it('terminalizes immediately on a human close (no session-initiated mark) — unchanged behavior', async () => {

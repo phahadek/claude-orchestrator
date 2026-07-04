@@ -70,7 +70,10 @@ vi.mock('../CliSessionRunner', () => ({
 
 import { isPRCloseCommand } from '../AgentSession';
 import { AgentSession } from '../AgentSession';
-import { getPRBySessionId, markSessionInitiatedPRClose } from '../../db/queries';
+import {
+  getPRBySessionId,
+  markSessionInitiatedPRClose,
+} from '../../db/queries';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -124,9 +127,9 @@ describe('isPRCloseCommand', () => {
   });
 
   it('returns false for non-Bash tool names', () => {
-    expect(isPRCloseCommand('mcp__github__create_pull_request', 'gh pr close')).toBe(
-      false,
-    );
+    expect(
+      isPRCloseCommand('mcp__github__create_pull_request', 'gh pr close'),
+    ).toBe(false);
   });
 });
 

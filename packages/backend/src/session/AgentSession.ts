@@ -179,10 +179,7 @@ export function isPRCreateCommand(
  * invocation — a session closing or reopening its own PR.
  * Exported for unit testing.
  */
-export function isPRCloseCommand(
-  toolName: string,
-  toolInput: string,
-): boolean {
+export function isPRCloseCommand(toolName: string, toolInput: string): boolean {
   if (toolName !== 'Bash') return false;
   return /\bgh\s+pr\s+(close|reopen)\b/.test(toolInput);
 }
