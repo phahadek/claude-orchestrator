@@ -2726,7 +2726,9 @@ export class SessionManager extends EventEmitter {
     }
 
     const isTerminal =
-      row.status === 'done' || row.status === 'error' || row.status === 'killed';
+      row.status === 'done' ||
+      row.status === 'error' ||
+      row.status === 'killed';
 
     if (!isTerminal) {
       const project = getProjectById(row.project_id ?? '');

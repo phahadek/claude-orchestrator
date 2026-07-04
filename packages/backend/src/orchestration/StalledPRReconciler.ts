@@ -17,7 +17,10 @@ import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
 import { classifyStalledPR } from '../github/pollUtils';
 import type { StalledPRKind } from '../github/pollUtils';
-import { formatCIFailureFeedback, formatMergeConflictFeedback } from '../github/reviewUtils';
+import {
+  formatCIFailureFeedback,
+  formatMergeConflictFeedback,
+} from '../github/reviewUtils';
 
 const DEFAULT_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const DEFAULT_RETRY_CAP = 2;

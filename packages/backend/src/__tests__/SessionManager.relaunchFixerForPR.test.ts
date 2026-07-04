@@ -236,7 +236,8 @@ describe('relaunchFixerForPR() terminal + worktree present: resume, not fresh sp
     vi.mocked(queries.getSession).mockReturnValue({
       ...BASE_SESSION_ROW,
       status: 'killed',
-      worktree_path: '/tmp/test/.claude/worktrees/aaaabbbb-cccc-dddd-eeee-ffffffffffff',
+      worktree_path:
+        '/tmp/test/.claude/worktrees/aaaabbbb-cccc-dddd-eeee-ffffffffffff',
     } as never);
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
@@ -261,7 +262,8 @@ describe('relaunchFixerForPR() idle + worktree present: resume, not fresh spawn'
     vi.mocked(queries.getSession).mockReturnValue({
       ...BASE_SESSION_ROW,
       status: 'idle',
-      worktree_path: '/tmp/test/.claude/worktrees/aaaabbbb-cccc-dddd-eeee-ffffffffffff',
+      worktree_path:
+        '/tmp/test/.claude/worktrees/aaaabbbb-cccc-dddd-eeee-ffffffffffff',
     } as never);
     vi.mocked(fs.existsSync).mockReturnValue(true);
 
