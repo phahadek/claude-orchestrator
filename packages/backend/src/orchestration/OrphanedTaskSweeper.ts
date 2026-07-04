@@ -63,11 +63,17 @@ export class OrphanedTaskSweeper {
       listProjects?: () => ProjectConfig[];
       resolveBackend?: (projectId: string) => TaskBackend;
       intervalMs?: number;
-      /** Shared nudge path — calls SessionManager.sendOrResume under the hood. */
-      sendOrResume?: (
+      /**
+       * Shared nudge path — calls SessionManager.enqueueFeedback under the hood,
+       * which routes the nudge through the turn-boundary-gated feedback inbox
+       * instead of a raw stdin write (delivered at the next turn boundary for a
+       * live session, or via a clean respawn for an idle/exited one).
+       */
+      enqueueFeedback?: (
         sessionId: string,
-        text: string,
-      ) => Promise<string | null>;
+        source: string,
+        payload: string,
+      ) => Promise<void>;
       /** Override recency gate threshold (ms). Defaults to RECENCY_GATE_MS. */
       recencyGateMs?: number;
       /** Override minimum nudge spacing (ms). Defaults to MIN_NUDGE_SPACING_MS. */
@@ -304,20 +310,20 @@ export class OrphanedTaskSweeper {
       return;
     }
 
-    const sendOrResume = this.options.sendOrResume;
-    if (!sendOrResume) {
-      // No sendOrResume injected — log and skip (shouldn't happen in production).
+    const enqueueFeedback = this.options.enqueueFeedback;
+    if (!enqueueFeedback) {
+      // No enqueueFeedback injected — log and skip (shouldn't happen in production).
       logger.warn(
-        `[OrphanedTaskSweeper] sendOrResume not injected — cannot nudge session ${session_id} for task ${taskId}`,
+        `[OrphanedTaskSweeper] enqueueFeedback not injected — cannot nudge session ${session_id} for task ${taskId}`,
       );
       return;
     }
 
     try {
-      await sendOrResume(session_id, nudgeMessage);
+      await enqueueFeedback(session_id, 'system:nudge', nudgeMessage);
     } catch (err) {
       logger.warn(
-        `[OrphanedTaskSweeper] sendOrResume failed for session ${session_id}: ${(err as Error).message}`,
+        `[OrphanedTaskSweeper] enqueueFeedback failed for session ${session_id}: ${(err as Error).message}`,
       );
       return;
     }

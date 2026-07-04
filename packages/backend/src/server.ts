@@ -322,10 +322,11 @@ const stuckSessionMonitor = new StuckSessionMonitor(
 );
 
 // Orphaned-task sweep: finds tasks stuck at In Progress with no live session.
-// sendOrResume is wired so idle sessions without a PR are nudged rather than reverted.
+// enqueueFeedback is wired so idle sessions without a PR are nudged via the
+// feedback inbox rather than reverted or sent a raw mid-teardown stdin write.
 const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
-  sendOrResume: (sessionId, text) =>
-    sessionManager.sendOrResume(sessionId, text),
+  enqueueFeedback: (sessionId, source, payload) =>
+    sessionManager.enqueueFeedback(sessionId, source, payload),
 });
 
 const sessionEventsPruner = new SessionEventsPruner();

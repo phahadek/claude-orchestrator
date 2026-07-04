@@ -651,15 +651,31 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       // (500 api_error or 529 overloaded_error). If so, retry with exponential backoff
       // using --resume to restore conversation history. Non-transient errors (bad config,
       // permission issues, etc.) fall through to permanent error immediately.
+      //
+      // Delivery-race backstop: a non-zero exit immediately preceded by a successful
+      // turn (or with a feedback-inbox item still undelivered) means the crash likely
+      // landed in the post-turn/teardown window rather than reflecting a genuine
+      // failure. Resume rather than terminally error — deliverInboxItems() re-delivers
+      // any pending item once the resumed session completes its next turn.
+      const isTransientError = this.isTransientApiError();
+      const isDeliveryRaceExit =
+        exitCode !== null &&
+        exitCode !== 0 &&
+        !isTransientError &&
+        (this.wasLastEventSuccessfulResult() ||
+          listUndeliveredInboxItems(this.sessionId).length > 0);
+
       if (
         this.retryCount < BACKOFF_DELAYS_MS.length &&
-        this.isTransientApiError()
+        (isTransientError || isDeliveryRaceExit)
       ) {
         const delay = BACKOFF_DELAYS_MS[this.retryCount];
         this.retryCount++;
         sessionLog(
           this.sessionId,
-          `transient API error — retry ${this.retryCount}/${BACKOFF_DELAYS_MS.length} after ${delay}ms`,
+          isDeliveryRaceExit
+            ? `non-zero exit (code=${exitCode}) after a successful turn/pending delivery — resuming (retry ${this.retryCount}/${BACKOFF_DELAYS_MS.length}) after ${delay}ms`
+            : `transient API error — retry ${this.retryCount}/${BACKOFF_DELAYS_MS.length} after ${delay}ms`,
         );
         this.broadcast({
           type: 'session_status',
@@ -717,6 +733,26 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     return (
       payload.includes('api_error') || payload.includes('overloaded_error')
     );
+  }
+
+  /**
+   * Return true if the session's last DB event is a result event with
+   * is_error !== true — i.e., the process completed a turn successfully
+   * immediately before exiting. Used by the exit handler's delivery-race
+   * backstop to distinguish a crash landing right after a turn boundary from
+   * a genuine failure.
+   */
+  private wasLastEventSuccessfulResult(): boolean {
+    const events = getEventsBySession(this.sessionId);
+    if (events.length === 0) return false;
+    const lastEvent = events[events.length - 1];
+    if (eventKind(lastEvent) !== 'result') return false;
+    try {
+      const payload = JSON.parse(lastEvent.payload) as Record<string, unknown>;
+      return payload.is_error !== true;
+    } catch {
+      return false;
+    }
   }
 
   /**
