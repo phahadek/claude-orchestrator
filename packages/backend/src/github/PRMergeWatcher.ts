@@ -44,6 +44,8 @@ import {
   markSessionDone,
   updateSessionStatus,
   clearTerminalPRFlags,
+  setHeadBranch,
+  clearSessionInitiatedPRClose,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
@@ -71,6 +73,22 @@ function isTerminalMergePause(pauseReasonRaw: string | null): boolean {
   if (pauseReasonRaw === null) return false;
   const parsed = parsePauseReason(pauseReasonRaw);
   return parsed !== null && TERMINAL_MERGE_PAUSE_REASONS.has(parsed.reason);
+}
+
+/**
+ * Session statuses that mean the coding session is done for good — it can
+ * never itself reopen the PR. Anything else (running, starting, idle) is
+ * "non-terminal" for the purpose of deferring a session-initiated PR close.
+ */
+const TERMINAL_SESSION_STATUSES: ReadonlySet<string> = new Set([
+  'done',
+  'error',
+  'killed',
+  'superseded',
+]);
+
+function isSessionTerminal(status: string | null | undefined): boolean {
+  return status != null && TERMINAL_SESSION_STATUSES.has(status);
 }
 
 export class PRMergeWatcher {
@@ -254,8 +272,15 @@ export class PRMergeWatcher {
     if (state === 'merged') {
       await this.handleMerged(pr, null, { silent: silentMerges });
     } else if (state === 'closed') {
+      if (this.shouldDeferSessionInitiatedClose(pr)) {
+        logger.info(
+          `[PRMergeWatcher] PR #${pr.pr_number}: session-initiated close detected, coding session ${pr.session_id} still active — deferring terminalization`,
+        );
+        return;
+      }
       updatePRState(pr.pr_number, pr.repo, 'closed');
       clearTerminalPRFlags(pr.pr_number, pr.repo, 'closed');
+      clearSessionInitiatedPRClose(pr.pr_number, pr.repo);
       deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
       // Transition coding session idle → error on close-without-merge
       if (pr.session_id) {
@@ -276,10 +301,95 @@ export class PRMergeWatcher {
     }
   }
 
+  /**
+   * True when this PR's close was live-detected as coming from the session's
+   * own `gh pr close` and the coding session hasn't reached a terminal status
+   * yet, and the ~5-min (configurable) grace window hasn't expired. Defers
+   * PRMergeWatcher from terminalizing on the first poll that sees state='closed',
+   * giving the session a chance to reopen it (churn recovery) before the PR
+   * and its session are stranded or duplicated.
+   */
+  private shouldDeferSessionInitiatedClose(pr: PullRequestRow): boolean {
+    if (!pr.session_initiated_close_at) return false;
+    const codingSessionStatus = pr.session_id
+      ? (getSession(pr.session_id)?.status ?? null)
+      : null;
+    if (isSessionTerminal(codingSessionStatus)) return false;
+    const graceMs =
+      typedGetSetting('session_pr_close_grace_minutes') * 60_000;
+    const elapsedMs = Date.now() - pr.session_initiated_close_at;
+    if (elapsedMs >= graceMs) {
+      logger.info(
+        `[PRMergeWatcher] PR #${pr.pr_number}: session-initiated close grace period (${graceMs / 60_000}m) expired — terminalizing`,
+      );
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Reconcile a PR that was deferred as a session-initiated close and has now
+   * been reopened (or was closed and reopened between polls). Restores
+   * head_branch/head_sha from GitHub, clears the pr_closed pause/error and the
+   * session-initiated-close marker, and resumes normal polling. If the coding
+   * session has since died, the PR is simply left open with pause cleared —
+   * the stalled-PR reconciliation path picks up dead-session PRs independently.
+   */
+  private async reconcileSessionInitiatedClose(
+    pr: PullRequestRow,
+    githubHeadSha: string | null,
+  ): Promise<PullRequestRow> {
+    logger.info(
+      `[PRMergeWatcher] PR #${pr.pr_number}: reconciling after session-initiated close/reopen churn`,
+    );
+    let headBranch = pr.head_branch;
+    let headSha = githubHeadSha ?? pr.head_sha;
+    try {
+      const fresh = await this.github.fetchPR(pr.repo, pr.pr_number);
+      headBranch = fresh.headBranch;
+      headSha = fresh.headSha ?? headSha;
+    } catch (err) {
+      if (err instanceof GitHubRateLimitError) {
+        this.handleRateLimit(err);
+      } else {
+        logger.warn(
+          `[PRMergeWatcher] PR #${pr.pr_number}: fetchPR failed during reconcile:`,
+          (err as Error).message,
+        );
+      }
+    }
+
+    updatePRState(pr.pr_number, pr.repo, 'open');
+    setHeadBranch(pr.pr_number, pr.repo, headBranch);
+    setHeadSha(pr.pr_number, pr.repo, headSha);
+    clearTerminalPRFlags(pr.pr_number, pr.repo, 'session_reconciled');
+    clearSessionInitiatedPRClose(pr.pr_number, pr.repo);
+
+    const codingSessionStatus = pr.session_id
+      ? (getSession(pr.session_id)?.status ?? null)
+      : null;
+    if (pr.session_id && isSessionTerminal(codingSessionStatus)) {
+      logger.info(
+        `[PRMergeWatcher] PR #${pr.pr_number}: reconciled but coding session ${pr.session_id} is dead (${codingSessionStatus}) — leaving for stalled-PR reconciliation`,
+      );
+    }
+
+    this.broadcast({
+      type: 'pr_reconciled',
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+    });
+
+    return getPRByNumber(pr.pr_number, pr.repo) ?? pr;
+  }
+
   private async processOpenPR(
     pr: PullRequestRow,
     githubHeadSha: string | null,
   ): Promise<void> {
+    if (pr.session_initiated_close_at) {
+      pr = await this.reconcileSessionInitiatedClose(pr, githubHeadSha);
+    }
     // Detect out-of-band pushes for any open PR
     if (githubHeadSha && githubHeadSha !== pr.head_sha) {
       logger.info(

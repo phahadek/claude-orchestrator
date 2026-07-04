@@ -175,6 +175,7 @@ export type ServerMessage =
     }
   | { type: 'pr_merged'; prNumber: number; repo: string; sha: string }
   | { type: 'pr_closed'; prNumber: number; repo: string }
+  | { type: 'pr_reconciled'; prNumber: number; repo: string }
   | {
       type: 'pr_state_changed';
       prNumber: number;

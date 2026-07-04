@@ -25,6 +25,8 @@ const mockQueries = vi.hoisted(() => ({
   markSessionDone: vi.fn(),
   setPreReviewStage: vi.fn(),
   clearTerminalPRFlags: vi.fn(),
+  setHeadBranch: vi.fn(),
+  clearSessionInitiatedPRClose: vi.fn(),
 }));
 
 vi.mock('../db/queries.js', () => mockQueries);
