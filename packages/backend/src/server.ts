@@ -70,6 +70,7 @@ import setupRouter, { createSetupModeGuard } from './routes/setup';
 import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
 import { runBootSequence, getActiveBootTracker } from './bootSequence';
 import { logger } from './logger';
+import { handleUncaughtException, handleUnhandledRejection } from './audit/recordFault';
 
 runMigrations(db);
 loadRuntimeSettingsFromDb();
@@ -384,6 +385,7 @@ process.on('SIGTERM', () => shutdownWithTimeout('SIGTERM'));
 process.on('SIGINT', () => shutdownWithTimeout('SIGINT'));
 process.on('unhandledRejection', (err) => {
   logger.error('[server] unhandledRejection:', err);
+  handleUnhandledRejection(err);
 });
 process.on('uncaughtException', (err) => {
   logger.error('[server] uncaughtException — initiating graceful shutdown', {
@@ -391,5 +393,5 @@ process.on('uncaughtException', (err) => {
     stack: err.stack,
     name: err.name,
   });
-  shutdownWithTimeout('uncaughtException', 1);
+  handleUncaughtException(err, shutdownWithTimeout);
 });

@@ -47,7 +47,9 @@ type EventType =
   | 'task_unblocked'
   | 'pr_unparked'
   | 'repo_git_config_repaired'
-  | 'task_recovered';
+  | 'task_recovered'
+  | 'process_fault'
+  | 'process_boot';
 
 type ActorType = 'ai' | 'human' | 'system';
 

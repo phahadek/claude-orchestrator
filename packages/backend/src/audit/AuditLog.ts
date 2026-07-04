@@ -1,6 +1,17 @@
 import { db } from '../db/db';
 import type { AuditEvent } from './types';
 
+export interface AuditRow {
+  id: number;
+  ts: number;
+  event_type: string;
+  actor_type: string;
+  actor_id: string | null;
+  project_id: string | null;
+  task_id: string | null;
+  payload: string;
+}
+
 export function recordEvent(event: AuditEvent): void {
   const stmt = db.prepare(`
     INSERT INTO audit_log (ts, event_type, actor_type, actor_id, project_id, task_id, payload)
@@ -60,4 +71,13 @@ export function countPushFailureEvents(sessionId: string): number {
       return false;
     }
   }).length;
+}
+
+/** Returns the most recent audit_log row of the given event type, or undefined. */
+export function getLatestEventByType(eventType: string): AuditRow | undefined {
+  return db
+    .prepare<[string], AuditRow>(
+      `SELECT * FROM audit_log WHERE event_type = ? ORDER BY ts DESC LIMIT 1`,
+    )
+    .get(eventType);
 }
