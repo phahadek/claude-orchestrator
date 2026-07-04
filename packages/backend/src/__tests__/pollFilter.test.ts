@@ -678,6 +678,75 @@ describe('classifyStalledPR pre_review_interrupted', () => {
   });
 });
 
+// ── classifyStalledPR: conflict_dead_session ──────────────────────────────────
+
+describe('classifyStalledPR conflict_dead_session', () => {
+  it('returns conflict_dead_session when merge_state=dirty and the implementing session errored', () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha-abc',
+      merge_state: 'dirty',
+    });
+    expect(classifyStalledPR(pr, null, 'error')).toEqual({
+      kind: 'conflict_dead_session',
+    });
+  });
+
+  it('returns conflict_dead_session when merge_state=blocked and the implementing session was killed', () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha-abc',
+      merge_state: 'blocked',
+    });
+    expect(classifyStalledPR(pr, null, 'killed')).toEqual({
+      kind: 'conflict_dead_session',
+    });
+  });
+
+  it('returns conflict_dead_session when the implementing session is done', () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha-abc',
+      merge_state: 'dirty',
+    });
+    expect(classifyStalledPR(pr, null, 'done')).toEqual({
+      kind: 'conflict_dead_session',
+    });
+  });
+
+  it('returns null (not conflict_dead_session) when the implementing session is idle — live-session nudge path handles it', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-old',
+      merge_state: 'dirty',
+    });
+    expect(classifyStalledPR(pr, null, 'idle')).toBeNull();
+  });
+
+  it('returns null when merge_state is clean, regardless of session status', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-old',
+      merge_state: 'clean',
+    });
+    expect(classifyStalledPR(pr, null, 'error')).toBeNull();
+  });
+
+  it('takes priority over a gate-failed verdict when both are present', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'autofix_failed' }),
+      head_sha: 'sha-abc',
+      merge_state: 'dirty',
+      pending_push: 0,
+    });
+    expect(classifyStalledPR(pr, null, 'error')).toEqual({
+      kind: 'conflict_dead_session',
+    });
+  });
+});
+
 // ── Integration: 20 PRs, 5 paused/stale → only active PRs trigger API calls ──
 
 describe('integration: only non-skipped PRs trigger API calls in one cycle', () => {
