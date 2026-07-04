@@ -1,0 +1,325 @@
+/**
+ * Tests for SessionManager.enqueueFeedback(): the shared routing point used by
+ * OrphanedTaskSweeper (nudges) and ReviewOrchestrator (local-branch CI-gate
+ * failures) so both bypass session.send() entirely.
+ *
+ * - Live session: item is enqueued only — delivery happens at the next turn
+ *   boundary via AgentSession.deliverInboxItems(), so sendOrResume must NOT
+ *   be called here (that would be a raw mid-teardown write risk).
+ * - Idle/exited session: item is enqueued, then delivered immediately via a
+ *   clean respawn (sendOrResume) and marked delivered.
+ * - Terminal session (done/error/killed): item is enqueued but left
+ *   undelivered without resending, matching reconcileInboxAtBoot's handling.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return {
+    ...actual,
+    execSync: vi.fn().mockReturnValue(''),
+    exec: vi.fn(),
+  };
+});
+
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof import('fs')>('fs');
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      writeFileSync: vi.fn(),
+      existsSync: vi.fn().mockReturnValue(false),
+      readFileSync: vi.fn().mockReturnValue(''),
+      mkdirSync: vi.fn(),
+      statSync: vi.fn().mockReturnValue({ isFile: () => false }),
+    },
+    writeFileSync: vi.fn(),
+    existsSync: vi.fn().mockReturnValue(false),
+    readFileSync: vi.fn().mockReturnValue(''),
+    mkdirSync: vi.fn(),
+    statSync: vi.fn().mockReturnValue({ isFile: () => false }),
+  };
+});
+
+vi.mock('../config', () => ({
+  config: { maxConcurrentCodeSessions: 10 },
+  runtimeSettings: { session_mode: 'cli' },
+  getProjectById: vi.fn().mockReturnValue(null),
+  normalizePath: (p: string) => p,
+}));
+
+const inboxItemsBySession = new Map<
+  string,
+  Array<{ id: number; source: string; payload: string }>
+>();
+let nextInboxId = 1;
+
+function seedInbox(
+  sessionId: string,
+  items: Array<{ id: number; source: string; payload: string }>,
+) {
+  inboxItemsBySession.set(sessionId, items);
+}
+
+vi.mock('../db/queries', () => ({
+  insertSession: vi.fn(),
+  updateSessionStatus: vi.fn(),
+  updateSessionWorktreePath: vi.fn(),
+  markSessionDone: vi.fn(),
+  markSessionSuperseded: vi.fn(),
+  insertEvent: vi.fn(),
+  getSession: vi.fn(),
+  getSessionsByStatus: vi.fn().mockReturnValue([]),
+  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+  getEventsBySession: vi.fn().mockReturnValue([]),
+  getPRByNumber: vi.fn().mockReturnValue(null),
+  getPRBySessionId: vi.fn().mockReturnValue(null),
+  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+  getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
+  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+  getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
+  setSessionPauseReason: vi.fn(),
+  setSessionLastErrorDetail: vi.fn(),
+  incrementTaskCrashCount: vi.fn().mockReturnValue(1),
+  setTaskPauseReason: vi.fn(),
+  getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
+  listSessionsWithUndeliveredInboxItems: vi.fn(() => [
+    ...inboxItemsBySession.keys(),
+  ]),
+  listUndeliveredInboxItems: vi.fn((sessionId: string) =>
+    (inboxItemsBySession.get(sessionId) ?? []).map((i) => ({
+      ...i,
+      session_id: sessionId,
+      enqueued_at: 0,
+      delivered_at: null,
+    })),
+  ),
+  markInboxItemsDelivered: vi.fn((ids: number[]) => {
+    for (const [sessionId, items] of inboxItemsBySession.entries()) {
+      inboxItemsBySession.set(
+        sessionId,
+        items.filter((i) => !ids.includes(i.id)),
+      );
+    }
+  }),
+  enqueueFeedbackItem: vi.fn(
+    (sessionId: string, source: string, payload: string) => {
+      const items = inboxItemsBySession.get(sessionId) ?? [];
+      items.push({ id: nextInboxId++, source, payload });
+      inboxItemsBySession.set(sessionId, items);
+    },
+  ),
+}));
+
+vi.mock('../tasks/TaskBackend', () => ({
+  getTaskBackend: vi.fn().mockReturnValue({
+    fetchTaskPage: vi.fn().mockResolvedValue('task content'),
+    updateStatus: vi.fn().mockResolvedValue(undefined),
+  }),
+}));
+
+vi.mock('../session/orchestrator-config', () => ({
+  loadOrchestratorConfig: vi.fn().mockReturnValue({
+    mainBranch: 'main',
+    bootstrapScript: null,
+    prGate: null,
+    bashRules: null,
+    allowedTools: [],
+    mcp_servers: undefined,
+  }),
+}));
+
+vi.mock('../session/ContextBuilder', () => ({
+  buildSessionContext: vi.fn().mockReturnValue('context'),
+}));
+
+vi.mock('../session/orchestrator-claudemd', () => ({
+  buildReviewClaudeMd: vi.fn().mockReturnValue('review context'),
+}));
+
+vi.mock('../session/branchModel', () => ({
+  resolveStartingPoint: vi.fn().mockReturnValue({
+    startingPoint: 'dev',
+    milestoneSlug: null,
+  }),
+  ensureMilestoneBranch: vi.fn(),
+  slugify: vi
+    .fn()
+    .mockImplementation((s: string) => s.toLowerCase().replace(/\s+/g, '-')),
+  deriveBranchSlug: vi
+    .fn()
+    .mockImplementation(
+      (s: string) => `feature/${s.toLowerCase().replace(/\s+/g, '-')}`,
+    ),
+}));
+
+vi.mock('../routes/tasks', () => ({
+  emitTaskUpdated: vi.fn(),
+}));
+
+vi.mock('../notion/NotionClient', () => ({
+  parseSection: vi.fn().mockReturnValue(''),
+}));
+
+vi.mock('../tasks/TaskStatusEngine', () => ({
+  deriveDisplayStatusFromDb: vi.fn().mockReturnValue('starting'),
+}));
+
+vi.mock('../session/CliSessionRunner', () => ({
+  CliSessionRunner: vi.fn().mockImplementation(() => ({
+    sendMessage: vi.fn(),
+    endSession: vi.fn(),
+    run: vi.fn().mockReturnValue(new Promise(() => {})),
+  })),
+}));
+
+vi.mock('../session/ApiSessionRunner', () => ({
+  ApiSessionRunner: vi.fn().mockImplementation(() => ({
+    sendMessage: vi.fn(),
+    endSession: vi.fn(),
+  })),
+}));
+
+vi.mock('../session/DockerSessionRunner', () => ({
+  DockerSessionRunner: vi.fn().mockImplementation(() => ({
+    sendMessage: vi.fn(),
+    endSession: vi.fn(),
+  })),
+  reapOrphanContainers: vi.fn(),
+}));
+
+vi.mock('../audit/AuditLog', () => ({
+  recordEvent: vi.fn(),
+}));
+
+vi.mock('../config/corporateMode', () => ({
+  getCorporateMode: vi
+    .fn()
+    .mockReturnValue({ gates: { dockerMandatory: false } }),
+}));
+
+import { SessionManager } from '../session/SessionManager';
+import * as queries from '../db/queries';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  inboxItemsBySession.clear();
+  nextInboxId = 1;
+});
+
+describe('SessionManager.enqueueFeedback()', () => {
+  it('live session: enqueues only — no sendOrResume (turn boundary delivers it)', async () => {
+    const sm = new SessionManager();
+    // Simulate a live in-memory session without going through the full spawn path.
+    (sm as unknown as { sessions: Map<string, unknown> }).sessions.set(
+      'sess-live',
+      {},
+    );
+    const sendSpy = vi.spyOn(sm, 'sendOrResume');
+
+    await sm.enqueueFeedback('sess-live', 'system:nudge', 'please open a PR');
+
+    expect(queries.enqueueFeedbackItem).toHaveBeenCalledWith(
+      'sess-live',
+      'system:nudge',
+      'please open a PR',
+    );
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-live')).toHaveLength(1);
+  });
+
+  it('idle session: enqueues and immediately delivers via a clean respawn', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-idle',
+      status: 'idle',
+    } as never);
+
+    const sm = new SessionManager();
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValue('sess-idle');
+
+    await sm.enqueueFeedback('sess-idle', 'ci-failure', 'verify failed');
+
+    expect(queries.enqueueFeedbackItem).toHaveBeenCalledWith(
+      'sess-idle',
+      'ci-failure',
+      'verify failed',
+    );
+    expect(sm.sendOrResume).toHaveBeenCalledWith(
+      'sess-idle',
+      expect.stringContaining('verify failed'),
+    );
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-idle')).toHaveLength(0);
+  });
+
+  it('idle session: leaves item undelivered for retry when sendOrResume throws', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-idle-2',
+      status: 'idle',
+    } as never);
+
+    const sm = new SessionManager();
+    vi.spyOn(sm, 'sendOrResume').mockRejectedValue(new Error('respawn failed'));
+
+    await sm.enqueueFeedback('sess-idle-2', 'system:nudge', 'nudge text');
+
+    expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-idle-2')).toHaveLength(1);
+  });
+
+  it('terminal session: enqueues but marks delivered without resending', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-done',
+      status: 'done',
+    } as never);
+
+    const sm = new SessionManager();
+    const sendSpy = vi.spyOn(sm, 'sendOrResume');
+
+    await sm.enqueueFeedback('sess-done', 'ci-failure', 'stale failure');
+
+    expect(queries.enqueueFeedbackItem).toHaveBeenCalledWith(
+      'sess-done',
+      'ci-failure',
+      'stale failure',
+    );
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-done')).toHaveLength(0);
+  });
+
+  it('unknown session: enqueues only, no crash', async () => {
+    vi.mocked(queries.getSession).mockReturnValue(undefined as never);
+    const sm = new SessionManager();
+    const sendSpy = vi.spyOn(sm, 'sendOrResume');
+
+    await sm.enqueueFeedback('sess-missing', 'system:nudge', 'text');
+
+    expect(queries.enqueueFeedbackItem).toHaveBeenCalledWith(
+      'sess-missing',
+      'system:nudge',
+      'text',
+    );
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it('idle session: combines multiple pending inbox items into a single sendOrResume call', async () => {
+    seedInbox('sess-multi', [
+      { id: 1, source: 'ai-reviewer', payload: 'first item' },
+    ]);
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-multi',
+      status: 'idle',
+    } as never);
+
+    const sm = new SessionManager();
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValue('sess-multi');
+
+    await sm.enqueueFeedback('sess-multi', 'system:nudge', 'second item');
+
+    const [, combined] = vi.mocked(sm.sendOrResume).mock.calls[0];
+    expect(combined).toContain('first item');
+    expect(combined).toContain('second item');
+  });
+});

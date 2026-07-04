@@ -675,8 +675,9 @@ export class ReviewOrchestrator {
                 // Autofix fixed the gate — fall through to AI review
               } else {
                 setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
-                this.sessionManager.send(
+                await this.sessionManager.enqueueFeedback(
                   job.sessionId,
+                  'ci-failure',
                   formatCIFailureFeedback({
                     source: 'verify',
                     failedCommand: retryResult.failedCommand,
@@ -687,8 +688,9 @@ export class ReviewOrchestrator {
               }
             } else {
               setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
-              this.sessionManager.send(
+              await this.sessionManager.enqueueFeedback(
                 job.sessionId,
+                'ci-failure',
                 formatCIFailureFeedback({
                   source: 'verify',
                   failedCommand: verifyResult.failedCommand,
@@ -703,8 +705,9 @@ export class ReviewOrchestrator {
               err,
             );
             setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
-            this.sessionManager.send(
+            await this.sessionManager.enqueueFeedback(
               job.sessionId,
+              'ci-failure',
               formatCIFailureFeedback({
                 source: 'verify',
                 failedCommand: verifyResult.failedCommand,
@@ -715,8 +718,9 @@ export class ReviewOrchestrator {
           }
         } else {
           setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
-          this.sessionManager.send(
+          await this.sessionManager.enqueueFeedback(
             job.sessionId,
+            'ci-failure',
             formatCIFailureFeedback({
               source: 'verify',
               failedCommand: verifyResult.failedCommand,

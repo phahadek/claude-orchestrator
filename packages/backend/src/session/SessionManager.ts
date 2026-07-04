@@ -61,6 +61,7 @@ import {
   listSessionsWithUndeliveredInboxItems,
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
+  enqueueFeedbackItem,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import { eventKind } from './eventKind';
@@ -2241,6 +2242,58 @@ export class SessionManager extends EventEmitter {
       eventType: 'user_message',
       content: message,
     } satisfies ServerMessage);
+  }
+
+  /**
+   * Enqueue a feedback item to a session's inbox instead of writing to stdin
+   * directly. A live session picks it up at its next turn boundary via
+   * AgentSession.deliverInboxItems() — no further action is taken here. An
+   * idle/exited session is delivered immediately via a clean respawn
+   * (sendOrResume), never a raw stdin write into a possibly mid-teardown
+   * process. Terminal sessions (done/error/killed) are left undelivered —
+   * marked delivered without resending, matching reconcileInboxAtBoot.
+   */
+  async enqueueFeedback(
+    sessionId: string,
+    source: string,
+    payload: string,
+  ): Promise<void> {
+    enqueueFeedbackItem(sessionId, source, payload);
+
+    // Live session — the next turn boundary (deliverInboxItems) will deliver it.
+    if (this.sessions.has(sessionId)) return;
+
+    const row = getSession(sessionId);
+    if (
+      !row ||
+      row.status === 'done' ||
+      row.status === 'error' ||
+      row.status === 'killed'
+    ) {
+      if (row) {
+        const items = listUndeliveredInboxItems(sessionId);
+        if (items.length > 0) {
+          markInboxItemsDelivered(items.map((i) => i.id));
+        }
+      }
+      return;
+    }
+
+    const items = listUndeliveredInboxItems(sessionId);
+    if (items.length === 0) return;
+    const combined = items
+      .map((item) => `[${item.source}]\n${item.payload}`)
+      .join('\n\n');
+
+    try {
+      await this.sendOrResume(sessionId, combined);
+    } catch (err) {
+      logger.warn(
+        `[SessionManager] enqueueFeedback: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
+      );
+      return;
+    }
+    markInboxItemsDelivered(items.map((i) => i.id));
   }
 
   /**
