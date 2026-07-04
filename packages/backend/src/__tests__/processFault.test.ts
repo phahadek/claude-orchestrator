@@ -54,7 +54,10 @@ describe('handleUncaughtException', () => {
 
     handleUncaughtException(err, shutdown);
 
-    const rows = getRows(db as import('better-sqlite3').Database, 'process_fault');
+    const rows = getRows(
+      db as import('better-sqlite3').Database,
+      'process_fault',
+    );
     expect(rows).toHaveLength(1);
     const payload = JSON.parse(rows[0].payload as string);
     expect(payload.kind).toBe('uncaughtException');
@@ -73,7 +76,10 @@ describe('handleUnhandledRejection', () => {
 
     handleUnhandledRejection(err);
 
-    const rows = getRows(db as import('better-sqlite3').Database, 'process_fault');
+    const rows = getRows(
+      db as import('better-sqlite3').Database,
+      'process_fault',
+    );
     expect(rows).toHaveLength(1);
     const payload = JSON.parse(rows[0].payload as string);
     expect(payload.kind).toBe('unhandledRejection');
@@ -83,11 +89,9 @@ describe('handleUnhandledRejection', () => {
 
 describe('recordFault — recordEvent failure is swallowed', () => {
   it('shutdown still fires when recordEvent throws', () => {
-    const spy = vi
-      .spyOn(AuditLog, 'recordEvent')
-      .mockImplementation(() => {
-        throw new Error('db exploded');
-      });
+    const spy = vi.spyOn(AuditLog, 'recordEvent').mockImplementation(() => {
+      throw new Error('db exploded');
+    });
     const shutdown = vi.fn();
 
     expect(() =>
@@ -99,11 +103,9 @@ describe('recordFault — recordEvent failure is swallowed', () => {
   });
 
   it('recordFault itself does not throw when recordEvent throws', () => {
-    const spy = vi
-      .spyOn(AuditLog, 'recordEvent')
-      .mockImplementation(() => {
-        throw new Error('db exploded');
-      });
+    const spy = vi.spyOn(AuditLog, 'recordEvent').mockImplementation(() => {
+      throw new Error('db exploded');
+    });
 
     expect(() =>
       recordFault('unhandledRejection', new Error('x'), false),
@@ -115,9 +117,7 @@ describe('recordFault — recordEvent failure is swallowed', () => {
 
 // ── Boot-time recovery detection ──────────────────────────────────────────────
 
-function makeBootDeps(
-  broadcast: (msg: ServerMessage) => void,
-): BootDeps {
+function makeBootDeps(broadcast: (msg: ServerMessage) => void): BootDeps {
   const server = {
     listen: vi.fn((_port: number, _host: string, cb: () => void) => {
       cb();
@@ -141,7 +141,9 @@ function makeBootDeps(
     autoLauncher: { pollOnce: vi.fn().mockResolvedValue(undefined) },
     scheduler: { start: vi.fn() },
     sessionEventsPruner: { runAtBoot: vi.fn().mockResolvedValue(undefined) },
-    stalledPRReconciler: { reconcileOnce: vi.fn().mockResolvedValue(undefined) },
+    stalledPRReconciler: {
+      reconcileOnce: vi.fn().mockResolvedValue(undefined),
+    },
     server,
     port: 3000,
     broadcast,
@@ -214,7 +216,10 @@ describe('boot-time process_fault recovery detection', () => {
 
     await runAndDrain(deps);
 
-    const rows = getRows(db as import('better-sqlite3').Database, 'process_boot');
+    const rows = getRows(
+      db as import('better-sqlite3').Database,
+      'process_boot',
+    );
     expect(rows.length).toBeGreaterThanOrEqual(1);
   });
 });

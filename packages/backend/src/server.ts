@@ -70,7 +70,10 @@ import setupRouter, { createSetupModeGuard } from './routes/setup';
 import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
 import { runBootSequence, getActiveBootTracker } from './bootSequence';
 import { logger } from './logger';
-import { handleUncaughtException, handleUnhandledRejection } from './audit/recordFault';
+import {
+  handleUncaughtException,
+  handleUnhandledRejection,
+} from './audit/recordFault';
 
 runMigrations(db);
 loadRuntimeSettingsFromDb();

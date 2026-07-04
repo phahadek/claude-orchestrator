@@ -183,7 +183,11 @@ function reportRecoveryIfNeeded(broadcast: (msg: ServerMessage) => void): void {
 /** Records the process_boot event; never throws so boot completion isn't blocked. */
 function recordBootEvent(): void {
   try {
-    recordEvent({ event_type: 'process_boot', actor_type: 'system', payload: {} });
+    recordEvent({
+      event_type: 'process_boot',
+      actor_type: 'system',
+      payload: {},
+    });
   } catch (err) {
     logger.warn('[boot] failed to record process_boot event:', err);
   }

@@ -76,8 +76,9 @@ export function countPushFailureEvents(sessionId: string): number {
 /** Returns the most recent audit_log row of the given event type, or undefined. */
 export function getLatestEventByType(eventType: string): AuditRow | undefined {
   return db
-    .prepare<[string], AuditRow>(
-      `SELECT * FROM audit_log WHERE event_type = ? ORDER BY ts DESC LIMIT 1`,
-    )
+    .prepare<
+      [string],
+      AuditRow
+    >(`SELECT * FROM audit_log WHERE event_type = ? ORDER BY ts DESC LIMIT 1`)
     .get(eventType);
 }
