@@ -224,7 +224,11 @@ describe('PRMergeWatcher — session-initiated PR close churn recovery', () => {
       'feature/test',
     );
     expect(setHeadSha).toHaveBeenCalledWith(PR_NUMBER, REPO, 'new-sha');
-    expect(clearTerminalPRFlags).toHaveBeenCalledWith(PR_NUMBER, REPO);
+    expect(clearTerminalPRFlags).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'session_reconciled',
+    );
     expect(clearSessionInitiatedPRClose).toHaveBeenCalledWith(
       PR_NUMBER,
       REPO,
