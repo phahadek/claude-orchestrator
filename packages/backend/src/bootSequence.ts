@@ -5,6 +5,7 @@ import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
 import { runGitConfigIntegrityCheck } from './orchestration/gitConfigIntegrity';
 import { logger } from './logger';
 import { getCorporateMode } from './config/corporateMode';
+import { recordEvent, getLatestEventByType } from './audit/AuditLog';
 import type { ServerMessage } from './ws/types';
 
 function isLoopback(host: string): boolean {
@@ -151,6 +152,47 @@ export function getActiveBootTracker(): BootStatusTracker | null {
   return _activeBootTracker;
 }
 
+/**
+ * Detects whether the most recent process_fault happened after the last
+ * recorded process_boot (i.e. the fault took the process down and this boot
+ * is the recovery) and, if so, surfaces it via log line + WS broadcast.
+ */
+function reportRecoveryIfNeeded(broadcast: (msg: ServerMessage) => void): void {
+  try {
+    const latestFault = getLatestEventByType('process_fault');
+    if (!latestFault) return;
+    const priorBoot = getLatestEventByType('process_boot');
+    if (priorBoot && priorBoot.ts >= latestFault.ts) return;
+
+    let message = 'unknown fault';
+    try {
+      const payload = JSON.parse(latestFault.payload) as { message?: string };
+      if (payload.message) message = payload.message;
+    } catch {
+      // malformed payload — fall back to the default message
+    }
+
+    const logLine = `[boot] recovered from prior process_fault at ${latestFault.ts}: ${message}`;
+    logger.warn(logLine);
+    broadcast({ type: 'error', message: logLine });
+  } catch (err) {
+    logger.warn('[boot] process_fault recovery detection failed:', err);
+  }
+}
+
+/** Records the process_boot event; never throws so boot completion isn't blocked. */
+function recordBootEvent(): void {
+  try {
+    recordEvent({
+      event_type: 'process_boot',
+      actor_type: 'system',
+      payload: {},
+    });
+  } catch (err) {
+    logger.warn('[boot] failed to record process_boot event:', err);
+  }
+}
+
 export async function runBootSequence(deps: BootDeps): Promise<void> {
   const { server, port } = deps;
   const bindHost = resolveBindHost();
@@ -224,8 +266,10 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   await tracker.runStep('auto_launcher_start', () =>
     deps.autoLauncher.pollOnce(),
   );
+  reportRecoveryIfNeeded(deps.broadcast);
   // Boot-safety gate: scheduler (and its runOnBoot jobs) must not start until
   // boot_reconciliation_completed is emitted. Ordering is explicit, not incidental.
   tracker.completeSequence();
+  recordBootEvent();
   deps.scheduler.start();
 }
