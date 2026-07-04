@@ -288,7 +288,9 @@ export class PRMergeWatcher {
       setHeadSha(pr.pr_number, pr.repo, githubHeadSha);
       // A fix was actually pushed — the load-bearing signal that un-sticks a
       // stalled_reconcile_cap escalation. No-op for any other pause reason.
-      if (parsePauseReason(pr.pause_reason)?.reason === 'stalled_reconcile_cap') {
+      if (
+        parsePauseReason(pr.pause_reason)?.reason === 'stalled_reconcile_cap'
+      ) {
         clearTerminalPRFlags(pr.pr_number, pr.repo, 'head_sha_advance');
       }
       const refreshedPr = getPRByNumber(pr.pr_number, pr.repo);

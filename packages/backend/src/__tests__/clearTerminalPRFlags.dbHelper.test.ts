@@ -102,9 +102,7 @@ describe('clearTerminalPRFlags — DB helper', () => {
 
   it('is a no-op when both fields are already null', () => {
     insertPR(2);
-    expect(() =>
-      clearTerminalPRFlags(2, 'owner/repo', 'closed'),
-    ).not.toThrow();
+    expect(() => clearTerminalPRFlags(2, 'owner/repo', 'closed')).not.toThrow();
     const row = getPRRow(2);
     expect(row?.pause_reason).toBeNull();
     expect(row?.pre_review_stage).toBeNull();
