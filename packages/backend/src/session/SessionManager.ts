@@ -2264,7 +2264,12 @@ export class SessionManager extends EventEmitter {
     if (this.sessions.has(sessionId)) return;
 
     const row = getSession(sessionId);
-    if (!row || row.status === 'done' || row.status === 'error' || row.status === 'killed') {
+    if (
+      !row ||
+      row.status === 'done' ||
+      row.status === 'error' ||
+      row.status === 'killed'
+    ) {
       if (row) {
         const items = listUndeliveredInboxItems(sessionId);
         if (items.length > 0) {

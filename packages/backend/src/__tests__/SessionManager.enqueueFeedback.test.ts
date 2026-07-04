@@ -304,25 +304,22 @@ describe('SessionManager.enqueueFeedback()', () => {
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
-  it(
-    'idle session: combines multiple pending inbox items into a single sendOrResume call',
-    async () => {
-      seedInbox('sess-multi', [
-        { id: 1, source: 'ai-reviewer', payload: 'first item' },
-      ]);
-      vi.mocked(queries.getSession).mockReturnValue({
-        session_id: 'sess-multi',
-        status: 'idle',
-      } as never);
+  it('idle session: combines multiple pending inbox items into a single sendOrResume call', async () => {
+    seedInbox('sess-multi', [
+      { id: 1, source: 'ai-reviewer', payload: 'first item' },
+    ]);
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-multi',
+      status: 'idle',
+    } as never);
 
-      const sm = new SessionManager();
-      vi.spyOn(sm, 'sendOrResume').mockResolvedValue('sess-multi');
+    const sm = new SessionManager();
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValue('sess-multi');
 
-      await sm.enqueueFeedback('sess-multi', 'system:nudge', 'second item');
+    await sm.enqueueFeedback('sess-multi', 'system:nudge', 'second item');
 
-      const [, combined] = vi.mocked(sm.sendOrResume).mock.calls[0];
-      expect(combined).toContain('first item');
-      expect(combined).toContain('second item');
-    },
-  );
+    const [, combined] = vi.mocked(sm.sendOrResume).mock.calls[0];
+    expect(combined).toContain('first item');
+    expect(combined).toContain('second item');
+  });
 });

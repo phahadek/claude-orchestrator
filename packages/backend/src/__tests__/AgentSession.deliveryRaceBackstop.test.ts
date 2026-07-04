@@ -144,104 +144,96 @@ describe('AgentSession — exit-handler delivery-race backstop', () => {
     vi.mocked(listUndeliveredInboxItems).mockReturnValue([]);
   });
 
-  it(
-    'resumes (does not terminally error) on a non-zero exit immediately after a successful result event',
-    async () => {
-      vi.mocked(getEventsBySession).mockReturnValue([
-        makeEventRow('result').live,
-      ] as ReturnType<typeof getEventsBySession>);
+  it('resumes (does not terminally error) on a non-zero exit immediately after a successful result event', async () => {
+    vi.mocked(getEventsBySession).mockReturnValue([
+      makeEventRow('result').live,
+    ] as ReturnType<typeof getEventsBySession>);
 
-      const session = makeSession('sess-race-1');
-      const messages: ServerMessage[] = [];
-      session.on('message', (msg: ServerMessage) => messages.push(msg));
+    const session = makeSession('sess-race-1');
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
 
-      const runPromise = session.run();
+    const runPromise = session.run();
 
-      // Simulate the process crashing right after emitting its result event.
-      // Close stdout first so the runner's readline-drain guard doesn't add a
-      // spurious 5s wait before the exit code is processed.
-      mockProc.stdout.push(null);
-      await new Promise((r) => setTimeout(r, 0));
-      mockProc.proc.emit('exit', 1);
-      await new Promise((r) => setTimeout(r, 30));
+    // Simulate the process crashing right after emitting its result event.
+    // Close stdout first so the runner's readline-drain guard doesn't add a
+    // spurious 5s wait before the exit code is processed.
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 1);
+    await new Promise((r) => setTimeout(r, 30));
 
-      // The retry-not-terminal decision is synchronous: broadcasts 'retrying'
-      // and never reaches the terminal error path.
-      expect(
-        messages.some(
-          (m) =>
-            m.type === 'session_status' &&
-            (m as { status?: string }).status === 'retrying',
-        ),
-      ).toBe(true);
-      expect(messages.some((m) => m.type === 'session_ended')).toBe(false);
-      expect(updateSessionStatus).not.toHaveBeenCalledWith(
-        'sess-race-1',
-        'error',
-        expect.anything(),
-      );
+    // The retry-not-terminal decision is synchronous: broadcasts 'retrying'
+    // and never reaches the terminal error path.
+    expect(
+      messages.some(
+        (m) =>
+          m.type === 'session_status' &&
+          (m as { status?: string }).status === 'retrying',
+      ),
+    ).toBe(true);
+    expect(messages.some((m) => m.type === 'session_ended')).toBe(false);
+    expect(updateSessionStatus).not.toHaveBeenCalledWith(
+      'sess-race-1',
+      'error',
+      expect.anything(),
+    );
 
-      // Short-circuit the pending backoff wait so the test doesn't need to sit
-      // through the real 5s delay — flips the same shutdown flag gracefulPause()
-      // sets, which the retry loop already checks before respawning.
-      (
-        session as unknown as { isPausingForShutdown: boolean }
-      ).isPausingForShutdown = true;
-      await runPromise;
+    // Short-circuit the pending backoff wait so the test doesn't need to sit
+    // through the real 5s delay — flips the same shutdown flag gracefulPause()
+    // sets, which the retry loop already checks before respawning.
+    (
+      session as unknown as { isPausingForShutdown: boolean }
+    ).isPausingForShutdown = true;
+    await runPromise;
 
-      // Only the original spawn happened — the shutdown flag pre-empted the resume.
-      expect(spawn).toHaveBeenCalledTimes(1);
-    },
-    8_000,
-  );
+    // Only the original spawn happened — the shutdown flag pre-empted the resume.
+    expect(spawn).toHaveBeenCalledTimes(1);
+  }, 8_000);
 
-  it(
-    'resumes when an undelivered inbox item is pending, even without a preceding successful result',
-    async () => {
-      vi.mocked(getEventsBySession).mockReturnValue([]);
-      vi.mocked(listUndeliveredInboxItems).mockReturnValue([
-        {
-          id: 1,
-          session_id: 'sess-race-2',
-          source: 'system:nudge',
-          payload: 'please open a PR',
-          enqueued_at: Date.now(),
-          delivered_at: null,
-        },
-      ] as ReturnType<typeof listUndeliveredInboxItems>);
+  it('resumes when an undelivered inbox item is pending, even without a preceding successful result', async () => {
+    vi.mocked(getEventsBySession).mockReturnValue([]);
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'sess-race-2',
+        source: 'system:nudge',
+        payload: 'please open a PR',
+        enqueued_at: Date.now(),
+        delivered_at: null,
+      },
+    ] as ReturnType<typeof listUndeliveredInboxItems>);
 
-      const session = makeSession('sess-race-2');
-      const messages: ServerMessage[] = [];
-      session.on('message', (msg: ServerMessage) => messages.push(msg));
+    const session = makeSession('sess-race-2');
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
 
-      const runPromise = session.run();
-      mockProc.stdout.push(null);
-      await new Promise((r) => setTimeout(r, 0));
-      mockProc.proc.emit('exit', 1);
-      await new Promise((r) => setTimeout(r, 30));
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 1);
+    await new Promise((r) => setTimeout(r, 30));
 
-      expect(
-        messages.some(
-          (m) =>
-            m.type === 'session_status' &&
-            (m as { status?: string }).status === 'retrying',
-        ),
-      ).toBe(true);
-      expect(updateSessionStatus).not.toHaveBeenCalledWith(
-        'sess-race-2',
-        'error',
-        expect.anything(),
-      );
+    expect(
+      messages.some(
+        (m) =>
+          m.type === 'session_status' &&
+          (m as { status?: string }).status === 'retrying',
+      ),
+    ).toBe(true);
+    expect(updateSessionStatus).not.toHaveBeenCalledWith(
+      'sess-race-2',
+      'error',
+      expect.anything(),
+    );
 
-      (
-        session as unknown as { isPausingForShutdown: boolean }
-      ).isPausingForShutdown = true;
-      await runPromise;
+    (
+      session as unknown as { isPausingForShutdown: boolean }
+    ).isPausingForShutdown = true;
+    await runPromise;
 
-      expect(spawn).toHaveBeenCalledTimes(1);
-    },
-    8_000,
-  );
+    expect(spawn).toHaveBeenCalledTimes(1);
+  }, 8_000);
 
   it('still fails terminally on a non-zero exit with no preceding success and no pending delivery', async () => {
     vi.mocked(getEventsBySession).mockReturnValue([]);
