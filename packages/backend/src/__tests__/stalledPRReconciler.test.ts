@@ -325,6 +325,7 @@ describe('StalledPRReconciler', () => {
       42,
       'org/repo',
       'stalled_reconcile_cap',
+      'incomplete_verdict — 2 fixer attempts exhausted',
     );
     expect(
       messages.find((m) => m.type === 'pr_stalled_escalated'),
@@ -496,6 +497,7 @@ describe('StalledPRReconciler', () => {
       42,
       'org/repo',
       'stalled_reconcile_cap',
+      'analyze_failing — 2 fixer attempts exhausted',
     );
     expect(
       messages.find((m) => m.type === 'pr_stalled_escalated'),
@@ -558,6 +560,7 @@ describe('StalledPRReconciler', () => {
       42,
       'org/repo',
       'stalled_reconcile_cap',
+      'pre_review_interrupted — 2 fixer attempts exhausted',
     );
     expect(
       messages.find((m) => m.type === 'pr_stalled_escalated'),

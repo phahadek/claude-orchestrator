@@ -187,6 +187,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     notionStatus,
     displayStatus,
     pauseReason: pauseStruct?.reason ?? null,
+    pauseDetail: pauseStruct?.detail ?? null,
     priority,
     notionUrl: notionTask?.notionUrl ?? '',
     taskType: notionTask?.type ?? '',
@@ -343,7 +344,7 @@ export function executeRerunPipeline(
   taskId: string | null,
   reviewOrchestrator?: ReviewOrchestratorLike,
 ): void {
-  clearTerminalPRFlags(prNumber, repo);
+  clearTerminalPRFlags(prNumber, repo, 'human_unpark');
   if (reviewOrchestrator) {
     void reviewOrchestrator
       .runAutofixPipeline(prNumber, repo, taskId)
@@ -753,7 +754,7 @@ export function createTasksRouter(
         // Clear PR-level pause so the task transitions away from needs_attention
         const prRow = getPRByNotionTaskId(taskId);
         if (prRow) {
-          clearTerminalPRFlags(prRow.pr_number, prRow.repo);
+          clearTerminalPRFlags(prRow.pr_number, prRow.repo, 'human_unpark');
         }
 
         if (sessionManager) {

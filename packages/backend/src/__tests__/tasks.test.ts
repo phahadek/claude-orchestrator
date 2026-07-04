@@ -1182,6 +1182,7 @@ describe('POST /api/tasks/:taskId/recover', () => {
       expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(
         42,
         'owner/repo',
+        'human_unpark',
       );
       // runAutofixPipeline is fire-and-forget; wait a tick for it
       await new Promise((r) => setTimeout(r, 10));
@@ -1253,6 +1254,7 @@ describe('POST /api/tasks/:taskId/recover', () => {
       expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(
         99,
         'owner/repo',
+        'human_unpark',
       );
       expect(sendOrResume).toHaveBeenCalledWith(
         'sess-1',

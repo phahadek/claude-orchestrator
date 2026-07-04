@@ -1462,12 +1462,54 @@ export function setPauseReason(
 }
 
 /**
+ * Signals that may trigger clearTerminalPRFlags. Only a subset of these are
+ * trusted to clear a 'stalled_reconcile_cap' escalation — see
+ * CAP_CLEAR_ALLOWED_TRIGGERS below.
+ */
+export type ClearTerminalPRFlagsTrigger =
+  | 'merged'
+  | 'closed'
+  | 'head_sha_advance'
+  | 'human_unpark'
+  | 'review_verdict';
+
+/**
+ * Triggers that are allowed to clear a 'stalled_reconcile_cap' escalation:
+ * a genuine terminal transition (merged/closed), a head_sha advance (a fix
+ * was actually pushed — the load-bearing signal), or an explicit human
+ * unpark/recovery action. A bare automated 'review_verdict' is deliberately
+ * excluded: an approved verdict does not guarantee the PR is mergeable, and
+ * clearing the cap on verdict alone re-creates the open+no-pause+no-session
+ * limbo the cap escalation exists to prevent.
+ */
+const CAP_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
+  new Set(['merged', 'closed', 'head_sha_advance', 'human_unpark']);
+
+/**
  * Clear both pause_reason and pre_review_stage on terminal PR transitions
  * (merged, closed, or approved verdict). Composes the existing setters so that
  * pause_reason_set_at is also nulled correctly. Re-nulling already-null fields
  * is a no-op in SQLite and is safe.
+ *
+ * When the PR is currently escalated to 'stalled_reconcile_cap', clearing is
+ * gated on `trigger` — see CAP_CLEAR_ALLOWED_TRIGGERS.
  */
-export function clearTerminalPRFlags(prNumber: number, repo: string): void {
+export function clearTerminalPRFlags(
+  prNumber: number,
+  repo: string,
+  trigger: ClearTerminalPRFlagsTrigger,
+): void {
+  const pr = getPRByNumber(prNumber, repo);
+  const pauseStruct = parsePauseReason(pr?.pause_reason ?? null);
+  if (
+    pauseStruct?.reason === 'stalled_reconcile_cap' &&
+    !CAP_CLEAR_ALLOWED_TRIGGERS.has(trigger)
+  ) {
+    logger.info(
+      `[clearTerminalPRFlags] PR #${prNumber} (${repo}): refusing to clear stalled_reconcile_cap — trigger '${trigger}' is not a trusted escalation-clearing signal`,
+    );
+    return;
+  }
   setPauseReason(prNumber, repo, null);
   setPreReviewStage(prNumber, repo, null);
   recordEvent({
@@ -1475,7 +1517,7 @@ export function clearTerminalPRFlags(prNumber: number, repo: string): void {
     actor_type: 'system',
     actor_id: null,
     task_id: null,
-    payload: { pr_number: prNumber, repo },
+    payload: { pr_number: prNumber, repo, trigger },
   });
 }
 

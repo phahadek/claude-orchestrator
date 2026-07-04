@@ -7,7 +7,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-const mockClearTerminalPRFlags = vi.fn();
+const { mockClearTerminalPRFlags, mockSetHeadSha } = vi.hoisted(() => ({
+  mockClearTerminalPRFlags: vi.fn(),
+  mockSetHeadSha: vi.fn(),
+}));
 
 vi.mock('../db/queries.js', () => ({
   getAllOpenPRs: vi.fn().mockReturnValue([]),
@@ -20,7 +23,7 @@ vi.mock('../db/queries.js', () => ({
   addAutofixSha: vi.fn(),
   consumeAutofixSha: vi.fn(),
   deleteAllAutofixShasForPR: vi.fn(),
-  setHeadSha: vi.fn(),
+  setHeadSha: mockSetHeadSha,
   setLastReviewedSha: vi.fn(),
   setPRReviewResult: vi.fn(),
   setPendingPush: vi.fn(),
@@ -67,6 +70,7 @@ vi.mock('../session/autofix-runner.js', () => ({
 }));
 
 import { PRMergeWatcher } from '../github/PRMergeWatcher.js';
+import { setHeadSha } from '../db/queries.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
 import type { SessionManager } from '../session/SessionManager.js';
 import type { PRReviewService } from '../github/PRReviewService.js';
@@ -159,7 +163,11 @@ describe('PRMergeWatcher — approved verdict clears terminal flags', () => {
     // Wait for the void async IIFE inside handlePushDetected to complete
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(mockClearTerminalPRFlags).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(mockClearTerminalPRFlags).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'review_verdict',
+    );
   });
 
   it('does not call clearTerminalPRFlags when review verdict is needs_changes', async () => {
@@ -203,5 +211,63 @@ describe('PRMergeWatcher — approved verdict clears terminal flags', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(mockClearTerminalPRFlags).not.toHaveBeenCalled();
+  });
+
+  it('clears stalled_reconcile_cap via head_sha_advance as soon as a new push is confirmed, before the verdict is known', async () => {
+    const github = {
+      // Fresh fetch reports a head_sha that differs from the stored one —
+      // a fix was actually pushed.
+      fetchPR: vi.fn().mockResolvedValue({ headSha: 'head-sha-2' }),
+      deleteBranch: vi.fn().mockResolvedValue(undefined),
+    } as unknown as GitHubClient;
+
+    const sessions = {
+      markSessionErrored: vi.fn(),
+      endSession: vi.fn(),
+      markForBranchDeletion: vi.fn(),
+      sendOrResume: vi.fn().mockResolvedValue(undefined),
+      on: vi.fn(),
+      off: vi.fn(),
+    } as unknown as SessionManager;
+
+    const prReviewService = {
+      // Verdict is needs_changes — the old code would NOT have cleared the
+      // cap here at all, but the fix (a real push happened) should still
+      // un-stick the escalation regardless of verdict.
+      reReviewPR: vi.fn().mockResolvedValue({
+        verdict: 'needs_changes',
+        summary: 'Still missing X',
+        dimensions: [],
+        prNumber: 42,
+        repo: 'owner/repo',
+        reviewedAt: new Date().toISOString(),
+      }),
+    } as unknown as PRReviewService;
+
+    const reviewOrchestrator = {
+      consumeAutofixSha: vi.fn().mockReturnValue(false),
+      runAutofixPipeline: vi.fn().mockResolvedValue(undefined),
+      runTestPipeline: vi.fn().mockResolvedValue(undefined),
+      isReviewInFlight: vi.fn().mockReturnValue(false),
+    } as unknown as ReviewOrchestrator;
+
+    const watcher = new PRMergeWatcher(github, sessions, undefined, vi.fn());
+    watcher.setPRReviewService(prReviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    const pr = makePRRow({
+      pause_reason:
+        '{"reason":"stalled_reconcile_cap","source":"review","severity":"needs_attention","retry_strategy":"manual_action"}',
+    });
+    await watcher.handlePushDetected(pr);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(setHeadSha).toHaveBeenCalledWith(42, 'owner/repo', 'head-sha-2');
+    expect(mockClearTerminalPRFlags).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'head_sha_advance',
+    );
   });
 });

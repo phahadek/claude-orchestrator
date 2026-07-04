@@ -187,7 +187,11 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
           className={`${styles.statusBadge} ${styles[`status-${statusKey}`] ?? ''}`}
           title={
             pauseStruct
-              ? `[${pauseStruct.source}] ${PAUSE_REASON_LABELS[pauseStruct.reason] ?? pauseStruct.reason}`
+              ? `[${pauseStruct.source}] ${PAUSE_REASON_LABELS[pauseStruct.reason] ?? pauseStruct.reason}` +
+                (pauseStruct.reason === 'stalled_reconcile_cap' &&
+                task.pauseDetail
+                  ? ` (${task.pauseDetail})`
+                  : '')
               : undefined
           }
           data-pause-severity={pauseStruct?.severity}
