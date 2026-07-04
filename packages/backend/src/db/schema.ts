@@ -275,7 +275,8 @@ export function runMigrations(target: Database.Database): void {
       failing_checks               TEXT,
       ci_remediation_attempted_sha TEXT,
       pause_reason_set_at          INTEGER,
-      conflict_nudge_sha           TEXT
+      conflict_nudge_sha           TEXT,
+      session_initiated_close_at   INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS scheduler_audit (
@@ -869,6 +870,13 @@ export function runMigrations(target: Database.Database): void {
   try {
     target.exec(
       `ALTER TABLE orchestrator_analyze_results ADD COLUMN is_transient INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN session_initiated_close_at INTEGER`,
     );
   } catch {
     /* already exists */

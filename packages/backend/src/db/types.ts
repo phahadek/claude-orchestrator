@@ -335,6 +335,10 @@ export interface PullRequestRow {
   pre_review_stage: string | null;
   conflict_nudge_sha: string | null; // SHA for which a conflict nudge was last sent (dedup key)
   stalled_pr_retry_count: number; // reconciler attempt counter; resets when head_sha changes
+  /** Unix ms timestamp set when a session's own gh pr close/reopen command was
+   *  live-detected; cleared on reconcile (reopen) and on terminalize. Null means
+   *  no session-initiated close/reopen churn is pending for this PR. */
+  session_initiated_close_at: number | null;
 }
 
 // ─── task_repo_assignments ──────────────────────────────────────────────────

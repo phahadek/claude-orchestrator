@@ -964,6 +964,7 @@ export function upsertPullRequest(
     | 'ci_remediation_attempted_sha'
     | 'pre_review_stage'
     | 'stalled_pr_retry_count'
+    | 'session_initiated_close_at'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -1119,6 +1120,57 @@ export function incrementStalledPRRetryCount(
 export function clearReviewSessionId(prNumber: number, repo: string): void {
   db.prepare<{ pr_number: number; repo: string }>(
     `UPDATE pull_requests SET review_session_id = NULL WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo });
+}
+
+export function setHeadBranch(
+  prNumber: number,
+  repo: string,
+  branch: string | null,
+): void {
+  db.prepare<{ pr_number: number; repo: string; head_branch: string | null }>(
+    `
+    UPDATE pull_requests
+    SET head_branch = @head_branch
+    WHERE pr_number = @pr_number AND repo = @repo
+  `,
+  ).run({ pr_number: prNumber, repo, head_branch: branch });
+}
+
+/**
+ * Marks a PR as having a pending session-initiated close/reopen cycle,
+ * live-detected from a `gh pr close`/`gh pr reopen` Bash command run by the
+ * session itself. PRMergeWatcher uses this to defer terminalization of a
+ * closed PR while the coding session is still non-terminal.
+ */
+export function markSessionInitiatedPRClose(
+  prNumber: number,
+  repo: string,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    session_initiated_close_at: number;
+  }>(
+    `
+    UPDATE pull_requests
+    SET session_initiated_close_at = @session_initiated_close_at
+    WHERE pr_number = @pr_number AND repo = @repo
+  `,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    session_initiated_close_at: Date.now(),
+  });
+}
+
+/** Clears the session-initiated close/reopen marker — called on reconcile and on terminalize. */
+export function clearSessionInitiatedPRClose(
+  prNumber: number,
+  repo: string,
+): void {
+  db.prepare<{ pr_number: number; repo: string }>(
+    `UPDATE pull_requests SET session_initiated_close_at = NULL WHERE pr_number = @pr_number AND repo = @repo`,
   ).run({ pr_number: prNumber, repo });
 }
 
@@ -1471,19 +1523,28 @@ export type ClearTerminalPRFlagsTrigger =
   | 'closed'
   | 'head_sha_advance'
   | 'human_unpark'
-  | 'review_verdict';
+  | 'review_verdict'
+  | 'session_reconciled';
 
 /**
  * Triggers that are allowed to clear a 'stalled_reconcile_cap' escalation:
  * a genuine terminal transition (merged/closed), a head_sha advance (a fix
- * was actually pushed — the load-bearing signal), or an explicit human
- * unpark/recovery action. A bare automated 'review_verdict' is deliberately
- * excluded: an approved verdict does not guarantee the PR is mergeable, and
- * clearing the cap on verdict alone re-creates the open+no-pause+no-session
- * limbo the cap escalation exists to prevent.
+ * was actually pushed — the load-bearing signal), an explicit human
+ * unpark/recovery action, or a session-initiated-close reconcile (the PR was
+ * never really abandoned — the close was the session's own churn). A bare
+ * automated 'review_verdict' is deliberately excluded: an approved verdict
+ * does not guarantee the PR is mergeable, and clearing the cap on verdict
+ * alone re-creates the open+no-pause+no-session limbo the cap escalation
+ * exists to prevent.
  */
 const CAP_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
-  new Set(['merged', 'closed', 'head_sha_advance', 'human_unpark']);
+  new Set([
+    'merged',
+    'closed',
+    'head_sha_advance',
+    'human_unpark',
+    'session_reconciled',
+  ]);
 
 /**
  * Clear both pause_reason and pre_review_stage on terminal PR transitions

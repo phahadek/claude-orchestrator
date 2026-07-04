@@ -32,6 +32,7 @@ import {
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
   getSession,
+  markSessionInitiatedPRClose,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -171,6 +172,16 @@ export function isPRCreateCommand(
 ): boolean {
   if (toolName !== 'Bash') return false;
   return /\bgh\s+pr\s+create\b/.test(toolInput);
+}
+
+/**
+ * Returns true if the tool call represents a `gh pr close` or `gh pr reopen`
+ * invocation — a session closing or reopening its own PR.
+ * Exported for unit testing.
+ */
+export function isPRCloseCommand(toolName: string, toolInput: string): boolean {
+  if (toolName !== 'Bash') return false;
+  return /\bgh\s+pr\s+(close|reopen)\b/.test(toolInput);
 }
 
 export interface GitHubPRShape {
@@ -958,11 +969,16 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           const text = extractTextFromToolResultEvent(event);
           void this.handlePRCreatedFromBashOutput(text);
         }
+        if (isPRCloseCommand('Bash', cmd)) {
+          this.handlePRCloseCommand();
+        }
       }
     }
 
-    // Also handle tool_result blocks embedded in user events
-    if (rawType === 'user' && !this.prDetectedLive) {
+    // Also handle tool_result blocks embedded in user events. Not gated on
+    // prDetectedLive: PR-creation sub-handlers already no-op once a PR exists,
+    // but gh pr close/reopen detection below must still fire post-creation.
+    if (rawType === 'user') {
       const msg = event.message as Record<string, unknown> | undefined;
       const content = (msg?.content ?? event.content) as
         | Array<Record<string, unknown>>
@@ -984,6 +1000,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
               if (isPRCreateCommand('Bash', cmd) && !this.prDetectedLive) {
                 const innerText = extractTextFromToolResultEvent(block);
                 void this.handlePRCreatedFromBashOutput(innerText);
+              }
+              if (isPRCloseCommand('Bash', cmd)) {
+                this.handlePRCloseCommand();
               }
             }
           }
@@ -1330,6 +1349,22 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     const prUrl = prShape.html_url ?? text.match(PR_URL_REGEX)?.[0];
     if (!prUrl) return;
     await this.handlePRDetected(prUrl, prShape);
+  }
+
+  /**
+   * Called when a `gh pr close`/`gh pr reopen` Bash command completes for
+   * this session's own PR. Marks the PR row so PRMergeWatcher can defer
+   * terminalization of a session-initiated close while the session is live,
+   * instead of treating it the same as a human close.
+   */
+  private handlePRCloseCommand(): void {
+    const pr = getPRBySessionId(this.sessionId);
+    if (!pr) return;
+    markSessionInitiatedPRClose(pr.pr_number, pr.repo);
+    sessionLog(
+      this.sessionId,
+      `gh pr close/reopen detected — marked PR #${pr.pr_number} session_initiated_close_at`,
+    );
   }
 
   /**

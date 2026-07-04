@@ -24,6 +24,8 @@ vi.mock('../db/queries.js', () => ({
   clearTerminalPRFlags: vi.fn(),
   setPreReviewStage: vi.fn(),
   setConflictNudgeSha: vi.fn(),
+  setHeadBranch: vi.fn(),
+  clearSessionInitiatedPRClose: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
