@@ -2254,7 +2254,11 @@ export class SessionManager extends EventEmitter {
    * is wired via wireSession, and the message is sent after the first event.
    * A concurrency guard ensures only one respawn runs per session ID at a time.
    */
-  async sendOrResume(sessionId: string, text: string): Promise<string | null> {
+  async sendOrResume(
+    sessionId: string,
+    text: string,
+    opts: { allowTerminal?: boolean } = {},
+  ): Promise<string | null> {
     // Live session — deliver directly
     if (this.sessions.has(sessionId)) {
       this.send(sessionId, text);
@@ -2277,7 +2281,7 @@ export class SessionManager extends EventEmitter {
     const inflight = this.resumesInFlight.get(sessionId);
     if (inflight) return inflight;
 
-    const promise = this._doSendOrResume(sessionId, text);
+    const promise = this._doSendOrResume(sessionId, text, opts);
     this.resumesInFlight.set(sessionId, promise);
     try {
       return await promise;
@@ -2289,6 +2293,7 @@ export class SessionManager extends EventEmitter {
   private async _doSendOrResume(
     sessionId: string,
     text: string,
+    opts: { allowTerminal?: boolean } = {},
   ): Promise<string | null> {
     // Session not live — look up details from DB and re-launch with --resume
     const row = getSession(sessionId);
@@ -2301,10 +2306,13 @@ export class SessionManager extends EventEmitter {
 
     // Refuse to respawn sessions that reached a terminal state — done/error/killed
     // sessions are intentionally finished and must not be revived by stale feedback.
+    // PR-scoped relaunches (relaunchFixerForPR) opt out via allowTerminal since a
+    // dead session is exactly the case they exist to recover from.
     if (
-      row.status === 'done' ||
-      row.status === 'error' ||
-      row.status === 'killed'
+      !opts.allowTerminal &&
+      (row.status === 'done' ||
+        row.status === 'error' ||
+        row.status === 'killed')
     ) {
       logger.warn(
         `[SessionManager] sendOrResume: refusing to respawn terminal session ${sessionId} (status=${row.status})`,
@@ -2661,6 +2669,99 @@ export class SessionManager extends EventEmitter {
 
     await firstEvent;
     return sessionId;
+  }
+
+  /**
+   * Idempotently remove a lingering in-memory session entry. Used before
+   * relaunchFixerForPR spawns a replacement so a stale map reference (session
+   * marked dead in the DB but not yet cleaned up in memory) can't collide with
+   * the new AgentSession instance.
+   */
+  private evictDeadSessionEntry(sessionId: string): void {
+    this.sessions.delete(sessionId);
+  }
+
+  /**
+   * Relaunch a coding fixer on a PR's existing branch when the implementing
+   * session has died (or is idle) and the normal gate-failure /
+   * conflict-nudge delivery path (sendOrResume to job.sessionId) can't reach
+   * anyone. PR-scoped: bound to `pr.session_id`'s branch/worktree, not to task
+   * dispatch — deliberately does NOT consult hasLiveSessionForTask, since that
+   * check exists for the initial task-launch decision (AutoLauncher), not for
+   * recovering a specific stalled PR.
+   *
+   * Resolution by session state:
+   *  - idle, worktree present: resume in place (delegates to sendOrResume).
+   *  - idle, worktree missing: anomaly — surface to the operator, no relaunch.
+   *  - terminal (done/error/killed), worktree present: resume in place with
+   *    --resume, bypassing the terminal refusal that sendOrResume enforces.
+   *  - terminal, worktree missing (confirmed dead): recreate a worktree
+   *    attached to the PR's existing branch and spawn fresh with --resume.
+   *
+   * Returns the session id on success, or null if no relaunch was attempted
+   * (missing session_id/DB row, or the idle+no-worktree operator-surface case).
+   */
+  async relaunchFixerForPR(
+    pr: { pr_number: number; repo: string; session_id: string | null },
+    prompt: string,
+  ): Promise<string | null> {
+    const sessionId = pr.session_id;
+    if (!sessionId) {
+      logger.warn(
+        `[SessionManager] relaunchFixerForPR: PR #${pr.pr_number} (${pr.repo}) has no session_id — cannot relaunch`,
+      );
+      return null;
+    }
+
+    // Evict any lingering in-memory entry for the dead session id before
+    // respawning — see evictDeadSessionEntry doc.
+    this.evictDeadSessionEntry(sessionId);
+
+    const row = getSession(sessionId);
+    if (!row) {
+      logger.error(
+        `[SessionManager] relaunchFixerForPR: session ${sessionId} not found in DB`,
+      );
+      return null;
+    }
+
+    const isTerminal =
+      row.status === 'done' ||
+      row.status === 'error' ||
+      row.status === 'killed';
+
+    if (!isTerminal) {
+      const project = getProjectById(row.project_id ?? '');
+      const projectDir = project ? normalizePath(project.projectDir) : null;
+      const recordedPath =
+        row.worktree_path ??
+        (projectDir
+          ? path.join(projectDir, '.claude', 'worktrees', sessionId)
+          : null);
+      const worktreePresent =
+        !!recordedPath &&
+        fs.existsSync(recordedPath) &&
+        fs.existsSync(path.join(recordedPath, '.git'));
+
+      if (!worktreePresent) {
+        logger.warn(
+          `[SessionManager] relaunchFixerForPR: idle session ${sessionId} has no worktree — surfacing to operator instead of relaunching`,
+        );
+        setSessionPauseReason(sessionId, 'stalled_idle');
+        this.emit('message', {
+          type: 'session_action_failed',
+          sessionId,
+          action: 'relaunch_fixer',
+          reason: 'worktree_missing',
+          detail: `Idle session has no worktree at ${recordedPath ?? '(unknown)'}`,
+        } satisfies ServerMessage);
+        return null;
+      }
+    }
+
+    // Idle-with-worktree resumes normally; terminal sessions bypass the
+    // terminal refusal since PR-scoped recovery is exactly what this is for.
+    return this.sendOrResume(sessionId, prompt, { allowTerminal: true });
   }
 
   async shutdownAll(): Promise<void> {

@@ -1,6 +1,7 @@
 import { logger } from '../logger';
 import type { Scheduler } from './Scheduler';
 import type { ReviewOrchestrator } from '../github/ReviewOrchestrator';
+import type { SessionManager } from '../session/SessionManager';
 import {
   getAllOpenPRs,
   setPauseReason,
@@ -13,8 +14,13 @@ import { parsePauseReason } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
+import type { PullRequestRow } from '../db/types';
 import { classifyStalledPR } from '../github/pollUtils';
 import type { StalledPRKind } from '../github/pollUtils';
+import {
+  formatCIFailureFeedback,
+  formatMergeConflictFeedback,
+} from '../github/reviewUtils';
 
 const DEFAULT_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const DEFAULT_RETRY_CAP = 2;
@@ -26,7 +32,11 @@ const DEFAULT_RETRY_CAP = 2;
  *  - incomplete_verdict: verdict=incomplete with head_sha unchanged → re-enqueue review
  *  - errored_review_session: review session is error/killed → clear stale session ID and
  *    spawn a fresh review (sidesteps SessionManager's terminal-session refuse)
- *  - gate_failed: autofix_failed/verify_failed with no pending push → re-run gate via enqueueReview
+ *  - gate_failed: autofix_failed/verify_failed with no pending push → relaunch the
+ *    coding fixer on the PR's existing branch (re-reviewing is futile when the
+ *    implementing session is dead — nobody receives the gate-failure feedback)
+ *  - conflict_dead_session: merge conflict/blocked with a dead implementing
+ *    session → relaunch the coding fixer with a rebase prompt
  *
  * Retry bound: after DEFAULT_RETRY_CAP attempts per head_sha the PR is escalated
  * to pause_reason='stalled_reconcile_cap' and left for human intervention.
@@ -36,6 +46,7 @@ const DEFAULT_RETRY_CAP = 2;
  */
 export class StalledPRReconciler {
   private reviewOrchestrator: ReviewOrchestrator | undefined;
+  private sessionManager: SessionManager | undefined;
 
   constructor(
     private readonly broadcast: (msg: ServerMessage) => void,
@@ -47,6 +58,10 @@ export class StalledPRReconciler {
 
   setReviewOrchestrator(ro: ReviewOrchestrator): void {
     this.reviewOrchestrator = ro;
+  }
+
+  setSessionManager(sm: SessionManager): void {
+    this.sessionManager = sm;
   }
 
   register(scheduler: Scheduler): void {
@@ -79,8 +94,16 @@ export class StalledPRReconciler {
       const reviewSessionStatus = pr.review_session_id
         ? (getSession(pr.review_session_id)?.status ?? null)
         : null;
+      // Resolve the implementing session status for the dead-session conflict check
+      const implementingSessionStatus = pr.session_id
+        ? (getSession(pr.session_id)?.status ?? null)
+        : null;
 
-      const stalled = classifyStalledPR(pr, reviewSessionStatus);
+      const stalled = classifyStalledPR(
+        pr,
+        reviewSessionStatus,
+        implementingSessionStatus,
+      );
       if (!stalled) continue;
 
       const count = pr.stalled_pr_retry_count ?? 0;
@@ -90,15 +113,7 @@ export class StalledPRReconciler {
         continue;
       }
 
-      const drove = await this.reDrive(
-        pr.pr_number,
-        pr.repo,
-        pr.task_id,
-        pr.session_id,
-        stalled.kind,
-        count,
-        pr.head_sha ?? null,
-      );
+      const drove = await this.reDrive(pr, stalled.kind, count);
       if (drove) itemsProcessed++;
     }
 
@@ -110,14 +125,19 @@ export class StalledPRReconciler {
   }
 
   private async reDrive(
-    prNumber: number,
-    repo: string,
-    taskId: string | null,
-    sessionId: string | null,
+    pr: PullRequestRow,
     kind: StalledPRKind,
     _currentCount: number,
-    headSha: string | null,
   ): Promise<boolean> {
+    const { pr_number: prNumber, repo } = pr;
+    const taskId = pr.task_id;
+    const sessionId = pr.session_id;
+    const headSha = pr.head_sha ?? null;
+
+    if (kind === 'gate_failed' || kind === 'conflict_dead_session') {
+      return this.reDriveViaFixerRelaunch(pr, kind);
+    }
+
     if (!this.reviewOrchestrator) {
       logger.warn(
         `[StalledPRReconciler] reviewOrchestrator not set — cannot re-drive PR #${prNumber}`,
@@ -180,6 +200,62 @@ export class StalledPRReconciler {
     return true;
   }
 
+  /**
+   * gate_failed / conflict_dead_session: re-reviewing is futile because the
+   * implementing session already died (or is dead-conflicted) — the pre-review
+   * gate delivers its fix prompt via SessionManager.send/sendOrResume to that
+   * same session, so a fresh review job would just repeat the same silent
+   * delivery failure. Relaunch a coding fixer bound to the PR's existing branch
+   * instead.
+   */
+  private async reDriveViaFixerRelaunch(
+    pr: PullRequestRow,
+    kind: 'gate_failed' | 'conflict_dead_session',
+  ): Promise<boolean> {
+    const { pr_number: prNumber, repo } = pr;
+
+    if (!this.sessionManager) {
+      logger.warn(
+        `[StalledPRReconciler] sessionManager not set — cannot relaunch fixer for PR #${prNumber}`,
+      );
+      return false;
+    }
+
+    const newCount = incrementStalledPRRetryCount(prNumber, repo);
+    const project = getProjectByGithubRepo(repo);
+
+    logger.info(
+      `[StalledPRReconciler] PR #${prNumber} (${repo}): re-driving kind=${kind} via fixer relaunch (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP})`,
+    );
+
+    recordEvent({
+      event_type: 'stalled_pr_reconcile_attempt',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: project?.id ?? null,
+      task_id: pr.task_id ?? null,
+      payload: { pr_number: prNumber, repo, kind, attempt: newCount },
+    });
+
+    const prompt =
+      kind === 'conflict_dead_session'
+        ? formatMergeConflictFeedback({
+            branchName: pr.head_branch ?? `feature/pr-${prNumber}`,
+            baseBranch: pr.base_branch ?? 'dev',
+          })
+        : formatCIFailureFeedback({
+            source: 'verify',
+            failedCommand: parseGateFailureSummary(pr.review_result),
+            truncatedOutput: undefined,
+            conflicted: pr.merge_state === 'dirty',
+            baseBranch: pr.base_branch ?? 'dev',
+          });
+
+    await this.sessionManager.relaunchFixerForPR(pr, prompt);
+
+    return true;
+  }
+
   private escalate(
     prNumber: number,
     repo: string,
@@ -209,5 +285,17 @@ export class StalledPRReconciler {
       repo,
       kind,
     });
+  }
+}
+
+/** Extract the gate-failure summary persisted by PreReviewPipeline, if any. */
+function parseGateFailureSummary(
+  reviewResult: string | null,
+): string | undefined {
+  if (!reviewResult) return undefined;
+  try {
+    return (JSON.parse(reviewResult) as { summary?: string }).summary;
+  } catch {
+    return undefined;
   }
 }

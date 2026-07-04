@@ -159,7 +159,13 @@ export class AutoMerger {
       if (!pr?.session_id) continue;
 
       const session = getSession(pr.session_id);
-      if (!session || session.status !== 'idle') continue;
+      if (!session) continue;
+      const isDeadSession =
+        session.status === 'done' ||
+        session.status === 'error' ||
+        session.status === 'killed';
+      // Live sessions that aren't idle are legitimately busy — leave them alone.
+      if (session.status !== 'idle' && !isDeadSession) continue;
 
       let category;
       try {
@@ -173,6 +179,20 @@ export class AutoMerger {
 
       if (category.category !== 'conflict' && category.category !== 'blocked')
         continue;
+
+      if (isDeadSession) {
+        // The implementing session is dead — the live-session nudge path
+        // (sendOrResume) can't reach it. Relaunch a coding fixer bound to the
+        // PR's existing branch instead, with a rebase prompt.
+        if (!this.sessions) continue;
+        const prompt = formatMergeConflictFeedback({
+          branchName: pr.head_branch ?? `feature/pr-${pr.pr_number}`,
+          baseBranch: pr.base_branch ?? 'dev',
+        });
+        await this.sessions.relaunchFixerForPR(pr, prompt);
+        nudged++;
+        continue;
+      }
 
       const cause: ConflictNudgeCause =
         category.category === 'conflict' &&

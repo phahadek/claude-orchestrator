@@ -396,7 +396,8 @@ export type ServerMessage =
         | 'errored_review_session'
         | 'gate_failed'
         | 'analyze_failing'
-        | 'pre_review_interrupted';
+        | 'pre_review_interrupted'
+        | 'conflict_dead_session';
     };
 
 // ── Client → Server ──────────────────────────────────────────────

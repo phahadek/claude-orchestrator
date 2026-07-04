@@ -700,10 +700,12 @@ function makeSessionRow(overrides: Partial<Session> = {}): Session {
 function makeMockSessions(): {
   sendOrResume: ReturnType<typeof vi.fn>;
   endSession: ReturnType<typeof vi.fn>;
+  relaunchFixerForPR: ReturnType<typeof vi.fn>;
 } {
   return {
     sendOrResume: vi.fn().mockResolvedValue('coding-session-1'),
     endSession: vi.fn(),
+    relaunchFixerForPR: vi.fn().mockResolvedValue('coding-session-1'),
   };
 }
 
@@ -1914,7 +1916,7 @@ describe('AutoMerger.conflictNudgeSweep()', () => {
     expect(setConflictNudgeSha).not.toHaveBeenCalled();
   });
 
-  it('skips non-idle sessions (running, error, done)', async () => {
+  it('skips busy (running) sessions — neither nudged nor fixer-relaunched', async () => {
     const sessions = makeMockSessions();
     vi.mocked(getConflictNudgeCandidates).mockReturnValue([
       { pr_number: 42, repo: 'owner/repo' },
@@ -1941,10 +1943,53 @@ describe('AutoMerger.conflictNudgeSweep()', () => {
 
     await merger.conflictNudgeSweep();
 
-    // Session not idle — skip before API call
+    // Session not idle and not dead (still running) — skip before API call
     expect(github.categorizeMergeability).not.toHaveBeenCalled();
     expect(sessions.sendOrResume).not.toHaveBeenCalled();
+    expect(sessions.relaunchFixerForPR).not.toHaveBeenCalled();
   });
+
+  it.each(['error', 'done', 'killed'] as const)(
+    'routes a dead (%s) implementing session to relaunchFixerForPR with a rebase prompt',
+    async (status) => {
+      const sessions = makeMockSessions();
+      vi.mocked(getConflictNudgeCandidates).mockReturnValue([
+        { pr_number: 42, repo: 'owner/repo' },
+      ]);
+      const pr = makePRRow({
+        session_id: 'coding-session',
+        head_sha: 'sha-abc',
+        conflict_nudge_sha: null,
+        pause_reason: 'auto_merge_failed',
+      });
+      vi.mocked(getPRByNumber).mockReturnValue(pr);
+      vi.mocked(getSession).mockReturnValue(makeSessionRow({ status }));
+      const github = makeMockGitHub([]);
+      vi.mocked(github.categorizeMergeability).mockResolvedValue({
+        category: 'blocked',
+        mergeState: 'blocked',
+        rawMergeableState: 'blocked',
+        failingChecks: [],
+        headSha: 'sha-abc',
+      });
+      const watcher = makeMockWatcher();
+      const merger = new AutoMerger(
+        github,
+        watcher,
+        () => {},
+        sessions as unknown as import('../session/SessionManager').SessionManager,
+      );
+
+      await merger.conflictNudgeSweep();
+
+      expect(sessions.relaunchFixerForPR).toHaveBeenCalledWith(
+        pr,
+        expect.stringContaining('Rebase'),
+      );
+      // Dead sessions can't be reached via sendOrResume — must not double-deliver.
+      expect(sessions.sendOrResume).not.toHaveBeenCalled();
+    },
+  );
 
   it('sweep is idempotent across consecutive invocations', async () => {
     const sessions = makeMockSessions();
