@@ -965,6 +965,7 @@ export function upsertPullRequest(
     | 'pre_review_stage'
     | 'stalled_pr_retry_count'
     | 'session_initiated_close_at'
+    | 'reviewer_requested_at'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -1481,6 +1482,18 @@ export function setConflictNudgeSha(
   db.prepare(
     `UPDATE pull_requests SET conflict_nudge_sha = ? WHERE pr_number = ? AND repo = ?`,
   ).run(sha, prNumber, repo);
+}
+
+/**
+ * Set-once marker for corporate-mode reviewer auto-assignment: stamped after
+ * requestReviewers fires (success or failure) so the ~5s merge poll never
+ * re-requests reviewers for the same PR. COALESCE preserves the first-set
+ * timestamp on repeat calls.
+ */
+export function markReviewerRequested(prNumber: number, repo: string): void {
+  db.prepare<{ pr_number: number; repo: string; now: number }>(
+    `UPDATE pull_requests SET reviewer_requested_at = COALESCE(reviewer_requested_at, @now) WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo, now: Date.now() });
 }
 
 export function setPauseReason(
@@ -2456,6 +2469,24 @@ export function ackPendingComments(prNumber: number, repo: string): void {
   db.prepare<{ pr_number: number; repo: string }>(
     `UPDATE pr_review_comments_routed SET routed_state = 'acked' WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'pending'`,
   ).run({ pr_number: prNumber, repo });
+}
+
+/**
+ * Count routed comments still awaiting acknowledgement for a PR. Used as a
+ * quiescence check by AutoMerger's reviewer auto-assignment: reviewers are
+ * only requested once all routed feedback has been acked, so the human
+ * reviewer isn't pinged while the AI is still mid-conversation on a thread.
+ */
+export function getPendingRoutedCommentCount(
+  prNumber: number,
+  repo: string,
+): number {
+  const row = db
+    .prepare<{ pr_number: number; repo: string }>(
+      `SELECT COUNT(*) AS count FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'pending'`,
+    )
+    .get({ pr_number: prNumber, repo }) as { count: number };
+  return row.count;
 }
 
 // ─── devices ────────────────────────────────────────────────────────────────

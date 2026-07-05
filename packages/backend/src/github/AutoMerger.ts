@@ -21,6 +21,9 @@ import {
   deleteActiveMerge,
   getAllActiveMerges,
   markSessionDone,
+  getTaskCache,
+  getPendingRoutedCommentCount,
+  markReviewerRequested,
 } from '../db/queries';
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import { GitHubApiError, GitHubRateLimitError } from './types';
@@ -540,6 +543,7 @@ export class AutoMerger {
               return;
             }
             if (reviewDecision !== 'APPROVED') {
+              await this.maybeRequestReviewers(row);
               await this.pauseWithReason(row, 'awaiting_human_approval');
               return;
             }
@@ -772,6 +776,57 @@ export class AutoMerger {
     logger.info(
       `[AutoMerger] PR #${pr.pr_number}: billing/spending limit blocked — paused as ci_billing_blocked`,
     );
+  }
+
+  /**
+   * Corporate-mode reviewer auto-assignment: when a PR is genuinely ready for
+   * human eyes (CI-clean, AI-approved, no feedback still pending) and the
+   * task names reviewers, un-draft the PR and request them. Fires once per PR
+   * (reviewer_requested_at set-once marker) so the ~5s merge poll never
+   * re-requests. Never throws — a bad username must not retry-storm the poller.
+   */
+  private async maybeRequestReviewers(pr: PullRequestRow): Promise<void> {
+    if (pr.reviewer_requested_at !== null) return;
+
+    let verdict: string | undefined;
+    try {
+      verdict = pr.review_result
+        ? (JSON.parse(pr.review_result) as { verdict?: string }).verdict
+        : undefined;
+    } catch {
+      verdict = undefined;
+    }
+    if (verdict !== 'approved') return;
+    if (getPendingRoutedCommentCount(pr.pr_number, pr.repo) !== 0) return;
+
+    const reviewers = this.resolveReviewers(pr.task_id);
+    if (reviewers.length === 0) return;
+
+    try {
+      if (pr.draft === 1) {
+        await this.github.markPRReady(pr.repo, pr.pr_number);
+        updatePRDraftStatus(pr.pr_number, pr.repo, 0);
+      }
+      await this.github.requestReviewers(pr.repo, pr.pr_number, reviewers);
+    } catch (err) {
+      logger.warn(
+        `[AutoMerger] PR #${pr.pr_number}: requestReviewers failed: ${(err as Error).message}`,
+      );
+    }
+    markReviewerRequested(pr.pr_number, pr.repo);
+  }
+
+  /** Source-agnostic reviewer lookup: task_cache JSON carries reviewer regardless of task source. */
+  private resolveReviewers(taskId: string | null): string[] {
+    if (!taskId) return [];
+    const cacheRow = getTaskCache(taskId);
+    if (!cacheRow) return [];
+    try {
+      const task = JSON.parse(cacheRow.raw_json) as { reviewer?: string[] };
+      return Array.isArray(task.reviewer) ? task.reviewer : [];
+    } catch {
+      return [];
+    }
   }
 
   private async pauseWithReason(
