@@ -23,6 +23,7 @@ interface LocalTask {
   acceptance_criteria?: string;
   files_affected?: string[];
   notes?: string;
+  reviewer?: string[]; // GitHub usernames to auto-request for review (corporate mode)
 }
 
 interface LocalMilestone {
@@ -172,6 +173,7 @@ export class LocalTaskBackend implements TaskBackend {
       notionUrl: '',
       prUrl: t.pr_url ?? undefined,
       priority: t.priority,
+      reviewer: t.reviewer,
     };
   }
 

@@ -826,6 +826,19 @@ export class GitHubClient {
     }
   }
 
+  /** Request one or more reviewers on a pull request. */
+  async requestReviewers(
+    repo: string,
+    prNumber: number,
+    reviewers: string[],
+  ): Promise<void> {
+    await this.request(`/repos/${repo}/pulls/${prNumber}/requested_reviewers`, {
+      method: 'POST',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reviewers }),
+    });
+  }
+
   /** Apply a label to a pull request (issues endpoint works for PRs too). */
   async addLabelToPR(
     repo: string,

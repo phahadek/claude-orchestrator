@@ -339,6 +339,9 @@ export interface PullRequestRow {
    *  live-detected; cleared on reconcile (reopen) and on terminalize. Null means
    *  no session-initiated close/reopen churn is pending for this PR. */
   session_initiated_close_at: number | null;
+  /** Unix ms timestamp stamped once requestReviewers has been called for this
+   *  PR (corporate-mode reviewer auto-assignment); null means not yet fired. */
+  reviewer_requested_at: number | null;
 }
 
 // ─── task_repo_assignments ──────────────────────────────────────────────────

@@ -39,6 +39,9 @@ vi.mock('../db/queries.js', () => ({
   deleteActiveMerge: vi.fn(),
   getAllActiveMerges: vi.fn().mockReturnValue([]),
   setConflictNudgeSha: vi.fn(),
+  getTaskCache: vi.fn().mockReturnValue(undefined),
+  getPendingRoutedCommentCount: vi.fn().mockReturnValue(0),
+  markReviewerRequested: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -104,6 +107,9 @@ import {
   getStaleAutoMergeFailedPRs,
   getConflictNudgeCandidates,
   setConflictNudgeSha,
+  getTaskCache,
+  getPendingRoutedCommentCount,
+  markReviewerRequested,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { squashMergeLocal } from '../orchestration/localMergeRunner';
@@ -152,6 +158,7 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     failing_checks: null,
     pending_push: 0,
     pause_reason: null,
+    reviewer_requested_at: null,
     ...overrides,
   };
 }
@@ -189,6 +196,7 @@ function makeMockGitHub(
       .mockResolvedValue(makeMergeability('clean')),
     getReviewState: vi.fn().mockResolvedValue(reviewDecision ?? null),
     detectBillingBlock: vi.fn().mockResolvedValue({ blocked: false }),
+    requestReviewers: vi.fn().mockResolvedValue(undefined),
   } as unknown as GitHubClient;
 }
 
@@ -2041,5 +2049,214 @@ describe('AutoMerger.conflictNudgeSweep()', () => {
     // Second sweep: back to already-nudged default → dedup skips
     await merger.conflictNudgeSweep();
     expect(sessions.sendOrResume).toHaveBeenCalledTimes(1); // still only 1
+  });
+});
+
+// ── Corporate-mode reviewer auto-assignment ──────────────────────────────────
+
+describe('AutoMerger — corporate-mode reviewer auto-assignment', () => {
+  function makeReviewRequiredPoll(): Awaited<
+    ReturnType<GitHubClient['fetchPRStatusConditional']>
+  > {
+    return {
+      status: 'ok',
+      etag: 'W/"a"',
+      state: 'open',
+      mergeability: makeMergeability('clean'),
+      headSha: 'sha-abc',
+    };
+  }
+
+  function mockReviewerTaskCache(reviewer: string[] | undefined): void {
+    vi.mocked(getTaskCache).mockReturnValue(
+      reviewer === undefined
+        ? undefined
+        : {
+            task_id: 'notion:task-abc',
+            fetched_at: 0,
+            raw_json: JSON.stringify({ reviewer }),
+          },
+    );
+  }
+
+  it('un-drafts, requests reviewers once, stamps the marker, then pauses awaiting_human_approval', async () => {
+    vi.mocked(getCorporateMode).mockReturnValue(makeCorporateMode(true));
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow({ draft: 1 }));
+    mockReviewerTaskCache(['alice', 'bob']);
+    vi.mocked(getPendingRoutedCommentCount).mockReturnValue(0);
+
+    const github = makeMockGitHub(
+      [makeReviewRequiredPoll()],
+      'REVIEW_REQUIRED',
+    );
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.markPRReady).toHaveBeenCalledWith('owner/repo', 42);
+    expect(github.requestReviewers).toHaveBeenCalledTimes(1);
+    expect(github.requestReviewers).toHaveBeenCalledWith('owner/repo', 42, [
+      'alice',
+      'bob',
+    ]);
+    expect(markReviewerRequested).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'awaiting_human_approval',
+    );
+  });
+
+  it('does not call markPRReady when the PR is not a draft', async () => {
+    vi.mocked(getCorporateMode).mockReturnValue(makeCorporateMode(true));
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow({ draft: 0 }));
+    mockReviewerTaskCache(['alice']);
+    vi.mocked(getPendingRoutedCommentCount).mockReturnValue(0);
+
+    const github = makeMockGitHub(
+      [makeReviewRequiredPoll()],
+      'REVIEW_REQUIRED',
+    );
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.markPRReady).not.toHaveBeenCalled();
+    expect(github.requestReviewers).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-request reviewers once reviewer_requested_at is already stamped', async () => {
+    vi.mocked(getCorporateMode).mockReturnValue(makeCorporateMode(true));
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ reviewer_requested_at: 1_700_000_000_000 }),
+    );
+    mockReviewerTaskCache(['alice']);
+    vi.mocked(getPendingRoutedCommentCount).mockReturnValue(0);
+
+    const github = makeMockGitHub(
+      [makeReviewRequiredPoll()],
+      'REVIEW_REQUIRED',
+    );
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.requestReviewers).not.toHaveBeenCalled();
+    expect(markReviewerRequested).not.toHaveBeenCalled();
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'awaiting_human_approval',
+    );
+  });
+
+  it('no-ops (no call, marker left unset) when the task has no reviewer field', async () => {
+    vi.mocked(getCorporateMode).mockReturnValue(makeCorporateMode(true));
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    mockReviewerTaskCache(undefined);
+    vi.mocked(getPendingRoutedCommentCount).mockReturnValue(0);
+
+    const github = makeMockGitHub(
+      [makeReviewRequiredPoll()],
+      'REVIEW_REQUIRED',
+    );
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.requestReviewers).not.toHaveBeenCalled();
+    expect(markReviewerRequested).not.toHaveBeenCalled();
+  });
+
+  it('no-ops when the reviewer list is empty', async () => {
+    vi.mocked(getCorporateMode).mockReturnValue(makeCorporateMode(true));
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    mockReviewerTaskCache([]);
+    vi.mocked(getPendingRoutedCommentCount).mockReturnValue(0);
+
+    const github = makeMockGitHub(
+      [makeReviewRequiredPoll()],
+      'REVIEW_REQUIRED',
+    );
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.requestReviewers).not.toHaveBeenCalled();
+    expect(markReviewerRequested).not.toHaveBeenCalled();
+  });
+
+  it('no-ops when there are still pending routed comments (quiescence not reached)', async () => {
+    vi.mocked(getCorporateMode).mockReturnValue(makeCorporateMode(true));
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    mockReviewerTaskCache(['alice']);
+    vi.mocked(getPendingRoutedCommentCount).mockReturnValue(2);
+
+    const github = makeMockGitHub(
+      [makeReviewRequiredPoll()],
+      'REVIEW_REQUIRED',
+    );
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.requestReviewers).not.toHaveBeenCalled();
+    expect(markReviewerRequested).not.toHaveBeenCalled();
+  });
+
+  it('logs a warning, continues the merge loop, and stamps the marker when requestReviewers throws (simulated 422)', async () => {
+    vi.mocked(getCorporateMode).mockReturnValue(makeCorporateMode(true));
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    mockReviewerTaskCache(['not-a-collaborator']);
+    vi.mocked(getPendingRoutedCommentCount).mockReturnValue(0);
+
+    const github = makeMockGitHub(
+      [makeReviewRequiredPoll()],
+      'REVIEW_REQUIRED',
+    );
+    vi.mocked(github.requestReviewers).mockRejectedValueOnce(
+      new Error('422 Unprocessable Entity'),
+    );
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(markReviewerRequested).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'awaiting_human_approval',
+    );
+  });
+
+  it('is inert (no requestReviewers call) when requireHumanApproval is off', async () => {
+    vi.mocked(getCorporateMode).mockReturnValue(makeCorporateMode(false));
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    mockReviewerTaskCache(['alice']);
+    vi.mocked(getPendingRoutedCommentCount).mockReturnValue(0);
+
+    const github = makeMockGitHub([makeReviewRequiredPoll()], null);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.requestReviewers).not.toHaveBeenCalled();
+    expect(markReviewerRequested).not.toHaveBeenCalled();
   });
 });

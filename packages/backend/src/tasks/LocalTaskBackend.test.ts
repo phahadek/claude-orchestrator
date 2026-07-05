@@ -18,6 +18,7 @@ function writeTempTasksYaml(
     name: string;
     status: string;
     depends_on?: string[];
+    reviewer?: string[];
   }>,
 ): void {
   const content = yaml.dump({
@@ -106,5 +107,41 @@ describe('LocalTaskBackend.fetchReadyTasks — dependsOn prefixing', () => {
     };
     expect(cached.id).toBe('yaml:task-a');
     expect(cached.dependsOn).toEqual(['yaml:task-b']);
+  });
+});
+
+describe('LocalTaskBackend.fetchReadyTasks — reviewer field round-trip', () => {
+  it('round-trips reviewer: [alice, bob] into the per-task cache JSON', async () => {
+    writeTempTasksYaml(tmpDir, [
+      {
+        id: 'task-a',
+        name: 'Task A',
+        status: 'Ready',
+        reviewer: ['alice', 'bob'],
+      },
+    ]);
+
+    const backend = new LocalTaskBackend(tmpDir);
+    await backend.fetchReadyTasks('ms-1');
+
+    const perTaskCall = vi
+      .mocked(upsertTaskCache)
+      .mock.calls.find(([key]) => key === 'yaml:task-a');
+    expect(perTaskCall).toBeDefined();
+    const cached = JSON.parse(perTaskCall![1] as string) as {
+      reviewer?: string[];
+    };
+    expect(cached.reviewer).toEqual(['alice', 'bob']);
+  });
+
+  it('omits reviewer when not specified in tasks.yaml', async () => {
+    writeTempTasksYaml(tmpDir, [
+      { id: 'task-x', name: 'Task X', status: 'Ready' },
+    ]);
+
+    const backend = new LocalTaskBackend(tmpDir);
+    const result = await backend.fetchReadyTasks('ms-1');
+
+    expect(result[0].task.reviewer).toBeUndefined();
   });
 });
