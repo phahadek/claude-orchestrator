@@ -2085,7 +2085,10 @@ describe('AutoMerger — corporate-mode reviewer auto-assignment', () => {
     mockReviewerTaskCache(['alice', 'bob']);
     vi.mocked(getPendingRoutedCommentCount).mockReturnValue(0);
 
-    const github = makeMockGitHub([makeReviewRequiredPoll()], 'REVIEW_REQUIRED');
+    const github = makeMockGitHub(
+      [makeReviewRequiredPoll()],
+      'REVIEW_REQUIRED',
+    );
     const watcher = makeMockWatcher();
 
     const merger = new AutoMerger(github, watcher, () => {});
@@ -2094,11 +2097,10 @@ describe('AutoMerger — corporate-mode reviewer auto-assignment', () => {
 
     expect(github.markPRReady).toHaveBeenCalledWith('owner/repo', 42);
     expect(github.requestReviewers).toHaveBeenCalledTimes(1);
-    expect(github.requestReviewers).toHaveBeenCalledWith(
-      'owner/repo',
-      42,
-      ['alice', 'bob'],
-    );
+    expect(github.requestReviewers).toHaveBeenCalledWith('owner/repo', 42, [
+      'alice',
+      'bob',
+    ]);
     expect(markReviewerRequested).toHaveBeenCalledWith(42, 'owner/repo');
     expect(setPauseReason).toHaveBeenCalledWith(
       42,
@@ -2113,7 +2115,10 @@ describe('AutoMerger — corporate-mode reviewer auto-assignment', () => {
     mockReviewerTaskCache(['alice']);
     vi.mocked(getPendingRoutedCommentCount).mockReturnValue(0);
 
-    const github = makeMockGitHub([makeReviewRequiredPoll()], 'REVIEW_REQUIRED');
+    const github = makeMockGitHub(
+      [makeReviewRequiredPoll()],
+      'REVIEW_REQUIRED',
+    );
     const watcher = makeMockWatcher();
 
     const merger = new AutoMerger(github, watcher, () => {});
@@ -2132,7 +2137,10 @@ describe('AutoMerger — corporate-mode reviewer auto-assignment', () => {
     mockReviewerTaskCache(['alice']);
     vi.mocked(getPendingRoutedCommentCount).mockReturnValue(0);
 
-    const github = makeMockGitHub([makeReviewRequiredPoll()], 'REVIEW_REQUIRED');
+    const github = makeMockGitHub(
+      [makeReviewRequiredPoll()],
+      'REVIEW_REQUIRED',
+    );
     const watcher = makeMockWatcher();
 
     const merger = new AutoMerger(github, watcher, () => {});
@@ -2154,7 +2162,10 @@ describe('AutoMerger — corporate-mode reviewer auto-assignment', () => {
     mockReviewerTaskCache(undefined);
     vi.mocked(getPendingRoutedCommentCount).mockReturnValue(0);
 
-    const github = makeMockGitHub([makeReviewRequiredPoll()], 'REVIEW_REQUIRED');
+    const github = makeMockGitHub(
+      [makeReviewRequiredPoll()],
+      'REVIEW_REQUIRED',
+    );
     const watcher = makeMockWatcher();
 
     const merger = new AutoMerger(github, watcher, () => {});
@@ -2171,7 +2182,10 @@ describe('AutoMerger — corporate-mode reviewer auto-assignment', () => {
     mockReviewerTaskCache([]);
     vi.mocked(getPendingRoutedCommentCount).mockReturnValue(0);
 
-    const github = makeMockGitHub([makeReviewRequiredPoll()], 'REVIEW_REQUIRED');
+    const github = makeMockGitHub(
+      [makeReviewRequiredPoll()],
+      'REVIEW_REQUIRED',
+    );
     const watcher = makeMockWatcher();
 
     const merger = new AutoMerger(github, watcher, () => {});
@@ -2188,7 +2202,10 @@ describe('AutoMerger — corporate-mode reviewer auto-assignment', () => {
     mockReviewerTaskCache(['alice']);
     vi.mocked(getPendingRoutedCommentCount).mockReturnValue(2);
 
-    const github = makeMockGitHub([makeReviewRequiredPoll()], 'REVIEW_REQUIRED');
+    const github = makeMockGitHub(
+      [makeReviewRequiredPoll()],
+      'REVIEW_REQUIRED',
+    );
     const watcher = makeMockWatcher();
 
     const merger = new AutoMerger(github, watcher, () => {});
@@ -2205,7 +2222,10 @@ describe('AutoMerger — corporate-mode reviewer auto-assignment', () => {
     mockReviewerTaskCache(['not-a-collaborator']);
     vi.mocked(getPendingRoutedCommentCount).mockReturnValue(0);
 
-    const github = makeMockGitHub([makeReviewRequiredPoll()], 'REVIEW_REQUIRED');
+    const github = makeMockGitHub(
+      [makeReviewRequiredPoll()],
+      'REVIEW_REQUIRED',
+    );
     vi.mocked(github.requestReviewers).mockRejectedValueOnce(
       new Error('422 Unprocessable Entity'),
     );

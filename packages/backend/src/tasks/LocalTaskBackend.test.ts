@@ -113,7 +113,12 @@ describe('LocalTaskBackend.fetchReadyTasks — dependsOn prefixing', () => {
 describe('LocalTaskBackend.fetchReadyTasks — reviewer field round-trip', () => {
   it('round-trips reviewer: [alice, bob] into the per-task cache JSON', async () => {
     writeTempTasksYaml(tmpDir, [
-      { id: 'task-a', name: 'Task A', status: 'Ready', reviewer: ['alice', 'bob'] },
+      {
+        id: 'task-a',
+        name: 'Task A',
+        status: 'Ready',
+        reviewer: ['alice', 'bob'],
+      },
     ]);
 
     const backend = new LocalTaskBackend(tmpDir);

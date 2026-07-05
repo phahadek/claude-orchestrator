@@ -2482,9 +2482,10 @@ export function getPendingRoutedCommentCount(
   repo: string,
 ): number {
   const row = db
-    .prepare<{ pr_number: number; repo: string }>(
-      `SELECT COUNT(*) AS count FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'pending'`,
-    )
+    .prepare<{
+      pr_number: number;
+      repo: string;
+    }>(`SELECT COUNT(*) AS count FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'pending'`)
     .get({ pr_number: prNumber, repo }) as { count: number };
   return row.count;
 }
