@@ -461,6 +461,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       this.sessionType === 'review'
         ? runtimeSettings.review_session_model
         : runtimeSettings.code_session_model;
+    const effortSetting =
+      this.sessionType === 'review'
+        ? runtimeSettings.review_session_effort
+        : runtimeSettings.code_session_effort;
 
     // Per-iteration overrides set by tryEscalateForOverflow() (T3b).
     // Instance fields _escalationModel and _escalationDisableAutoCompact hold these
@@ -541,6 +545,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         {
           worktreePath: this.worktreePath,
           model: this._escalationModel ?? (modelSetting || undefined),
+          effort:
+            (this._escalationModel
+              ? runtimeSettings.large_task_effort
+              : effortSetting) || undefined,
           allowedTools: [...ALLOWED_TOOLS, ...this.extraAllowedTools],
           systemPrompt: this.systemPromptContent,
           mcpConfigPath: this.mcpConfigPath,

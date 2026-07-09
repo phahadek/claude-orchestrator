@@ -23,6 +23,8 @@ const SETTING_KEYS = [
   'card_preview_lines',
   'code_session_model',
   'review_session_model',
+  'code_session_effort',
+  'review_session_effort',
   'session_mode',
   'auto_launch_concurrency',
   'auto_launch_poll_interval_ms',
@@ -37,6 +39,7 @@ const SETTING_KEYS = [
   'auto_archive_grace_minutes',
   'auto_archive_sweep_interval_minutes',
   'large_task_model',
+  'large_task_effort',
 ] as const satisfies readonly SettingKey[];
 
 type RouteSettingKey = (typeof SETTING_KEYS)[number];
@@ -64,6 +67,12 @@ function applyToRuntime(
       break;
     case 'review_session_model':
       runtimeSettings.review_session_model = value as string;
+      break;
+    case 'code_session_effort':
+      runtimeSettings.code_session_effort = value as string;
+      break;
+    case 'review_session_effort':
+      runtimeSettings.review_session_effort = value as string;
       break;
     case 'session_mode':
       runtimeSettings.session_mode = value as 'cli' | 'api';
@@ -107,6 +116,9 @@ function applyToRuntime(
     case 'large_task_model':
       runtimeSettings.large_task_model = value as string;
       break;
+    case 'large_task_effort':
+      runtimeSettings.large_task_effort = value as string;
+      break;
   }
 }
 
@@ -127,6 +139,8 @@ function runtimeSettingsAsRecord(): Record<RouteSettingKey, string> {
     card_preview_lines: String(runtimeSettings.card_preview_lines),
     code_session_model: runtimeSettings.code_session_model,
     review_session_model: runtimeSettings.review_session_model,
+    code_session_effort: runtimeSettings.code_session_effort,
+    review_session_effort: runtimeSettings.review_session_effort,
     session_mode: runtimeSettings.session_mode,
     auto_launch_concurrency: String(runtimeSettings.auto_launch_concurrency),
     auto_launch_poll_interval_ms: String(
@@ -155,6 +169,7 @@ function runtimeSettingsAsRecord(): Record<RouteSettingKey, string> {
       runtimeSettings.auto_archive_sweep_interval_minutes,
     ),
     large_task_model: runtimeSettings.large_task_model,
+    large_task_effort: runtimeSettings.large_task_effort,
   };
 }
 

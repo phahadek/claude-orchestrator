@@ -5,6 +5,8 @@ export interface SettingsValues {
   card_preview_lines: string;
   code_session_model: string;
   review_session_model: string;
+  code_session_effort: string;
+  review_session_effort: string;
   session_mode: string;
   auto_launch_concurrency: string;
   auto_launch_poll_interval_ms: string;
@@ -18,6 +20,7 @@ export interface SettingsValues {
   auto_archive_grace_minutes: string;
   auto_archive_sweep_interval_minutes: string;
   large_task_model: string;
+  large_task_effort: string;
 }
 
 export const MIN_POLL_INTERVAL_MS = 5000;
@@ -25,8 +28,11 @@ export const MIN_POLL_INTERVAL_MS = 5000;
 const NON_NUMERIC_KEYS = new Set<keyof SettingsValues>([
   'code_session_model',
   'review_session_model',
+  'code_session_effort',
+  'review_session_effort',
   'session_mode',
   'large_task_model',
+  'large_task_effort',
   'auto_review',
   'auto_archive_enabled',
 ]);
