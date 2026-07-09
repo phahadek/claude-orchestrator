@@ -75,7 +75,8 @@ function resolveRepo(configDir) {
   if (explicit) return resolve(explicit);
   const projectsRoot = resolve(configDir, '..');
   const named = join(projectsRoot, 'claude-orchestrator');
-  if (existsSync(join(named, 'config-template', 'task-writing.md'))) return named;
+  if (existsSync(join(named, 'config-template', 'task-writing.md')))
+    return named;
   // Last resort: scan siblings for one that carries the upstream sources.
   return named; // best-effort; the caller validates existence and reports a clear error.
 }
@@ -105,13 +106,13 @@ function headSha() {
 // --- --record: bump baseline for the named docs (default all) to the current HEAD. ---
 if (doRecord) {
   const idx = process.argv.indexOf('--record');
-  const named = process.argv
-    .slice(idx + 1)
-    .filter((a) => !a.startsWith('--'));
+  const named = process.argv.slice(idx + 1).filter((a) => !a.startsWith('--'));
   const docs = named.length ? named : GUIDELINES;
   for (const d of docs) {
     if (!GUIDELINES.includes(d)) {
-      console.error(`! not a tracked guideline doc: ${d} (known: ${GUIDELINES.join(', ')})`);
+      console.error(
+        `! not a tracked guideline doc: ${d} (known: ${GUIDELINES.join(', ')})`,
+      );
       process.exit(1);
     }
   }
@@ -153,7 +154,15 @@ for (const doc of GUIDELINES) {
     delta = git(['diff', `${base}..${head}`, '--', `config-template/${doc}`]);
     status = delta.trim() ? 'has-upstream-changes' : 'up-to-date';
   }
-  plan.push({ doc, status, base: base || null, head, upstreamPath, livePath, delta });
+  plan.push({
+    doc,
+    status,
+    base: base || null,
+    head,
+    upstreamPath,
+    livePath,
+    delta,
+  });
 }
 
 if (wantJson) {
@@ -165,7 +174,9 @@ if (wantJson) {
 console.log(`sync-guidelines plan`);
 console.log(`  upstream repo : ${repo}`);
 console.log(`  config tree   : ${configDir}`);
-console.log(`  baseline file : ${baselinePath}${existsSync(baselinePath) ? '' : '  (absent — first run)'}`);
+console.log(
+  `  baseline file : ${baselinePath}${existsSync(baselinePath) ? '' : '  (absent — first run)'}`,
+);
 console.log(`  repo HEAD     : ${head.slice(0, 10)}\n`);
 
 for (const p of plan) {
@@ -176,11 +187,17 @@ for (const p of plan) {
   if (p.status === 'up-to-date') {
     console.log(`     nothing to integrate.\n`);
   } else if (p.status === 'missing-live') {
-    console.log(`     live copy absent — first deploy: copy upstream, then add local content, then --record.\n`);
+    console.log(
+      `     live copy absent — first deploy: copy upstream, then add local content, then --record.\n`,
+    );
   } else if (p.status === 'no-baseline') {
-    console.log(`     no baseline — FULL reconcile: diff upstream vs live by hand, integrate, then --record.\n`);
+    console.log(
+      `     no baseline — FULL reconcile: diff upstream vs live by hand, integrate, then --record.\n`,
+    );
   } else {
-    console.log(`     UPSTREAM DELTA since baseline (integrate this into the live doc, preserving local content):`);
+    console.log(
+      `     UPSTREAM DELTA since baseline (integrate this into the live doc, preserving local content):`,
+    );
     console.log(
       p.delta
         .split('\n')
@@ -198,5 +215,7 @@ if (!actionable.length) {
   console.log(
     `${actionable.length} doc(s) need integration: ${actionable.map((p) => p.doc).join(', ')}.`,
   );
-  console.log('After integrating + human confirmation, run:  node sync-guidelines-load.mjs --record');
+  console.log(
+    'After integrating + human confirmation, run:  node sync-guidelines-load.mjs --record',
+  );
 }

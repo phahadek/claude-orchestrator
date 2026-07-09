@@ -533,9 +533,7 @@ export function TaskList({
           >
             <div className={styles.sectionHeading}>
               <span className={styles.groupLabel}>📋 Non-code</span>
-              <span className={styles.groupCount}>
-                {nonCodeNotDone.length}
-              </span>
+              <span className={styles.groupCount}>{nonCodeNotDone.length}</span>
             </div>
             <NonCodeTypeSection
               tasks={nonCodeNotDone}

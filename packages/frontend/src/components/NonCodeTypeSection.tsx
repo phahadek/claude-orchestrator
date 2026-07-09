@@ -75,7 +75,10 @@ export function NonCodeTypeSection({ tasks, onSelectTask }: Props) {
 
         const counts = new Map<DisplayStatus, number>();
         for (const task of typeTasks) {
-          counts.set(task.displayStatus, (counts.get(task.displayStatus) ?? 0) + 1);
+          counts.set(
+            task.displayStatus,
+            (counts.get(task.displayStatus) ?? 0) + 1,
+          );
         }
 
         return (
@@ -100,13 +103,13 @@ export function NonCodeTypeSection({ tasks, onSelectTask }: Props) {
                 className={styles.statusBreakdown}
                 data-testid={`type-card-breakdown-${slug}`}
               >
-                {STATUS_BREAKDOWN_ORDER.filter((status) => counts.get(status)).map(
-                  (status) => (
-                    <span key={status} className={styles.statusBadge}>
-                      {STATUS_EMOJI[status]} {counts.get(status)}
-                    </span>
-                  ),
-                )}
+                {STATUS_BREAKDOWN_ORDER.filter((status) =>
+                  counts.get(status),
+                ).map((status) => (
+                  <span key={status} className={styles.statusBadge}>
+                    {STATUS_EMOJI[status]} {counts.get(status)}
+                  </span>
+                ))}
               </span>
             </div>
 

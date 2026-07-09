@@ -143,7 +143,7 @@ The `/groom` (Backlog Grooming) and `/design` (Design Execution) Claude Code ski
 source-controlled here and deployed to `~/.claude` by a run-by-hand script:
 
 - **Vendored artifacts:** `scripts/{groom-load,design-load,groom-gate,ops-load,ops-journal-set,
-  check-task-status,sync-guidelines-load,notion-page}.mjs`,
+check-task-status,sync-guidelines-load,notion-page}.mjs`,
   `skills/{groom,design,ops,deploy,wrap,sync-guidelines}/**`, and `config-template/**` (the
   Remote Control bootstrap — see below).
 - **Deploy — two tracks:**
@@ -153,7 +153,7 @@ source-controlled here and deployed to `~/.claude` by a run-by-hand script:
     `config-template/hooks/load-procedures.mjs` into the central config tree (overwritten each
     run — pure mechanism).
   - **Guideline docs (`/sync-guidelines` skill).** `config-template/{task-writing,procedures}.md`
-    are **not** copied by the deploy script — they are the *upstream* guideline sources, and the
+    are **not** copied by the deploy script — they are the _upstream_ guideline sources, and the
     live copies carry host/project content (the filled Project index; project examples) that must
     be preserved. Deploying an update to them is a Claude-led three-way merge via `/sync-guidelines`
     (diffs the upstream delta since the recorded baseline, weaves it into the live doc, confirm-gated).
@@ -196,12 +196,12 @@ into the config tree via the `/sync-guidelines` skill, not the deploy script (se
 `config-template/README.md`). You then register the hook once and launch the server. On a fresh
 host, run `/sync-guidelines` once to seed the guideline docs and record the baseline.
 
-* **Launch (durable, multi-session):**
+- **Launch (durable, multi-session):**
   `claude --permission-mode acceptEdits remote-control`, run from the **projects root**. Note
   the `remote-control` _subcommand_ does **not** accept `--settings` — context delivery is via
   the hook below, not a settings file. (The single-session `--remote-control` _flag_ does take
   `--settings`, but that's not the durable server.)
-* **One-time hook registration (manual):** add a `SessionStart` hook in `~/.claude/settings.json`
+- **One-time hook registration (manual):** add a `SessionStart` hook in `~/.claude/settings.json`
   pointing at the deployed hook (absolute path to your config tree). It self-gates on cwd —
   it injects only at the projects root, so orchestrator-launched worktree sessions never
   inherit it:
@@ -224,7 +224,7 @@ host, run `/sync-guidelines` once to seed the guideline docs and record the base
   }
   ```
 
-* **Non-dev layouts:** if the config tree is not the parent of the projects root, set
+- **Non-dev layouts:** if the config tree is not the parent of the projects root, set
   `ORCHESTRATOR_CONFIG_DIR` (deploy + loaders) and `ORCHESTRATOR_PROJECTS_ROOT` (the hook's cwd
   gate). The systemd unit shipped in the config tree sets both.
 

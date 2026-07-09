@@ -700,9 +700,7 @@ describe('TaskList', () => {
     ).toBeNull();
 
     const nonCodeSection = screen.getByTestId('non-code-section');
-    expect(
-      within(nonCodeSection).queryByText('Backlog Code Task'),
-    ).toBeNull();
+    expect(within(nonCodeSection).queryByText('Backlog Code Task')).toBeNull();
     fireEvent.click(
       within(nonCodeSection).getByTestId('type-card-header-design'),
     );

@@ -34,7 +34,11 @@ if (toolName.endsWith('notion-create-pages')) {
   const pages = Array.isArray(args?.pages) ? args.pages : [];
   for (const p of pages) {
     const status = p?.properties?.Status;
-    if (typeof status === 'string' && status.trim() !== '' && status !== BACKLOG) {
+    if (
+      typeof status === 'string' &&
+      status.trim() !== '' &&
+      status !== BACKLOG
+    ) {
       const name =
         p?.properties?.['Task Name'] ?? p?.properties?.title ?? '<untitled>';
       console.error(
