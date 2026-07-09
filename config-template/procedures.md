@@ -66,6 +66,18 @@ a project `CLAUDE.md` only if one exists.
 
 ---
 
+## Repeated / duplicate command invocations
+
+A remote-control session may receive the **same slash-command twice** — e.g. a second
+`/design` arrives after batch 1 was already sent. This is a transport-level artifact of how
+`claude remote-control` forwards input, **not** a new request. **A duplicate invocation of a
+command already running this session is a no-op:** do not restart it, re-run its loader, or
+re-present work already shown — acknowledge that it's already in progress and continue from the
+current state. Treat a repeated invocation as real **only** if its arguments differ (e.g. a
+different milestone) or the prior run has already finished.
+
+---
+
 ## Rules
 
 |                                         |                                                                                                                                                                                                                                                                                   |
@@ -92,6 +104,56 @@ drift is your responsibility.
 > `git -C <path>` is acceptable **only** when `<path>` is your own worktree. Never point
 > `git -C` at the main checkout or another repo. In a normal session you are already in
 > the worktree, so just run `git ...` directly.
+
+---
+
+## Shell hygiene — all sessions (incl. interactive / Remote Control)
+
+The Bash formatting rules under § Tool permissions are written for orchestrator-launched
+sessions, but their **git/shell discipline applies to *every* session**, including this
+interactive Remote Control one. Interactive sessions still hit approval prompts and the
+built-in git-hook-safety guard when they ignore it.
+
+- **Never chain `cd <path> && git …`.** The `cd`-before-`git` shape trips a built-in safety
+  prompt ("changes directory before running git, which can execute untrusted hooks from the
+  target directory") **even when `Bash(cd:*)` is allow-listed** — allow-listing cannot
+  suppress it. Use **`git -C <path> …`** instead (read-only inspection of any repo is fine;
+  the managed-repo *write* prohibitions above still hold).
+- **One command per Bash call.** Don't chain with `&&` / `;` — the permission matcher keys on
+  the first token, so the rest of a chained command can silently fail to match and prompt.
+- **Avoid pipes with write commands**, and don't write files via shell redirects — use the
+  `Read`/`Write`/`Edit` tools. Pipes are fine for read-only inspection.
+
+> Rationale: most recurring approval prompts in interactive sessions are self-inflicted by
+> `cd … && git … | …` one-liners. `git -C` + one-command-per-call removes them.
+
+---
+
+## Asking the human — plain text only, never the AskUserQuestion tool
+
+The **`AskUserQuestion` tool is disabled** in this environment (a PreToolUse hook denies
+every call). **Do not reach for it** — not to scope a task, not to offer options, not to
+confirm before a risky step. A blocked call is a wasted round-trip, not a fallback.
+
+When you need the human to decide something, **ask in plain prose in your normal reply**:
+state the decision, lay out the options (letter or bullet them if there are several), give
+a recommendation, and let the human answer however they like. This applies to **every**
+session type, including the structured skills (`/groom`, `/design`, etc.) whose own
+instructions may still mention presenting choices — present them as text.
+
+---
+
+## Don't propose wrapping, pausing, or "a good stopping point"
+
+**Never proactively suggest ending, pausing, or wrapping the session** — no *"want me to wrap
+up?"*, *"this is a good stopping point"*, *"should we stop here?"*, *"let's stop here"*, or any
+variant. It is unhelpful meta-commentary: the human decides when to stop, and will say so (or run
+`/wrap`) when they want to.
+
+When you finish a piece of work, **just report what you did and stop** — plainly, without an
+exit-poll or an editorial about whether now is a good time to pause. If genuine next steps exist,
+name them as options to pick up; do **not** frame them as a reason to end. Don't ask permission to
+stop, don't announce a stopping point, and don't suggest `/wrap` — wait for the human to raise it.
 
 ---
 
@@ -148,7 +210,7 @@ call to make, never yours to initiate. **Do not even propose** doing any of the 
 | `🔄 In Progress` | Actively being worked. |
 | `👀 In Review` | PR open (Code) / changes proposed (Design), awaiting the human. |
 | `✅ Done` | Merged + verified (Code) / pages locked (Design). |
-| `⏭️ Deferred` | Scope superseded by another task. Treated like Done by `/groom` + `/design`. |
+| `⏭️ Deferred` | Scope superseded by another task. Treated like Done **only as a `/groom` + `/design` target** (they skip it). **Not** for auto-dispatch: a ⏭️ Deferred task in another task's `Depends On` **blocks** it — only ✅ Done satisfies a dependency (see § Task types). |
 | `🚫 Blocked` | Rare. Set by the **orchestrator** when a task can't be implemented as-is; the blocker is documented in Notes. Not a grooming target — which is why the machine `status_vocab` in `grooming.json` omits it (grooming and auto-dispatch never set it). |
 
 ---
@@ -242,6 +304,21 @@ Use the task-source MCP only for what the scripts don't cover:
 - update a page's properties/content;
 - create pages.
 
+> **Editing page bodies via MCP.** When the task-source MCP does targeted search/replace on
+> a page body, the match string must be the task source's **own serialization**, which can
+> differ from a markdown export (bare domains may be auto-linkified, inline code keeps its
+> backticks, and table rows may not match on their pipe-text). Anchor edits on plain prose or
+> a heading (stable), not table rows; when a match fails, re-fetch the page and copy the exact
+> serialized text. Prefer a targeted search/replace over a whole-body replace for small edits.
+
+> **Don't put a literal shell-command line in a page body written via MCP.** A body containing
+> an executable command line (e.g. `<interpreter> -m <pkg> <sub> --flag value`) can be blocked
+> by an upstream WAF as a command-injection pattern — the create/update call then fails with an
+> opaque HTML error rather than a validation error. Describe the CLI prosaically instead (module
+> path + subcommand in backticks). Raw SQL, DDL, and code snippets are fine — it is specifically
+> the bare command-line shape that trips it; phrase any command prosaically, backticking the
+> verb/unit tokens rather than writing a full command line.
+
 The task-source API key (e.g. `NOTION_API_KEY`) lives in the dashboard backend `.env`. The
 same key works across this user's projects — pass it via `--env` (path recorded in each
 project's `grooming.json` / `context.md`).
@@ -258,6 +335,10 @@ node ~/.claude/scripts/notion-move-tasks.mjs --target <db-id> --tasks <id1,id2> 
 > Text** field holding pipe-delimited page IDs (`id1|id2|id3`). To update deps, write the
 > full pipe-delimited string. Never use a relation for `Depends On` — the MCP cannot
 > write multi-value relations.
+
+> **Archiving a page.** The MCP may not be able to archive/delete a page. When it can't,
+> archive via the task-source REST API directly (a `PATCH` setting `archived: true`), using
+> the same API key from the backend `.env`.
 
 ---
 
@@ -330,10 +411,11 @@ authoritatively.
 
 | Type                            | Brought to Ready by                    | Who executes it once Ready                                                                                                                                                                                                     |
 | ------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 💻 **Code**                     | `/groom`                               | **The orchestrator auto-dispatches it** — unattended, in a fresh worktree — the moment it is 🗂️ Ready with **no unsatisfied dependency** (every `Depends On` task is ✅ Done / 🗂️ Ready / ⏭️ Deferred). No human kicks it off. |
+| 💻 **Code**                     | `/groom`                               | **The orchestrator auto-dispatches it** — unattended, in a fresh worktree — the moment it is 🗂️ Ready with **no unsatisfied dependency** (every `Depends On` task is ✅ Done — **only ✅ Done satisfies a dependency; 🗂️ Ready *and* ⏭️ Deferred both block**). No human kicks it off. |
 | 📐 **Design** / 📋 **Planning** | already Ready/In-Progress, or `/groom` | **`/design`, interactively.** The orchestrator does **not** auto-dispatch these — they wait for a human to run a Design Execution session.                                                                                     |
-| 🛠️ **Tooling** / 🧪 **Testing** | `/groom`                               | **A session, interactively** (a human runs it). Not auto-dispatched. May or may not end in a PR.                                                                                                                               |
-| 🚦 **Gate** | `/groom` (kept at Ready) | The milestone's **Manual Verification Gate** — a human runs it once, at the end of the milestone. Never auto-dispatched. Unlike ordinary tasks it **accretes**: `/groom` appends each code task's stripped manual-verification items to it while it rests at 🗂️ Ready (the Gate type's defined behavior, not a modify-a-Ready-task exception). |
+| 🔧 **Operational** / 🔎 **Investigation** | `/groom`                     | **The `/ops` skill, interactively.** These two Types replace the retired 🛠️ Tooling. Not auto-dispatched. Operational *changes* prod/environment state through a sanctioned surface; Investigation *diagnoses* from live data and files follow-on tasks. An **autonomous** ops run only **stages** (records provisional findings / staged proposals to a local journal, never verdicts, never ✅ Done); a human **interactive** run resolves. May or may not end in a change/PR. **Config-seed accretion:** a milestone's one **🔧 config-seed** Operational task is the operational twin of the 🚦 Gate — `/groom` accretes each 💻 Code task's prod-data/config seed (deliberately kept out of the auto-dispatched PR: config rows, config defaults, alias/lookup flags) to it, recorded as a `seed_contribution` artifact; it runs at milestone end via audited CRUD (reconcile + capture, incl. the config-hot-reload check). Schema/DDL still ships as a migration in the Code task's PR — only data/config seeds accrete. See `task-writing.md` § Milestone config-seed. |
+| 🧪 **Testing** | `/groom`                                                | **Observational / E2E Testing → the `/ops` skill**, folded in as an 🔎 Investigation variant (run the system live → a **disposition**: `pass` / `blocked-pending-fix` / `pass-with-caveat`, no "fail"). **Test-authoring** Testing (writing test code, no impl-time data dependency) is really 💻 **Code** — reclassify it. Not auto-dispatched. |
+| 🚦 **Gate** | `/groom` (kept at Ready)                                   | The milestone's **Manual Verification Gate** — a human runs it once, at the end of the milestone. Never auto-dispatched. Unlike ordinary tasks it **accretes**: `/groom` appends each code task's stripped manual-verification items to it while it rests at 🗂️ Ready (the Gate type's defined behavior, not a modify-a-Ready-task exception). **This accretion is mandatory before each 💻 Code task goes Ready** — recorded as a `gate_contribution` artifact in `grooming-state.json` (see `task-writing.md` § Manual Verification Gate). 🔧 Operational / 🔎 Investigation tasks **do not accrete** (they self-verify in-session). Stripping a code task's manual items from its body without accreting them to the gate is a silent coverage leak. |
 | 📝 **Docs** / 🎨 **Assets**     | `/groom`                               | Interactively. Not auto-dispatched.                                                                                                                                                                                            |
 
 Two consequences every session must internalize:
@@ -342,13 +424,61 @@ Two consequences every session must internalize:
   the work unattended. A wrong `Depends On` or an unresolved open question becomes a
   broken worktree session, not a review comment. This is why `/groom` gates the Ready
   flip so hard (sign-off + classified hard-block deps + size check).
-- **A 🛠️ Tooling / 🧪 Testing task must not smuggle dispatchable code.** If part of the
-  task is "write module/script X" with **no dependency on data only available at
+- **Sequencing is safe; parallel-launching *conflicting* tasks is the danger — the
+  dependency asymmetry runs opposite to intuition.** Over-declaring a hard-block costs at
+  most a short wait (mark the blocker ✅ Done and the task dispatches — fully reversible).
+  ***Under*-declaring** lets two tasks that touch the same code / migration number / prod
+  state auto-dispatch into parallel worktrees that **race** each other: merge conflicts,
+  migration-number collisions, broken worktrees, wasted unattended work — hard to unwind.
+  So when unsure whether B must wait for A, **hard-block it**. "Unsure" is a vote to
+  *sequence*, **never** to soft-order — which persists nothing on the task and enforces
+  nothing (it lives only in the grooming chat). Soft-order is legitimate only for a genuine
+  preference where B is provably correct **and** conflict-free without A. *(Not licence to
+  chain **independent** tasks — parallelism of non-interacting tasks is good; the flip
+  applies only where a conflict or prerequisite is possible.)*
+- **A 🔧 Operational / 🔎 Investigation task must not smuggle dispatchable code.** If part of
+  the task is "write module/script X" with **no dependency on data only available at
   implementation time**, that part is a 💻 **Code** task — **excise it into a separate
-  Code task** so it flows through the normal auto-dispatch path. Keep the Tooling/Testing
-  task scoped to the interactive, judgment-bound remainder (running it, wiring it,
-  observing results). The same rule applies when `/design` or `/groom` files a follow-on:
-  pure code-generation → Code type; interactive/observational → Tooling/Testing.
+  Code task** so it flows through the normal auto-dispatch path. Keep the Operational /
+  Investigation task scoped to the interactive, judgment-bound remainder (authoring the
+  change, running it, wiring it, observing results, reaching the decision). An
+  **Investigation legitimately *produces* Code tasks** as its output — that is **not**
+  smuggling; smuggling is bundling the *doing* of the code into the task's own acceptance
+  criteria. The same rule applies when `/design` or `/groom` files a follow-on: pure
+  code-generation → Code type; a prod/env change → Operational; a live-data decision →
+  Investigation.
+
+---
+
+## Deployment — the `/deploy` playbook contract
+
+Production deploys run through the **`/deploy` skill**, which executes a project's deploy
+**strictly from a structured, ordered playbook** — confirm-gated, never improvised. For
+`/deploy` to run a project, that project must expose a playbook with these five parts. The
+exact step commands may live in the repo (e.g. a README "Deploy" section) with the project's
+`context.md` pointing to it; `context.md` owns the environment specifics (host, runtime user,
+access) the repo doc deliberately leaves out.
+
+1. **Preconditions** — what must hold before deploying (merged to `dev` + CI green, clean
+   tree, correct host + runtime user, access/keys, the exact `<sha>`).
+2. **Ordered steps** — numbered, each with the exact command, what it does, and whether it is
+   **conditional** (e.g. "only if the frontend changed"). Nothing implicit — the explicit
+   sequence is what guarantees nothing gets skipped.
+3. **Verification** — the checks that confirm success (health endpoint, unit/service state).
+4. **Rollback / failure handling** — what to do when a step fails, including any "do *not*
+   roll back, do X instead" cases.
+5. **Hazards** — the "never do X" constraints (e.g. never run a package manager as root
+   against a system-owned install path).
+6. **Companion deploys** *(optional)* — separately-deployed components (another host, venv, or
+   process) that are **not** part of this deploy, each declared with the source **path(s)**
+   whose change makes redeploying that component advisable. `/deploy` diffs the
+   currently-deployed SHA → the target `<sha>` and, for any companion whose path(s) appear in
+   that diff, **flags the operator** that the companion likely needs its own separate deploy.
+   Advisory only — `/deploy` never touches the companion and does not check its live status.
+
+If a project has no such structured playbook, `/deploy` **stops** and says so — it does not
+improvise deploy steps. (Deploy runs the project's own documented entrypoint, which is
+in-scope; it is not a licence to touch any other session's git/worktree/PR — see § Hard rule.)
 
 ---
 
