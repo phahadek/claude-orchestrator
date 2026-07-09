@@ -83,6 +83,21 @@ groomer either records the accreted items (`{ "gate_task_id": "…", "items": [�
 "appended_at": "…" }`) or explicitly records `{ "decision": "none" }` to confirm the
 task has no standalone runtime item.
 
+**Leaving a task's operational seed in an inline note but never accreting it to the
+config-seed task (the "seeded-then-dropped" pattern).** The operational twin of
+stripped-then-dropped. A Code/Tooling task frequently ships pure dispatchable code plus a
+prod-data/config seed (an `analyzer_configs` row, config defaults, alias/cohort flags)
+that is _correctly_ kept out of the auto-dispatched PR. Left as a free-floating "applied
+operationally on prod" note, that seed is owned by no one: after merge the code sits dark
+until someone hand-seeds it (the "Done ≠ deployed ≠ seeded ≠ working" / silent-0 class).
+The seed must **land on the milestone config-seed task** during grooming (Step 4 — Seed
+accretion), with a back-reference on the source task. Observed grooming M13 (~17 scattered
+inline seed notes, fixed by hand). The promotion hook now blocks this: `seed_contribution:
+null` on a Code/Tooling task prevents the Ready-flip until the groomer either records the
+accreted seeds (`{ "seed_task_id": "…", "seeds": […], "appended_at": "…" }` — the array
+field is `seeds`, **not** the gate's `items`) or explicitly records `{ "decision": "none" }`
+to confirm the task has no operational seed.
+
 **Promoting oversized Code/Tooling tasks without splitting.** The temptation is
 to wave a 1,200-LoC task through because it _"feels coherent"_ — but a Code task
 that big is one no one can review, and the implementation session that picks it

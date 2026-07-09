@@ -3,11 +3,13 @@
 //
 // Part of the user-global grooming system (groom-load.mjs + skills/groom/ +
 // this). Blocks promoting a grooming-tracked task to its Ready status via
-// notion-update-page unless three artifacts are recorded for it in
+// notion-update-page unless the required artifacts are recorded for it in
 // .skill-cache/grooming/<milestone>/grooming-state.json: a human signoff,
-// a hard_block_deps array, and a size_check classification. The loader
-// seeds the file, the skill fills the three fields, this gate checks
-// them — so a task cannot reach Ready without all three. (Old path
+// a hard_block_deps array, a size_check classification, repo_assignment
+// (multi-repo tasks), and — for 💻 Code / 🛠️ Tooling tasks — a gate_contribution
+// (manual-verification accretion) and a seed_contribution (config-seed accretion).
+// The loader seeds the file, the skill fills the fields, this gate checks
+// them — so a task cannot reach Ready without all of them. (Old path
 // .claude/grooming/<milestone>/grooming-state.json is read as a fallback
 // for pre-migration caches; see findStateEntry.)
 //
@@ -101,12 +103,27 @@ const gateRecorded =
         Array.isArray(gc.items) &&
         typeof gc.appended_at === 'string')));
 
+// seed_contribution: required for 💻 Code / 🛠️ Tooling tasks; exempt for others — the
+// operational twin of gate_contribution. Landmine: the array field is `seeds`, NOT the
+// gate's `items`. Absent entry.type → fail-open (allow), like gate_contribution.
+const needsSeed = entry.type === '💻 Code' || entry.type === '🛠️ Tooling';
+const sd = entry.seed_contribution;
+const seedRecorded =
+  !needsSeed ||
+  (sd &&
+    typeof sd === 'object' &&
+    (sd.decision === 'none' ||
+      (typeof sd.seed_task_id === 'string' &&
+        Array.isArray(sd.seeds) &&
+        typeof sd.appended_at === 'string')));
+
 if (
   signedOff &&
   depsClassified &&
   sizeClassified &&
   repoAssigned &&
-  gateRecorded
+  gateRecorded &&
+  seedRecorded
 )
   process.exit(0); // fully gated → allow
 
@@ -139,6 +156,17 @@ if (!gateRecorded) {
       `grooming-state.json before promotion (or {"decision":"none"} if the task has no standalone ` +
       `runtime item). The gate task id is in context-bundle.json as milestone_gate_task_id. ` +
       `See the /groom skill's Step 4`,
+  );
+}
+if (!seedRecorded) {
+  reasons.push(
+    `seed_contribution is not recorded — for 💻 Code and 🛠️ Tooling tasks, the groomer must ` +
+      `append the task's operational data/config seed (deliberately kept out of its PR) to the ` +
+      `milestone config-seed task, then write seed_contribution: ` +
+      `{"seed_task_id":"<id>","seeds":[...],"appended_at":"<iso>"} to grooming-state.json before ` +
+      `promotion (or {"decision":"none"} if the task has no operational seed). Note the field is ` +
+      `"seeds", not the gate's "items". The config-seed task id is in context-bundle.json as ` +
+      `milestone_seed_task_id. See the /groom skill's Step 4`,
   );
 }
 

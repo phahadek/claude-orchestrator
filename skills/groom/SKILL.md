@@ -186,11 +186,12 @@ Only after explicit sign-off on the batch (_"looks good"_, _"ship it"_, _"next"_
 <number>, "decision": "unsplittable", "reason": "<one-line>" }` for the atomic
    case, or `{ "decision": "n/a" }` for Design/Planning tasks), fill
    `gate_contribution` for 💻 Code / 🛠️ Tooling tasks (see _Gate accretion_ below;
-   write `{ "decision": "n/a" }` for exempt types), and set
-   `signoff: { "by": "<human>", "at": "<iso>" }`. _(All four — `signoff`,
-   `hard_block_deps`, `size_check`, and `gate_contribution` — are gated by the
-   promotion hook. They must be written **before** the status flip, or the gate
-   blocks the update.)_
+   write `{ "decision": "n/a" }` for exempt types), fill `seed_contribution` the same
+   way for 💻 Code / 🛠️ Tooling tasks (see _Seed accretion_ below; `{ "decision": "n/a" }`
+   for exempt types), and set `signoff: { "by": "<human>", "at": "<iso>" }`. _(All five
+   — `signoff`, `hard_block_deps`, `size_check`, `gate_contribution`, and
+   `seed_contribution` — are gated by the promotion hook. They must be written **before**
+   the status flip, or the gate blocks the update.)_
 
 **Gate accretion (💻 Code / 🛠️ Tooling tasks):** Before writing `gate_contribution`
 and flipping to Ready, append the task's stripped runtime/launch-and-observe items to
@@ -205,6 +206,22 @@ task. Then write to `grooming-state.json`:
 
 Confirm the accretion in chat before the Ready-flip. If the milestone has no Gate task
 yet (`milestone_gate_task_id: null` in context-bundle.json), surface it — do not
+silently skip accretion.
+
+**Seed accretion (💻 Code / 🛠️ Tooling tasks):** The operational twin of Gate accretion.
+Before writing `seed_contribution` and flipping to Ready, append the task's operational
+data/config seed — a prod-data row/flag/default deliberately kept **out** of its
+auto-dispatched PR (e.g. an `analyzer_configs` row, config-category defaults, alias/cohort
+flags) — to the milestone **config-seed** task body, and add the one-line back-reference on
+the source task. The config-seed task id is in `context-bundle.json` as
+`milestone_seed_task_id`. Append the seed(s) under a `#### <source-task-title>` heading,
+grouped by source task. Then write to `grooming-state.json`:
+
+- Seeds accreted: `{ "seed_task_id": "<id>", "seeds": ["<seed 1>", "…"], "appended_at": "<iso>" }` _(the array field is `seeds`, **not** the gate's `items`)_
+- No operational seed: `{ "decision": "none" }`
+
+Confirm the accretion in chat before the Ready-flip. If the milestone has no config-seed
+task yet (`milestone_seed_task_id: null` in context-bundle.json), surface it — do not
 silently skip accretion.
 
 2. **Then**, in a **single** `notion-update-page` call (`command:
@@ -228,7 +245,9 @@ tasks are signed off. Accretion happens incrementally — as each 💻 Code / �
 task is promoted (Gate accretion above), its stripped items are appended to the Gate.
 The final Gate batch confirms that all stripped items landed on the Gate body and
 presents the Gate for sign-off. The Gate type's defined lifecycle is accumulation while
-at 🗂️ Ready — appending to it is not editing a Ready task.
+at 🗂️ Ready — appending to it is not editing a Ready task. The milestone **config-seed**
+🔧 Operational task accretes the same way (Seed accretion above) — a human runs it at
+milestone end, after the code is merged and deployed.
 
 **Re-check the board before finishing — don't close on a stale snapshot.** Step 1 loaded the
 board once at the start, but new 🔲 Backlog tasks can arrive *during* the session (the operator or
