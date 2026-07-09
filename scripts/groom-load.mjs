@@ -425,9 +425,11 @@ const milestoneGateTaskId = gateTaskRow?.id ?? null;
 // "config-seed" (case-insensitive) per the task spec's D1. 0 matches → null (surfaced like an
 // absent Gate); >1 matches → null + ambiguity surfaced, rather than guessing which one.
 const seedTaskRows = targetRows.filter(
-  (r) => (r['Type'] ?? '') === '🔧 Operational' && /config-seed/i.test(titleOf(r)),
+  (r) =>
+    (r['Type'] ?? '') === '🔧 Operational' && /config-seed/i.test(titleOf(r)),
 );
-const milestoneSeedTaskId = seedTaskRows.length === 1 ? seedTaskRows[0].id : null;
+const milestoneSeedTaskId =
+  seedTaskRows.length === 1 ? seedTaskRows[0].id : null;
 const seedTaskAmbiguous = seedTaskRows.length > 1;
 
 const targetTasks = [];

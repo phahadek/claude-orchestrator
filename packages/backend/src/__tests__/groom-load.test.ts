@@ -272,7 +272,13 @@ describe('groom-load.mjs — seed_contribution seeding + milestone_seed_task_id 
   function readBundle(repoDir: string) {
     return JSON.parse(
       readFileSync(
-        join(repoDir, '.skill-cache', 'grooming', 'M-test', 'context-bundle.json'),
+        join(
+          repoDir,
+          '.skill-cache',
+          'grooming',
+          'M-test',
+          'context-bundle.json',
+        ),
         'utf8',
       ),
     );
@@ -280,7 +286,13 @@ describe('groom-load.mjs — seed_contribution seeding + milestone_seed_task_id 
   function readState(repoDir: string) {
     return JSON.parse(
       readFileSync(
-        join(repoDir, '.skill-cache', 'grooming', 'M-test', 'grooming-state.json'),
+        join(
+          repoDir,
+          '.skill-cache',
+          'grooming',
+          'M-test',
+          'grooming-state.json',
+        ),
         'utf8',
       ),
     );

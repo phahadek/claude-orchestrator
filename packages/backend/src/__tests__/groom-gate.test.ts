@@ -254,7 +254,10 @@ describe('groom-gate.mjs — seed_contribution check (5th artifact)', () => {
   it('allows a Code task when seed_contribution is {"decision":"none"}', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'groom-gate-'));
     makeStateFile(tmpDir, {
-      [PAGE_ID]: { ...VALID_CODE_BASE, seed_contribution: { decision: 'none' } },
+      [PAGE_ID]: {
+        ...VALID_CODE_BASE,
+        seed_contribution: { decision: 'none' },
+      },
     });
     const r = runGate(tmpDir, PAGE_ID);
     expect(r.status).toBe(0);
