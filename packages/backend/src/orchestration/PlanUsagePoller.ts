@@ -55,9 +55,7 @@ export class PlanUsagePoller {
         await this.poll();
       },
       onError: (err) =>
-        logger.warn(
-          `[PlanUsagePoller] poll error: ${(err as Error).message}`,
-        ),
+        logger.warn(`[PlanUsagePoller] poll error: ${(err as Error).message}`),
     });
   }
 
@@ -102,9 +100,7 @@ export class PlanUsagePoller {
         },
       });
     } catch (err) {
-      logger.warn(
-        `[PlanUsagePoller] fetch failed: ${(err as Error).message}`,
-      );
+      logger.warn(`[PlanUsagePoller] fetch failed: ${(err as Error).message}`);
       return UNAVAILABLE;
     }
 
