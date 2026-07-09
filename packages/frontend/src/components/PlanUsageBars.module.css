@@ -1,0 +1,30 @@
+.wrapper {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.barTrack {
+  width: 36px;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--bg-tertiary, #313244);
+}
+
+.barFill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.severityNormal {
+  background: var(--color-green, #a6e3a1);
+}
+
+.severityWarning {
+  background: var(--color-yellow, #f9e2af);
+}
+
+.severityCritical {
+  background: var(--color-red, #f38ba8);
+}

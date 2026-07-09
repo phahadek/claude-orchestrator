@@ -36,7 +36,10 @@ import { ShortcutHint } from './components/ShortcutHint';
 import { SessionFilterBar } from './components/SessionFilterBar';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import type { NotificationItem } from './components/Notifications';
-import type { ServerMessage } from '@claude-orchestrator/backend/src/ws/types';
+import type {
+  ServerMessage,
+  PlanUsage,
+} from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { calculateCost } from '@claude-orchestrator/backend/src/utils/usage';
 import type {
@@ -225,6 +228,7 @@ export default function App() {
   const [rateLimitInfo, setRateLimitInfo] = useState<{
     resetAt: string;
   } | null>(null);
+  const [planUsage, setPlanUsage] = useState<PlanUsage | null>(null);
   const [rateLimitDismissed, setRateLimitDismissed] = useState(false);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
@@ -269,6 +273,10 @@ export default function App() {
       if (msg.type === 'github_rate_limit_cleared') {
         setRateLimitInfo(null);
         setRateLimitDismissed(false);
+        return;
+      }
+      if (msg.type === 'plan_usage') {
+        setPlanUsage(msg.usage);
         return;
       }
       dispatch(msg);
@@ -1233,6 +1241,7 @@ export default function App() {
           onViewChange={handleViewChange}
           totalTokens={totalTokens}
           totalCost={totalCost}
+          planUsage={planUsage}
           tasks={taskViews}
           incompleteReviewCount={incompleteReviews.length}
           onAutoLaunchToggle={handleAutoLaunchToggle}
