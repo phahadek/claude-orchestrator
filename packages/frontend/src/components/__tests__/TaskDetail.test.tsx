@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { TaskDetail } from '../TaskDetail';
@@ -1276,5 +1276,85 @@ describe('TaskDetail', () => {
     });
 
     fetchSpy.mockRestore();
+  });
+});
+
+// ── Spec section ────────────────────────────────────────────────────────────
+
+describe('TaskDetail — Spec section', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('shows a loading state then renders fetched Markdown', async () => {
+    let resolveFetch!: (value: Response) => void;
+    const fetchPromise = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => fetchPromise),
+    );
+
+    render(
+      <TaskDetail
+        task={makeTask({ taskId: 'spec-task-loading' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+
+    expect(screen.getByText('Loading spec…')).toBeTruthy();
+
+    resolveFetch({
+      ok: true,
+      json: async () => ({
+        markdown: '# Spec Title\n\n- [ ] first checkbox item',
+      }),
+    } as Response);
+
+    await waitFor(() => {
+      expect(screen.getByText('Spec Title')).toBeTruthy();
+    });
+    expect(screen.getByRole('checkbox')).toBeTruthy();
+    expect(screen.queryByText('Loading spec…')).toBeNull();
+  });
+
+  it('shows a non-blocking inline error when the fetch fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: async () => ({ error: 'task not found' }),
+      } as Response),
+    );
+
+    render(
+      <TaskDetail
+        task={makeTask({ taskId: 'spec-task-error' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Failed to load spec/)).toBeTruthy();
+    });
+    // Panel still renders around the error — not blocked.
+    expect(screen.getByText('Implement something')).toBeTruthy();
+  });
+
+  it('hides the source link when notionUrl is empty (e.g. YAML tasks)', () => {
+    render(
+      <TaskDetail
+        task={makeTask({ notionUrl: '' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/open in/i)).toBeNull();
   });
 });

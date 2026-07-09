@@ -678,6 +678,38 @@ export function createTasksRouter(
     res.json({ ok: true, repo });
   });
 
+  // ── GET /api/tasks/:taskId/page?projectId=<id> ──────────────────────────────
+  // Read-only fetch of the task's full spec body as markdown, uniform across sources.
+  router.get('/tasks/:taskId/page', async (req: Request, res: Response) => {
+    const taskId = String(req.params.taskId);
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : '';
+
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' });
+      return;
+    }
+
+    let backend: ReturnType<typeof getTaskBackend>;
+    try {
+      backend = getTaskBackend(projectId);
+    } catch {
+      res
+        .status(400)
+        .json({ error: `Cannot resolve backend for project '${projectId}'` });
+      return;
+    }
+
+    try {
+      const markdown = await backend.fetchTaskPage(taskId);
+      res.json({ markdown });
+    } catch (err) {
+      res.status(404).json({
+        error: err instanceof Error ? err.message : `task not found: ${taskId}`,
+      });
+    }
+  });
+
   // ── POST /api/tasks/:taskId/recover ─────────────────────────────────────────
   // Generalized recovery endpoint: derives the action from the current pause reason
   // and executes redispatch / rerun / resume accordingly.

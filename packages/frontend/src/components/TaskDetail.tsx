@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 import type { DisplayStatus } from '@claude-orchestrator/backend/src/tasks/TaskStatusEngine';
@@ -8,6 +10,7 @@ import { SessionPanel } from './SessionPanel';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { sessionsApi, authedFetch } from '../api/projects';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useTaskPage } from '../hooks/useTaskPage';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import styles from './TaskDetail.module.css';
 
@@ -139,6 +142,11 @@ export function TaskDetail({
     task.assignedRepo,
   );
   const [assignRepoInFlight, setAssignRepoInFlight] = useState(false);
+  const {
+    markdown: specMarkdown,
+    loading: specLoading,
+    error: specError,
+  } = useTaskPage(task.taskId, projectId);
 
   // Reset state when task changes
   useEffect(() => {
@@ -442,6 +450,31 @@ export function TaskDetail({
       </div>
 
       <div className={styles.body}>
+        {/* ── Spec — read-only task body, uniform across sources ── */}
+        <div className={styles.specSection}>
+          <div className={styles.sectionHeader}>
+            <span className={styles.sectionTitle}>Spec</span>
+          </div>
+          <div className={styles.specBody}>
+            {specLoading && (
+              <p className={styles.noTranscript}>Loading spec…</p>
+            )}
+            {specError && (
+              <div className={styles.errorBanner}>
+                Failed to load spec: {specError}
+              </div>
+            )}
+            {!specLoading && !specError && specMarkdown && (
+              <div className={styles.specMarkdown}>
+                <Markdown remarkPlugins={[remarkGfm]}>{specMarkdown}</Markdown>
+              </div>
+            )}
+            {!specLoading && !specError && !specMarkdown && (
+              <p className={styles.noTranscript}>No spec available.</p>
+            )}
+          </div>
+        </div>
+
         {/* ── Code SessionPanel ── */}
         {task.codeSession && (
           <div className={styles.codeSection}>
