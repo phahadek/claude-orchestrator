@@ -57,6 +57,7 @@ import { getCorporateMode } from './config/corporateMode';
 import { getOrchestratorConfig } from './config/appConfig';
 import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
+import { PlanUsagePoller } from './orchestration/PlanUsagePoller';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
 import { StalledPRReconciler } from './orchestration/StalledPRReconciler';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
@@ -68,6 +69,7 @@ import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
 import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
+import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
 import { runBootSequence, getActiveBootTracker } from './bootSequence';
 import { logger } from './logger';
 import {
@@ -188,6 +190,7 @@ app.use('/api', projectsRouter);
 app.use('/api', configRouter);
 app.use('/api', updateRouter);
 app.use('/api/diagnostics', createDiagnosticsRouter());
+app.use('/api', createPlanUsageRouter());
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')),
@@ -287,6 +290,12 @@ wss.on('connection', (ws, req) => {
     (msg) => ws.send(JSON.stringify(msg)),
     getActiveBootTracker(),
   );
+  ws.send(
+    JSON.stringify({
+      type: 'plan_usage',
+      usage: planUsagePoller.getCache(),
+    } satisfies ServerMessage),
+  );
 
   ws.on('message', (data) =>
     handleMessage(ws, data.toString(), sessionManager),
@@ -321,6 +330,12 @@ const stuckSessionMonitor = new StuckSessionMonitor(
   githubClient,
 );
 
+// Plan-usage poller: reads Claude subscription 5-hour/weekly usage every 60s
+// for display in the top bar. Degrades to `{ available: false }` when the
+// device is on an API key or the OAuth token can't be read.
+const planUsagePoller = new PlanUsagePoller(broadcast);
+setPlanUsagePoller(planUsagePoller);
+
 // Orphaned-task sweep: finds tasks stuck at In Progress with no live session.
 // enqueueFeedback is wired so idle sessions without a PR are nudged via the
 // feedback inbox rather than reverted or sent a raw mid-teardown stdin write.
@@ -349,6 +364,7 @@ stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
 sessionEventsPruner.register(scheduler);
 stuckSessionMonitor.register(scheduler);
+planUsagePoller.register(scheduler);
 registerWorktreeReconciler(scheduler);
 
 void runBootSequence({

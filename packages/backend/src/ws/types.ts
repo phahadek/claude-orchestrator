@@ -42,6 +42,20 @@ interface SessionState {
   taskId?: string;
 }
 
+/** A single plan-usage window (5-hour session or 7-day/weekly), as rendered by a usage bar. */
+export interface UsageWindow {
+  percent: number;
+  resetsAt: string;
+  severity: 'normal' | string;
+}
+
+/** Cached Claude subscription plan-usage snapshot, polled from the oauth/usage endpoint. */
+export interface PlanUsage {
+  available: boolean;
+  fiveHour?: UsageWindow;
+  weekly?: UsageWindow;
+}
+
 /** Full live-state snapshot of a task, sent in task_updated WS messages. */
 export interface TaskView {
   taskId: string;
@@ -267,6 +281,7 @@ export type ServerMessage =
       used: number;
     }
   | { type: 'github_rate_limit_cleared' }
+  | { type: 'plan_usage'; usage: PlanUsage }
   | { type: 'error'; message: string }
   | { type: 'pr_pause_cleared'; prNumber: number; repo: string }
   | { type: 'autofix_started'; prNumber: number; repo: string }
