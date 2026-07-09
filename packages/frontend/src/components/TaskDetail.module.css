@@ -179,6 +179,51 @@
   flex-shrink: 0;
 }
 
+/* ── Spec — read-only markdown body ──────────────────────────────── */
+.specSection {
+  flex-shrink: 0;
+  max-height: 280px;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+}
+
+.specBody {
+  overflow-y: auto;
+  padding: 0 16px 12px;
+}
+
+.specMarkdown {
+  font-size: 0.86rem;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.specMarkdown :global(h1),
+.specMarkdown :global(h2),
+.specMarkdown :global(h3) {
+  font-size: 0.95rem;
+  margin: 12px 0 6px;
+}
+
+.specMarkdown :global(table) {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.specMarkdown :global(th),
+.specMarkdown :global(td) {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.specMarkdown :global(pre) {
+  overflow-x: auto;
+  padding: 8px;
+  background: var(--bg-inset, rgba(0, 0, 0, 0.05));
+}
+
 /* ── Code session — takes bulk of panel, scrolls independently ────── */
 .codeSection {
   flex: 1;
