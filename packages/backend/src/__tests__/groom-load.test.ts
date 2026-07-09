@@ -12,11 +12,24 @@ import { tmpdir } from 'os';
 
 const LOADER = resolve(__dirname, '../../../../scripts/groom-load.mjs');
 
-// Fixture board rows: Code + Tooling (need gate_contribution) + Gate (the target) + Design (exempt)
+// Fixture board rows: Code + Tooling (need gate_contribution + seed_contribution) + Gate +
+// config-seed Operational task (the seed target) + Design (exempt)
 const GATE_TASK_ID = 'gateabc12345678901234567890abcd';
 const CODE_TASK_ID = 'codeabc12345678901234567890abcd';
 const TOOL_TASK_ID = 'toolabc12345678901234567890abcd';
 const DSGN_TASK_ID = 'dsgnaabc12345678901234567890abc';
+const SEED_TASK_ID = 'seedabc12345678901234567890abcd';
+
+// A 🔧 Operational task whose title contains "config-seed" — the D1 accretion target.
+const SEED_ROW = {
+  id: SEED_TASK_ID,
+  'Task Name': 'M-test milestone config-seed',
+  Type: '🔧 Operational',
+  Status: '🗂️ Ready',
+  'Depends On': '',
+  Priority: '',
+  url: 'n/a',
+};
 
 const FIXTURE_ROWS = [
   {
@@ -55,15 +68,16 @@ const FIXTURE_ROWS = [
     Priority: '',
     url: 'n/a',
   },
+  SEED_ROW,
 ];
 
-function setupEnv(tmpDir: string) {
+function setupEnv(tmpDir: string, rows: unknown[] = FIXTURE_ROWS) {
   // Stub scripts dir: notion-query returns fixture board; notion-page returns empty markdown
   const stubDir = join(tmpDir, 'scripts');
   mkdirSync(stubDir, { recursive: true });
   writeFileSync(
     join(stubDir, 'notion-query.mjs'),
-    `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify(FIXTURE_ROWS))} + '\\n');\n`,
+    `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(JSON.stringify(rows))} + '\\n');\n`,
   );
   writeFileSync(
     join(stubDir, 'notion-page.mjs'),
@@ -245,5 +259,136 @@ describe('groom-load.mjs — gate_contribution seeding', () => {
     const codeEntry = state[CODE_TASK_ID];
     expect(codeEntry.type).toBe('💻 Code');
     expect(codeEntry.gate_contribution).toBeNull(); // seeded null for Code task
+  });
+});
+
+describe('groom-load.mjs — seed_contribution seeding + milestone_seed_task_id (D1)', () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function readBundle(repoDir: string) {
+    return JSON.parse(
+      readFileSync(
+        join(
+          repoDir,
+          '.skill-cache',
+          'grooming',
+          'M-test',
+          'context-bundle.json',
+        ),
+        'utf8',
+      ),
+    );
+  }
+  function readState(repoDir: string) {
+    return JSON.parse(
+      readFileSync(
+        join(
+          repoDir,
+          '.skill-cache',
+          'grooming',
+          'M-test',
+          'grooming-state.json',
+        ),
+        'utf8',
+      ),
+    );
+  }
+
+  it('D1: resolves milestone_seed_task_id from the single config-seed Operational task', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'groom-load-'));
+    const { stubDir, repoDir, manifestPath } = setupEnv(tmpDir);
+    const r = runLoader(repoDir, manifestPath, stubDir);
+    expect(r.status).toBe(0);
+    expect(readBundle(repoDir).milestone_seed_task_id).toBe(SEED_TASK_ID);
+  });
+
+  it('D1: milestone_seed_task_id is null when no config-seed task exists', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'groom-load-'));
+    const rows = FIXTURE_ROWS.filter(
+      (r) => (r as { id: string }).id !== SEED_TASK_ID,
+    );
+    const { stubDir, repoDir, manifestPath } = setupEnv(tmpDir, rows);
+    const r = runLoader(repoDir, manifestPath, stubDir);
+    expect(r.status).toBe(0);
+    expect(readBundle(repoDir).milestone_seed_task_id).toBeNull();
+  });
+
+  it('D1: milestone_seed_task_id is null (ambiguous) when >1 config-seed tasks match', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'groom-load-'));
+    const secondSeed = {
+      id: 'seed2bc12345678901234567890abcd',
+      'Task Name': 'Extra config-seed task',
+      Type: '🔧 Operational',
+      Status: '🗂️ Ready',
+      'Depends On': '',
+      Priority: '',
+      url: 'n/a',
+    };
+    const { stubDir, repoDir, manifestPath } = setupEnv(tmpDir, [
+      ...FIXTURE_ROWS,
+      secondSeed,
+    ]);
+    const r = runLoader(repoDir, manifestPath, stubDir);
+    expect(r.status).toBe(0);
+    expect(readBundle(repoDir).milestone_seed_task_id).toBeNull();
+  });
+
+  it('seeds seed_contribution: null for a Code task', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'groom-load-'));
+    const { stubDir, repoDir, manifestPath } = setupEnv(tmpDir);
+    const r = runLoader(repoDir, manifestPath, stubDir);
+    expect(r.status).toBe(0);
+    expect(readState(repoDir)[CODE_TASK_ID].seed_contribution).toBeNull();
+  });
+
+  it('seeds seed_contribution: null for a Tooling task', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'groom-load-'));
+    const { stubDir, repoDir, manifestPath } = setupEnv(tmpDir);
+    const r = runLoader(repoDir, manifestPath, stubDir);
+    expect(r.status).toBe(0);
+    expect(readState(repoDir)[TOOL_TASK_ID].seed_contribution).toBeNull();
+  });
+
+  it('seeds seed_contribution: {decision:"n/a"} for a Design task (exempt type)', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'groom-load-'));
+    const { stubDir, repoDir, manifestPath } = setupEnv(tmpDir);
+    const r = runLoader(repoDir, manifestPath, stubDir);
+    expect(r.status).toBe(0);
+    expect(readState(repoDir)[DSGN_TASK_ID].seed_contribution).toEqual({
+      decision: 'n/a',
+    });
+  });
+
+  it('seeds seed_contribution back-compat for existing entries missing the field', () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'groom-load-'));
+    const { stubDir, repoDir, manifestPath } = setupEnv(tmpDir);
+
+    // Pre-seed a state file that lacks seed_contribution (simulates a pre-migration cache)
+    const stateDir = join(repoDir, '.skill-cache', 'grooming', 'M-test');
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(
+      join(stateDir, 'grooming-state.json'),
+      JSON.stringify({
+        [CODE_TASK_ID]: {
+          title: 'Old title',
+          status: '🔲 Backlog',
+          signoff: null,
+          hard_block_deps: null,
+          size_check: null,
+          gate_contribution: null,
+          // no seed_contribution, no type
+        },
+      }),
+    );
+
+    const r = runLoader(repoDir, manifestPath, stubDir);
+    expect(r.status).toBe(0);
+    const codeEntry = readState(repoDir)[CODE_TASK_ID];
+    expect(codeEntry.type).toBe('💻 Code');
+    expect(codeEntry.seed_contribution).toBeNull(); // seeded null for Code task
   });
 });
