@@ -66,6 +66,12 @@
   color: var(--color-text-muted, #718096);
 }
 
+.statusIcon {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+}
+
 .blockers {
   display: flex;
   flex-direction: column;

@@ -58,10 +58,16 @@ const milestone = option('--milestone');
 const configDirOpt = option('--config-dir');
 
 if (!taskId || !state)
-  fail('required: --task <id> --state <state>  (see the header for full usage).');
+  fail(
+    'required: --task <id> --state <state>  (see the header for full usage).',
+  );
 if (!STATES.has(state))
   fail(`unknown --state "${state}". One of: ${[...STATES].join(' | ')}.`);
-const DISPOSITIONS = new Set(['pass', 'blocked-pending-fix', 'pass-with-caveat']);
+const DISPOSITIONS = new Set([
+  'pass',
+  'blocked-pending-fix',
+  'pass-with-caveat',
+]);
 if (dispositionRaw !== undefined && !DISPOSITIONS.has(dispositionRaw))
   fail(
     `--disposition must be one of: ${[...DISPOSITIONS].join(' | ')} (got "${dispositionRaw}"). ` +
@@ -87,12 +93,23 @@ function resolveConfigDir() {
 let file = fileOpt ? resolve(process.cwd(), fileOpt) : null;
 if (!file) {
   if (!project || !milestone)
-    fail('locate the journal with --file <path>, or --project <key> --milestone <M>.');
+    fail(
+      'locate the journal with --file <path>, or --project <key> --milestone <M>.',
+    );
   const cfg = resolveConfigDir();
-  if (!cfg) fail('could not locate the config tree; pass --file or --config-dir.');
-  file = join(cfg, 'projects', project, '.ops-cache', milestone, 'ops-state.json');
+  if (!cfg)
+    fail('could not locate the config tree; pass --file or --config-dir.');
+  file = join(
+    cfg,
+    'projects',
+    project,
+    '.ops-cache',
+    milestone,
+    'ops-state.json',
+  );
 }
-if (!existsSync(file)) fail(`journal not found at ${file} (run ops-load.mjs first?).`);
+if (!existsSync(file))
+  fail(`journal not found at ${file} (run ops-load.mjs first?).`);
 
 let journal;
 try {
@@ -112,7 +129,9 @@ if (!key)
 if (!key)
   fail(
     `no journal entry matches task "${taskId}". Entries: ${
-      Object.keys(journal).map((k) => k.slice(0, 13)).join(', ') || '(none)'
+      Object.keys(journal)
+        .map((k) => k.slice(0, 13))
+        .join(', ') || '(none)'
     }.`,
   );
 

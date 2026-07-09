@@ -238,7 +238,9 @@ function queryBoard(boardId) {
   try {
     return JSON.parse(out);
   } catch (e) {
-    fail(`could not parse notion-query.mjs JSON for board ${boardId}: ${e.message}`);
+    fail(
+      `could not parse notion-query.mjs JSON for board ${boardId}: ${e.message}`,
+    );
   }
 }
 function fetchPageMarkdown(pageId) {
@@ -266,7 +268,9 @@ function sectionBody(md, headRe) {
 /** Parse the "Mode:" declaration line → operational flavor (directed | research-first). */
 function parseFlavor(md, mode) {
   if (mode !== 'operational') return null;
-  const m = md.match(/mode\s*:.*?operational.*?(directed|research[-\s]?first)/is);
+  const m = md.match(
+    /mode\s*:.*?operational.*?(directed|research[-\s]?first)/is,
+  );
   if (m) return /research/i.test(m[1]) ? 'research-first' : 'directed';
   return null;
 }
@@ -275,7 +279,10 @@ function extractDepIds(depsStr) {
   if (!depsStr || typeof depsStr !== 'string') return [];
   const out = new Set();
   for (const m of depsStr.matchAll(NOTION_ID_RE)) {
-    const norm = [m[1], m[2], m[3], m[4], m[5]].filter(Boolean).join('').toLowerCase();
+    const norm = [m[1], m[2], m[3], m[4], m[5]]
+      .filter(Boolean)
+      .join('')
+      .toLowerCase();
     if (norm.length >= 16) out.add(norm);
   }
   return [...out];
@@ -381,7 +388,12 @@ for (const row of targetRows) {
 
   // Flag any still-open legacy 🛠️ Tooling (the split retired it → reclassify to Operational/Investigation).
   if (toolingTypeMatcher(type) && !isDone) {
-    leftoverTooling.push({ id: row.id, title: titleOf(row), status, url: row.url });
+    leftoverTooling.push({
+      id: row.id,
+      title: titleOf(row),
+      status,
+      url: row.url,
+    });
     continue;
   }
   const isOps = opsTypeMatcher(type);
@@ -407,7 +419,12 @@ for (const row of targetRows) {
   let mode, flavor;
   if (isTesting) {
     if (parseTestingVariant(md) === 'authoring') {
-      testAuthoring.push({ id: row.id, title: titleOf(row), status, url: row.url });
+      testAuthoring.push({
+        id: row.id,
+        title: titleOf(row),
+        status,
+        url: row.url,
+      });
       continue;
     }
     mode = 'investigation';
@@ -449,7 +466,9 @@ for (const row of targetRows) {
   };
 
   if (isExecutable)
-    (depStatus === 'blocked' ? tasks.dep_blocked : tasks.executable).push(entry);
+    (depStatus === 'blocked' ? tasks.dep_blocked : tasks.executable).push(
+      entry,
+    );
   else if (isBacklog) tasks.needs_grooming.push(entry);
   else if (isInReview) tasks.closed_not_done.push(entry);
 }
@@ -513,7 +532,11 @@ const sourceOfTruthDocs = contextPages.map((p) => ({
 }));
 
 const bundle = {
-  generated: { milestone, project: projectKey, ts: null /* skill stamps on first use */ },
+  generated: {
+    milestone,
+    project: projectKey,
+    ts: null /* skill stamps on first use */,
+  },
   context_pages: contextPages,
   // Surfaced explicitly so the skill CONSULTS these before interpreting any zero/anomaly.
   source_of_truth_docs: sourceOfTruthDocs,
@@ -523,7 +546,9 @@ const bundle = {
       board: milestoneCfg.board,
       ops_tasks: {
         executable: tasks.executable.length,
-        testing_observational: tasks.executable.filter((t) => t.flavor === 'testing').length,
+        testing_observational: tasks.executable.filter(
+          (t) => t.flavor === 'testing',
+        ).length,
         dep_blocked: tasks.dep_blocked.length,
         needs_grooming: tasks.needs_grooming.length,
         closed_not_done: tasks.closed_not_done.length,
@@ -547,19 +572,35 @@ const worklist = {
   test_authoring: testAuthoring,
 };
 
-writeFileSync(join(cacheDir, 'context-bundle.json'), JSON.stringify(bundle, null, 2), 'utf8');
-writeFileSync(join(cacheDir, 'ops-worklist.json'), JSON.stringify(worklist, null, 2), 'utf8');
-writeFileSync(join(cacheDir, 'ops-state.json'), JSON.stringify(state, null, 2), 'utf8');
+writeFileSync(
+  join(cacheDir, 'context-bundle.json'),
+  JSON.stringify(bundle, null, 2),
+  'utf8',
+);
+writeFileSync(
+  join(cacheDir, 'ops-worklist.json'),
+  JSON.stringify(worklist, null, 2),
+  'utf8',
+);
+writeFileSync(
+  join(cacheDir, 'ops-state.json'),
+  JSON.stringify(state, null, 2),
+  'utf8',
+);
 
 // ── summary ──────────────────────────────────────────────────────────
 const nTesting = tasks.executable.filter((t) => t.flavor === 'testing').length;
-const nOperational = tasks.executable.filter((t) => t.mode === 'operational').length;
+const nOperational = tasks.executable.filter(
+  (t) => t.mode === 'operational',
+).length;
 const nInvestigation = tasks.executable.length - nOperational - nTesting;
 console.log(`ops-load: ${projectKey} / ${milestone} loaded into ${cacheDir}`);
 console.log(
   `  context pages: ${contextPages.length} (${contextPages.filter((p) => p.refetched).length} fetched, rest cached) — source-of-truth docs surfaced in context-bundle.json`,
 );
-console.log(`  🔧 Operational + 🔎 Investigation (+ observational 🧪 Testing) tasks on target board:`);
+console.log(
+  `  🔧 Operational + 🔎 Investigation (+ observational 🧪 Testing) tasks on target board:`,
+);
 console.log(
   `    executable (Ready/In-Progress, deps ✅ Done): ${tasks.executable.length} — ${nOperational} operational, ${nInvestigation} investigation, ${nTesting} testing (observational/E2E)`,
 );

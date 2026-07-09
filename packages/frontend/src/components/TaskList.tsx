@@ -4,8 +4,11 @@ import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { TaskCard } from './TaskCard';
 import { CompactTaskCard } from './CompactTaskCard';
+import { BacklogCodeSection } from './BacklogCodeSection';
+import { NonCodeTypeSection } from './NonCodeTypeSection';
 import { useDispatch } from '../hooks/useDispatch';
 import { projectsApi } from '../api/projects';
+import { priorityRank, sortByPriority } from '../utils/taskSort';
 import styles from './TaskList.module.css';
 
 interface Props {
@@ -29,13 +32,13 @@ interface Props {
   project: ProjectConfig | null;
 }
 
-const GROUP_ORDER: DisplayStatus[] = [
+// Code section groups, in display order. Ready/Backlog/Done are handled by their own
+// dedicated sections below (ReadySection, BacklogCodeSection, the bottom Done section).
+const CODE_GROUP_ORDER: DisplayStatus[] = [
   'needs_attention',
   'ready_to_merge',
   'in_progress',
   'in_review',
-  'ready',
-  'done',
   'blocked',
   'deferred',
 ];
@@ -51,16 +54,6 @@ const GROUP_LABELS: Record<DisplayStatus, string> = {
   blocked: '🚫 Blocked',
   deferred: '⏭️ Deferred',
 };
-
-const PRIORITY_RANK: Record<string, number> = {
-  '🔴 High': 0,
-  '🟡 Medium': 1,
-  '🟢 Low': 2,
-};
-
-function priorityRank(p: string): number {
-  return PRIORITY_RANK[p] ?? 99;
-}
 
 /** Group tasks by wave number, returning a map of wave → sorted tasks. */
 function groupByWave(tasks: TaskView[]): Map<number, TaskView[]> {
@@ -81,7 +74,6 @@ function groupByWave(tasks: TaskView[]): Map<number, TaskView[]> {
 /** Compact wave-grouped section for Ready tasks with Select All / Launch controls. */
 function ReadySection({
   tasks,
-  nonCodeTasks,
   onSelectTask,
   send,
   project,
@@ -90,7 +82,6 @@ function ReadySection({
   onOptimisticDispatch,
 }: {
   tasks: TaskView[];
-  nonCodeTasks: TaskView[];
   onSelectTask: (taskId: string) => void;
   send: (msg: ClientMessage) => boolean;
   project: ProjectConfig | null;
@@ -107,7 +98,7 @@ function ReadySection({
   });
 
   const wave1CodeTasks = tasks.filter((t) => (t.wave ?? 1) === 1 && !t.blocked);
-  const totalCount = tasks.length + nonCodeTasks.length;
+  const totalCount = tasks.length;
   const waveMap = groupByWave(tasks);
   const waveNumbers = Array.from(waveMap.keys()).sort((a, b) => a - b);
 
@@ -245,31 +236,6 @@ function ReadySection({
               </div>
             );
           })}
-
-          {nonCodeTasks.length > 0 && (
-            <div className={styles.waveGroup} data-testid="non-code-wave-group">
-              <div
-                className={styles.waveHeader}
-                data-testid="non-code-wave-header"
-              >
-                <span className={styles.waveLabel}>Non-Code</span>
-              </div>
-              {nonCodeTasks
-                .sort(
-                  (a, b) => priorityRank(a.priority) - priorityRank(b.priority),
-                )
-                .map((task) => (
-                  <CompactTaskCard
-                    key={task.taskId}
-                    task={task}
-                    showCheckbox={false}
-                    checked={false}
-                    onCheckChange={() => {}}
-                    onClick={() => onSelectTask(task.taskId)}
-                  />
-                ))}
-            </div>
-          )}
         </div>
       )}
     </div>
@@ -465,35 +431,30 @@ export function TaskList({
     );
   }
 
-  const backlogTasks = tasks.filter((t) => t.displayStatus === 'backlog');
-  const activeTasks = tasks.filter((t) => t.displayStatus !== 'backlog');
+  const codeTasks = tasks.filter((t) => t.taskType.includes('💻'));
+  const nonCodeTasks = tasks.filter((t) => !t.taskType.includes('💻'));
 
-  const codeTasks = activeTasks.filter((t) => t.taskType.includes('💻'));
-  const nonCodeTasks = activeTasks.filter((t) => !t.taskType.includes('💻'));
-
-  const readyCodeTasks = codeTasks.filter((t) => t.displayStatus === 'ready');
-  const readyNonCodeTasks = nonCodeTasks.filter(
-    (t) => t.displayStatus === 'ready',
+  const codeDoneTasks = codeTasks.filter((t) => t.displayStatus === 'done');
+  const nonCodeDoneTasks = nonCodeTasks.filter(
+    (t) => t.displayStatus === 'done',
   );
-  const hasReadyTasks =
-    readyCodeTasks.length > 0 || readyNonCodeTasks.length > 0;
+  const doneCount = codeDoneTasks.length + nonCodeDoneTasks.length;
 
-  const nonReadyCodeTasks = codeTasks.filter(
-    (t) => t.displayStatus !== 'ready',
+  const codeNotDone = codeTasks.filter((t) => t.displayStatus !== 'done');
+  const nonCodeNotDone = nonCodeTasks.filter((t) => t.displayStatus !== 'done');
+
+  const readyCodeTasks = codeNotDone.filter((t) => t.displayStatus === 'ready');
+  const backlogCodeTasks = codeNotDone.filter(
+    (t) => t.displayStatus === 'backlog',
   );
-  const nonReadyNonCodeTasks = nonCodeTasks
-    .filter((t) => t.displayStatus !== 'ready')
-    .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
 
-  // Build per-status lookup for non-ready code tasks
-  const nonReadyGroupMap = new Map<DisplayStatus, TaskView[]>();
-  for (const status of GROUP_ORDER) {
-    if (status === 'ready') continue;
-    nonReadyGroupMap.set(
+  // Build per-status lookup for the remaining code groups (needs_attention, ready_to_merge,
+  // in_progress, in_review, blocked, deferred) — ready/backlog/done have their own sections.
+  const codeGroupMap = new Map<DisplayStatus, TaskView[]>();
+  for (const status of CODE_GROUP_ORDER) {
+    codeGroupMap.set(
       status,
-      nonReadyCodeTasks
-        .filter((t) => t.displayStatus === status)
-        .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority)),
+      sortByPriority(codeNotDone.filter((t) => t.displayStatus === status)),
     );
   }
 
@@ -501,26 +462,9 @@ export function TaskList({
     <div className={styles.taskListContainer}>
       {syncButton}
       <div className={styles.taskList} data-testid="task-list">
-        {GROUP_ORDER.map((status) => {
-          if (status === 'ready') {
-            // Compact wave-grouped section for ready tasks
-            if (!hasReadyTasks) return null;
-            return (
-              <ReadySection
-                key="ready"
-                tasks={readyCodeTasks}
-                nonCodeTasks={readyNonCodeTasks}
-                onSelectTask={onSelectTask}
-                send={send}
-                project={project}
-                isExpanded={!collapsed.has('ready')}
-                onToggleCollapse={() => toggleGroup('ready')}
-                onOptimisticDispatch={handleOptimisticDispatch}
-              />
-            );
-          }
-
-          const groupTasks = nonReadyGroupMap.get(status) ?? [];
+        {/* 💻 Code */}
+        {CODE_GROUP_ORDER.map((status) => {
+          const groupTasks = codeGroupMap.get(status) ?? [];
           if (groupTasks.length === 0) return null;
 
           const isExpanded = !collapsed.has(status);
@@ -560,29 +504,67 @@ export function TaskList({
           );
         })}
 
-        {nonReadyNonCodeTasks.length > 0 && (
+        {readyCodeTasks.length > 0 && (
+          <ReadySection
+            key="ready"
+            tasks={readyCodeTasks}
+            onSelectTask={onSelectTask}
+            send={send}
+            project={project}
+            isExpanded={!collapsed.has('ready')}
+            onToggleCollapse={() => toggleGroup('ready')}
+            onOptimisticDispatch={handleOptimisticDispatch}
+          />
+        )}
+
+        {/* 🔲 Backlog — Code */}
+        <BacklogCodeSection
+          tasks={backlogCodeTasks}
+          isExpanded={!collapsed.has('backlog')}
+          onToggleCollapse={() => toggleGroup('backlog')}
+          onSelectTask={onSelectTask}
+        />
+
+        {/* 📋 Non-code, by type */}
+        {nonCodeNotDone.length > 0 && (
           <div
             className={`${styles.group} ${styles.nonCodeGroup}`}
             data-testid="non-code-section"
           >
+            <div className={styles.sectionHeading}>
+              <span className={styles.groupLabel}>📋 Non-code</span>
+              <span className={styles.groupCount}>{nonCodeNotDone.length}</span>
+            </div>
+            <NonCodeTypeSection
+              tasks={nonCodeNotDone}
+              onSelectTask={onSelectTask}
+            />
+          </div>
+        )}
+
+        {/* ✅ Done — all Types, collapsed by default */}
+        {doneCount > 0 && (
+          <div
+            className={styles.group}
+            data-status="done"
+            data-testid="done-section"
+          >
             <div
               className={`${styles.groupHeader} ${styles.groupHeaderToggle}`}
-              onClick={() => toggleGroup('planning')}
+              onClick={() => toggleGroup('done')}
               role="button"
-              aria-expanded={!collapsed.has('planning')}
-              data-testid="group-header-planning"
+              aria-expanded={!collapsed.has('done')}
+              data-testid="group-header-done"
             >
               <span className={styles.toggle} aria-hidden="true">
-                {!collapsed.has('planning') ? '▼' : '▶'}
+                {!collapsed.has('done') ? '▼' : '▶'}
               </span>
-              <span className={styles.groupLabel}>📋 Planning / Testing</span>
-              <span className={styles.groupCount}>
-                {nonReadyNonCodeTasks.length}
-              </span>
+              <span className={styles.groupLabel}>{GROUP_LABELS.done}</span>
+              <span className={styles.groupCount}>{doneCount}</span>
             </div>
-            {!collapsed.has('planning') && (
+            {!collapsed.has('done') && (
               <div className={styles.groupCards}>
-                {nonReadyNonCodeTasks.map((task) => (
+                {sortByPriority(codeDoneTasks).map((task) => (
                   <TaskCard
                     key={task.taskId}
                     task={task}
@@ -592,53 +574,16 @@ export function TaskList({
                     project={project}
                   />
                 ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {backlogTasks.length > 0 && (
-          <div
-            className={`${styles.group} ${styles.backlogGroup}`}
-            data-status="backlog"
-            data-testid="backlog-section"
-          >
-            <div
-              className={`${styles.groupHeader} ${styles.groupHeaderToggle}`}
-              onClick={() => toggleGroup('backlog')}
-              role="button"
-              aria-expanded={!collapsed.has('backlog')}
-              data-testid="group-header-backlog"
-            >
-              <span className={styles.toggle} aria-hidden="true">
-                {!collapsed.has('backlog') ? '▼' : '▶'}
-              </span>
-              <span className={styles.groupLabel}>{GROUP_LABELS.backlog}</span>
-              <span className={styles.groupCount}>{backlogTasks.length}</span>
-            </div>
-            {!collapsed.has('backlog') && (
-              <div className={styles.groupCards}>
-                {backlogTasks
-                  .sort(
-                    (a, b) =>
-                      priorityRank(a.priority) - priorityRank(b.priority),
-                  )
-                  .map((task) => (
-                    <CompactTaskCard
-                      key={task.taskId}
-                      task={task}
-                      showCheckbox={false}
-                      checked={false}
-                      onCheckChange={() => {}}
-                      onClick={() =>
-                        window.open(
-                          task.notionUrl,
-                          '_blank',
-                          'noopener,noreferrer',
-                        )
-                      }
-                    />
-                  ))}
+                {sortByPriority(nonCodeDoneTasks).map((task) => (
+                  <CompactTaskCard
+                    key={task.taskId}
+                    task={task}
+                    showCheckbox={false}
+                    checked={false}
+                    onCheckChange={() => {}}
+                    onClick={() => onSelectTask(task.taskId)}
+                  />
+                ))}
               </div>
             )}
           </div>
