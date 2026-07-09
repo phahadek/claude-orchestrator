@@ -54,7 +54,8 @@ export function useTaskPage(
         setState({
           markdown: null,
           loading: false,
-          error: err instanceof Error ? err.message : 'Failed to load task spec',
+          error:
+            err instanceof Error ? err.message : 'Failed to load task spec',
         });
       });
   }, [taskId, projectId]);

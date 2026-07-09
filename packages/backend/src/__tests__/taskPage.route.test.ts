@@ -8,13 +8,12 @@ import supertest from 'supertest';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-const { mockGetProjectById, mockGetTaskBackend, mockFetchTaskPage } = vi.hoisted(
-  () => ({
+const { mockGetProjectById, mockGetTaskBackend, mockFetchTaskPage } =
+  vi.hoisted(() => ({
     mockGetProjectById: vi.fn(),
     mockGetTaskBackend: vi.fn(),
     mockFetchTaskPage: vi.fn(),
-  }),
-);
+  }));
 
 vi.mock('../config.js', () => ({
   getProjectById: mockGetProjectById,
