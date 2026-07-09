@@ -1,4 +1,5 @@
 import type { TaskView } from '../types/taskView';
+import { STATUS_EMOJI } from '../utils/taskSort';
 import styles from './CompactTaskCard.module.css';
 
 interface Props {
@@ -8,6 +9,8 @@ interface Props {
   checked: boolean;
   onCheckChange: (taskId: string, checked: boolean) => void;
   onClick: () => void;
+  /** Show a status emoji badge — used where rows mix multiple statuses (e.g. non-code type cards). */
+  showStatus?: boolean;
 }
 
 const PRIORITY_ICONS: Record<string, string> = {
@@ -22,6 +25,7 @@ export function CompactTaskCard({
   checked,
   onCheckChange,
   onClick,
+  showStatus = false,
 }: Props) {
   const priorityIcon = PRIORITY_ICONS[task.priority] ?? '';
   const isBlocked = task.blocked;
@@ -64,6 +68,16 @@ export function CompactTaskCard({
           {task.taskType.split(' ')[0]}
         </span>
         <span className={styles.taskName}>{task.taskName}</span>
+
+        {showStatus && (
+          <span
+            className={styles.statusIcon}
+            aria-label={task.displayStatus}
+            data-testid="compact-status-icon"
+          >
+            {STATUS_EMOJI[task.displayStatus]}
+          </span>
+        )}
       </div>
 
       {isBlocked && task.blockerNames.length > 0 && (

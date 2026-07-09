@@ -4,6 +4,7 @@ import {
   waitFor,
   fireEvent,
   act,
+  within,
 } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskList } from '../TaskList';
@@ -223,7 +224,7 @@ describe('TaskList', () => {
     expect(screen.getByRole('checkbox')).toBeDefined();
   });
 
-  it('non-code ready tasks are in the Non-Code sub-group within the Ready section with no checkboxes', () => {
+  it('non-code ready tasks fold into the Non-code type section, not the Ready section', () => {
     renderList([
       makeTask({
         taskId: 't1',
@@ -233,11 +234,14 @@ describe('TaskList', () => {
         wave: 1,
       }),
     ]);
-    expect(screen.getByTestId('non-code-wave-group')).toBeDefined();
+    expect(screen.queryByTestId('ready-section')).toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.getByTestId('type-card-header-planning')).toBeDefined();
+    fireEvent.click(screen.getByTestId('type-card-header-planning'));
+    expect(screen.getByText('Planning Task')).toBeDefined();
   });
 
-  it('renders non-ready non-code tasks in a separate section at the bottom', () => {
+  it('renders non-code, non-done tasks inside the Non-code type section', () => {
     renderList([
       makeTask({
         taskId: 't1',
@@ -246,7 +250,9 @@ describe('TaskList', () => {
         taskType: '📋 Planning',
       }),
     ]);
-    expect(screen.getByTestId('group-header-planning')).toBeDefined();
+    expect(screen.getByTestId('non-code-section')).toBeDefined();
+    expect(screen.queryByText('Planning Task')).toBeNull();
+    fireEvent.click(screen.getByTestId('type-card-header-planning'));
     expect(screen.getByText('Planning Task')).toBeDefined();
   });
 
@@ -603,7 +609,7 @@ describe('TaskList', () => {
     expect(readyHeader.getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('Planning/Testing group header renders with role="button" and aria-expanded', () => {
+  it('non-code type card header renders with role="button" and aria-expanded, collapsed by default', () => {
     renderList([
       makeTask({
         taskId: 't1',
@@ -612,12 +618,12 @@ describe('TaskList', () => {
         taskType: '📋 Planning',
       }),
     ]);
-    const header = screen.getByTestId('group-header-planning');
+    const header = screen.getByTestId('type-card-header-planning');
     expect(header.getAttribute('role')).toBe('button');
-    expect(header.getAttribute('aria-expanded')).toBe('true');
+    expect(header.getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('clicking Planning/Testing header toggles visibility of its task cards', () => {
+  it('clicking a non-code type card header toggles visibility of its task cards', () => {
     renderList([
       makeTask({
         taskId: 't1',
@@ -626,10 +632,109 @@ describe('TaskList', () => {
         taskType: '📋 Planning',
       }),
     ]);
+    const header = screen.getByTestId('type-card-header-planning');
+    expect(screen.queryByText('Planning Task')).toBeNull();
+    fireEvent.click(header);
     expect(screen.getByText('Planning Task')).toBeDefined();
-    const header = screen.getByTestId('group-header-planning');
     fireEvent.click(header);
     expect(screen.queryByText('Planning Task')).toBeNull();
+  });
+
+  it('non-code Type card shows correct not-Done count and status-emoji breakdown; expanding lists remaining tasks', () => {
+    renderList([
+      makeTask({
+        taskId: 'd1',
+        taskName: 'Design In Progress',
+        displayStatus: 'in_progress',
+        taskType: '📐 Design',
+      }),
+      makeTask({
+        taskId: 'd2',
+        taskName: 'Design In Review',
+        displayStatus: 'in_review',
+        taskType: '📐 Design',
+      }),
+      makeTask({
+        taskId: 'd3',
+        taskName: 'Design Backlog',
+        displayStatus: 'backlog',
+        taskType: '📐 Design',
+      }),
+    ]);
+
+    const header = screen.getByTestId('type-card-header-design');
+    expect(header.textContent).toContain('📐 Design');
+    expect(header.textContent).toContain('3');
+    expect(header.textContent).toContain('🔄');
+    expect(header.textContent).toContain('👀');
+    expect(header.textContent).toContain('🔲');
+
+    expect(screen.queryByText('Design In Progress')).toBeNull();
+    fireEvent.click(header);
+    expect(screen.getByText('Design In Progress')).toBeDefined();
+    expect(screen.getByText('Design In Review')).toBeDefined();
+    expect(screen.getByText('Design Backlog')).toBeDefined();
+  });
+
+  it('backlog-code tasks render in their own section, separate from the non-code section', () => {
+    renderList([
+      makeTask({
+        taskId: 'bc1',
+        taskName: 'Backlog Code Task',
+        displayStatus: 'backlog',
+        taskType: '💻 Code',
+      }),
+      makeTask({
+        taskId: 'bn1',
+        taskName: 'Backlog Design Task',
+        displayStatus: 'backlog',
+        taskType: '📐 Design',
+      }),
+    ]);
+
+    const backlogSection = screen.getByTestId('backlog-section');
+    fireEvent.click(within(backlogSection).getByTestId('group-header-backlog'));
+    expect(within(backlogSection).getByText('Backlog Code Task')).toBeDefined();
+    expect(
+      within(backlogSection).queryByText('Backlog Design Task'),
+    ).toBeNull();
+
+    const nonCodeSection = screen.getByTestId('non-code-section');
+    expect(
+      within(nonCodeSection).queryByText('Backlog Code Task'),
+    ).toBeNull();
+    fireEvent.click(
+      within(nonCodeSection).getByTestId('type-card-header-design'),
+    );
+    expect(
+      within(nonCodeSection).getByText('Backlog Design Task'),
+    ).toBeDefined();
+  });
+
+  it('Done section is collapsed by default and contains both code and non-code done tasks', () => {
+    renderList([
+      makeTask({
+        taskId: 'c1',
+        taskName: 'Code Done Task',
+        displayStatus: 'done',
+        taskType: '💻 Code',
+      }),
+      makeTask({
+        taskId: 'n1',
+        taskName: 'Design Done Task',
+        displayStatus: 'done',
+        taskType: '📐 Design',
+      }),
+    ]);
+
+    const header = screen.getByTestId('group-header-done');
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('Code Done Task')).toBeNull();
+    expect(screen.queryByText('Design Done Task')).toBeNull();
+
+    fireEvent.click(header);
+    expect(screen.getByText('Code Done Task')).toBeDefined();
+    expect(screen.getByText('Design Done Task')).toBeDefined();
   });
 
   it('updating the tasks prop reflects the updated task name in the UI', () => {
