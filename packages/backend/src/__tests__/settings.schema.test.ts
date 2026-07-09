@@ -171,6 +171,32 @@ describe('typedSetSetting — valid values', () => {
   });
 });
 
+describe('effort settings', () => {
+  it('defaults to empty string for all three effort fields', () => {
+    expect(typedGetSetting('code_session_effort')).toBe('');
+    expect(typedGetSetting('review_session_effort')).toBe('');
+    expect(typedGetSetting('large_task_effort')).toBe('');
+  });
+
+  it('accepts each allowed enum value', () => {
+    for (const level of ['low', 'medium', 'high', 'xhigh', 'max']) {
+      expect(typedSetSetting('code_session_effort', level)).toBe(level);
+    }
+  });
+
+  it('throws for a value outside the allowed enum', () => {
+    expect(() =>
+      typedSetSetting('code_session_effort', 'ultra' as never),
+    ).toThrow();
+    expect(() =>
+      typedSetSetting('review_session_effort', 'none' as never),
+    ).toThrow();
+    expect(() =>
+      typedSetSetting('large_task_effort', 'super' as never),
+    ).toThrow();
+  });
+});
+
 describe('typedSetSetting — non-conforming values throw ZodError', () => {
   it('throws for out-of-enum session_mode', () => {
     expect(() => typedSetSetting('session_mode', 'web' as never)).toThrow();

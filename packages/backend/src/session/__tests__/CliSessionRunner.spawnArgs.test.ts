@@ -131,6 +131,39 @@ describe('CliSessionRunner spawn args', () => {
     expect(capturedSpawnArgs).not.toContain('--settings');
   });
 
+  it('includes --effort xhigh when effort is "xhigh"', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, effort: 'xhigh' },
+      () => {},
+    );
+
+    const idx = capturedSpawnArgs.indexOf('--effort');
+    expect(idx).not.toBe(-1);
+    expect(capturedSpawnArgs[idx + 1]).toBe('xhigh');
+  });
+
+  it('omits --effort when effort is empty string', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, effort: '' },
+      () => {},
+    );
+
+    expect(capturedSpawnArgs).not.toContain('--effort');
+  });
+
+  it('omits --effort when effort is undefined', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    expect(capturedSpawnArgs).not.toContain('--effort');
+  });
+
   it('disableAutoCompact can be set independently per spawn', async () => {
     const runner1 = new CliSessionRunner(SESSION_ID);
     await runner1.run(

@@ -42,6 +42,9 @@ const SettingsSchema = z.object({
   session_mode: z.enum(['cli', 'api']),
   release_channel: z.enum(['stable', 'beta']),
   corporate_mode: z.enum(['corporate', 'personal']),
+  code_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
+  review_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
+  large_task_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
 
   // JSON-serialised string arrays
   ai_reviewer_usernames: z.array(z.string()),
@@ -77,6 +80,9 @@ export const SETTING_DEFAULTS: Settings = {
   session_mode: 'cli',
   release_channel: 'stable',
   corporate_mode: 'personal',
+  code_session_effort: '',
+  review_session_effort: '',
+  large_task_effort: '',
   ai_reviewer_usernames: [],
   bot_comment_deny_list: [],
   bot_comment_allow_list: [],

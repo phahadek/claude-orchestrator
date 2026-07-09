@@ -6,6 +6,11 @@ export interface SessionRunnerOptions {
   worktreePath: string;
   /** Claude model to use, e.g. 'claude-opus-4-6'. Undefined = CLI default. */
   model: string | undefined;
+  /**
+   * Reasoning effort to use, one of 'low' | 'medium' | 'high' | 'xhigh' | 'max'.
+   * Undefined/empty = model default (no --effort flag).
+   */
+  effort?: string;
   /** Tool names to auto-approve (Bash(git:*), mcp__github__*, etc.) */
   allowedTools: string[];
   /**
