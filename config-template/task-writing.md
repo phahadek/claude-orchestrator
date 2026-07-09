@@ -26,10 +26,13 @@
 
 ## Core principles
 
-1. **A task should be completable in one session.** Code/Tooling tasks: ~2 hours of
+1. **A task should be completable in one session.** Code tasks: ~2 hours of
    focused implementation, ceiling ~500 lines of diff / ~10 files. Design/Planning
-   tasks: a single discussion-and-document session that locks the decision. If it
-   doesn't fit, split it.
+   tasks: a single discussion-and-document session that locks the decision.
+   🔧 Operational / 🔎 Investigation tasks: one coherent change set (Operational) or one
+   question/anomaly (Investigation) — if it balloons past a handful of investigation steps
+   or uncovers a code gap that blocks its own completion, it stops and files follow-ons
+   (the `ops` skill's drill-budget). If it doesn't fit, split it.
 2. **The implementing session should not need to make any design decisions.** Every
    decision belongs in the task body or in an upstream design page it links to.
    Ambiguity causes scope creep.
@@ -41,10 +44,13 @@
 5. **Notes is for human flags only.** One short sentence, only if a human needs to
    see something before the session starts. Leave it blank otherwise.
 6. **Each task is exactly one Type — no hybrids.** A task is `📐 Design` *or*
-   `💻 Code` *or* `🛠️ Tooling`, never two at once. If both spec-locking and
-   implementation are needed, that is two tasks: a Design task upstream that closes
-   when the spec is locked, then a Code task downstream that implements against it.
-   (See `procedures.md` § Task types for what each Type triggers once Ready.)
+   `💻 Code` *or* `🔧 Operational` *or* `🔎 Investigation`, never two at once. If both
+   spec-locking and implementation are needed, that is two tasks: a Design task upstream
+   that closes when the spec is locked, then a Code task downstream that implements
+   against it. Likewise a code fix that an **Investigation** surfaces is a *separate*
+   `💻 Code` task the Investigation files — never folded into the Investigation's own
+   acceptance criteria. (See `procedures.md` § Task types for what each Type triggers
+   once Ready, and the `🔧 Operational & 🔎 Investigation` section below for those two.)
 
 ---
 
@@ -66,13 +72,28 @@ only, never transitive). Write `*None.*` if there are none. This is the human-re
 mirror; the machine-authoritative dependency list is the **`Depends On`** property
 (pipe-delimited page IDs — see `procedures.md`).
 
+**Hard-block vs soft-order — prefer to sequence.** A dependency here is a **hard block**: B
+lists A only if B *cannot be correctly implemented*, or would *collide* with A, until A is
+✅ Done. The test: *would B produce a wrong/broken result, or race A's worktree (shared code /
+migration number / prod state), if both ran at once?* **Yes or unsure → hard-block.** A mere
+preference ("nicer after A") is **soft order** — it is *not* a dependency, is not persisted on
+the task, and enforces nothing; it lives only in the grooming conversation. Because the
+auto-dispatcher launches **every** unblocked Ready Code task in parallel, **under**-declaring is
+the dangerous, hard-to-unwind error (conflicting worktrees race) while **over**-declaring is cheap
+and reversible (a task just waits). Resolve uncertainty toward the hard block — see
+`procedures.md` § Task types.
+
 ### Context
 The "why" and the spec.
 - **Design/Planning tasks:** the decision space — what is being decided, the options,
   the constraints, what upstream tasks already settled, what downstream tasks consume
   this. Cross-link the architecture page(s) that will be updated.
-- **Code/Tooling tasks:** the implementation spec — type signatures, function/class
+- **Code tasks:** the implementation spec — type signatures, function/class
   skeletons, configuration values, file paths, event names.
+- **🔧 Operational / 🔎 Investigation tasks:** see the dedicated section below — they
+  carry a **Mode declaration** and a different Context shape (target surface + audited
+  path for Operational; observed anomaly + decision space + falsification for
+  Investigation).
 
 **Write code skeletons, not essays.** A typed skeleton with stub bodies beats three
 paragraphs describing it. Where exact code isn't needed, be concrete about shapes:
@@ -101,19 +122,25 @@ Aim for **5–10 items total** across both subsections.
 > ✅ *Design:* `Technical Architecture page has a 'Common Ingestion Interface' section naming both Protocol signatures.`
 > ❌ `The server handles shutdowns gracefully`
 
-**Code/Tooling tasks must not put runtime/launch-and-observe items in their own
+**Code tasks must not put runtime/launch-and-observe items in their own
 acceptance criteria** — those belong to the milestone's **Manual Verification Gate**
 task (below). A Code task's manual-verification subsection reads:
-`Covered by the **Manual Verification Gate** task.`
+`Covered by the **Manual Verification Gate** task.` *(🔧 Operational / 🔎 Investigation
+tasks are the exception — they verify in-session and do NOT accrete to the gate; see
+their section below.)*
 
 ### Notion pages affected *(Design/Planning tasks only)*
 Bulleted list of every Notion page this task creates or edits, with `*(new)*` or
 `*(update — Section name)*`. The acceptance criteria reference these pages.
 
-### Files / paths affected *(Code/Tooling tasks only)*
+### Files / paths affected *(Code tasks only)*
 Bulleted list of every file the task creates or modifies, with `*(new)*` or
 `*(update)*`. Lets the implementing session know exactly where to work and prevents
 scope creep into other files.
+
+> 🔧 Operational tasks use **Targets / surfaces affected** and 🔎 Investigation tasks use
+> **Deliverables** instead of this section — see the `🔧 Operational & 🔎 Investigation`
+> section below.
 
 ### Implementation notes
 Always present, always created empty: `> To be filled in during/after task completion.`
@@ -130,7 +157,7 @@ runs interactively) and the **`Depends On`** convention. This is the authoring s
 | Property | Guidance |
 | --- | --- |
 | **Task Name** | Verb phrase starting with an action word (*Implement, Scaffold, Add, Fix, Migrate, Lock*). Include the primary file/class/decision. |
-| **Type** | One of `💻 Code` / `📐 Design` / `📋 Planning` / `🛠️ Tooling` / `🧪 Testing` / `🚦 Gate` / `📝 Docs` / `🎨 Assets`. Exactly one. See `procedures.md` § Task types. |
+| **Type** | One of `💻 Code` / `📐 Design` / `📋 Planning` / `🔧 Operational` / `🔎 Investigation` / `🧪 Testing` / `🚦 Gate` / `📝 Docs` / `🎨 Assets`. Exactly one. See `procedures.md` § Task types. *(`🛠️ Tooling` is retired — split into `🔧 Operational` + `🔎 Investigation`; it survives only on grandfathered pre-split tasks, never author a new one. `🧪 Testing` is observational/E2E only → `ops` as an Investigation variant; **pure test implementation is `💻 Code`**.)* |
 | **Priority** | `🔴 High` = blocks others / on the critical path. `🟡 Medium` = important, not blocking. `🟢 Low` = nice-to-have this milestone. |
 | **Status** | New tasks always start at `🔲 Backlog`. See Readiness gate below, and `procedures.md` § Status values for the full set (incl. the rare, orchestrator-set `🚫 Blocked`). |
 | **Depends On** | Pipe-delimited page IDs of *direct* dependencies, machine-consumed. Blank if none. The body `## Dependencies` section is its human-readable mirror. |
@@ -186,6 +213,24 @@ as a gate.
   milestone end. Leave `Depends On` empty (the dependency on all code tasks is implicit;
   documented in Notes: *"Run after all upstream code tasks are merged."*). Implementation
   Notes record pass/fail per item + links to any follow-up bug tasks.
+- **Accretion is mandatory and promotion-gated — not best-effort.** Because a
+  💻 Code task's body is *required* to strip its runtime items (above),
+  those items live nowhere else — if the groomer doesn't append them to the gate, they
+  are lost from the body **and** the gate (a silent coverage leak; e.g. a launch-only manual
+  check was stripped from a task body but never landed on the gate — found only by a later
+  coverage audit). So **before** any 💻 Code
+  task is marked `🗂️ Ready`, the groomer MUST either (a) append its stripped
+  runtime / launch-and-observe items to the milestone's `🚦 Gate` task body (grouped by
+  source task), or (b) confirm it has none — and record the outcome as a `gate_contribution`
+  artifact in `grooming-state.json`: `{ "gate_task_id": "…", "items": [...], "appended_at": "…" }`
+  or `{ "decision": "none" }`. This is symmetric with `size_check` / `hard_block_deps` /
+  `signoff` — same shape, same load-bearing weight. A Ready-flip that strips manual items
+  from the body without accreting them to the gate is the same class of failure as locking
+  sequencing in the task body instead of the `Depends On` property: the downstream artifact
+  (here, the gate) is the only place the information survives. *(Mechanical enforcement — the
+  `gate_contribution` field seeding in the loader + a 4th promotion-gate hook check — is
+  tracked by a follow-up Code task on the milestone board, **Enforce Manual-Verification-Gate
+  accretion in /groom**; until it ships, groomers apply this rule by hand.)*
 - **Placement:** at the end of its cluster. Follow-up tasks that depend on confirmed
   runtime behaviour list the gate task in `Depends On`, not the individual code tasks.
 - **Acceptance criteria:** still uses the two-subsection format — `### 🤖 Automated
@@ -193,6 +238,138 @@ as a gate.
   `### 👁️ Manual verification`.
 
 ---
+
+## Milestone config-seed (the operational twin of the Manual Verification Gate)
+
+Operational **data/config seeds must not be scattered across code tasks** as un-owned inline
+notes. A 💻 Code task frequently ships pure dispatchable code (a new worker + its registration
+with a pipeline runner, an alias/cohort mechanism, a new config category) **plus** a prod-data
+seed that is *correctly* not in the auto-dispatched PR — a config-defaults table row, a config
+category's default values, alias/cohort flags, etc. Left as an
+inline "applied operationally on prod" note, that seed is owned by no one, and after merge the code
+sits **dark until someone hand-seeds it** — the "Done ≠ deployed ≠ seeded ≠ working" / silent-0
+failure class, un-owned. So each milestone gets one dedicated **config-seed** task that
+accretes every code task's operational seed — the exact operational mirror of the Gate.
+
+- **Schema vs data — the load-bearing split.** *Schema / DDL* → a **migration in the Code task's
+  own PR** (auto-dispatched, forward-only). *Data / config seed* (rows, defaults, flags) → the
+  **milestone config-seed task**, applied operationally on prod (**prod is the source of truth for
+  seeded data**; it does not belong in `migrations/`). A task with both ships the migration in its
+  PR and accretes the seed. *(This is the universal form of the project-specific "data-only seeds
+  are operational" rule that also lives in a project's `context.md`.)*
+- **The config-seed task:** Type `🔧 Operational` — `Mode: 🔧 Operational · directed`, **or
+  `· research-first`** if any seed's values still need gathering/confirmation (e.g. when the concrete
+  config values and their defaults must be gathered and confirmed before authoring). One per milestone;
+  **rests at `🔲 Backlog` / `🗂️ Ready` and accretes** — `/groom` appends each code task's seed as
+  it's groomed (the accumulator lifecycle, like the Gate — not a modify-a-Ready-task exception).
+  Never auto-dispatched; a human runs it **at milestone end, after the code is merged and
+  deployed**, through the **audited config-CRUD + change-signal** path, never raw SQL. It **does not
+  itself accrete to the Manual Verification Gate** (it is operational, not runtime-manual).
+- **Reconcile + capture is the acceptance** — and it catches the specific prod gotcha: a
+  long-running worker that reloads config on a change signal must **pick up the change via the
+  CRUD-fired change signal, without a restart** (config hot-reload; if
+  it doesn't, restart the runner), **and** the seeded mechanism must **actually emit**. Authoring a
+  row is not seeding; a change signal that the runner's stale config-cache ignores is not seeding.
+  (This hot-reload caveat is documented in the project's `context.md`.)
+- **Bidirectional cross-reference.** The config-seed task body lists **every seed + its source-task
+  ID**, grouped by source task; **each contributing Code task points back at the config-seed task**
+  (a one-line "operational seed: applied via the milestone config-seed task `<task-id>`" in its body,
+  in place of a free-floating inline note).
+- **Accretion is mandatory and promotion-gated — not best-effort.** Because the seed is deliberately
+  kept out of the Code task's PR, the config-seed task is the **only** place it survives. So
+  **before** any 💻 Code task carrying an operational seed is marked `🗂️ Ready`, the groomer MUST
+  either (a) append that seed to the milestone's config-seed task body (grouped by source task,
+  creating the config-seed task if absent) **and** add the back-reference to the Code task, or
+  (b) confirm the task has **no** operational seed — recording the outcome as a `seed_contribution`
+  artifact in `grooming-state.json`: `{ "seed_task_id": "…", "seeds": [...], "appended_at": "…" }`
+  or `{ "decision": "none" }`. Symmetric with `gate_contribution` — same shape, same load-bearing
+  weight. Dropping a seed into an inline note without accreting it is the same silent-coverage-leak
+  class as stripping a manual item without accreting it to the Gate. *(Mechanical enforcement —
+  `seed_contribution` seeding + a `milestone_seed_task_id` field in `groom-load.mjs`, plus a
+  promotion-gate hook check in `groom-gate.mjs`, mirroring the Gate's — is tracked by the Backlog
+  task **Enforce milestone config-seed accretion in /groom** on the milestone board (mirroring the
+  Gate's enforcement task); until it ships, groomers apply this by hand.)*
+- **Acceptance criteria:** two-subsection format — `### 🤖 Automated tests` reads `*N/A —
+  operational task; verification is by reconcile + capture.*`; `### 👁️ Manual verification` lists,
+  per seed, "applied via audited CRUD + change signal; worker hot-reloaded (or runner restarted); the
+  mechanism actually emits (reconcile + capture)".
+
+---
+
+## 🔧 Operational & 🔎 Investigation tasks
+
+These two Types replace the retired `🛠️ Tooling`. Both are **interactive, judgment-bound,
+and never auto-dispatched** — they are executed by the **`ops` skill** (see `procedures.md`
+§ Task types). They are distinguished by their **primary deliverable**, and each carries a
+**Mode declaration** line at the top of its Context.
+
+### 🔧 Operational — change prod/environment state through a sanctioned surface
+The deliverable is a **verified change** to production or the operating environment
+(config/catalog/entity authoring, a backfill/re-derive, alarm config, a dependency install,
+wiring a tool/MCP into sessions, a machine migration). The decision is already made; the
+uncertainty is **breadth / source / mechanics**, never *whether* or *what*.
+
+- **Mode declaration:** `Mode: 🔧 Operational · directed` (fully-specified change, little/no
+  research) **or** `Mode: 🔧 Operational · research-first` (the *what to author* needs research;
+  governed by "research → present → author on confirmation; never apply before presenting").
+- **Context:** the **target surface** (which config category / catalog / entity set / host),
+  the **audited path** to use (the project's config-CRUD / ops affordance — never raw SQL), the
+  **read-modify-write** requirement for any replace-semantics shared state, and the
+  **reconcile + capture** check that proves the worker heard the change and a record landed.
+  For research-first, state the research scope + the source-of-truth to pull from.
+- **Acceptance criteria:** `### 🤖 Automated tests` is usually `*N/A — operational task;
+  verification is by reconcile + capture.*` `### 👁️ Manual verification` lists the **in-session**
+  checks (seed present on prod; worker reconciled; correct breadth authored; "Done ≠ deployed ≠
+  seeded ≠ working"). **Operational tasks do NOT accrete to the Manual Verification Gate** — they
+  self-verify when run.
+- **Milestone config-seed accretion (grooming-time).** A 💻 Code task's *operational data/config
+  seed* — a prod-data row/flag/default deliberately kept **out** of its auto-dispatched PR — accretes
+  at grooming time to the milestone's one **config-seed** `🔧 Operational` task, the operational twin
+  of the Manual Verification Gate (see § Milestone config-seed). Schema/DDL still ships as a migration
+  in the Code task's PR; only data/config seeds accrete.
+- Use a **Targets / surfaces affected** section (config categories / catalog entries / entities /
+  hosts) in place of *Files / paths affected*.
+
+### 🔎 Investigation — produce a defensible decision from live data
+The deliverable is a **decision** (diagnosis, disposition, go/no-go spike) plus **filed
+follow-on tasks**. The uncertainty is **the conclusion itself**.
+
+- **Mode declaration:** `Mode: 🔎 Investigation` (or `Mode: 🔎 Investigation · spike` for
+  verifying an external surface before code depends on it).
+- **Context:** the **observed anomaly by value with provenance**, the **authoritative doc** to
+  consult first, the **decision space / branches** (a/b/c → what each implies and what gets
+  filed), and the **falsification** to run ("what would I observe if this were false, and did I
+  look?"). Treat any registered number as a claim to re-derive, not a fact.
+- **Acceptance criteria:** `### 🤖 Automated tests` is usually `*N/A — investigation task.*`
+  `### 👁️ Manual verification` lists: the decision reached is defensible (falsification run);
+  evidence recorded with provenance; follow-on tasks filed with **accurate priority**.
+- Use a **Deliverables** section (the decision + the follow-on tasks it will file) in place of
+  *Files / paths affected*. **Never** put "implement module X" in an Investigation's acceptance
+  criteria — a code fix it surfaces is a *separate* `💻 Code` task it files (an Investigation
+  legitimately *produces* Code tasks; it must not *be* one).
+
+### 🧪 Testing — observational/E2E is an Investigation variant; pure test implementation is Code
+A 🧪 Testing task is only for **observational / E2E** work — *run the system live and observe*,
+reaching a **`disposition`** — `pass` (verified by value), `blocked-pending-fix` (issue surfaced →
+file the fix + set this task 🗂️ Ready + `Depends On` it), or `pass-with-caveat` (**there is no
+"fail"**). Executed by the **`ops` skill** as an 🔎 Investigation variant (same by-value + falsify +
+root-cause bar), and declares **`Mode: 🧪 Testing · observational`** (or `· e2e`).
+
+- **Pure test implementation is 💻 Code, not 🧪 Testing.** Writing unit/integration tests, fixtures,
+  or harness code — with **no dependency on data only available at run time** — is dispatchable code;
+  author it as a `💻 Code` task so it flows through auto-dispatch. Filing it as 🧪 Testing (or
+  `Mode: 🧪 Testing · authoring`) only gets it **excluded** from `/ops` with a "reclassify → Code" flag.
+- **Acceptance criteria:** like Investigation — `### 🤖 Automated tests` reads `*N/A — observational
+  testing task.*`; `### 👁️ Manual verification` states the **disposition** (`pass` shown *by value*,
+  not a green-looking zero; or `blocked-pending-fix` with the filed fix + `Depends On`).
+
+### Classifying at authoring time
+Classify by the **primary deliverable**: a verified prod change ⇒ Operational; a decision ⇒
+Investigation. Watch the two smuggling shapes: an "Operational" task whose *what* can only be
+decided by live-data diagnosis is really **Investigation**; an "Investigation" that bundles a
+well-specified code change is two tasks (Investigation + Code). *(At runtime the `ops` skill may
+still convert a task between the modes under its drill-budget rule — but author it as its primary
+shape, don't pre-hedge.)*
 
 ## Common mistakes to avoid
 

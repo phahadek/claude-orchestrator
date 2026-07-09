@@ -106,8 +106,8 @@ On success it has written, under `.skill-cache/design/<milestone>/`:
 
 Read the context-page bodies in `context/` — Master Context, Technical Architecture,
 Coding Guidelines, Research Goals, Future Scope, Project Milestones. Also read the
-universal task-authoring standard at `config/task-writing.md` (no longer a context
-page — read it from local disk). **This is non-negotiable**: executing a design task
+universal task-authoring standard at `config/task-writing.md` (no longer a Notion
+context page — read it from local disk). **This is non-negotiable**: executing a design task
 without the
 architectural constraints loaded is how design sessions produce confidently-wrong
 decisions that cascade through every Code task that consumes them.

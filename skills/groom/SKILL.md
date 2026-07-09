@@ -83,7 +83,7 @@ On success it has written, under `.skill-cache/grooming/<milestone>/`:
 Read `context-bundle.json` and `worklist.json`. Read the context-page bodies in
 `context/` — the master context, research goals, architecture, coding guidelines.
 Also read the universal task-authoring standard at `config/task-writing.md` (it is no
-longer a context page — the skill reads it from local disk). **This is
+longer a Notion context page — the skill reads it from local disk). **This is
 non-negotiable**: resolving a task without the architectural constraints loaded is how
 grooming produces confidently-wrong decisions.
 
@@ -230,7 +230,13 @@ The final Gate batch confirms that all stripped items landed on the Gate body an
 presents the Gate for sign-off. The Gate type's defined lifecycle is accumulation while
 at 🗂️ Ready — appending to it is not editing a Ready task.
 
-When every batch is signed off, confirm the milestone board is fully groomed.
+**Re-check the board before finishing — don't close on a stale snapshot.** Step 1 loaded the
+board once at the start, but new 🔲 Backlog tasks can arrive *during* the session (the operator or
+another session files them while grooming runs). So before declaring the board groomed, **re-query
+the live board** for any 🔲 Backlog tasks not in the original worklist. If any appeared, **continue**
+— groom them in fresh batches (Steps 2–4) exactly like the rest; don't defer them to "next time."
+Repeat the re-query until a pass finds **no** new Backlog. Only then, when every batch is signed
+off, confirm the milestone board is fully groomed.
 
 ---
 
