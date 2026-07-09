@@ -321,9 +321,9 @@ describe('Settings — effort dropdowns', () => {
     expect(effortSelects).toHaveLength(3);
 
     for (const select of effortSelects) {
-      const labels = Array.from(
-        (select as HTMLSelectElement).options,
-      ).map((o) => o.text);
+      const labels = Array.from((select as HTMLSelectElement).options).map(
+        (o) => o.text,
+      );
       expect(labels).toEqual([
         'Default',
         'low',

@@ -366,10 +366,7 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                     className={styles.select}
                     value={settings?.review_session_effort ?? ''}
                     onChange={(e) =>
-                      void handleChange(
-                        'review_session_effort',
-                        e.target.value,
-                      )
+                      void handleChange('review_session_effort', e.target.value)
                     }
                   >
                     {EFFORT_OPTIONS.map((o) => (
