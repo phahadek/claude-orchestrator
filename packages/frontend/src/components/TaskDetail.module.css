@@ -76,6 +76,23 @@
   cursor: not-allowed;
 }
 
+/* ── Spec toggle button ───────────────────────────────────────────── */
+.specToggleButton {
+  font-size: 0.78rem;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm, 4px);
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+.specToggleButton:hover {
+  color: var(--text-primary);
+}
+
 /* ── Display status badge ─────────────────────────────────────────── */
 .displayStatusBadge {
   display: inline-flex;
