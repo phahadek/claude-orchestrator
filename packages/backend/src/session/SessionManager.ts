@@ -2082,15 +2082,36 @@ export class SessionManager extends EventEmitter {
     return this.findLiveSessionIdForTask(taskId) !== undefined;
   }
 
-  /** Returns the live (non-review) session id for the given task id, if any. */
+  /**
+   * Returns the live (non-review) session id for the given task id, if any.
+   * Skips entries that are ended/terminal — a stalled or already-exited session
+   * must not block AutoLauncher from relaunching the task. A genuinely
+   * resumable idle session (DB row present, non-terminal status) still counts
+   * as live so a parallel launch can't collide with it.
+   */
   findLiveSessionIdForTask(taskId: string): string | undefined {
     const norm = taskId.replace(/-/g, '');
     for (const s of this.sessions.values()) {
       if (s.sessionType === 'review') continue;
+      if (s.hasEnded) continue;
       const tid = s.taskId?.replace(/-/g, '');
-      if (tid && tid === norm) return s.sessionId;
+      if (!tid || tid !== norm) continue;
+      const row = getSession(s.sessionId);
+      if (row && TERMINAL_STATUSES.has(row.status)) continue;
+      return s.sessionId;
     }
     return undefined;
+  }
+
+  /**
+   * Force-remove a session's in-memory entry, regardless of process lifecycle
+   * state. Recovery paths (redispatch, abort, delete) call this to reconcile
+   * the live-session map so a stalled or already-exited session can no longer
+   * block a relaunch — the normal run().then() cleanup only fires when the
+   * subprocess actually exits, which a hung session may never do.
+   */
+  evictSession(sessionId: string): void {
+    this.evictDeadSessionEntry(sessionId);
   }
 
   async kill(sessionId: string): Promise<void> {
@@ -2140,7 +2161,9 @@ export class SessionManager extends EventEmitter {
       payload: { sessionId, reason: 'user_abort' },
     });
 
-    // Kill the process (fire-and-forget — cleanup via run().then() still fires).
+    // Kill the process (fire-and-forget — cleanup via run().then() still fires
+    // for a genuinely live process, but is a no-op / never fires for a session
+    // that has already exited or hung, so we also evict directly below).
     if (liveSession) {
       liveSession.kill().catch((err) => {
         logger.error(
@@ -2148,6 +2171,11 @@ export class SessionManager extends EventEmitter {
         );
       });
     }
+
+    // Evict the in-memory entry now rather than relying solely on the
+    // run().then() cleanup cascade, which never fires for an already-exited
+    // or hung session — leaving a dead map entry that blocks relaunch.
+    this.evictSession(sessionId);
 
     // Reset the task to Ready so the next launch is a fresh session.
     if (row.session_type !== 'standard' || !row.task_id) return;
