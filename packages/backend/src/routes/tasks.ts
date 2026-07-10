@@ -293,6 +293,8 @@ export function summarizeEvent(payload: string): string {
 
 interface SessionManagerLike {
   sendOrResume(sessionId: string, text: string): Promise<string | null>;
+  findLiveSessionIdForTask(taskId: string): string | undefined;
+  abortSession(sessionId: string): Promise<void>;
 }
 
 interface ReviewOrchestratorLike {
@@ -311,16 +313,29 @@ interface ReviewOrchestratorLike {
 
 /**
  * redispatch — clear the sticky pause + crash count, drop the stale task-cache
- * row, and set the task back to Ready. This is the clear-pause primitive the
- * legacy `unblock` endpoint performed. Rejects if `backend.updateStatus` rejects.
+ * row, evict/abort any lingering live session for the task, and set the task
+ * back to Ready. This is the clear-pause primitive the legacy `unblock`
+ * endpoint performed. Rejects if `backend.updateStatus` rejects.
+ *
+ * Evicting the live session before setting Ready matters because a stalled or
+ * hung session can otherwise survive in SessionManager's in-memory map
+ * indefinitely, causing AutoLauncher to skip every relaunch attempt with
+ * "live session already exists".
  */
 async function executeRedispatch(
   backend: Awaited<ReturnType<typeof getTaskBackend>>,
   taskId: string,
+  sessionManager?: SessionManagerLike,
 ): Promise<void> {
   clearTaskPauseReason(taskId);
   resetTaskCrashCount(taskId);
   deleteTaskCacheRow(taskId);
+
+  const liveSessionId = sessionManager?.findLiveSessionIdForTask(taskId);
+  if (liveSessionId) {
+    await sessionManager!.abortSession(liveSessionId);
+  }
+
   await backend.updateStatus(taskId, '🗂️ Ready', { source: 'orchestrator' });
   emitTaskUpdated(taskId);
   if (taskBroadcastFn) {
@@ -621,7 +636,7 @@ export function createTasksRouter(
     }
 
     try {
-      await executeRedispatch(backend, taskId);
+      await executeRedispatch(backend, taskId, sessionManager);
     } catch (err) {
       res.status(500).json({
         error: err instanceof Error ? err.message : 'Failed to update status',
@@ -758,7 +773,7 @@ export function createTasksRouter(
           return;
         }
 
-        await executeRedispatch(backend, taskId);
+        await executeRedispatch(backend, taskId, sessionManager);
       } else if (action === 'rerun') {
         const prRow = getPRByNotionTaskId(taskId);
         if (!prRow) {

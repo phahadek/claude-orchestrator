@@ -377,6 +377,122 @@ describe('SessionManager.abortSession() — hasEnded guard', () => {
   });
 });
 
+describe('SessionManager.abortSession() — in-memory eviction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
+    setupFakeBackend();
+  });
+
+  it('removes the in-memory entry even when run() never resolves (already-exited/hung session)', async () => {
+    const mockSession = {
+      sessionType: 'standard',
+      taskId: 'notion-task-id',
+      prUrl: null,
+      hasEnded: false,
+      on: vi.fn(),
+      // Simulates an already-dead process whose run() promise never settles —
+      // the run().then() cleanup cascade cannot fire in this case.
+      run: vi.fn().mockReturnValue(new Promise(() => {})),
+      kill: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const sm = new SessionManager();
+    const sessions = (sm as unknown as { sessions: Map<string, unknown> })
+      .sessions;
+    sessions.set('test-session', mockSession);
+
+    await sm.abortSession('test-session');
+
+    expect(sessions.has('test-session')).toBe(false);
+  });
+});
+
+describe('SessionManager.findLiveSessionIdForTask()', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function makeLiveSession(overrides: Record<string, unknown> = {}) {
+    return {
+      sessionId: 'live-session',
+      sessionType: 'standard',
+      taskId: 'notion-task-id',
+      hasEnded: false,
+      ...overrides,
+    };
+  }
+
+  function withLiveSession(overrides: Record<string, unknown> = {}) {
+    const sm = new SessionManager();
+    (sm as unknown as { sessions: Map<string, unknown> }).sessions.set(
+      'live-session',
+      makeLiveSession(overrides),
+    );
+    return sm;
+  }
+
+  it('returns the session id for a genuinely live (running) session', () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }) as never,
+    );
+    const sm = withLiveSession();
+    expect(sm.findLiveSessionIdForTask('notion-task-id')).toBe(
+      'live-session',
+    );
+  });
+
+  it('returns undefined when the in-memory session has hasEnded=true', () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }) as never,
+    );
+    const sm = withLiveSession({ hasEnded: true });
+    expect(
+      sm.findLiveSessionIdForTask('notion-task-id'),
+    ).toBeUndefined();
+  });
+
+  it('returns undefined when the DB row status is terminal (killed)', () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'killed' }) as never,
+    );
+    const sm = withLiveSession();
+    expect(
+      sm.findLiveSessionIdForTask('notion-task-id'),
+    ).toBeUndefined();
+  });
+
+  it('returns undefined when the DB row status is terminal (done/error/superseded)', () => {
+    for (const status of ['done', 'error', 'superseded']) {
+      vi.mocked(queries.getSession).mockReturnValue(
+        makeSessionRow({ status }) as never,
+      );
+      const sm = withLiveSession();
+      expect(sm.findLiveSessionIdForTask('notion-task-id')).toBeUndefined();
+    }
+  });
+
+  it('keeps a genuinely resumable idle session blocking a parallel launch', () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'idle' }) as never,
+    );
+    const sm = withLiveSession();
+    expect(sm.findLiveSessionIdForTask('notion-task-id')).toBe(
+      'live-session',
+    );
+  });
+
+  it('ignores review sessions', () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }) as never,
+    );
+    const sm = withLiveSession({ sessionType: 'review' });
+    expect(
+      sm.findLiveSessionIdForTask('notion-task-id'),
+    ).toBeUndefined();
+  });
+});
+
 describe('SessionManager.abortSession() — fresh launch eligibility', () => {
   beforeEach(() => {
     vi.clearAllMocks();

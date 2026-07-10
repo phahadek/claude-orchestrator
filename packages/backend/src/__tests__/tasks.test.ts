@@ -1143,6 +1143,47 @@ describe('POST /api/tasks/:taskId/recover', () => {
         }),
       );
     });
+
+    it('evicts/aborts a live non-review session for the task before setting Ready', async () => {
+      const updateStatus = setupFakeBackend();
+      const findLiveSessionIdForTask = vi.fn().mockReturnValue('live-session-1');
+      const abortSession = vi.fn().mockResolvedValue(undefined);
+      const app = buildAppWithServices({
+        sendOrResume: vi.fn(),
+        findLiveSessionIdForTask,
+        abortSession,
+      } as never);
+
+      const res = await supertest(app).post(
+        '/api/tasks/task-1/recover?projectId=proj-1',
+      );
+
+      expect(res.status).toBe(200);
+      expect(findLiveSessionIdForTask).toHaveBeenCalledWith('task-1');
+      expect(abortSession).toHaveBeenCalledWith('live-session-1');
+      expect(abortSession.mock.invocationCallOrder[0]).toBeLessThan(
+        updateStatus.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('does not call abortSession when no live session exists for the task', async () => {
+      const updateStatus = setupFakeBackend();
+      const findLiveSessionIdForTask = vi.fn().mockReturnValue(undefined);
+      const abortSession = vi.fn().mockResolvedValue(undefined);
+      const app = buildAppWithServices({
+        sendOrResume: vi.fn(),
+        findLiveSessionIdForTask,
+        abortSession,
+      } as never);
+
+      const res = await supertest(app).post(
+        '/api/tasks/task-1/recover?projectId=proj-1',
+      );
+
+      expect(res.status).toBe(200);
+      expect(abortSession).not.toHaveBeenCalled();
+      expect(updateStatus).toHaveBeenCalled();
+    });
   });
 
   describe('action: rerun', () => {

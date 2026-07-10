@@ -102,6 +102,9 @@ sessionsRouter.delete('/:id', (req: Request, res: Response) => {
     res.status(404).json({ error: 'Session not found' });
     return;
   }
+  // Evict the in-memory entry first so a lingering live session can never
+  // outlive its DB row and block a future relaunch.
+  _sessionManager?.evictSession(sessionId);
   deleteSession(sessionId);
   res.status(200).json({ deleted: sessionId });
 });
