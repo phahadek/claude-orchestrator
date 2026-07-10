@@ -126,6 +126,7 @@ export function TaskDetail({
 }: Props) {
   const isMobile = useIsMobile();
   const [showReviewSection, setShowReviewSection] = useState(true);
+  const [showSpec, setShowSpec] = useState(!task.codeSession);
   const [mobileOpenSection, setMobileOpenSection] = useState<
     'review' | 'pr' | null
   >('review');
@@ -162,6 +163,8 @@ export function TaskDetail({
     setAbortInFlight(false);
     setAssignedRepo(task.assignedRepo);
     setAssignRepoInFlight(false);
+    setShowSpec(!task.codeSession);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.taskId, task.assignedRepo]);
 
   // Look up live session state
@@ -386,6 +389,10 @@ export function TaskDetail({
     setMobileOpenSection((prev) => (prev === 'pr' ? null : 'pr'));
   }, []);
 
+  const handleSpecToggle = useCallback(() => {
+    setShowSpec((v) => !v);
+  }, []);
+
   return (
     <div className={styles.panel}>
       {/* ── Header ── */}
@@ -427,6 +434,14 @@ export function TaskDetail({
               {getTaskSourceLinkLabel(project?.taskSource ?? 'notion')}
             </a>
           )}
+          <button
+            className={styles.specToggleButton}
+            onClick={handleSpecToggle}
+            aria-expanded={showSpec}
+            aria-controls="task-detail-spec-section"
+          >
+            {showSpec ? 'Hide spec' : 'Show spec'}
+          </button>
           {isMultiRepo && (
             <select
               className={styles.repoSelect}
@@ -451,29 +466,33 @@ export function TaskDetail({
 
       <div className={styles.body}>
         {/* ── Spec — read-only task body, uniform across sources ── */}
-        <div className={styles.specSection}>
-          <div className={styles.sectionHeader}>
-            <span className={styles.sectionTitle}>Spec</span>
+        {showSpec && (
+          <div id="task-detail-spec-section" className={styles.specSection}>
+            <div className={styles.sectionHeader}>
+              <span className={styles.sectionTitle}>Spec</span>
+            </div>
+            <div className={styles.specBody}>
+              {specLoading && (
+                <p className={styles.noTranscript}>Loading spec…</p>
+              )}
+              {specError && (
+                <div className={styles.errorBanner}>
+                  Failed to load spec: {specError}
+                </div>
+              )}
+              {!specLoading && !specError && specMarkdown && (
+                <div className={styles.specMarkdown}>
+                  <Markdown remarkPlugins={[remarkGfm]}>
+                    {specMarkdown}
+                  </Markdown>
+                </div>
+              )}
+              {!specLoading && !specError && !specMarkdown && (
+                <p className={styles.noTranscript}>No spec available.</p>
+              )}
+            </div>
           </div>
-          <div className={styles.specBody}>
-            {specLoading && (
-              <p className={styles.noTranscript}>Loading spec…</p>
-            )}
-            {specError && (
-              <div className={styles.errorBanner}>
-                Failed to load spec: {specError}
-              </div>
-            )}
-            {!specLoading && !specError && specMarkdown && (
-              <div className={styles.specMarkdown}>
-                <Markdown remarkPlugins={[remarkGfm]}>{specMarkdown}</Markdown>
-              </div>
-            )}
-            {!specLoading && !specError && !specMarkdown && (
-              <p className={styles.noTranscript}>No spec available.</p>
-            )}
-          </div>
-        </div>
+        )}
 
         {/* ── Code SessionPanel ── */}
         {task.codeSession && (
