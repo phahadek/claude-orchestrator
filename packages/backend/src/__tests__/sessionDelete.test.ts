@@ -24,7 +24,11 @@ vi.mock('../db/queries', () => ({
   unfavoriteSession: vi.fn(),
 }));
 
-import { sessionsRouter, setBroadcast, setSessionManager } from '../routes/sessions';
+import {
+  sessionsRouter,
+  setBroadcast,
+  setSessionManager,
+} from '../routes/sessions';
 import * as queries from '../db/queries';
 import type { SessionManager } from '../session/SessionManager';
 

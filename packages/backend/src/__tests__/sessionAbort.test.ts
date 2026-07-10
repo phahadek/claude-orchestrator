@@ -437,9 +437,7 @@ describe('SessionManager.findLiveSessionIdForTask()', () => {
       makeSessionRow({ status: 'running' }) as never,
     );
     const sm = withLiveSession();
-    expect(sm.findLiveSessionIdForTask('notion-task-id')).toBe(
-      'live-session',
-    );
+    expect(sm.findLiveSessionIdForTask('notion-task-id')).toBe('live-session');
   });
 
   it('returns undefined when the in-memory session has hasEnded=true', () => {
@@ -447,9 +445,7 @@ describe('SessionManager.findLiveSessionIdForTask()', () => {
       makeSessionRow({ status: 'running' }) as never,
     );
     const sm = withLiveSession({ hasEnded: true });
-    expect(
-      sm.findLiveSessionIdForTask('notion-task-id'),
-    ).toBeUndefined();
+    expect(sm.findLiveSessionIdForTask('notion-task-id')).toBeUndefined();
   });
 
   it('returns undefined when the DB row status is terminal (killed)', () => {
@@ -457,9 +453,7 @@ describe('SessionManager.findLiveSessionIdForTask()', () => {
       makeSessionRow({ status: 'killed' }) as never,
     );
     const sm = withLiveSession();
-    expect(
-      sm.findLiveSessionIdForTask('notion-task-id'),
-    ).toBeUndefined();
+    expect(sm.findLiveSessionIdForTask('notion-task-id')).toBeUndefined();
   });
 
   it('returns undefined when the DB row status is terminal (done/error/superseded)', () => {
@@ -477,9 +471,7 @@ describe('SessionManager.findLiveSessionIdForTask()', () => {
       makeSessionRow({ status: 'idle' }) as never,
     );
     const sm = withLiveSession();
-    expect(sm.findLiveSessionIdForTask('notion-task-id')).toBe(
-      'live-session',
-    );
+    expect(sm.findLiveSessionIdForTask('notion-task-id')).toBe('live-session');
   });
 
   it('ignores review sessions', () => {
@@ -487,9 +479,7 @@ describe('SessionManager.findLiveSessionIdForTask()', () => {
       makeSessionRow({ status: 'running' }) as never,
     );
     const sm = withLiveSession({ sessionType: 'review' });
-    expect(
-      sm.findLiveSessionIdForTask('notion-task-id'),
-    ).toBeUndefined();
+    expect(sm.findLiveSessionIdForTask('notion-task-id')).toBeUndefined();
   });
 });
 

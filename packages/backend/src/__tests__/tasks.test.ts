@@ -1146,7 +1146,9 @@ describe('POST /api/tasks/:taskId/recover', () => {
 
     it('evicts/aborts a live non-review session for the task before setting Ready', async () => {
       const updateStatus = setupFakeBackend();
-      const findLiveSessionIdForTask = vi.fn().mockReturnValue('live-session-1');
+      const findLiveSessionIdForTask = vi
+        .fn()
+        .mockReturnValue('live-session-1');
       const abortSession = vi.fn().mockResolvedValue(undefined);
       const app = buildAppWithServices({
         sendOrResume: vi.fn(),
