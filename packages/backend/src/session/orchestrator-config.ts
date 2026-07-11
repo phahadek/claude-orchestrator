@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { logger } from '../logger';
+import { ALLOWED_TOOLS } from '../config';
 
 export interface OrchestratorConfig {
   /**
@@ -176,4 +177,16 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
     );
     return { ...DEFAULTS };
   }
+}
+
+/**
+ * The full allowlist a spawned session is granted: the base ALLOWED_TOOLS plus
+ * the per-project extras from .claude-orchestrator.yml. This is the exact array
+ * passed as `allowedTools` at spawn (see AgentSession) — extracted so tests can
+ * assert on the merged result rather than just the base const.
+ */
+export function getSessionAllowedTools(
+  orchConfig: Pick<OrchestratorConfig, 'allowed_tools'>,
+): string[] {
+  return [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
 }
