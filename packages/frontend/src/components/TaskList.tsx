@@ -10,7 +10,7 @@ import { StagedIntentPanel } from './StagedIntentPanel';
 import type { StagedIntent } from '../api/stagedIntents';
 import { useDispatch } from '../hooks/useDispatch';
 import { projectsApi } from '../api/projects';
-import { priorityRank, sortByPriority } from '../utils/taskSort';
+import { sortByPriority } from '../utils/taskSort';
 import styles from './TaskList.module.css';
 
 interface Props {
@@ -65,10 +65,8 @@ function groupByWave(tasks: TaskView[]): Map<number, TaskView[]> {
     if (!map.has(wave)) map.set(wave, []);
     map.get(wave)!.push(task);
   }
-  for (const [, waveTasks] of map) {
-    waveTasks.sort(
-      (a, b) => priorityRank(a.priority) - priorityRank(b.priority),
-    );
+  for (const [wave, waveTasks] of map) {
+    map.set(wave, sortByPriority(waveTasks));
   }
   return map;
 }
