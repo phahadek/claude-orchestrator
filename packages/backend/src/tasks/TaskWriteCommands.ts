@@ -261,7 +261,8 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     options?: TaskWriteOptions,
   ): Promise<void> {
     const disallowed = Object.keys(patch).filter(
-      (key) => !ALLOWED_PROPERTY_KEYS.includes(key as keyof TaskPropertiesPatch),
+      (key) =>
+        !ALLOWED_PROPERTY_KEYS.includes(key as keyof TaskPropertiesPatch),
     );
     if (disallowed.length > 0) {
       throw new Error(

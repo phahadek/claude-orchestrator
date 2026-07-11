@@ -189,9 +189,11 @@ describe('TaskWriteCommands.setType', () => {
 
   it('rejects setting Code when the body has open/to-be-investigated items', async () => {
     const backend = makeBackend({
-      fetchTaskPage: vi.fn().mockResolvedValue(
-        '## Open Questions\n- Which retry policy should we use?\n',
-      ),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Open Questions\n- Which retry policy should we use?\n',
+        ),
     });
     const commands = new BackendTaskWriteCommands(backend);
 
@@ -203,9 +205,11 @@ describe('TaskWriteCommands.setType', () => {
 
   it('accepts Investigation when the body carries an open investigation', async () => {
     const backend = makeBackend({
-      fetchTaskPage: vi.fn().mockResolvedValue(
-        '## Open Questions\n- What is causing the memory leak?\n',
-      ),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Open Questions\n- What is causing the memory leak?\n',
+        ),
     });
     const commands = new BackendTaskWriteCommands(backend);
 
