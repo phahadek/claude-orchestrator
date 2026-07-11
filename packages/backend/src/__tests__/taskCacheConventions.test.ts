@@ -13,6 +13,7 @@ vi.mock('../config.js', () => ({
 vi.mock('../projects/ProjectService.js', () => ({
   ProjectService: {
     getMilestone: vi.fn(),
+    listMilestones: vi.fn(() => []),
   },
 }));
 
@@ -30,6 +31,9 @@ import { ProjectService } from '../projects/ProjectService.js';
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 const BOARD_ID = 'aabbccdd-1122-3344-5566-778899aabbcc';
+// The DB milestone UUID — the board cache is keyed on this, not on BOARD_ID
+// (the Notion source database id), so it stays project-scoped by construction.
+const MILESTONE_ID = 'milestone-1';
 const TASK_1 = '11111111-1111-1111-1111-111111111111';
 const TASK_2 = '22222222-2222-2222-2222-222222222222';
 const TASK_3 = '33333333-3333-3333-3333-333333333333';
@@ -106,9 +110,9 @@ describe('getTaskCache — no UUID format fallback', () => {
 // ─── NotionTaskBackend.fetchReadyTasks: cache write shape ─────────────────────
 
 describe('NotionTaskBackend.fetchReadyTasks — task_cache write shape', () => {
-  it('writes exactly 4 rows: 3 notion:<id> + 1 board:<id>, no raw-UUID rows', async () => {
+  it('writes exactly 5 rows: 3 notion:<id> + 1 board:<milestoneId> (app cache) + 1 board:<sourceId> (NotionClient read-through cache), no raw-UUID rows', async () => {
     vi.mocked(ProjectService.getMilestone).mockReturnValue({
-      id: 'milestone-1',
+      id: MILESTONE_ID,
       projectId: 'proj-1',
       name: 'M1',
       sourceId: BOARD_ID,
@@ -126,16 +130,22 @@ describe('NotionTaskBackend.fetchReadyTasks — task_cache write shape', () => {
     );
 
     const backend = new NotionTaskBackend(new NotionClient());
-    await backend.fetchReadyTasks('milestone-1');
+    await backend.fetchReadyTasks(MILESTONE_ID);
 
     const { db } = await import('../db/db.js');
     const rows = db
       .prepare('SELECT task_id FROM task_cache ORDER BY task_id')
       .all() as { task_id: string }[];
 
-    expect(rows).toHaveLength(4);
+    // NotionClient keeps its own short-TTL read-through cache keyed on the
+    // Notion database id (sourceId) — needed by callers like the groom
+    // loader that call NotionClient directly with no milestone concept.
+    // That row is separate from the app-level board cache, which is keyed
+    // on the DB milestone UUID (see NotionTaskBackend.fetchReadyTasks).
+    expect(rows).toHaveLength(5);
 
     const keys = rows.map((r) => r.task_id);
+    expect(keys).toContain(`board:${MILESTONE_ID}`);
     expect(keys).toContain(`board:${BOARD_ID}`);
     expect(keys).toContain(`notion:${TASK_1}`);
     expect(keys).toContain(`notion:${TASK_2}`);
@@ -155,7 +165,7 @@ describe('NotionTaskBackend.fetchReadyTasks — task_cache write shape', () => {
 describe('NotionTaskBackend.fetchReadyTasks — board cache JSON content', () => {
   it('board cache JSON contains prefixed notion:<uuid> IDs, not raw UUIDs', async () => {
     vi.mocked(ProjectService.getMilestone).mockReturnValue({
-      id: 'milestone-1',
+      id: MILESTONE_ID,
       projectId: 'proj-1',
       name: 'M1',
       sourceId: BOARD_ID,
@@ -173,9 +183,9 @@ describe('NotionTaskBackend.fetchReadyTasks — board cache JSON content', () =>
     );
 
     const backend = new NotionTaskBackend(new NotionClient());
-    await backend.fetchReadyTasks('milestone-1');
+    await backend.fetchReadyTasks(MILESTONE_ID);
 
-    const boardRow = getTaskCache(`board:${BOARD_ID}`);
+    const boardRow = getTaskCache(`board:${MILESTONE_ID}`);
     expect(boardRow).toBeDefined();
     const tasks = JSON.parse(boardRow!.raw_json) as { id: string }[];
     expect(tasks).toHaveLength(3);
@@ -208,6 +218,17 @@ describe('LocalTaskBackend.fetchReadyTasks — board cache JSON content', () => 
         '        status: Ready',
       ].join('\n'),
     );
+    vi.mocked(ProjectService.listMilestones).mockReturnValue([
+      {
+        id: 'db-milestone-m1',
+        projectId: 'proj-local',
+        name: 'M1',
+        sourceId: 'm1',
+        displayOrder: 0,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+    ]);
   });
 
   afterEach(() => {
@@ -215,15 +236,135 @@ describe('LocalTaskBackend.fetchReadyTasks — board cache JSON content', () => 
   });
 
   it('board cache JSON contains prefixed yaml:<id> IDs, not raw IDs', async () => {
-    const backend = new LocalTaskBackend(tmpDir);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-local');
     await backend.fetchReadyTasks('m1');
 
-    const boardRow = getTaskCache('board:m1');
+    const boardRow = getTaskCache('board:db-milestone-m1');
     expect(boardRow).toBeDefined();
     const tasks = JSON.parse(boardRow!.raw_json) as { id: string }[];
     expect(tasks.every((t) => t.id.startsWith('yaml:'))).toBe(true);
     expect(tasks.map((t) => t.id)).toContain('yaml:task-alpha');
     expect(tasks.map((t) => t.id)).toContain('yaml:task-beta');
+  });
+});
+
+// ─── LocalTaskBackend: cache key is scoped by project (same-named-milestone fix) ─
+
+describe('LocalTaskBackend.fetchReadyTasks — board cache is scoped per project', () => {
+  let dirA: string;
+  let dirB: string;
+
+  beforeEach(() => {
+    dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'local-task-projA-'));
+    dirB = fs.mkdtempSync(path.join(os.tmpdir(), 'local-task-projB-'));
+    for (const [dir, taskName] of [
+      [dirA, 'Task From Project A'],
+      [dirB, 'Task From Project B'],
+    ] as const) {
+      fs.writeFileSync(
+        path.join(dir, 'tasks.yaml'),
+        [
+          'milestones:',
+          '  - id: m1', // same yaml milestone id in both projects, on purpose
+          '    name: Same Name',
+          '    tasks:',
+          '      - id: only-task',
+          `        name: ${taskName}`,
+          '        status: Ready',
+        ].join('\n'),
+      );
+    }
+  });
+
+  afterEach(() => {
+    fs.rmSync(dirA, { recursive: true, force: true });
+    fs.rmSync(dirB, { recursive: true, force: true });
+  });
+
+  it('two projects with the same yaml milestone id each retain a distinct board cache', async () => {
+    vi.mocked(ProjectService.listMilestones).mockImplementation(
+      (projectId: string) => {
+        if (projectId === 'projA') {
+          return [
+            {
+              id: 'db-milestone-A',
+              projectId: 'projA',
+              name: 'Same Name',
+              sourceId: 'm1',
+              displayOrder: 0,
+              createdAt: 0,
+              updatedAt: 0,
+            },
+          ];
+        }
+        return [
+          {
+            id: 'db-milestone-B',
+            projectId: 'projB',
+            name: 'Same Name',
+            sourceId: 'm1',
+            displayOrder: 0,
+            createdAt: 0,
+            updatedAt: 0,
+          },
+        ];
+      },
+    );
+
+    const backendA = new LocalTaskBackend(dirA, 'projA');
+    const backendB = new LocalTaskBackend(dirB, 'projB');
+
+    await backendA.fetchReadyTasks('m1');
+    await backendB.fetchReadyTasks('m1');
+
+    const boardA = getTaskCache('board:db-milestone-A');
+    const boardB = getTaskCache('board:db-milestone-B');
+    expect(boardA).toBeDefined();
+    expect(boardB).toBeDefined();
+
+    const tasksA = JSON.parse(boardA!.raw_json) as { title: string }[];
+    const tasksB = JSON.parse(boardB!.raw_json) as { title: string }[];
+
+    // Neither project's board was overwritten/masked by the other's write.
+    expect(tasksA).toHaveLength(1);
+    expect(tasksA[0].title).toBe('Task From Project A');
+    expect(tasksB).toHaveLength(1);
+    expect(tasksB[0].title).toBe('Task From Project B');
+  });
+
+  it('write key and read key round-trip to the same value', async () => {
+    vi.mocked(ProjectService.listMilestones).mockReturnValue([
+      {
+        id: 'db-milestone-roundtrip',
+        projectId: 'projA',
+        name: 'Same Name',
+        sourceId: 'm1',
+        displayOrder: 0,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+    ]);
+    vi.mocked(ProjectService.getMilestone).mockReturnValue({
+      id: 'db-milestone-roundtrip',
+      projectId: 'projA',
+      name: 'Same Name',
+      sourceId: 'm1',
+      displayOrder: 0,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    const backend = new LocalTaskBackend(dirA, 'projA');
+    await backend.fetchReadyTasks('m1');
+
+    // Write side (LocalTaskBackend) keys the board cache on the DB milestone
+    // UUID. The read side (ws/router, /api/tasks/active) looks the milestone
+    // up by that same UUID and reads `board:${milestone.id}` — reproduce that
+    // read-side lookup here and confirm it hits the row LocalTaskBackend wrote.
+    const milestone = ProjectService.getMilestone('db-milestone-roundtrip');
+    const readKey = `board:${milestone!.id}`;
+    expect(getTaskCache(readKey)).toBeDefined();
+    expect(readKey).toBe('board:db-milestone-roundtrip');
   });
 });
 
@@ -277,7 +418,7 @@ describe('JiraTaskSourceProvider.fetchReadyTasks — board cache JSON content', 
 describe('NotionTaskBackend.fetchReadyTasks — no double-prefix on cache-hit', () => {
   it('second call (cache-hit) returns same single-prefixed IDs as first call (cache-miss)', async () => {
     vi.mocked(ProjectService.getMilestone).mockReturnValue({
-      id: 'milestone-1',
+      id: MILESTONE_ID,
       projectId: 'proj-1',
       name: 'M1',
       sourceId: BOARD_ID,
@@ -297,11 +438,11 @@ describe('NotionTaskBackend.fetchReadyTasks — no double-prefix on cache-hit', 
     const backend = new NotionTaskBackend(new NotionClient());
 
     // First call: cache miss — fetches from Notion API, writes board cache with prefixed IDs
-    const firstResult = await backend.fetchReadyTasks('milestone-1');
+    const firstResult = await backend.fetchReadyTasks(MILESTONE_ID);
     const firstIds = firstResult.map((r) => r.task.id).sort();
 
     // Second call: board cache is fresh (just written), NotionClient uses cache-hit path
-    const secondResult = await backend.fetchReadyTasks('milestone-1');
+    const secondResult = await backend.fetchReadyTasks(MILESTONE_ID);
     const secondIds = secondResult.map((r) => r.task.id).sort();
 
     // IDs must be identical and exactly single-prefixed (no notion:notion: amplification)

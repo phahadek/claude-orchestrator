@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { logger } from '../logger';
 import { getProjectById, runtimeSettings } from '../config';
-import { ProjectService, getProjectRepos } from '../projects/ProjectService';
+import { getProjectRepos } from '../projects/ProjectService';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   getTaskCache,
@@ -32,18 +32,6 @@ export interface TasksActiveResponse {
   lastRefreshedAt: number | null;
   stale: boolean;
   coldCache: boolean;
-}
-
-/**
- * The frontend sends milestone row ids as `boardId` after the milestone schema migration.
- * Resolve to the milestone's `source_id` (the Notion database id) for cache key lookup.
- * Falls back to the input value when no matching milestone exists (back-compat for callers
- * that still pass a raw source_id).
- */
-function resolveBoardCacheKey(boardId: string): string {
-  const milestone = ProjectService.getMilestone(boardId);
-  if (milestone?.sourceId) return milestone.sourceId;
-  return boardId;
 }
 
 function getReviewIterationCap(): number {
@@ -403,7 +391,7 @@ export function createTasksRouter(
       return;
     }
 
-    const cacheKey = `board:${resolveBoardCacheKey(boardId)}`;
+    const cacheKey = `board:${boardId}`;
     const boardCacheRow = getTaskCache(cacheKey);
     if (!boardCacheRow) {
       res
@@ -524,8 +512,8 @@ export function createTasksRouter(
         : project.boardId;
 
     // Read the board cache to get the list of task IDs for this board.
-    // boardId arrives as the milestone row id; resolve to the underlying source_id.
-    const cacheKey = `board:${resolveBoardCacheKey(boardId)}`;
+    // boardId is the DB milestone UUID, matching the write-side cache key.
+    const cacheKey = `board:${boardId}`;
     const boardCacheRow = getTaskCache(cacheKey);
 
     // Cold cache: no data yet — return immediately without blocking on Notion.

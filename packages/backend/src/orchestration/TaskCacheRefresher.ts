@@ -119,10 +119,14 @@ export class TaskCacheRefresher {
         const tasks = skipCache
           ? await backend.fetchReadyTasks(fetchId, true)
           : await backend.fetchReadyTasks(fetchId);
+        // The board cache is always keyed on the DB milestone UUID (milestone.id),
+        // regardless of what identifier the backend needed to fetch the data —
+        // this must match the read side (ws/router) and the write side (each
+        // backend's own upsertTaskCache call).
         this.broadcast?.({
           type: 'task_cache_updated',
           projectId: project.id,
-          boardId: fetchId,
+          boardId: milestone.id,
           taskCount: tasks.length,
           refreshedAt: Date.now(),
         });

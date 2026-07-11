@@ -109,6 +109,7 @@ vi.mock('../projects/ProjectService.js', () => ({
       name: 'Test Milestone',
     }),
     getById: vi.fn(),
+    listMilestones: vi.fn().mockReturnValue([]),
   },
 }));
 
@@ -202,7 +203,7 @@ describe('LocalTaskBackend prefix handling', () => {
       ].join('\n'),
       'utf-8',
     );
-    backend = new LocalTaskBackend(tmpDir);
+    backend = new LocalTaskBackend(tmpDir, 'test-project');
   });
 
   it('fetchReadyTasks returns ResolvedTask with source: yaml and prefixed IDs', async () => {
