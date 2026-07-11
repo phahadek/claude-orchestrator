@@ -6,6 +6,8 @@ import { TaskCard } from './TaskCard';
 import { CompactTaskCard } from './CompactTaskCard';
 import { BacklogCodeSection } from './BacklogCodeSection';
 import { NonCodeTypeSection } from './NonCodeTypeSection';
+import { StagedIntentPanel } from './StagedIntentPanel';
+import type { StagedIntent } from '../api/stagedIntents';
 import { useDispatch } from '../hooks/useDispatch';
 import { projectsApi } from '../api/projects';
 import { priorityRank, sortByPriority } from '../utils/taskSort';
@@ -260,6 +262,13 @@ export function TaskList({
   const [collapsed, setCollapsed] = useState<Set<string>>(
     new Set(['done', 'backlog']),
   );
+  const [groomCheckedIds, setGroomCheckedIds] = useState<Set<string>>(
+    new Set(),
+  );
+  // No-op launch placeholder — real groom-session staging lands with the launch mechanism.
+  const [groomStubIntent, setGroomStubIntent] = useState<StagedIntent | null>(
+    null,
+  );
 
   const toggleGroup = useCallback((status: string) => {
     setCollapsed((prev) => {
@@ -447,6 +456,46 @@ export function TaskList({
   const backlogCodeTasks = codeNotDone.filter(
     (t) => t.displayStatus === 'backlog',
   );
+  const backlogNonCodeTasks = nonCodeNotDone.filter(
+    (t) => t.displayStatus === 'backlog',
+  );
+  const groomableTasks = [...backlogCodeTasks, ...backlogNonCodeTasks];
+  const groomSelectedCount = groomableTasks.filter((t) =>
+    groomCheckedIds.has(t.taskId),
+  ).length;
+
+  function toggleGroomCheck(taskId: string, checked: boolean) {
+    setGroomCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(taskId);
+      else next.delete(taskId);
+      return next;
+    });
+  }
+
+  function handleGroomSelectAll() {
+    setGroomCheckedIds(new Set(groomableTasks.map((t) => t.taskId)));
+  }
+
+  // No-op launch: stub a StagedIntent client-side so the right panel can preview the
+  // future groom-session surface. No groom-load call, no command-layer write.
+  function handleGroomLaunch() {
+    const selectedIds = groomableTasks
+      .filter((t) => groomCheckedIds.has(t.taskId))
+      .map((t) => t.taskId);
+    if (selectedIds.length === 0) return;
+    setGroomStubIntent({
+      id: 'groom-stub',
+      kind: 'groom',
+      payload: {
+        placeholder: true,
+        taskIds: selectedIds,
+        message: 'Grooming session staging is not yet wired up.',
+      },
+      projectId: activeProjectId ?? '',
+      createdAt: 0,
+    });
+  }
 
   // Build per-status lookup for the remaining code groups (needs_attention, ready_to_merge,
   // in_progress, in_review, blocked, deferred) — ready/backlog/done have their own sections.
@@ -523,6 +572,12 @@ export function TaskList({
           isExpanded={!collapsed.has('backlog')}
           onToggleCollapse={() => toggleGroup('backlog')}
           onSelectTask={onSelectTask}
+          groomCheckedIds={groomCheckedIds}
+          onGroomCheckChange={toggleGroomCheck}
+          groomableCount={groomableTasks.length}
+          groomSelectedCount={groomSelectedCount}
+          onGroomSelectAll={handleGroomSelectAll}
+          onGroomLaunch={handleGroomLaunch}
         />
 
         {/* 📋 Non-code, by type */}
@@ -538,6 +593,21 @@ export function TaskList({
             <NonCodeTypeSection
               tasks={nonCodeNotDone}
               onSelectTask={onSelectTask}
+              groomCheckedIds={groomCheckedIds}
+              onGroomCheckChange={toggleGroomCheck}
+            />
+          </div>
+        )}
+
+        {groomStubIntent && (
+          <div
+            className={styles.groomPlaceholderPanel}
+            data-testid="groom-placeholder-panel"
+          >
+            <StagedIntentPanel
+              intent={groomStubIntent}
+              onApplied={() => setGroomStubIntent(null)}
+              onRejected={() => setGroomStubIntent(null)}
             />
           </div>
         )}
