@@ -167,7 +167,9 @@ export function buildCodeWorklist(
   opts: CodeWorklistOptions,
 ): Map<string, string[]> {
   const sourceRoot = (opts.sourceRoot ?? '').replace(/\/+$/, '');
-  const packages = [...(opts.packages ?? [])].sort((a, b) => b.length - a.length);
+  const packages = [...(opts.packages ?? [])].sort(
+    (a, b) => b.length - a.length,
+  );
   const areaAliases = opts.areaAliases ?? {};
   const fileIndex = buildFileIndex(opts.trackedFiles);
 

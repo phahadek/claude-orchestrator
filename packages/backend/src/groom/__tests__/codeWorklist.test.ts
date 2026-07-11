@@ -35,7 +35,11 @@ describe('buildCodeWorklist', () => {
 
     const worklist = buildCodeWorklist(tasks, {
       sourceRoot: 'packages',
-      packages: ['backend/src/notion', 'backend/src/tasks', 'frontend/src/components'],
+      packages: [
+        'backend/src/notion',
+        'backend/src/tasks',
+        'frontend/src/components',
+      ],
       areaAliases: {},
       trackedFiles: TRACKED_FILES,
     });
@@ -98,7 +102,8 @@ describe('buildCodeWorklist', () => {
         id: 'task-1',
         title: 'Untitled task',
         filesSection: '',
-        rawMarkdown: 'See `packages/backend/src/tasks/NotionTaskBackend.ts` for details.',
+        rawMarkdown:
+          'See `packages/backend/src/tasks/NotionTaskBackend.ts` for details.',
       },
     ];
 

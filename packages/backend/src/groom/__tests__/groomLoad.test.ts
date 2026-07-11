@@ -55,7 +55,10 @@ const MANIFEST: GroomManifest = {
   area_aliases: {},
   context_pages: [{ id: 'ctx-page-1', title: 'Technical Architecture' }],
   milestones: {
-    'M-test': { board: 'fake-board', neighbours: [{ id: 'M-prev', board: 'fake-neighbour-board' }] },
+    'M-test': {
+      board: 'fake-board',
+      neighbours: [{ id: 'M-prev', board: 'fake-neighbour-board' }],
+    },
   },
 };
 
@@ -92,16 +95,21 @@ const NEIGHBOUR_ROW: NotionTaskLike = {
   notionUrl: 'n/a',
 };
 
-const TASK_PAGES: Record<string, { name: string; filesSection: string; rawMarkdown: string }> = {
+const TASK_PAGES: Record<
+  string,
+  { name: string; filesSection: string; rawMarkdown: string }
+> = {
   'code-task-1': {
     name: CODE_ROW.title,
     filesSection: '- `packages/backend/src/notion/NotionClient.ts`',
-    rawMarkdown: '## Files / paths affected\n- `packages/backend/src/notion/NotionClient.ts`',
+    rawMarkdown:
+      '## Files / paths affected\n- `packages/backend/src/notion/NotionClient.ts`',
   },
   'tool-task-1': {
     name: TOOL_ROW.title,
     filesSection: '- `packages/backend/src/tasks/NotionTaskBackend.ts`',
-    rawMarkdown: '## Files / paths affected\n- `packages/backend/src/tasks/NotionTaskBackend.ts`',
+    rawMarkdown:
+      '## Files / paths affected\n- `packages/backend/src/tasks/NotionTaskBackend.ts`',
   },
   'ctx-page-1': {
     name: 'Technical Architecture',
@@ -155,7 +163,11 @@ describe('loadGroomContext', () => {
     ).toContain('NotionClient.ts');
     expect(result.neighbourBoards.map((r) => r.id)).toEqual([NEIGHBOUR_ROW.id]);
     expect(result.contextPages).toEqual([
-      { id: 'ctx-page-1', title: 'Technical Architecture', markdown: '# Technical Architecture\n\nSome context.' },
+      {
+        id: 'ctx-page-1',
+        title: 'Technical Architecture',
+        markdown: '# Technical Architecture\n\nSome context.',
+      },
     ]);
   });
 
@@ -190,9 +202,15 @@ describe('loadGroomContext', () => {
       },
     });
 
-    expect(result.gitFreshness['packages/backend/src/notion'].status).toBe('fresh');
-    expect(result.gitFreshness['packages/backend/src/tasks'].status).toBe('stale');
-    expect(result.gitFreshness['packages/backend/src/notion'].baselineSha).toBe(setup.commit2);
+    expect(result.gitFreshness['packages/backend/src/notion'].status).toBe(
+      'fresh',
+    );
+    expect(result.gitFreshness['packages/backend/src/tasks'].status).toBe(
+      'stale',
+    );
+    expect(result.gitFreshness['packages/backend/src/notion'].baselineSha).toBe(
+      setup.commit2,
+    );
   });
 
   it('marks a package missing when there is no prior explored SHA', async () => {
@@ -204,8 +222,12 @@ describe('loadGroomContext', () => {
       notionClient: fakeNotion(),
     });
 
-    expect(result.gitFreshness['packages/backend/src/notion'].status).toBe('missing');
-    expect(result.gitFreshness['packages/backend/src/notion'].priorSha).toBeNull();
+    expect(result.gitFreshness['packages/backend/src/notion'].status).toBe(
+      'missing',
+    );
+    expect(
+      result.gitFreshness['packages/backend/src/notion'].priorSha,
+    ).toBeNull();
   });
 
   it('throws for an unregistered milestone', async () => {

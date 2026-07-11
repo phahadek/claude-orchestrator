@@ -153,7 +153,10 @@ async function git(
     return { status: 0, stdout: stdout.trim() };
   } catch (err) {
     const e = err as { code?: number; stdout?: string };
-    return { status: typeof e.code === 'number' ? e.code : 1, stdout: (e.stdout ?? '').trim() };
+    return {
+      status: typeof e.code === 'number' ? e.code : 1,
+      stdout: (e.stdout ?? '').trim(),
+    };
   }
 }
 
@@ -231,7 +234,8 @@ export async function loadGroomContext(
   for (const n of milestoneCfg.neighbours ?? []) {
     const rows = await notion.fetchReadyTasks(n.board);
     for (const r of rows) {
-      if (!DONE_STATUSES.has(r.task.status)) neighbourBoards.push(rowFromTask(r.task));
+      if (!DONE_STATUSES.has(r.task.status))
+        neighbourBoards.push(rowFromTask(r.task));
     }
   }
 
@@ -278,5 +282,12 @@ export async function loadGroomContext(
     });
   }
 
-  return { contextPages, board, neighbourBoards, targetTasks, codeWorklist, gitFreshness };
+  return {
+    contextPages,
+    board,
+    neighbourBoards,
+    targetTasks,
+    codeWorklist,
+    gitFreshness,
+  };
 }
