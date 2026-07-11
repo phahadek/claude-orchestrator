@@ -1,4 +1,8 @@
-import type { TaskBackend, NewTaskFields, TaskWriteOptions } from './TaskBackend';
+import type {
+  TaskBackend,
+  NewTaskFields,
+  TaskWriteOptions,
+} from './TaskBackend';
 import { getTaskCache } from '../db/queries';
 
 /**

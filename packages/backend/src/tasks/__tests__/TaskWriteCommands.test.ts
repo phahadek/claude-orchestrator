@@ -53,7 +53,9 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
   });
 
   it('calls backend.updateStatus with the display-format status on a valid transition', async () => {
-    mockGetTaskCache.mockReturnValue(cacheRowWithStatus(STATUS_DISPLAY.Backlog));
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
     const backend = makeBackend();
     const commands = new BackendTaskWriteCommands(backend);
 
@@ -67,7 +69,9 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
   });
 
   it('rejects an invalid transition and does not call the backend', async () => {
-    mockGetTaskCache.mockReturnValue(cacheRowWithStatus(STATUS_DISPLAY.Backlog));
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
     const backend = makeBackend();
     const commands = new BackendTaskWriteCommands(backend);
 
@@ -92,7 +96,9 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
   });
 
   it('forwards provenance options through to the backend', async () => {
-    mockGetTaskCache.mockReturnValue(cacheRowWithStatus(STATUS_DISPLAY.Backlog));
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
     const backend = makeBackend();
     const commands = new BackendTaskWriteCommands(backend);
 
@@ -101,10 +107,14 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
       sessionId: 'sess-1',
     });
 
-    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready', {
-      source: 'human',
-      sessionId: 'sess-1',
-    });
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:abc',
+      '🗂️ Ready',
+      {
+        source: 'human',
+        sessionId: 'sess-1',
+      },
+    );
   });
 });
 
