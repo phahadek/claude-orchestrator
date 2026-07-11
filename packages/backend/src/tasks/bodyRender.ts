@@ -51,16 +51,63 @@ export interface RenderedBlock {
  * prosaically / backticked rather than as an executable command line —
  * see procedures.md § Notion access.
  */
-const INTERPRETER_MODULE_RE =
-  /^\s*(?:sudo\s+)?(python3?|node|npx|npm|yarn|pnpm|bash|sh|ts-node|ruby|perl|php)\s+.*(-m\s+\S+|--[\w-]+)/i;
-const SERVICE_RESTART_RE =
-  /^\s*(?:sudo\s+)?(systemctl\s+(start|stop|restart|reload|status)\b|service\s+\S+\s+(start|stop|restart|reload|status)\b)/i;
+const INTERPRETERS = new Set([
+  'python',
+  'python3',
+  'node',
+  'npx',
+  'npm',
+  'yarn',
+  'pnpm',
+  'bash',
+  'sh',
+  'ts-node',
+  'ruby',
+  'perl',
+  'php',
+]);
+const SERVICE_ACTIONS = new Set([
+  'start',
+  'stop',
+  'restart',
+  'reload',
+  'status',
+]);
+// Anchored, single-pass, no nested quantifiers — safe against ReDoS.
+const LONG_FLAG_RE = /^--[\w-]+$/;
 
+/**
+ * Tokenizes a line and inspects the leading command (after an optional
+ * `sudo`) rather than a single sprawling regex — avoids the catastrophic
+ * backtracking a `.*` + alternation pattern risks on adversarial input.
+ */
 export function isShellCommandLine(line: string): boolean {
-  const trimmed = line.trim();
-  return (
-    INTERPRETER_MODULE_RE.test(trimmed) || SERVICE_RESTART_RE.test(trimmed)
-  );
+  const tokens = line.trim().split(/\s+/);
+  if (tokens.length === 0 || tokens[0] === '') return false;
+  const offset = tokens[0].toLowerCase() === 'sudo' ? 1 : 0;
+  const cmd = tokens[offset]?.toLowerCase();
+  if (!cmd) return false;
+
+  if (INTERPRETERS.has(cmd)) {
+    const rest = tokens.slice(offset + 1);
+    const hasModuleFlag = rest.some(
+      (token, i) => token === '-m' && rest[i + 1] !== undefined,
+    );
+    const hasLongFlag = rest.some((token) => LONG_FLAG_RE.test(token));
+    return hasModuleFlag || hasLongFlag;
+  }
+
+  if (cmd === 'systemctl') {
+    const action = tokens[offset + 1]?.toLowerCase();
+    return action !== undefined && SERVICE_ACTIONS.has(action);
+  }
+
+  if (cmd === 'service') {
+    const action = tokens[offset + 2]?.toLowerCase();
+    return action !== undefined && SERVICE_ACTIONS.has(action);
+  }
+
+  return false;
 }
 
 /**
