@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { sortByPriority, sortStable, priorityRank } from '../taskSort';
+import { sortByPriority, priorityRank } from '../taskSort';
 import type { TaskView } from '../../types/taskView';
 
 function makeTask(taskId: string, priority: string): TaskView {
@@ -24,7 +24,7 @@ function makeTask(taskId: string, priority: string): TaskView {
   };
 }
 
-describe('sortByPriority / sortStable', () => {
+describe('sortByPriority', () => {
   it('is deterministic across differently-ordered inputs for equal-priority items', () => {
     const a = makeTask('task-a', '🟡 Medium');
     const b = makeTask('task-b', '🟡 Medium');
@@ -55,10 +55,6 @@ describe('sortByPriority / sortStable', () => {
     const low = makeTask('task-a', '🟢 Low');
     const result = sortByPriority([low, high]);
     expect(result.map((t) => t.taskId)).toEqual(['task-b', 'task-a']);
-  });
-
-  it('sortStable is the same function as sortByPriority', () => {
-    expect(sortStable).toBe(sortByPriority);
   });
 
   it('unset priorities rank last', () => {

@@ -23,9 +23,6 @@ export function sortByPriority<T extends TaskView>(tasks: T[]): T[] {
   );
 }
 
-/** Alias for sortByPriority — deterministic total-order sort with an id tiebreak. */
-export const sortStable = sortByPriority;
-
 export const STATUS_EMOJI: Record<DisplayStatus, string> = {
   needs_attention: '⚠️',
   ready_to_merge: '✅',
