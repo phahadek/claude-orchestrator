@@ -28,7 +28,10 @@ beforeEach(() => {
   db.prepare('DELETE FROM audit_log').run();
 });
 
-function seedEntry(taskId: string, overrides: Partial<Record<string, unknown>> = {}) {
+function seedEntry(
+  taskId: string,
+  overrides: Partial<Record<string, unknown>> = {},
+) {
   upsertOpsJournalEntry({
     task_id: taskId,
     project: 'polimarket-analyser',
@@ -91,19 +94,23 @@ describe('setEntryState', () => {
 
   it('rejects an invalid transition (e.g. pending -> applied-pending-confirm)', () => {
     seedEntry('task-3');
-    expect(() =>
-      setEntryState('task-3', 'applied-pending-confirm'),
-    ).toThrow(/invalid transition/);
+    expect(() => setEntryState('task-3', 'applied-pending-confirm')).toThrow(
+      /invalid transition/,
+    );
     expect(getEntry('task-3')?.state).toBe('pending');
   });
 
   it('rejects any transition out of resolved (terminal)', () => {
     seedEntry('task-4', { state: 'resolved' });
-    expect(() => setEntryState('task-4', 'pending')).toThrow(/invalid transition/);
+    expect(() => setEntryState('task-4', 'pending')).toThrow(
+      /invalid transition/,
+    );
   });
 
   it('throws when the entry does not exist', () => {
-    expect(() => setEntryState('missing-task', 'candidate')).toThrow(/no entry/);
+    expect(() => setEntryState('missing-task', 'candidate')).toThrow(
+      /no entry/,
+    );
   });
 });
 
@@ -135,7 +142,10 @@ describe('worked-field round-trip', () => {
     expect(entry?.workedIn).toEqual({ branch: 'feature/x' });
     expect(entry?.evidence).toEqual(['log line 1', 'log line 2']);
     expect(entry?.findingOrProposal).toEqual({ summary: 'looks fine' });
-    expect(entry?.falsification).toEqual({ attempted: true, result: 'not falsified' });
+    expect(entry?.falsification).toEqual({
+      attempted: true,
+      result: 'not falsified',
+    });
     expect(entry?.filedFollowons).toEqual(['task-99']);
     expect(entry?.needsFromOperator).toBe('confirm deploy window');
     expect(entry?.disposition).toBe('pass');
@@ -147,7 +157,11 @@ describe('reconcileJournal', () => {
     seedEntry('still-open');
     seedEntry('now-done');
     reconcileJournal([
-      { taskId: 'still-open', project: 'polimarket-analyser', milestone: 'M12' },
+      {
+        taskId: 'still-open',
+        project: 'polimarket-analyser',
+        milestone: 'M12',
+      },
     ]);
     expect(getEntry('still-open')).toBeDefined();
     expect(getEntry('now-done')).toBeUndefined();
@@ -160,7 +174,11 @@ describe('reconcileJournal', () => {
       finding_or_proposal: JSON.stringify({ summary: 'proposal text' }),
     });
     reconcileJournal([
-      { taskId: 'still-open', project: 'polimarket-analyser', milestone: 'M12' },
+      {
+        taskId: 'still-open',
+        project: 'polimarket-analyser',
+        milestone: 'M12',
+      },
     ]);
     const entry = getEntry('still-open');
     expect(entry?.state).toBe('staged-proposal');

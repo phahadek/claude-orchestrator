@@ -20,7 +20,10 @@ export const OPS_STATES: readonly OpsState[] = [
   'resolved',
 ];
 
-export type OpsDisposition = 'pass' | 'blocked-pending-fix' | 'pass-with-caveat';
+export type OpsDisposition =
+  | 'pass'
+  | 'blocked-pending-fix'
+  | 'pass-with-caveat';
 
 export interface OpsJournalEntry {
   taskId: string;
