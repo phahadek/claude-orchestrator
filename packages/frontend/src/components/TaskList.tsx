@@ -8,6 +8,7 @@ import { BacklogCodeSection } from './BacklogCodeSection';
 import { NonCodeTypeSection } from './NonCodeTypeSection';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import type { StagedIntent } from '../api/stagedIntents';
+import { opsJournalApi } from '../api/opsJournal';
 import { useDispatch } from '../hooks/useDispatch';
 import { projectsApi } from '../api/projects';
 import { sortByPriority } from '../utils/taskSort';
@@ -56,6 +57,10 @@ const GROUP_LABELS: Record<DisplayStatus, string> = {
   blocked: '🚫 Blocked',
   deferred: '⏭️ Deferred',
 };
+
+// Task types the Ops(N) button stages — the ops_journal is only pre-seeded
+// for 🔧 Operational / 🔎 Investigation tasks (see ops/opsLoad.ts).
+const OPS_TASK_TYPES = ['🔧 Operational', '🔎 Investigation'];
 
 /** Group tasks by wave number, returning a map of wave → sorted tasks. */
 function groupByWave(tasks: TaskView[]): Map<number, TaskView[]> {
@@ -267,6 +272,11 @@ export function TaskList({
   const [groomStubIntent, setGroomStubIntent] = useState<StagedIntent | null>(
     null,
   );
+  // Ops(N): the staged data already exists (ops_journal), so this renders real rows.
+  // The ops-session spawn itself is a placeholder — apply/reject is a no-op here.
+  const [opsIntent, setOpsIntent] = useState<StagedIntent | null>(null);
+  const [opsLoading, setOpsLoading] = useState(false);
+  const [opsError, setOpsError] = useState<string | null>(null);
 
   const toggleGroup = useCallback((status: string) => {
     setCollapsed((prev) => {
@@ -495,6 +505,38 @@ export function TaskList({
     });
   }
 
+  // Ops(N): selects every not-Done 🔧/🔎 task currently on the board.
+  const opsEligibleTasks = tasks.filter(
+    (t) => OPS_TASK_TYPES.includes(t.taskType) && t.displayStatus !== 'done',
+  );
+
+  // Reads existing per-task ops_journal rows via the backend route and stages them
+  // client-side for display in the shared StagedIntentPanel. No task-store write —
+  // the ops-session spawn (and its command-layer apply) is a separate, later task.
+  async function handleOpsLaunch() {
+    if (!boardId || opsEligibleTasks.length === 0) return;
+    setOpsLoading(true);
+    setOpsError(null);
+    try {
+      const entries = await opsJournalApi.listForMilestone(boardId);
+      const eligibleIds = new Set(opsEligibleTasks.map((t) => t.taskId));
+      const rows = entries.filter((e) => eligibleIds.has(e.taskId));
+      setOpsIntent({
+        id: 'ops-stub',
+        kind: 'ops',
+        payload: { taskIds: Array.from(eligibleIds), rows },
+        projectId: activeProjectId ?? '',
+        createdAt: 0,
+      });
+    } catch (err) {
+      setOpsError(
+        err instanceof Error ? err.message : 'Failed to load ops journal',
+      );
+    } finally {
+      setOpsLoading(false);
+    }
+  }
+
   // Build per-status lookup for the remaining code groups (needs_attention, ready_to_merge,
   // in_progress, in_review, blocked, deferred) — ready/backlog/done have their own sections.
   const codeGroupMap = new Map<DisplayStatus, TaskView[]>();
@@ -587,7 +629,26 @@ export function TaskList({
             <div className={styles.sectionHeading}>
               <span className={styles.groupLabel}>📋 Non-code</span>
               <span className={styles.groupCount}>{nonCodeNotDone.length}</span>
+              {opsEligibleTasks.length > 0 && (
+                <div className={styles.launchControls}>
+                  <button
+                    className={styles.opsBtn}
+                    onClick={() => void handleOpsLaunch()}
+                    disabled={opsLoading || !boardId}
+                    data-testid="ops-btn"
+                  >
+                    {opsLoading
+                      ? 'Loading…'
+                      : `Ops (${opsEligibleTasks.length})`}
+                  </button>
+                </div>
+              )}
             </div>
+            {opsError && (
+              <div className={styles.error} data-testid="ops-error">
+                {opsError}
+              </div>
+            )}
             <NonCodeTypeSection
               tasks={nonCodeNotDone}
               onSelectTask={onSelectTask}
@@ -606,6 +667,16 @@ export function TaskList({
               intent={groomStubIntent}
               onApplied={() => setGroomStubIntent(null)}
               onRejected={() => setGroomStubIntent(null)}
+            />
+          </div>
+        )}
+
+        {opsIntent && (
+          <div className={styles.opsPlaceholderPanel} data-testid="ops-panel">
+            <StagedIntentPanel
+              intent={opsIntent}
+              onApplied={() => setOpsIntent(null)}
+              onRejected={() => setOpsIntent(null)}
             />
           </div>
         )}

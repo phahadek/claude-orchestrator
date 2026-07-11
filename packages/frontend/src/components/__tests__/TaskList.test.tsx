@@ -1014,6 +1014,105 @@ describe('TaskList', () => {
     });
   });
 
+  describe('Ops(N) button', () => {
+    function mockOpsJournalResponse(entries: unknown[]) {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ entries }),
+      });
+    }
+
+    it('does not render when there are no 🔧/🔎 tasks', () => {
+      renderList([
+        makeTask({
+          taskId: 't1',
+          taskName: 'Code Task',
+          displayStatus: 'in_progress',
+          taskType: '💻 Code',
+        }),
+      ]);
+      expect(screen.queryByTestId('ops-btn')).toBeNull();
+    });
+
+    it('renders Ops(N) with the count of not-Done 🔧/🔎 tasks', () => {
+      renderList(
+        [
+          makeTask({
+            taskId: 'op1',
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+          makeTask({
+            taskId: 'inv1',
+            taskName: 'Investigation Task',
+            displayStatus: 'ready',
+            taskType: '🔎 Investigation',
+          }),
+          makeTask({
+            taskId: 'op2',
+            taskName: 'Done Op Task',
+            displayStatus: 'done',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      expect(opsBtn.textContent).toContain('Ops (2)');
+    });
+
+    it('clicking Ops(N) fetches ops_journal rows and renders them, scoped to selected tasks, with state per row', async () => {
+      mockOpsJournalResponse([
+        {
+          taskId: 'op1',
+          project: 'proj-1',
+          milestone: 'milestone-1',
+          state: 'candidate',
+          workedIn: 'session-abc',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+        {
+          taskId: 'other-task',
+          project: 'proj-1',
+          milestone: 'milestone-1',
+          state: 'resolved',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ]);
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'op1',
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('ops-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('ops-panel')).toBeDefined();
+      });
+
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/ops-journal?milestone=milestone-1'),
+        expect.anything(),
+      );
+
+      const panel = screen.getByTestId('ops-panel');
+      expect(panel.textContent).toContain('candidate');
+      expect(panel.textContent).not.toContain('resolved');
+      expect(panel.textContent).toContain('ops');
+    });
+  });
+
   describe('Sync button — send() boolean return and safety timeout', () => {
     it('clears syncing immediately when send() returns false (WS disconnected)', () => {
       const disconnectedSend = vi.fn().mockReturnValue(false);
