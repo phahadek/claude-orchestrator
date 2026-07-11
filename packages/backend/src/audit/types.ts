@@ -49,7 +49,10 @@ type EventType =
   | 'repo_git_config_repaired'
   | 'task_recovered'
   | 'process_fault'
-  | 'process_boot';
+  | 'process_boot'
+  | 'ops_journal_state_changed'
+  | 'ops_journal_entry_seeded'
+  | 'ops_journal_entry_dropped';
 
 type ActorType = 'ai' | 'human' | 'system';
 

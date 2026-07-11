@@ -208,6 +208,23 @@ export function runMigrations(target: Database.Database): void {
       assigned_at  INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS ops_journal (
+      task_id              TEXT    PRIMARY KEY,
+      project              TEXT    NOT NULL,
+      milestone            TEXT    NOT NULL,
+      state                TEXT    NOT NULL,
+      disposition          TEXT,
+      worked_in            TEXT,
+      evidence             TEXT,
+      finding_or_proposal  TEXT,
+      falsification        TEXT,
+      filed_followons      TEXT,
+      needs_from_operator  TEXT,
+      resolution           TEXT,
+      updated_at           TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ops_journal_project_milestone ON ops_journal(project, milestone);
+
     CREATE TABLE IF NOT EXISTS pending_review_sync (
       pr_number  INTEGER NOT NULL,
       repo       TEXT    NOT NULL,

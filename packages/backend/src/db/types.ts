@@ -354,6 +354,34 @@ export interface TaskRepoAssignmentRow {
   assigned_at: number;
 }
 
+// ─── ops_journal ──────────────────────────────────────────────────────────
+
+export type OpsJournalState =
+  | 'pending'
+  | 'candidate'
+  | 'staged-proposal'
+  | 'applied-pending-confirm'
+  | 'blocked'
+  | 'incident-frozen'
+  | 'resolved';
+
+/** JSON-TEXT columns carry the full on-disk worked-field set verbatim (unparsed). */
+export interface OpsJournalRow {
+  task_id: string;
+  project: string;
+  milestone: string;
+  state: OpsJournalState;
+  disposition: string | null;
+  worked_in: string | null;
+  evidence: string | null;
+  finding_or_proposal: string | null;
+  falsification: string | null;
+  filed_followons: string | null;
+  needs_from_operator: string | null;
+  resolution: string | null;
+  updated_at: string;
+}
+
 // ─── session_feedback_inbox ─────────────────────────────────────────────────
 
 export interface FeedbackInboxRow {

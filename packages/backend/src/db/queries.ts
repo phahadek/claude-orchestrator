@@ -1,3 +1,4 @@
+import type Database from 'better-sqlite3';
 import { db } from './db';
 import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
@@ -32,6 +33,7 @@ import type {
   SessionPauseInterval,
   TaskRepoAssignmentRow,
   FeedbackInboxRow,
+  OpsJournalRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -3223,6 +3225,80 @@ export function getTaskRepoAssignment(
 
 export function deleteTaskRepoAssignment(taskId: string): void {
   db.prepare(`DELETE FROM task_repo_assignments WHERE task_id = ?`).run(taskId);
+}
+
+// ─── ops_journal ─────────────────────────────────────────────────────────────
+// Statements are cached lazily (prepared on first use, not at module load) so
+// importing this module doesn't fail on a not-yet-migrated db handle.
+
+let _stmtGetOpsJournalEntry: Database.Statement | null = null;
+let _stmtListOpsJournalEntries: Database.Statement | null = null;
+let _stmtListOpsJournalEntriesForMilestone: Database.Statement | null = null;
+let _stmtUpsertOpsJournalEntry: Database.Statement | null = null;
+let _stmtDeleteOpsJournalEntry: Database.Statement | null = null;
+
+export function getOpsJournalEntry(taskId: string): OpsJournalRow | undefined {
+  _stmtGetOpsJournalEntry ??= db.prepare<{ task_id: string }>(
+    `SELECT * FROM ops_journal WHERE task_id = @task_id`,
+  );
+  return _stmtGetOpsJournalEntry.get({ task_id: taskId }) as
+    | OpsJournalRow
+    | undefined;
+}
+
+export function listOpsJournalEntries(): OpsJournalRow[] {
+  _stmtListOpsJournalEntries ??= db.prepare(`SELECT * FROM ops_journal`);
+  return _stmtListOpsJournalEntries.all() as OpsJournalRow[];
+}
+
+export function listOpsJournalEntriesForMilestone(
+  project: string,
+  milestone: string,
+): OpsJournalRow[] {
+  _stmtListOpsJournalEntriesForMilestone ??= db.prepare<{
+    project: string;
+    milestone: string;
+  }>(
+    `SELECT * FROM ops_journal WHERE project = @project AND milestone = @milestone`,
+  );
+  return _stmtListOpsJournalEntriesForMilestone.all({
+    project,
+    milestone,
+  }) as OpsJournalRow[];
+}
+
+export function upsertOpsJournalEntry(row: OpsJournalRow): void {
+  _stmtUpsertOpsJournalEntry ??= db.prepare<OpsJournalRow>(`
+    INSERT INTO ops_journal
+      (task_id, project, milestone, state, disposition, worked_in, evidence,
+       finding_or_proposal, falsification, filed_followons, needs_from_operator,
+       resolution, updated_at)
+    VALUES
+      (@task_id, @project, @milestone, @state, @disposition, @worked_in, @evidence,
+       @finding_or_proposal, @falsification, @filed_followons, @needs_from_operator,
+       @resolution, @updated_at)
+    ON CONFLICT(task_id) DO UPDATE SET
+      project = @project,
+      milestone = @milestone,
+      state = @state,
+      disposition = @disposition,
+      worked_in = @worked_in,
+      evidence = @evidence,
+      finding_or_proposal = @finding_or_proposal,
+      falsification = @falsification,
+      filed_followons = @filed_followons,
+      needs_from_operator = @needs_from_operator,
+      resolution = @resolution,
+      updated_at = @updated_at
+  `);
+  _stmtUpsertOpsJournalEntry.run(row);
+}
+
+export function deleteOpsJournalEntry(taskId: string): void {
+  _stmtDeleteOpsJournalEntry ??= db.prepare<{ task_id: string }>(
+    `DELETE FROM ops_journal WHERE task_id = @task_id`,
+  );
+  _stmtDeleteOpsJournalEntry.run({ task_id: taskId });
 }
 
 // ─── session_feedback_inbox ─────────────────────────────────────────────────
