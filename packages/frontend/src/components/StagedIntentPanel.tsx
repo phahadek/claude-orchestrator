@@ -11,8 +11,11 @@ interface Props {
 
 function renderPayload(payload: unknown): ReactNode {
   if (payload == null) return null;
-  if (typeof payload === 'string') return <p className={styles.text}>{payload}</p>;
-  return <pre className={styles.payload}>{JSON.stringify(payload, null, 2)}</pre>;
+  if (typeof payload === 'string')
+    return <p className={styles.text}>{payload}</p>;
+  return (
+    <pre className={styles.payload}>{JSON.stringify(payload, null, 2)}</pre>
+  );
 }
 
 /**
