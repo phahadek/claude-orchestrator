@@ -248,13 +248,17 @@ describe('runBootIdleReconciliation — pass 2: idle review sessions', () => {
   it('sets a non-empty last_error_detail when idle review session errors (coding errored)', () => {
     makeSession('code-sess-detail', 'error');
     makeSession('review-sess-detail', 'idle', null, 'review');
-    makePRRow(110, 'code-sess-detail', 'open', 'owner/repo', 'review-sess-detail');
+    makePRRow(
+      110,
+      'code-sess-detail',
+      'open',
+      'owner/repo',
+      'review-sess-detail',
+    );
 
     runBootIdleReconciliation();
 
-    expect(
-      getSession('review-sess-detail')?.last_error_detail,
-    ).toBeTruthy();
+    expect(getSession('review-sess-detail')?.last_error_detail).toBeTruthy();
   });
 
   it('does not touch review session when coding session is idle (open PR)', () => {

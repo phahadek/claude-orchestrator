@@ -67,11 +67,7 @@ function _runPass0(isSessionLive: (sessionId: string) => boolean): void {
 
   const now = Date.now();
   for (const row of rows) {
-    _errorSession(
-      row.session_id,
-      now,
-      'orphaned at boot — process tree gone',
-    );
+    _errorSession(row.session_id, now, 'orphaned at boot — process tree gone');
     logger.info(
       `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} ${row.status}→error (dead at boot)`,
     );
