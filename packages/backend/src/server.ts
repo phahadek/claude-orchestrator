@@ -349,6 +349,7 @@ const sessionEventsPruner = new SessionEventsPruner();
 const stalledPRReconciler = new StalledPRReconciler(broadcast);
 stalledPRReconciler.setReviewOrchestrator(reviewOrchestrator);
 stalledPRReconciler.setSessionManager(sessionManager);
+stalledPRReconciler.setGitHubClient(githubClient);
 
 // Concluded-session archiver: registers with Scheduler for cadence management.
 const concludedSessionArchiver = new ConcludedSessionArchiver(broadcast);

@@ -2,6 +2,7 @@ import { logger } from '../logger';
 import type { Scheduler } from './Scheduler';
 import type { ReviewOrchestrator } from '../github/ReviewOrchestrator';
 import type { SessionManager } from '../session/SessionManager';
+import type { GitHubClient } from '../github/GitHubClient';
 import {
   getAllOpenPRs,
   setPauseReason,
@@ -9,6 +10,8 @@ import {
   incrementStalledPRRetryCount,
   clearReviewSessionId,
   deleteAnalyzeResult,
+  setHeadSha,
+  clearTerminalPRFlags,
 } from '../db/queries';
 import { parsePauseReason } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
@@ -47,6 +50,7 @@ const DEFAULT_RETRY_CAP = 2;
 export class StalledPRReconciler {
   private reviewOrchestrator: ReviewOrchestrator | undefined;
   private sessionManager: SessionManager | undefined;
+  private githubClient: GitHubClient | undefined;
 
   constructor(
     private readonly broadcast: (msg: ServerMessage) => void,
@@ -62,6 +66,10 @@ export class StalledPRReconciler {
 
   setSessionManager(sm: SessionManager): void {
     this.sessionManager = sm;
+  }
+
+  setGitHubClient(gh: GitHubClient): void {
+    this.githubClient = gh;
   }
 
   register(scheduler: Scheduler): void {
@@ -214,6 +222,11 @@ export class StalledPRReconciler {
   ): Promise<boolean> {
     const { pr_number: prNumber, repo } = pr;
 
+    if (kind === 'gate_failed') {
+      const pushed = await this.reDriveIfPushDetected(pr);
+      if (pushed !== null) return pushed;
+    }
+
     if (!this.sessionManager) {
       logger.warn(
         `[StalledPRReconciler] sessionManager not set — cannot relaunch fixer for PR #${prNumber}`,
@@ -252,6 +265,78 @@ export class StalledPRReconciler {
           });
 
     await this.sessionManager.relaunchFixerForPR(pr, prompt);
+
+    return true;
+  }
+
+  /**
+   * gate_failed only: a session can respond to a gate failure by pushing a fix
+   * rather than dying, and PRMergeWatcher skips parked PRs entirely (see
+   * isTerminalStalePR), so that push is never observed. Check remote HEAD
+   * directly — if it has advanced past the recorded head_sha, treat it exactly
+   * like PRMergeWatcher's own push detection (adopt the sha, clear terminal
+   * flags, re-run the gate) instead of relaunching an already-done fixer.
+   *
+   * Returns null when no push was detected (caller should fall through to the
+   * fixer relaunch), or a boolean when this method fully handled the PR.
+   */
+  private async reDriveIfPushDetected(
+    pr: PullRequestRow,
+  ): Promise<boolean | null> {
+    const { pr_number: prNumber, repo } = pr;
+
+    if (!this.githubClient || !pr.head_sha) return null;
+
+    let remote: { headSha: string | null };
+    try {
+      remote = await this.githubClient.getPRState(prNumber, repo);
+    } catch (err) {
+      logger.warn(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): getPRState failed — ${(err as Error).message}`,
+      );
+      return null;
+    }
+
+    if (!remote.headSha || remote.headSha === pr.head_sha) return null;
+
+    logger.info(
+      `[StalledPRReconciler] PR #${prNumber} (${repo}): detected push during gate_failed (${pr.head_sha.slice(0, 7)} → ${remote.headSha.slice(0, 7)}) — re-running gate instead of relaunching fixer`,
+    );
+
+    if (!this.reviewOrchestrator) {
+      logger.warn(
+        `[StalledPRReconciler] reviewOrchestrator not set — cannot re-run gate for PR #${prNumber}`,
+      );
+      return null;
+    }
+
+    setHeadSha(prNumber, repo, remote.headSha);
+    clearTerminalPRFlags(prNumber, repo, 'head_sha_advance');
+
+    const project = getProjectByGithubRepo(repo);
+    const session = pr.session_id ? getSession(pr.session_id) : null;
+
+    recordEvent({
+      event_type: 'stalled_pr_reconcile_attempt',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: project?.id ?? null,
+      task_id: pr.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        kind: 'gate_failed_push_detected',
+        head_sha: remote.headSha,
+      },
+    });
+
+    this.reviewOrchestrator.enqueueReview({
+      prNumber,
+      repo,
+      taskId: pr.task_id ?? '',
+      taskUrl: session?.task_url ?? '',
+      contextUrl: project?.contextUrl ?? '',
+    });
 
     return true;
   }
