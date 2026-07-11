@@ -70,25 +70,25 @@ const normId = (id: string) => id.replace(/-/g, '').toLowerCase();
 
 // ─── result shapes ──────────────────────────────────────────────────────────
 
-export interface PageDoc {
+interface PageDoc {
   id: string;
   title: string;
   markdown: string;
 }
 
-export interface BoardRef {
+interface BoardRef {
   id: string; // milestone id
   board: string; // Notion board (data source) id
 }
 
-export interface TaskRef {
+interface TaskRef {
   id: string;
   title: string;
   status: string;
   url: string;
 }
 
-export interface OpsTaskEntry extends TaskRef {
+interface OpsTaskEntry extends TaskRef {
   type: string;
   mode: 'operational' | 'investigation';
   priority?: string;
@@ -97,7 +97,7 @@ export interface OpsTaskEntry extends TaskRef {
   depStatus: 'ready' | 'blocked';
 }
 
-export interface OpsBoardSummary {
+interface OpsBoardSummary {
   milestone: string;
   board: string;
   counts: {
