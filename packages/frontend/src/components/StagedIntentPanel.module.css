@@ -1,0 +1,82 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kind {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+}
+
+.text {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+
+.payload {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-faint);
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-x: auto;
+}
+
+.error {
+  font-size: 0.8rem;
+  color: var(--ctp-red);
+}
+
+.permissionButtons {
+  display: flex;
+  gap: 8px;
+}
+
+.approveButton {
+  background: rgba(166, 227, 161, 0.15);
+  border: 1px solid rgba(166, 227, 161, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-green);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 6px 14px;
+  transition: background 0.15s;
+}
+
+.approveButton:hover {
+  background: rgba(166, 227, 161, 0.25);
+}
+
+.denyButton {
+  background: rgba(243, 139, 168, 0.15);
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-red);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 6px 14px;
+  transition: background 0.15s;
+}
+
+.denyButton:hover {
+  background: rgba(243, 139, 168, 0.25);
+}
