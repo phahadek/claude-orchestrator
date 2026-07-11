@@ -58,7 +58,9 @@ const SERVICE_RESTART_RE =
 
 export function isShellCommandLine(line: string): boolean {
   const trimmed = line.trim();
-  return INTERPRETER_MODULE_RE.test(trimmed) || SERVICE_RESTART_RE.test(trimmed);
+  return (
+    INTERPRETER_MODULE_RE.test(trimmed) || SERVICE_RESTART_RE.test(trimmed)
+  );
 }
 
 /**
@@ -76,7 +78,9 @@ function richText(text: string): NotionRichTextItem[] {
 }
 
 function italicRichText(text: string): NotionRichTextItem[] {
-  return [{ type: 'text', text: { content: text }, annotations: { italic: true } }];
+  return [
+    { type: 'text', text: { content: text }, annotations: { italic: true } },
+  ];
 }
 
 // ─── Block builders ─────────────────────────────────────────────────────────
@@ -97,7 +101,10 @@ function heading3(text: string): RenderedBlock {
   };
 }
 
-function paragraph(text: string, richTextOverride?: NotionRichTextItem[]): RenderedBlock {
+function paragraph(
+  text: string,
+  richTextOverride?: NotionRichTextItem[],
+): RenderedBlock {
   return {
     object: 'block',
     type: 'paragraph',
@@ -203,9 +210,7 @@ function renderAcceptanceCriteria(
   blocks.push(...automatedCriteria.map((c) => todo(c)));
   blocks.push(heading3('👁️ Manual verification'));
   if (manualCriteria.length === 0) {
-    blocks.push(
-      paragraph('Covered by the Manual Verification Gate task.'),
-    );
+    blocks.push(paragraph('Covered by the Manual Verification Gate task.'));
   } else {
     blocks.push(...manualCriteria.map((c) => todo(c)));
   }
@@ -226,7 +231,10 @@ export function renderTaskBody(sections: TaskBodySections): RenderedBlock[] {
   blocks.push(...sections.context.map(renderContextBlock));
 
   blocks.push(
-    ...renderAcceptanceCriteria(sections.automatedCriteria, sections.manualCriteria),
+    ...renderAcceptanceCriteria(
+      sections.automatedCriteria,
+      sections.manualCriteria,
+    ),
   );
 
   if (sections.filesAffected?.length) {
@@ -236,7 +244,9 @@ export function renderTaskBody(sections: TaskBodySections): RenderedBlock[] {
 
   if (sections.notionPagesAffected?.length) {
     blocks.push(heading2('Notion pages affected'));
-    blocks.push(...sections.notionPagesAffected.map((p) => bulletedListItem(p)));
+    blocks.push(
+      ...sections.notionPagesAffected.map((p) => bulletedListItem(p)),
+    );
   }
 
   blocks.push(heading2('Implementation notes'));

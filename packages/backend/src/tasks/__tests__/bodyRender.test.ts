@@ -64,8 +64,7 @@ describe('renderTaskBody — section structure', () => {
 
     const filesHeadingIdx = blocks.findIndex(
       (b) =>
-        b.type === 'heading_2' &&
-        JSON.stringify(b.heading_2).includes('Files'),
+        b.type === 'heading_2' && JSON.stringify(b.heading_2).includes('Files'),
     );
     expect(blocks[filesHeadingIdx + 1]).toMatchObject({
       type: 'bulleted_list_item',
@@ -122,7 +121,10 @@ describe('renderTaskBody — acceptance criteria 🤖/👁️ split', () => {
 
     expect(blocks[automatedIdx + 1]).toMatchObject({
       type: 'to_do',
-      to_do: { checked: false, rich_text: [{ text: { content: 'Unit test passes' } }] },
+      to_do: {
+        checked: false,
+        rich_text: [{ text: { content: 'Unit test passes' } }],
+      },
     });
     expect(blocks[automatedIdx + 2]).toMatchObject({
       type: 'to_do',
@@ -130,7 +132,9 @@ describe('renderTaskBody — acceptance criteria 🤖/👁️ split', () => {
     });
     expect(blocks[manualIdx + 1]).toMatchObject({
       type: 'to_do',
-      to_do: { rich_text: [{ text: { content: 'Feature visible in browser' } }] },
+      to_do: {
+        rich_text: [{ text: { content: 'Feature visible in browser' } }],
+      },
     });
   });
 
@@ -150,7 +154,9 @@ describe('renderTaskBody — acceptance criteria 🤖/👁️ split', () => {
       type: 'paragraph',
       paragraph: {
         rich_text: [
-          { text: { content: 'Covered by the Manual Verification Gate task.' } },
+          {
+            text: { content: 'Covered by the Manual Verification Gate task.' },
+          },
         ],
       },
     });
@@ -159,8 +165,12 @@ describe('renderTaskBody — acceptance criteria 🤖/👁️ split', () => {
 
 describe('WAF-safe command-line rendering', () => {
   it('detects interpreter module invocations and service-restart lines', () => {
-    expect(isShellCommandLine('python3 -m http.server --bind 0.0.0.0')).toBe(true);
-    expect(isShellCommandLine('node -e "console.log(1)" --experimental-foo')).toBe(true);
+    expect(isShellCommandLine('python3 -m http.server --bind 0.0.0.0')).toBe(
+      true,
+    );
+    expect(
+      isShellCommandLine('node -e "console.log(1)" --experimental-foo'),
+    ).toBe(true);
     expect(isShellCommandLine('sudo systemctl restart nginx')).toBe(true);
     expect(isShellCommandLine('service nginx restart')).toBe(true);
     expect(isShellCommandLine('Some prose about the widget.')).toBe(false);
@@ -239,7 +249,9 @@ describe('WAF-safe command-line rendering', () => {
     );
     const codeBlock = blocks.find((b) => b.type === 'code');
     expect(codeBlock).toMatchObject({
-      code: { rich_text: [{ text: { content: 'const x = 1;\nconst y = 2;' } }] },
+      code: {
+        rich_text: [{ text: { content: 'const x = 1;\nconst y = 2;' } }],
+      },
     });
   });
 });
