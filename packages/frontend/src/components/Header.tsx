@@ -7,8 +7,10 @@ import {
 import type { TaskView } from '../types/taskView';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { MilestoneProgress } from './MilestoneProgress';
+import { PlanUsageBars } from './PlanUsageBars';
 import { ReconciliationPill } from './header/ReconciliationPill';
 import type { BootReconciliationState } from '../hooks/useBootReconciliation';
+import type { PlanUsage } from '@claude-orchestrator/backend/src/ws/types';
 import styles from './Header.module.css';
 
 export type TopView = 'tasks' | 'sessions' | 'prs' | 'analytics' | 'settings';
@@ -28,6 +30,7 @@ interface Props {
   onViewChange: (view: TopView) => void;
   totalTokens?: number;
   totalCost?: number;
+  planUsage?: PlanUsage | null;
   tasks?: TaskView[];
   incompleteReviewCount?: number;
   onAutoLaunchToggle?: (patch: AutoLaunchTogglePatch) => void;
@@ -65,6 +68,7 @@ export function Header({
   onViewChange,
   totalTokens,
   totalCost,
+  planUsage,
   tasks,
   incompleteReviewCount,
   onAutoLaunchToggle,
@@ -255,6 +259,7 @@ export function Header({
             <MilestoneProgress tasks={tasks} compact />
           )}
           {tokenContent}
+          <PlanUsageBars usage={planUsage} />
           {bootReconciliation && bootReconciliation.phase !== 'idle' && (
             <ReconciliationPill state={bootReconciliation} />
           )}
@@ -297,6 +302,7 @@ export function Header({
           {tokenContent}
         </>
       )}
+      <PlanUsageBars usage={planUsage} />
       {bootReconciliation && bootReconciliation.phase !== 'idle' && (
         <>
           <div className={styles.divider} />

@@ -6,44 +6,68 @@ import type { Scheduler } from '../orchestration/Scheduler';
 import {
   getAllOpenPRs,
   getRoutedCommentIds,
-  markCommentsRouted,
+  markCommentsPending,
   setPauseReason,
   getSession,
+  getPRByNumber,
 } from '../db/queries';
 import { typedGetSetting } from '../config/settings';
 import { getProjectByGithubRepo } from '../config';
-import { isTerminalStalePR } from './pollUtils';
-import { formatHumanReviewFeedback, type HumanComment } from './reviewUtils';
+import { parsePauseReason } from '../db/pauseReason';
+import { formatCoalescedHumanBatch, type HumanComment } from './reviewUtils';
 import type { PullRequestRow } from '../db/types';
 import type { ServerMessage } from '../ws/types';
-
-const WATCHABLE_PAUSE_REASONS: ReadonlySet<string | null> = new Set([
-  null,
-  'awaiting_human_approval',
-  'human_changes_requested',
-]);
 
 function getAIReviewerUsernames(): Set<string> {
   return new Set(typedGetSetting('ai_reviewer_usernames'));
 }
 
+export function isBotAuthor(
+  author: string,
+  authorType: string,
+  denyList: ReadonlySet<string>,
+  allowList: ReadonlySet<string>,
+): boolean {
+  if (allowList.has(author)) return false;
+  if (denyList.has(author)) return true;
+  return authorType === 'Bot' || author.endsWith('[bot]');
+}
+
+interface BufferEntry {
+  prNumber: number;
+  repo: string;
+  sessionId: string;
+  author: string;
+  comments: HumanComment[];
+  hasChangesRequested: boolean;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 /**
- * Polls open PRs for new human reviewer comments and routes them to the
- * corresponding coding session via SessionManager.send(). Deduplicates via
- * the pr_review_comments_routed table so comments are only sent once.
+ * Polls open PRs for new human reviewer comments and coalesces them into a
+ * per-source quiescence buffer. Comments from the same reviewer are held until
+ * no new comment arrives within the quiescence window (default 2 min, sliding),
+ * then flushed as one batch into the per-session feedback inbox.
  *
- * Design: piggybacked on the AutoMerger poll cadence — pollAll() is called
- * from a setInterval in server.ts at ~5-10s so human feedback reaches the
- * coding session promptly without a separate poll infrastructure.
+ * Deduplication lives in pr_review_comments_routed (marked only on flush).
+ * A restart mid-window re-discovers un-flushed comments from the DB — no loss.
  */
 export class ReviewerCommentsWatcher {
   private pausedUntil: Date | null = null;
   private rateLimitBroadcasted = false;
+  private readonly buffer = new Map<string, BufferEntry>();
 
   constructor(
     private github: GitHubClient,
     private sessions: SessionManager,
     private broadcast: (msg: ServerMessage) => void = () => {},
+    private _setTimeout: (
+      fn: () => void,
+      ms: number,
+    ) => ReturnType<typeof setTimeout> = globalThis.setTimeout.bind(globalThis),
+    private _clearTimeout: (
+      id: ReturnType<typeof setTimeout>,
+    ) => void = globalThis.clearTimeout.bind(globalThis),
   ) {}
 
   register(scheduler: Scheduler): void {
@@ -61,6 +85,15 @@ export class ReviewerCommentsWatcher {
           (err as Error).message,
         ),
     });
+  }
+
+  private getBufferedIds(prNumber: number, repo: string): Set<string> {
+    const ids = new Set<string>();
+    for (const entry of this.buffer.values()) {
+      if (entry.prNumber !== prNumber || entry.repo !== repo) continue;
+      for (const c of entry.comments) ids.add(c.id);
+    }
+    return ids;
   }
 
   private handleRateLimit(err: GitHubRateLimitError): void {
@@ -90,9 +123,8 @@ export class ReviewerCommentsWatcher {
     const watchable = openPRs.filter(
       (pr) =>
         pr.session_id !== null &&
-        WATCHABLE_PAUSE_REASONS.has(pr.pause_reason) &&
-        getProjectByGithubRepo(pr.repo) !== null &&
-        !isTerminalStalePR(pr),
+        parsePauseReason(pr.pause_reason)?.severity !== 'terminal' &&
+        getProjectByGithubRepo(pr.repo) !== null,
     );
     for (const pr of watchable) {
       try {
@@ -112,7 +144,16 @@ export class ReviewerCommentsWatcher {
 
   private async pollPR(pr: PullRequestRow): Promise<void> {
     const aiUsernames = getAIReviewerUsernames();
+    const botDenyList = new Set(typedGetSetting('bot_comment_deny_list'));
+    const botAllowList = new Set(typedGetSetting('bot_comment_allow_list'));
     const routedIds = getRoutedCommentIds(pr.pr_number, pr.repo);
+    const bufferedIds = this.getBufferedIds(pr.pr_number, pr.repo);
+    const isKnown = (id: string): boolean =>
+      routedIds.has(id) || bufferedIds.has(id);
+
+    const shouldExclude = (author: string, authorType: string): boolean =>
+      aiUsernames.has(author) ||
+      isBotAuthor(author, authorType, botDenyList, botAllowList);
 
     const [reviews, reviewComments, issueComments] = await Promise.all([
       this.github.listPRReviews(pr.pr_number, pr.repo),
@@ -120,43 +161,13 @@ export class ReviewerCommentsWatcher {
       this.github.listPRIssueComments(pr.pr_number, pr.repo),
     ]);
 
-    const humanReviews = reviews.filter((r) => !aiUsernames.has(r.author));
+    const humanReviews = reviews.filter(
+      (r) => !shouldExclude(r.author, r.authorType),
+    );
 
     const hasChangesRequested = humanReviews.some(
       (r) => r.state === 'CHANGES_REQUESTED',
     );
-
-    const newComments: HumanComment[] = [];
-
-    for (const review of humanReviews) {
-      if (!review.body?.trim()) continue;
-      const id = `rv_${review.id}`;
-      if (!routedIds.has(id)) {
-        newComments.push({ id, author: review.author, body: review.body });
-      }
-    }
-
-    for (const c of reviewComments) {
-      if (aiUsernames.has(c.author)) continue;
-      const id = `rc_${c.id}`;
-      if (!routedIds.has(id)) {
-        newComments.push({
-          id,
-          author: c.author,
-          body: c.body,
-          path: c.path,
-          line: c.line,
-        });
-      }
-    }
-
-    for (const c of issueComments) {
-      if (aiUsernames.has(c.author)) continue;
-      const id = `ic_${c.id}`;
-      if (!routedIds.has(id)) {
-        newComments.push({ id, author: c.author, body: c.body });
-      }
-    }
 
     if (hasChangesRequested && pr.pause_reason === 'awaiting_human_approval') {
       setPauseReason(pr.pr_number, pr.repo, 'human_changes_requested');
@@ -165,9 +176,119 @@ export class ReviewerCommentsWatcher {
       );
     }
 
-    if (newComments.length === 0) return;
+    // Accumulate new comments per source (reviewer login)
+    const newByAuthor = new Map<
+      string,
+      { comments: HumanComment[]; hasChangesRequested: boolean }
+    >();
 
-    const sessionId = pr.session_id!;
+    const addToAuthor = (
+      author: string,
+      comment: HumanComment,
+      changesRequested: boolean,
+    ): void => {
+      const entry = newByAuthor.get(author);
+      if (entry) {
+        entry.comments.push(comment);
+        entry.hasChangesRequested =
+          entry.hasChangesRequested || changesRequested;
+      } else {
+        newByAuthor.set(author, {
+          comments: [comment],
+          hasChangesRequested: changesRequested,
+        });
+      }
+    };
+
+    for (const review of humanReviews) {
+      if (!review.body?.trim()) continue;
+      const id = `rv_${review.id}`;
+      if (isKnown(id)) continue;
+      addToAuthor(
+        review.author,
+        { id, author: review.author, body: review.body },
+        review.state === 'CHANGES_REQUESTED',
+      );
+    }
+
+    for (const c of reviewComments) {
+      if (shouldExclude(c.author, c.authorType)) continue;
+      const id = `rc_${c.id}`;
+      if (isKnown(id)) continue;
+      addToAuthor(
+        c.author,
+        {
+          id,
+          author: c.author,
+          body: c.body,
+          path: c.path,
+          line: c.line,
+          pullRequestReviewId: c.pullRequestReviewId,
+        },
+        false,
+      );
+    }
+
+    for (const c of issueComments) {
+      if (shouldExclude(c.author, c.authorType)) continue;
+      const id = `ic_${c.id}`;
+      if (isKnown(id)) continue;
+      addToAuthor(c.author, { id, author: c.author, body: c.body }, false);
+    }
+
+    if (newByAuthor.size === 0) return;
+
+    const quiescenceMs = typedGetSetting('reviewer_comment_quiescence_ms');
+
+    for (const [
+      author,
+      { comments, hasChangesRequested: authorCR },
+    ] of newByAuthor) {
+      const bufferKey = `${pr.pr_number}:${pr.repo}:${author}`;
+      const existing = this.buffer.get(bufferKey);
+
+      if (existing) {
+        // Reset sliding window: clear old timer, merge new comments (dedup by id)
+        this._clearTimeout(existing.timer);
+        const existingIds = new Set(existing.comments.map((c) => c.id));
+        for (const c of comments) {
+          if (!existingIds.has(c.id)) existing.comments.push(c);
+        }
+        existing.hasChangesRequested = existing.hasChangesRequested || authorCR;
+        existing.timer = this._setTimeout(
+          () => void this.flush(bufferKey),
+          quiescenceMs,
+        );
+      } else {
+        const timer = this._setTimeout(
+          () => void this.flush(bufferKey),
+          quiescenceMs,
+        );
+        this.buffer.set(bufferKey, {
+          prNumber: pr.pr_number,
+          repo: pr.repo,
+          sessionId: pr.session_id!,
+          author,
+          comments,
+          hasChangesRequested: authorCR,
+          timer,
+        });
+      }
+
+      logger.debug(
+        `[ReviewerCommentsWatcher] buffered ${comments.length} comment(s) from @${author} for PR #${pr.pr_number} (quiescence ${quiescenceMs}ms)`,
+      );
+    }
+  }
+
+  private async flush(bufferKey: string): Promise<void> {
+    const entry = this.buffer.get(bufferKey);
+    if (!entry) return;
+    this.buffer.delete(bufferKey);
+
+    const { prNumber, repo, sessionId, author, comments, hasChangesRequested } =
+      entry;
+
     const sessionRow = getSession(sessionId);
     if (
       !sessionRow ||
@@ -176,28 +297,31 @@ export class ReviewerCommentsWatcher {
       sessionRow.status === 'killed'
     ) {
       logger.warn(
-        `[ReviewerCommentsWatcher] PR #${pr.pr_number}: session ${sessionId.slice(0, 8)} is not alive — skipping comment routing`,
+        `[ReviewerCommentsWatcher] PR #${prNumber}: session ${sessionId.slice(0, 8)} is not alive — discarding ${comments.length} buffered comment(s) from @${author}`,
       );
       return;
     }
 
-    const feedback = formatHumanReviewFeedback(
-      pr.pr_number,
-      newComments,
+    const prRow = getPRByNumber(prNumber, repo);
+    const payload = formatCoalescedHumanBatch(
+      prNumber,
+      author,
+      comments,
       hasChangesRequested,
+      {
+        conflicted: prRow?.merge_state === 'dirty',
+        baseBranch: prRow?.base_branch ?? undefined,
+      },
     );
-    // Use sendOrResume so idle sessions (submitted PR and exited) are respawned
-    // to receive the feedback. send() is a no-op for non-live sessions and would
-    // silently drop the comments even though they get marked as routed below.
-    await this.sessions.sendOrResume(sessionId, feedback);
-    markCommentsRouted(
-      pr.pr_number,
-      pr.repo,
-      newComments.map((c) => c.id),
+    markCommentsPending(
+      prNumber,
+      repo,
+      comments.map((c) => c.id),
     );
+    await this.sessions.enqueueFeedback(sessionId, `human:${author}`, payload);
 
     logger.info(
-      `[ReviewerCommentsWatcher] routed ${newComments.length} new human comment(s) to session ${sessionId.slice(0, 8)} for PR #${pr.pr_number}`,
+      `[ReviewerCommentsWatcher] flushed ${comments.length} comment(s) from @${author} for PR #${prNumber} → inbox for session ${sessionId.slice(0, 8)}`,
     );
   }
 }

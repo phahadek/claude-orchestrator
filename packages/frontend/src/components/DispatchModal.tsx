@@ -91,6 +91,7 @@ export function DispatchModal({
       .filter((t) => selected.has(t.task.id))
       .map((t) => ({
         notionUrl: t.task.notionUrl,
+        taskId: t.task.id,
         taskType: t.task.type,
         taskName: t.task.title,
         milestoneId,

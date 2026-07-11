@@ -335,6 +335,13 @@ export interface PullRequestRow {
   pre_review_stage: string | null;
   conflict_nudge_sha: string | null; // SHA for which a conflict nudge was last sent (dedup key)
   stalled_pr_retry_count: number; // reconciler attempt counter; resets when head_sha changes
+  /** Unix ms timestamp set when a session's own gh pr close/reopen command was
+   *  live-detected; cleared on reconcile (reopen) and on terminalize. Null means
+   *  no session-initiated close/reopen churn is pending for this PR. */
+  session_initiated_close_at: number | null;
+  /** Unix ms timestamp stamped once requestReviewers has been called for this
+   *  PR (corporate-mode reviewer auto-assignment); null means not yet fired. */
+  reviewer_requested_at: number | null;
 }
 
 // ─── task_repo_assignments ──────────────────────────────────────────────────
@@ -345,4 +352,15 @@ export interface TaskRepoAssignmentRow {
   repo: string;
   assigned_by: string;
   assigned_at: number;
+}
+
+// ─── session_feedback_inbox ─────────────────────────────────────────────────
+
+export interface FeedbackInboxRow {
+  id: number;
+  session_id: string;
+  source: string;
+  payload: string;
+  enqueued_at: number;
+  delivered_at: number | null;
 }

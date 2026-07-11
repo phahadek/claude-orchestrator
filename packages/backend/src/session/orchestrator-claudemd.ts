@@ -232,7 +232,7 @@ ${
     : `## PR Format Standards
 
 - **Title**: \`feat: <task-name>\` — no scope prefix, no milestone tags.
-- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only path.
+- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message — this is the sanctioned path. Do NOT use the MCP \`mcp__github__create_pull_request\` tool. If a PR was already opened another way (e.g. you ran \`gh pr create\` directly), that is fine and does not need to be undone — the orchestrator detects and tracks it too; just re-emit the \`<pr-body>\` marker if the body still needs to match the template below.
 - **Required body sections**:
 
 \`\`\`
@@ -288,7 +288,7 @@ ${(() => {
 Run in order — all must pass before opening the PR:
 
 1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
-2. Rebase onto \`${targetBranch}\` and resolve any conflicts.
+2. Rebase onto \`${targetBranch}\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
 3. Restore CLAUDE.md: \`git stash pop\`
 ${verifySteps}
 ${stageNum}. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.`;
@@ -299,12 +299,19 @@ ${stageNum}. Stage only your implementation files for commit — never stage \`C
 ## Forbidden Actions
 
 - Never push directly to \`main\`
-- Never force push (\`--force\`)
+- Never bare force push (\`git push --force\`)
+- Never force-push \`main\`, \`${targetBranch}\`, or any branch outside this worktree's own feature branch
+- \`git push --force-with-lease origin <your feature branch>\` **is allowed** — use it to update your own PR branch after a rebase (see Pre-PR Gate)
 - Never delete branches that live outside this worktree
 - Never run \`git reset --hard\` on the main repository directory
 - Never skip pre-commit hooks (\`--no-verify\`)
 - Never stage or commit \`CLAUDE.md\` — it contains orchestrator-injected content that must not appear in PRs. Use \`git add <specific files>\` instead of \`git add .\`.
-
+${
+  gitMode === 'local-only'
+    ? ''
+    : `- Never run \`gh pr close\` or \`gh pr reopen\`, and never close or recreate your own PR to "redo" it — the orchestrator tracks whatever PR is currently open. If it was opened the wrong way, leave it open; just re-emit the \`<pr-body>\` marker if the body needs updating.
+`
+}
 ---
 
 ## Git Isolation

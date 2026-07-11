@@ -171,6 +171,9 @@
   border-top: 1px solid var(--border-subtle);
   padding-top: 8px;
   margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 /* Backlog section separator */
@@ -178,6 +181,38 @@
   border-top: 1px solid var(--border-subtle);
   padding-top: 8px;
   margin-top: 4px;
+}
+
+/* Static (non-collapsible) heading above the Non-code type cards */
+.sectionHeading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 2px;
+}
+
+/* Per-type summary card within the Non-code section */
+.typeCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.statusBreakdown {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
 }
 
 /* Cards container */

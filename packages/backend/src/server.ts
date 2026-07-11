@@ -57,6 +57,7 @@ import { getCorporateMode } from './config/corporateMode';
 import { getOrchestratorConfig } from './config/appConfig';
 import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
+import { PlanUsagePoller } from './orchestration/PlanUsagePoller';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
 import { StalledPRReconciler } from './orchestration/StalledPRReconciler';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
@@ -68,8 +69,13 @@ import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
 import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
+import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
 import { runBootSequence, getActiveBootTracker } from './bootSequence';
 import { logger } from './logger';
+import {
+  handleUncaughtException,
+  handleUnhandledRejection,
+} from './audit/recordFault';
 
 runMigrations(db);
 loadRuntimeSettingsFromDb();
@@ -178,12 +184,13 @@ app.use(
     reviewOrchestrator,
   ),
 );
-app.use('/api', createTasksRouter());
+app.use('/api', createTasksRouter(sessionManager, reviewOrchestrator));
 app.use('/api/analytics', analyticsRouter);
 app.use('/api', projectsRouter);
 app.use('/api', configRouter);
 app.use('/api', updateRouter);
 app.use('/api/diagnostics', createDiagnosticsRouter());
+app.use('/api', createPlanUsageRouter());
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')),
@@ -244,7 +251,11 @@ sessionManager.on(
       );
       return;
     }
-    void prMergeWatcher.handlePushDetected(prRow);
+    void prMergeWatcher
+      .handlePushDetected(prRow)
+      .catch((err: unknown) =>
+        logger.error('[server] push_detected: handlePushDetected failed:', err),
+      );
   },
 );
 
@@ -278,6 +289,12 @@ wss.on('connection', (ws, req) => {
   sendInitialStateBurst(
     (msg) => ws.send(JSON.stringify(msg)),
     getActiveBootTracker(),
+  );
+  ws.send(
+    JSON.stringify({
+      type: 'plan_usage',
+      usage: planUsagePoller.getCache(),
+    } satisfies ServerMessage),
   );
 
   ws.on('message', (data) =>
@@ -313,17 +330,26 @@ const stuckSessionMonitor = new StuckSessionMonitor(
   githubClient,
 );
 
+// Plan-usage poller: reads Claude subscription 5-hour/weekly usage every 60s
+// for display in the top bar. Degrades to `{ available: false }` when the
+// device is on an API key or the OAuth token can't be read.
+const planUsagePoller = new PlanUsagePoller(broadcast);
+setPlanUsagePoller(planUsagePoller);
+
 // Orphaned-task sweep: finds tasks stuck at In Progress with no live session.
-// sendOrResume is wired so idle sessions without a PR are nudged rather than reverted.
+// enqueueFeedback is wired so idle sessions without a PR are nudged via the
+// feedback inbox rather than reverted or sent a raw mid-teardown stdin write.
 const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
-  sendOrResume: (sessionId, text) =>
-    sessionManager.sendOrResume(sessionId, text),
+  enqueueFeedback: (sessionId, source, payload) =>
+    sessionManager.enqueueFeedback(sessionId, source, payload),
 });
 
 const sessionEventsPruner = new SessionEventsPruner();
 
 const stalledPRReconciler = new StalledPRReconciler(broadcast);
 stalledPRReconciler.setReviewOrchestrator(reviewOrchestrator);
+stalledPRReconciler.setSessionManager(sessionManager);
+stalledPRReconciler.setGitHubClient(githubClient);
 
 // Concluded-session archiver: registers with Scheduler for cadence management.
 const concludedSessionArchiver = new ConcludedSessionArchiver(broadcast);
@@ -339,6 +365,7 @@ stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
 sessionEventsPruner.register(scheduler);
 stuckSessionMonitor.register(scheduler);
+planUsagePoller.register(scheduler);
 registerWorktreeReconciler(scheduler);
 
 void runBootSequence({
@@ -356,7 +383,7 @@ void runBootSequence({
   broadcast,
 });
 
-async function gracefulShutdown(signal: string) {
+async function gracefulShutdown(signal: string, exitCode = 0) {
   logger.info(`[server] ${signal} received — shutting down`);
   stuckSessionMonitor.stop();
   await scheduler.stopAll({ drain: true, timeoutMs: 15_000 });
@@ -364,11 +391,11 @@ async function gracefulShutdown(signal: string) {
   await sessionManager.shutdownAll();
   server.close();
   db.close();
-  process.exit(0);
+  process.exit(exitCode);
 }
 
-function shutdownWithTimeout(signal: string) {
-  gracefulShutdown(signal).catch(logger.error);
+function shutdownWithTimeout(signal: string, exitCode = 0) {
+  gracefulShutdown(signal, exitCode).catch(logger.error);
   setTimeout(() => {
     logger.error('[server] Graceful shutdown timed out — forcing exit');
     process.exit(1);
@@ -377,3 +404,15 @@ function shutdownWithTimeout(signal: string) {
 
 process.on('SIGTERM', () => shutdownWithTimeout('SIGTERM'));
 process.on('SIGINT', () => shutdownWithTimeout('SIGINT'));
+process.on('unhandledRejection', (err) => {
+  logger.error('[server] unhandledRejection:', err);
+  handleUnhandledRejection(err);
+});
+process.on('uncaughtException', (err) => {
+  logger.error('[server] uncaughtException — initiating graceful shutdown', {
+    message: err.message,
+    stack: err.stack,
+    name: err.name,
+  });
+  handleUncaughtException(err, shutdownWithTimeout);
+});

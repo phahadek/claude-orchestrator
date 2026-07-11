@@ -10,7 +10,7 @@ WorkingDirectory=/home/orchestrator/claude-orchestrator
 Environment=NODE_ENV=production
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/node packages/backend/dist/server.js
-Restart=on-failure
+Restart=always
 RestartSec=5
 TimeoutStopSec=20
 

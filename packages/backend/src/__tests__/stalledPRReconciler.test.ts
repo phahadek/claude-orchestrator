@@ -22,6 +22,8 @@ vi.mock('../db/queries.js', () => ({
   incrementStalledPRRetryCount: vi.fn(),
   clearReviewSessionId: vi.fn(),
   deleteAnalyzeResult: vi.fn(),
+  setHeadSha: vi.fn(),
+  clearTerminalPRFlags: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -39,6 +41,8 @@ import {
   incrementStalledPRRetryCount,
   clearReviewSessionId,
   deleteAnalyzeResult,
+  setHeadSha,
+  clearTerminalPRFlags,
 } from '../db/queries.js';
 import { recordEvent } from '../audit/AuditLog.js';
 import { StalledPRReconciler } from '../orchestration/StalledPRReconciler.js';
@@ -89,6 +93,18 @@ function makeReviewOrchestrator(inFlight = false) {
   return {
     isReviewInFlight: vi.fn(() => inFlight),
     enqueueReview: vi.fn(),
+  };
+}
+
+function makeSessionManager() {
+  return {
+    relaunchFixerForPR: vi.fn().mockResolvedValue('session-1'),
+  };
+}
+
+function makeGitHubClient(headSha: string | null) {
+  return {
+    getPRState: vi.fn().mockResolvedValue({ state: 'open', headSha }),
   };
 }
 
@@ -163,9 +179,12 @@ describe('StalledPRReconciler', () => {
     );
   });
 
-  it('retries a gate-failed PR without requiring a new push', async () => {
+  it('relaunches the fixer (not a re-review) for a gate-failed PR without requiring a new push', async () => {
     const pr = makePR({
-      review_result: JSON.stringify({ verdict: 'autofix_failed' }),
+      review_result: JSON.stringify({
+        verdict: 'autofix_failed',
+        summary: 'verify failed: npm test',
+      }),
       head_sha: 'sha1',
       last_reviewed_sha: 'sha1',
       review_session_id: null,
@@ -175,18 +194,146 @@ describe('StalledPRReconciler', () => {
 
     const { fn: broadcast } = makeBroadcast();
     const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
     const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
     reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
 
     await reconciler.reconcileOnce();
 
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+    expect(sm.relaunchFixerForPR).toHaveBeenCalledWith(
+      expect.objectContaining({ pr_number: 42, repo: 'org/repo' }),
+      expect.any(String),
+    );
+    expect(clearReviewSessionId).not.toHaveBeenCalled(); // not errored session
+    expect(incrementStalledPRRetryCount).toHaveBeenCalledWith(42, 'org/repo');
+  });
+
+  it('also relaunches the fixer for verify_failed gate-failure', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'verify_failed' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+    expect(sm.relaunchFixerForPR).toHaveBeenCalledWith(
+      expect.objectContaining({ pr_number: 42, repo: 'org/repo' }),
+      expect.any(String),
+    );
+  });
+
+  it('re-runs the gate via enqueueReview instead of relaunching the fixer when remote HEAD has advanced past head_sha (gate_failed)', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'verify_failed' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    const gh = makeGitHubClient('sha2'); // remote HEAD advanced past sha1
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+    reconciler.setGitHubClient(gh as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(gh.getPRState).toHaveBeenCalledWith(42, 'org/repo');
+    expect(setHeadSha).toHaveBeenCalledWith(42, 'org/repo', 'sha2');
+    expect(clearTerminalPRFlags).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      'head_sha_advance',
+    );
     expect(ro.enqueueReview).toHaveBeenCalledWith(
       expect.objectContaining({ prNumber: 42, repo: 'org/repo' }),
     );
-    expect(clearReviewSessionId).not.toHaveBeenCalled(); // not errored session
+    expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
+    // The push is handled via setHeadSha's own atomic reset, not a manual bump.
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
   });
 
-  it('also retries verify_failed gate-failure', async () => {
+  it('relaunches the fixer (not enqueueReview) for a gate-failed PR when remote HEAD equals head_sha, and still escalates at the retry cap', async () => {
+    const prBelowCap = makePR({
+      review_result: JSON.stringify({ verdict: 'verify_failed' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+      stalled_pr_retry_count: 1,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([prBelowCap] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    const gh = makeGitHubClient('sha1'); // remote HEAD unchanged
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+    reconciler.setGitHubClient(gh as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(gh.getPRState).toHaveBeenCalledWith(42, 'org/repo');
+    expect(setHeadSha).not.toHaveBeenCalled();
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+    expect(sm.relaunchFixerForPR).toHaveBeenCalledWith(
+      expect.objectContaining({ pr_number: 42, repo: 'org/repo' }),
+      expect.any(String),
+    );
+
+    // Unchanged behavior: once the retry count is at the cap, the PR still
+    // escalates to stalled_reconcile_cap regardless of the HEAD check.
+    vi.clearAllMocks();
+    const prAtCap = makePR({
+      review_result: JSON.stringify({ verdict: 'verify_failed' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+      stalled_pr_retry_count: 2, // already at cap
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([prAtCap] as any);
+    const { fn: broadcast2, messages } = makeBroadcast();
+    const reconciler2 = new StalledPRReconciler(broadcast2, { retryCap: 2 });
+    reconciler2.setReviewOrchestrator(ro as any);
+    reconciler2.setSessionManager(sm as any);
+    reconciler2.setGitHubClient(gh as any);
+
+    await reconciler2.reconcileOnce();
+
+    expect(
+      messages.find((m) => m.type === 'pr_stalled_escalated'),
+    ).toMatchObject({
+      type: 'pr_stalled_escalated',
+      prNumber: 42,
+      repo: 'org/repo',
+      kind: 'gate_failed',
+    });
+    expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
+  });
+
+  it('does not relaunch a gate-failed PR when sessionManager is not set', async () => {
     const pr = makePR({
       review_result: JSON.stringify({ verdict: 'verify_failed' }),
       head_sha: 'sha1',
@@ -200,12 +347,69 @@ describe('StalledPRReconciler', () => {
     const ro = makeReviewOrchestrator();
     const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
     reconciler.setReviewOrchestrator(ro as any);
+    // No sessionManager set
 
     await reconciler.reconcileOnce();
 
-    expect(ro.enqueueReview).toHaveBeenCalledWith(
-      expect.objectContaining({ prNumber: 42, repo: 'org/repo' }),
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+  });
+
+  it('routes a dead-session merge conflict to the fixer relaunch with a rebase prompt', async () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha1',
+      merge_state: 'dirty',
+      session_id: 'session-1',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getSession).mockImplementation((sessionId: string) => {
+      if (sessionId === 'session-1') return { status: 'error' } as any;
+      return null as any;
+    });
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+    expect(sm.relaunchFixerForPR).toHaveBeenCalledWith(
+      expect.objectContaining({ pr_number: 42, repo: 'org/repo' }),
+      expect.stringContaining('Rebase'),
     );
+  });
+
+  it('does not treat a conflicted PR with a live (idle) implementing session as stalled', async () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha1',
+      merge_state: 'dirty',
+      session_id: 'session-1',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getSession).mockImplementation((sessionId: string) => {
+      if (sessionId === 'session-1') return { status: 'idle' } as any;
+      return null as any;
+    });
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+
+    await reconciler.reconcileOnce();
+
+    // pre_review_interrupted would otherwise match (no review_result, no pending
+    // push) — but that's for the live-session nudge path (AutoMerger) to handle,
+    // not the reconciler. Confirm the reconciler doesn't fixer-relaunch here.
+    expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
   });
 
   it('escalates to stalled_reconcile_cap after retry cap is reached', async () => {
@@ -228,6 +432,7 @@ describe('StalledPRReconciler', () => {
       42,
       'org/repo',
       'stalled_reconcile_cap',
+      'incomplete_verdict — 2 fixer attempts exhausted',
     );
     expect(
       messages.find((m) => m.type === 'pr_stalled_escalated'),
@@ -399,6 +604,7 @@ describe('StalledPRReconciler', () => {
       42,
       'org/repo',
       'stalled_reconcile_cap',
+      'analyze_failing — 2 fixer attempts exhausted',
     );
     expect(
       messages.find((m) => m.type === 'pr_stalled_escalated'),
@@ -461,6 +667,7 @@ describe('StalledPRReconciler', () => {
       42,
       'org/repo',
       'stalled_reconcile_cap',
+      'pre_review_interrupted — 2 fixer attempts exhausted',
     );
     expect(
       messages.find((m) => m.type === 'pr_stalled_escalated'),

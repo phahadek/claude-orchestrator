@@ -25,6 +25,7 @@ describe('loadOrchestratorConfig', () => {
     expect(config.bash_rules).toEqual([]);
     expect(config.bootstrap_script).toBe('');
     expect(config.mcp_servers).toBeUndefined();
+    expect(config.autofix_skip_ci).toBe(true);
   });
 
   it('returns parsed values for a well-formed config containing all six fields', () => {
@@ -125,5 +126,38 @@ describe('loadOrchestratorConfig', () => {
 
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.mcp_servers).toBeUndefined();
+  });
+
+  it('defaults autofix_skip_ci to true when not set in config', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      'autofix:\n  - npm run lint\n',
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.autofix_skip_ci).toBe(true);
+  });
+
+  it('parses autofix_skip_ci: false from config', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      'autofix_skip_ci: false\n',
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.autofix_skip_ci).toBe(false);
+  });
+
+  it('parses autofix_skip_ci: true from config', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      'autofix_skip_ci: true\n',
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.autofix_skip_ci).toBe(true);
   });
 });

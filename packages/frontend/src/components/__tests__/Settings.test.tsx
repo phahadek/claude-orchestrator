@@ -22,6 +22,8 @@ const defaultSettings = {
   card_preview_lines: '5',
   code_session_model: '',
   review_session_model: '',
+  code_session_effort: '',
+  review_session_effort: '',
   session_mode: 'cli',
   auto_launch_concurrency: '1',
   auto_launch_poll_interval_ms: '60000',
@@ -35,6 +37,7 @@ const defaultSettings = {
   auto_archive_grace_minutes: '10',
   auto_archive_sweep_interval_minutes: '5',
   large_task_model: '',
+  large_task_effort: '',
 };
 
 function makeFetch(getBody: object = defaultSettings, patchBody: object = {}) {
@@ -284,6 +287,89 @@ describe('Settings — non-numeric settings PATCH', () => {
           opts.method === 'PATCH' &&
           JSON.parse(opts.body as string).large_task_model ===
             'claude-opus-4-8[1m]',
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
+});
+
+describe('Settings — effort dropdowns', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', makeFetch());
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn().mockReturnValue(null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+  });
+
+  function findEffortSelects() {
+    return screen
+      .getAllByRole('combobox')
+      .filter((el) =>
+        Array.from((el as HTMLSelectElement).options).some(
+          (o) => o.text === 'Default' && o.value === '',
+        ),
+      );
+  }
+
+  it('renders three effort selects, each listing Default first then the levels', async () => {
+    render(<Settings />);
+    await screen.findByText('(off)');
+
+    const effortSelects = findEffortSelects();
+    expect(effortSelects).toHaveLength(3);
+
+    for (const select of effortSelects) {
+      const labels = Array.from((select as HTMLSelectElement).options).map(
+        (o) => o.text,
+      );
+      expect(labels).toEqual([
+        'Default',
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+      ]);
+    }
+  });
+
+  it('fires PATCH with code_session_effort when the code effort select changes', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByText('(off)');
+
+    const [codeEffortSelect] = findEffortSelects();
+    fireEvent.change(codeEffortSelect, { target: { value: 'xhigh' } });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).code_session_effort === 'xhigh',
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
+
+  it('fires PATCH with large_task_effort when the large-task effort select changes', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByText('(off)');
+
+    const [, , largeTaskEffortSelect] = findEffortSelects();
+    fireEvent.change(largeTaskEffortSelect, { target: { value: 'max' } });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).large_task_effort === 'max',
       );
       expect(patchCall).toBeDefined();
     });

@@ -13,6 +13,7 @@ import {
   getStuckResultSessionRows,
   markSessionDone,
   markSessionIdle,
+  getSession,
 } from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -494,6 +495,13 @@ export class StuckSessionMonitor {
   private firePause(sessionId: string): void {
     const state = this.timers.get(sessionId);
     if (!state) return;
+    if (!getSession(sessionId)) {
+      // Parent row is gone (e.g. session deleted before the timer fired) —
+      // nothing to pause. Clean up the orphaned timer state and bail before
+      // any DB write, which would otherwise violate the FK to sessions.
+      this.timers.delete(sessionId);
+      return;
+    }
     state.pauseTimer = null;
     state.pauseDeadline = 0;
 
@@ -588,16 +596,22 @@ export class StuckSessionMonitor {
   private persistTimerState(sessionId: string): void {
     const state = this.timers.get(sessionId);
     if (!state) return;
-    upsertStuckSessionTimer(
-      sessionId,
-      state.taskName,
-      state.notifyDeadline,
-      state.pauseDeadline,
-      state.hardStopDeadline,
-      state.hardStopArmed,
-      state.notifyRemainingMs,
-      state.pauseRemainingMs,
-      state.hardStopRemainingMs,
-    );
+    try {
+      upsertStuckSessionTimer(
+        sessionId,
+        state.taskName,
+        state.notifyDeadline,
+        state.pauseDeadline,
+        state.hardStopDeadline,
+        state.hardStopArmed,
+        state.notifyRemainingMs,
+        state.pauseRemainingMs,
+        state.hardStopRemainingMs,
+      );
+    } catch (err) {
+      logger.warn(
+        `[StuckSessionMonitor] persistTimerState skipped for ${sessionId.slice(0, 8)}: ${err}`,
+      );
+    }
   }
 }

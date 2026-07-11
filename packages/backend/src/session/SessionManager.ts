@@ -58,6 +58,10 @@ import {
   incrementTaskCrashCount,
   setTaskPauseReason,
   getTerminalSessionsForTask,
+  listSessionsWithUndeliveredInboxItems,
+  listUndeliveredInboxItems,
+  markInboxItemsDelivered,
+  enqueueFeedbackItem,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import { eventKind } from './eventKind';
@@ -176,6 +180,26 @@ export function writeMcpConfig(
   fs.mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, 'orchestrator-mcp.json');
   fs.writeFileSync(filePath, JSON.stringify({ mcpServers }, null, 2), 'utf-8');
+  return filePath;
+}
+
+/**
+ * Write the assembled orchestrator session rules + task spec to a per-session
+ * file that lives OUTSIDE the managed worktree, at
+ * `<projectDir>/.claude/session-prompts/<sessionId>.md`.
+ *
+ * The path is returned so it can be passed via --append-system-prompt-file.
+ * Exported for unit testing.
+ */
+export function writeSystemPromptFile(
+  projectDir: string,
+  sessionId: string,
+  content: string,
+): string {
+  const dir = path.join(projectDir, '.claude', 'session-prompts');
+  fs.mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, `${sessionId}.md`);
+  fs.writeFileSync(filePath, content, 'utf-8');
   return filePath;
 }
 
@@ -493,11 +517,22 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     status: 'error' | 'killed',
     reason: string,
+    detail?: string,
   ): void {
     const endedAt = Date.now();
 
     // 1. Update DB status and ended_at
     updateSessionStatus(sessionId, status, endedAt);
+
+    // Persist a concise reason so failures are diagnosable from the dashboard/DB
+    // without reading raw session_events.
+    if (detail) {
+      try {
+        setSessionLastErrorDetail(sessionId, detail);
+      } catch {
+        // Best-effort — DB may be unavailable or mocked without this function.
+      }
+    }
 
     // 2. Set hasEnded on live in-memory session to prevent double-broadcasts
     const liveSession = this.sessions.get(sessionId);
@@ -1027,10 +1062,36 @@ export class SessionManager extends EventEmitter {
           `[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`,
         );
       } catch (err) {
-        logger.warn(
-          `[SessionManager] bootstrap script failed for ${sessionId.slice(0, 8)} (continuing): ${err}`,
+        const e = err as { stderr?: string | Buffer; message?: string };
+        const stderr = e.stderr ? e.stderr.toString().slice(0, 500) : '';
+        const detail = `bootstrap failed: ${stderr || String(err)}`;
+        logger.error(
+          `[SessionManager] ${detail} for ${sessionId.slice(0, 8)} — aborting launch`,
         );
+        throw Object.assign(new Error(detail), { cause: err });
       }
+    }
+
+    const missingEnv = orchConfig.required_env.filter(
+      (varName) => !(varName in process.env),
+    );
+    if (missingEnv.length > 0) {
+      const detail = `bootstrap gate: missing required env var(s): ${missingEnv.join(', ')}`;
+      logger.error(
+        `[SessionManager] ${detail} for ${sessionId.slice(0, 8)} — aborting launch`,
+      );
+      throw new Error(detail);
+    }
+
+    const missingFiles = orchConfig.required_files.filter(
+      (filePath) => !fs.existsSync(path.join(worktreePath, filePath)),
+    );
+    if (missingFiles.length > 0) {
+      const detail = `bootstrap gate: missing required file(s): ${missingFiles.join(', ')}`;
+      logger.error(
+        `[SessionManager] ${detail} for ${sessionId.slice(0, 8)} — aborting launch`,
+      );
+      throw new Error(detail);
     }
 
     const sessionMode = runtimeSettings.session_mode;
@@ -1112,6 +1173,18 @@ export class SessionManager extends EventEmitter {
       );
     }
 
+    let systemPromptFilePath: string | undefined;
+    if (sessionMode === 'cli' && sessionContextContent) {
+      systemPromptFilePath = writeSystemPromptFile(
+        projectDir,
+        sessionId,
+        sessionContextContent,
+      );
+      logger.info(
+        `[SessionManager] system prompt written to ${systemPromptFilePath} for ${sessionId.slice(0, 8)}`,
+      );
+    }
+
     const session = new AgentSession(
       sessionId,
       taskUrl,
@@ -1129,14 +1202,8 @@ export class SessionManager extends EventEmitter {
       runner,
       projectId,
       mcpConfigPath,
+      systemPromptFilePath,
     );
-
-    if (sessionMode === 'cli' && sessionContextContent) {
-      session.injectContextFile('CLAUDE.md', sessionContextContent);
-      logger.info(
-        `[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`,
-      );
-    }
 
     this.pendingStarts.delete(sessionId);
     this.sessions.set(sessionId, session);
@@ -1311,6 +1378,10 @@ export class SessionManager extends EventEmitter {
     session.on('push_detected', (payload: unknown) =>
       this.emit('push_detected', payload),
     );
+    // Forward dispositions_parsed so ReviewOrchestrator can drive reply/resolve actions
+    session.on('dispositions_parsed', (payload: unknown) =>
+      this.emit('dispositions_parsed', payload),
+    );
 
     // Fire-and-forget — run() blocks until the subprocess exits, then clean up
     session
@@ -1328,7 +1399,8 @@ export class SessionManager extends EventEmitter {
         // If run() threw before broadcasting session_ended, update SQLite and
         // notify the frontend so the session doesn't stay stuck at 'running'.
         if (!session.hasEnded) {
-          this.markSessionErrored(sessionId, 'error', 'run_error');
+          const detail = err instanceof Error ? err.message : String(err);
+          this.markSessionErrored(sessionId, 'error', 'run_error', detail);
         }
         return this.cleanupWorktree(
           sessionId,
@@ -1354,6 +1426,7 @@ export class SessionManager extends EventEmitter {
     orchConfig: ReturnType<typeof loadOrchestratorConfig>,
     runner: ISessionRunner,
     mcpConfigPath: string | undefined,
+    systemPromptFilePath?: string,
   ): AgentSession {
     const session = new AgentSession(
       row.session_id,
@@ -1372,6 +1445,7 @@ export class SessionManager extends EventEmitter {
       runner,
       row.project_id ?? '',
       mcpConfigPath,
+      systemPromptFilePath,
     );
     if (row.pr_url) session.prUrl = row.pr_url;
     this.sessions.set(row.session_id, session);
@@ -1387,6 +1461,126 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Fetch task content, build session context, write the system-prompt file
+   * outside the worktree, and return its path. Returns undefined when not in
+   * CLI mode, when task_url is absent, or when building fails.
+   */
+  private async _buildAndWriteResumeSystemPrompt(
+    row: Session,
+    project: NonNullable<ReturnType<typeof getProjectById>>,
+    orchConfig: ReturnType<typeof loadOrchestratorConfig>,
+    projectDir: string,
+    worktreePath: string,
+  ): Promise<string | undefined> {
+    try {
+      let taskContent: string | undefined;
+      if (row.task_id && row.project_id) {
+        try {
+          taskContent = await getTaskBackend(row.project_id).fetchTaskPage(
+            row.task_id,
+          );
+        } catch {
+          // best-effort — build without pre-loaded task content
+        }
+      }
+      const context = buildSessionContext({
+        taskName: row.task_name ?? row.task_url ?? '',
+        taskUrl: row.task_url ?? '',
+        projectContextUrl: row.project_context_url ?? '',
+        targetBranch: project.baseBranch ?? 'dev',
+        projectDir,
+        worktreePath,
+        verify: orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
+        bashRules:
+          orchConfig.bash_rules.length > 0 ? orchConfig.bash_rules : undefined,
+        taskBackend:
+          project.taskSource === 'yaml'
+            ? 'local'
+            : project.taskSource === 'github'
+              ? 'github'
+              : 'notion',
+        taskContent,
+        gitMode: project.gitMode,
+      });
+      const filePath = writeSystemPromptFile(
+        projectDir,
+        row.session_id,
+        context,
+      );
+      logger.info(
+        `[SessionManager] system prompt written to ${filePath} for ${row.session_id.slice(0, 8)}`,
+      );
+      return filePath;
+    } catch (err) {
+      logger.warn(
+        `[SessionManager] _buildAndWriteResumeSystemPrompt failed for ${row.session_id.slice(0, 8)}: ${err}`,
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * A session resume couldn't continue: resumeSession threw, the worktree was
+   * missing, or the resumed process re-failed immediately (no events within
+   * the resume timeout). Per policy a running/resuming session must never be
+   * silently auto-disposed — flag the task needs_attention (resume_failed) so
+   * an operator decides, instead of routing through markSessionErrored's
+   * crash-budget/Notion-flip path which would silently re-Ready or Block it.
+   * The session itself is still driven to a terminal DB status ('error') since
+   * its process is gone, but the row is never deleted.
+   */
+  private flagResumeFailure(row: Session, detail: string): void {
+    const endedAt = Date.now();
+    updateSessionStatus(row.session_id, 'error', endedAt);
+    try {
+      setSessionLastErrorDetail(row.session_id, detail);
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
+
+    const liveSession = this.sessions.get(row.session_id);
+    if (liveSession) {
+      liveSession.hasEnded = true;
+    }
+
+    this.emit('message', {
+      type: 'session_ended',
+      sessionId: row.session_id,
+      status: 'error',
+      ...(row.task_id && { taskId: row.task_id }),
+    } satisfies ServerMessage);
+
+    recordEvent({
+      event_type: 'session_errored',
+      actor_type: 'system',
+      actor_id: row.session_id,
+      project_id: null,
+      task_id: null,
+      payload: {
+        sessionId: row.session_id,
+        status: 'error',
+        reason: 'resume_failed',
+      },
+    });
+
+    if (row.task_id) {
+      setTaskPauseReason(row.task_id, 'resume_failed', detail);
+      recordEvent({
+        event_type: 'auto_launch_paused',
+        actor_type: 'system',
+        actor_id: row.session_id,
+        project_id: row.project_id ?? null,
+        task_id: row.task_id,
+        payload: { reason: 'resume_failed', sessionId: row.session_id, detail },
+      });
+    }
+
+    logger.warn(
+      `[SessionManager] ${row.session_id.slice(0, 8)} resume failed — flagged needs_attention (resume_failed): ${detail}`,
+    );
+  }
+
+  /**
    * Re-attach to a session that was running when the server last shut down.
    * Unlike sendOrResume(), this keeps the original session_id so the UI shows
    * continuity — same card, same transcript.
@@ -1395,12 +1589,11 @@ export class SessionManager extends EventEmitter {
     const project = getProjectById(row.project_id ?? '');
     if (!project) {
       logger.warn(
-        `[SessionManager] orphan ${row.session_id}: project not found, marking error`,
+        `[SessionManager] orphan ${row.session_id}: project not found — cannot resume`,
       );
-      this.markSessionErrored(
-        row.session_id,
-        'error',
-        'orphan_project_not_found',
+      this.flagResumeFailure(
+        row,
+        `project ${row.project_id ?? 'unknown'} not found`,
       );
       return;
     }
@@ -1415,9 +1608,9 @@ export class SessionManager extends EventEmitter {
     // without spawning anything.
     if (!worktreePath || !fs.existsSync(worktreePath)) {
       logger.warn(
-        `[SessionManager] resumability pre-check failed for ${row.session_id}: worktree missing (${worktreePath}) — marking error`,
+        `[SessionManager] resumability pre-check failed for ${row.session_id}: worktree missing (${worktreePath}) — cannot resume`,
       );
-      this.markSessionErrored(row.session_id, 'error', 'worktree_missing');
+      this.flagResumeFailure(row, `worktree missing: ${worktreePath}`);
       return;
     }
 
@@ -1442,6 +1635,19 @@ export class SessionManager extends EventEmitter {
       orchConfig.mcp_servers,
     );
 
+    // Re-pin: refresh the system-prompt file outside the worktree so the
+    // resumed session is bound to its original task.
+    const resumeSystemPromptFilePath =
+      resumeSessionMode === 'cli' && row.task_url
+        ? await this._buildAndWriteResumeSystemPrompt(
+            row,
+            project,
+            orchConfig,
+            projectDir,
+            worktreePath,
+          )
+        : undefined;
+
     // Shared helper: creates session with original ID, registers, updates DB, emits status.
     const session = this.respawnSession(
       row,
@@ -1449,55 +1655,8 @@ export class SessionManager extends EventEmitter {
       orchConfig,
       resumeRunner,
       resumeMcpConfigPath,
+      resumeSystemPromptFilePath,
     );
-
-    // Re-pin: re-inject CLAUDE.md with the dispatched task so the resumed session
-    // is bound to its original task and cannot self-select another task from the board.
-    if (runtimeSettings.session_mode === 'cli' && row.task_url) {
-      try {
-        let taskContent: string | undefined;
-        if (row.task_id && row.project_id) {
-          try {
-            taskContent = await getTaskBackend(row.project_id).fetchTaskPage(
-              row.task_id,
-            );
-          } catch (fetchErr) {
-            logger.warn(
-              `[SessionManager] resumeSession: task fetch failed for ${row.session_id.slice(0, 8)} (injecting without pre-loaded content): ${fetchErr}`,
-            );
-          }
-        }
-        const repinnedContext = buildSessionContext({
-          taskName: row.task_name ?? row.task_url,
-          taskUrl: row.task_url,
-          projectContextUrl: row.project_context_url ?? '',
-          targetBranch: project.baseBranch ?? 'dev',
-          projectDir,
-          worktreePath,
-          verify: orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
-          bashRules:
-            orchConfig.bash_rules.length > 0
-              ? orchConfig.bash_rules
-              : undefined,
-          taskBackend:
-            project.taskSource === 'yaml'
-              ? 'local'
-              : project.taskSource === 'github'
-                ? 'github'
-                : 'notion',
-          taskContent,
-          gitMode: project.gitMode,
-        });
-        session.injectContextFile('CLAUDE.md', repinnedContext);
-        logger.info(
-          `[SessionManager] resumeSession: re-pinned CLAUDE.md for ${row.session_id.slice(0, 8)}`,
-        );
-      } catch (err) {
-        logger.warn(
-          `[SessionManager] resumeSession: CLAUDE.md re-pin failed for ${row.session_id.slice(0, 8)}: ${err}`,
-        );
-      }
-    }
 
     // Detect mid-turn state: last event was a tool_result or tool_use with no
     // subsequent assistant/result response. Log a warning to aid diagnosis.
@@ -1527,9 +1686,9 @@ export class SessionManager extends EventEmitter {
     const errorTimer = setTimeout(() => {
       if (!session.hasEnded) {
         logger.warn(
-          `[SessionManager] resumeSession ${row.session_id}: no events within 30s after resume — marking as error`,
+          `[SessionManager] resumeSession ${row.session_id}: no events within 30s after resume — flagging needs_attention`,
         );
-        this.markSessionErrored(row.session_id, 'error', 'resume_timeout');
+        this.flagResumeFailure(row, 'no events within 30s of resume');
         session.kill().catch(() => {});
       }
     }, RESUME_TIMEOUT_MS);
@@ -1569,7 +1728,10 @@ export class SessionManager extends EventEmitter {
         result.verdict === 'needs_changes' ||
         result.verdict === 'incomplete'
       ) {
-        return formatReviewFeedback(result, pr.review_iteration ?? 0);
+        return formatReviewFeedback(result, pr.review_iteration ?? 0, {
+          conflicted: pr.merge_state === 'dirty',
+          baseBranch: pr.base_branch ?? undefined,
+        });
       }
       if (result.verdict === 'approved') {
         return formatApprovedVerdictMessage(result);
@@ -1704,8 +1866,12 @@ export class SessionManager extends EventEmitter {
         logger.error(
           `[SessionManager] failed to resume ${row.session_id}: ${err}`,
         );
-        // Mark as error so it doesn't retry forever on subsequent restarts.
-        this.markSessionErrored(row.session_id, 'error', 'resume_failed');
+        // Flag needs_attention rather than silently disposing — an operator
+        // decides whether to redispatch (see policy in flagResumeFailure).
+        this.flagResumeFailure(
+          row,
+          err instanceof Error ? err.message : String(err),
+        );
       }
     }
 
@@ -1713,7 +1879,12 @@ export class SessionManager extends EventEmitter {
       logger.warn(
         `[SessionManager] max concurrent code sessions reached — marking orphan ${row.session_id} as error`,
       );
-      this.markSessionErrored(row.session_id, 'error', 'max_concurrent');
+      this.markSessionErrored(
+        row.session_id,
+        'error',
+        'max_concurrent',
+        'max concurrent code sessions reached',
+      );
     }
   }
 
@@ -1779,6 +1950,23 @@ export class SessionManager extends EventEmitter {
     } catch (err) {
       logger.warn(
         `[SessionManager] failed to remove orchestrator-mcp.json for ${sessionId.slice(0, 8)}: ${err}`,
+      );
+    }
+
+    // Remove the per-session system-prompt file (written outside the worktree).
+    const systemPromptFile = path.join(
+      projectDir,
+      '.claude',
+      'session-prompts',
+      `${sessionId}.md`,
+    );
+    try {
+      if (fs.existsSync(systemPromptFile)) {
+        fs.unlinkSync(systemPromptFile);
+      }
+    } catch (err) {
+      logger.warn(
+        `[SessionManager] failed to remove system-prompt file for ${sessionId.slice(0, 8)}: ${err}`,
       );
     }
 
@@ -1891,13 +2079,39 @@ export class SessionManager extends EventEmitter {
 
   /** Returns true if a live session exists for the given task id. */
   hasLiveSessionForTask(taskId: string): boolean {
+    return this.findLiveSessionIdForTask(taskId) !== undefined;
+  }
+
+  /**
+   * Returns the live (non-review) session id for the given task id, if any.
+   * Skips entries that are ended/terminal — a stalled or already-exited session
+   * must not block AutoLauncher from relaunching the task. A genuinely
+   * resumable idle session (DB row present, non-terminal status) still counts
+   * as live so a parallel launch can't collide with it.
+   */
+  findLiveSessionIdForTask(taskId: string): string | undefined {
     const norm = taskId.replace(/-/g, '');
     for (const s of this.sessions.values()) {
       if (s.sessionType === 'review') continue;
+      if (s.hasEnded) continue;
       const tid = s.taskId?.replace(/-/g, '');
-      if (tid && tid === norm) return true;
+      if (!tid || tid !== norm) continue;
+      const row = getSession(s.sessionId);
+      if (row && TERMINAL_STATUSES.has(row.status)) continue;
+      return s.sessionId;
     }
-    return false;
+    return undefined;
+  }
+
+  /**
+   * Force-remove a session's in-memory entry, regardless of process lifecycle
+   * state. Recovery paths (redispatch, abort, delete) call this to reconcile
+   * the live-session map so a stalled or already-exited session can no longer
+   * block a relaunch — the normal run().then() cleanup only fires when the
+   * subprocess actually exits, which a hung session may never do.
+   */
+  evictSession(sessionId: string): void {
+    this.evictDeadSessionEntry(sessionId);
   }
 
   async kill(sessionId: string): Promise<void> {
@@ -1947,7 +2161,9 @@ export class SessionManager extends EventEmitter {
       payload: { sessionId, reason: 'user_abort' },
     });
 
-    // Kill the process (fire-and-forget — cleanup via run().then() still fires).
+    // Kill the process (fire-and-forget — cleanup via run().then() still fires
+    // for a genuinely live process, but is a no-op / never fires for a session
+    // that has already exited or hung, so we also evict directly below).
     if (liveSession) {
       liveSession.kill().catch((err) => {
         logger.error(
@@ -1955,6 +2171,11 @@ export class SessionManager extends EventEmitter {
         );
       });
     }
+
+    // Evict the in-memory entry now rather than relying solely on the
+    // run().then() cleanup cascade, which never fires for an already-exited
+    // or hung session — leaving a dead map entry that blocks relaunch.
+    this.evictSession(sessionId);
 
     // Reset the task to Ready so the next launch is a fresh session.
     if (row.session_type !== 'standard' || !row.task_id) return;
@@ -2052,6 +2273,58 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Enqueue a feedback item to a session's inbox instead of writing to stdin
+   * directly. A live session picks it up at its next turn boundary via
+   * AgentSession.deliverInboxItems() — no further action is taken here. An
+   * idle/exited session is delivered immediately via a clean respawn
+   * (sendOrResume), never a raw stdin write into a possibly mid-teardown
+   * process. Terminal sessions (done/error/killed) are left undelivered —
+   * marked delivered without resending, matching reconcileInboxAtBoot.
+   */
+  async enqueueFeedback(
+    sessionId: string,
+    source: string,
+    payload: string,
+  ): Promise<void> {
+    enqueueFeedbackItem(sessionId, source, payload);
+
+    // Live session — the next turn boundary (deliverInboxItems) will deliver it.
+    if (this.sessions.has(sessionId)) return;
+
+    const row = getSession(sessionId);
+    if (
+      !row ||
+      row.status === 'done' ||
+      row.status === 'error' ||
+      row.status === 'killed'
+    ) {
+      if (row) {
+        const items = listUndeliveredInboxItems(sessionId);
+        if (items.length > 0) {
+          markInboxItemsDelivered(items.map((i) => i.id));
+        }
+      }
+      return;
+    }
+
+    const items = listUndeliveredInboxItems(sessionId);
+    if (items.length === 0) return;
+    const combined = items
+      .map((item) => `[${item.source}]\n${item.payload}`)
+      .join('\n\n');
+
+    try {
+      await this.sendOrResume(sessionId, combined);
+    } catch (err) {
+      logger.warn(
+        `[SessionManager] enqueueFeedback: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
+      );
+      return;
+    }
+    markInboxItemsDelivered(items.map((i) => i.id));
+  }
+
+  /**
    * Send a message to a session, resuming it first if it is no longer live.
    * Reuses the original session ID so pull_requests.session_id linkage stays
    * valid and the UI card is updated in place (not a new card).
@@ -2062,7 +2335,11 @@ export class SessionManager extends EventEmitter {
    * is wired via wireSession, and the message is sent after the first event.
    * A concurrency guard ensures only one respawn runs per session ID at a time.
    */
-  async sendOrResume(sessionId: string, text: string): Promise<string | null> {
+  async sendOrResume(
+    sessionId: string,
+    text: string,
+    opts: { allowTerminal?: boolean } = {},
+  ): Promise<string | null> {
     // Live session — deliver directly
     if (this.sessions.has(sessionId)) {
       this.send(sessionId, text);
@@ -2085,7 +2362,7 @@ export class SessionManager extends EventEmitter {
     const inflight = this.resumesInFlight.get(sessionId);
     if (inflight) return inflight;
 
-    const promise = this._doSendOrResume(sessionId, text);
+    const promise = this._doSendOrResume(sessionId, text, opts);
     this.resumesInFlight.set(sessionId, promise);
     try {
       return await promise;
@@ -2097,6 +2374,7 @@ export class SessionManager extends EventEmitter {
   private async _doSendOrResume(
     sessionId: string,
     text: string,
+    opts: { allowTerminal?: boolean } = {},
   ): Promise<string | null> {
     // Session not live — look up details from DB and re-launch with --resume
     const row = getSession(sessionId);
@@ -2109,10 +2387,13 @@ export class SessionManager extends EventEmitter {
 
     // Refuse to respawn sessions that reached a terminal state — done/error/killed
     // sessions are intentionally finished and must not be revived by stale feedback.
+    // PR-scoped relaunches (relaunchFixerForPR) opt out via allowTerminal since a
+    // dead session is exactly the case they exist to recover from.
     if (
-      row.status === 'done' ||
-      row.status === 'error' ||
-      row.status === 'killed'
+      !opts.allowTerminal &&
+      (row.status === 'done' ||
+        row.status === 'error' ||
+        row.status === 'killed')
     ) {
       logger.warn(
         `[SessionManager] sendOrResume: refusing to respawn terminal session ${sessionId} (status=${row.status})`,
@@ -2171,6 +2452,16 @@ export class SessionManager extends EventEmitter {
         recordedPath,
         orchConfig.mcp_servers,
       );
+      const fastPathSystemPromptPath =
+        mode === 'cli' && row.task_url
+          ? await this._buildAndWriteResumeSystemPrompt(
+              row,
+              project,
+              orchConfig,
+              projectDir,
+              recordedPath,
+            )
+          : undefined;
       if (row.task_id) {
         const stale = getOtherRunningSessionsForTask(
           row.task_id,
@@ -2189,6 +2480,7 @@ export class SessionManager extends EventEmitter {
         orchConfig,
         runner,
         mcpConfigPath,
+        fastPathSystemPromptPath,
       );
 
       // Proactive ceiling-escalation: if the session's persisted context occupancy
@@ -2340,7 +2632,12 @@ export class SessionManager extends EventEmitter {
       const msg = `sendOrResume: worktree recreation failed for session ${sessionId.slice(0, 8)}: ${(err as Error).message}\nstderr: ${stderr}`;
       logger.error(`[SessionManager] ${msg}`);
 
-      this.markSessionErrored(sessionId, 'error', 'worktree_recreate_failed');
+      this.markSessionErrored(
+        sessionId,
+        'error',
+        'worktree_recreate_failed',
+        `worktree recreation failed: ${(err as Error).message}`,
+      );
 
       this.emit('message', {
         type: 'session_action_failed',
@@ -2376,6 +2673,17 @@ export class SessionManager extends EventEmitter {
 
     const mcpConfigPath = writeMcpConfig(worktreePath, orchConfig.mcp_servers);
 
+    const slowPathSystemPromptPath =
+      mode === 'cli' && row.task_url
+        ? await this._buildAndWriteResumeSystemPrompt(
+            row,
+            project,
+            orchConfig,
+            projectDir,
+            worktreePath,
+          )
+        : undefined;
+
     // Reconcile zombie rows: mark any other running sessions for this task as
     // superseded before respawning, so no two live rows exist for the same task.
     if (row.task_id) {
@@ -2396,6 +2704,7 @@ export class SessionManager extends EventEmitter {
       orchConfig,
       runner,
       mcpConfigPath,
+      slowPathSystemPromptPath,
     );
 
     // Register the pending text on the session so that if the resumed context
@@ -2443,8 +2752,148 @@ export class SessionManager extends EventEmitter {
     return sessionId;
   }
 
+  /**
+   * Idempotently remove a lingering in-memory session entry. Used before
+   * relaunchFixerForPR spawns a replacement so a stale map reference (session
+   * marked dead in the DB but not yet cleaned up in memory) can't collide with
+   * the new AgentSession instance.
+   */
+  private evictDeadSessionEntry(sessionId: string): void {
+    this.sessions.delete(sessionId);
+  }
+
+  /**
+   * Relaunch a coding fixer on a PR's existing branch when the implementing
+   * session has died (or is idle) and the normal gate-failure /
+   * conflict-nudge delivery path (sendOrResume to job.sessionId) can't reach
+   * anyone. PR-scoped: bound to `pr.session_id`'s branch/worktree, not to task
+   * dispatch — deliberately does NOT consult hasLiveSessionForTask, since that
+   * check exists for the initial task-launch decision (AutoLauncher), not for
+   * recovering a specific stalled PR.
+   *
+   * Resolution by session state:
+   *  - idle, worktree present: resume in place (delegates to sendOrResume).
+   *  - idle, worktree missing: anomaly — surface to the operator, no relaunch.
+   *  - terminal (done/error/killed), worktree present: resume in place with
+   *    --resume, bypassing the terminal refusal that sendOrResume enforces.
+   *  - terminal, worktree missing (confirmed dead): recreate a worktree
+   *    attached to the PR's existing branch and spawn fresh with --resume.
+   *
+   * Returns the session id on success, or null if no relaunch was attempted
+   * (missing session_id/DB row, or the idle+no-worktree operator-surface case).
+   */
+  async relaunchFixerForPR(
+    pr: { pr_number: number; repo: string; session_id: string | null },
+    prompt: string,
+  ): Promise<string | null> {
+    const sessionId = pr.session_id;
+    if (!sessionId) {
+      logger.warn(
+        `[SessionManager] relaunchFixerForPR: PR #${pr.pr_number} (${pr.repo}) has no session_id — cannot relaunch`,
+      );
+      return null;
+    }
+
+    // Evict any lingering in-memory entry for the dead session id before
+    // respawning — see evictDeadSessionEntry doc.
+    this.evictDeadSessionEntry(sessionId);
+
+    const row = getSession(sessionId);
+    if (!row) {
+      logger.error(
+        `[SessionManager] relaunchFixerForPR: session ${sessionId} not found in DB`,
+      );
+      return null;
+    }
+
+    const isTerminal =
+      row.status === 'done' ||
+      row.status === 'error' ||
+      row.status === 'killed';
+
+    if (!isTerminal) {
+      const project = getProjectById(row.project_id ?? '');
+      const projectDir = project ? normalizePath(project.projectDir) : null;
+      const recordedPath =
+        row.worktree_path ??
+        (projectDir
+          ? path.join(projectDir, '.claude', 'worktrees', sessionId)
+          : null);
+      const worktreePresent =
+        !!recordedPath &&
+        fs.existsSync(recordedPath) &&
+        fs.existsSync(path.join(recordedPath, '.git'));
+
+      if (!worktreePresent) {
+        logger.warn(
+          `[SessionManager] relaunchFixerForPR: idle session ${sessionId} has no worktree — surfacing to operator instead of relaunching`,
+        );
+        setSessionPauseReason(sessionId, 'stalled_idle');
+        this.emit('message', {
+          type: 'session_action_failed',
+          sessionId,
+          action: 'relaunch_fixer',
+          reason: 'worktree_missing',
+          detail: `Idle session has no worktree at ${recordedPath ?? '(unknown)'}`,
+        } satisfies ServerMessage);
+        return null;
+      }
+    }
+
+    // Idle-with-worktree resumes normally; terminal sessions bypass the
+    // terminal refusal since PR-scoped recovery is exactly what this is for.
+    return this.sendOrResume(sessionId, prompt, { allowTerminal: true });
+  }
+
   async shutdownAll(): Promise<void> {
     const pauses = [...this.sessions.values()].map((s) => s.gracefulPause());
     await Promise.allSettled(pauses);
+  }
+
+  /**
+   * At boot, find all sessions with undelivered inbox items and deliver them
+   * via sendOrResume so idle/exited sessions receive pending feedback.
+   */
+  async reconcileInboxAtBoot(): Promise<void> {
+    const sessionIds = listSessionsWithUndeliveredInboxItems();
+    if (sessionIds.length === 0) return;
+
+    logger.info(
+      `[SessionManager] inbox boot reconciliation: ${sessionIds.length} session(s) with undelivered items`,
+    );
+
+    await Promise.allSettled(
+      sessionIds.map(async (sessionId) => {
+        const row = getSession(sessionId);
+        if (!row) return;
+        if (
+          row.status === 'done' ||
+          row.status === 'error' ||
+          row.status === 'killed'
+        ) {
+          // Terminal sessions: mark items delivered without resending
+          const items = listUndeliveredInboxItems(sessionId);
+          if (items.length > 0) markInboxItemsDelivered(items.map((i) => i.id));
+          return;
+        }
+
+        const items = listUndeliveredInboxItems(sessionId);
+        if (items.length === 0) return;
+
+        const combined = items
+          .map((item) => `[${item.source}]\n${item.payload}`)
+          .join('\n\n');
+
+        try {
+          await this.sendOrResume(sessionId, combined);
+        } catch (err) {
+          logger.warn(
+            `[SessionManager] inbox boot reconciliation: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
+          );
+          return;
+        }
+        markInboxItemsDelivered(items.map((i) => i.id));
+      }),
+    );
   }
 }

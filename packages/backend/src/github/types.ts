@@ -136,3 +136,17 @@ export interface ReviewJob {
   worktreePath?: string;
   projectId?: string;
 }
+
+export interface ParsedDispositionItem {
+  comment_id: number;
+  disposition: 'addressed' | 'wont_fix' | 'out_of_scope';
+  reason?: string;
+}
+
+export interface DispositionsParsedPayload {
+  sessionId: string;
+  prNumber: number;
+  repo: string;
+  headSha: string | null;
+  dispositions: ParsedDispositionItem[];
+}

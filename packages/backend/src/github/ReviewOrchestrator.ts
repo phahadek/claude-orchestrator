@@ -25,6 +25,7 @@ import {
   upsertAnalyzeResult,
   getAnalyzeResult,
   setPreReviewStage,
+  enqueueFeedbackItem,
 } from '../db/queries';
 import { syncToOrigin } from './PRFileReverter';
 import type {
@@ -38,6 +39,7 @@ import type { GitHubClient } from './GitHubClient';
 import type { ReviewJob } from './types';
 import { GitHubDiffSource, LocalDiffSource } from './DiffSource';
 import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
+import type { DispositionsParsedPayload } from './types';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
@@ -93,6 +95,11 @@ export class ReviewOrchestrator {
     this.preReviewPipeline = new PreReviewPipeline(sessionManager, github);
     sessionManager.on('pr_opened', (job: ReviewJob) => this.onPrOpened(job));
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
+    sessionManager.on(
+      'dispositions_parsed',
+      (payload: unknown) =>
+        void this.handleDispositions(payload as DispositionsParsedPayload),
+    );
     sessionManager.on(
       'revert_sync_registered',
       (payload: {
@@ -349,6 +356,8 @@ export class ReviewOrchestrator {
     if (autofixCommands.length === 0)
       return { success: true, summary: 'no autofix commands — skipped' };
 
+    const autofixConfig = loadOrchestratorConfig(project.projectDir);
+
     this.sessionManager.emit('message', {
       type: 'autofix_started',
       prNumber,
@@ -372,6 +381,8 @@ export class ReviewOrchestrator {
           autofixCommands,
           (msg) =>
             logger.info(`[ReviewOrchestrator] autofix PR #${prNumber}: ${msg}`),
+          'dev',
+          autofixConfig.autofix_skip_ci,
         );
         autofixSuccess = result.success;
         autofixSummary = result.summary;
@@ -393,6 +404,7 @@ export class ReviewOrchestrator {
               sessionId: prRow?.session_id ?? null,
               projectId: project.id,
               taskId,
+              skipCi: autofixConfig.autofix_skip_ci,
               onReverted: (files) => {
                 if (prRow?.session_id) {
                   this.sessionManager.addToRevertLock(prRow.session_id, files);
@@ -559,6 +571,64 @@ export class ReviewOrchestrator {
     return { passed, output };
   }
 
+  /**
+   * Drive review-thread reply/resolve actions based on dispositions emitted by
+   * the coding session. Called when the session emits a `dispositions_parsed` event.
+   */
+  async handleDispositions(payload: DispositionsParsedPayload): Promise<void> {
+    if (!this.github) return;
+    const { prNumber, repo, headSha, dispositions } = payload;
+    const shaLabel = headSha ? headSha.slice(0, 7) : 'unknown';
+
+    for (const d of dispositions) {
+      let threadId: string | null;
+      try {
+        threadId = await this.github.findThreadByCommentId(
+          d.comment_id,
+          prNumber,
+          repo,
+        );
+      } catch (err) {
+        logger.warn(
+          `[ReviewOrchestrator] disposition: findThreadByCommentId failed for comment_id ${d.comment_id}: ${(err as Error).message}`,
+        );
+        continue;
+      }
+      if (!threadId) {
+        logger.warn(
+          `[ReviewOrchestrator] disposition: no thread found for comment_id ${d.comment_id} on PR #${prNumber} — skipping`,
+        );
+        continue;
+      }
+      try {
+        if (d.disposition === 'addressed') {
+          await this.github.addPullRequestReviewThreadReply(
+            threadId,
+            `Addressed in ${shaLabel}`,
+          );
+          await this.github.resolveReviewThread(threadId);
+        } else if (d.disposition === 'wont_fix') {
+          await this.github.addPullRequestReviewThreadReply(
+            threadId,
+            `Won't fix: ${d.reason ?? ''}`,
+          );
+        } else if (d.disposition === 'out_of_scope') {
+          await this.github.addPullRequestReviewThreadReply(
+            threadId,
+            `Out of scope for this PR: ${d.reason ?? ''}`,
+          );
+        }
+        logger.info(
+          `[ReviewOrchestrator] disposition: ${d.disposition} for comment_id ${d.comment_id} → thread ${threadId}`,
+        );
+      } catch (err) {
+        logger.warn(
+          `[ReviewOrchestrator] disposition action failed for comment_id ${d.comment_id}: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+
   private async executeLocalBranchReview(job: LocalBranchJob): Promise<void> {
     const project = getProjectById(job.projectId);
     if (project) {
@@ -579,6 +649,8 @@ export class ReviewOrchestrator {
                 logger.info(
                   `[ReviewOrchestrator] autofix local branch ${job.branchName}: ${msg}`,
                 ),
+              'dev',
+              config.autofix_skip_ci,
             );
             if (autofixResult.commitSha) {
               recordEvent({
@@ -603,8 +675,9 @@ export class ReviewOrchestrator {
                 // Autofix fixed the gate — fall through to AI review
               } else {
                 setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
-                this.sessionManager.send(
+                await this.sessionManager.enqueueFeedback(
                   job.sessionId,
+                  'ci-failure',
                   formatCIFailureFeedback({
                     source: 'verify',
                     failedCommand: retryResult.failedCommand,
@@ -615,8 +688,9 @@ export class ReviewOrchestrator {
               }
             } else {
               setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
-              this.sessionManager.send(
+              await this.sessionManager.enqueueFeedback(
                 job.sessionId,
+                'ci-failure',
                 formatCIFailureFeedback({
                   source: 'verify',
                   failedCommand: verifyResult.failedCommand,
@@ -631,8 +705,9 @@ export class ReviewOrchestrator {
               err,
             );
             setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
-            this.sessionManager.send(
+            await this.sessionManager.enqueueFeedback(
               job.sessionId,
+              'ci-failure',
               formatCIFailureFeedback({
                 source: 'verify',
                 failedCommand: verifyResult.failedCommand,
@@ -643,8 +718,9 @@ export class ReviewOrchestrator {
           }
         } else {
           setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
-          this.sessionManager.send(
+          await this.sessionManager.enqueueFeedback(
             job.sessionId,
+            'ci-failure',
             formatCIFailureFeedback({
               source: 'verify',
               failedCommand: verifyResult.failedCommand,
@@ -699,28 +775,11 @@ export class ReviewOrchestrator {
     });
 
     if (result.verdict === 'needs_changes') {
-      try {
-        await this.sessionManager.sendOrResume(
-          job.sessionId,
-          formatReviewFeedback(result, 0),
-        );
-      } catch (e) {
-        recordEvent({
-          event_type: 'verdict_routing_failed',
-          actor_type: 'system',
-          actor_id: job.sessionId,
-          project_id: job.projectId ?? null,
-          task_id: job.taskId ?? null,
-          payload: {
-            pr_number: job.localBranchId,
-            repo: `local/${job.branchName}`,
-            error: String(e),
-          },
-        });
-        logger.warn(
-          `[ReviewOrchestrator] verdict routing failed for local branch ${job.branchName}: ${e}`,
-        );
-      }
+      enqueueFeedbackItem(
+        job.sessionId,
+        'ai-reviewer',
+        formatReviewFeedback(result, 0),
+      );
     }
   }
 
@@ -904,32 +963,18 @@ export class ReviewOrchestrator {
       ...(draftTransitioned && { draft: false }),
     });
 
-    // Route feedback to coding session if verdict requires changes
+    // Route feedback to coding session via the inbox — delivered at next turn boundary
     if (result.verdict === 'needs_changes') {
       const prRow = getPRByNumber(job.prNumber, job.repo);
       if (prRow?.session_id) {
-        try {
-          await this.sessionManager.sendOrResume(
-            prRow.session_id,
-            formatReviewFeedback(result, 0),
-          );
-        } catch (e) {
-          recordEvent({
-            event_type: 'verdict_routing_failed',
-            actor_type: 'system',
-            actor_id: prRow.session_id,
-            project_id: project.id ?? null,
-            task_id: prRow.task_id ?? null,
-            payload: {
-              pr_number: job.prNumber,
-              repo: job.repo,
-              error: String(e),
-            },
-          });
-          logger.warn(
-            `[ReviewOrchestrator] verdict routing failed for PR #${job.prNumber}: ${e}`,
-          );
-        }
+        enqueueFeedbackItem(
+          prRow.session_id,
+          'ai-reviewer',
+          formatReviewFeedback(result, 0, {
+            conflicted: prRow?.merge_state === 'dirty',
+            baseBranch: prRow?.base_branch ?? undefined,
+          }),
+        );
       }
     } else if (result.verdict === 'incomplete') {
       const message = `Review for PR #${job.prNumber} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
@@ -940,30 +985,15 @@ export class ReviewOrchestrator {
         repo: job.repo,
         message,
       });
-      // Notify the implementing session so it knows to push a clearer version.
       if (prRow?.session_id) {
-        try {
-          await this.sessionManager.sendOrResume(
-            prRow.session_id,
-            formatReviewFeedback(result, 0),
-          );
-        } catch (e) {
-          recordEvent({
-            event_type: 'verdict_routing_failed',
-            actor_type: 'system',
-            actor_id: prRow.session_id,
-            project_id: project.id ?? null,
-            task_id: prRow.task_id ?? null,
-            payload: {
-              pr_number: job.prNumber,
-              repo: job.repo,
-              error: String(e),
-            },
-          });
-          logger.warn(
-            `[ReviewOrchestrator] incomplete verdict routing failed for PR #${job.prNumber}: ${e}`,
-          );
-        }
+        enqueueFeedbackItem(
+          prRow.session_id,
+          'ai-reviewer',
+          formatReviewFeedback(result, 0, {
+            conflicted: prRow?.merge_state === 'dirty',
+            baseBranch: prRow?.base_branch ?? undefined,
+          }),
+        );
       }
     }
 

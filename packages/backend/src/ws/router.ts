@@ -44,22 +44,25 @@ export async function handleMessage(
         break;
       }
       for (const t of msg.tasks) {
-        if (!t.taskUrl) {
+        if (!t.taskUrl && !t.taskId) {
           ws.send(
             JSON.stringify({
               type: 'error',
-              message: 'dispatch task requires a non-empty taskUrl',
+              message: 'dispatch task requires a non-empty taskUrl or taskId',
             }),
           );
           continue;
         }
+        const taskUrl =
+          t.taskUrl || `https://www.notion.so/${t.taskId!.replace(/-/g, '')}`;
         try {
-          await sessions.start(t.taskUrl, t.projectContextUrl, {
+          await sessions.start(taskUrl, t.projectContextUrl, {
             taskType: t.taskType,
             projectId: t.projectId,
             milestoneId: t.milestoneId,
             taskKind: t.taskKind ?? 'milestone',
             taskName: t.taskName,
+            taskId: t.taskId,
           });
         } catch (e) {
           const err = e as Error & { alreadyRunning?: boolean };

@@ -46,7 +46,7 @@ vi.mock('../../audit/AuditLog', () => ({
 interface MockProc {
   stdout: { on: (e: string, cb: (d: Buffer) => void) => void } | null;
   stderr: { on: (e: string, cb: (d: Buffer) => void) => void } | null;
-  on: (e: string, cb: (code: number | null) => void) => void;
+  on: (e: string, cb: (arg: unknown) => void) => void;
 }
 
 type SpawnHook = (cmd: string, args: unknown, opts: unknown) => MockProc;
@@ -78,7 +78,7 @@ function makeProc(exitCode: number, stdout = '', stderr = ''): MockProc {
       },
     },
     on: (e, cb) => {
-      if (e === 'close') closeCbs.push(cb);
+      if (e === 'close') closeCbs.push(cb as (c: number | null) => void);
     },
   };
 
@@ -91,9 +91,32 @@ function makeProc(exitCode: number, stdout = '', stderr = ''): MockProc {
   return proc;
 }
 
+/** makeErrorProc emits an 'error' event instead of 'close', simulating ENOENT. */
+function makeErrorProc(err: Error): MockProc {
+  const errorCbs: Array<(e: Error) => void> = [];
+
+  const proc: MockProc = {
+    stdout: { on: () => {} },
+    stderr: { on: () => {} },
+    on: (e, cb) => {
+      if (e === 'error') errorCbs.push(cb as (e: Error) => void);
+    },
+  };
+
+  setImmediate(() => {
+    errorCbs.forEach((cb) => cb(err));
+  });
+
+  return proc;
+}
+
 // ── subject ───────────────────────────────────────────────────────────────────
 
-import { loadAutofixCommands, runAutofix } from '../autofix-runner';
+import {
+  loadAutofixCommands,
+  runAutofix,
+  expandAutofixCommand,
+} from '../autofix-runner';
 import { recordEvent } from '../../audit/AuditLog';
 
 // ── test setup ────────────────────────────────────────────────────────────────
@@ -101,7 +124,9 @@ import { recordEvent } from '../../audit/AuditLog';
 beforeEach(() => {
   vi.clearAllMocks();
   _spawnHook = null;
-  mockExistsSync.mockReturnValue(false);
+  // Default true so runAutofix's cwd-missing guard doesn't short-circuit most tests.
+  // loadAutofixCommands tests that need false set it explicitly in each case.
+  mockExistsSync.mockReturnValue(true);
   mockReadFileSync.mockReturnValue('');
   mockYamlLoad.mockReturnValue(null);
 });
@@ -197,7 +222,44 @@ describe('runAutofix — no diff produced', () => {
 // ── runAutofix — diff produced → commit ──────────────────────────────────────
 
 describe('runAutofix — diff produced → commit + push', () => {
-  it('creates a commit with message "chore: apply autofix [orchestrator]"', async () => {
+  it('creates commit with [skip ci] by default (skipCi = true)', async () => {
+    const commitArgs: string[] = [];
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  src/foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, 'src/foo.ts\n');
+      if (cmd === 'git' && a[0] === 'commit') {
+        commitArgs.push(...a);
+        return makeProc(
+          0,
+          '[branch abc1234] chore: apply autofix [orchestrator] [skip ci]',
+        );
+      }
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'rev-parse')
+        return makeProc(0, 'abc1234567\n');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run lint'],
+      () => {},
+    );
+
+    expect(commitArgs).toContain(
+      'chore: apply autofix [orchestrator] [skip ci]',
+    );
+    expect(result.commitSha).toBe('abc1234567');
+    expect(result.success).toBe(true);
+  });
+
+  it('omits [skip ci] from commit message when skipCi = false', async () => {
     const commitArgs: string[] = [];
 
     _spawnHook = (cmd, args) => {
@@ -225,9 +287,14 @@ describe('runAutofix — diff produced → commit + push', () => {
       '/project',
       ['npm run lint'],
       () => {},
+      'dev',
+      false,
     );
 
     expect(commitArgs).toContain('chore: apply autofix [orchestrator]');
+    expect(commitArgs).not.toContain(
+      'chore: apply autofix [orchestrator] [skip ci]',
+    );
     expect(result.commitSha).toBe('abc1234567');
     expect(result.success).toBe(true);
   });
@@ -264,12 +331,12 @@ describe('runAutofix — diff produced → commit + push', () => {
 // ── runAutofix — fail open ─────────────────────────────────────────────────────
 
 describe('runAutofix — fail open on non-zero exit', () => {
-  it('returns success:false when a command exits non-zero with no diff', async () => {
+  it('returns success:true with unfixableViolations when a command exits 1 with output and no diff', async () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
-      // autofix shell command fails
-      return makeProc(1, '', 'lint error');
+      // autofix shell command exits 1 with output (treated as unfixable violations)
+      return makeProc(1, 'lint error', '');
     };
 
     const logged: string[] = [];
@@ -280,26 +347,29 @@ describe('runAutofix — fail open on non-zero exit', () => {
       (m) => logged.push(m),
     );
 
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
     expect(result.commitSha).toBeUndefined();
+    expect(result.unfixableViolations).toBe('lint error');
     expect(logged.some((l) => l.includes('WARN'))).toBe(true);
   });
 
-  it('commits whatever changes were produced even when a command fails', async () => {
+  it('commits changes and reports unfixableViolations when a command exits 1 with output', async () => {
     let committed = false;
 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'commit') {
         committed = true;
         return makeProc(0, '');
       }
       if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'rev-parse') return makeProc(0, 'abc\n');
-      // autofix shell command exits non-zero
-      return makeProc(1, '', 'error');
+      // autofix shell command exits 1 with output (unfixable violations)
+      return makeProc(1, 'error', '');
     };
 
     const result = await runAutofix(
@@ -311,7 +381,9 @@ describe('runAutofix — fail open on non-zero exit', () => {
 
     expect(committed).toBe(true);
     expect(result.commitSha).toBe('abc');
-    expect(result.success).toBe(false);
+    // Exit 1 with output is treated as unfixable violations, not a hard failure
+    expect(result.success).toBe(true);
+    expect(result.unfixableViolations).toBe('error');
   });
 });
 
@@ -908,5 +980,215 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
     expect(result.summary).toContain('git add -A failed (exit 128)');
     expect(result.summary).toContain(stderr);
     expect(result.gitFailureReason).toBe(stderr);
+  });
+});
+
+// ── expandAutofixCommand — unit ───────────────────────────────────────────────
+
+describe('expandAutofixCommand', () => {
+  it('returns the command unchanged when no placeholder is present', () => {
+    expect(expandAutofixCommand('npm run fmt', [])).toBe('npm run fmt');
+    expect(expandAutofixCommand('npm run fmt', ['src/a.ts'])).toBe(
+      'npm run fmt',
+    );
+  });
+
+  it('replaces {{changed_files}} with individually-quoted paths', () => {
+    const result = expandAutofixCommand('fmt {{changed_files}}', [
+      'src/a.ts',
+      'src/b.ts',
+    ]);
+    expect(result).toBe("fmt 'src/a.ts' 'src/b.ts'");
+  });
+
+  it('returns null when placeholder present but changed-file set is empty', () => {
+    expect(expandAutofixCommand('fmt {{changed_files}}', [])).toBeNull();
+  });
+});
+
+// ── runAutofix — {{changed_files}} placeholder ────────────────────────────────
+
+describe('runAutofix — {{changed_files}} placeholder', () => {
+  it('replaces {{changed_files}} with the changed-file set before execution', async () => {
+    const shellCmds: string[] = [];
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      // git diff --name-only dev...HEAD → one changed file
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      ) {
+        return makeProc(0, 'src/foo.ts\n');
+      }
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      // shell command (spawnShell passes opts as second arg, not an array)
+      if (!Array.isArray(args)) shellCmds.push(cmd as string);
+      return makeProc(0, '');
+    };
+
+    await runAutofix(
+      '/worktree',
+      '/project',
+      ['fmt {{changed_files}}'],
+      () => {},
+    );
+
+    expect(shellCmds).toHaveLength(1);
+    expect(shellCmds[0]).toBe("fmt 'src/foo.ts'");
+  });
+
+  it('command without {{changed_files}} runs unchanged (no git diff call)', async () => {
+    const shellCmds: string[] = [];
+    const gitDiffCalls: string[][] = [];
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        typeof a[2] === 'string' &&
+        a[2].includes('...')
+      ) {
+        gitDiffCalls.push(a);
+      }
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      if (!Array.isArray(args)) shellCmds.push(cmd as string);
+      return makeProc(0, '');
+    };
+
+    await runAutofix('/worktree', '/project', ['npm run fmt'], () => {});
+
+    expect(gitDiffCalls).toHaveLength(0);
+    expect(shellCmds).toContain('npm run fmt');
+  });
+
+  it('skips command entirely when {{changed_files}} set is empty (no-op, not whole-repo run)', async () => {
+    const shellCmds: string[] = [];
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      ) {
+        return makeProc(0, ''); // empty changed-file set
+      }
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      if (!Array.isArray(args)) shellCmds.push(cmd as string);
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['fmt {{changed_files}}'],
+      () => {},
+    );
+
+    expect(shellCmds).toHaveLength(0); // formatter was never invoked
+    expect(result.success).toBe(true);
+    expect(result.commitSha).toBeUndefined();
+  });
+});
+
+// ── spawnCmd / spawnShell — 'error' event handler ─────────────────────────────
+
+describe('spawnCmd / spawnShell — error event resolves instead of throwing', () => {
+  it('resolves with exitCode=1 and error text when spawn emits an error (non-existent cwd)', async () => {
+    const enoentErr = Object.assign(new Error('spawn /bin/sh ENOENT'), {
+      code: 'ENOENT',
+    });
+
+    _spawnHook = () => makeErrorProc(enoentErr);
+
+    // runAutofix internally calls spawnShell (the autofix command) — the error
+    // must NOT propagate as an unhandled throw. Verify the result resolves cleanly.
+    mockExistsSync.mockReturnValue(true); // worktree dir "exists" so we reach the spawn
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run lint'],
+      () => {},
+    );
+
+    // The shell command errored (exitCode=1, no output) → treated as a hard
+    // failure (empty output, not a lint-violation exit-1-with-output).
+    expect(result.success).toBe(false);
+    expect(result.commitSha).toBeUndefined();
+  });
+
+  it('does not throw or produce an unhandled rejection when spawnCmd emits error', async () => {
+    const enoentErr = Object.assign(new Error('spawn git ENOENT'), {
+      code: 'ENOENT',
+    });
+    let unhandled: Error | undefined;
+    const onUnhandled = (e: Error) => {
+      unhandled = e;
+    };
+    process.on('unhandledRejection', onUnhandled);
+
+    _spawnHook = () => makeErrorProc(enoentErr);
+    mockExistsSync.mockReturnValue(true);
+
+    let threw = false;
+    try {
+      await runAutofix('/worktree', '/project', ['npm run lint'], () => {});
+    } catch {
+      threw = true;
+    }
+
+    // Allow microtasks to flush before checking
+    await new Promise((r) => setTimeout(r, 20));
+
+    process.off('unhandledRejection', onUnhandled);
+
+    expect(threw).toBe(false);
+    expect(unhandled).toBeUndefined();
+  });
+});
+
+// ── runAutofix — cwd-missing guard ────────────────────────────────────────────
+
+describe('runAutofix — cwd-missing guard', () => {
+  it('returns success:true with skip summary when worktreePath does not exist', async () => {
+    mockExistsSync.mockReturnValue(false);
+
+    const logged: string[] = [];
+    const result = await runAutofix(
+      '/gone/worktree',
+      '/project',
+      ['npm run lint'],
+      (m) => logged.push(m),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.summary).toContain('worktree path no longer exists');
+    expect(result.commitSha).toBeUndefined();
+    expect(logged.some((l) => l.includes('no longer exists'))).toBe(true);
+  });
+
+  it('proceeds normally when worktreePath exists', async () => {
+    mockExistsSync.mockReturnValue(true);
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run fmt'],
+      () => {},
+    );
+
+    expect(result.summary).not.toContain('no longer exists');
   });
 });

@@ -83,7 +83,7 @@ On success it has written, under `.skill-cache/grooming/<milestone>/`:
 Read `context-bundle.json` and `worklist.json`. Read the context-page bodies in
 `context/` — the master context, research goals, architecture, coding guidelines.
 Also read the universal task-authoring standard at `config/task-writing.md` (it is no
-longer a context page — the skill reads it from local disk). **This is
+longer a Notion context page — the skill reads it from local disk). **This is
 non-negotiable**: resolving a task without the architectural constraints loaded is how
 grooming produces confidently-wrong decisions.
 
@@ -184,10 +184,46 @@ Only after explicit sign-off on the batch (_"looks good"_, _"ship it"_, _"next"_
 "decision": "no_split" }` for ≤500 LoC tasks, `{ "loc": <number>, "decision":
 "split_now", "split_into": ["<task-id>", …] }` after splitting, `{ "loc":
 <number>, "decision": "unsplittable", "reason": "<one-line>" }` for the atomic
-   case, or `{ "decision": "n/a" }` for Design/Planning tasks), and set
-   `signoff: { "by": "<human>", "at": "<iso>" }`. _(All three — `signoff`,
-   `hard_block_deps`, and `size_check` — are gated by the promotion hook. They
-   must be written **before** the status flip, or the gate blocks the update.)_
+   case, or `{ "decision": "n/a" }` for Design/Planning tasks), fill
+   `gate_contribution` for 💻 Code / 🛠️ Tooling tasks (see _Gate accretion_ below;
+   write `{ "decision": "n/a" }` for exempt types), fill `seed_contribution` the same
+   way for 💻 Code / 🛠️ Tooling tasks (see _Seed accretion_ below; `{ "decision": "n/a" }`
+   for exempt types), and set `signoff: { "by": "<human>", "at": "<iso>" }`. _(All five
+   — `signoff`, `hard_block_deps`, `size_check`, `gate_contribution`, and
+   `seed_contribution` — are gated by the promotion hook. They must be written **before**
+   the status flip, or the gate blocks the update.)_
+
+**Gate accretion (💻 Code / 🛠️ Tooling tasks):** Before writing `gate_contribution`
+and flipping to Ready, append the task's stripped runtime/launch-and-observe items to
+the milestone 🚦 Gate task body. The Gate task id is in `context-bundle.json` as
+`milestone_gate_task_id`. Read the task body's `### 👁️ Manual verification` section —
+these are the items the task spec says are _"Covered by the Manual Verification Gate."_
+Append them to the Gate under a `#### <source-task-title>` heading, grouped by source
+task. Then write to `grooming-state.json`:
+
+- Items accreted: `{ "gate_task_id": "<id>", "items": ["<item 1>", "…"], "appended_at": "<iso>" }`
+- No standalone runtime item: `{ "decision": "none" }`
+
+Confirm the accretion in chat before the Ready-flip. If the milestone has no Gate task
+yet (`milestone_gate_task_id: null` in context-bundle.json), surface it — do not
+silently skip accretion.
+
+**Seed accretion (💻 Code / 🛠️ Tooling tasks):** The operational twin of Gate accretion.
+Before writing `seed_contribution` and flipping to Ready, append the task's operational
+data/config seed — a prod-data row/flag/default deliberately kept **out** of its
+auto-dispatched PR (e.g. an `analyzer_configs` row, config-category defaults, alias/cohort
+flags) — to the milestone **config-seed** task body, and add the one-line back-reference on
+the source task. The config-seed task id is in `context-bundle.json` as
+`milestone_seed_task_id`. Append the seed(s) under a `#### <source-task-title>` heading,
+grouped by source task. Then write to `grooming-state.json`:
+
+- Seeds accreted: `{ "seed_task_id": "<id>", "seeds": ["<seed 1>", "…"], "appended_at": "<iso>" }` _(the array field is `seeds`, **not** the gate's `items`)_
+- No operational seed: `{ "decision": "none" }`
+
+Confirm the accretion in chat before the Ready-flip. If the milestone has no config-seed
+task yet (`milestone_seed_task_id: null` in context-bundle.json), surface it — do not
+silently skip accretion.
+
 2. **Then**, in a **single** `notion-update-page` call (`command:
 "update_properties"`) per task, write **both** the canonical hard-block deps
    into the `Depends On` property **and** set `Status → 🗂️ Ready`. The
@@ -204,12 +240,22 @@ Only after explicit sign-off on the batch (_"looks good"_, _"ship it"_, _"next"_
 3. Confirm in chat what was marked Ready **and** what `Depends On` value was
    written for each task. Then present the next batch.
 
-**Gates last**: the milestone's **🚦 Gate** task (the Manual Verification Gate) is the
-final batch, after all code tasks are signed off. The Gate rests at 🗂️ Ready and
-**accretes** — as each code task is groomed, append its stripped manual-verification
-items to the Gate. That is the Gate type's defined lifecycle, not editing a Ready task.
+**Gates last**: the milestone's **🚦 Gate** task is the final batch, after all code
+tasks are signed off. Accretion happens incrementally — as each 💻 Code / 🛠️ Tooling
+task is promoted (Gate accretion above), its stripped items are appended to the Gate.
+The final Gate batch confirms that all stripped items landed on the Gate body and
+presents the Gate for sign-off. The Gate type's defined lifecycle is accumulation while
+at 🗂️ Ready — appending to it is not editing a Ready task. The milestone **config-seed**
+🔧 Operational task accretes the same way (Seed accretion above) — a human runs it at
+milestone end, after the code is merged and deployed.
 
-When every batch is signed off, confirm the milestone board is fully groomed.
+**Re-check the board before finishing — don't close on a stale snapshot.** Step 1 loaded the
+board once at the start, but new 🔲 Backlog tasks can arrive *during* the session (the operator or
+another session files them while grooming runs). So before declaring the board groomed, **re-query
+the live board** for any 🔲 Backlog tasks not in the original worklist. If any appeared, **continue**
+— groom them in fresh batches (Steps 2–4) exactly like the rest; don't defer them to "next time."
+Repeat the re-query until a pass finds **no** new Backlog. Only then, when every batch is signed
+off, confirm the milestone board is fully groomed.
 
 ---
 

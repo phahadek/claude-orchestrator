@@ -7,6 +7,7 @@ export interface NotionTask {
   notionUrl: string;
   prUrl?: string; // value of the "PR" URL property on the Notion page, if present
   priority?: string; // '🔴 High' | '🟡 Medium' | '🟢 Low'
+  reviewer?: string[]; // GitHub usernames to auto-request for review (corporate mode)
 }
 
 // ResolvedTask has been moved to packages/backend/src/tasks/types.ts.

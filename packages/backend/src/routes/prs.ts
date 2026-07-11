@@ -33,7 +33,7 @@ import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { ServerMessage } from '../ws/types';
-import { emitTaskUpdated } from './tasks';
+import { emitTaskUpdated, executeRerunPipeline } from './tasks';
 
 let _broadcast: (msg: ServerMessage) => void = () => {};
 export function setPRBroadcast(fn: (msg: ServerMessage) => void): void {
@@ -471,7 +471,7 @@ export function createPrsRouter(
 
         const result = await github.mergePR(prNumber, commitTitle, repo);
         updatePRState(prNumber, repo, 'merged');
-        clearTerminalPRFlags(prNumber, repo);
+        clearTerminalPRFlags(prNumber, repo, 'merged');
 
         // Transition session DB status idle → done (must precede endSession subprocess cleanup)
         if (prRow?.session_id) {
@@ -758,13 +758,13 @@ export function createPrsRouter(
       // If the PR is cap-escalated, clear the pause and re-run the pre-review gate
       const pauseStruct = parsePauseReason(prRow.pause_reason ?? null);
       if (pauseStruct?.reason === 'stalled_reconcile_cap') {
-        clearTerminalPRFlags(prNumber, repo);
+        clearTerminalPRFlags(prNumber, repo, 'human_unpark');
         if (reviewOrchestrator) {
-          void reviewOrchestrator.runAutofixPipeline(
-            prNumber,
-            repo,
-            prRow.task_id,
-          );
+          void reviewOrchestrator
+            .runAutofixPipeline(prNumber, repo, prRow.task_id)
+            .catch((err: unknown) =>
+              logger.error('[prs] approve runAutofixPipeline failed:', err),
+            );
         }
       }
 
@@ -932,8 +932,9 @@ export function createPrsRouter(
   });
 
   // ── POST /api/prs/:prNumber/unpark ──────────────────────────────────────────
-  // Operator action: clear a stalled_reconcile_cap pause and re-enqueue the
-  // pre-review pipeline so the PR can recover without being merged.
+  // @deprecated Superseded by POST /tasks/:taskId/recover (rerun action), which
+  // folds in this unpark behavior. Retained as a thin alias over the shared
+  // rerun executor for the current frontend; /recover is the canonical interface.
   router.post('/prs/:prNumber/unpark', async (req: Request, res: Response) => {
     const prNumber = parseInt(String(req.params.prNumber), 10);
     const projectId =
@@ -954,13 +955,9 @@ export function createPrsRouter(
       return;
     }
 
-    clearTerminalPRFlags(prNumber, repo);
-
-    if (reviewOrchestrator) {
-      void reviewOrchestrator.runAutofixPipeline(prNumber, repo, prRow.task_id);
-    }
-
-    if (prRow.task_id) emitTaskUpdated(prRow.task_id);
+    // Shared rerun executor: clears terminal PR flags, re-enqueues the
+    // pre-review/autofix pipeline, and emits a task update.
+    executeRerunPipeline(prNumber, repo, prRow.task_id, reviewOrchestrator);
 
     recordEvent({
       event_type: 'pr_unparked',

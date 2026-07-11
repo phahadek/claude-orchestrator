@@ -1,35 +1,40 @@
 #!/usr/bin/env node
 /**
- * deploy-grooming.mjs — copy the vendored grooming/design skill artifacts from this
- * repo into ~/.claude so the /groom and /design skills + their loaders run user-globally.
+ * deploy-grooming.mjs — copy the vendored grooming/design/ops skill artifacts from this
+ * repo into ~/.claude so the /groom, /design, /ops, /deploy and /wrap skills + their
+ * loaders run user-globally.
  *
  * Run by hand after changing any vendored artifact:
  *   node scripts/deploy-grooming.mjs [--dry-run]
  *
  * Idempotent and cross-platform (Node fs; Windows + Linux). Copies:
- *   scripts/{groom-load,design-load,groom-gate,notion-page}.mjs → ~/.claude/scripts/
- *   skills/groom/**  +  skills/design/**                         → ~/.claude/skills/
+ *   scripts/{groom-load,design-load,groom-gate,ops-load,ops-journal-set,
+ *            check-task-status,notion-page}.mjs               → ~/.claude/scripts/
+ *   skills/{groom,design,ops,deploy,wrap,sync-guidelines}/** → ~/.claude/skills/
  *   config-template/hooks/load-procedures.mjs → <config-tree>/hooks/  (overwrite)
- *   config-template/task-writing.md           → <config-tree>/task-writing.md  (overwrite)
- *   config-template/procedures.md             → <config-tree>/procedures.md  (seed-only)
  *
- * The config-template/* artifacts go into the central config tree (a `config/` dir inside
+ * The config-template/hooks/* artifacts go into the central config tree (a `config/` dir inside
  * the projects root, beside each managed repo), not ~/.claude — that's where the Remote
  * Control SessionStart hook runs from. The config tree is resolved via
  * $ORCHESTRATOR_CONFIG_DIR, else `<repo>/../config` (config-inside-projects, both hosts),
  * with `<repo>/../../config` kept only as a legacy-layout fallback.
- * load-procedures.mjs + task-writing.md are overwritten each run (pure universal rules);
- * procedures.md is seeded only if absent (it's deployment-edited — fill in its Project index).
+ * load-procedures.mjs is overwritten each run (pure mechanism).
+ *
+ * NOT copied here: the guideline docs config-template/{task-writing,procedures}.md. They are
+ * Class-2 — the repo copy is the *upstream guideline source*, the live copy is an *integrated*
+ * copy carrying host/project content (the filled Project index; project examples). A file op
+ * would clobber that (overwrite) or never propagate updates (seed-only), so deploying an update
+ * to them is a Claude-led merge via the /sync-guidelines skill (scripts/sync-guidelines-load.mjs).
  *
  * By design there is NO auto-run (no postinstall, no symlink, no watcher) — see the M9
  * "Productize the Backlog Grooming procedure" task. It also does NOT register any hooks in
- * ~/.claude/settings.json — both the `groom-gate.mjs` PreToolUse hook and the
- * `load-procedures.mjs` SessionStart hook stay documented one-time manual steps
+ * ~/.claude/settings.json — the `groom-gate.mjs` + `check-task-status.mjs` PreToolUse hooks
+ * and the `load-procedures.mjs` SessionStart hook stay documented one-time manual steps
  * (auto-editing user-global settings is riskier). See README § Grooming/design skills.
  *
- * Note: groom-load.mjs / design-load.mjs also call sibling scripts notion-query.mjs and
- * notion-move-tasks.mjs, which are deployed to ~/.claude/scripts separately (they predate
- * this script). This deploy only owns the four grooming/design-specific scripts + the skills.
+ * Note: the loaders also call sibling scripts notion-query.mjs and notion-move-tasks.mjs,
+ * which are deployed to ~/.claude/scripts separately (they predate this script). This deploy
+ * owns the seven grooming/design/ops scripts above + the five skills.
  */
 import { cpSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname, resolve } from 'path';
@@ -44,9 +49,13 @@ const SCRIPTS = [
   'groom-load.mjs',
   'design-load.mjs',
   'groom-gate.mjs',
+  'ops-load.mjs',
+  'ops-journal-set.mjs',
+  'check-task-status.mjs',
+  'sync-guidelines-load.mjs',
   'notion-page.mjs',
 ];
-const SKILLS = ['groom', 'design'];
+const SKILLS = ['groom', 'design', 'ops', 'deploy', 'wrap', 'sync-guidelines'];
 
 function copy(src, dest, label) {
   if (!existsSync(src)) {
@@ -58,24 +67,6 @@ function copy(src, dest, label) {
   if (dryRun) return;
   mkdirSync(dirname(dest), { recursive: true });
   cpSync(src, dest, { recursive: true, force: true });
-}
-
-// Copy only if the destination does not already exist — for deployment-edited
-// files (e.g. procedures.md) that must never be clobbered by a re-deploy.
-function seedIfAbsent(src, dest, label) {
-  if (!existsSync(src)) {
-    console.error(`  ! missing source: ${src}`);
-    process.exitCode = 1;
-    return;
-  }
-  if (existsSync(dest)) {
-    console.log(`  skip (exists)  ${label}`);
-    return;
-  }
-  console.log(`  ${dryRun ? '[dry-run] would seed' : 'seeded'}  ${label}`);
-  if (dryRun) return;
-  mkdirSync(dirname(dest), { recursive: true });
-  cpSync(src, dest, { force: true });
 }
 
 // Resolve the central config tree (a `config/` dir inside the projects root, beside
@@ -115,7 +106,10 @@ for (const s of SKILLS)
   );
 
 // Central config tree (outside every repo): the Remote Control SessionStart hook
-// (overwrite) + a procedures.md to fill in (seed only).
+// (pure mechanism → overwrite). The guideline docs task-writing.md + procedures.md are
+// deliberately NOT copied here — they are Class-2 (repo = upstream guideline source, live =
+// integrated copy carrying host/project content). Deploying an update to them is a Claude-led
+// merge via the /sync-guidelines skill (scripts/sync-guidelines-load.mjs), never a file op.
 const configDir = resolveConfigDir(repoRoot);
 console.log(`config tree -> ${configDir}`);
 copy(
@@ -123,20 +117,14 @@ copy(
   join(configDir, 'hooks', 'load-procedures.mjs'),
   'config/hooks/load-procedures.mjs',
 );
-copy(
-  join(repoRoot, 'config-template', 'task-writing.md'),
-  join(configDir, 'task-writing.md'),
-  'config/task-writing.md',
-);
-seedIfAbsent(
-  join(repoRoot, 'config-template', 'procedures.md'),
-  join(configDir, 'procedures.md'),
-  'config/procedures.md',
+console.log(
+  '  guideline docs (task-writing.md, procedures.md) are NOT copied here — integrate ' +
+    'updates with the /sync-guidelines skill.',
 );
 
 console.log(dryRun ? 'dry-run complete (no changes).' : 'deploy complete.');
 console.log(
-  'Reminder: register BOTH hooks once in ~/.claude/settings.json (manual — see README ' +
-    '§ Grooming/design skills): the groom-gate.mjs PreToolUse gate and the ' +
-    'load-procedures.mjs SessionStart bootstrap.',
+  'Reminder: register the hooks once in ~/.claude/settings.json (manual — see README ' +
+    '§ Grooming/design skills): the groom-gate.mjs + check-task-status.mjs PreToolUse gates ' +
+    'and the load-procedures.mjs SessionStart bootstrap.',
 );

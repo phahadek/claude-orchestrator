@@ -69,6 +69,7 @@ function spawnCmd(
     proc.stderr?.on('data', (d: Buffer) => {
       out += d.toString();
     });
+    proc.on('error', (err) => resolve({ exitCode: 1, stdout: String(err) }));
     proc.on('close', (code) => resolve({ exitCode: code ?? 1, stdout: out }));
   });
 }
@@ -89,6 +90,7 @@ function spawnShell(
       out += d.toString();
       log(d.toString());
     });
+    proc.on('error', (err) => resolve({ exitCode: 1, output: String(err) }));
     proc.on('close', (code) => resolve({ exitCode: code ?? 1, output: out }));
   });
 }
@@ -103,21 +105,73 @@ async function getHeadSha(cwd: string): Promise<string> {
   return stdout.trim();
 }
 
+async function getChangedFiles(
+  worktreePath: string,
+  baseBranch: string,
+): Promise<string[]> {
+  const { stdout } = await spawnCmd(
+    'git',
+    ['diff', '--name-only', `${baseBranch}...HEAD`],
+    { cwd: worktreePath },
+  );
+  return stdout.split('\n').filter(Boolean);
+}
+
+/**
+ * Expand {{changed_files}} in an autofix command string.
+ * Returns null when the command should be skipped (placeholder present but no changed files).
+ * Returns the command unchanged when no placeholder is present.
+ */
+export function expandAutofixCommand(
+  cmd: string,
+  changedFiles: string[],
+): string | null {
+  if (!cmd.includes('{{changed_files}}')) return cmd;
+  if (changedFiles.length === 0) return null;
+  const quoted = changedFiles
+    .map((f) => `'${f.replace(/'/g, "'\\''")}'`)
+    .join(' ');
+  return cmd.replace(/\{\{changed_files\}\}/g, quoted);
+}
+
 export async function runAutofix(
   worktreePath: string,
   _projectDir: string,
   commands: string[],
   log: (msg: string) => void,
+  baseBranch = 'dev',
+  skipCi = true,
 ): Promise<AutofixResult> {
   if (commands.length === 0) {
     return { success: true, summary: 'no autofix commands configured' };
+  }
+
+  if (!fs.existsSync(worktreePath)) {
+    log(
+      `[autofix] worktree path no longer exists, skipping: ${worktreePath}\n`,
+    );
+    return {
+      success: true,
+      summary: 'autofix skipped: worktree path no longer exists',
+    };
+  }
+
+  // Resolve {{changed_files}} once upfront if any command uses the placeholder.
+  let changedFiles: string[] | undefined;
+  if (commands.some((c) => c.includes('{{changed_files}}'))) {
+    changedFiles = await getChangedFiles(worktreePath, baseBranch);
   }
 
   const failures: string[] = [];
   // exit-1 output from linting tools that fixed what they could but left violations behind
   const violationChunks: string[] = [];
 
-  for (const cmd of commands) {
+  for (const rawCmd of commands) {
+    const cmd = expandAutofixCommand(rawCmd, changedFiles ?? []);
+    if (cmd === null) {
+      log(`[autofix] skipping (no changed files): ${rawCmd}\n`);
+      continue;
+    }
     log(`[autofix] running: ${cmd}\n`);
     const { exitCode, output } = await spawnShell(
       cmd,
@@ -125,7 +179,7 @@ export async function runAutofix(
       log,
     );
     if (exitCode !== 0) {
-      const msg = `command exited with code ${exitCode}: ${cmd}`;
+      const msg = `command exited with code ${exitCode}: ${rawCmd}`;
       log(`[autofix] WARN: ${msg}\n`);
       if (exitCode === 1 && output.trim()) {
         // Treat exit 1 with output as unfixable violations (e.g. ruff E501)
@@ -224,14 +278,11 @@ export async function runAutofix(
   // on the orchestrator's internal autofix commit. The orchestrator runs its own
   // verify/analyze gate — redundant hook invocations here only cause spurious
   // exit-1 failures (e.g. polimarket E501).
+  const commitMsg =
+    'chore: apply autofix [orchestrator]' + (skipCi ? ' [skip ci]' : '');
   const commitResult = await spawnCmd(
     'git',
-    [
-      'commit',
-      '--no-verify',
-      '-m',
-      'chore: apply autofix [orchestrator] [skip ci]',
-    ],
+    ['commit', '--no-verify', '-m', commitMsg],
     { cwd: worktreePath, env },
   );
   if (commitResult.exitCode !== 0) {

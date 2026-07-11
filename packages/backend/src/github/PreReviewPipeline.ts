@@ -44,7 +44,10 @@ interface GateStageDescriptor {
   blockedStage: string;
   verdict: string;
   pauseReason?: PauseReason;
-  formatFailure: (detail: GateFailureDetail) => string;
+  formatFailure: (
+    detail: GateFailureDetail,
+    prConflictCtx: { conflicted: boolean; baseBranch: string },
+  ) => string;
 }
 
 interface RecordStageDescriptor {
@@ -108,6 +111,7 @@ export class PreReviewPipeline {
         let summary = 'no worktree available — autofix skipped';
 
         if (ctx.worktreePath) {
+          const autofixCfg = loadOrchestratorConfig(ctx.project.projectDir);
           try {
             const result = await runAutofix(
               ctx.worktreePath,
@@ -117,6 +121,8 @@ export class PreReviewPipeline {
                 logger.info(
                   `[PreReviewPipeline] autofix PR #${ctx.prNumber}: ${msg}`,
                 ),
+              'dev',
+              autofixCfg.autofix_skip_ci,
             );
 
             if (result.isGitInfraFailure) {
@@ -182,6 +188,7 @@ export class PreReviewPipeline {
                     getPRByNumber(ctx.prNumber, ctx.repo)?.session_id ?? null,
                   projectId: ctx.project.id,
                   taskId: ctx.job.taskId,
+                  skipCi: autofixCfg.autofix_skip_ci,
                   onReverted: (files) => {
                     const row = getPRByNumber(ctx.prNumber, ctx.repo);
                     if (row?.session_id) {
@@ -253,11 +260,13 @@ export class PreReviewPipeline {
       },
       blockedStage: 'blocked_verify',
       verdict: 'verify_failed',
-      formatFailure: (detail) =>
+      formatFailure: (detail, { conflicted, baseBranch }) =>
         formatCIFailureFeedback({
           source: 'verify',
           failedCommand: detail.failedCommand,
           truncatedOutput: detail.truncatedOutput,
+          conflicted,
+          baseBranch,
         }),
     };
   }
@@ -416,7 +425,10 @@ export class PreReviewPipeline {
 
     const message = detail.isGitInfraFailure
       ? `## Autofix Infrastructure Failure\n\nA git operation failed with exit code 128, indicating a git infrastructure issue (likely a corrupted .git/config). The orchestrator has attempted to repair the configuration automatically.\n\n**Detail:** ${detail.summary}`
-      : stage.formatFailure(detail);
+      : stage.formatFailure(detail, {
+          conflicted: prRow?.merge_state === 'dirty',
+          baseBranch: prRow?.base_branch ?? 'dev',
+        });
     try {
       await this.sessionManager.sendOrResume(sessionId, message);
     } catch (e) {

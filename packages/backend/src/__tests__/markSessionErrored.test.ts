@@ -79,6 +79,7 @@ vi.mock('../db/queries', () => ({
   incrementTaskCrashCount: vi.fn().mockReturnValue(1),
   resetTaskCrashCount: vi.fn(),
   setTaskPauseReason: vi.fn(),
+  setSessionLastErrorDetail: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog', () => ({
@@ -217,6 +218,34 @@ describe('SessionManager.markSessionErrored() — DB update', () => {
       'killed',
       expect.any(Number),
     );
+  });
+});
+
+describe('SessionManager.markSessionErrored() — last_error_detail', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
+    setupFakeBackend();
+  });
+
+  it('persists the detail via setSessionLastErrorDetail when provided', () => {
+    const sm = new SessionManager();
+    sm.markSessionErrored(
+      'test-session',
+      'error',
+      'run_error',
+      'boom: SIGSEGV',
+    );
+    expect(queries.setSessionLastErrorDetail).toHaveBeenCalledWith(
+      'test-session',
+      'boom: SIGSEGV',
+    );
+  });
+
+  it('does not write a detail when none is provided', () => {
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    expect(queries.setSessionLastErrorDetail).not.toHaveBeenCalled();
   });
 });
 

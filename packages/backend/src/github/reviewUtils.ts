@@ -9,12 +9,20 @@ export interface GitHubCIFailureArgs {
   runUrl: string | null;
   /** Truncated log excerpt from the failing step. */
   logExcerpt: string | null;
+  /** True when the PR is currently conflicted with its base branch (merge_state === 'dirty'). */
+  conflicted?: boolean;
+  /** The PR's base branch, used in the rebase instruction when conflicted. Defaults to 'dev'. */
+  baseBranch?: string;
 }
 
 export interface VerifyCIFailureArgs {
   source: 'verify';
   failedCommand: string | undefined;
   truncatedOutput: string | undefined;
+  /** True when the PR is currently conflicted with its base branch (merge_state === 'dirty'). */
+  conflicted?: boolean;
+  /** The PR's base branch, used in the rebase instruction when conflicted. Defaults to 'dev'. */
+  baseBranch?: string;
 }
 
 export const CI_LOG_EXCERPT_CAP = 4000;
@@ -38,13 +46,40 @@ export function truncateLog(log: string, cap: number): string {
   return `${head}\n… [${omittedLineCount} line${omittedLineCount !== 1 ? 's' : ''} omitted] …\n${tail}`;
 }
 
-const INSTRUCTION_BLOCK =
-  `Please investigate the failures and push a fix. ` +
-  `The orchestrator will automatically re-check once you push.\n\n` +
-  `**Important:** Do NOT rebase onto dev or merge dev into your branch. ` +
-  `Just commit your fixes and push directly to your feature branch. ` +
-  `Rebasing or merging would pull in unrelated changes from other merged PRs ` +
-  `and pollute the PR diff.`;
+/**
+ * Rebase guidance shared by all fix-prompt message builders. When the PR is
+ * conflicted with its base branch, a rebase is the only way to make it
+ * mergeable, so instruct the session to rebase + force-with-lease instead of
+ * the blanket "never rebase" guidance (which would make a conflicted PR
+ * unmergeable).
+ */
+function buildRebaseGuidance(conflicted: boolean, baseBranch: string): string {
+  if (conflicted) {
+    return (
+      `**Important:** This PR has a merge conflict with \`${baseBranch}\`. ` +
+      `Rebase onto \`${baseBranch}\` to resolve the conflict, then force-push: ` +
+      `\`git rebase ${baseBranch}\`, resolve any conflict markers, run ` +
+      `\`git rebase --continue\`, then \`git push --force-with-lease\`.`
+    );
+  }
+  return (
+    `**Important:** Do NOT rebase onto dev or merge dev into your branch. ` +
+    `Just commit your fixes and push directly to your feature branch. ` +
+    `Rebasing or merging would pull in unrelated changes from other merged PRs ` +
+    `and pollute the PR diff.`
+  );
+}
+
+function buildInstructionBlock(
+  conflicted: boolean,
+  baseBranch: string,
+): string {
+  return (
+    `Please investigate the failures and push a fix. ` +
+    `The orchestrator will automatically re-check once you push.\n\n` +
+    buildRebaseGuidance(conflicted, baseBranch)
+  );
+}
 
 /**
  * Format CI failure data into a structured message suitable for sending
@@ -56,6 +91,10 @@ const INSTRUCTION_BLOCK =
 export function formatCIFailureFeedback(
   args: GitHubCIFailureArgs | VerifyCIFailureArgs,
 ): string {
+  const conflicted = args.conflicted ?? false;
+  const baseBranch = args.baseBranch ?? 'dev';
+  const instructionBlock = buildInstructionBlock(conflicted, baseBranch);
+
   if (args.source === 'verify') {
     const cmd = args.failedCommand ?? '(unknown)';
     const out = args.truncatedOutput ?? '';
@@ -66,7 +105,7 @@ export function formatCIFailureFeedback(
       `## CI Failure — verify gate\n\n` +
       `### Failed command:\n\`\`\`\n${cmd}\n\`\`\`\n\n` +
       outSection +
-      INSTRUCTION_BLOCK
+      instructionBlock
     );
   }
 
@@ -88,7 +127,7 @@ export function formatCIFailureFeedback(
     `### Failing checks:\n${checkList}\n\n` +
     runSection +
     logSection +
-    INSTRUCTION_BLOCK
+    instructionBlock
   );
 }
 
@@ -141,7 +180,10 @@ export function formatApprovedVerdictMessage(result: PRReviewResult): string {
 export function formatReviewFeedback(
   result: PRReviewResult,
   iteration: number,
+  opts?: { conflicted?: boolean; baseBranch?: string },
 ): string {
+  const conflicted = opts?.conflicted ?? false;
+  const baseBranch = opts?.baseBranch ?? 'dev';
   const failingDimensions = (result.dimensions ?? []).filter((d) => !d.passed);
   const dimensionLines =
     failingDimensions.length > 0
@@ -154,10 +196,7 @@ export function formatReviewFeedback(
     `**Overall:** ${result.summary}\n\n` +
     `Please address these issues and push your changes. ` +
     `The orchestrator will automatically re-review.\n\n` +
-    `**Important:** Do NOT rebase onto dev or merge dev into your branch. ` +
-    `Just commit your fixes and push directly to your feature branch. ` +
-    `Rebasing or merging would pull in unrelated changes from other merged PRs ` +
-    `and pollute the PR diff.`
+    buildRebaseGuidance(conflicted, baseBranch)
   );
 }
 
@@ -167,17 +206,27 @@ export interface HumanComment {
   body: string;
   path?: string | null;
   line?: number | null;
+  pullRequestReviewId?: number | null;
+}
+
+function buildRoutingFooter(conflicted: boolean, baseBranch: string): string {
+  return (
+    `\n\nThe orchestrator will automatically resume the merge process once you push.\n\n` +
+    buildRebaseGuidance(conflicted, baseBranch)
+  );
 }
 
 /**
- * Format human reviewer comments into a message for the coding session.
- * Mirrors the structure of formatReviewFeedback() so the session doesn't
- * care whether feedback originated from AI or human review.
+ * Format a coalesced batch of comments from one reviewer after the quiescence
+ * buffer flushes. Groups inline review comments under their parent review via
+ * pullRequestReviewId so related feedback is co-located in the message.
  */
-export function formatHumanReviewFeedback(
+export function formatCoalescedHumanBatch(
   prNumber: number,
+  author: string,
   comments: HumanComment[],
   hasChangesRequested: boolean,
+  opts?: { conflicted?: boolean; baseBranch?: string },
 ): string {
   const header = hasChangesRequested
     ? `## Human Reviewer — Changes Requested on PR #${prNumber}`
@@ -187,24 +236,70 @@ export function formatHumanReviewFeedback(
     ? `**The reviewer has requested changes. Please address all feedback below and push your changes.**`
     : `**The reviewer has left comments. Please review and address them as appropriate, then push your changes.**`;
 
-  const commentBlocks = comments.map((c) => {
-    const location =
-      c.path != null
-        ? ` (\`${c.path}${c.line != null ? `:${c.line}` : ''}\`)`
-        : '';
-    return `### @${c.author}${location}\n${c.body.trim()}`;
-  });
+  // Partition by comment type
+  const reviewBodies = new Map<number, string>(); // GitHub review id → body
+  const inlinesByReview = new Map<number | null, HumanComment[]>();
+  const issueComments: HumanComment[] = [];
 
-  return (
-    `${header}\n\n` +
-    `${verdict}\n\n` +
-    commentBlocks.join('\n\n') +
-    `\n\nThe orchestrator will automatically resume the merge process once you push.\n\n` +
-    `**Important:** Do NOT rebase onto dev or merge dev into your branch. ` +
-    `Just commit your fixes and push directly to your feature branch. ` +
-    `Rebasing or merging would pull in unrelated changes from other merged PRs ` +
-    `and pollute the PR diff.`
+  for (const c of comments) {
+    if (c.id.startsWith('rv_')) {
+      reviewBodies.set(parseInt(c.id.slice(3), 10), c.body);
+    } else if (c.id.startsWith('rc_')) {
+      const key = c.pullRequestReviewId ?? null;
+      const group = inlinesByReview.get(key) ?? [];
+      group.push(c);
+      inlinesByReview.set(key, group);
+    } else {
+      issueComments.push(c);
+    }
+  }
+
+  const blocks: string[] = [];
+
+  // Review bodies with their inline comments nested underneath
+  for (const [reviewId, body] of reviewBodies) {
+    const lines = [`### @${author} (review)\n${body.trim()}`];
+    const inlines = inlinesByReview.get(reviewId) ?? [];
+    for (const inline of inlines) {
+      const loc =
+        inline.path != null
+          ? ` (\`${inline.path}${inline.line != null ? `:${inline.line}` : ''}\`)`
+          : '';
+      const commentId = inline.id.startsWith('rc_')
+        ? ` [comment_id: ${inline.id.slice(3)}]`
+        : '';
+      lines.push(
+        `#### Inline comment${loc}${commentId}\n${inline.body.trim()}`,
+      );
+    }
+    inlinesByReview.delete(reviewId);
+    blocks.push(lines.join('\n\n'));
+  }
+
+  // Orphaned inline comments (parent review body not in this batch)
+  for (const [, inlines] of inlinesByReview) {
+    for (const inline of inlines) {
+      const loc =
+        inline.path != null
+          ? ` (\`${inline.path}${inline.line != null ? `:${inline.line}` : ''}\`)`
+          : '';
+      const commentId = inline.id.startsWith('rc_')
+        ? ` [comment_id: ${inline.id.slice(3)}]`
+        : '';
+      blocks.push(`### @${author}${loc}${commentId}\n${inline.body.trim()}`);
+    }
+  }
+
+  // Issue / PR comments
+  for (const c of issueComments) {
+    blocks.push(`### @${author}\n${c.body.trim()}`);
+  }
+
+  const routingFooter = buildRoutingFooter(
+    opts?.conflicted ?? false,
+    opts?.baseBranch ?? 'dev',
   );
+  return `${header}\n\n${verdict}\n\n${blocks.join('\n\n')}${routingFooter}`;
 }
 
 export interface NoOpInvestigationArgs {

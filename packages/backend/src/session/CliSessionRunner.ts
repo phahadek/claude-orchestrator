@@ -41,8 +41,10 @@ export class CliSessionRunner implements ISessionRunner {
     const {
       worktreePath,
       model,
+      effort,
       allowedTools,
       mcpConfigPath,
+      systemPromptFilePath,
       disableAutoCompact,
     } = options;
 
@@ -59,11 +61,15 @@ export class CliSessionRunner implements ISessionRunner {
       '--permission-mode',
       'acceptEdits',
       ...(model ? ['--model', model] : []),
+      ...(effort ? ['--effort', effort] : []),
       ...(disableAutoCompact
         ? ['--settings', '{"autoCompactEnabled":false}']
         : []),
       ...(mcpConfigPath
         ? ['--mcp-config', mcpConfigPath, '--strict-mcp-config']
+        : []),
+      ...(systemPromptFilePath
+        ? ['--append-system-prompt-file', systemPromptFilePath]
         : []),
       '--allowed-tools',
       ...allowedTools,

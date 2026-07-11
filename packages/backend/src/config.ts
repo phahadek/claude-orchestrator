@@ -221,6 +221,10 @@ export interface RuntimeSettings {
   card_preview_lines: number;
   code_session_model: string;
   review_session_model: string;
+  /** Reasoning effort for code sessions passed via --effort; empty string = model default. */
+  code_session_effort: string;
+  /** Reasoning effort for review sessions passed via --effort; empty string = model default. */
+  review_session_effort: string;
   /** Session launch mode: 'cli' uses the claude subprocess, 'api' uses the Agent SDK. */
   session_mode: 'cli' | 'api';
   /** Global concurrency cap for AutoLauncher-spawned code sessions. */
@@ -254,6 +258,8 @@ export interface RuntimeSettings {
   auto_archive_sweep_interval_minutes: number;
   /** Model used for large-context task escalation; empty string = feature off. */
   large_task_model: string;
+  /** Reasoning effort for large-task/escalation spawns; empty string = model default. */
+  large_task_effort: string;
   /** TaskCacheRefresher: how often (ms) to refresh per-project board caches in background. */
   task_cache_refresh_interval_ms: number;
 }
@@ -268,6 +274,8 @@ export const runtimeSettings: RuntimeSettings = {
   card_preview_lines: Number(process.env.CARD_PREVIEW_LINES ?? 3),
   code_session_model: '',
   review_session_model: '',
+  code_session_effort: '',
+  review_session_effort: '',
   session_mode: process.env.SESSION_MODE === 'api' ? 'api' : 'cli',
   auto_launch_concurrency: Number(process.env.AUTO_LAUNCH_CONCURRENCY ?? 1),
   auto_launch_poll_interval_ms: Number(
@@ -300,6 +308,7 @@ export const runtimeSettings: RuntimeSettings = {
     process.env.AUTO_ARCHIVE_SWEEP_INTERVAL_MINUTES ?? 5,
   ),
   large_task_model: '',
+  large_task_effort: '',
   task_cache_refresh_interval_ms: Number(
     process.env.TASK_CACHE_REFRESH_INTERVAL_MS ?? 60_000,
   ),

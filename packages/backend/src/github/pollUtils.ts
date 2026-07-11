@@ -6,7 +6,8 @@ export type StalledPRKind =
   | 'errored_review_session'
   | 'gate_failed'
   | 'analyze_failing'
-  | 'pre_review_interrupted';
+  | 'pre_review_interrupted'
+  | 'conflict_dead_session';
 
 /**
  * True when a PR is in a terminal-stale state where PRMergeWatcher polling
@@ -60,18 +61,33 @@ export function isTerminalStalePR(pr: PullRequestRow): boolean {
  * Classify which stalled state a PR is in, for use by StalledPRReconciler.
  * Returns null when the PR is not stalled (no action needed).
  *
- * Called with the session status resolved by the caller to avoid importing
- * session queries here.
+ * Called with the session statuses resolved by the caller to avoid importing
+ * session queries here. reviewSessionStatus covers the review session
+ * (review_session_id); implementingSessionStatus covers the implementing
+ * session (session_id) and is only used for the conflict check below.
  */
 export function classifyStalledPR(
   pr: PullRequestRow,
   reviewSessionStatus: string | null,
+  implementingSessionStatus: string | null = null,
 ): { kind: StalledPRKind } | null {
   // Already escalated — reconciler is done with this PR
   const parsed = parsePauseReason(pr.pause_reason);
   if (parsed?.reason === 'stalled_reconcile_cap') return null;
 
   if (!pr.head_sha) return null;
+
+  // Merge conflict/blocked with a dead implementing session: the live-session
+  // nudge path (AutoMerger.conflictNudgeSweep) can't reach it, and re-reviewing
+  // is pointless since nothing is left to push a rebase. Independent of verdict.
+  if (
+    (pr.merge_state === 'dirty' || pr.merge_state === 'blocked') &&
+    (implementingSessionStatus === 'done' ||
+      implementingSessionStatus === 'error' ||
+      implementingSessionStatus === 'killed')
+  ) {
+    return { kind: 'conflict_dead_session' };
+  }
 
   // Analyze-gate failure: parked with analyze_failing and no pending push
   if (parsed?.reason === 'analyze_failing' && !pr.pending_push) {

@@ -63,6 +63,8 @@ export interface FilePollutionCheckOptions {
    * re-reverting our own orchestrator-revert commit.
    */
   lastRevertSha?: string | null;
+  /** When false, the revert commit omits [skip ci]. Default true. */
+  skipCi?: boolean;
 }
 
 export interface FilePollutionCheckResult {
@@ -140,6 +142,7 @@ export async function runFilePollutionCheck(
         bannedFiles: validation.bannedFiles,
         prNumber,
         repo,
+        skipCi: opts.skipCi ?? true,
       }));
     } finally {
       resolveSyncPromise();

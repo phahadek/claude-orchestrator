@@ -232,6 +232,151 @@ export class GitHubClient {
     return decision as PRReviewDecision;
   }
 
+  /**
+   * Reply to a pull-request review thread via GraphQL.
+   * threadId is the GraphQL node-id of the PullRequestReviewThread.
+   */
+  async addPullRequestReviewThreadReply(
+    threadId: string,
+    body: string,
+  ): Promise<void> {
+    const query = `mutation($threadId: ID!, $body: String!) {
+      addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
+        comment { id }
+      }
+    }`;
+    const res = await fetch('https://api.github.com/graphql', {
+      method: 'POST',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, variables: { threadId, body } }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new GitHubApiError(res.status, text);
+    }
+    const resBody = (await res.json()) as {
+      errors?: Array<{ message: string }>;
+    };
+    if (resBody.errors?.length) {
+      throw new GitHubApiError(
+        422,
+        resBody.errors.map((e) => e.message).join('; '),
+      );
+    }
+  }
+
+  /** Resolve a pull-request review thread via GraphQL. */
+  async resolveReviewThread(threadId: string): Promise<void> {
+    const query = `mutation($threadId: ID!) {
+      resolveReviewThread(input: { threadId: $threadId }) {
+        thread { isResolved }
+      }
+    }`;
+    const res = await fetch('https://api.github.com/graphql', {
+      method: 'POST',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, variables: { threadId } }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new GitHubApiError(res.status, text);
+    }
+    const resBody = (await res.json()) as {
+      errors?: Array<{ message: string }>;
+    };
+    if (resBody.errors?.length) {
+      throw new GitHubApiError(
+        422,
+        resBody.errors.map((e) => e.message).join('; '),
+      );
+    }
+  }
+
+  /**
+   * Fetch all review threads for a PR via GraphQL.
+   * Returns an array of threads, each with their node-id and the REST comment ids
+   * (databaseId) of every comment in the thread.
+   */
+  async getReviewThreads(
+    prNumber: number,
+    repo?: string,
+  ): Promise<ReviewThread[]> {
+    const r = repo ?? GITHUB_REPO;
+    const [owner, name] = r.split('/');
+    const query = `query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100) {
+            nodes {
+              id
+              isResolved
+              comments(first: 100) {
+                nodes {
+                  databaseId
+                }
+              }
+            }
+          }
+        }
+      }
+    }`;
+    const res = await fetch('https://api.github.com/graphql', {
+      method: 'POST',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        variables: { owner, name, number: prNumber },
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new GitHubApiError(res.status, text);
+    }
+    const resBody = (await res.json()) as {
+      errors?: Array<{ message: string }>;
+      data?: {
+        repository?: {
+          pullRequest?: {
+            reviewThreads: {
+              nodes: Array<{
+                id: string;
+                isResolved: boolean;
+                comments: { nodes: Array<{ databaseId: number }> };
+              }>;
+            };
+          };
+        };
+      };
+    };
+    if (resBody.errors?.length) {
+      throw new GitHubApiError(
+        422,
+        resBody.errors.map((e) => e.message).join('; '),
+      );
+    }
+    const nodes =
+      resBody.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+    return nodes.map((t) => ({
+      id: t.id,
+      isResolved: t.isResolved,
+      commentDatabaseIds: t.comments.nodes.map((c) => c.databaseId),
+    }));
+  }
+
+  /**
+   * Map a REST review-comment id (databaseId) to the GraphQL thread node-id
+   * that contains it. Returns null when no matching thread is found.
+   */
+  async findThreadByCommentId(
+    commentId: number,
+    prNumber: number,
+    repo?: string,
+  ): Promise<string | null> {
+    const threads = await this.getReviewThreads(prNumber, repo);
+    const match = threads.find((t) => t.commentDatabaseIds.includes(commentId));
+    return match?.id ?? null;
+  }
+
   private async markPRReadyByNodeId(nodeId: string): Promise<void> {
     const query = `mutation($pullRequestId: ID!) {
       markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
@@ -681,6 +826,19 @@ export class GitHubClient {
     }
   }
 
+  /** Request one or more reviewers on a pull request. */
+  async requestReviewers(
+    repo: string,
+    prNumber: number,
+    reviewers: string[],
+  ): Promise<void> {
+    await this.request(`/repos/${repo}/pulls/${prNumber}/requested_reviewers`, {
+      method: 'POST',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reviewers }),
+    });
+  }
+
   /** Apply a label to a pull request (issues endpoint works for PRs too). */
   async addLabelToPR(
     repo: string,
@@ -716,7 +874,7 @@ export class GitHubClient {
       Array<{
         id: number;
         state: string;
-        user: { login: string };
+        user: { login: string; type: string };
         body: string | null;
         submitted_at: string;
       }>
@@ -725,6 +883,7 @@ export class GitHubClient {
       id: review.id,
       state: review.state as PRReviewSummary['state'],
       author: review.user.login,
+      authorType: review.user.type,
       body: review.body,
       submittedAt: review.submitted_at,
     }));
@@ -738,21 +897,24 @@ export class GitHubClient {
     const data = await this.request<
       Array<{
         id: number;
-        user: { login: string };
+        user: { login: string; type: string };
         body: string;
         created_at: string;
         path: string;
         line: number | null;
         original_line: number | null;
+        pull_request_review_id: number | null;
       }>
     >(`/repos/${r}/pulls/${prNumber}/comments?per_page=100`);
     return data.map((c) => ({
       id: c.id,
       author: c.user.login,
+      authorType: c.user.type,
       body: c.body,
       createdAt: c.created_at,
       path: c.path,
       line: c.line ?? c.original_line ?? null,
+      pullRequestReviewId: c.pull_request_review_id ?? null,
     }));
   }
 
@@ -764,7 +926,7 @@ export class GitHubClient {
     const data = await this.request<
       Array<{
         id: number;
-        user: { login: string };
+        user: { login: string; type: string };
         body: string;
         created_at: string;
       }>
@@ -772,6 +934,7 @@ export class GitHubClient {
     return data.map((c) => ({
       id: c.id,
       author: c.user.login,
+      authorType: c.user.type,
       body: c.body,
       createdAt: c.created_at,
     }));
@@ -1353,17 +1516,26 @@ export interface PRReviewSummary {
   id: number;
   state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED';
   author: string;
+  authorType: string;
   body: string | null;
   submittedAt: string;
+}
+
+export interface ReviewThread {
+  id: string;
+  isResolved: boolean;
+  commentDatabaseIds: number[];
 }
 
 export interface PRCommentSummary {
   id: number;
   author: string;
+  authorType: string;
   body: string;
   createdAt: string;
   path?: string | null;
   line?: number | null;
+  pullRequestReviewId?: number | null;
 }
 
 export interface SizeSignal {

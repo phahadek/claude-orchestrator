@@ -21,7 +21,7 @@ import {
   countNudgeEvents,
   getLatestNudgeTimestamp,
 } from '../audit/AuditLog';
-import type { Session } from '../db/types';
+import type { Session, PullRequestRow } from '../db/types';
 import { GitHubClient } from '../github/GitHubClient';
 import type { PullRequest } from '../github/types';
 
@@ -38,8 +38,13 @@ const RECENCY_GATE_MS = 10 * 60 * 1000;
 /** Skip nudge if the previous nudge was less than this many ms ago. */
 const MIN_NUDGE_SPACING_MS = 15 * 60 * 1000;
 /** Nudge message sent to a stalled idle session that hasn't opened a PR. */
-const IDLE_NUDGE_MESSAGE =
+const NO_PR_NUDGE_MESSAGE =
   'You appear to have finished your work but no PR was opened. Please open a draft PR now so your changes can be reviewed. If you are done with your task, follow the PR format in CLAUDE.md and emit the <pr-body>…</pr-body> marker.';
+
+/** Nudge message sent to a stalled idle session that already has an open PR. */
+function openPrNudgeMessage(pr: PullRequestRow): string {
+  return `Your PR #${pr.pr_number} appears stalled — check for and address any pending review feedback, then wait.`;
+}
 
 /**
  * Periodic sweep that detects tasks stuck at "🔄 In Progress" in Notion with no
@@ -58,11 +63,17 @@ export class OrphanedTaskSweeper {
       listProjects?: () => ProjectConfig[];
       resolveBackend?: (projectId: string) => TaskBackend;
       intervalMs?: number;
-      /** Shared nudge path — calls SessionManager.sendOrResume under the hood. */
-      sendOrResume?: (
+      /**
+       * Shared nudge path — calls SessionManager.enqueueFeedback under the hood,
+       * which routes the nudge through the turn-boundary-gated feedback inbox
+       * instead of a raw stdin write (delivered at the next turn boundary for a
+       * live session, or via a clean respawn for an idle/exited one).
+       */
+      enqueueFeedback?: (
         sessionId: string,
-        text: string,
-      ) => Promise<string | null>;
+        source: string,
+        payload: string,
+      ) => Promise<void>;
       /** Override recency gate threshold (ms). Defaults to RECENCY_GATE_MS. */
       recencyGateMs?: number;
       /** Override minimum nudge spacing (ms). Defaults to MIN_NUDGE_SPACING_MS. */
@@ -184,6 +195,7 @@ export class OrphanedTaskSweeper {
             latestSession,
             taskId,
             effectiveProjectId,
+            openPrNudgeMessage(pr),
           );
         }
         return;
@@ -225,6 +237,7 @@ export class OrphanedTaskSweeper {
         latestSession,
         taskId,
         effectiveProjectId,
+        NO_PR_NUDGE_MESSAGE,
       );
       return;
     }
@@ -245,6 +258,7 @@ export class OrphanedTaskSweeper {
     session: Session,
     taskId: string,
     effectiveProjectId: string,
+    nudgeMessage: string,
   ): Promise<void> {
     const { session_id, worktree_path } = session;
 
@@ -296,20 +310,20 @@ export class OrphanedTaskSweeper {
       return;
     }
 
-    const sendOrResume = this.options.sendOrResume;
-    if (!sendOrResume) {
-      // No sendOrResume injected — log and skip (shouldn't happen in production).
+    const enqueueFeedback = this.options.enqueueFeedback;
+    if (!enqueueFeedback) {
+      // No enqueueFeedback injected — log and skip (shouldn't happen in production).
       logger.warn(
-        `[OrphanedTaskSweeper] sendOrResume not injected — cannot nudge session ${session_id} for task ${taskId}`,
+        `[OrphanedTaskSweeper] enqueueFeedback not injected — cannot nudge session ${session_id} for task ${taskId}`,
       );
       return;
     }
 
     try {
-      await sendOrResume(session_id, IDLE_NUDGE_MESSAGE);
+      await enqueueFeedback(session_id, 'system:nudge', nudgeMessage);
     } catch (err) {
       logger.warn(
-        `[OrphanedTaskSweeper] sendOrResume failed for session ${session_id}: ${(err as Error).message}`,
+        `[OrphanedTaskSweeper] enqueueFeedback failed for session ${session_id}: ${(err as Error).message}`,
       );
       return;
     }

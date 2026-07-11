@@ -6,12 +6,27 @@ beside the managed repos (dev: `~/IdeaProjects/config/`; prod: `/srv/orchestrato
 this directory is where those pieces are version-controlled, and `scripts/deploy-grooming.mjs`
 copies them into the live tree.
 
-## Contents
+## Contents — two tracks
 
-| File                        | Deploys to                           | Behaviour                                                                                                   |
-| --------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `hooks/load-procedures.mjs` | `<config>/hooks/load-procedures.mjs` | **Overwritten** every deploy (pure mechanism).                                                              |
-| `procedures.md`             | `<config>/procedures.md`             | **Seed-only** — copied only if absent, never clobbered (it's deployment-edited; fill in the Project index). |
+**Class 1 — mechanism (mechanically copied by `deploy-grooming.mjs`):**
+
+| File                        | Deploys to                           | Behaviour                                        |
+| --------------------------- | ------------------------------------ | ------------------------------------------------ |
+| `hooks/load-procedures.mjs` | `<config>/hooks/load-procedures.mjs` | **Overwritten** every deploy (pure mechanism).   |
+
+**Class 2 — guideline sources (NOT copied; integrated by the `/sync-guidelines` skill):**
+
+| File              | Live copy                | Behaviour                                                                                                          |
+| ----------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `task-writing.md` | `<config>/task-writing.md` | Portable **upstream** guideline source. The live copy carries project examples; updates are **merged** in, never overwritten. |
+| `procedures.md`   | `<config>/procedures.md`   | Portable **upstream** guideline source. The live copy carries the filled **Project index**; updates are **merged** in.        |
+
+These two docs are the reason a plain file-copy deploy is wrong: the repo copy is the generic
+upstream guideline, the live copy is an *integrated* copy with host/project content that must be
+preserved. `deploy-grooming.mjs` deliberately does **not** touch them. Deploying an update to
+them is a Claude-led three-way merge — run the **`/sync-guidelines`** skill, which diffs the
+upstream delta since the last integration (`<config>/guidelines-baseline.json`) and weaves it
+into the live doc, confirm-gated. See `skills/sync-guidelines/SKILL.md`.
 
 `<config>` is resolved by the deploy script: `$ORCHESTRATOR_CONFIG_DIR`, else a `config/`
 dir inside the projects root, beside each repo (`<repo>/../config` on both hosts now that

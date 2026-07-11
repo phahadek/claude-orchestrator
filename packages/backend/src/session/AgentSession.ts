@@ -28,6 +28,11 @@ import {
   getSessionTags,
   setSessionTags,
   resetTaskCrashCount,
+  ackPendingComments,
+  listUndeliveredInboxItems,
+  markInboxItemsDelivered,
+  getSession,
+  markSessionInitiatedPRClose,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -38,6 +43,7 @@ import {
   buildValidationComment,
 } from '../github/PRBodyValidator';
 import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCheck';
+import { loadOrchestratorConfig } from './orchestrator-config';
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
 import { recordEvent, countPushFailureEvents } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
@@ -54,12 +60,92 @@ import {
 import { eventKind } from './eventKind';
 import { isContextOverflow } from './contextOverflow';
 import { logger } from '../logger';
+import {
+  pauseReasonFromCanonical,
+  serializePauseReason,
+} from '../db/pauseReason';
+import type {
+  ParsedDispositionItem,
+  DispositionsParsedPayload,
+} from '../github/types';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
 
+/**
+ * Extract and validate a dispositions block from session assistant text.
+ * Returns the array of parsed items on success, null when absent or malformed.
+ * Exported for unit testing.
+ */
+export function parseDispositionBlock(
+  text: string,
+): ParsedDispositionItem[] | null {
+  const idx = text.indexOf('"dispositions"');
+  if (idx === -1) return null;
+  // Walk back to find the opening brace
+  const openBrace = text.lastIndexOf('{', idx);
+  if (openBrace === -1) return null;
+  // Find the matching closing brace (brace-counting)
+  let depth = 0;
+  let closeBrace = -1;
+  for (let i = openBrace; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}') {
+      depth--;
+      if (depth === 0) {
+        closeBrace = i;
+        break;
+      }
+    }
+  }
+  if (closeBrace === -1) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(openBrace, closeBrace + 1));
+  } catch {
+    return null;
+  }
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    !Array.isArray((parsed as Record<string, unknown>).dispositions)
+  ) {
+    return null;
+  }
+  const items: ParsedDispositionItem[] = [];
+  for (const item of (parsed as { dispositions: unknown[] }).dispositions) {
+    if (
+      typeof item !== 'object' ||
+      item === null ||
+      typeof (item as Record<string, unknown>).comment_id !== 'number' ||
+      !['addressed', 'wont_fix', 'out_of_scope'].includes(
+        (item as Record<string, unknown>).disposition as string,
+      )
+    ) {
+      continue;
+    }
+    const d = item as Record<string, unknown>;
+    items.push({
+      comment_id: d.comment_id as number,
+      disposition: d.disposition as ParsedDispositionItem['disposition'],
+      reason: typeof d.reason === 'string' ? d.reason : undefined,
+    });
+  }
+  return items.length > 0 ? items : null;
+}
+
 /** Maximum number of rebase nudges sent to a session before escalating to needs_attention. */
 export const MAX_REBASE_NUDGES = 3;
+
+/**
+ * Returns true when the git push error message contains GitHub's workflow-scope
+ * refusal signature. The PAT deliberately lacks the `workflow` scope so code
+ * sessions cannot modify .github/workflows/ files.
+ * Exported for unit testing.
+ */
+export function isWorkflowScopeDenied(msg: string): boolean {
+  return /refusing to allow.*without `workflow` scope/.test(msg);
+}
 
 /**
  * Returns true if the tool call represents a git push operation.
@@ -86,6 +172,16 @@ export function isPRCreateCommand(
 ): boolean {
   if (toolName !== 'Bash') return false;
   return /\bgh\s+pr\s+create\b/.test(toolInput);
+}
+
+/**
+ * Returns true if the tool call represents a `gh pr close` or `gh pr reopen`
+ * invocation — a session closing or reopening its own PR.
+ * Exported for unit testing.
+ */
+export function isPRCloseCommand(toolName: string, toolInput: string): boolean {
+  if (toolName !== 'Bash') return false;
+  return /\bgh\s+pr\s+(close|reopen)\b/.test(toolInput);
 }
 
 export interface GitHubPRShape {
@@ -231,8 +327,16 @@ export class AgentSession extends EventEmitter {
    *  Used as a loop guard: if the PR's HEAD equals this SHA, the check is skipped
    *  so we don't re-revert our own revert commit. */
   private lastFilePollutionRevertSha: string | null = null;
+  /** Local HEAD SHA at the time push_detected was last emitted. The turn-end
+   *  trigger skips push_detected when HEAD has not advanced since the last emission,
+   *  preventing redundant re-review cycles on read-only or chat-only turns. */
+  private lastSignalledHeadSha: string | null = null;
   /** Tracks message IDs whose <pr-body> marker has already been processed (deduplicate streaming chunks). */
   private readonly processedPRBodyMessageIds = new Set<string>();
+  /** Tracks message IDs whose disposition block has already been parsed (deduplicate streaming chunks). */
+  private readonly processedDispositionMessageIds = new Set<string>();
+  /** Dispositions parsed from the current turn's assistant text; cleared after result event. */
+  private pendingParsedDispositions: ParsedDispositionItem[] | null = null;
   /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
   private readonly warnedEscapeToolUseIds = new Set<string>();
   /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
@@ -267,9 +371,10 @@ export class AgentSession extends EventEmitter {
     private readonly githubClient?: GitHubClient,
     private readonly extraAllowedTools: string[] = [],
     /**
-     * System prompt content for API mode.
-     * In CLI mode this is written to CLAUDE.md in the worktree before spawn.
-     * In API mode this is passed directly to the Agent SDK as systemPrompt.
+     * System prompt content for API mode only.
+     * In CLI mode the content is delivered via --append-system-prompt-file
+     * (see systemPromptFilePath). In API mode this is passed directly to
+     * the Agent SDK as systemPrompt.
      */
     private readonly systemPromptContent?: string,
     /**
@@ -289,6 +394,13 @@ export class AgentSession extends EventEmitter {
      * Forwarded to the runner as `mcpConfigPath`.
      */
     private readonly mcpConfigPath?: string,
+    /**
+     * Absolute path to a per-session orchestrator system-prompt file written
+     * outside the worktree. When set, CLI mode passes
+     * --append-system-prompt-file <path> so the session receives its rules
+     * without any file written inside the managed git repo.
+     */
+    private readonly systemPromptFilePath?: string,
   ) {
     super();
     this.runner = runner ?? new CliSessionRunner(sessionId);
@@ -315,16 +427,14 @@ You are a Claude Code session managed by Claude Code Orchestrator.
 ## Task
 Task page: ${this.taskUrl}
 
-Read CLAUDE.md in the repo root — it contains the full task spec and all rules.
-Begin implementing the task immediately. Do NOT fetch Notion pages.
+The full task spec and all rules are in your system prompt. Begin implementing directly.
 
 ## Lifecycle
-1. Read CLAUDE.md for the task spec, orchestrator rules, and project conventions.
-2. Create a feature branch from the project's base branch.
-3. Implement the task per the acceptance criteria in the Task Spec section of CLAUDE.md.
-4. Pass the pre-PR gate as specified in CLAUDE.md.
-5. Open a draft PR as specified in CLAUDE.md.
-6. After the PR is open, WAIT. Do not merge.
+1. Verify your branch: \`git branch --show-current\` → it should match the task name.
+2. Implement the task per the acceptance criteria in your system prompt.
+3. Pass the pre-PR gate as specified in your system prompt.
+4. Open a draft PR targeting the base branch using the required body template.
+5. After the PR is open, WAIT. Do not merge.
    The dashboard will send review feedback as follow-up messages.
    Address findings by pushing additional commits, then wait again.
 
@@ -336,7 +446,6 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 - One task per session. No scope creep.
 - Never commit to the base branch directly.
 - Never merge your own PR.
-- Never fetch Notion pages — the task spec is already in CLAUDE.md.
 `.trim();
 
     // Backoff schedule for transient API errors: 5s, 10s, 20s, 40s, 80s (5 attempts).
@@ -352,6 +461,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       this.sessionType === 'review'
         ? runtimeSettings.review_session_model
         : runtimeSettings.code_session_model;
+    const effortSetting =
+      this.sessionType === 'review'
+        ? runtimeSettings.review_session_effort
+        : runtimeSettings.code_session_effort;
 
     // Per-iteration overrides set by tryEscalateForOverflow() (T3b).
     // Instance fields _escalationModel and _escalationDisableAutoCompact hold these
@@ -432,9 +545,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         {
           worktreePath: this.worktreePath,
           model: this._escalationModel ?? (modelSetting || undefined),
+          effort:
+            (this._escalationModel
+              ? runtimeSettings.large_task_effort
+              : effortSetting) || undefined,
           allowedTools: [...ALLOWED_TOOLS, ...this.extraAllowedTools],
           systemPrompt: this.systemPromptContent,
           mcpConfigPath: this.mcpConfigPath,
+          systemPromptFilePath: this.systemPromptFilePath,
           disableAutoCompact:
             this._escalationDisableAutoCompact !== null
               ? this._escalationDisableAutoCompact
@@ -492,6 +610,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             'error',
             'escalation_deadlock',
+            `context overflow: all ${MAX_ESCALATION_RETRIES + 1} escalation attempts exhausted`,
           );
           if (!this.hasEnded) {
             updateSessionStatus(this.sessionId, 'error', Date.now());
@@ -526,6 +645,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             'error',
             'context_overflow',
+            'context window full; no large-task model available to escalate',
           );
           if (!this.hasEnded) {
             updateSessionStatus(this.sessionId, 'error', Date.now());
@@ -550,15 +670,31 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       // (500 api_error or 529 overloaded_error). If so, retry with exponential backoff
       // using --resume to restore conversation history. Non-transient errors (bad config,
       // permission issues, etc.) fall through to permanent error immediately.
+      //
+      // Delivery-race backstop: a non-zero exit immediately preceded by a successful
+      // turn (or with a feedback-inbox item still undelivered) means the crash likely
+      // landed in the post-turn/teardown window rather than reflecting a genuine
+      // failure. Resume rather than terminally error — deliverInboxItems() re-delivers
+      // any pending item once the resumed session completes its next turn.
+      const isTransientError = this.isTransientApiError();
+      const isDeliveryRaceExit =
+        exitCode !== null &&
+        exitCode !== 0 &&
+        !isTransientError &&
+        (this.wasLastEventSuccessfulResult() ||
+          listUndeliveredInboxItems(this.sessionId).length > 0);
+
       if (
         this.retryCount < BACKOFF_DELAYS_MS.length &&
-        this.isTransientApiError()
+        (isTransientError || isDeliveryRaceExit)
       ) {
         const delay = BACKOFF_DELAYS_MS[this.retryCount];
         this.retryCount++;
         sessionLog(
           this.sessionId,
-          `transient API error — retry ${this.retryCount}/${BACKOFF_DELAYS_MS.length} after ${delay}ms`,
+          isDeliveryRaceExit
+            ? `non-zero exit (code=${exitCode}) after a successful turn/pending delivery — resuming (retry ${this.retryCount}/${BACKOFF_DELAYS_MS.length}) after ${delay}ms`
+            : `transient API error — retry ${this.retryCount}/${BACKOFF_DELAYS_MS.length} after ${delay}ms`,
         );
         this.broadcast({
           type: 'session_status',
@@ -582,6 +718,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             status,
             reason,
+            this.buildExitDetail(exitCode),
           );
           if (!this.hasEnded) {
             // Fallback when sessionManager is absent (e.g. unit tests without a manager)
@@ -615,6 +752,41 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     return (
       payload.includes('api_error') || payload.includes('overloaded_error')
     );
+  }
+
+  /**
+   * Return true if the session's last DB event is a result event with
+   * is_error !== true — i.e., the process completed a turn successfully
+   * immediately before exiting. Used by the exit handler's delivery-race
+   * backstop to distinguish a crash landing right after a turn boundary from
+   * a genuine failure.
+   */
+  private wasLastEventSuccessfulResult(): boolean {
+    const events = getEventsBySession(this.sessionId);
+    if (events.length === 0) return false;
+    const lastEvent = events[events.length - 1];
+    if (eventKind(lastEvent) !== 'result') return false;
+    try {
+      const payload = JSON.parse(lastEvent.payload) as Record<string, unknown>;
+      return payload.is_error !== true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Build a concise one-line reason for a non-zero/null process exit, suitable for
+   * last_error_detail. Appends a short snippet of the last error event when present.
+   */
+  private buildExitDetail(exitCode: number | null): string {
+    if (exitCode === null) return 'process killed unexpectedly';
+    const base = `process exited with code ${exitCode}`;
+    const events = getEventsBySession(this.sessionId);
+    if (events.length === 0) return base;
+    const last = events[events.length - 1];
+    if (eventKind(last) !== 'error') return base;
+    const snippet = last.payload.slice(0, 120).replace(/\n/g, ' ');
+    return `${base}; last error: ${snippet}`;
   }
 
   /**
@@ -805,11 +977,16 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           const text = extractTextFromToolResultEvent(event);
           void this.handlePRCreatedFromBashOutput(text);
         }
+        if (isPRCloseCommand('Bash', cmd)) {
+          this.handlePRCloseCommand();
+        }
       }
     }
 
-    // Also handle tool_result blocks embedded in user events
-    if (rawType === 'user' && !this.prDetectedLive) {
+    // Also handle tool_result blocks embedded in user events. Not gated on
+    // prDetectedLive: PR-creation sub-handlers already no-op once a PR exists,
+    // but gh pr close/reopen detection below must still fire post-creation.
+    if (rawType === 'user') {
       const msg = event.message as Record<string, unknown> | undefined;
       const content = (msg?.content ?? event.content) as
         | Array<Record<string, unknown>>
@@ -832,6 +1009,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
                 const innerText = extractTextFromToolResultEvent(block);
                 void this.handlePRCreatedFromBashOutput(innerText);
               }
+              if (isPRCloseCommand('Bash', cmd)) {
+                this.handlePRCloseCommand();
+              }
             }
           }
         }
@@ -843,11 +1023,77 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     if (rawType === 'result') {
       const pr = getPRBySessionId(this.sessionId);
       if (pr?.review_session_id) {
-        sessionLog(
-          this.sessionId,
-          `turn complete — PR #${pr.pr_number} has review session, signalling push_detected`,
-        );
-        void this.handlePushDetected();
+        // Gate on actual HEAD SHA advance — skip when no new commits were made.
+        let currentHeadSha: string | null = null;
+        if (this.worktreePath) {
+          try {
+            currentHeadSha = execSync('git rev-parse HEAD', {
+              cwd: this.worktreePath,
+            })
+              .toString()
+              .trim();
+          } catch {
+            // git unavailable — proceed unconditionally
+          }
+        }
+        if (
+          currentHeadSha === null ||
+          currentHeadSha !== this.lastSignalledHeadSha
+        ) {
+          sessionLog(
+            this.sessionId,
+            `turn complete — PR #${pr.pr_number} has review session, signalling push_detected (head=${currentHeadSha?.slice(0, 7) ?? 'unknown'})`,
+          );
+          void this.handlePushDetected();
+        } else {
+          sessionLog(
+            this.sessionId,
+            `turn complete — PR #${pr.pr_number} has review session, skipping push_detected (head unchanged at ${currentHeadSha.slice(0, 7)})`,
+          );
+        }
+      }
+
+      // Ack pending review comments on successful turn completion so the
+      // next poll doesn't re-deliver already-consumed feedback.
+      if (pr && event.is_error !== true) {
+        ackPendingComments(pr.pr_number, pr.repo);
+      }
+
+      // Drive review-thread disposition actions (reply/resolve) for any
+      // dispositions the session emitted this turn. Fires after ack so the
+      // ack is never gated on disposition success.
+      if (
+        pr &&
+        event.is_error !== true &&
+        this.pendingParsedDispositions !== null
+      ) {
+        const dispositions = this.pendingParsedDispositions;
+        this.pendingParsedDispositions = null;
+        let headSha: string | null = null;
+        if (this.worktreePath) {
+          try {
+            headSha = execSync('git rev-parse HEAD', {
+              cwd: this.worktreePath,
+            })
+              .toString()
+              .trim();
+          } catch {
+            // non-fatal
+          }
+        }
+        const payload: DispositionsParsedPayload = {
+          sessionId: this.sessionId,
+          prNumber: pr.pr_number,
+          repo: pr.repo,
+          headSha,
+          dispositions,
+        };
+        this.emit('dispositions_parsed', payload);
+      }
+
+      // Deliver any undelivered inbox items at the turn boundary.
+      if (event.is_error !== true) {
+        void this.deliverInboxItems();
       }
 
       const denials = event.permission_denials as
@@ -928,19 +1174,31 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           message: { ...msg, content: mergedContent },
         });
 
-        // Detect <pr-body>…</pr-body> marker emitted by the session.
-        // Guard by message ID so streaming chunks don't trigger multiple times.
-        if (!this.processedPRBodyMessageIds.has(messageId)) {
+        // Detect <pr-body>…</pr-body> marker or disposition block in session text.
+        // Both are guarded by message ID so streaming chunks don't fire multiple times.
+        if (
+          !this.processedPRBodyMessageIds.has(messageId) ||
+          !this.processedDispositionMessageIds.has(messageId)
+        ) {
           const accumulatedText = mergedContent
             .filter((b) => b.type === 'text' && typeof b.text === 'string')
             .map((b) => b.text as string)
             .join('');
-          const markerMatch = accumulatedText.match(PR_BODY_MARKER_REGEX);
-          if (markerMatch) {
-            this.processedPRBodyMessageIds.add(messageId);
-            this.prBodyMarkerPromise = this.handlePRBodyMarker(
-              markerMatch[1].trim(),
-            );
+          if (!this.processedPRBodyMessageIds.has(messageId)) {
+            const markerMatch = accumulatedText.match(PR_BODY_MARKER_REGEX);
+            if (markerMatch) {
+              this.processedPRBodyMessageIds.add(messageId);
+              this.prBodyMarkerPromise = this.handlePRBodyMarker(
+                markerMatch[1].trim(),
+              );
+            }
+          }
+          if (!this.processedDispositionMessageIds.has(messageId)) {
+            const dispositions = parseDispositionBlock(accumulatedText);
+            if (dispositions !== null) {
+              this.processedDispositionMessageIds.add(messageId);
+              this.pendingParsedDispositions = dispositions;
+            }
           }
         }
       }
@@ -1102,6 +1360,22 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
   }
 
   /**
+   * Called when a `gh pr close`/`gh pr reopen` Bash command completes for
+   * this session's own PR. Marks the PR row so PRMergeWatcher can defer
+   * terminalization of a session-initiated close while the session is live,
+   * instead of treating it the same as a human close.
+   */
+  private handlePRCloseCommand(): void {
+    const pr = getPRBySessionId(this.sessionId);
+    if (!pr) return;
+    markSessionInitiatedPRClose(pr.pr_number, pr.repo);
+    sessionLog(
+      this.sessionId,
+      `gh pr close/reopen detected — marked PR #${pr.pr_number} session_initiated_close_at`,
+    );
+  }
+
+  /**
    * Handle a <pr-body>…</pr-body> marker emitted by the session.
    * Validates the body, then either creates a new PR or updates an existing one.
    * Invalid body → re-prompts the session over stdin; no PR opened.
@@ -1250,6 +1524,21 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         task_id: this.taskId || null,
         payload: { stage: 'push', error: msg },
       });
+      // Workflow-scope rejection: the PAT cannot push .github/workflows/ files.
+      // No retry can fix this credential gap — pause immediately as needs_attention.
+      if (isWorkflowScopeDenied(msg)) {
+        setSessionPauseReason(
+          this.sessionId,
+          serializePauseReason(
+            pauseReasonFromCanonical(
+              'workflow_scope_denied',
+              'This task edits .github/workflows/ but the auto-dispatch PAT lacks the `workflow` scope. ' +
+                'Push requires a workflow-scoped credential; such tasks should be typed as 🛠️ Tooling and landed interactively.',
+            ),
+          ),
+        );
+        return;
+      }
       // Bounded retry: derive count from persisted events so it survives re-prompts.
       // The event recorded above is already included, so priorCount >= 1 here.
       const priorCount = countPushFailureEvents(this.sessionId);
@@ -1266,7 +1555,8 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       return;
     }
 
-    const taskName = branch.replace(/^feature\//, '');
+    const persistedTaskName = getSession(this.sessionId)?.task_name;
+    const taskName = persistedTaskName || branch.replace(/^feature\//, '');
     const title = `feat: ${taskName}`;
 
     await this.createPRWithRetry(
@@ -1740,7 +2030,8 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               const baseBranch = pr?.base_branch ?? 'dev';
               const nudgeMsg =
                 `Your branch has diverged from origin/${branch} (${behind} commit(s) behind). ` +
-                `Run: git fetch origin && git rebase origin/${baseBranch}, resolve any conflicts, then push.`;
+                `Run: git fetch origin && git rebase origin/${baseBranch}, resolve any conflicts, then ` +
+                `git push --force-with-lease origin ${branch} (a bare push will be rejected after a rebase).`;
               void this.sessionManager?.sendOrResume?.(
                 this.sessionId,
                 nudgeMsg,
@@ -1771,6 +2062,20 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           this.sessionId,
           `auto-push check failed (non-fatal): ${(err as Error).message}`,
         );
+      }
+    }
+
+    // Record the HEAD SHA at emission time so the turn-end gate can skip
+    // redundant push_detected signals when no new commits were made.
+    if (this.worktreePath) {
+      try {
+        this.lastSignalledHeadSha = execSync('git rev-parse HEAD', {
+          cwd: this.worktreePath,
+        })
+          .toString()
+          .trim();
+      } catch {
+        // non-fatal — leave lastSignalledHeadSha unchanged
       }
     }
 
@@ -1818,6 +2123,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     baseBranch: string,
   ): Promise<void> {
     if (!this.githubClient) return;
+    const project = getProjectById(this.projectId);
+    const sessionConfig = project
+      ? loadOrchestratorConfig(project.projectDir)
+      : null;
     const { revertCommitSha } = await filePollutionCheckFn({
       github: this.githubClient,
       worktreePath: this.worktreePath,
@@ -1827,6 +2136,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       sessionId: this.sessionId,
       projectId: this.projectId || null,
       taskId: this.taskId || null,
+      skipCi: sessionConfig?.autofix_skip_ci ?? true,
       onReverted: (files) => {
         for (const f of files) this._revertLock.add(f);
       },
@@ -1846,6 +2156,29 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    */
   setPendingOverflowText(text: string): void {
     this._pendingOverflowText = text;
+  }
+
+  /**
+   * Coalesce all undelivered inbox items for this session and deliver them
+   * as a single combined message via sendOrResume. Called at each successful
+   * turn-completion boundary so feedback never interrupts an in-progress turn.
+   */
+  private async deliverInboxItems(): Promise<void> {
+    const items = listUndeliveredInboxItems(this.sessionId);
+    if (items.length === 0) return;
+    const combined = items
+      .map((item) => `[${item.source}]\n${item.payload}`)
+      .join('\n\n');
+    try {
+      await this.sessionManager?.sendOrResume?.(this.sessionId, combined);
+    } catch (err) {
+      sessionLog(
+        this.sessionId,
+        `deliverInboxItems: sendOrResume failed: ${err}`,
+      );
+      return;
+    }
+    markInboxItemsDelivered(items.map((item) => item.id));
   }
 
   /**
@@ -2080,6 +2413,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         this.sessionId,
         'killed',
         'user_kill',
+        'killed by user request',
       );
       if (!this.hasEnded) {
         // Fallback when sessionManager is absent (e.g. unit tests without a manager)

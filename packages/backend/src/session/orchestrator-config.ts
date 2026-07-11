@@ -4,7 +4,14 @@ import yaml from 'js-yaml';
 import { logger } from '../logger';
 
 export interface OrchestratorConfig {
-  /** Commands run in the worktree before opening the PR (mechanical fixes only). */
+  /**
+   * Commands run in the worktree before opening the PR (mechanical fixes only).
+   * A command MAY contain `{{changed_files}}` — the runner replaces it with the
+   * session's changed files (`git diff --name-only <baseBranch>...HEAD`), quoted
+   * individually, so formatters only touch changed files. When the changed-file
+   * set is empty the command is skipped entirely (no whole-repo run). Commands
+   * without the placeholder run unchanged over the whole worktree.
+   */
   autofix: string[];
   /** Commands the session runs before opening the PR (injected into CLAUDE.md). */
   verify: string[];
@@ -16,6 +23,10 @@ export interface OrchestratorConfig {
   bash_rules: string[];
   /** Path to a script run after worktree creation, relative to the project root. */
   bootstrap_script: string;
+  /** Env var names that must be set after bootstrap. Launch aborts if any are missing. */
+  required_env: string[];
+  /** Paths relative to the worktree root that must exist after bootstrap. Launch aborts if any are missing. */
+  required_files: string[];
   /**
    * MCP server definitions to restrict sessions to. When defined, sessions only
    * see the listed MCP servers instead of inheriting all user-level servers.
@@ -39,6 +50,13 @@ export interface OrchestratorConfig {
   analyze_max_rss_mb: number;
   /** Stop running subsequent analyze commands after the first failure. Default true. */
   analyze_fail_fast: boolean;
+  /**
+   * When true (default), orchestrator autofix and file-revert commits include
+   * [skip ci] so GitHub skips pull_request workflows, saving CI minutes.
+   * Set to false on projects with required GitHub status checks — [skip ci]
+   * prevents those checks from reporting, permanently blocking the PR.
+   */
+  autofix_skip_ci: boolean;
 }
 
 const DEFAULTS: OrchestratorConfig = {
@@ -48,6 +66,8 @@ const DEFAULTS: OrchestratorConfig = {
   allowed_tools: [],
   bash_rules: [],
   bootstrap_script: '',
+  required_env: [],
+  required_files: [],
   test: [],
   test_timeout_sec: 300,
   test_max_rss_mb: 0,
@@ -56,6 +76,7 @@ const DEFAULTS: OrchestratorConfig = {
   analyze_timeout_sec: 300,
   analyze_max_rss_mb: 0,
   analyze_fail_fast: true,
+  autofix_skip_ci: true,
 };
 
 /**
@@ -92,6 +113,16 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.bootstrap_script === 'string'
           ? parsed.bootstrap_script
           : DEFAULTS.bootstrap_script,
+      required_env: Array.isArray(parsed.required_env)
+        ? (parsed.required_env as unknown[])
+            .filter((v) => typeof v === 'string')
+            .map((v) => v as string)
+        : DEFAULTS.required_env,
+      required_files: Array.isArray(parsed.required_files)
+        ? (parsed.required_files as unknown[])
+            .filter((v) => typeof v === 'string')
+            .map((v) => v as string)
+        : DEFAULTS.required_files,
       test: Array.isArray(parsed.test) ? parsed.test : DEFAULTS.test,
       test_timeout_sec:
         typeof parsed.test_timeout_sec === 'number' &&
@@ -128,6 +159,10 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.analyze_fail_fast === 'boolean'
           ? parsed.analyze_fail_fast
           : DEFAULTS.analyze_fail_fast,
+      autofix_skip_ci:
+        typeof parsed.autofix_skip_ci === 'boolean'
+          ? parsed.autofix_skip_ci
+          : DEFAULTS.autofix_skip_ci,
       mcp_servers:
         parsed.mcp_servers !== null &&
         typeof parsed.mcp_servers === 'object' &&

@@ -7,7 +7,7 @@
  * - Already-failed skip: task whose latest session is error|killed → skipped
  * - No-task-id edge case: tasks with empty id → skipped
  * - recordEvent and broadcast fire on revert
- * - Idle session → sendOrResume nudge, no task revert, worktree intact
+ * - Idle session → enqueueFeedback nudge (inbox), no task revert, worktree intact
  * - Nudge limit: after NUDGE_LIMIT nudges → operator surface (setSessionPauseReason), no revert
  * - Missing worktree → operator surface immediately
  * - Open PR → still skipped (unchanged)
@@ -515,22 +515,23 @@ describe('OrphanedTaskSweeper', () => {
       >,
     );
     vi.mocked(countNudgeEvents).mockReturnValue(0);
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
     });
 
     await sweeper.sweepOnce();
 
-    // Must nudge, not revert
-    expect(sendOrResume).toHaveBeenCalledWith(
+    // Must nudge, not revert — no-PR path keeps the "open a draft PR" wording
+    expect(enqueueFeedback).toHaveBeenCalledWith(
       'sess-1',
-      expect.stringContaining('PR'),
+      'system:nudge',
+      expect.stringContaining('no PR was opened'),
     );
     expect(backend.updateStatus).not.toHaveBeenCalled();
     expect(recordEvent).toHaveBeenCalledWith(
@@ -551,20 +552,20 @@ describe('OrphanedTaskSweeper', () => {
     );
     // Already nudged NUDGE_LIMIT times
     vi.mocked(countNudgeEvents).mockReturnValue(2);
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
     });
 
     await sweeper.sweepOnce();
 
     // No more nudges, no revert
-    expect(sendOrResume).not.toHaveBeenCalled();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
     expect(backend.updateStatus).not.toHaveBeenCalled();
     // Surfaced to operator via session pause_reason
     expect(setSessionPauseReason).toHaveBeenCalledWith(
@@ -591,19 +592,19 @@ describe('OrphanedTaskSweeper', () => {
       ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
     );
     vi.mocked(fs.existsSync).mockReturnValue(false);
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
     });
 
     await sweeper.sweepOnce();
 
-    expect(sendOrResume).not.toHaveBeenCalled();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
     expect(backend.updateStatus).not.toHaveBeenCalled();
     expect(setSessionPauseReason).toHaveBeenCalledWith(
       'sess-1',
@@ -630,20 +631,20 @@ describe('OrphanedTaskSweeper', () => {
         1,
       ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
     );
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
     });
 
     await sweeper.sweepOnce();
 
     // Archived idle session must NOT be nudged
-    expect(sendOrResume).not.toHaveBeenCalled();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
     // Treat as a genuine orphan — revert to Ready
     expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
   });
@@ -662,19 +663,19 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
       Date.now() - 5 * 60 * 1000,
     );
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
     });
 
     await sweeper.sweepOnce();
 
-    expect(sendOrResume).not.toHaveBeenCalled();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
     expect(backend.updateStatus).not.toHaveBeenCalled();
   });
 
@@ -690,20 +691,21 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
       Date.now() - 15 * 60 * 1000,
     );
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
     });
 
     await sweeper.sweepOnce();
 
-    expect(sendOrResume).toHaveBeenCalledWith(
+    expect(enqueueFeedback).toHaveBeenCalledWith(
       'sess-1',
+      'system:nudge',
       expect.stringContaining('PR'),
     );
   });
@@ -725,19 +727,19 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(getLatestNudgeTimestamp).mockReturnValue(
       Date.now() - 5 * 60 * 1000,
     );
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
     });
 
     await sweeper.sweepOnce();
 
-    expect(sendOrResume).not.toHaveBeenCalled();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
   });
 
   it('two sweep ticks 60s apart produce at most one nudge (spacing enforced)', async () => {
@@ -752,26 +754,26 @@ describe('OrphanedTaskSweeper', () => {
       Date.now() - 30 * 60 * 1000,
     );
     vi.mocked(getLatestNudgeTimestamp).mockReturnValue(null);
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
     });
 
     // First tick nudges
     await sweeper.sweepOnce();
-    expect(sendOrResume).toHaveBeenCalledTimes(1);
+    expect(enqueueFeedback).toHaveBeenCalledTimes(1);
 
     // Simulate 60s elapsed — nudge was recorded 60s ago (under 15-min spacing)
     vi.mocked(getLatestNudgeTimestamp).mockReturnValue(Date.now() - 60 * 1000);
 
     // Second tick is blocked by spacing gate
     await sweeper.sweepOnce();
-    expect(sendOrResume).toHaveBeenCalledTimes(1);
+    expect(enqueueFeedback).toHaveBeenCalledTimes(1);
   });
 
   // ── Total-count cap (fixes livelock) ─────────────────────────────────────
@@ -790,20 +792,20 @@ describe('OrphanedTaskSweeper', () => {
     );
     // Total nudge count = NUDGE_LIMIT — should surface regardless of session activity
     vi.mocked(countNudgeEvents).mockReturnValue(2);
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
     });
 
     await sweeper.sweepOnce();
 
     // Should surface to operator, NOT nudge again, even though session responded
-    expect(sendOrResume).not.toHaveBeenCalled();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
     expect(setSessionPauseReason).toHaveBeenCalledWith(
       'sess-1',
       'stalled_idle',
@@ -828,19 +830,19 @@ describe('OrphanedTaskSweeper', () => {
     );
     // 2 total nudges — limit reached
     vi.mocked(countNudgeEvents).mockReturnValue(2);
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
     });
 
     await sweeper.sweepOnce();
 
-    expect(sendOrResume).not.toHaveBeenCalled();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
     expect(setSessionPauseReason).toHaveBeenCalledWith(
       'sess-1',
       'stalled_idle',
@@ -863,14 +865,14 @@ describe('OrphanedTaskSweeper', () => {
       Date.now() - 60 * 60 * 1000,
     );
     vi.mocked(countNudgeEvents).mockReturnValue(2);
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
     });
 
     await sweeper.sweepOnce();
@@ -891,20 +893,20 @@ describe('OrphanedTaskSweeper', () => {
       const backend = makeBackend([
         makeTask('notion:abc', '🔄 In Progress', taskType),
       ]);
-      const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+      const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
       const sweeper = new OrphanedTaskSweeper(broadcast, {
         listProjects: () => [
           { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
         ],
         resolveBackend: () => backend,
-        sendOrResume,
+        enqueueFeedback,
       });
 
       await sweeper.sweepOnce();
 
       expect(backend.updateStatus).not.toHaveBeenCalled();
-      expect(sendOrResume).not.toHaveBeenCalled();
+      expect(enqueueFeedback).not.toHaveBeenCalled();
       expect(recordEvent).not.toHaveBeenCalledWith(
         expect.objectContaining({ event_type: 'task_orphan_reverted' }),
       );
@@ -1005,21 +1007,21 @@ describe('OrphanedTaskSweeper', () => {
         },
       ]),
     };
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
       githubClient,
     });
 
     await sweeper.sweepOnce();
 
     // Nudge suppressed — PR already open on GitHub
-    expect(sendOrResume).not.toHaveBeenCalled();
+    expect(enqueueFeedback).not.toHaveBeenCalled();
     // PR row backfilled
     expect(upsertPullRequest).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1075,22 +1077,23 @@ describe('OrphanedTaskSweeper', () => {
         },
       ]),
     };
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
       githubClient,
     });
 
     await sweeper.sweepOnce();
 
     // No matching PR — nudge proceeds normally
-    expect(sendOrResume).toHaveBeenCalledWith(
+    expect(enqueueFeedback).toHaveBeenCalledWith(
       'sess-1',
+      'system:nudge',
       expect.stringContaining('PR'),
     );
     expect(upsertPullRequest).not.toHaveBeenCalled();
@@ -1122,22 +1125,23 @@ describe('OrphanedTaskSweeper', () => {
     const githubClient = {
       listOpenPRs: vi.fn().mockRejectedValue(new Error('API rate limit')),
     };
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
       githubClient,
     });
 
     await sweeper.sweepOnce();
 
     // Fail-open: GitHub error doesn't prevent the nudge
-    expect(sendOrResume).toHaveBeenCalledWith(
+    expect(enqueueFeedback).toHaveBeenCalledWith(
       'sess-1',
+      'system:nudge',
       expect.stringContaining('PR'),
     );
     expect(upsertPullRequest).not.toHaveBeenCalled();
@@ -1158,20 +1162,27 @@ describe('OrphanedTaskSweeper', () => {
       session_id: 'sess-1',
       state: 'open',
     } as ReturnType<typeof getPRBySessionId>);
-    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
         { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
       ],
       resolveBackend: () => backend,
-      sendOrResume,
+      enqueueFeedback,
     });
 
     await sweeper.sweepOnce();
 
-    // Stalled-PR idle path: session IS nudged (to act on review feedback)
-    expect(sendOrResume).toHaveBeenCalledWith('sess-1', expect.any(String));
+    // Stalled-PR idle path: session IS nudged (to act on review feedback),
+    // referencing the existing PR rather than claiming none was opened.
+    expect(enqueueFeedback).toHaveBeenCalledWith(
+      'sess-1',
+      'system:nudge',
+      expect.stringContaining('#510'),
+    );
+    const [, , message] = enqueueFeedback.mock.calls[0];
+    expect(message).not.toContain('no PR was opened');
     // Task is NOT reverted — open PR means session did its job
     expect(backend.updateStatus).not.toHaveBeenCalled();
   });

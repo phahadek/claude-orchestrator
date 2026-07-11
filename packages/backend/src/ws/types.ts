@@ -2,6 +2,7 @@ import type { ResolvedTask } from '../notion/types';
 import type { DisplayStatus } from '../tasks/TaskStatusEngine';
 import type { PauseReason } from '../db/types';
 import type { EventKind } from '../session/eventKind';
+import type { RecoveryDescriptor } from '../db/pauseReason';
 
 // ── Server → Client ──────────────────────────────────────────────
 export interface PermissionDenial {
@@ -41,6 +42,20 @@ interface SessionState {
   taskId?: string;
 }
 
+/** A single plan-usage window (5-hour session or 7-day/weekly), as rendered by a usage bar. */
+export interface UsageWindow {
+  percent: number;
+  resetsAt: string;
+  severity: 'normal' | string;
+}
+
+/** Cached Claude subscription plan-usage snapshot, polled from the oauth/usage endpoint. */
+export interface PlanUsage {
+  available: boolean;
+  fiveHour?: UsageWindow;
+  weekly?: UsageWindow;
+}
+
 /** Full live-state snapshot of a task, sent in task_updated WS messages. */
 export interface TaskView {
   taskId: string;
@@ -49,6 +64,8 @@ export interface TaskView {
   displayStatus: DisplayStatus;
   /** Non-null when the task is paused (e.g. 'max_reviews', 'stuck_timeout'). */
   pauseReason: PauseReason | null;
+  /** Optional free-text detail for the pause reason (e.g. stall kind + attempt count). */
+  pauseDetail?: string | null;
   priority: string;
   notionUrl: string;
   taskType: string;
@@ -91,6 +108,8 @@ export interface TaskView {
   totalTokens: { input: number; output: number };
   /** Assigned target repo slug for multi-repo projects, e.g. "owner/repo". Null when unassigned. */
   assignedRepo: string | null;
+  /** Recovery action available for this task when paused. */
+  recoveryDescriptor?: RecoveryDescriptor;
 }
 
 export type ServerMessage =
@@ -170,6 +189,7 @@ export type ServerMessage =
     }
   | { type: 'pr_merged'; prNumber: number; repo: string; sha: string }
   | { type: 'pr_closed'; prNumber: number; repo: string }
+  | { type: 'pr_reconciled'; prNumber: number; repo: string }
   | {
       type: 'pr_state_changed';
       prNumber: number;
@@ -261,6 +281,7 @@ export type ServerMessage =
       used: number;
     }
   | { type: 'github_rate_limit_cleared' }
+  | { type: 'plan_usage'; usage: PlanUsage }
   | { type: 'error'; message: string }
   | { type: 'pr_pause_cleared'; prNumber: number; repo: string }
   | { type: 'autofix_started'; prNumber: number; repo: string }
@@ -393,7 +414,8 @@ export type ServerMessage =
         | 'errored_review_session'
         | 'gate_failed'
         | 'analyze_failing'
-        | 'pre_review_interrupted';
+        | 'pre_review_interrupted'
+        | 'conflict_dead_session';
     };
 
 // ── Client → Server ──────────────────────────────────────────────
@@ -401,7 +423,8 @@ export type ClientMessage =
   | {
       type: 'dispatch';
       tasks: {
-        taskUrl: string;
+        taskUrl?: string;
+        taskId?: string;
         projectContextUrl: string;
         taskType?: string;
         projectId: string;

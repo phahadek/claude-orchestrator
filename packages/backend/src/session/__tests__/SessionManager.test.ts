@@ -189,12 +189,15 @@ import {
   getStuckResultSessionRows,
   insertSession,
   incrementTaskCrashCount,
+  setSessionLastErrorDetail,
+  setTaskPauseReason,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
 import { execSync, exec as execCb } from 'child_process';
 import { recordEvent } from '../../audit/AuditLog';
 import * as fsModule from 'fs';
+import { loadOrchestratorConfig } from '../orchestrator-config';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -571,6 +574,103 @@ describe('resumeOrphanSessions — boot recovery regression', () => {
     const sess = capturedSessions[0];
     sess.emit('push_detected', { sha: 'xyz' });
     expect(pushHandler).toHaveBeenCalledWith({ sha: 'xyz' });
+  });
+
+  it('does not flag resume_failed on a successful resume', async () => {
+    const orphanRow = { ...makeDeadRow(), status: 'running' };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(setTaskPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalledWith(
+      SESSION_ID,
+      'error',
+      expect.any(Number),
+    );
+  });
+});
+
+// ── resumeOrphanSessions — resume failure flags needs_attention ──────────────
+//
+// Policy: a session resume can't continue must never be silently disposed
+// (silent error + crash-count Notion flip). It must flag the task
+// needs_attention via setTaskPauseReason(taskId, 'resume_failed', detail)
+// instead, and the session row must not be deleted.
+
+describe('resumeOrphanSessions — resume failure flags needs_attention (resume_failed)', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getStuckResultSessionRows).mockReturnValue([]);
+  });
+
+  it('worktree missing at resume time: flags resume_failed, does not spawn, session row not deleted', async () => {
+    const orphanRow = { ...makeDeadRow(), status: 'running' };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+    // Once-only override so the default existsSync behavior (relied on by
+    // later describe blocks in this file) is restored after this call.
+    vi.mocked(fsModule.existsSync).mockImplementationOnce(() => false);
+    vi.mocked((fsModule as any).default.existsSync).mockImplementationOnce(
+      () => false,
+    );
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'error',
+      expect.any(Number),
+    );
+    expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
+      'task-1',
+      'resume_failed',
+      expect.stringContaining('worktree missing'),
+    );
+    // Bypasses markSessionErrored's crash-budget/Notion-flip path entirely.
+    expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
+  });
+
+  it('resumeSession throws unexpectedly: flags resume_failed instead of the silent crash-count flow', async () => {
+    const orphanRow = { ...makeDeadRow(), status: 'running' };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+    vi.mocked(loadOrchestratorConfig).mockImplementationOnce(() => {
+      throw new Error('config boom');
+    });
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
+      'task-1',
+      'resume_failed',
+      expect.stringContaining('config boom'),
+    );
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'error',
+      expect.any(Number),
+    );
+    expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
+  });
+
+  it('project not found at resume time: flags resume_failed', async () => {
+    const orphanRow = { ...makeDeadRow(), status: 'running' };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+    vi.mocked(getProjectById).mockReturnValue(undefined);
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
+      'task-1',
+      'resume_failed',
+      expect.stringContaining('not found'),
+    );
+    expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
   });
 });
 
@@ -1230,5 +1330,153 @@ describe('sendOrResume — lock-contention retry in worktree creation', () => {
     expect(result).toBe(SESSION_ID);
     // After exhausting retries, markSessionErrored is called → crash count incremented.
     expect(vi.mocked(incrementTaskCrashCount)).toHaveBeenCalledWith('task-1');
+  });
+});
+
+// ── bootstrap failure / required_env / required_files gate ───────────────────
+
+describe('start() — bootstrap gate', () => {
+  let sm: SessionManager;
+
+  const BASE_ORCH_CONFIG = {
+    mcp_servers: undefined,
+    allowed_tools: [],
+    verify: [],
+    bash_rules: [],
+    bootstrap_script: '',
+    required_env: [] as string[],
+    required_files: [] as string[],
+    autofix: [],
+    ci_check_name: [],
+    test: [],
+    test_timeout_sec: 300,
+    test_max_rss_mb: 0,
+    test_fail_fast: true,
+    analyze: [],
+    analyze_timeout_sec: 300,
+    analyze_max_rss_mb: 0,
+    analyze_fail_fast: true,
+  };
+
+  const START_OPTS = {
+    projectId: PROJECT_ID,
+    taskKind: 'non_milestone' as const,
+    taskName: 'my-task',
+  };
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    // .git absent → no worktree reuse; worktree add always succeeds
+    vi.mocked(fsModule.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+    vi.mocked((fsModule as any).default.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+    // Default orchestrator config — no bootstrap_script, no required_*
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({ ...BASE_ORCH_CONFIG });
+  });
+
+  it('bootstrap exits non-zero → session marked error, last_error_detail set, runner not spawned', async () => {
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ...BASE_ORCH_CONFIG,
+      bootstrap_script: './scripts/bootstrap.sh',
+    });
+
+    // Make bootstrap exec fail; worktree add must still succeed
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        if (String(_cmd).includes('bootstrap.sh')) {
+          const err = Object.assign(new Error('Command failed'), {
+            stderr: 'Error: .env not found',
+          });
+          return callback(err);
+        }
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+
+    sm.start('https://notion.so/task', 'https://notion.so/project', START_OPTS);
+
+    await vi.waitFor(() =>
+      expect(vi.mocked(setSessionLastErrorDetail)).toHaveBeenCalled(),
+    );
+
+    expect(vi.mocked(setSessionLastErrorDetail)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('bootstrap failed'),
+    );
+    // AgentSession must NOT have been constructed
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    // Session must be in error state
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      expect.any(String),
+      'error',
+      expect.any(Number),
+    );
+  });
+
+  it('required_env var missing in process.env → launch aborts with clear reason', async () => {
+    const missingVar = '__ORCH_TEST_MISSING_VAR_XYZ_NONEXISTENT__';
+    delete process.env[missingVar];
+
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ...BASE_ORCH_CONFIG,
+      required_env: [missingVar],
+    });
+
+    sm.start('https://notion.so/task', 'https://notion.so/project', START_OPTS);
+
+    await vi.waitFor(() =>
+      expect(vi.mocked(setSessionLastErrorDetail)).toHaveBeenCalled(),
+    );
+
+    expect(vi.mocked(setSessionLastErrorDetail)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining(missingVar),
+    );
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+  });
+
+  it('required_files entry missing in worktree → launch aborts with clear reason', async () => {
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ...BASE_ORCH_CONFIG,
+      required_files: ['.env'],
+    });
+
+    // existsSync returns false for paths containing '.env'
+    vi.mocked((fsModule as any).default.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git') && !String(p).endsWith('.env'),
+    );
+
+    sm.start('https://notion.so/task', 'https://notion.so/project', START_OPTS);
+
+    await vi.waitFor(() =>
+      expect(vi.mocked(setSessionLastErrorDetail)).toHaveBeenCalled(),
+    );
+
+    expect(vi.mocked(setSessionLastErrorDetail)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('.env'),
+    );
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+  });
+
+  it('no bootstrap_script and no required_* → session launches normally (AgentSession constructed)', async () => {
+    // Default config has no bootstrap_script and empty required_* — already set in beforeEach.
+    sm.start('https://notion.so/task', 'https://notion.so/project', START_OPTS);
+
+    await vi.waitFor(() => expect(vi.mocked(AgentSession)).toHaveBeenCalled());
+
+    // Bootstrap gate must not have fired — no bootstrap-related error detail set
+    const calls = vi.mocked(setSessionLastErrorDetail).mock.calls;
+    const bootstrapErrorCalls = calls.filter(([, detail]) =>
+      String(detail).startsWith('bootstrap'),
+    );
+    expect(bootstrapErrorCalls).toHaveLength(0);
   });
 });

@@ -4,6 +4,7 @@ import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 
 export interface DispatchTask {
   notionUrl: string;
+  taskId?: string;
   taskType?: string;
   taskName?: string;
   milestoneId?: string | null;
@@ -21,10 +22,11 @@ export function useDispatch(
       send({
         type: 'dispatch',
         tasks: tasks.map((t) => ({
-          taskUrl: t.notionUrl,
+          taskUrl: t.notionUrl || undefined,
           projectContextUrl: project.contextUrl,
           taskType: t.taskType,
           projectId: project.id,
+          ...(t.taskId !== undefined && { taskId: t.taskId }),
           ...(t.milestoneId !== undefined && { milestoneId: t.milestoneId }),
           ...(t.taskKind !== undefined && { taskKind: t.taskKind }),
           ...(t.taskName !== undefined && { taskName: t.taskName }),

@@ -12,6 +12,8 @@ import {
   deleteTaskCacheRow,
   getTaskRepoAssignment,
   setTaskRepoAssignment,
+  getPRByNotionTaskId,
+  clearTerminalPRFlags,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { typedGetSetting } from '../config/settings';
@@ -21,7 +23,7 @@ import type { NotionTask } from '../notion/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
-import { parsePauseReason } from '../db/pauseReason';
+import { parsePauseReason, deriveRecoveryDescriptor } from '../db/pauseReason';
 import yaml from 'js-yaml';
 export type { TaskView } from '../ws/types';
 
@@ -185,6 +187,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     notionStatus,
     displayStatus,
     pauseReason: pauseStruct?.reason ?? null,
+    pauseDetail: pauseStruct?.detail ?? null,
     priority,
     notionUrl: notionTask?.notionUrl ?? '',
     taskType: notionTask?.type ?? '',
@@ -196,6 +199,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     review,
     totalTokens,
     assignedRepo: getTaskRepoAssignment(row.task_id)?.repo ?? null,
+    recoveryDescriptor: deriveRecoveryDescriptor(pauseStruct?.reason ?? null),
   };
 }
 
@@ -287,7 +291,89 @@ export function summarizeEvent(payload: string): string {
   return '';
 }
 
-export function createTasksRouter(): Router {
+interface SessionManagerLike {
+  sendOrResume(sessionId: string, text: string): Promise<string | null>;
+  findLiveSessionIdForTask(taskId: string): string | undefined;
+  abortSession(sessionId: string): Promise<void>;
+}
+
+interface ReviewOrchestratorLike {
+  runAutofixPipeline(
+    prNumber: number,
+    repo: string,
+    taskId: string | null,
+  ): Promise<{ success: boolean; summary: string }>;
+}
+
+// ── Shared recovery executors ────────────────────────────────────────────────
+// Single implementation of each Needs-Attention recovery action. Used by the
+// unified POST /tasks/:taskId/recover endpoint and by the deprecated
+// POST /tasks/:taskId/unblock + POST /prs/:prNumber/unpark aliases, so there is
+// exactly one code path per action instead of duplicated logic.
+
+/**
+ * redispatch — clear the sticky pause + crash count, drop the stale task-cache
+ * row, evict/abort any lingering live session for the task, and set the task
+ * back to Ready. This is the clear-pause primitive the legacy `unblock`
+ * endpoint performed. Rejects if `backend.updateStatus` rejects.
+ *
+ * Evicting the live session before setting Ready matters because a stalled or
+ * hung session can otherwise survive in SessionManager's in-memory map
+ * indefinitely, causing AutoLauncher to skip every relaunch attempt with
+ * "live session already exists".
+ */
+async function executeRedispatch(
+  backend: Awaited<ReturnType<typeof getTaskBackend>>,
+  taskId: string,
+  sessionManager?: SessionManagerLike,
+): Promise<void> {
+  clearTaskPauseReason(taskId);
+  resetTaskCrashCount(taskId);
+  deleteTaskCacheRow(taskId);
+
+  const liveSessionId = sessionManager?.findLiveSessionIdForTask(taskId);
+  if (liveSessionId) {
+    await sessionManager!.abortSession(liveSessionId);
+  }
+
+  await backend.updateStatus(taskId, '🗂️ Ready', { source: 'orchestrator' });
+  emitTaskUpdated(taskId);
+  if (taskBroadcastFn) {
+    taskBroadcastFn({
+      type: 'task_status_changed',
+      notionTaskId: taskId,
+      newStatus: '🗂️ Ready',
+    });
+  }
+}
+
+/**
+ * rerun — clear terminal PR flags (pause + pre-review stage) and re-enqueue the
+ * pre-review/autofix pipeline so the PR can recover without being merged. This
+ * is the primitive the legacy `unpark` endpoint performed. The pipeline runs
+ * fire-and-forget.
+ */
+export function executeRerunPipeline(
+  prNumber: number,
+  repo: string,
+  taskId: string | null,
+  reviewOrchestrator?: ReviewOrchestratorLike,
+): void {
+  clearTerminalPRFlags(prNumber, repo, 'human_unpark');
+  if (reviewOrchestrator) {
+    void reviewOrchestrator
+      .runAutofixPipeline(prNumber, repo, taskId)
+      .catch((err: unknown) =>
+        logger.error('[recover] rerun pipeline failed:', err),
+      );
+  }
+  if (taskId) emitTaskUpdated(taskId);
+}
+
+export function createTasksRouter(
+  sessionManager?: SessionManagerLike,
+  reviewOrchestrator?: ReviewOrchestratorLike,
+): Router {
   const router = Router();
 
   // ── GET /api/tasks/export?format=yaml&projectId=<id>&boardId=<id> ────────
@@ -526,6 +612,9 @@ export function createTasksRouter(): Router {
   });
 
   // ── POST /api/tasks/:taskId/unblock ─────────────────────────────────────
+  // @deprecated Superseded by POST /tasks/:taskId/recover (redispatch action).
+  // Retained as a thin alias over the shared redispatch executor for the current
+  // frontend; the unified /recover endpoint is the canonical recovery interface.
   router.post('/tasks/:taskId/unblock', async (req: Request, res: Response) => {
     const taskId = String(req.params.taskId);
     const projectId =
@@ -546,28 +635,13 @@ export function createTasksRouter(): Router {
       return;
     }
 
-    clearTaskPauseReason(taskId);
-    resetTaskCrashCount(taskId);
-    deleteTaskCacheRow(taskId);
-
     try {
-      await backend.updateStatus(taskId, '🗂️ Ready', {
-        source: 'orchestrator',
-      });
+      await executeRedispatch(backend, taskId, sessionManager);
     } catch (err) {
       res.status(500).json({
         error: err instanceof Error ? err.message : 'Failed to update status',
       });
       return;
-    }
-
-    emitTaskUpdated(taskId);
-    if (taskBroadcastFn) {
-      taskBroadcastFn({
-        type: 'task_status_changed',
-        notionTaskId: taskId,
-        newStatus: '🗂️ Ready',
-      });
     }
 
     recordEvent({
@@ -617,6 +691,144 @@ export function createTasksRouter(): Router {
     emitTaskUpdated(taskId);
 
     res.json({ ok: true, repo });
+  });
+
+  // ── GET /api/tasks/:taskId/page?projectId=<id> ──────────────────────────────
+  // Read-only fetch of the task's full spec body as markdown, uniform across sources.
+  router.get('/tasks/:taskId/page', async (req: Request, res: Response) => {
+    const taskId = String(req.params.taskId);
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : '';
+
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' });
+      return;
+    }
+
+    let backend: ReturnType<typeof getTaskBackend>;
+    try {
+      backend = getTaskBackend(projectId);
+    } catch {
+      res
+        .status(400)
+        .json({ error: `Cannot resolve backend for project '${projectId}'` });
+      return;
+    }
+
+    try {
+      const markdown = await backend.fetchTaskPage(taskId);
+      res.json({ markdown });
+    } catch (err) {
+      res.status(404).json({
+        error: err instanceof Error ? err.message : `task not found: ${taskId}`,
+      });
+    }
+  });
+
+  // ── POST /api/tasks/:taskId/recover ─────────────────────────────────────────
+  // Generalized recovery endpoint: derives the action from the current pause reason
+  // and executes redispatch / rerun / resume accordingly.
+  router.post('/tasks/:taskId/recover', async (req: Request, res: Response) => {
+    const taskId = String(req.params.taskId);
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+
+    if (!projectId) {
+      res.status(422).json({ error: 'projectId is required' });
+      return;
+    }
+
+    // Load current task state to read pause reason
+    const rows = getActiveTaskAggregates([taskId]);
+    const row = rows[0] ?? null;
+    const pauseStruct = row
+      ? parsePauseReason(
+          row.pr_pause_reason ??
+            row.session_pr_creation_failed_pause_reason ??
+            null,
+        )
+      : null;
+
+    const descriptor = deriveRecoveryDescriptor(pauseStruct?.reason ?? null);
+
+    if (!descriptor.available || !descriptor.action) {
+      res.status(422).json({
+        error: 'No recovery action available for this task',
+        pauseReason: pauseStruct?.reason ?? null,
+      });
+      return;
+    }
+
+    const action = descriptor.action;
+
+    try {
+      if (action === 'redispatch') {
+        let backend: Awaited<ReturnType<typeof getTaskBackend>>;
+        try {
+          backend = getTaskBackend(projectId);
+        } catch {
+          res.status(422).json({
+            error: `Cannot resolve backend for project '${projectId}'`,
+          });
+          return;
+        }
+
+        await executeRedispatch(backend, taskId, sessionManager);
+      } else if (action === 'rerun') {
+        const prRow = getPRByNotionTaskId(taskId);
+        if (!prRow) {
+          res.status(422).json({
+            error: 'No PR found for this task — cannot rerun pipeline',
+          });
+          return;
+        }
+
+        executeRerunPipeline(
+          prRow.pr_number,
+          prRow.repo,
+          taskId,
+          reviewOrchestrator,
+        );
+      } else if (action === 'resume') {
+        const sessionId = row?.code_session_id ?? null;
+        if (!sessionId) {
+          res.status(422).json({
+            error: 'No code session found for this task — cannot resume',
+          });
+          return;
+        }
+
+        // Clear PR-level pause so the task transitions away from needs_attention
+        const prRow = getPRByNotionTaskId(taskId);
+        if (prRow) {
+          clearTerminalPRFlags(prRow.pr_number, prRow.repo, 'human_unpark');
+        }
+
+        if (sessionManager) {
+          await sessionManager.sendOrResume(
+            sessionId,
+            'Recovery requested. Please review the current state and continue working on the task.',
+          );
+        }
+
+        emitTaskUpdated(taskId);
+      }
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Recovery action failed',
+      });
+      return;
+    }
+
+    recordEvent({
+      event_type: 'task_recovered',
+      actor_type: 'human',
+      project_id: projectId,
+      task_id: taskId,
+      payload: { taskId, projectId, action },
+    });
+
+    res.json({ ok: true, action });
   });
 
   // ── PATCH /api/tasks/:id/status ──────────────────────────────────────────

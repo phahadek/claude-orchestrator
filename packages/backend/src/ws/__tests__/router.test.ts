@@ -27,6 +27,75 @@ function makeSessions(overrides: Partial<Record<string, unknown>> = {}) {
 const SESSION_ID = 'test-session-id';
 const MESSAGE = 'hello from composer';
 
+describe('router: dispatch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('accepts a task with taskId only and synthesizes a taskUrl', async () => {
+    const sessions = makeSessions({
+      start: vi.fn().mockResolvedValue('new-session-id'),
+    });
+    const ws = makeWs();
+
+    await handleMessage(
+      ws,
+      JSON.stringify({
+        type: 'dispatch',
+        tasks: [
+          {
+            taskId: 'abc-def-123',
+            projectContextUrl: 'https://notion.so/ctx',
+            projectId: 'proj-1',
+            taskKind: 'milestone',
+          },
+        ],
+      }),
+      sessions,
+    );
+
+    expect(sessions.start).toHaveBeenCalledWith(
+      'https://www.notion.so/abcdef123',
+      'https://notion.so/ctx',
+      expect.objectContaining({ taskId: 'abc-def-123' }),
+    );
+    const sent = (ws.send as ReturnType<typeof vi.fn>).mock.calls;
+    const errors = sent.filter((c) => {
+      const parsed = JSON.parse(c[0] as string) as { type: string };
+      return parsed.type === 'error';
+    });
+    expect(errors).toHaveLength(0);
+  });
+
+  it('rejects a task with neither taskUrl nor taskId', async () => {
+    const sessions = makeSessions();
+    const ws = makeWs();
+
+    await handleMessage(
+      ws,
+      JSON.stringify({
+        type: 'dispatch',
+        tasks: [
+          {
+            projectContextUrl: 'https://notion.so/ctx',
+            projectId: 'proj-1',
+          },
+        ],
+      }),
+      sessions,
+    );
+
+    expect(sessions.start).not.toHaveBeenCalled();
+    const sent = (ws.send as ReturnType<typeof vi.fn>).mock.calls;
+    const error = JSON.parse(sent[0][0] as string) as {
+      type: string;
+      message: string;
+    };
+    expect(error.type).toBe('error');
+    expect(error.message).toMatch(/taskUrl or taskId/);
+  });
+});
+
 describe('router: send_message', () => {
   beforeEach(() => {
     vi.clearAllMocks();

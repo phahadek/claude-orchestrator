@@ -9,9 +9,14 @@ import supertest from 'supertest';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────────
 
-vi.mock('../routes/tasks.js', () => ({
-  emitTaskUpdated: vi.fn(),
-}));
+// Keep the real `executeRerunPipeline` (the shared rerun executor the deprecated
+// unpark route now delegates to) while stubbing `emitTaskUpdated`. The real
+// executeRerunPipeline calls the module-local emitTaskUpdated, which no-ops when
+// no broadcast fn is registered, so this stays free of DB access.
+vi.mock('../routes/tasks.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../routes/tasks.js')>();
+  return { ...actual, emitTaskUpdated: vi.fn() };
+});
 
 vi.mock('../db/queries.js', () => ({
   getPRs: vi.fn(),
@@ -189,7 +194,11 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
 
     await supertest(app).post('/api/prs/owner/repo/42/approve').expect(200);
 
-    expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'human_unpark',
+    );
   });
 
   it('calls runAutofixPipeline with correct args when PR is cap-escalated', async () => {
@@ -259,6 +268,37 @@ describe('POST /prs/:owner/:repoName/:prNumber/approve — cap-escalated PR', ()
     expect(queries.clearTerminalPRFlags).not.toHaveBeenCalled();
     expect(runAutofixPipeline).not.toHaveBeenCalled();
   });
+
+  it('still returns 200 when runAutofixPipeline rejects on cap-escalated approve', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      makeCapPRRow({ task_id: 'task-abc' }) as never,
+    );
+
+    const runAutofixPipeline = vi
+      .fn()
+      .mockRejectedValue(new Error('pipeline exploded'));
+    const reviewOrchestrator = { runAutofixPipeline };
+
+    const app = express();
+    app.use(express.json());
+    app.use(
+      '/api',
+      createPrsRouter(
+        makeGithub(),
+        makePRReviewService(),
+        makeSessionManager(),
+        undefined,
+        undefined,
+        undefined,
+        reviewOrchestrator,
+      ),
+    );
+
+    await supertest(app).post('/api/prs/owner/repo/42/approve').expect(200);
+
+    // Allow the rejected promise to settle — no unhandled rejection should propagate
+    await new Promise((r) => setTimeout(r, 20));
+  });
 });
 
 // ── POST /api/prs/:prNumber/unpark ────────────────────────────────────────────
@@ -321,7 +361,11 @@ describe('POST /prs/:prNumber/unpark', () => {
       .expect(200);
 
     expect(res.body).toEqual({ ok: true });
-    expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(queries.clearTerminalPRFlags).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'human_unpark',
+    );
   });
 
   it('calls runAutofixPipeline with correct args', async () => {
@@ -389,5 +433,40 @@ describe('POST /prs/:prNumber/unpark', () => {
         task_id: 'task-xyz',
       }),
     );
+  });
+
+  it('still returns 200 when runAutofixPipeline rejects', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(
+      makeCapPRRow({ task_id: 'task-xyz' }) as never,
+    );
+
+    const runAutofixPipeline = vi
+      .fn()
+      .mockRejectedValue(new Error('pipeline exploded'));
+    const reviewOrchestrator = { runAutofixPipeline };
+
+    const app = express();
+    app.use(express.json());
+    app.use(
+      '/api',
+      createPrsRouter(
+        makeGithub(),
+        makePRReviewService(),
+        makeSessionManager(),
+        undefined,
+        undefined,
+        undefined,
+        reviewOrchestrator,
+      ),
+    );
+
+    const res = await supertest(app)
+      .post('/api/prs/42/unpark?projectId=proj-1')
+      .expect(200);
+
+    expect(res.body).toEqual({ ok: true });
+
+    // Allow the rejected promise to settle — no unhandled rejection should propagate
+    await new Promise((r) => setTimeout(r, 20));
   });
 });

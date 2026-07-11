@@ -322,7 +322,7 @@ describe('revertBannedFiles()', () => {
     expect(result.syncedTo).toBeNull();
   });
 
-  it('commit message ends with [skip ci]', async () => {
+  it('commit message ends with [skip ci] by default (skipCi = true)', async () => {
     await git(['checkout', 'dev'], worktreeDir);
     fs.writeFileSync(path.join(worktreeDir, 'CLAUDE.md'), 'base\n');
     await git(['add', 'CLAUDE.md'], worktreeDir);
@@ -349,6 +349,37 @@ describe('revertBannedFiles()', () => {
       worktreeDir,
     );
     expect(commitMsg).toMatch(/\[skip ci\]$/);
+  });
+
+  it('omits [skip ci] from commit message when skipCi = false', async () => {
+    await git(['checkout', 'dev'], worktreeDir);
+    fs.writeFileSync(path.join(worktreeDir, 'CLAUDE.md'), 'base\n');
+    await git(['add', 'CLAUDE.md'], worktreeDir);
+    await git([...GIT_AUTHOR, 'commit', '-m', 'base CLAUDE.md'], worktreeDir);
+    await git(['push', 'origin', 'dev'], worktreeDir);
+
+    await git(['checkout', 'feature/test'], worktreeDir);
+    await git(['merge', 'dev', '--no-edit'], worktreeDir);
+    fs.writeFileSync(path.join(worktreeDir, 'CLAUDE.md'), 'injected\n');
+    await git(['add', 'CLAUDE.md'], worktreeDir);
+    await git([...GIT_AUTHOR, 'commit', '-m', 'inject'], worktreeDir);
+    await git(['push', 'origin', 'feature/test'], worktreeDir);
+
+    await revertBannedFiles({
+      worktreePath: worktreeDir,
+      baseBranch: 'dev',
+      bannedFiles: ['CLAUDE.md'],
+      prNumber: 1,
+      repo: 'owner/repo',
+      skipCi: false,
+    });
+
+    const commitMsg = await git(
+      ['log', '--format=%s', '--grep=orchestrator-revert', '-1'],
+      worktreeDir,
+    );
+    expect(commitMsg).not.toMatch(/\[skip ci\]/);
+    expect(commitMsg).toMatch(/\[auto-revert\]$/);
   });
 
   it('local branch pointer matches origin after revert (no divergence)', async () => {

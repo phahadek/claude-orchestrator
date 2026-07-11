@@ -31,6 +31,7 @@ import type {
   NewDeviceRow,
   SessionPauseInterval,
   TaskRepoAssignmentRow,
+  FeedbackInboxRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -963,6 +964,8 @@ export function upsertPullRequest(
     | 'ci_remediation_attempted_sha'
     | 'pre_review_stage'
     | 'stalled_pr_retry_count'
+    | 'session_initiated_close_at'
+    | 'reviewer_requested_at'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -1118,6 +1121,57 @@ export function incrementStalledPRRetryCount(
 export function clearReviewSessionId(prNumber: number, repo: string): void {
   db.prepare<{ pr_number: number; repo: string }>(
     `UPDATE pull_requests SET review_session_id = NULL WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo });
+}
+
+export function setHeadBranch(
+  prNumber: number,
+  repo: string,
+  branch: string | null,
+): void {
+  db.prepare<{ pr_number: number; repo: string; head_branch: string | null }>(
+    `
+    UPDATE pull_requests
+    SET head_branch = @head_branch
+    WHERE pr_number = @pr_number AND repo = @repo
+  `,
+  ).run({ pr_number: prNumber, repo, head_branch: branch });
+}
+
+/**
+ * Marks a PR as having a pending session-initiated close/reopen cycle,
+ * live-detected from a `gh pr close`/`gh pr reopen` Bash command run by the
+ * session itself. PRMergeWatcher uses this to defer terminalization of a
+ * closed PR while the coding session is still non-terminal.
+ */
+export function markSessionInitiatedPRClose(
+  prNumber: number,
+  repo: string,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    session_initiated_close_at: number;
+  }>(
+    `
+    UPDATE pull_requests
+    SET session_initiated_close_at = @session_initiated_close_at
+    WHERE pr_number = @pr_number AND repo = @repo
+  `,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    session_initiated_close_at: Date.now(),
+  });
+}
+
+/** Clears the session-initiated close/reopen marker — called on reconcile and on terminalize. */
+export function clearSessionInitiatedPRClose(
+  prNumber: number,
+  repo: string,
+): void {
+  db.prepare<{ pr_number: number; repo: string }>(
+    `UPDATE pull_requests SET session_initiated_close_at = NULL WHERE pr_number = @pr_number AND repo = @repo`,
   ).run({ pr_number: prNumber, repo });
 }
 
@@ -1430,6 +1484,18 @@ export function setConflictNudgeSha(
   ).run(sha, prNumber, repo);
 }
 
+/**
+ * Set-once marker for corporate-mode reviewer auto-assignment: stamped after
+ * requestReviewers fires (success or failure) so the ~5s merge poll never
+ * re-requests reviewers for the same PR. COALESCE preserves the first-set
+ * timestamp on repeat calls.
+ */
+export function markReviewerRequested(prNumber: number, repo: string): void {
+  db.prepare<{ pr_number: number; repo: string; now: number }>(
+    `UPDATE pull_requests SET reviewer_requested_at = COALESCE(reviewer_requested_at, @now) WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo, now: Date.now() });
+}
+
 export function setPauseReason(
   prNumber: number,
   repo: string,
@@ -1461,12 +1527,63 @@ export function setPauseReason(
 }
 
 /**
+ * Signals that may trigger clearTerminalPRFlags. Only a subset of these are
+ * trusted to clear a 'stalled_reconcile_cap' escalation — see
+ * CAP_CLEAR_ALLOWED_TRIGGERS below.
+ */
+export type ClearTerminalPRFlagsTrigger =
+  | 'merged'
+  | 'closed'
+  | 'head_sha_advance'
+  | 'human_unpark'
+  | 'review_verdict'
+  | 'session_reconciled';
+
+/**
+ * Triggers that are allowed to clear a 'stalled_reconcile_cap' escalation:
+ * a genuine terminal transition (merged/closed), a head_sha advance (a fix
+ * was actually pushed — the load-bearing signal), an explicit human
+ * unpark/recovery action, or a session-initiated-close reconcile (the PR was
+ * never really abandoned — the close was the session's own churn). A bare
+ * automated 'review_verdict' is deliberately excluded: an approved verdict
+ * does not guarantee the PR is mergeable, and clearing the cap on verdict
+ * alone re-creates the open+no-pause+no-session limbo the cap escalation
+ * exists to prevent.
+ */
+const CAP_CLEAR_ALLOWED_TRIGGERS: ReadonlySet<ClearTerminalPRFlagsTrigger> =
+  new Set([
+    'merged',
+    'closed',
+    'head_sha_advance',
+    'human_unpark',
+    'session_reconciled',
+  ]);
+
+/**
  * Clear both pause_reason and pre_review_stage on terminal PR transitions
  * (merged, closed, or approved verdict). Composes the existing setters so that
  * pause_reason_set_at is also nulled correctly. Re-nulling already-null fields
  * is a no-op in SQLite and is safe.
+ *
+ * When the PR is currently escalated to 'stalled_reconcile_cap', clearing is
+ * gated on `trigger` — see CAP_CLEAR_ALLOWED_TRIGGERS.
  */
-export function clearTerminalPRFlags(prNumber: number, repo: string): void {
+export function clearTerminalPRFlags(
+  prNumber: number,
+  repo: string,
+  trigger: ClearTerminalPRFlagsTrigger,
+): void {
+  const pr = getPRByNumber(prNumber, repo);
+  const pauseStruct = parsePauseReason(pr?.pause_reason ?? null);
+  if (
+    pauseStruct?.reason === 'stalled_reconcile_cap' &&
+    !CAP_CLEAR_ALLOWED_TRIGGERS.has(trigger)
+  ) {
+    logger.info(
+      `[clearTerminalPRFlags] PR #${prNumber} (${repo}): refusing to clear stalled_reconcile_cap — trigger '${trigger}' is not a trusted escalation-clearing signal`,
+    );
+    return;
+  }
   setPauseReason(prNumber, repo, null);
   setPreReviewStage(prNumber, repo, null);
   recordEvent({
@@ -1474,7 +1591,7 @@ export function clearTerminalPRFlags(prNumber: number, repo: string): void {
     actor_type: 'system',
     actor_id: null,
     task_id: null,
-    payload: { pr_number: prNumber, repo },
+    payload: { pr_number: prNumber, repo, trigger },
   });
 }
 
@@ -1622,6 +1739,19 @@ export function getTaskPauseReason(taskId: string): PauseReasonStruct | null {
 export function clearTaskPauseReason(taskId: string): void {
   db.prepare<{ task_id: string }>(
     `DELETE FROM task_pause_reasons WHERE task_id = @task_id`,
+  ).run({ task_id: taskId });
+}
+
+/**
+ * Clear the pause_reason on all PRs associated with a task (used when the task
+ * transitions back to Ready so the next launch attempt is not blocked by a
+ * stale PR-level pause such as stuck_timeout).
+ */
+export function clearPausedPrReasonForTask(taskId: string): void {
+  db.prepare<{ task_id: string }>(
+    `UPDATE pull_requests
+     SET pause_reason = NULL, pause_reason_set_at = NULL
+     WHERE task_id = @task_id AND pause_reason IS NOT NULL`,
   ).run({ task_id: taskId });
 }
 
@@ -2282,6 +2412,12 @@ export function markLocalBranchMerged(
 
 // ─── pr_review_comments_routed ────────────────────────────────────────────────
 
+/**
+ * Returns comment IDs that have been fully acknowledged (routed_state='acked').
+ * Used by ReviewerCommentsWatcher as the dedup filter — acked comments are
+ * never re-delivered. Pending comments are NOT included so they can be
+ * re-delivered on the next poll if the consuming session died before acking.
+ */
 export function getRoutedCommentIds(
   prNumber: number,
   repo: string,
@@ -2291,13 +2427,19 @@ export function getRoutedCommentIds(
       pr_number: number;
       repo: string;
     }>(
-      `SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo`,
+      `SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'acked'`,
     )
     .all({ pr_number: prNumber, repo }) as { comment_id: string }[];
   return new Set(rows.map((r) => r.comment_id));
 }
 
-export function markCommentsRouted(
+/**
+ * Insert comment IDs as pending (at-least-once delivery record). Must be
+ * called BEFORE sendOrResume so the record survives a crash between marking
+ * and delivery. INSERT OR IGNORE preserves any existing pending row and never
+ * flips an already-acked row back to pending.
+ */
+export function markCommentsPending(
   prNumber: number,
   repo: string,
   commentIds: string[],
@@ -2310,12 +2452,44 @@ export function markCommentsRouted(
     comment_id: string;
     routed_at: number;
   }>(
-    `INSERT OR IGNORE INTO pr_review_comments_routed (pr_number, repo, comment_id, routed_at)
-     VALUES (@pr_number, @repo, @comment_id, @routed_at)`,
+    `INSERT OR IGNORE INTO pr_review_comments_routed (pr_number, repo, comment_id, routed_at, routed_state)
+     VALUES (@pr_number, @repo, @comment_id, @routed_at, 'pending')`,
   );
   for (const comment_id of commentIds) {
     stmt.run({ pr_number: prNumber, repo, comment_id, routed_at: now });
   }
+}
+
+/**
+ * Flip all pending comment rows for a PR to acked. Called on successful
+ * turn completion in AgentSession to signal that the consuming session has
+ * processed the feedback.
+ */
+export function ackPendingComments(prNumber: number, repo: string): void {
+  db.prepare<{ pr_number: number; repo: string }>(
+    `UPDATE pr_review_comments_routed SET routed_state = 'acked' WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'pending'`,
+  ).run({ pr_number: prNumber, repo });
+}
+
+/**
+ * Count routed comments still awaiting acknowledgement for a PR. Used as a
+ * quiescence check by AutoMerger's reviewer auto-assignment: reviewers are
+ * only requested once all routed feedback has been acked, so the human
+ * reviewer isn't pinged while the AI is still mid-conversation on a thread.
+ */
+export function getPendingRoutedCommentCount(
+  prNumber: number,
+  repo: string,
+): number {
+  const row = db
+    .prepare<{
+      pr_number: number;
+      repo: string;
+    }>(
+      `SELECT COUNT(*) AS count FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'pending'`,
+    )
+    .get({ pr_number: prNumber, repo }) as { count: number };
+  return row.count;
 }
 
 // ─── devices ────────────────────────────────────────────────────────────────
@@ -2522,6 +2696,13 @@ export function insertPauseInterval(
   sessionId: string,
   pauseReason: CanonicalPauseReason,
 ): void {
+  if (!stmtGetSession.get({ session_id: sessionId })) {
+    // Parent row is gone — inserting would violate the FK on session_pause_intervals.
+    logger.warn(
+      `[insertPauseInterval] skipped — session ${sessionId} no longer exists`,
+    );
+    return;
+  }
   const serialized = serializePauseReason(
     pauseReasonFromCanonical(pauseReason),
   );
@@ -3042,4 +3223,47 @@ export function getTaskRepoAssignment(
 
 export function deleteTaskRepoAssignment(taskId: string): void {
   db.prepare(`DELETE FROM task_repo_assignments WHERE task_id = ?`).run(taskId);
+}
+
+// ─── session_feedback_inbox ─────────────────────────────────────────────────
+
+export function enqueueFeedbackItem(
+  sessionId: string,
+  source: string,
+  payload: string,
+): void {
+  db.prepare(
+    `INSERT INTO session_feedback_inbox (session_id, source, payload, enqueued_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(sessionId, source, payload, Date.now());
+}
+
+export function listUndeliveredInboxItems(
+  sessionId: string,
+): FeedbackInboxRow[] {
+  return db
+    .prepare(
+      `SELECT id, session_id, source, payload, enqueued_at, delivered_at
+       FROM session_feedback_inbox
+       WHERE session_id = ? AND delivered_at IS NULL
+       ORDER BY enqueued_at ASC`,
+    )
+    .all(sessionId) as FeedbackInboxRow[];
+}
+
+export function markInboxItemsDelivered(ids: number[]): void {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => '?').join(', ');
+  db.prepare(
+    `UPDATE session_feedback_inbox SET delivered_at = ? WHERE id IN (${placeholders})`,
+  ).run(Date.now(), ...ids);
+}
+
+export function listSessionsWithUndeliveredInboxItems(): string[] {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT session_id FROM session_feedback_inbox WHERE delivered_at IS NULL`,
+    )
+    .all() as { session_id: string }[];
+  return rows.map((r) => r.session_id);
 }

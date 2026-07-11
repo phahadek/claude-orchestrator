@@ -150,11 +150,12 @@ export function runMigrations(target: Database.Database): void {
     );
 
     CREATE TABLE IF NOT EXISTS pr_review_comments_routed (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      pr_number  INTEGER NOT NULL,
-      repo       TEXT    NOT NULL,
-      comment_id TEXT    NOT NULL,
-      routed_at  INTEGER NOT NULL,
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      pr_number    INTEGER NOT NULL,
+      repo         TEXT    NOT NULL,
+      comment_id   TEXT    NOT NULL,
+      routed_at    INTEGER NOT NULL,
+      routed_state TEXT    NOT NULL DEFAULT 'pending',
       UNIQUE(pr_number, repo, comment_id)
     );
     CREATE INDEX IF NOT EXISTS idx_pr_review_comments_routed_pr ON pr_review_comments_routed(pr_number, repo);
@@ -274,7 +275,8 @@ export function runMigrations(target: Database.Database): void {
       failing_checks               TEXT,
       ci_remediation_attempted_sha TEXT,
       pause_reason_set_at          INTEGER,
-      conflict_nudge_sha           TEXT
+      conflict_nudge_sha           TEXT,
+      session_initiated_close_at   INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS scheduler_audit (
@@ -288,6 +290,17 @@ export function runMigrations(target: Database.Database): void {
       error          TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_scheduler_audit_job ON scheduler_audit(job, started_at DESC);
+
+    CREATE TABLE IF NOT EXISTS session_feedback_inbox (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id   TEXT    NOT NULL,
+      source       TEXT    NOT NULL,
+      payload      TEXT    NOT NULL,
+      enqueued_at  INTEGER NOT NULL,
+      delivered_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_feedback_inbox_session_delivered
+      ON session_feedback_inbox(session_id, delivered_at);
 
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
@@ -823,6 +836,25 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  {
+    let routedStateColAdded = false;
+    try {
+      target.exec(
+        `ALTER TABLE pr_review_comments_routed ADD COLUMN routed_state TEXT NOT NULL DEFAULT 'pending'`,
+      );
+      routedStateColAdded = true;
+    } catch {
+      /* already exists */
+    }
+    if (routedStateColAdded) {
+      // Backfill rows that existed before this migration — they were already
+      // delivered, so mark them acked so they are never re-sent.
+      target.exec(
+        `UPDATE pr_review_comments_routed SET routed_state = 'acked' WHERE routed_state = 'pending'`,
+      );
+    }
+  }
+
   try {
     target.exec(`ALTER TABLE pull_requests ADD COLUMN conflict_nudge_sha TEXT`);
   } catch {
@@ -838,6 +870,20 @@ export function runMigrations(target: Database.Database): void {
   try {
     target.exec(
       `ALTER TABLE orchestrator_analyze_results ADD COLUMN is_transient INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN session_initiated_close_at INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN reviewer_requested_at INTEGER`,
     );
   } catch {
     /* already exists */

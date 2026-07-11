@@ -45,9 +45,12 @@ export interface ISessionManager {
     sessionId: string,
     status: 'error' | 'killed',
     reason: string,
+    detail?: string,
   ): void;
   /** Deliver a message to a live session or resume a dead one and deliver it. */
   sendOrResume?(sessionId: string, text: string): Promise<string | null>;
+  /** Re-deliver undelivered inbox items for all resumable sessions at boot. */
+  reconcileInboxAtBoot?(): Promise<void>;
 }
 
 /**

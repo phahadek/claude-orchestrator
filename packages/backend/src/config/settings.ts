@@ -26,6 +26,8 @@ const SettingsSchema = z.object({
   pr_boot_sweep_merged_lookback_days: z.coerce.number().int().min(0),
   auto_archive_grace_minutes: z.coerce.number().int().min(0),
   auto_archive_sweep_interval_minutes: z.coerce.number().int().min(1),
+  reviewer_comment_quiescence_ms: z.coerce.number().int().min(0),
+  session_pr_close_grace_minutes: z.coerce.number().int().min(0),
 
   // Boolean settings (stored as 'true'/'false' strings; also accepts native booleans)
   auto_review: zodBoolCoerce,
@@ -40,9 +42,14 @@ const SettingsSchema = z.object({
   session_mode: z.enum(['cli', 'api']),
   release_channel: z.enum(['stable', 'beta']),
   corporate_mode: z.enum(['corporate', 'personal']),
+  code_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
+  review_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
+  large_task_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
 
-  // JSON-serialised string array
+  // JSON-serialised string arrays
   ai_reviewer_usernames: z.array(z.string()),
+  bot_comment_deny_list: z.array(z.string()),
+  bot_comment_allow_list: z.array(z.string()),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -63,6 +70,8 @@ export const SETTING_DEFAULTS: Settings = {
   pr_boot_sweep_merged_lookback_days: 30,
   auto_archive_grace_minutes: 30,
   auto_archive_sweep_interval_minutes: 5,
+  reviewer_comment_quiescence_ms: 120_000,
+  session_pr_close_grace_minutes: 5,
   auto_review: true,
   auto_archive_enabled: true,
   code_session_model: '',
@@ -71,7 +80,12 @@ export const SETTING_DEFAULTS: Settings = {
   session_mode: 'cli',
   release_channel: 'stable',
   corporate_mode: 'personal',
+  code_session_effort: '',
+  review_session_effort: '',
+  large_task_effort: '',
   ai_reviewer_usernames: [],
+  bot_comment_deny_list: [],
+  bot_comment_allow_list: [],
 };
 
 function deserializeField<K extends SettingKey>(
@@ -79,7 +93,7 @@ function deserializeField<K extends SettingKey>(
   raw: string,
 ): Settings[K] | null {
   let input: unknown = raw;
-  if (key === 'ai_reviewer_usernames') {
+  if (Array.isArray(SETTING_DEFAULTS[key])) {
     try {
       input = JSON.parse(raw);
     } catch {
