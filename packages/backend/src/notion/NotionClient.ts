@@ -414,17 +414,18 @@ export class NotionClient {
   }
 
   /**
-   * Fetch all tasks from a Notion database board.
-   * Results are cached per board with a 5-minute TTL.
-   * Returns ResolvedTask[] with dependency annotations.
+   * Fetch all raw tasks from a Notion database board, unresolved (no
+   * dependency annotations). Results are cached per board with a 60-second
+   * TTL. Used directly by callers (e.g. the ops loader) that need to combine
+   * rows from multiple boards before resolving dependencies.
    */
-  async fetchReadyTasks(
+  async fetchBoardTasks(
     boardId: string,
     skipCache?: boolean,
-  ): Promise<ResolvedTask[]> {
+  ): Promise<NotionTask[]> {
     if (!skipCache && isBoardCacheFresh(boardId)) {
       const cached = readBoardCache(boardId);
-      if (cached) return resolver.resolve(cached);
+      if (cached) return cached;
     }
 
     // Fetch all pages from the board (paginate through all results)
@@ -456,7 +457,52 @@ export class NotionClient {
     } while (startCursor);
 
     writeBoardCache(boardId, tasks);
+    return tasks;
+  }
+
+  /**
+   * Fetch all tasks from a Notion database board.
+   * Results are cached per board with a 5-minute TTL.
+   * Returns ResolvedTask[] with dependency annotations.
+   */
+  async fetchReadyTasks(
+    boardId: string,
+    skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
+    const tasks = await this.fetchBoardTasks(boardId, skipCache);
     return resolver.resolve(tasks);
+  }
+
+  /**
+   * Fetch a generic Notion page's title + body as Markdown (not a task page —
+   * no section parsing). Used to load fixed context pages (e.g. a project's
+   * master context page) via the same Notion query path as task pages.
+   */
+  async fetchPageMarkdown(
+    pageId: string,
+  ): Promise<{ title: string; markdown: string }> {
+    const externalId = toExternalId(pageId);
+    const page = await notionRequest<NotionPage>('GET', `/pages/${externalId}`);
+    const titleProp = Object.values(
+      page.properties as Record<string, unknown>,
+    ).find((p) => (p as { type?: string })?.type === 'title') as
+      | { title: NotionRichTextItem[] }
+      | undefined;
+    const title = titleProp
+      ? titleProp.title.map((t) => t.text.content).join('')
+      : '';
+
+    const lines: string[] = [];
+    let startCursor: string | undefined;
+    do {
+      const path = `/blocks/${externalId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
+      const resp = await notionRequest<NotionBlocksResponse>('GET', path);
+      for (const block of resp.results) lines.push(blockToLine(block));
+      startCursor =
+        resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
+    } while (startCursor);
+
+    return { title, markdown: lines.join('\n') };
   }
 
   /** Update the Status select property on a Notion task page. */
