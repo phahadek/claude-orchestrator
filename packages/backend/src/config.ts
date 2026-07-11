@@ -118,7 +118,6 @@ export const ALLOWED_TOOLS = [
   'Bash(grep:*)',
   'Bash(sort:*)',
   'Bash(pwd:*)',
-  'mcp__claude_ai_Notion__*',
   // GitHub MCP — explicit allowlist; create_pull_request and merge_pull_request are
   // backend-owned and must not be available to session agents.
   'mcp__github__add_issue_comment',

@@ -2,12 +2,7 @@ import { EventEmitter } from 'events';
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import {
-  ALLOWED_TOOLS,
-  GITHUB_REPO,
-  runtimeSettings,
-  getProjectById,
-} from '../config';
+import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
 import {
   upsertSessionEvent,
   updateSessionStatus,
@@ -43,7 +38,10 @@ import {
   buildValidationComment,
 } from '../github/PRBodyValidator';
 import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCheck';
-import { loadOrchestratorConfig } from './orchestrator-config';
+import {
+  loadOrchestratorConfig,
+  getSessionAllowedTools,
+} from './orchestrator-config';
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
 import { recordEvent, countPushFailureEvents } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
@@ -549,7 +547,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             (this._escalationModel
               ? runtimeSettings.large_task_effort
               : effortSetting) || undefined,
-          allowedTools: [...ALLOWED_TOOLS, ...this.extraAllowedTools],
+          allowedTools: getSessionAllowedTools({
+            allowed_tools: this.extraAllowedTools,
+          }),
           systemPrompt: this.systemPromptContent,
           mcpConfigPath: this.mcpConfigPath,
           systemPromptFilePath: this.systemPromptFilePath,
