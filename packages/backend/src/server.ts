@@ -71,6 +71,7 @@ import setupRouter, { createSetupModeGuard } from './routes/setup';
 import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
 import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
 import { createStagedIntentsRouter } from './routes/stagedIntents';
+import { createOpsJournalRouter } from './routes/opsJournal';
 import { runBootSequence, getActiveBootTracker } from './bootSequence';
 import { logger } from './logger';
 import {
@@ -193,6 +194,7 @@ app.use('/api', updateRouter);
 app.use('/api/diagnostics', createDiagnosticsRouter());
 app.use('/api', createPlanUsageRouter());
 app.use('/api', createStagedIntentsRouter());
+app.use('/api', createOpsJournalRouter());
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')),

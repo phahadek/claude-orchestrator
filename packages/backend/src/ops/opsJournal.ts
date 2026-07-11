@@ -132,6 +132,15 @@ export function getEntry(taskId: string): OpsJournalEntry | undefined {
   return row ? rowToEntry(row) : undefined;
 }
 
+/** All journal entries for a given milestone, as surfaced to the Ops(N) staged-intent view. */
+export function listEntriesForMilestone(
+  milestone: string,
+): OpsJournalEntry[] {
+  return listOpsJournalEntries()
+    .filter((row) => row.milestone === milestone)
+    .map(rowToEntry);
+}
+
 /**
  * Typed in-place field writer for one journal entry — replaces ops-journal-set.mjs.
  * The entry must already exist (seeded by reconcileJournal); this never creates one.
