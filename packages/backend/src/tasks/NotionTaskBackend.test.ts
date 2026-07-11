@@ -90,7 +90,7 @@ describe('NotionTaskBackend.fetchReadyTasks — dependsOn prefixing', () => {
 
     const boardCacheCall = vi
       .mocked(upsertTaskCache)
-      .mock.calls.find(([key]) => key === `board:${SOURCE_ID}`);
+      .mock.calls.find(([key]) => key === `board:${MILESTONE_ID}`);
     expect(boardCacheCall).toBeDefined();
     const cached = JSON.parse(boardCacheCall![1] as string) as Array<{
       id: string;

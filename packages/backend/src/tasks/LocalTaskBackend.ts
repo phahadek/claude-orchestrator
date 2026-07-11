@@ -8,6 +8,7 @@ import { toExternalId, formatTaskId } from './taskId';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import { upsertTaskCache } from '../db/queries';
 import { logger } from '../logger';
+import { ProjectService } from '../projects/ProjectService';
 
 // ── tasks.yaml schema ────────────────────────────────────────────────────────
 
@@ -110,7 +111,29 @@ const resolver = new DependencyResolver();
 export class LocalTaskBackend implements TaskBackend {
   readonly type = 'local' as const;
 
-  constructor(private readonly projectDir: string) {}
+  constructor(
+    private readonly projectDir: string,
+    private readonly projectId: string,
+  ) {}
+
+  /**
+   * Resolve the globally-unique DB milestone UUID for a yaml milestone id (the
+   * raw `m.id` used inside tasks.yaml). The board cache is keyed on this UUID
+   * (not the yaml id) so two projects that happen to reuse the same yaml
+   * milestone id (e.g. "m1") don't collide in the shared task_cache table.
+   */
+  private resolveBoardCacheKey(yamlMilestoneId: string): string {
+    const dbMilestone = ProjectService.listMilestones(this.projectId).find(
+      (m) => m.sourceId === yamlMilestoneId,
+    );
+    if (!dbMilestone) {
+      logger.warn(
+        `[LocalTaskBackend] no DB milestone found for project=${this.projectId} yamlMilestoneId=${yamlMilestoneId}; falling back to yaml id as cache key`,
+      );
+      return yamlMilestoneId;
+    }
+    return dbMilestone.id;
+  }
 
   private get filePath(): string {
     return path.join(this.projectDir, 'tasks.yaml');
@@ -223,9 +246,11 @@ export class LocalTaskBackend implements TaskBackend {
       upsertTaskCache(r.task.id, JSON.stringify(r.task));
     }
     // Overwrite board cache with prefixed IDs so /api/tasks/active joins correctly.
+    // Keyed on the DB milestone UUID (not the yaml milestone id) so the cache
+    // is scoped per-project — see resolveBoardCacheKey.
     if (milestoneId !== null) {
       upsertTaskCache(
-        `board:${milestoneId}`,
+        `board:${this.resolveBoardCacheKey(milestoneId)}`,
         JSON.stringify(prefixed.map((r) => r.task)),
       );
     }

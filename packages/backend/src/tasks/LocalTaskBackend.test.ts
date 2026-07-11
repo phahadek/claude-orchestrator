@@ -8,6 +8,22 @@ vi.mock('../db/queries', () => ({
   upsertTaskCache: vi.fn(),
 }));
 
+vi.mock('../projects/ProjectService', () => ({
+  ProjectService: {
+    listMilestones: vi.fn(() => [
+      {
+        id: 'db-ms-1',
+        projectId: 'proj-1',
+        name: 'Milestone 1',
+        sourceId: 'ms-1',
+        displayOrder: 0,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+    ]),
+  },
+}));
+
 import { LocalTaskBackend } from './LocalTaskBackend';
 import { upsertTaskCache } from '../db/queries';
 
@@ -47,7 +63,7 @@ describe('LocalTaskBackend.fetchReadyTasks — dependsOn prefixing', () => {
       { id: 'task-b', name: 'Task B', status: 'Ready' },
     ]);
 
-    const backend = new LocalTaskBackend(tmpDir);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
     const result = await backend.fetchReadyTasks('ms-1');
 
     const taskA = result.find((r) => r.task.id === 'yaml:task-a')!;
@@ -60,7 +76,7 @@ describe('LocalTaskBackend.fetchReadyTasks — dependsOn prefixing', () => {
       { id: 'task-x', name: 'Task X', status: 'Ready' },
     ]);
 
-    const backend = new LocalTaskBackend(tmpDir);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
     const result = await backend.fetchReadyTasks('ms-1');
 
     expect(result[0].task.dependsOn).toEqual([]);
@@ -72,12 +88,12 @@ describe('LocalTaskBackend.fetchReadyTasks — dependsOn prefixing', () => {
       { id: 'task-b', name: 'Task B', status: 'Ready' },
     ]);
 
-    const backend = new LocalTaskBackend(tmpDir);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
     await backend.fetchReadyTasks('ms-1');
 
     const boardCacheCall = vi
       .mocked(upsertTaskCache)
-      .mock.calls.find(([key]) => key === 'board:ms-1');
+      .mock.calls.find(([key]) => key === 'board:db-ms-1');
     expect(boardCacheCall).toBeDefined();
     const cached = JSON.parse(boardCacheCall![1] as string) as Array<{
       id: string;
@@ -94,7 +110,7 @@ describe('LocalTaskBackend.fetchReadyTasks — dependsOn prefixing', () => {
       { id: 'task-b', name: 'Task B', status: 'Ready' },
     ]);
 
-    const backend = new LocalTaskBackend(tmpDir);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
     await backend.fetchReadyTasks('ms-1');
 
     const perTaskCall = vi
@@ -121,7 +137,7 @@ describe('LocalTaskBackend.fetchReadyTasks — reviewer field round-trip', () =>
       },
     ]);
 
-    const backend = new LocalTaskBackend(tmpDir);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
     await backend.fetchReadyTasks('ms-1');
 
     const perTaskCall = vi
@@ -139,7 +155,7 @@ describe('LocalTaskBackend.fetchReadyTasks — reviewer field round-trip', () =>
       { id: 'task-x', name: 'Task X', status: 'Ready' },
     ]);
 
-    const backend = new LocalTaskBackend(tmpDir);
+    const backend = new LocalTaskBackend(tmpDir, 'proj-1');
     const result = await backend.fetchReadyTasks('ms-1');
 
     expect(result[0].task.reviewer).toBeUndefined();

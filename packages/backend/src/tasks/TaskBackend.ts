@@ -312,7 +312,7 @@ export function getTaskBackend(projectId: string): TaskBackend {
   }
   let inner: TaskBackend;
   if (project.taskSource === 'yaml') {
-    inner = new LocalTaskBackend(project.projectDir);
+    inner = new LocalTaskBackend(project.projectDir, project.id);
   } else if (project.taskSource === 'jira') {
     inner = buildJiraBackend(project.taskSourceConfig);
   } else if (project.taskSource === 'github') {

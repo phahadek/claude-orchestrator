@@ -159,10 +159,10 @@ export async function handleMessage(
         );
         break;
       }
-      const boardCacheKey = isLocalTaskSource
-        ? milestone.id
-        : (milestone.sourceId as string);
-      const cacheRow = getTaskCache(`board:${boardCacheKey}`);
+      // Board cache is always keyed on the DB milestone UUID (milestone.id),
+      // matching the write side in every backend — see LocalTaskBackend,
+      // NotionTaskBackend, JiraTaskSourceProvider, and AuditingTaskBackend (github).
+      const cacheRow = getTaskCache(`board:${milestone.id}`);
       if (!cacheRow) {
         ws.send(JSON.stringify({ type: 'tasks_ready', tasks: [] }));
         if (msg.skipCache && refreshProjectFn) {

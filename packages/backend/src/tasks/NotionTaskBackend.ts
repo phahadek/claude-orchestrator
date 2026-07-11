@@ -74,8 +74,10 @@ export class NotionTaskBackend implements TaskBackend {
     });
     // Overwrite board cache with prefixed IDs so /api/tasks/active joins correctly
     // against per-task rows (fixes post-D3 mismatch where raw IDs were stored).
+    // Keyed on the DB milestone UUID (not source_id) so the cache key scheme
+    // matches every other backend and stays project-scoped by construction.
     upsertTaskCache(
-      `board:${milestone.sourceId}`,
+      `board:${milestoneId}`,
       JSON.stringify(prefixed.map((r) => r.task)),
     );
     return prefixed;

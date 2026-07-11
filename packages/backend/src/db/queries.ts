@@ -1882,22 +1882,19 @@ export function getMergeReadyPRs(
   projectId: string,
   milestoneId: string,
 ): PullRequestRow[] {
-  // Resolve milestone source_id to build the board cache key.
   const milestone = db
     .prepare<{
       id: string;
       project_id: string;
-    }>(
-      `SELECT source_id FROM milestones WHERE id = @id AND project_id = @project_id`,
-    )
+    }>(`SELECT id FROM milestones WHERE id = @id AND project_id = @project_id`)
     .get({ id: milestoneId, project_id: projectId }) as
-    | { source_id: string | null }
+    | { id: string }
     | undefined;
 
   if (!milestone) return [];
 
-  const boardKey = milestone.source_id ?? milestoneId;
-  const cacheKey = `board:${boardKey}`;
+  // Board cache is keyed on the DB milestone UUID, matching every backend's write side.
+  const cacheKey = `board:${milestoneId}`;
 
   const boardCache = db
     .prepare<{

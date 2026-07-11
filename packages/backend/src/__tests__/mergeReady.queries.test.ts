@@ -93,7 +93,7 @@ describe('getMergeReadyPRs', () => {
       )
       .run();
     insertMilestone(milestoneId, projectId, sourceId);
-    insertBoardCache(`board:${sourceId}`, ['task-aaa', 'task-bbb']);
+    insertBoardCache(`board:${milestoneId}`, ['task-aaa', 'task-bbb']);
   });
 
   it('returns eligible PRs satisfying all filters', () => {
@@ -156,7 +156,7 @@ describe('getMergeReadyPRs', () => {
   it('matches prefixed task_id when board cache has hyphenated raw id', () => {
     cleanDb();
     insertMilestone(milestoneId, projectId, sourceId);
-    insertBoardCache(`board:${sourceId}`, [
+    insertBoardCache(`board:${milestoneId}`, [
       'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
     ]);
     insertPR(10, 'notion:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');

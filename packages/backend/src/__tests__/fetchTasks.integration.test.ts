@@ -114,7 +114,7 @@ function makeWarmCache() {
     },
   ];
   return {
-    task_id: `board:${NOTION_SOURCE_ID}`,
+    task_id: `board:${MILESTONE_UUID}`,
     fetched_at: Date.now(),
     raw_json: JSON.stringify(cachedTasks),
   };
@@ -174,7 +174,7 @@ describe('WS fetch_tasks — cache-only path (never calls backend)', () => {
     expect(getTaskBackend).not.toHaveBeenCalled();
   });
 
-  it('reads cache with board:<sourceId> key', () => {
+  it('reads cache with board:<milestoneId> key (DB milestone UUID, not sourceId)', () => {
     const ws = makeFakeWs();
     handleMessage(
       ws,
@@ -187,7 +187,7 @@ describe('WS fetch_tasks — cache-only path (never calls backend)', () => {
     );
 
     expect(vi.mocked(getTaskCache)).toHaveBeenCalledWith(
-      `board:${NOTION_SOURCE_ID}`,
+      `board:${MILESTONE_UUID}`,
     );
   });
 
