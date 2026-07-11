@@ -91,6 +91,19 @@ describe('runBootIdleReconciliation', () => {
     expect(getSession('sess-closed-1')?.status).toBe('error');
   });
 
+  it('sets a non-empty last_error_detail when idle coding session errors on PR closed', () => {
+    makeSession(
+      'sess-closed-detail',
+      'idle',
+      'https://github.com/owner/repo/pull/21',
+    );
+    makePRRow(21, 'sess-closed-detail', 'closed');
+
+    runBootIdleReconciliation();
+
+    expect(getSession('sess-closed-detail')?.last_error_detail).toBeTruthy();
+  });
+
   it('marks running sessions as error (dead at boot) even with merged PR', () => {
     makeSession(
       'sess-running',
@@ -232,6 +245,18 @@ describe('runBootIdleReconciliation — pass 2: idle review sessions', () => {
     expect(getSession('review-sess')?.status).toBe('error');
   });
 
+  it('sets a non-empty last_error_detail when idle review session errors (coding errored)', () => {
+    makeSession('code-sess-detail', 'error');
+    makeSession('review-sess-detail', 'idle', null, 'review');
+    makePRRow(110, 'code-sess-detail', 'open', 'owner/repo', 'review-sess-detail');
+
+    runBootIdleReconciliation();
+
+    expect(
+      getSession('review-sess-detail')?.last_error_detail,
+    ).toBeTruthy();
+  });
+
   it('does not touch review session when coding session is idle (open PR)', () => {
     makeSession('code-sess', 'idle');
     makeSession('review-sess', 'idle', null, 'review');
@@ -304,6 +329,14 @@ describe('runBootIdleReconciliation — pass 0: dead sessions at boot', () => {
     runBootIdleReconciliation();
 
     expect(getSession('sess-running-boot')?.status).toBe('error');
+  });
+
+  it('sets a non-empty last_error_detail when a session is dead at boot', () => {
+    makeSession('sess-dead-detail', 'running');
+
+    runBootIdleReconciliation();
+
+    expect(getSession('sess-dead-detail')?.last_error_detail).toBeTruthy();
   });
 
   it('marks a review session at starting as error', () => {
