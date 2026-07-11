@@ -196,10 +196,7 @@ describe('ReviewerCommentsWatcher quiescence + at-least-once delivery', () => {
     // Simulate session death — no ack fires; comment stays pending
     // Second poll: comment is pending (not acked) → getRoutedCommentIds returns empty
     // → re-buffered → re-flush = second inbox item (at-least-once)
-    const watcher2 = new ReviewerCommentsWatcher(
-      github,
-      makeSessions() as any,
-    );
+    const watcher2 = new ReviewerCommentsWatcher(github, makeSessions() as any);
     await (watcher2 as any).pollPR(pr);
     await vi.advanceTimersByTimeAsync(120_001);
 
@@ -227,10 +224,7 @@ describe('ReviewerCommentsWatcher quiescence + at-least-once delivery', () => {
     expect(ackedIds(PR_NUMBER, REPO)).toContain(`ic_${COMMENT_ID}`);
 
     // Second poll: comment is acked → not re-buffered
-    const watcher2 = new ReviewerCommentsWatcher(
-      github,
-      makeSessions() as any,
-    );
+    const watcher2 = new ReviewerCommentsWatcher(github, makeSessions() as any);
     await (watcher2 as any).pollPR(pr);
     await vi.advanceTimersByTimeAsync(120_001);
 
