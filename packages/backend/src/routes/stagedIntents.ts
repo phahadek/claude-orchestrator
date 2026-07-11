@@ -24,7 +24,7 @@ export interface StagedIntent {
 
 const store = new Map<string, StagedIntent>();
 
-interface CreateTaskPayload extends NewTaskFields {}
+type CreateTaskPayload = NewTaskFields;
 interface SetStatusPayload {
   taskId: string;
   status: TaskStatus;
