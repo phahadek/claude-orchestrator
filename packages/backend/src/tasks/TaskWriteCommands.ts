@@ -88,7 +88,7 @@ const TASK_TYPES: readonly TaskType[] = [
   '🔎 Investigation',
 ];
 
-export function isValidTaskType(type: string): type is TaskType {
+function isValidTaskType(type: string): type is TaskType {
   return (TASK_TYPES as readonly string[]).includes(type);
 }
 
