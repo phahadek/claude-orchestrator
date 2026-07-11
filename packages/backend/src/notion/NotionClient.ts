@@ -472,6 +472,56 @@ export class NotionClient {
   }
 
   /**
+   * Create a new task page under the given database, always at the initial
+   * Backlog status regardless of any status implied by `fields`.
+   */
+  async createTask(
+    databaseId: string,
+    fields: {
+      title: string;
+      type?: string;
+      priority?: string;
+      dependsOn?: string[]; // prefixed task IDs, e.g. 'notion:abc123'
+    },
+  ): Promise<NotionTask> {
+    const properties: Record<string, unknown> = {
+      'Task Name': { title: [{ text: { content: fields.title } }] },
+      Status: { select: { name: '🔲 Backlog' } },
+    };
+    if (fields.type) {
+      properties.Type = { select: { name: fields.type } };
+    }
+    if (fields.priority) {
+      properties.Priority = { select: { name: fields.priority } };
+    }
+    if (fields.dependsOn?.length) {
+      const value = fields.dependsOn.map((dep) => toExternalId(dep)).join('|');
+      properties['Depends On'] = { rich_text: [{ text: { content: value } }] };
+    }
+    const page = await notionRequest<NotionPage>('POST', '/pages', {
+      parent: { database_id: databaseId },
+      properties,
+    });
+    return mapPageToTask(page);
+  }
+
+  /**
+   * Overwrite the Depends On rich_text property with the given task IDs,
+   * encoded pipe-delimited (mirrors parseDependsOn's canonical format).
+   */
+  async setDependsOn(taskId: string, dependsOn: string[]): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const value = dependsOn.map((dep) => toExternalId(dep)).join('|');
+    await notionRequest('PATCH', `/pages/${externalId}`, {
+      properties: {
+        'Depends On': {
+          rich_text: value ? [{ text: { content: value } }] : [],
+        },
+      },
+    });
+  }
+
+  /**
    * Fetch the full body of a Notion task page, parse it into sections, and
    * cache the result for 10 minutes using key `task:{taskId}`.
    */

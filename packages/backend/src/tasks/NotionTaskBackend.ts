@@ -1,10 +1,18 @@
-import type { TaskBackend, NonMilestoneSourceConfig } from './TaskBackend';
+import type {
+  TaskBackend,
+  NonMilestoneSourceConfig,
+  NewTaskFields,
+} from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
 import { formatTaskId } from './taskId';
 import { NotionClient } from '../notion/NotionClient';
 import { ProjectService } from '../projects/ProjectService';
-import { upsertTaskCache, getTasksByStatusFromCache } from '../db/queries';
+import {
+  upsertTaskCache,
+  getTaskCache,
+  getTasksByStatusFromCache,
+} from '../db/queries';
 
 /**
  * Notion-backed implementation of TaskBackend. Resolves the Notion database ID
@@ -150,5 +158,36 @@ export class NotionTaskBackend implements TaskBackend {
       );
     }
     return resolved;
+  }
+
+  async createTask(fields: NewTaskFields): Promise<string> {
+    const task = await this.client.createTask(fields.databaseId, {
+      title: fields.title,
+      type: fields.type,
+      priority: fields.priority,
+      dependsOn: fields.dependsOn,
+    });
+    const prefixedId = formatTaskId('notion', task.id);
+    const prefixedDependsOn = task.dependsOn.map((dep) =>
+      formatTaskId('notion', dep),
+    );
+    upsertTaskCache(
+      prefixedId,
+      JSON.stringify({ ...task, id: prefixedId, dependsOn: prefixedDependsOn }),
+    );
+    return prefixedId;
+  }
+
+  async setDependsOn(taskId: string, dependsOn: string[]): Promise<void> {
+    await this.client.setDependsOn(taskId, dependsOn);
+    const row = getTaskCache(taskId);
+    if (!row) return;
+    try {
+      const parsed = JSON.parse(row.raw_json);
+      parsed.dependsOn = dependsOn;
+      upsertTaskCache(taskId, JSON.stringify(parsed));
+    } catch {
+      // ignore malformed cache entries
+    }
   }
 }

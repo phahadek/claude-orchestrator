@@ -254,6 +254,88 @@ describe('NotionClient — prefix stripping in public methods', () => {
     expect(firstUrl).toContain('/pages/abc');
     expect(firstUrl).not.toContain('notion:abc');
   });
+
+  it('createTask always sets Status to 🔲 Backlog regardless of input fields', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: 'new-id',
+        url: 'https://notion.so/new-id',
+        properties: {
+          'Task Name': { type: 'title', title: [{ text: { content: 'X' } }] },
+          Status: { type: 'select', select: { name: '🔲 Backlog' } },
+          Type: { type: 'select', select: null },
+          'Depends On': { type: 'rich_text', rich_text: [] },
+          Notes: { type: 'rich_text', rich_text: [] },
+        },
+      }),
+    });
+
+    await client.createTask('db-1', {
+      title: 'New task',
+      // Even a caller who somehow slips a status-like field through must not
+      // influence the persisted status — createTask's fields type has no
+      // status field at all, so this is enforced entirely by omission.
+    });
+
+    const [, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(options.body as string);
+    expect(body.properties.Status).toEqual({ select: { name: '🔲 Backlog' } });
+    expect(body.parent).toEqual({ database_id: 'db-1' });
+  });
+
+  it('createTask encodes dependsOn as a pipe-delimited Depends On rich_text', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: 'new-id',
+        url: 'https://notion.so/new-id',
+        properties: {
+          'Task Name': { type: 'title', title: [{ text: { content: 'X' } }] },
+          Status: { type: 'select', select: { name: '🔲 Backlog' } },
+          Type: { type: 'select', select: null },
+          'Depends On': { type: 'rich_text', rich_text: [] },
+          Notes: { type: 'rich_text', rich_text: [] },
+        },
+      }),
+    });
+
+    await client.createTask('db-1', {
+      title: 'New task',
+      dependsOn: ['notion:dep1', 'notion:dep2'],
+    });
+
+    const [, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(options.body as string);
+    expect(body.properties['Depends On']).toEqual({
+      rich_text: [{ text: { content: 'dep1|dep2' } }],
+    });
+  });
+
+  it('setDependsOn writes a pipe-delimited Depends On rich_text at /pages/abc', async () => {
+    fetchSpy.mockResolvedValue({ ok: true, json: async () => ({}) });
+
+    await client.setDependsOn('notion:abc', ['notion:dep1', 'notion:dep2']);
+
+    const [url, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/pages/abc');
+    expect(url).not.toContain('notion:abc');
+    const body = JSON.parse(options.body as string);
+    expect(body.properties['Depends On']).toEqual({
+      rich_text: [{ text: { content: 'dep1|dep2' } }],
+    });
+  });
+
+  it('setDependsOn round-trips through parseDependsOn', async () => {
+    fetchSpy.mockResolvedValue({ ok: true, json: async () => ({}) });
+
+    await client.setDependsOn('notion:abc', ['notion:dep1', 'notion:dep2']);
+
+    const [, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(options.body as string);
+    const written = body.properties['Depends On'].rich_text[0].text.content;
+    expect(parseDependsOn(written)).toEqual(['dep1', 'dep2']);
+  });
 });
 
 // ─── NotionClient.readBoardCache — prefix-stripping on cache-hit ──────────────

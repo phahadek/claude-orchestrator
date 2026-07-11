@@ -52,7 +52,9 @@ type EventType =
   | 'process_boot'
   | 'ops_journal_state_changed'
   | 'ops_journal_entry_seeded'
-  | 'ops_journal_entry_dropped';
+  | 'ops_journal_entry_dropped'
+  | 'task_created'
+  | 'task_deps_updated';
 
 type ActorType = 'ai' | 'human' | 'system';
 
