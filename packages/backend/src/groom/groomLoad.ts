@@ -117,10 +117,7 @@ function resolveConfigDir(repoRoot: string): string | null {
   return null;
 }
 
-function loadManifest(
-  repoRoot: string,
-  projectKey?: string,
-): GroomManifest {
+function loadManifest(repoRoot: string, projectKey?: string): GroomManifest {
   const configDir = resolveConfigDir(repoRoot);
   if (!configDir) {
     throw new Error(
