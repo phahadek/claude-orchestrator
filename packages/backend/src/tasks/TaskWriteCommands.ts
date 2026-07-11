@@ -73,7 +73,7 @@ function getCachedStatus(taskId: string): TaskStatus | null {
  * producers — panels and sessions submit intents here rather than calling the
  * backend port directly.
  */
-export interface TaskWriteCommands {
+interface TaskWriteCommands {
   createTask(
     fields: NewTaskFields,
     options?: TaskWriteOptions,
