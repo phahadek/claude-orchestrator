@@ -507,8 +507,7 @@ export function TaskList({
 
   // Ops(N): selects every not-Done 🔧/🔎 task currently on the board.
   const opsEligibleTasks = tasks.filter(
-    (t) =>
-      OPS_TASK_TYPES.includes(t.taskType) && t.displayStatus !== 'done',
+    (t) => OPS_TASK_TYPES.includes(t.taskType) && t.displayStatus !== 'done',
   );
 
   // Reads existing per-task ops_journal rows via the backend route and stages them
@@ -673,10 +672,7 @@ export function TaskList({
         )}
 
         {opsIntent && (
-          <div
-            className={styles.opsPlaceholderPanel}
-            data-testid="ops-panel"
-          >
+          <div className={styles.opsPlaceholderPanel} data-testid="ops-panel">
             <StagedIntentPanel
               intent={opsIntent}
               onApplied={() => setOpsIntent(null)}
