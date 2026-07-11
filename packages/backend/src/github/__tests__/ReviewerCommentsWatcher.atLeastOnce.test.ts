@@ -19,9 +19,6 @@ vi.mock('../../config/settings', () => ({
     return [];
   }),
 }));
-vi.mock('../pollUtils', () => ({
-  isTerminalStalePR: vi.fn().mockReturnValue(false),
-}));
 vi.mock('../reviewUtils', () => ({
   formatCoalescedHumanBatch: vi
     .fn()
@@ -38,11 +35,22 @@ import {
   markCommentsPending,
   ackPendingComments,
   listUndeliveredInboxItems,
+  enqueueFeedbackItem,
 } from '../../db/queries.js';
 import { ReviewerCommentsWatcher } from '../ReviewerCommentsWatcher.js';
 import { db } from '../../db/db.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function makeSessions() {
+  return {
+    enqueueFeedback: vi.fn(
+      async (sessionId: string, source: string, payload: string) => {
+        enqueueFeedbackItem(sessionId, source, payload);
+      },
+    ),
+  };
+}
 
 function seedSession(sessionId: string, status: string = 'running'): void {
   db.prepare(
@@ -153,7 +161,7 @@ describe('ReviewerCommentsWatcher quiescence + at-least-once delivery', () => {
     vi.useFakeTimers();
     const COMMENT_ID = 101;
     const github = makeGitHubClient(COMMENT_ID) as any;
-    const watcher = new ReviewerCommentsWatcher(github, {} as any);
+    const watcher = new ReviewerCommentsWatcher(github, makeSessions() as any);
     const pr = db
       .prepare(`SELECT * FROM pull_requests WHERE pr_number = ? AND repo = ?`)
       .get(PR_NUMBER, REPO) as any;
@@ -175,7 +183,7 @@ describe('ReviewerCommentsWatcher quiescence + at-least-once delivery', () => {
     vi.useFakeTimers();
     const COMMENT_ID = 102;
     const github = makeGitHubClient(COMMENT_ID) as any;
-    const watcher = new ReviewerCommentsWatcher(github, {} as any);
+    const watcher = new ReviewerCommentsWatcher(github, makeSessions() as any);
     const pr = db
       .prepare(`SELECT * FROM pull_requests WHERE pr_number = ? AND repo = ?`)
       .get(PR_NUMBER, REPO) as any;
@@ -188,7 +196,10 @@ describe('ReviewerCommentsWatcher quiescence + at-least-once delivery', () => {
     // Simulate session death — no ack fires; comment stays pending
     // Second poll: comment is pending (not acked) → getRoutedCommentIds returns empty
     // → re-buffered → re-flush = second inbox item (at-least-once)
-    const watcher2 = new ReviewerCommentsWatcher(github, {} as any);
+    const watcher2 = new ReviewerCommentsWatcher(
+      github,
+      makeSessions() as any,
+    );
     await (watcher2 as any).pollPR(pr);
     await vi.advanceTimersByTimeAsync(120_001);
 
@@ -201,7 +212,7 @@ describe('ReviewerCommentsWatcher quiescence + at-least-once delivery', () => {
     vi.useFakeTimers();
     const COMMENT_ID = 103;
     const github = makeGitHubClient(COMMENT_ID) as any;
-    const watcher = new ReviewerCommentsWatcher(github, {} as any);
+    const watcher = new ReviewerCommentsWatcher(github, makeSessions() as any);
     const pr = db
       .prepare(`SELECT * FROM pull_requests WHERE pr_number = ? AND repo = ?`)
       .get(PR_NUMBER, REPO) as any;
@@ -216,7 +227,10 @@ describe('ReviewerCommentsWatcher quiescence + at-least-once delivery', () => {
     expect(ackedIds(PR_NUMBER, REPO)).toContain(`ic_${COMMENT_ID}`);
 
     // Second poll: comment is acked → not re-buffered
-    const watcher2 = new ReviewerCommentsWatcher(github, {} as any);
+    const watcher2 = new ReviewerCommentsWatcher(
+      github,
+      makeSessions() as any,
+    );
     await (watcher2 as any).pollPR(pr);
     await vi.advanceTimersByTimeAsync(120_001);
 
@@ -235,7 +249,7 @@ describe('ReviewerCommentsWatcher quiescence + at-least-once delivery', () => {
     ).run(PR_NUMBER, REPO, `ic_${COMMENT_ID}`, Date.now());
 
     const github = makeGitHubClient(COMMENT_ID) as any;
-    const watcher = new ReviewerCommentsWatcher(github, {} as any);
+    const watcher = new ReviewerCommentsWatcher(github, makeSessions() as any);
     const pr = db
       .prepare(`SELECT * FROM pull_requests WHERE pr_number = ? AND repo = ?`)
       .get(PR_NUMBER, REPO) as any;

@@ -7,23 +7,16 @@ import {
   getAllOpenPRs,
   getRoutedCommentIds,
   markCommentsPending,
-  enqueueFeedbackItem,
   setPauseReason,
   getSession,
   getPRByNumber,
 } from '../db/queries';
 import { typedGetSetting } from '../config/settings';
 import { getProjectByGithubRepo } from '../config';
-import { isTerminalStalePR } from './pollUtils';
+import { parsePauseReason } from '../db/pauseReason';
 import { formatCoalescedHumanBatch, type HumanComment } from './reviewUtils';
 import type { PullRequestRow } from '../db/types';
 import type { ServerMessage } from '../ws/types';
-
-const WATCHABLE_PAUSE_REASONS: ReadonlySet<string | null> = new Set([
-  null,
-  'awaiting_human_approval',
-  'human_changes_requested',
-]);
 
 function getAIReviewerUsernames(): Set<string> {
   return new Set(typedGetSetting('ai_reviewer_usernames'));
@@ -130,9 +123,8 @@ export class ReviewerCommentsWatcher {
     const watchable = openPRs.filter(
       (pr) =>
         pr.session_id !== null &&
-        WATCHABLE_PAUSE_REASONS.has(pr.pause_reason) &&
-        getProjectByGithubRepo(pr.repo) !== null &&
-        !isTerminalStalePR(pr),
+        parsePauseReason(pr.pause_reason)?.severity !== 'terminal' &&
+        getProjectByGithubRepo(pr.repo) !== null,
     );
     for (const pr of watchable) {
       try {
@@ -326,7 +318,7 @@ export class ReviewerCommentsWatcher {
       repo,
       comments.map((c) => c.id),
     );
-    enqueueFeedbackItem(sessionId, `human:${author}`, payload);
+    await this.sessions.enqueueFeedback(sessionId, `human:${author}`, payload);
 
     logger.info(
       `[ReviewerCommentsWatcher] flushed ${comments.length} comment(s) from @${author} for PR #${prNumber} → inbox for session ${sessionId.slice(0, 8)}`,

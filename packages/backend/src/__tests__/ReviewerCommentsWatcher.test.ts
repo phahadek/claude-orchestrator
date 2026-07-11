@@ -9,6 +9,7 @@ vi.mock('../db/queries.js', () => ({
   enqueueFeedbackItem: vi.fn(),
   setPauseReason: vi.fn(),
   getSession: vi.fn(),
+  getPRByNumber: vi.fn().mockReturnValue(undefined),
   getSetting: vi.fn().mockReturnValue(undefined),
 }));
 
@@ -107,12 +108,18 @@ function makeSessionManager(
   overrides: {
     send?: ReturnType<typeof vi.fn>;
     sendOrResume?: ReturnType<typeof vi.fn>;
+    enqueueFeedback?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   return {
     send: overrides.send ?? vi.fn(),
     sendOrResume:
       overrides.sendOrResume ?? vi.fn().mockResolvedValue('session-abc'),
+    enqueueFeedback:
+      overrides.enqueueFeedback ??
+      vi.fn(async (sessionId: string, source: string, payload: string) => {
+        enqueueFeedbackItem(sessionId, source, payload);
+      }),
   };
 }
 
@@ -638,10 +645,10 @@ describe('new human comments reach the inbox', () => {
     vi.useRealTimers();
   });
 
-  it('skips PRs paused for non-watchable reasons', async () => {
+  it('skips PRs paused for a terminal reason (pr_closed)', async () => {
     vi.useFakeTimers();
     vi.mocked(getAllOpenPRs).mockReturnValue([
-      makePR({ pause_reason: 'ci_failing' }),
+      makePR({ pause_reason: 'pr_closed' }),
     ]);
     const github = makeGitHub({
       reviewComments: [
@@ -663,6 +670,58 @@ describe('new human comments reach the inbox', () => {
     ).pollAll();
     await vi.advanceTimersByTimeAsync(120_001);
     expect(enqueueFeedbackItem).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('watches a PR paused with a needs_attention reason (max_reviews) — regression: previously excluded by the whitelist', async () => {
+    vi.useFakeTimers();
+    vi.mocked(getAllOpenPRs).mockReturnValue([
+      makePR({ pause_reason: 'max_reviews' }),
+    ]);
+    const github = makeGitHub({
+      issueComments: [
+        {
+          id: 1,
+          author: 'alice',
+          authorType: 'User',
+          body: 'please look at this',
+          createdAt: '',
+        },
+      ],
+    });
+    await new ReviewerCommentsWatcher(
+      github as never,
+      makeSessionManager() as never,
+    ).pollAll();
+    await vi.advanceTimersByTimeAsync(120_001);
+    expect(enqueueFeedbackItem).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
+  it('watches a parked PR (stalled_reconcile_cap) for which isTerminalStalePR returns true — confirms the dropped clause', async () => {
+    vi.useFakeTimers();
+    // stalled_reconcile_cap is both a needs_attention pause reason AND makes
+    // isTerminalStalePR() return true — this PR must still be watched.
+    vi.mocked(getAllOpenPRs).mockReturnValue([
+      makePR({ pause_reason: 'stalled_reconcile_cap' }),
+    ]);
+    const github = makeGitHub({
+      issueComments: [
+        {
+          id: 1,
+          author: 'alice',
+          authorType: 'User',
+          body: 'unstick this',
+          createdAt: '',
+        },
+      ],
+    });
+    await new ReviewerCommentsWatcher(
+      github as never,
+      makeSessionManager() as never,
+    ).pollAll();
+    await vi.advanceTimersByTimeAsync(120_001);
+    expect(enqueueFeedbackItem).toHaveBeenCalledOnce();
     vi.useRealTimers();
   });
 });
@@ -1108,6 +1167,49 @@ describe('CHANGES_REQUESTED clears awaiting_human_approval', () => {
     );
     await watcher.pollAll();
 
+    expect(setPauseReason).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+});
+
+describe('delivery routes through SessionManager.enqueueFeedback (resume, no force-clear)', () => {
+  it('flushes a comment for a paused session via sessions.enqueueFeedback, resuming it without clearing pause_reason', async () => {
+    vi.useFakeTimers();
+    const pr = makePR({ pause_reason: 'stalled_reconcile_cap' });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeGitHub({
+      issueComments: [
+        {
+          id: 1,
+          author: 'alice',
+          authorType: 'User',
+          body: 'please unstick this',
+          createdAt: '',
+        },
+      ],
+    });
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+    const watcher = new ReviewerCommentsWatcher(
+      github as never,
+      makeSessionManager({ enqueueFeedback }) as never,
+    );
+
+    await watcher.pollAll();
+    await vi.advanceTimersByTimeAsync(120_001);
+
+    expect(enqueueFeedback).toHaveBeenCalledOnce();
+    const [sid, source, payload] = enqueueFeedback.mock.calls[0] as [
+      string,
+      string,
+      string,
+    ];
+    expect(sid).toBe('session-abc');
+    expect(source).toBe('human:alice');
+    expect(payload).toContain('please unstick this');
+
+    // The watcher must not force-clear the PR's pause state — only the
+    // CHANGES_REQUESTED transition (unrelated to this flow) calls setPauseReason.
     expect(setPauseReason).not.toHaveBeenCalled();
 
     vi.useRealTimers();
