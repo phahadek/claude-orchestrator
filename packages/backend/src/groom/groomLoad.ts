@@ -23,13 +23,13 @@ const execFileAsync = promisify(execFile);
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export interface PageDoc {
+interface PageDoc {
   id: string;
   title: string;
   markdown: string;
 }
 
-export interface TaskRow {
+interface TaskRow {
   id: string;
   title: string;
   status: string;
@@ -38,14 +38,14 @@ export interface TaskRow {
   url: string;
 }
 
-export interface TaskDoc extends TaskRow {
+interface TaskDoc extends TaskRow {
   filesSection: string;
   rawMarkdown: string;
 }
 
-export type FreshnessStatus = 'fresh' | 'stale' | 'missing';
+type FreshnessStatus = 'fresh' | 'stale' | 'missing';
 
-export interface FreshnessInfo {
+interface FreshnessInfo {
   status: FreshnessStatus;
   priorSha: string | null;
   baselineSha: string;
@@ -62,7 +62,7 @@ export interface GroomLoadResult {
   gitFreshness: Record<string, FreshnessInfo>;
 }
 
-export interface GroomManifestMilestone {
+interface GroomManifestMilestone {
   board: string;
   neighbours?: { id: string; board: string }[];
 }
@@ -117,7 +117,7 @@ function resolveConfigDir(repoRoot: string): string | null {
   return null;
 }
 
-export function loadManifest(
+function loadManifest(
   repoRoot: string,
   projectKey?: string,
 ): GroomManifest {
@@ -138,6 +138,7 @@ export function loadManifest(
   } catch (e) {
     throw new Error(
       `groomLoad: manifest at ${manifestPath} is not valid JSON: ${(e as Error).message}`,
+      { cause: e },
     );
   }
 }

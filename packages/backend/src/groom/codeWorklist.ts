@@ -27,12 +27,12 @@ export interface CodeWorklistOptions {
   trackedFiles: string[];
 }
 
-export interface FileIndex {
+interface FileIndex {
   tracked: Set<string>;
   byBasename: Map<string, string[]>;
 }
 
-export function buildFileIndex(trackedFiles: string[]): FileIndex {
+function buildFileIndex(trackedFiles: string[]): FileIndex {
   const tracked = new Set(trackedFiles);
   const byBasename = new Map<string, string[]>();
   for (const p of trackedFiles) {
@@ -45,7 +45,7 @@ export function buildFileIndex(trackedFiles: string[]): FileIndex {
 }
 
 /** True if a resolved package path corresponds to real tracked files (drops prose noise). */
-export function pkgHasFiles(fileIndex: FileIndex, pkgPath: string): boolean {
+function pkgHasFiles(fileIndex: FileIndex, pkgPath: string): boolean {
   for (const p of fileIndex.tracked) {
     if (p === pkgPath || p.startsWith(pkgPath + '/')) return true;
   }
