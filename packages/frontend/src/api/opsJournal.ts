@@ -1,6 +1,6 @@
 import { apiRequest } from './projects';
 
-export type OpsState =
+type OpsState =
   | 'pending'
   | 'candidate'
   | 'staged-proposal'
