@@ -61,7 +61,11 @@ export function PlanUsageBars({ usage }: Props) {
   if (!usage.fiveHour && !usage.weekly) return null;
 
   return (
-    <div className={styles.wrapper} data-testid="plan-usage-bars">
+    <div
+      className={`${styles.wrapper} ${usage.stale ? styles.stale : ''}`}
+      data-testid="plan-usage-bars"
+      title={usage.stale ? 'Showing last known usage (poll pending)' : undefined}
+    >
       {usage.fiveHour && <Bar label="Hourly" window={usage.fiveHour} />}
       {usage.weekly && <Bar label="Weekly" window={usage.weekly} />}
     </div>
