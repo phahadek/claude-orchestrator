@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { loadOrchestratorConfig, getSessionAllowedTools } from '../orchestrator-config';
+import {
+  loadOrchestratorConfig,
+  getSessionAllowedTools,
+} from '../orchestrator-config';
 
 describe('loadOrchestratorConfig', () => {
   let tmpDir: string;
