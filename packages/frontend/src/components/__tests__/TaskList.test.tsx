@@ -923,6 +923,97 @@ describe('TaskList', () => {
     expect(screen.getByText('Task Alpha')).toBeDefined();
   });
 
+  describe('Groom(N) button', () => {
+    it('does not render when there are no Backlog tasks', () => {
+      renderList([
+        makeTask({
+          taskId: 't1',
+          taskName: 'In Progress Task',
+          displayStatus: 'in_progress',
+        }),
+      ]);
+      expect(screen.queryByTestId('groom-btn')).toBeNull();
+    });
+
+    it('renders on the Backlog section and reflects the selected count', () => {
+      renderList([
+        makeTask({
+          taskId: 'bc1',
+          taskName: 'Backlog Code Task',
+          displayStatus: 'backlog',
+          taskType: '💻 Code',
+        }),
+      ]);
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      expect(groomBtn.textContent).toContain('Groom (0)');
+      expect(groomBtn.disabled).toBe(true);
+
+      fireEvent.click(within(backlogSection).getByRole('checkbox'));
+      expect(groomBtn.textContent).toContain('Groom (1)');
+      expect(groomBtn.disabled).toBe(false);
+    });
+
+    it('Select All selects both code and non-code Backlog tasks', () => {
+      renderList([
+        makeTask({
+          taskId: 'bc1',
+          taskName: 'Backlog Code Task',
+          displayStatus: 'backlog',
+          taskType: '💻 Code',
+        }),
+        makeTask({
+          taskId: 'bn1',
+          taskName: 'Backlog Design Task',
+          displayStatus: 'backlog',
+          taskType: '📐 Design',
+        }),
+      ]);
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      fireEvent.click(
+        within(backlogSection).getByTestId('groom-select-all-btn'),
+      );
+
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      expect(groomBtn.textContent).toContain('Groom (2)');
+    });
+
+    it('clicking Groom(N) shows the StagedIntentPanel placeholder without a network write', () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockClear();
+      renderList([
+        makeTask({
+          taskId: 'bc1',
+          taskName: 'Backlog Code Task',
+          displayStatus: 'backlog',
+          taskType: '💻 Code',
+        }),
+      ]);
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      fireEvent.click(within(backlogSection).getByRole('checkbox'));
+      fireEvent.click(within(backlogSection).getByTestId('groom-btn'));
+
+      expect(screen.getByTestId('groom-placeholder-panel')).toBeDefined();
+      expect(fetch).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Sync button — send() boolean return and safety timeout', () => {
     it('clears syncing immediately when send() returns false (WS disconnected)', () => {
       const disconnectedSend = vi.fn().mockReturnValue(false);

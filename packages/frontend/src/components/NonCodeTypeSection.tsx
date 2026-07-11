@@ -8,6 +8,9 @@ interface Props {
   /** Non-code, not-Done tasks across all statuses (ready, backlog, in_progress, etc). */
   tasks: TaskView[];
   onSelectTask: (taskId: string) => void;
+  /** When provided, 🔲 Backlog-status tasks render a checkbox (Groom selection mode). */
+  groomCheckedIds?: Set<string>;
+  onGroomCheckChange?: (taskId: string, checked: boolean) => void;
 }
 
 const TYPE_ORDER = [
@@ -44,7 +47,12 @@ function sortTypes(types: string[]): string[] {
 }
 
 /** One summary card per non-code Type, each expandable into its remaining (not-Done) tasks. */
-export function NonCodeTypeSection({ tasks, onSelectTask }: Props) {
+export function NonCodeTypeSection({
+  tasks,
+  onSelectTask,
+  groomCheckedIds,
+  onGroomCheckChange,
+}: Props) {
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
 
   if (tasks.length === 0) return null;
@@ -115,17 +123,26 @@ export function NonCodeTypeSection({ tasks, onSelectTask }: Props) {
 
             {isExpanded && (
               <div className={styles.groupCards}>
-                {typeTasks.map((task) => (
-                  <CompactTaskCard
-                    key={task.taskId}
-                    task={task}
-                    showCheckbox={false}
-                    checked={false}
-                    onCheckChange={() => {}}
-                    onClick={() => onSelectTask(task.taskId)}
-                    showStatus
-                  />
-                ))}
+                {typeTasks.map((task) => {
+                  const groomable =
+                    groomCheckedIds !== undefined &&
+                    task.displayStatus === 'backlog';
+                  return (
+                    <CompactTaskCard
+                      key={task.taskId}
+                      task={task}
+                      showCheckbox={groomable}
+                      checked={groomable && groomCheckedIds!.has(task.taskId)}
+                      onCheckChange={
+                        groomable
+                          ? (onGroomCheckChange ?? (() => {}))
+                          : () => {}
+                      }
+                      onClick={() => onSelectTask(task.taskId)}
+                      showStatus
+                    />
+                  );
+                })}
               </div>
             )}
           </div>
