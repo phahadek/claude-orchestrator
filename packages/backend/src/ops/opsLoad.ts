@@ -208,9 +208,11 @@ export async function loadOpsContext(
   );
 
   const depMap = new Map<string, { status: string; title: string }>();
-  for (const r of targetRows) depMap.set(normId(r.id), { status: r.status, title: r.title });
+  for (const r of targetRows)
+    depMap.set(normId(r.id), { status: r.status, title: r.title });
   for (const rows of neighbourRowSets)
-    for (const r of rows) depMap.set(normId(r.id), { status: r.status, title: r.title });
+    for (const r of rows)
+      depMap.set(normId(r.id), { status: r.status, title: r.title });
 
   const executable: OpsTaskEntry[] = [];
   const depBlocked: OpsTaskEntry[] = [];
@@ -241,7 +243,8 @@ export async function loadOpsContext(
 
     const isInReview = status === STATUS.inReview;
     const isBacklog = status === STATUS.backlog;
-    const isExecutable = status === STATUS.ready || status === STATUS.inProgress;
+    const isExecutable =
+      status === STATUS.ready || status === STATUS.inProgress;
     if (!isExecutable && !isBacklog && !isInReview) continue;
 
     let mode: 'operational' | 'investigation';
@@ -305,7 +308,11 @@ export async function loadOpsContext(
     (e) => e.project !== project || e.milestone !== milestoneId,
   );
   const liveBoard: OpsBoardTaskRow[] = [
-    ...executable.map((t) => ({ taskId: t.id, project, milestone: milestoneId })),
+    ...executable.map((t) => ({
+      taskId: t.id,
+      project,
+      milestone: milestoneId,
+    })),
     ...otherEntries.map((e) => ({
       taskId: e.task_id,
       project: e.project,

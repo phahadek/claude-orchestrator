@@ -69,7 +69,10 @@ function selectProp(name: string | null) {
   return { type: 'select', select: name ? { name } : null };
 }
 function richTextProp(text: string) {
-  return { type: 'rich_text', rich_text: text ? [{ text: { content: text } }] : [] };
+  return {
+    type: 'rich_text',
+    rich_text: text ? [{ text: { content: text } }] : [],
+  };
 }
 
 interface FixtureRow {
@@ -155,7 +158,12 @@ beforeEach(() => {
 describe('loadOpsContext — classification', () => {
   it('classifies tasks into executable / dep-blocked / needs-grooming / closed / done', async () => {
     rows = [
-      { id: 'task-op-ready', name: 'Op ready no deps', type: '🔧 Operational', status: '🗂️ Ready' },
+      {
+        id: 'task-op-ready',
+        name: 'Op ready no deps',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
       {
         id: 'task-op-blocked',
         name: 'Op blocked on ready dep',
@@ -170,11 +178,36 @@ describe('loadOpsContext — classification', () => {
         status: '🔄 In Progress',
         dependsOn: 'task-done',
       },
-      { id: 'task-backlog', name: 'Needs grooming', type: '🔎 Investigation', status: '🔲 Backlog' },
-      { id: 'task-done', name: 'Already done', type: '🔧 Operational', status: '✅ Done' },
-      { id: 'task-review', name: 'In review', type: '🔧 Operational', status: '👀 In Review' },
-      { id: 'task-tooling', name: 'Leftover tooling', type: '🛠️ Tooling', status: '🗂️ Ready' },
-      { id: 'task-code', name: 'Not an ops type', type: '💻 Code', status: '🗂️ Ready' },
+      {
+        id: 'task-backlog',
+        name: 'Needs grooming',
+        type: '🔎 Investigation',
+        status: '🔲 Backlog',
+      },
+      {
+        id: 'task-done',
+        name: 'Already done',
+        type: '🔧 Operational',
+        status: '✅ Done',
+      },
+      {
+        id: 'task-review',
+        name: 'In review',
+        type: '🔧 Operational',
+        status: '👀 In Review',
+      },
+      {
+        id: 'task-tooling',
+        name: 'Leftover tooling',
+        type: '🛠️ Tooling',
+        status: '🗂️ Ready',
+      },
+      {
+        id: 'task-code',
+        name: 'Not an ops type',
+        type: '💻 Code',
+        status: '🗂️ Ready',
+      },
       {
         id: 'task-deferred-dep',
         name: 'Blocked by deferred dep',
@@ -182,7 +215,12 @@ describe('loadOpsContext — classification', () => {
         status: '🗂️ Ready',
         dependsOn: 'task-deferred',
       },
-      { id: 'task-deferred', name: 'Deferred', type: '🔧 Operational', status: '⏭️ Deferred' },
+      {
+        id: 'task-deferred',
+        name: 'Deferred',
+        type: '🔧 Operational',
+        status: '⏭️ Deferred',
+      },
     ];
 
     const result = await loadOpsContext(MILESTONE);
@@ -193,13 +231,21 @@ describe('loadOpsContext — classification', () => {
     expect(result.worklist.dep_blocked.map((t) => t.id).sort()).toEqual(
       ['task-op-blocked', 'task-deferred-dep'].sort(),
     );
-    expect(result.worklist.needs_grooming.map((t) => t.id)).toEqual(['task-backlog']);
-    expect(result.worklist.closed_not_done.map((t) => t.id)).toEqual(['task-review']);
-    expect(result.worklist.leftover_tooling.map((t) => t.id)).toEqual(['task-tooling']);
+    expect(result.worklist.needs_grooming.map((t) => t.id)).toEqual([
+      'task-backlog',
+    ]);
+    expect(result.worklist.closed_not_done.map((t) => t.id)).toEqual([
+      'task-review',
+    ]);
+    expect(result.worklist.leftover_tooling.map((t) => t.id)).toEqual([
+      'task-tooling',
+    ]);
     expect(result.boards.target.counts.done_or_deferred).toBe(2);
 
     // Only ✅ Done satisfies a dep — Ready and Deferred both block.
-    const blocked = result.worklist.dep_blocked.find((t) => t.id === 'task-op-blocked');
+    const blocked = result.worklist.dep_blocked.find(
+      (t) => t.id === 'task-op-blocked',
+    );
     expect(blocked?.blockingDepIds).toEqual(['task-op-ready']);
     const deferredBlocked = result.worklist.dep_blocked.find(
       (t) => t.id === 'task-deferred-dep',
@@ -209,14 +255,26 @@ describe('loadOpsContext — classification', () => {
 
   it('excludes test-authoring 🧪 Testing tasks and folds observational Testing in as executable', async () => {
     rows = [
-      { id: 'task-testing-obs', name: 'Observational test', type: '🧪 Testing', status: '🗂️ Ready' },
-      { id: 'task-testing-authoring', name: 'Authoring test', type: '🧪 Testing', status: '🗂️ Ready' },
+      {
+        id: 'task-testing-obs',
+        name: 'Observational test',
+        type: '🧪 Testing',
+        status: '🗂️ Ready',
+      },
+      {
+        id: 'task-testing-authoring',
+        name: 'Authoring test',
+        type: '🧪 Testing',
+        status: '🗂️ Ready',
+      },
     ];
     testingBodies['task-testing-authoring'] = 'Mode: 🧪 Testing · authoring';
 
     const result = await loadOpsContext(MILESTONE);
 
-    expect(result.worklist.executable.map((t) => t.id)).toEqual(['task-testing-obs']);
+    expect(result.worklist.executable.map((t) => t.id)).toEqual([
+      'task-testing-obs',
+    ]);
     expect(result.worklist.test_authoring.map((t) => t.id)).toEqual([
       'task-testing-authoring',
     ]);
@@ -234,8 +292,18 @@ describe('loadOpsContext — classification', () => {
 describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {
   it('pre-seeds exactly one pending entry per executable task', async () => {
     rows = [
-      { id: 'exec-1', name: 'Executable 1', type: '🔧 Operational', status: '🗂️ Ready' },
-      { id: 'exec-2', name: 'Executable 2', type: '🔎 Investigation', status: '🔄 In Progress' },
+      {
+        id: 'exec-1',
+        name: 'Executable 1',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+      {
+        id: 'exec-2',
+        name: 'Executable 2',
+        type: '🔎 Investigation',
+        status: '🔄 In Progress',
+      },
       {
         id: 'blocked-1',
         name: 'Blocked',
@@ -254,7 +322,12 @@ describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {
 
   it('drops entries for tasks now Done/Deferred/removed and preserves worked fields for still-open tasks', async () => {
     rows = [
-      { id: 'still-open', name: 'Still open', type: '🔧 Operational', status: '🗂️ Ready' },
+      {
+        id: 'still-open',
+        name: 'Still open',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
     ];
 
     upsertOpsJournalEntry({
@@ -321,7 +394,12 @@ describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {
 
   it('fires the newly-unblocked signal the run after a blocking dep goes ✅ Done', async () => {
     rows = [
-      { id: 'dep-task', name: 'Dependency', type: '🔧 Operational', status: '🗂️ Ready' },
+      {
+        id: 'dep-task',
+        name: 'Dependency',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
       {
         id: 'blocked-task',
         name: 'Blocked task',
@@ -332,18 +410,34 @@ describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {
     ];
 
     const first = await loadOpsContext(MILESTONE);
-    expect(first.worklist.dep_blocked.map((t) => t.id)).toEqual(['blocked-task']);
+    expect(first.worklist.dep_blocked.map((t) => t.id)).toEqual([
+      'blocked-task',
+    ]);
     expect(first.worklist.newly_unblocked).toEqual([]);
 
     // Dep resolves; bust the 60s board cache so the second run re-fetches.
     db.prepare('DELETE FROM task_cache WHERE task_id LIKE ?').run('board:%');
     rows = [
-      { id: 'dep-task', name: 'Dependency', type: '🔧 Operational', status: '✅ Done' },
-      { id: 'blocked-task', name: 'Blocked task', type: '🔧 Operational', status: '🗂️ Ready' },
+      {
+        id: 'dep-task',
+        name: 'Dependency',
+        type: '🔧 Operational',
+        status: '✅ Done',
+      },
+      {
+        id: 'blocked-task',
+        name: 'Blocked task',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
     ];
 
     const second = await loadOpsContext(MILESTONE);
-    expect(second.worklist.executable.map((t) => t.id)).toContain('blocked-task');
-    expect(second.worklist.newly_unblocked.map((t) => t.id)).toEqual(['blocked-task']);
+    expect(second.worklist.executable.map((t) => t.id)).toContain(
+      'blocked-task',
+    );
+    expect(second.worklist.newly_unblocked.map((t) => t.id)).toEqual([
+      'blocked-task',
+    ]);
   });
 });

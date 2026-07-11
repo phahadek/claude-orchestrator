@@ -485,9 +485,9 @@ export class NotionClient {
     const page = await notionRequest<NotionPage>('GET', `/pages/${externalId}`);
     const titleProp = Object.values(
       page.properties as Record<string, unknown>,
-    ).find(
-      (p) => (p as { type?: string })?.type === 'title',
-    ) as { title: NotionRichTextItem[] } | undefined;
+    ).find((p) => (p as { type?: string })?.type === 'title') as
+      | { title: NotionRichTextItem[] }
+      | undefined;
     const title = titleProp
       ? titleProp.title.map((t) => t.text.content).join('')
       : '';
