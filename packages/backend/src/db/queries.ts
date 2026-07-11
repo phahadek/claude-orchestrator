@@ -3233,7 +3233,6 @@ export function deleteTaskRepoAssignment(taskId: string): void {
 
 let _stmtGetOpsJournalEntry: Database.Statement | null = null;
 let _stmtListOpsJournalEntries: Database.Statement | null = null;
-let _stmtListOpsJournalEntriesForMilestone: Database.Statement | null = null;
 let _stmtUpsertOpsJournalEntry: Database.Statement | null = null;
 let _stmtDeleteOpsJournalEntry: Database.Statement | null = null;
 
@@ -3249,22 +3248,6 @@ export function getOpsJournalEntry(taskId: string): OpsJournalRow | undefined {
 export function listOpsJournalEntries(): OpsJournalRow[] {
   _stmtListOpsJournalEntries ??= db.prepare(`SELECT * FROM ops_journal`);
   return _stmtListOpsJournalEntries.all() as OpsJournalRow[];
-}
-
-export function listOpsJournalEntriesForMilestone(
-  project: string,
-  milestone: string,
-): OpsJournalRow[] {
-  _stmtListOpsJournalEntriesForMilestone ??= db.prepare<{
-    project: string;
-    milestone: string;
-  }>(
-    `SELECT * FROM ops_journal WHERE project = @project AND milestone = @milestone`,
-  );
-  return _stmtListOpsJournalEntriesForMilestone.all({
-    project,
-    milestone,
-  }) as OpsJournalRow[];
 }
 
 export function upsertOpsJournalEntry(row: OpsJournalRow): void {

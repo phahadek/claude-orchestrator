@@ -2,7 +2,6 @@ import { recordEvent } from '../audit/AuditLog';
 import {
   getOpsJournalEntry,
   listOpsJournalEntries,
-  listOpsJournalEntriesForMilestone,
   upsertOpsJournalEntry,
   deleteOpsJournalEntry,
 } from '../db/queries';
@@ -10,20 +9,7 @@ import type { OpsJournalRow, OpsJournalState } from '../db/types';
 
 export type OpsState = OpsJournalState;
 
-export const OPS_STATES: readonly OpsState[] = [
-  'pending',
-  'candidate',
-  'staged-proposal',
-  'applied-pending-confirm',
-  'blocked',
-  'incident-frozen',
-  'resolved',
-];
-
-export type OpsDisposition =
-  | 'pass'
-  | 'blocked-pending-fix'
-  | 'pass-with-caveat';
+type OpsDisposition = 'pass' | 'blocked-pending-fix' | 'pass-with-caveat';
 
 export interface OpsJournalEntry {
   taskId: string;
@@ -144,17 +130,6 @@ function entryToRow(entry: OpsJournalEntry): OpsJournalRow {
 export function getEntry(taskId: string): OpsJournalEntry | undefined {
   const row = getOpsJournalEntry(taskId);
   return row ? rowToEntry(row) : undefined;
-}
-
-export function listEntries(): OpsJournalEntry[] {
-  return listOpsJournalEntries().map(rowToEntry);
-}
-
-export function listEntriesForMilestone(
-  project: string,
-  milestone: string,
-): OpsJournalEntry[] {
-  return listOpsJournalEntriesForMilestone(project, milestone).map(rowToEntry);
 }
 
 /**
