@@ -265,7 +265,24 @@ describe('Header', () => {
         name: /Auto-launch ON for this milestone/i,
       });
       expect(pill.getAttribute('aria-pressed')).toBe('true');
-      expect(pill.textContent).toContain('ON');
+    });
+
+    it('does not render the standalone ON/OFF text label in the pill', () => {
+      const project = makeProject({
+        autoLaunchEnabled: true,
+        autoLaunchMilestoneId: 'm1',
+      });
+      render(
+        <Header
+          {...defaultProps}
+          projects={[project]}
+          activeProjectId="proj1"
+          activeBoardId="m1"
+          onAutoLaunchToggle={vi.fn()}
+        />,
+      );
+      const pill = screen.getByTestId('auto-launch-counter');
+      expect(/\bON\b|\bOFF\b/.test(pill.textContent ?? '')).toBe(false);
     });
 
     it('renders OFF when the project has auto-launch disabled', () => {
@@ -284,7 +301,6 @@ describe('Header', () => {
       );
       const pill = screen.getByRole('button', { name: /Auto-launch OFF/i });
       expect(pill.getAttribute('aria-pressed')).toBe('false');
-      expect(pill.textContent).toContain('OFF');
     });
 
     it('renders OFF with a tooltip naming the bound milestone when bound elsewhere', () => {
@@ -305,7 +321,6 @@ describe('Header', () => {
         name: /Auto-launch active on Milestone 2/i,
       });
       expect(pill.getAttribute('aria-pressed')).toBe('false');
-      expect(pill.textContent).toContain('OFF');
       expect(pill.getAttribute('title')).toContain('Milestone 2');
     });
 
@@ -533,10 +548,10 @@ describe('Header', () => {
         />,
       );
       const counter = screen.getByTestId('auto-launch-counter');
-      expect(counter.textContent).toContain('+3 queued');
+      expect(counter.textContent).toContain('3⏳');
     });
 
-    it('counter is hidden when the auto-launch toggle is OFF for the active project', () => {
+    it('counter remains visible (off-styled) when the auto-launch toggle is OFF for the active project', () => {
       const offProject = makeProject({
         autoLaunchEnabled: false,
         autoLaunchMilestoneId: null,
@@ -554,7 +569,9 @@ describe('Header', () => {
           autoLaunchPollIntervalMs={60000}
         />,
       );
-      expect(screen.queryByTestId('auto-launch-counter')).toBeNull();
+      const counter = screen.getByTestId('auto-launch-counter');
+      expect(counter.getAttribute('aria-pressed')).toBe('false');
+      expect(counter.textContent).toContain('1/1');
     });
 
     it('counter is hidden when the project has no boards', () => {
