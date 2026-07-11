@@ -3,6 +3,7 @@ import {
   getIdleSessionsWithResolvedPRs,
   getIdleReviewSessionsWithTerminalCodingOrPR,
   markSessionDone,
+  setSessionLastErrorDetail,
   updateSessionStatus,
 } from '../db/queries';
 import { logger } from '../logger';
@@ -37,6 +38,15 @@ import { logger } from '../logger';
  *   review idle + closed PR (no terminal coding) → error
  * Mirrors the coding session's terminal status; defaults to done if absent.
  */
+function _errorSession(sessionId: string, now: number, detail: string): void {
+  updateSessionStatus(sessionId, 'error', now);
+  try {
+    setSessionLastErrorDetail(sessionId, detail);
+  } catch {
+    // Best-effort — DB may be unavailable or mocked without this function.
+  }
+}
+
 export function runBootIdleReconciliation(
   isSessionLive: (sessionId: string) => boolean = () => false,
 ): void {
@@ -57,7 +67,7 @@ function _runPass0(isSessionLive: (sessionId: string) => boolean): void {
 
   const now = Date.now();
   for (const row of rows) {
-    updateSessionStatus(row.session_id, 'error', now);
+    _errorSession(row.session_id, now, 'orphaned at boot — process tree gone');
     logger.info(
       `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} ${row.status}→error (dead at boot)`,
     );
@@ -91,14 +101,15 @@ function _runPass1(): void {
         );
       }
     } else {
-      updateSessionStatus(row.session_id, 'error', now);
+      const detail = `PR #${row.pr_number} ${row.repo} closed`;
+      _errorSession(row.session_id, now, detail);
       logger.info(
-        `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} idle→error (PR #${row.pr_number} ${row.repo} closed)`,
+        `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} idle→error (${detail})`,
       );
       if (row.review_session_id) {
-        updateSessionStatus(row.review_session_id, 'error', now);
+        _errorSession(row.review_session_id, now, detail);
         logger.info(
-          `[BootIdleReconciliation] review ${row.review_session_id.slice(0, 8)} idle→error (PR #${row.pr_number} ${row.repo} closed)`,
+          `[BootIdleReconciliation] review ${row.review_session_id.slice(0, 8)} idle→error (${detail})`,
         );
       }
     }
@@ -130,7 +141,8 @@ function _runPass2(): void {
         `[BootIdleReconciliation] review ${row.session_id.slice(0, 8)} idle→done (coding=${row.coding_session_status ?? 'none'} pr=${row.pr_state})`,
       );
     } else {
-      updateSessionStatus(row.session_id, 'error', now);
+      const detail = `review session orphaned — coding=${row.coding_session_status ?? 'none'} pr=${row.pr_state}`;
+      _errorSession(row.session_id, now, detail);
       logger.info(
         `[BootIdleReconciliation] review ${row.session_id.slice(0, 8)} idle→error (coding=${row.coding_session_status ?? 'none'} pr=${row.pr_state})`,
       );
