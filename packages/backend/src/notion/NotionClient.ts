@@ -4,6 +4,7 @@ import {
   getCacheAge,
   getTaskCache,
   updateTaskCacheStatus,
+  deleteTaskCacheRow,
 } from '../db/queries';
 import { NotionTask, NotionApiError, ResolvedTask } from './types';
 import { DependencyResolver } from './DependencyResolver';
@@ -680,6 +681,45 @@ export class NotionClient {
       });
     }
   }
+
+  /**
+   * Overwrite the full page body: archives every existing top-level block,
+   * then appends `blocks` (chunked to Notion's 100-block-per-request limit).
+   * Invalidates the cached task page so the next fetchTaskPage() re-fetches.
+   */
+  async updateBody(
+    taskId: string,
+    blocks: NotionBlockPayload[],
+  ): Promise<void> {
+    const externalId = toExternalId(taskId);
+
+    let startCursor: string | undefined;
+    do {
+      const path = `/blocks/${externalId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
+      const resp = await notionRequest<NotionBlocksResponse>('GET', path);
+      for (const block of resp.results) {
+        await notionRequest('DELETE', `/blocks/${block.id as string}`);
+      }
+      startCursor =
+        resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
+    } while (startCursor);
+
+    for (let i = 0; i < blocks.length; i += 100) {
+      const chunk = blocks.slice(i, i + 100);
+      await notionRequest('PATCH', `/blocks/${externalId}/children`, {
+        children: chunk,
+      });
+    }
+
+    deleteTaskCacheRow(taskPageCacheKey(taskId));
+  }
+}
+
+/** Shape accepted by updateBody — mirrors the bodyRender.ts RenderedBlock output. */
+export interface NotionBlockPayload {
+  object: 'block';
+  type: string;
+  [key: string]: unknown;
 }
 
 /** Probe-validate an arbitrary Notion integration token by calling /v1/users/me. */

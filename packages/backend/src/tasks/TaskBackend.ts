@@ -1,4 +1,5 @@
 import type { ResolvedTask } from './types';
+import type { TaskBodySections } from './bodyRender';
 import { ProjectService } from '../projects/ProjectService';
 import { NotionClient } from '../notion/NotionClient';
 import { NotionTaskBackend } from './NotionTaskBackend';
@@ -125,6 +126,16 @@ export interface TaskBackend {
   setDependsOn?(
     taskId: string,
     dependsOn: string[],
+    options?: TaskWriteOptions,
+  ): Promise<void>;
+
+  /**
+   * Render the task-writing.md section model into the page body, replacing
+   * any existing content. Optional for the same reason as createTask.
+   */
+  updateBody?(
+    taskId: string,
+    sections: TaskBodySections,
     options?: TaskWriteOptions,
   ): Promise<void>;
 }
@@ -255,6 +266,28 @@ export class AuditingTaskBackend implements TaskBackend {
       project_id: this.projectId,
       task_id: taskId,
       payload: { dependsOn, source },
+    });
+  }
+
+  async updateBody(
+    taskId: string,
+    sections: TaskBodySections,
+    options?: TaskWriteOptions,
+  ): Promise<void> {
+    if (!this.inner.updateBody) {
+      throw new Error(
+        `[AuditingTaskBackend] updateBody is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    await this.inner.updateBody(taskId, sections);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_body_updated',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { source },
     });
   }
 }
