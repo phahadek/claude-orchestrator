@@ -54,6 +54,18 @@ export interface NewTaskFields {
 }
 
 /**
+ * Cosmetic properties settable via setProperties — Priority and Task Name
+ * only. Status, Type, and Depends On are execution-governing and have their
+ * own validated write commands.
+ */
+export interface TaskPropertiesPatch {
+  /** Display-format priority, e.g. '🔴 High'. */
+  priority?: string;
+  /** Task Name (title property), plain text. */
+  title?: string;
+}
+
+/**
  * Project-scoped task tracker. An instance is bound to a single project via the
  * factory `getTaskBackend(projectId)` — callers do not pass projectId to methods.
  */
@@ -136,6 +148,26 @@ export interface TaskBackend {
   updateBody?(
     taskId: string,
     sections: TaskBodySections,
+    options?: TaskWriteOptions,
+  ): Promise<void>;
+
+  /**
+   * Overwrite the Type select property (display-format, e.g. '💻 Code').
+   * Optional for the same reason as createTask.
+   */
+  setType?(
+    taskId: string,
+    type: string,
+    options?: TaskWriteOptions,
+  ): Promise<void>;
+
+  /**
+   * Overwrite cosmetic properties (Priority / Task Name). Optional for the
+   * same reason as createTask.
+   */
+  setProperties?(
+    taskId: string,
+    patch: TaskPropertiesPatch,
     options?: TaskWriteOptions,
   ): Promise<void>;
 }
@@ -288,6 +320,50 @@ export class AuditingTaskBackend implements TaskBackend {
       project_id: this.projectId,
       task_id: taskId,
       payload: { source },
+    });
+  }
+
+  async setType(
+    taskId: string,
+    type: string,
+    options?: TaskWriteOptions,
+  ): Promise<void> {
+    if (!this.inner.setType) {
+      throw new Error(
+        `[AuditingTaskBackend] setType is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    await this.inner.setType(taskId, type);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_type_updated',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { type, source },
+    });
+  }
+
+  async setProperties(
+    taskId: string,
+    patch: TaskPropertiesPatch,
+    options?: TaskWriteOptions,
+  ): Promise<void> {
+    if (!this.inner.setProperties) {
+      throw new Error(
+        `[AuditingTaskBackend] setProperties is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    await this.inner.setProperties(taskId, patch);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_properties_updated',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { patch, source },
     });
   }
 }

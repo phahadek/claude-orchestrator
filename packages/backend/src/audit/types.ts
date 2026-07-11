@@ -55,7 +55,9 @@ type EventType =
   | 'ops_journal_entry_dropped'
   | 'task_created'
   | 'task_deps_updated'
-  | 'task_body_updated';
+  | 'task_body_updated'
+  | 'task_type_updated'
+  | 'task_properties_updated';
 
 type ActorType = 'ai' | 'human' | 'system';
 

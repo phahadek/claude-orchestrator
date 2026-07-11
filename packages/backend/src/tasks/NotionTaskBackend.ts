@@ -2,6 +2,7 @@ import type {
   TaskBackend,
   NonMilestoneSourceConfig,
   NewTaskFields,
+  TaskPropertiesPatch,
 } from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
@@ -197,5 +198,35 @@ export class NotionTaskBackend implements TaskBackend {
   async updateBody(taskId: string, sections: TaskBodySections): Promise<void> {
     const blocks = renderTaskBody(sections);
     await this.client.updateBody(taskId, blocks);
+  }
+
+  async setType(taskId: string, type: string): Promise<void> {
+    await this.client.setType(taskId, type);
+    const row = getTaskCache(taskId);
+    if (!row) return;
+    try {
+      const parsed = JSON.parse(row.raw_json);
+      parsed.type = type;
+      upsertTaskCache(taskId, JSON.stringify(parsed));
+    } catch {
+      // ignore malformed cache entries
+    }
+  }
+
+  async setProperties(
+    taskId: string,
+    patch: TaskPropertiesPatch,
+  ): Promise<void> {
+    await this.client.setProperties(taskId, patch);
+    const row = getTaskCache(taskId);
+    if (!row) return;
+    try {
+      const parsed = JSON.parse(row.raw_json);
+      if (patch.priority !== undefined) parsed.priority = patch.priority;
+      if (patch.title !== undefined) parsed.title = patch.title;
+      upsertTaskCache(taskId, JSON.stringify(parsed));
+    } catch {
+      // ignore malformed cache entries
+    }
   }
 }

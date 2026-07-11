@@ -26,6 +26,8 @@ function makeBackend(overrides: Partial<TaskBackend> = {}): TaskBackend {
     listTasksByStatus: vi.fn(),
     createTask: vi.fn().mockResolvedValue('notion:new-id'),
     setDependsOn: vi.fn().mockResolvedValue(undefined),
+    setType: vi.fn().mockResolvedValue(undefined),
+    setProperties: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -165,6 +167,130 @@ describe('TaskWriteCommands.setDependsOn', () => {
 
     await expect(
       commands.setDependsOn('notion:abc', ['notion:dep1']),
+    ).rejects.toThrow(/not supported/i);
+  });
+});
+
+describe('TaskWriteCommands.setType', () => {
+  it('accepts a valid reclassification with a consistent body (Code, no open questions)', async () => {
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.\n'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setType('notion:abc', '💻 Code');
+
+    expect(backend.setType).toHaveBeenCalledWith(
+      'notion:abc',
+      '💻 Code',
+      undefined,
+    );
+  });
+
+  it('rejects setting Code when the body has open/to-be-investigated items', async () => {
+    const backend = makeBackend({
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Open Questions\n- Which retry policy should we use?\n',
+        ),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(commands.setType('notion:abc', '💻 Code')).rejects.toThrow(
+      /open\/to-be-investigated/i,
+    );
+    expect(backend.setType).not.toHaveBeenCalled();
+  });
+
+  it('accepts Investigation when the body carries an open investigation', async () => {
+    const backend = makeBackend({
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Open Questions\n- What is causing the memory leak?\n',
+        ),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setType('notion:abc', '🔎 Investigation');
+
+    expect(backend.setType).toHaveBeenCalledWith(
+      'notion:abc',
+      '🔎 Investigation',
+      undefined,
+    );
+  });
+
+  it('rejects Investigation when the body has no open investigation', async () => {
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll resolved.\n'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.setType('notion:abc', '🔎 Investigation'),
+    ).rejects.toThrow(/no open investigation/i);
+    expect(backend.setType).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown/illegal type', async () => {
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.\n'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.setType('notion:abc', 'Bogus Type' as never),
+    ).rejects.toThrow(/illegal reclassification/i);
+    expect(backend.setType).not.toHaveBeenCalled();
+  });
+
+  it('throws when the backend does not support setType', async () => {
+    const backend = makeBackend({ setType: undefined });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(commands.setType('notion:abc', '📐 Design')).rejects.toThrow(
+      /not supported/i,
+    );
+  });
+});
+
+describe('TaskWriteCommands.setProperties', () => {
+  it('updates Priority and Task Name', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setProperties('notion:abc', {
+      priority: '🔴 High',
+      title: 'Renamed task',
+    });
+
+    expect(backend.setProperties).toHaveBeenCalledWith(
+      'notion:abc',
+      { priority: '🔴 High', title: 'Renamed task' },
+      undefined,
+    );
+  });
+
+  it('rejects an attempt to set Status/Type/Depends On through it', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.setProperties('notion:abc', {
+        status: '✅ Done',
+      } as never),
+    ).rejects.toThrow(/setProperties does not support/i);
+    expect(backend.setProperties).not.toHaveBeenCalled();
+  });
+
+  it('throws when the backend does not support setProperties', async () => {
+    const backend = makeBackend({ setProperties: undefined });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.setProperties('notion:abc', { priority: '🔴 High' }),
     ).rejects.toThrow(/not supported/i);
   });
 });
