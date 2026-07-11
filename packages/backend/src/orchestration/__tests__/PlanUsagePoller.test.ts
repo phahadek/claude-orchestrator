@@ -139,9 +139,7 @@ describe('PlanUsagePoller', () => {
     const poller = new PlanUsagePoller(broadcast);
     await poller.poll();
     const good = poller.getCache();
-    expect(good).toEqual(
-      expect.objectContaining({ available: true }),
-    );
+    expect(good).toEqual(expect.objectContaining({ available: true }));
 
     mockFetch({}, 500);
 
