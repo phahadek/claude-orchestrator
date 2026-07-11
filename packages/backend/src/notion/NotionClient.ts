@@ -568,6 +568,36 @@ export class NotionClient {
     });
   }
 
+  /** Overwrite the Type select property on a Notion task page. */
+  async setType(taskId: string, type: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    await notionRequest('PATCH', `/pages/${externalId}`, {
+      properties: {
+        Type: { select: { name: type } },
+      },
+    });
+  }
+
+  /**
+   * Overwrite cosmetic properties (Priority select / Task Name title). Only
+   * the properties present in `patch` are sent.
+   */
+  async setProperties(
+    taskId: string,
+    patch: { priority?: string; title?: string },
+  ): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const properties: Record<string, unknown> = {};
+    if (patch.priority !== undefined) {
+      properties.Priority = { select: { name: patch.priority } };
+    }
+    if (patch.title !== undefined) {
+      properties['Task Name'] = { title: [{ text: { content: patch.title } }] };
+    }
+    if (Object.keys(properties).length === 0) return;
+    await notionRequest('PATCH', `/pages/${externalId}`, { properties });
+  }
+
   /**
    * Fetch the full body of a Notion task page, parse it into sections, and
    * cache the result for 10 minutes using key `task:{taskId}`.
