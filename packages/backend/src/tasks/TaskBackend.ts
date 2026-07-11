@@ -33,6 +33,25 @@ export interface UpdateStatusOptions {
   sessionId?: string | null;
 }
 
+/** Provenance options shared by the write-side port methods (create / deps). */
+export type TaskWriteOptions = UpdateStatusOptions;
+
+/**
+ * Fields accepted by createTask. Status is intentionally absent — every
+ * implementation hard-codes the initial Backlog status regardless of input.
+ */
+export interface NewTaskFields {
+  /** Parent database/board ID (e.g. Notion database ID) the task is created under. */
+  databaseId: string;
+  title: string;
+  /** Display-format type, e.g. '💻 Code'. */
+  type?: string;
+  /** Display-format priority, e.g. '🔴 High'. */
+  priority?: string;
+  /** Task IDs (prefixed, e.g. 'notion:abc123') this task depends on. */
+  dependsOn?: string[];
+}
+
 /**
  * Project-scoped task tracker. An instance is bound to a single project via the
  * factory `getTaskBackend(projectId)` — callers do not pass projectId to methods.
@@ -87,6 +106,27 @@ export interface TaskBackend {
    * Implementations may return from cache rather than making live API calls.
    */
   listTasksByStatus(status: string): Promise<ResolvedTask[]>;
+
+  /**
+   * Create a new task page. Always created at the initial Backlog status,
+   * regardless of any status implied by `fields`. Optional — only backends
+   * that support programmatic task creation implement this (Notion today;
+   * other stores can add support later since the port stays store-agnostic).
+   */
+  createTask?(
+    fields: NewTaskFields,
+    options?: TaskWriteOptions,
+  ): Promise<string>;
+
+  /**
+   * Overwrite the Depends On property with the given task IDs. Optional for
+   * the same reason as createTask.
+   */
+  setDependsOn?(
+    taskId: string,
+    dependsOn: string[],
+    options?: TaskWriteOptions,
+  ): Promise<void>;
 }
 
 // ── AuditingTaskBackend ──────────────────────────────────────────────────────
@@ -172,6 +212,50 @@ export class AuditingTaskBackend implements TaskBackend {
 
   listTasksByStatus(status: string) {
     return this.inner.listTasksByStatus(status);
+  }
+
+  async createTask(
+    fields: NewTaskFields,
+    options?: TaskWriteOptions,
+  ): Promise<string> {
+    if (!this.inner.createTask) {
+      throw new Error(
+        `[AuditingTaskBackend] createTask is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    const taskId = await this.inner.createTask(fields);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_created',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { title: fields.title, source },
+    });
+    return taskId;
+  }
+
+  async setDependsOn(
+    taskId: string,
+    dependsOn: string[],
+    options?: TaskWriteOptions,
+  ): Promise<void> {
+    if (!this.inner.setDependsOn) {
+      throw new Error(
+        `[AuditingTaskBackend] setDependsOn is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    await this.inner.setDependsOn(taskId, dependsOn);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_deps_updated',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { dependsOn, source },
+    });
   }
 }
 
