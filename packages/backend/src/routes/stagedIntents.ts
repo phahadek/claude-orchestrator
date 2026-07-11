@@ -14,7 +14,7 @@ import type { NewTaskFields } from '../tasks/TaskBackend';
  * and a human applies or rejects. Apply always dispatches through
  * TaskWriteCommands — never a bespoke per-producer write.
  */
-export interface StagedIntent {
+interface StagedIntent {
   id: string;
   kind: string;
   payload: unknown;
