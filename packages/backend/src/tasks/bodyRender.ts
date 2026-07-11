@@ -6,7 +6,7 @@
  */
 
 /** Structured content model for the Context section (see docs/task-writing.md). */
-export type BlockModel =
+type BlockModel =
   | { type: 'paragraph'; text: string }
   | { type: 'heading_3'; text: string }
   | { type: 'bulleted_list_item'; text: string }
