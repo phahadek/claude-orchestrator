@@ -63,9 +63,7 @@ describe('gateStore', () => {
       milestone: 'M12',
       text: 'Verify the deploy script writes the new env var',
       classification: 'needs-triage',
-      sources: [
-        { sourceTaskId: 'notion:abc', sourceTaskTitle: 'Add env var' },
-      ],
+      sources: [{ sourceTaskId: 'notion:abc', sourceTaskTitle: 'Add env var' }],
       updatedAt: new Date(0).toISOString(),
     });
     // A text hash (e.g. sha256 hex) is 64 hex chars; a minted id is a UUID.
@@ -143,7 +141,9 @@ describe('gateStore', () => {
       milestone: 'M12',
       text: 'Verify the migration ran cleanly',
       classification: 'needs-triage',
-      sources: [{ sourceTaskId: 'notion:m1', sourceTaskTitle: 'Add migration' }],
+      sources: [
+        { sourceTaskId: 'notion:m1', sourceTaskTitle: 'Add migration' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
 

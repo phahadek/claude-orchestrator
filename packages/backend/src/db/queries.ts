@@ -3354,7 +3354,10 @@ export function listGateItemsByMilestone(
   }>(
     `SELECT * FROM gate_item WHERE project = @project AND milestone = @milestone`,
   );
-  return _stmtListGateItemsByMilestone.all({ project, milestone }) as GateItemRow[];
+  return _stmtListGateItemsByMilestone.all({
+    project,
+    milestone,
+  }) as GateItemRow[];
 }
 
 export function insertGateItem(row: GateItemRow): void {

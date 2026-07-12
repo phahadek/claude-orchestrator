@@ -90,7 +90,10 @@ export function getItem(id: string): GateItem | undefined {
 }
 
 /** All gate items for a milestone, each with its sources and event history. */
-export function listByMilestone(project: string, milestone: string): GateItem[] {
+export function listByMilestone(
+  project: string,
+  milestone: string,
+): GateItem[] {
   return listGateItemsByMilestone(project, milestone)
     .map((row) => getItem(row.id))
     .filter((item): item is GateItem => item !== undefined);
@@ -146,10 +149,7 @@ export function insertItem(input: NewGateItemInput): GateItem {
 }
 
 /** Appends an immutable event (evidence carried by value, with provenance) to an item's history. */
-export function appendEvent(
-  gateItemId: string,
-  event: GateItemEvent,
-): void {
+export function appendEvent(gateItemId: string, event: GateItemEvent): void {
   const row = getGateItem(gateItemId);
   if (!row) {
     throw new Error(`gate_item: no item ${gateItemId} to append an event to`);
