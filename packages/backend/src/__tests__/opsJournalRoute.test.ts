@@ -73,3 +73,66 @@ describe('GET /api/ops-journal', () => {
     expect(res.body.entries).toEqual([]);
   });
 });
+
+describe('POST /api/ops-journal/:taskId/state', () => {
+  it('returns 400 when state is missing', async () => {
+    seedEntry('task-1', 'M12', { state: 'pending' });
+    const res = await request(makeApp())
+      .post('/api/ops-journal/task-1/state')
+      .send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 when the task has no journal entry', async () => {
+    const res = await request(makeApp())
+      .post('/api/ops-journal/unknown-task/state')
+      .send({ state: 'candidate' });
+    expect(res.status).toBe(404);
+  });
+
+  it('writes via setEntryState on a valid transition', async () => {
+    seedEntry('task-1', 'M12', { state: 'pending' });
+    const res = await request(makeApp())
+      .post('/api/ops-journal/task-1/state')
+      .send({ state: 'candidate' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('candidate');
+
+    const getRes = await request(makeApp()).get(
+      '/api/ops-journal?milestone=M12',
+    );
+    expect(getRes.body.entries[0].state).toBe('candidate');
+  });
+
+  it('rejects an invalid transition', async () => {
+    seedEntry('task-1', 'M12', { state: 'pending' });
+    const res = await request(makeApp())
+      .post('/api/ops-journal/task-1/state')
+      .send({ state: 'resolved' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid transition/);
+
+    const getRes = await request(makeApp()).get(
+      '/api/ops-journal?milestone=M12',
+    );
+    expect(getRes.body.entries[0].state).toBe('pending');
+  });
+
+  it('carries optional resolution and disposition fields', async () => {
+    seedEntry('task-1', 'M12', { state: 'applied-pending-confirm' });
+    const res = await request(makeApp())
+      .post('/api/ops-journal/task-1/state')
+      .send({
+        state: 'resolved',
+        disposition: 'pass',
+        resolution: { note: 'looks good' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('resolved');
+    expect(res.body.disposition).toBe('pass');
+    expect(res.body.resolution).toEqual({ note: 'looks good' });
+  });
+});
