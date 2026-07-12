@@ -32,7 +32,10 @@ describe('GET /api/ops-context', () => {
   it('returns the ops context bundle', async () => {
     const bundle = {
       contextPages: [],
-      boards: { target: { milestone: 'm1', board: 'b1', counts: {} }, neighbours: [] },
+      boards: {
+        target: { milestone: 'm1', board: 'b1', counts: {} },
+        neighbours: [],
+      },
       worklist: {
         executable: [],
         dep_blocked: [],

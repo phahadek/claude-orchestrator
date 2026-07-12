@@ -38,7 +38,8 @@ export function createOpsJournalRouter(): Router {
       resolution?: unknown;
       disposition?: unknown;
     };
-    const state = typeof body.state === 'string' ? (body.state as OpsState) : null;
+    const state =
+      typeof body.state === 'string' ? (body.state as OpsState) : null;
     if (!state) {
       res.status(400).json({ error: 'state is required' });
       return;
@@ -46,7 +47,9 @@ export function createOpsJournalRouter(): Router {
 
     const current = getEntry(taskId);
     if (!current) {
-      res.status(404).json({ error: `no ops_journal entry for task ${taskId}` });
+      res
+        .status(404)
+        .json({ error: `no ops_journal entry for task ${taskId}` });
       return;
     }
     if (!isValidOpsTransition(current.state, state)) {
