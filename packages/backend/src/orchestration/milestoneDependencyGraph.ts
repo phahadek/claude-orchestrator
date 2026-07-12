@@ -23,7 +23,7 @@
 
 const DONE_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
 
-export interface TaskRegionsInput {
+interface TaskRegionsInput {
   /** Coarse package paths this task's declared scope resolves to. */
   packages: string[];
   /** Deduped, repo-validated file tokens declared in the task's scope text. */
@@ -38,7 +38,7 @@ export interface MilestoneDependencyGraphTaskInput {
   regions: TaskRegionsInput;
 }
 
-export interface CandidateBlocker {
+interface CandidateBlocker {
   taskId: string;
   reason: string;
 }
