@@ -95,7 +95,9 @@ async function callApi(path, init = {}) {
   try {
     body = text ? JSON.parse(text) : {};
   } catch {
-    fail(`non-JSON response from ${path} (status ${res.status}): ${text.slice(0, 500)}`);
+    fail(
+      `non-JSON response from ${path} (status ${res.status}): ${text.slice(0, 500)}`,
+    );
   }
   if (!res.ok) {
     fail(
