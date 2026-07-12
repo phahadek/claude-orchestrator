@@ -3,6 +3,8 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
+import { getOrchestratorConfig } from '../config/appConfig';
+import { mintStageCredential } from '../auth/SessionStageAuth';
 import {
   upsertSessionEvent,
   updateSessionStatus,
@@ -537,6 +539,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         escalationWatchdog.unref?.();
       }
 
+      const stageToken = mintStageCredential(this.sessionId);
       const exitCode = await this.runner.run(
         resumeIdForSpawn ? undefined : initialPrompt,
         resumeIdForSpawn,
@@ -557,6 +560,20 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             this._escalationDisableAutoCompact !== null
               ? this._escalationDisableAutoCompact
               : !!runtimeSettings.large_task_model,
+          extraEnv: {
+            ORCHESTRATOR_STAGE_PORT: String(
+              getOrchestratorConfig().server.port,
+            ),
+            ORCHESTRATOR_STAGE_TOKEN: stageToken,
+            // Sanctioned node CLI client — sessions submit staged task-write
+            // intents through this script (curl/wget are off the
+            // auto-dispatch allowlist; node is). Lives outside any worktree,
+            // one level up from src/ and dist/ alike.
+            ORCHESTRATOR_STAGE_CLI: path.resolve(
+              __dirname,
+              '../../scripts/stage-task-intent.mjs',
+            ),
+          },
         },
         (event) => {
           // On the first event of an escalated spawn: cancel pending timers and
