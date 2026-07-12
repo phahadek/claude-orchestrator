@@ -12,6 +12,9 @@ import { sessionsApi, authedFetch } from '../api/projects';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useTaskPage } from '../hooks/useTaskPage';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
+import { TaskMoveDialog } from './TaskMoveDialog';
+import { StagedIntentPanel } from './StagedIntentPanel';
+import type { StagedIntent } from '../api/stagedIntents';
 import styles from './TaskDetail.module.css';
 
 function getProjectRepos(
@@ -100,6 +103,8 @@ interface Props {
   onClose: () => void;
   sessions?: SessionState[];
   projectId?: string;
+  /** The current board (milestone) id, used to resolve the move source milestone. */
+  boardId?: string | null;
   project?: ProjectConfig | null;
   /** When true, shows the "Mark Merged" button for local-only projects. */
   isLocalOnly?: boolean;
@@ -118,6 +123,7 @@ export function TaskDetail({
   onClose: _onClose,
   sessions = [],
   projectId,
+  boardId = null,
   project = null,
   isLocalOnly = false,
   autoMergeEnabled = false,
@@ -143,6 +149,8 @@ export function TaskDetail({
     task.assignedRepo,
   );
   const [assignRepoInFlight, setAssignRepoInFlight] = useState(false);
+  const [showMoveDialog, setShowMoveDialog] = useState(false);
+  const [moveIntent, setMoveIntent] = useState<StagedIntent | null>(null);
   const {
     markdown: specMarkdown,
     loading: specLoading,
@@ -164,6 +172,8 @@ export function TaskDetail({
     setAssignedRepo(task.assignedRepo);
     setAssignRepoInFlight(false);
     setShowSpec(!task.codeSession);
+    setShowMoveDialog(false);
+    setMoveIntent(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.taskId, task.assignedRepo]);
 
@@ -442,6 +452,15 @@ export function TaskDetail({
           >
             {showSpec ? 'Hide spec' : 'Show spec'}
           </button>
+          {projectId && (
+            <button
+              className={styles.specToggleButton}
+              onClick={() => setShowMoveDialog(true)}
+              aria-label={`Move ${task.taskName} to another milestone`}
+            >
+              ↗ Move
+            </button>
+          )}
           {isMultiRepo && (
             <select
               className={styles.repoSelect}
@@ -465,6 +484,16 @@ export function TaskDetail({
       </div>
 
       <div className={styles.body}>
+        {moveIntent && (
+          <div data-testid="task-detail-move-panel">
+            <StagedIntentPanel
+              intent={moveIntent}
+              onApplied={() => setMoveIntent(null)}
+              onRejected={() => setMoveIntent(null)}
+            />
+          </div>
+        )}
+
         {/* ── Spec — read-only task body, uniform across sources ── */}
         {showSpec && (
           <div id="task-detail-spec-section" className={styles.specSection}>
@@ -774,6 +803,19 @@ export function TaskDetail({
           </div>
         )}
       </div>
+
+      {showMoveDialog && projectId && (
+        <TaskMoveDialog
+          task={task}
+          projectId={projectId}
+          currentBoardId={boardId}
+          onClose={() => setShowMoveDialog(false)}
+          onStaged={(intent) => {
+            setMoveIntent(intent);
+            setShowMoveDialog(false);
+          }}
+        />
+      )}
     </div>
   );
 }

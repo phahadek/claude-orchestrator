@@ -14,10 +14,12 @@ import {
   setTaskRepoAssignment,
   getPRByNotionTaskId,
   clearTerminalPRFlags,
+  getMilestoneById,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { typedGetSetting } from '../config/settings';
 import type { TaskAggregateRow } from '../db/queries';
+import { planMove, MoveTaskError } from '../orchestration/moveTask';
 import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';
 import type { NotionTask } from '../notion/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
@@ -709,6 +711,79 @@ export function createTasksRouter(
     } catch (err) {
       res.status(404).json({
         error: err instanceof Error ? err.message : `task not found: ${taskId}`,
+      });
+    }
+  });
+
+  // ── POST /api/tasks/move-preview ────────────────────────────────────────────
+  // Read-only preview for the move confirm UI: runs the same planMove used by
+  // TaskWriteCommands.moveTask (via the source milestone's dependency graph) so
+  // the operator sees the cascade set or refusal reason before staging a
+  // task.move intent through the general staged-intent surface.
+  router.post('/tasks/move-preview', async (req: Request, res: Response) => {
+    const body = req.body as {
+      projectId?: unknown;
+      taskId?: unknown;
+      sourceMilestoneId?: unknown;
+      targetMilestoneId?: unknown;
+    };
+    const projectId =
+      typeof body.projectId === 'string' ? body.projectId : '';
+    const taskId = typeof body.taskId === 'string' ? body.taskId : '';
+    const sourceMilestoneId =
+      typeof body.sourceMilestoneId === 'string' ? body.sourceMilestoneId : '';
+    const targetMilestoneId =
+      typeof body.targetMilestoneId === 'string' ? body.targetMilestoneId : '';
+
+    if (!projectId || !taskId || !sourceMilestoneId || !targetMilestoneId) {
+      res.status(400).json({
+        error:
+          'projectId, taskId, sourceMilestoneId and targetMilestoneId are required',
+      });
+      return;
+    }
+
+    const sourceMilestone = getMilestoneById(sourceMilestoneId);
+    const targetMilestone = getMilestoneById(targetMilestoneId);
+    if (!sourceMilestone || !targetMilestone) {
+      res.status(404).json({ error: 'unknown milestone' });
+      return;
+    }
+
+    let backend: ReturnType<typeof getTaskBackend>;
+    try {
+      backend = getTaskBackend(projectId);
+    } catch {
+      res
+        .status(400)
+        .json({ error: `Cannot resolve backend for project '${projectId}'` });
+      return;
+    }
+
+    try {
+      const sourceGraph = (
+        await backend.fetchReadyTasks(sourceMilestone.id, true)
+      ).map((r) => ({ id: r.task.id, dependsOn: r.task.dependsOn }));
+
+      const plan = planMove({
+        taskId,
+        sourceMilestoneTasks: sourceGraph,
+        isLaterMove: targetMilestone.display_order > sourceMilestone.display_order,
+      });
+
+      res.json({
+        ok: true,
+        isLaterMove: targetMilestone.display_order > sourceMilestone.display_order,
+        cascadeSet: plan.cascadeSet,
+        droppedEdges: plan.droppedEdges,
+      });
+    } catch (err) {
+      if (err instanceof MoveTaskError) {
+        res.status(409).json({ ok: false, error: err.message });
+        return;
+      }
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to preview move',
       });
     }
   });

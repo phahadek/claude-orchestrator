@@ -9,8 +9,62 @@ interface Props {
   onRejected?: (intent: StagedIntent) => void;
 }
 
-function renderPayload(payload: unknown): ReactNode {
+interface TaskMovePayload {
+  taskName?: string;
+  sourceMilestoneName?: string;
+  targetMilestoneName?: string;
+  originalDisposition?: 'archive' | 'defer';
+  isLaterMove?: boolean;
+  cascadeSet?: string[];
+}
+
+function isTaskMovePayload(payload: unknown): payload is TaskMovePayload {
+  return (
+    !!payload &&
+    typeof payload === 'object' &&
+    'targetMilestoneName' in payload
+  );
+}
+
+function renderTaskMovePayload(payload: TaskMovePayload): ReactNode {
+  return (
+    <div className={styles.text} data-testid="staged-intent-move-payload">
+      <p>
+        Move <strong>{payload.taskName ?? 'task'}</strong> from{' '}
+        <strong>{payload.sourceMilestoneName ?? '—'}</strong> to{' '}
+        <strong>{payload.targetMilestoneName ?? '—'}</strong>
+      </p>
+      <p>
+        Original task:{' '}
+        {payload.originalDisposition === 'defer'
+          ? 'Deferred (tombstone)'
+          : 'Archived (clean)'}
+      </p>
+      {payload.isLaterMove && (
+        <div data-testid="staged-intent-cascade-set">
+          {payload.cascadeSet && payload.cascadeSet.length > 0 ? (
+            <>
+              <p>{payload.cascadeSet.length} dependent task(s) move with it:</p>
+              <ul>
+                {payload.cascadeSet.map((id) => (
+                  <li key={id}>{id}</li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p>No dependents move with it.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function renderPayload(kind: string, payload: unknown): ReactNode {
   if (payload == null) return null;
+  if (kind === 'task.move' && isTaskMovePayload(payload)) {
+    return renderTaskMovePayload(payload);
+  }
   if (typeof payload === 'string')
     return <p className={styles.text}>{payload}</p>;
   return (
@@ -65,7 +119,9 @@ export function StagedIntentPanel({ intent, onApplied, onRejected }: Props) {
         )}
       </div>
 
-      <div className={styles.body}>{renderPayload(intent.payload)}</div>
+      <div className={styles.body}>
+        {renderPayload(intent.kind, intent.payload)}
+      </div>
 
       {error && <div className={styles.error}>{error}</div>}
 

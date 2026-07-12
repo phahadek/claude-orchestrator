@@ -9,6 +9,8 @@ import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { CIBadges, PipelineStageBadge } from './CIBadges';
 import { ContextBadge } from './ContextBadge';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
+import { TaskMoveDialog } from './TaskMoveDialog';
+import type { StagedIntent } from '../api/stagedIntents';
 import styles from './TaskCard.module.css';
 
 interface Props {
@@ -17,6 +19,10 @@ interface Props {
   onClick: () => void;
   send: (msg: ClientMessage) => void;
   project: ProjectConfig | null;
+  /** The current board (milestone) id, used to resolve the move source milestone. */
+  boardId?: string | null;
+  /** Called when a task.move intent is staged, so the parent can display it. */
+  onMoveStaged?: (intent: StagedIntent) => void;
 }
 
 function getProjectRepos(
@@ -110,11 +116,20 @@ function launchTooltip(task: TaskView): string {
   return '';
 }
 
-export function TaskCard({ task, selected, onClick, send, project }: Props) {
+export function TaskCard({
+  task,
+  selected,
+  onClick,
+  send,
+  project,
+  boardId = null,
+  onMoveStaged,
+}: Props) {
   const { codeSession, pr, review } = task;
   const isMultiRepo = getProjectRepos(project).length > 1;
   const needsRepo = isMultiRepo && task.assignedRepo === null;
   const [recoveryInFlight, setRecoveryInFlight] = useState(false);
+  const [showMoveDialog, setShowMoveDialog] = useState(false);
   const statusKey = task.displayStatus.replace(/_/g, '-') as string;
 
   // Derive implementing/reviewing pre-stages when no post-PR pipeline stage is active.
@@ -339,7 +354,32 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
             </button>
           </>
         )}
+        {project?.id && (
+          <button
+            className={styles.moveButton}
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowMoveDialog(true);
+            }}
+            title="Move to another milestone"
+            aria-label={`Move ${task.taskName} to another milestone`}
+          >
+            ↗ Move
+          </button>
+        )}
       </div>
+      {showMoveDialog && project?.id && (
+        <TaskMoveDialog
+          task={task}
+          projectId={project.id}
+          currentBoardId={boardId}
+          onClose={() => setShowMoveDialog(false)}
+          onStaged={(intent) => {
+            onMoveStaged?.(intent);
+            setShowMoveDialog(false);
+          }}
+        />
+      )}
     </div>
   );
 }

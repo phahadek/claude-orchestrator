@@ -279,6 +279,9 @@ export function TaskList({
   const [opsIntent, setOpsIntent] = useState<StagedIntent | null>(null);
   const [opsLoading, setOpsLoading] = useState(false);
   const [opsError, setOpsError] = useState<string | null>(null);
+  // Cross-milestone move: the shared staged-intent display renders whichever
+  // task.move intent was most recently staged from a TaskCard on this board.
+  const [moveIntent, setMoveIntent] = useState<StagedIntent | null>(null);
 
   const toggleGroup = useCallback((status: string) => {
     setCollapsed((prev) => {
@@ -589,6 +592,8 @@ export function TaskList({
                       onClick={() => onSelectTask(task.taskId)}
                       send={send}
                       project={project}
+                      boardId={boardId}
+                      onMoveStaged={setMoveIntent}
                     />
                   ))}
                 </div>
@@ -681,6 +686,16 @@ export function TaskList({
               intent={opsIntent}
               onApplied={() => setOpsIntent(null)}
               onRejected={() => setOpsIntent(null)}
+            />
+          </div>
+        )}
+
+        {moveIntent && (
+          <div className={styles.opsPlaceholderPanel} data-testid="move-panel">
+            <StagedIntentPanel
+              intent={moveIntent}
+              onApplied={() => setMoveIntent(null)}
+              onRejected={() => setMoveIntent(null)}
             />
           </div>
         )}

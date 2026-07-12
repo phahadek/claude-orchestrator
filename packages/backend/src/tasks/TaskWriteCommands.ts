@@ -57,7 +57,7 @@ export function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
   return VALID_TRANSITIONS[from].has(to);
 }
 
-function toCanonicalStatus(display: string): TaskStatus | null {
+export function toCanonicalStatus(display: string): TaskStatus | null {
   for (const status of Object.keys(STATUS_DISPLAY) as TaskStatus[]) {
     if (STATUS_DISPLAY[status] === display) return status;
   }
