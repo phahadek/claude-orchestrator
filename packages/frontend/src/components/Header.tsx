@@ -13,7 +13,13 @@ import type { BootReconciliationState } from '../hooks/useBootReconciliation';
 import type { PlanUsage } from '@claude-orchestrator/backend/src/ws/types';
 import styles from './Header.module.css';
 
-export type TopView = 'tasks' | 'sessions' | 'prs' | 'analytics' | 'settings';
+export type TopView =
+  | 'tasks'
+  | 'sessions'
+  | 'prs'
+  | 'analytics'
+  | 'gate'
+  | 'settings';
 
 interface AutoLaunchTogglePatch {
   autoLaunchEnabled: boolean;
@@ -156,6 +162,15 @@ export function Header({
         aria-label="Analytics"
       >
         📊
+      </button>
+      <button
+        type="button"
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'gate' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('gate')}
+        title="Gate Readiness"
+        aria-label="Gate Readiness"
+      >
+        🚦
       </button>
       <button
         type="button"
