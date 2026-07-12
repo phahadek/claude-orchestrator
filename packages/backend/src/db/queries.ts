@@ -39,6 +39,7 @@ import type {
   NewGateItemSourceRow,
   GateItemEventRow,
   NewGateItemEventRow,
+  GateAccretionRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -3487,6 +3488,35 @@ export function updateGateItemMinDeployedCommit(
     min_deployed_commit: minDeployedCommit,
     updated_at: updatedAt,
   });
+}
+
+// ─── gate_accretion ───────────────────────────────────────────────────────
+
+let _stmtGetGateAccretion: Database.Statement | null = null;
+let _stmtUpsertGateAccretion: Database.Statement | null = null;
+
+export function getGateAccretion(
+  sourceTaskId: string,
+): GateAccretionRow | undefined {
+  _stmtGetGateAccretion ??= db.prepare<{ source_task_id: string }>(
+    `SELECT * FROM gate_accretion WHERE source_task_id = @source_task_id`,
+  );
+  return _stmtGetGateAccretion.get({
+    source_task_id: sourceTaskId,
+  }) as GateAccretionRow | undefined;
+}
+
+export function upsertGateAccretion(row: GateAccretionRow): void {
+  _stmtUpsertGateAccretion ??= db.prepare<GateAccretionRow>(`
+    INSERT INTO gate_accretion (source_task_id, project, milestone, decision, accreted_at)
+    VALUES (@source_task_id, @project, @milestone, @decision, @accreted_at)
+    ON CONFLICT(source_task_id) DO UPDATE SET
+      project = excluded.project,
+      milestone = excluded.milestone,
+      decision = excluded.decision,
+      accreted_at = excluded.accreted_at
+  `);
+  _stmtUpsertGateAccretion.run(row);
 }
 
 // ─── session_feedback_inbox ─────────────────────────────────────────────────

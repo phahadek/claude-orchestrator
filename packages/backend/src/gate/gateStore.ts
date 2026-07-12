@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import crypto from 'crypto';
 import { recordEvent } from '../audit/AuditLog';
 import {
   getGateItem,
@@ -13,8 +13,13 @@ import {
   listGateItemEvents,
   insertGateItemEvent,
   updateGateItemSourceMergeCommit,
+  getGateAccretion,
+  upsertGateAccretion,
 } from '../db/queries';
-import type { GateItemClassification } from '../db/types';
+import type {
+  GateItemClassification,
+  GateAccretionDecision,
+} from '../db/types';
 
 interface GateItemSource {
   sourceTaskId: string;
@@ -129,7 +134,7 @@ export interface NewGateItemInput {
  * task's PR merges.
  */
 export function insertItem(input: NewGateItemInput): GateItem {
-  const id = randomUUID();
+  const id = crypto.randomUUID();
   insertGateItem({
     id,
     project: input.project,
@@ -245,4 +250,44 @@ export function setSourceMergeCommit(
     );
   }
   updateGateItemSourceMergeCommit(gateItemId, sourceTaskId, mergeCommit);
+}
+
+export interface GateAccretionMarker {
+  sourceTaskId: string;
+  project: string;
+  milestone: string;
+  decision: GateAccretionDecision;
+  accretedAt: string;
+}
+
+/** Reads the per-source gate_accretion marker the promotion gate checks for. */
+export function getAccretionMarker(
+  sourceTaskId: string,
+): GateAccretionMarker | undefined {
+  const row = getGateAccretion(sourceTaskId);
+  if (!row) return undefined;
+  return {
+    sourceTaskId: row.source_task_id,
+    project: row.project,
+    milestone: row.milestone,
+    decision: row.decision,
+    accretedAt: row.accreted_at,
+  };
+}
+
+/**
+ * Records (or replaces) the per-source gate_accretion marker — written once a
+ * Code/Tooling task has either appended its runtime items to the milestone
+ * gate ('items') or explicitly recorded that it has none ('none') or is
+ * exempt ('n/a'). checkGroomingPromotionGate reads this before allowing the
+ * task's Ready flip.
+ */
+export function recordAccretionMarker(marker: GateAccretionMarker): void {
+  upsertGateAccretion({
+    source_task_id: marker.sourceTaskId,
+    project: marker.project,
+    milestone: marker.milestone,
+    decision: marker.decision,
+    accreted_at: marker.accretedAt,
+  });
 }

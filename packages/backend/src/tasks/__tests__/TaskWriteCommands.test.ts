@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockGetTaskCache = vi.fn();
 const mockRecordEvent = vi.fn();
+const mockInsertItem = vi.fn();
+const mockRecordAccretionMarker = vi.fn();
+const mockGetAccretionMarker = vi.fn();
 
 vi.mock('../../db/queries', () => ({
   getTaskCache: (...args: unknown[]) => mockGetTaskCache(...args),
@@ -9,6 +12,13 @@ vi.mock('../../db/queries', () => ({
 
 vi.mock('../../audit/AuditLog', () => ({
   recordEvent: (...args: unknown[]) => mockRecordEvent(...args),
+}));
+
+vi.mock('../../gate/gateStore', () => ({
+  insertItem: (...args: unknown[]) => mockInsertItem(...args),
+  recordAccretionMarker: (...args: unknown[]) =>
+    mockRecordAccretionMarker(...args),
+  getAccretionMarker: (...args: unknown[]) => mockGetAccretionMarker(...args),
 }));
 
 import {
@@ -47,6 +57,9 @@ function cacheRowWithStatus(display: string) {
 beforeEach(() => {
   mockGetTaskCache.mockReset();
   mockRecordEvent.mockReset();
+  mockInsertItem.mockReset();
+  mockRecordAccretionMarker.mockReset();
+  mockGetAccretionMarker.mockReset();
 });
 
 describe('TaskWriteCommands.setStatus — state machine', () => {
@@ -484,5 +497,109 @@ describe('TaskWriteCommands.archive', () => {
     await expect(commands.archive('notion:abc')).rejects.toThrow(
       /not supported/i,
     );
+  });
+});
+
+describe('TaskWriteCommands.accreteGateContribution', () => {
+  const sourceTask = {
+    id: 'notion:src-1',
+    title: 'Add the webhook',
+    project: 'polimarket-analyser',
+    milestone: 'M12',
+  };
+
+  it('mints a gate_item per item (source id + title recorded) and records an "items" marker', async () => {
+    mockInsertItem
+      .mockReturnValueOnce({ id: 'gate-item-1' })
+      .mockReturnValueOnce({ id: 'gate-item-2' });
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    const result = await commands.accreteGateContribution(
+      sourceTask,
+      [{ text: 'Verify the webhook fires' }, { text: 'Check the retry path' }],
+      'Read-Only',
+    );
+
+    expect(mockInsertItem).toHaveBeenCalledTimes(2);
+    expect(mockInsertItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: 'polimarket-analyser',
+        milestone: 'M12',
+        text: 'Verify the webhook fires',
+        classification: 'Read-Only',
+        sources: [
+          { sourceTaskId: 'notion:src-1', sourceTaskTitle: 'Add the webhook' },
+        ],
+      }),
+    );
+    expect(mockInsertItem.mock.calls[0][0].updatedAt).toBeDefined();
+
+    expect(mockRecordAccretionMarker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceTaskId: 'notion:src-1',
+        project: 'polimarket-analyser',
+        milestone: 'M12',
+        decision: 'items',
+      }),
+    );
+    expect(result.itemIds).toEqual(['gate-item-1', 'gate-item-2']);
+  });
+
+  it('records a "none" marker and mints no items', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    const result = await commands.accreteGateContribution(
+      sourceTask,
+      [],
+      'none',
+    );
+
+    expect(mockInsertItem).not.toHaveBeenCalled();
+    expect(mockRecordAccretionMarker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceTaskId: 'notion:src-1',
+        decision: 'none',
+      }),
+    );
+    expect(result.itemIds).toEqual([]);
+  });
+
+  it('records an "n/a" marker and mints no items', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.accreteGateContribution(sourceTask, [], 'n/a');
+
+    expect(mockInsertItem).not.toHaveBeenCalled();
+    expect(mockRecordAccretionMarker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceTaskId: 'notion:src-1',
+        decision: 'n/a',
+      }),
+    );
+  });
+
+  it('rejects "none"/"n/a" when items are non-empty', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.accreteGateContribution(
+        sourceTask,
+        [{ text: 'stray item' }],
+        'none',
+      ),
+    ).rejects.toThrow(/empty items array/);
+  });
+
+  it('rejects a classification decision with an empty items array', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.accreteGateContribution(sourceTask, [], 'Prod-Mutating'),
+    ).rejects.toThrow(/at least one item/);
   });
 });

@@ -427,6 +427,19 @@ export interface GateItemEventRow {
   at: string;
 }
 
+// ─── gate_accretion ───────────────────────────────────────────────────────
+
+/** Per-source-task marker recording whether the gate_contribution promotion check is satisfied. */
+export type GateAccretionDecision = 'items' | 'none' | 'n/a';
+
+export interface GateAccretionRow {
+  source_task_id: string;
+  project: string;
+  milestone: string;
+  decision: GateAccretionDecision;
+  accreted_at: string;
+}
+
 export type NewGateItemEventRow = Omit<GateItemEventRow, 'id'>;
 
 // ─── session_feedback_inbox ─────────────────────────────────────────────────
