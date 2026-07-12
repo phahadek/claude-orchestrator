@@ -12,6 +12,8 @@ export interface StagedIntent {
   payload: unknown;
   projectId: string;
   createdAt: number;
+  /** Correlates intents that form one structural-change unit (e.g. a split). */
+  groupId?: string | null;
 }
 
 export const stagedIntentsApi = {
@@ -28,11 +30,12 @@ export const stagedIntentsApi = {
     kind: string,
     payload: unknown,
     projectId: string,
+    groupId?: string,
   ): Promise<StagedIntent> {
     return apiRequest<StagedIntent>('/api/staged-intents', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, payload, projectId }),
+      body: JSON.stringify({ kind, payload, projectId, groupId }),
     });
   },
 

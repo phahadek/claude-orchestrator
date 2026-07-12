@@ -20,6 +20,16 @@
   color: var(--text-primary);
 }
 
+.groupBadge {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+}
+
 .body {
   display: flex;
   flex-direction: column;

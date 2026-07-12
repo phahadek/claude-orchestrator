@@ -58,6 +58,11 @@ export function StagedIntentPanel({ intent, onApplied, onRejected }: Props) {
     <div className={styles.panel}>
       <div className={styles.header}>
         <span className={styles.kind}>{intent.kind}</span>
+        {intent.groupId && (
+          <span className={styles.groupBadge} data-testid="staged-intent-group">
+            {intent.groupId}
+          </span>
+        )}
       </div>
 
       <div className={styles.body}>{renderPayload(intent.payload)}</div>
