@@ -217,9 +217,7 @@ export function planMove(input: MovePlanInput): MovePlan {
   );
   const dependentRewrites = directDependents.map((task) => ({
     taskId: task.id,
-    dependsOn: task.dependsOn.filter(
-      (dep) => stripHyphens(dep) !== normTaskId,
-    ),
+    dependsOn: task.dependsOn.filter((dep) => stripHyphens(dep) !== normTaskId),
   }));
   const droppedEdges = directDependents.map((task) => ({
     from: task.id,

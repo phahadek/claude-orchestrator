@@ -92,7 +92,9 @@ describe('planMove', () => {
 
     expect(plan.newDependsOn).toEqual([]);
     expect(plan.cascadeSet).toEqual([]);
-    expect(plan.droppedEdges.sort((x, y) => x.from.localeCompare(y.from))).toEqual([
+    expect(
+      plan.droppedEdges.sort((x, y) => x.from.localeCompare(y.from)),
+    ).toEqual([
       { from: 'notion:dep1', to: 'notion:a' },
       { from: 'notion:dep2', to: 'notion:a' },
     ]);
@@ -149,9 +151,9 @@ describe('planMove', () => {
 function makeBackend(overrides: Partial<TaskBackend> = {}): TaskBackend {
   return {
     type: 'notion',
-    fetchReadyTasks: vi.fn().mockResolvedValue([
-      { task: { id: 'notion:a', dependsOn: [] } },
-    ]),
+    fetchReadyTasks: vi
+      .fn()
+      .mockResolvedValue([{ task: { id: 'notion:a', dependsOn: [] } }]),
     attachPR: vi.fn(),
     updateStatus: vi.fn().mockResolvedValue(undefined),
     fetchTaskPage: vi.fn().mockResolvedValue(''),
@@ -186,7 +188,11 @@ function baseParams(overrides: Record<string, unknown> = {}) {
       status: 'Backlog' as const,
     },
     sourceMilestone: { id: 'm-source', displayOrder: 0 },
-    targetMilestone: { id: 'm-target', displayOrder: 1, databaseId: 'db-target' },
+    targetMilestone: {
+      id: 'm-target',
+      displayOrder: 1,
+      databaseId: 'db-target',
+    },
     originalDisposition: 'archive' as const,
     ...overrides,
   };
