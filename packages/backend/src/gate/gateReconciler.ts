@@ -30,7 +30,7 @@ const noopDeployAdvanceTrigger: DeployAdvanceTrigger = {
   },
 };
 
-export interface GateVerificationResult {
+interface GateVerificationResult {
   disposition: 'pass' | 'fail';
   evidence?: unknown;
 }
@@ -44,7 +44,7 @@ export interface GateItemVerifier {
   verify(item: GateItem): Promise<GateVerificationResult>;
 }
 
-export interface FollowupFixTask {
+interface FollowupFixTask {
   taskId: string;
   taskTitle: string;
 }
@@ -106,7 +106,7 @@ export interface GateReconcilerOptions {
   tierLimit?: number;
 }
 
-export interface ProcessedGateItem {
+interface ProcessedGateItem {
   itemId: string;
   classification: GateItemClassification;
   disposition: 'pass' | 'fail';
