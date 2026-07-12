@@ -15,7 +15,7 @@ export interface DeployAncestrySource {
   isAncestor(ancestorSha: string, descendantSha: string): boolean;
 }
 
-export const gitAncestrySource: DeployAncestrySource = {
+const gitAncestrySource: DeployAncestrySource = {
   isAncestor(ancestorSha, descendantSha) {
     if (ancestorSha === descendantSha) return true;
     try {
@@ -34,7 +34,7 @@ export const gitAncestrySource: DeployAncestrySource = {
 /** Terminal states: the item no longer blocks milestone completion. */
 const RESOLVED_STATES = new Set(['pass', 'deferred']);
 
-export interface GateBlockingItem {
+interface GateBlockingItem {
   id: string;
   project: string;
   milestone: string;
