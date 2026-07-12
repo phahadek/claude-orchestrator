@@ -63,7 +63,9 @@ const fixedTrigger = (sha: string | null): DeployAdvanceTrigger => ({
 describe('register', () => {
   it('registers a job with the Scheduler that runs on tick', async () => {
     const run = vi.fn(async () => undefined);
-    const scheduler = { register: vi.fn(({ run: r }) => run.mockImplementation(r)) };
+    const scheduler = {
+      register: vi.fn(({ run: r }) => run.mockImplementation(r)),
+    };
     register(scheduler as never);
     expect(scheduler.register).toHaveBeenCalledTimes(1);
     const opts = scheduler.register.mock.calls[0][0];
@@ -137,7 +139,8 @@ describe('runGateReconcilerTick', () => {
     const followupFiler: FollowupFixTaskFiler = {
       fileFollowupFixTask: vi.fn(async () => ({
         taskId: 'notion:followup-1',
-        taskTitle: 'Fix gate item: Verify the deploy script writes the new env var',
+        taskTitle:
+          'Fix gate item: Verify the deploy script writes the new env var',
       })),
     };
     const result = await runGateReconcilerTick({
