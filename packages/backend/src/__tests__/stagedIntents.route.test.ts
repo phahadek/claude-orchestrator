@@ -185,7 +185,11 @@ describe('POST /api/staged-intents — kind validation', () => {
     ]) {
       const res = await agent
         .post('/api/staged-intents')
-        .send({ kind, projectId: 'proj-kinds', payload: { taskId: 'notion:abc' } });
+        .send({
+          kind,
+          projectId: 'proj-kinds',
+          payload: { taskId: 'notion:abc' },
+        });
       expect(res.status).toBe(201);
     }
   });
