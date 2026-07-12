@@ -73,6 +73,8 @@ import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
 import { createStagedIntentsRouter } from './routes/stagedIntents';
 import { createTaskIntentsRouter } from './routes/taskIntents';
 import { createOpsJournalRouter } from './routes/opsJournal';
+import { createOpsLaunchRouter } from './routes/opsLaunch';
+import { OpsSessionLauncher } from './orchestration/OpsSessionLauncher';
 import { runBootSequence, getActiveBootTracker } from './bootSequence';
 import { logger } from './logger';
 import {
@@ -201,6 +203,8 @@ app.use('/api/diagnostics', createDiagnosticsRouter());
 app.use('/api', createPlanUsageRouter());
 app.use('/api', createStagedIntentsRouter());
 app.use('/api', createOpsJournalRouter());
+const opsSessionLauncher = new OpsSessionLauncher(sessionManager);
+app.use('/api', createOpsLaunchRouter(opsSessionLauncher));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')),
@@ -370,6 +374,7 @@ updateChecker.register(scheduler);
 
 // Register all periodic sweepers with the Scheduler.
 autoLauncher.register(scheduler);
+opsSessionLauncher.register(scheduler);
 orphanedTaskSweeper.register(scheduler);
 stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);

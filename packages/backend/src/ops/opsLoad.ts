@@ -88,7 +88,7 @@ interface TaskRef {
   url: string;
 }
 
-interface OpsTaskEntry extends TaskRef {
+export interface OpsTaskEntry extends TaskRef {
   type: string;
   mode: 'operational' | 'investigation';
   priority?: string;

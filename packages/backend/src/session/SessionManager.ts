@@ -265,6 +265,13 @@ export interface StartOptions {
    * Used for branch deletion and other GitHub API calls in completeStart.
    */
   repo?: string;
+  /**
+   * Backend-injected ops context for an Ops(N)-launched session (loadOpsContext
+   * output + the task's ops_journal entry, rendered as markdown). Appended to
+   * the pre-fetched task content, same as file snippets — the session never
+   * runs the vendored /ops skill to assemble this itself.
+   */
+  opsContext?: string;
 }
 
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
@@ -839,6 +846,7 @@ export class SessionManager extends EventEmitter {
       milestoneId = null,
       taskId: precomputedTaskId,
       repo: resolvedRepo,
+      opsContext,
     } = options;
 
     const project = getProjectById(projectId)!;
@@ -1132,6 +1140,15 @@ export class SessionManager extends EventEmitter {
           `[SessionManager] failed to read task files for ${sessionId.slice(0, 8)}: ${err}`,
         );
       }
+    }
+
+    if (opsContext) {
+      taskContent = taskContent
+        ? `${taskContent}\n\n${opsContext}`
+        : opsContext;
+      logger.info(
+        `[SessionManager] appended ops context for ${sessionId.slice(0, 8)}`,
+      );
     }
 
     let sessionContextContent: string | undefined;
