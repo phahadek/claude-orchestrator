@@ -118,9 +118,7 @@ describe('computeMilestoneDependencyCandidates', () => {
       },
     ];
 
-    expect(() =>
-      computeMilestoneDependencyCandidates(tasks),
-    ).not.toThrow();
+    expect(() => computeMilestoneDependencyCandidates(tasks)).not.toThrow();
     const result = computeMilestoneDependencyCandidates(tasks);
     expect(result).toEqual([
       { taskId: 'task-1', candidateBlockers: [], declaredDeps: [] },

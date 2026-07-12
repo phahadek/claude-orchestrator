@@ -102,8 +102,7 @@ export function computeMilestoneDependencyCandidates(
         other.regions.packages,
       );
       const sharedFiles = intersect(task.regions.files, other.regions.files);
-      if (!declared && !sharedPackages.length && !sharedFiles.length)
-        continue;
+      if (!declared && !sharedPackages.length && !sharedFiles.length) continue;
       candidatesByNormId.set(otherNormId, {
         taskId: other.id,
         reason: buildReason(declared, sharedPackages, sharedFiles),
