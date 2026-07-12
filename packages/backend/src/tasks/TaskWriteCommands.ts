@@ -7,7 +7,10 @@ import type {
 import type { TaskBodySections } from './bodyRender';
 import { getTaskCache } from '../db/queries';
 import { checkReadiness, ReadinessGateError } from './readinessGate';
-import { checkGroomingPromotionGate, GroomingGateError } from '../groom/groomGate';
+import {
+  checkGroomingPromotionGate,
+  GroomingGateError,
+} from '../groom/groomGate';
 import { recordEvent } from '../audit/AuditLog';
 
 /**
