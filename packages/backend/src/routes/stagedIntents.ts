@@ -19,7 +19,7 @@ import {
  * and a human applies or rejects. Apply always dispatches through
  * TaskWriteCommands — never a bespoke per-producer write.
  */
-interface StagedIntent {
+export interface StagedIntent {
   id: string;
   kind: string;
   payload: unknown;
@@ -59,7 +59,7 @@ interface ArchivePayload {
 }
 
 /** Intent kinds accepted by POST /staged-intents. */
-const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
+export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'task.create',
   'task.setStatus',
   'task.setDependsOn',
@@ -67,6 +67,31 @@ const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'task.setProperties',
   'task.archive',
 ]);
+
+/**
+ * Stage a task-write intent into the shared in-memory store — the single
+ * chokepoint both the human-facing POST /staged-intents route and the
+ * loopback session stage endpoint (POST /api/task-intents) write through.
+ * Never touches the task backend; staging is purely in-memory bookkeeping
+ * until a human applies (or rejects) the intent.
+ */
+export function stageIntent(
+  kind: string,
+  payload: unknown,
+  projectId: string,
+  groupId?: string | null,
+): StagedIntent {
+  const intent: StagedIntent = {
+    id: randomUUID(),
+    kind,
+    payload: payload ?? null,
+    projectId,
+    createdAt: Date.now(),
+    groupId: groupId ?? null,
+  };
+  store.set(intent.id, intent);
+  return intent;
+}
 
 /**
  * Archive and the structural intents (body/property rewrites) are
@@ -186,15 +211,7 @@ export function createStagedIntentsRouter(): Router {
       return;
     }
 
-    const intent: StagedIntent = {
-      id: randomUUID(),
-      kind,
-      payload: body.payload ?? null,
-      projectId,
-      createdAt: Date.now(),
-      groupId,
-    };
-    store.set(intent.id, intent);
+    const intent = stageIntent(kind, body.payload, projectId, groupId);
     res.status(201).json(intent);
   });
 

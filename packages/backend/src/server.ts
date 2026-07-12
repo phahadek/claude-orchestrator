@@ -71,6 +71,7 @@ import setupRouter, { createSetupModeGuard } from './routes/setup';
 import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
 import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
 import { createStagedIntentsRouter } from './routes/stagedIntents';
+import { createTaskIntentsRouter } from './routes/taskIntents';
 import { createOpsJournalRouter } from './routes/opsJournal';
 import { runBootSequence, getActiveBootTracker } from './bootSequence';
 import { logger } from './logger';
@@ -131,6 +132,11 @@ const app = express();
 app.use(express.json());
 // Public enrollment routes (bootstrap, request, status) — no token required
 app.use('/api/enrollment', createPublicEnrollmentRouter());
+// Loopback-only session stage endpoint: authed by its own scoped session
+// credential (never a device token), so it is mounted ahead of
+// requireDeviceAuth deliberately — it must stay reachable only via
+// requireSessionStageAuth, never fall back to the device-auth surface.
+app.use('/api', createTaskIntentsRouter());
 // Setup endpoints are public — wizard UI uses them before credentials exist
 app.use('/api', setupRouter);
 // Gate all other /api routes when setup has not been completed

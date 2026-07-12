@@ -46,6 +46,7 @@ export class CliSessionRunner implements ISessionRunner {
       mcpConfigPath,
       systemPromptFilePath,
       disableAutoCompact,
+      extraEnv,
     } = options;
 
     const spawnArgs = [
@@ -92,6 +93,7 @@ export class CliSessionRunner implements ISessionRunner {
         ...process.env,
         BASH_MAX_OUTPUT_LENGTH: String(BASH_MAX_OUTPUT_LENGTH),
         BASH_DEFAULT_TIMEOUT_MS: String(BASH_DEFAULT_TIMEOUT_MS),
+        ...extraEnv,
       },
       ...(process.platform !== 'win32' && { detached: true }),
     });
