@@ -1,7 +1,11 @@
 import { logger } from '../logger';
 import type { SessionManager } from '../session/SessionManager';
 import type { Scheduler } from './Scheduler';
-import { loadOpsContext, type OpsLoadResult, type OpsTaskEntry } from '../ops/opsLoad';
+import {
+  loadOpsContext,
+  type OpsLoadResult,
+  type OpsTaskEntry,
+} from '../ops/opsLoad';
 import { buildOpsSessionContext } from '../ops/opsSessionContext';
 
 const POLL_INTERVAL_MS = 15_000;
@@ -137,16 +141,21 @@ export class OpsSessionLauncher {
     opsContext: OpsLoadResult,
     task: OpsTaskEntry,
   ): Promise<void> {
-    const taskUrl = task.url || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
+    const taskUrl =
+      task.url || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
     try {
-      const sessionId = await this.sessionManager.start(taskUrl, projectContextUrl, {
-        projectId,
-        taskName: task.title || taskUrl,
-        milestoneId,
-        taskKind: 'milestone',
-        taskId: task.id,
-        opsContext: buildOpsSessionContext(opsContext, task),
-      });
+      const sessionId = await this.sessionManager.start(
+        taskUrl,
+        projectContextUrl,
+        {
+          projectId,
+          taskName: task.title || taskUrl,
+          milestoneId,
+          taskKind: 'milestone',
+          taskId: task.id,
+          opsContext: buildOpsSessionContext(opsContext, task),
+        },
+      );
       logger.info(
         `[OpsSessionLauncher] launched session ${sessionId.slice(0, 8)} for ops task ${task.id}`,
       );

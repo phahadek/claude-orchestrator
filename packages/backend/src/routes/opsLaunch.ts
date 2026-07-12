@@ -37,7 +37,9 @@ export function createOpsLaunchRouter(launcher: OpsSessionLauncher): Router {
     }
     const project = getProjectRowById(milestone.project_id);
     if (!project) {
-      res.status(404).json({ error: `unknown project ${milestone.project_id}` });
+      res
+        .status(404)
+        .json({ error: `unknown project ${milestone.project_id}` });
       return;
     }
 
@@ -58,7 +60,9 @@ export function createOpsLaunchRouter(launcher: OpsSessionLauncher): Router {
     } catch (err) {
       res
         .status(500)
-        .json({ error: err instanceof Error ? err.message : 'ops launch failed' });
+        .json({
+          error: err instanceof Error ? err.message : 'ops launch failed',
+        });
     }
   });
 

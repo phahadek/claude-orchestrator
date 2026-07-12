@@ -25,9 +25,7 @@ function makeTask(overrides: Partial<OpsTaskEntry> = {}): OpsTaskEntry {
   };
 }
 
-function makeOpsContext(
-  executable: OpsTaskEntry[] = [],
-): OpsLoadResult {
+function makeOpsContext(executable: OpsTaskEntry[] = []): OpsLoadResult {
   return {
     contextPages: [],
     boards: {
@@ -121,7 +119,11 @@ describe('OpsSessionLauncher', () => {
     expect(launcher.hasDeferred('task-blocked')).toBe(true);
 
     // The dependency completes — the next poll picks it up as executable+ready.
-    const unblockedTask = { ...blockedTask, blockingDepIds: [], depStatus: 'ready' as const };
+    const unblockedTask = {
+      ...blockedTask,
+      blockingDepIds: [],
+      depStatus: 'ready' as const,
+    };
     (loadOpsContext as ReturnType<typeof vi.fn>).mockResolvedValue(
       makeOpsContext([unblockedTask]),
     );
