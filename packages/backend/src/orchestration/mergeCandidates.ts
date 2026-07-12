@@ -30,9 +30,9 @@
 const DONE_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
 
 /** Default fraction of milestone tasks a file may appear in before being excluded as a hub file. */
-export const DEFAULT_HUB_FREQUENCY_CUTOFF = 0.25;
+const DEFAULT_HUB_FREQUENCY_CUTOFF = 0.25;
 /** Default minimum containment ratio (sharedFiles / min(|A|, |B|)) to trip a candidate. */
-export const DEFAULT_CONTAINMENT_THRESHOLD = 0.5;
+const DEFAULT_CONTAINMENT_THRESHOLD = 0.5;
 
 interface TaskRegionsInput {
   /** Coarse package paths this task's declared scope resolves to (advisory only). */
