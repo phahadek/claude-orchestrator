@@ -6,14 +6,14 @@ export type GateItemClassification =
   | 'Opportunistic'
   | 'needs-triage';
 
-export interface GateItemSource {
+interface GateItemSource {
   sourceTaskId: string;
   sourceTaskTitle: string;
   mergeCommit?: string;
   addedAt: string;
 }
 
-export interface GateItemEvent {
+interface GateItemEvent {
   disposition: string;
   evidence?: unknown;
   filedFollowon?: string;
