@@ -24,6 +24,9 @@ import {
   reconcileGateRunnability,
   nextRunnableGateItems,
   getGateItem,
+  getGateItemDetail,
+  listGateItems,
+  listMilestoneReadiness,
   appendGateItemEvent,
   approveGateItem,
   type DeployAncestrySource,
@@ -207,5 +210,138 @@ describe('approveGateItem', () => {
   it('rejects approval when not pending-approval', () => {
     const item = makeItem({ classification: 'Prod-Mutating' });
     expect(() => approveGateItem(item.id)).toThrow();
+  });
+});
+
+describe('getGateItemDetail', () => {
+  it('returns the item split from its sources and event history, by value', () => {
+    const item = makeItem({
+      sources: [{ sourceTaskId: 'notion:abc', sourceTaskTitle: 'Add env var' }],
+    });
+    appendGateItemEvent(item.id, { disposition: 'fail', evidence: { note: 'x' } });
+
+    const detail = getGateItemDetail(item.id);
+    expect(detail).toBeDefined();
+    expect(detail!.item.id).toBe(item.id);
+    expect(detail!.item).not.toHaveProperty('sources');
+    expect(detail!.item).not.toHaveProperty('events');
+    expect(detail!.sources).toEqual([
+      expect.objectContaining({ sourceTaskId: 'notion:abc' }),
+    ]);
+    expect(detail!.events).toEqual([
+      expect.objectContaining({ disposition: 'fail' }),
+    ]);
+  });
+
+  it('returns undefined for an unknown item', () => {
+    expect(getGateItemDetail('no-such-id')).toBeUndefined();
+  });
+});
+
+describe('listGateItems', () => {
+  it('filters by project, milestone, state, classification, and runnable', () => {
+    const a = makeItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      classification: 'Read-Only',
+    });
+    const b = makeItem({
+      project: 'other-project',
+      milestone: 'M12',
+      classification: 'Prod-Mutating',
+    });
+    const c = makeItem({
+      project: 'polimarket-analyser',
+      milestone: 'M13',
+      classification: 'Read-Only',
+    });
+    setMinDeployedCommit(a.id, 'sha1', new Date(1).toISOString());
+    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+
+    expect(
+      listGateItems({ project: 'polimarket-analyser' }).items.map((i) => i.id),
+    ).toEqual(expect.arrayContaining([a.id, c.id]));
+    expect(listGateItems({ milestone: 'M13' }).items.map((i) => i.id)).toEqual([
+      c.id,
+    ]);
+    expect(
+      listGateItems({ classification: 'Prod-Mutating' }).items.map(
+        (i) => i.id,
+      ),
+    ).toEqual([b.id]);
+    expect(listGateItems({ state: 'runnable' }).items.map((i) => i.id)).toEqual(
+      [a.id],
+    );
+    expect(listGateItems({ runnable: true }).items.map((i) => i.id)).toEqual([
+      a.id,
+    ]);
+    expect(
+      listGateItems({ runnable: false }).items.map((i) => i.id).sort(),
+    ).toEqual([b.id, c.id].sort());
+  });
+
+  it('paginates and never returns an unbounded load', () => {
+    for (let i = 0; i < 5; i++) {
+      makeItem({ text: `item ${i}` });
+    }
+    const page1 = listGateItems({ limit: 2, page: 1 });
+    expect(page1.items).toHaveLength(2);
+    expect(page1.total).toBe(5);
+    expect(page1.page).toBe(1);
+
+    const page2 = listGateItems({ limit: 2, page: 2 });
+    expect(page2.items).toHaveLength(2);
+
+    const page3 = listGateItems({ limit: 2, page: 3 });
+    expect(page3.items).toHaveLength(1);
+
+    const ids = [...page1.items, ...page2.items, ...page3.items].map(
+      (i) => i.id,
+    );
+    expect(new Set(ids).size).toBe(5);
+  });
+
+  it('defaults to a bounded page size when none is given', () => {
+    for (let i = 0; i < 3; i++) {
+      makeItem({ text: `item ${i}` });
+    }
+    const result = listGateItems();
+    expect(result.items).toHaveLength(3);
+    expect(result.page).toBe(1);
+  });
+});
+
+describe('listMilestoneReadiness', () => {
+  it('rolls up per-milestone green/blocked status across a project', () => {
+    const greenItem = makeItem({ milestone: 'M12', text: 'green' });
+    appendGateItemEvent(greenItem.id, { disposition: 'pass' });
+    makeItem({ milestone: 'M13', text: 'blocked' });
+
+    const rows = listMilestoneReadiness({ project: 'polimarket-analyser' });
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          project: 'polimarket-analyser',
+          milestone: 'M12',
+          status: 'green',
+          blockingCount: 0,
+        }),
+        expect.objectContaining({
+          project: 'polimarket-analyser',
+          milestone: 'M13',
+          status: 'blocked',
+          blockingCount: 1,
+        }),
+      ]),
+    );
+  });
+
+  it('rolls up across projects when project is omitted', () => {
+    makeItem({ project: 'proj-a', milestone: 'M12' });
+    makeItem({ project: 'proj-b', milestone: 'M12' });
+
+    const rows = listMilestoneReadiness();
+    const projects = rows.map((r) => r.project).sort();
+    expect(projects).toEqual(['proj-a', 'proj-b']);
   });
 });

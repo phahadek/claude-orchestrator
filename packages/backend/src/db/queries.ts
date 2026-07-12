@@ -40,6 +40,7 @@ import type {
   GateItemEventRow,
   NewGateItemEventRow,
   GateAccretionRow,
+  GateItemClassification,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -3488,6 +3489,74 @@ export function updateGateItemMinDeployedCommit(
     min_deployed_commit: minDeployedCommit,
     updated_at: updatedAt,
   });
+}
+
+/** All gate items for a project, regardless of milestone — the readiness rollup's per-project lookup. */
+export function listGateItemsByProject(project: string): GateItemRow[] {
+  const stmt = db.prepare<{ project: string }>(
+    `SELECT * FROM gate_item WHERE project = @project`,
+  );
+  return stmt.all({ project }) as GateItemRow[];
+}
+
+export interface GateItemFilter {
+  project?: string;
+  milestone?: string;
+  state?: string;
+  classification?: GateItemClassification;
+  runnable?: boolean;
+}
+
+function buildGateItemWhereClause(filter: GateItemFilter): {
+  clause: string;
+  params: Record<string, string>;
+} {
+  const conditions: string[] = [];
+  const params: Record<string, string> = {};
+  if (filter.project) {
+    conditions.push('project = @project');
+    params.project = filter.project;
+  }
+  if (filter.milestone) {
+    conditions.push('milestone = @milestone');
+    params.milestone = filter.milestone;
+  }
+  if (filter.classification) {
+    conditions.push('classification = @classification');
+    params.classification = filter.classification;
+  }
+  if (filter.state) {
+    conditions.push('state = @state');
+    params.state = filter.state;
+  }
+  if (filter.runnable !== undefined) {
+    conditions.push(filter.runnable ? "state = 'runnable'" : "state != 'runnable'");
+  }
+  return {
+    clause: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
+    params,
+  };
+}
+
+/** Paginated, filtered read of gate_item — never an unbounded load; caller supplies limit/offset. */
+export function listGateItemsFiltered(
+  filter: GateItemFilter,
+  limit: number,
+  offset: number,
+): GateItemRow[] {
+  const { clause, params } = buildGateItemWhereClause(filter);
+  const stmt = db.prepare(
+    `SELECT * FROM gate_item ${clause} ORDER BY updated_at DESC, id ASC LIMIT @limit OFFSET @offset`,
+  );
+  return stmt.all({ ...params, limit, offset }) as GateItemRow[];
+}
+
+/** Total count matching the same filter as listGateItemsFiltered — powers the `total` in a paginated response. */
+export function countGateItemsFiltered(filter: GateItemFilter): number {
+  const { clause, params } = buildGateItemWhereClause(filter);
+  const stmt = db.prepare(`SELECT COUNT(*) AS count FROM gate_item ${clause}`);
+  const row = stmt.get(params) as { count: number };
+  return row.count;
 }
 
 // ─── gate_accretion ───────────────────────────────────────────────────────

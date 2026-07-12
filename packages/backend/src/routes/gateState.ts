@@ -5,6 +5,9 @@ import {
   reconcileGateRunnability,
   nextRunnableGateItems,
   getGateItem,
+  getGateItemDetail,
+  listGateItems,
+  listMilestoneReadiness,
   appendGateItemEvent,
   approveGateItem,
 } from '../gate/gateService';
@@ -64,6 +67,41 @@ export function createGateStateRouter(): Router {
     );
   });
 
+  // GET /api/gate/items?project=P&milestone=M12&state=open&classification=Read-Only&runnable=true&page=1&limit=20
+  router.get('/gate/items', (req: Request, res: Response) => {
+    const query = req.query as Record<string, unknown>;
+    const stringParam = (key: string): string | undefined =>
+      typeof query[key] === 'string' ? (query[key] as string) : undefined;
+    const numberParam = (key: string): number | undefined => {
+      const raw = stringParam(key);
+      if (raw === undefined) return undefined;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const runnableRaw = stringParam('runnable');
+    res.json(
+      listGateItems({
+        project: stringParam('project'),
+        milestone: stringParam('milestone'),
+        state: stringParam('state'),
+        classification: stringParam('classification') as
+          | GateItemClassification
+          | undefined,
+        runnable:
+          runnableRaw === undefined ? undefined : runnableRaw === 'true',
+        page: numberParam('page'),
+        limit: numberParam('limit'),
+      }),
+    );
+  });
+
+  // GET /api/gate/milestones/readiness?project=P
+  router.get('/gate/milestones/readiness', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : undefined;
+    res.json(listMilestoneReadiness({ project }));
+  });
+
   // GET /api/gate/items/:id
   router.get('/gate/items/:id', (req: Request, res: Response) => {
     const item = getGateItem(String(req.params.id));
@@ -72,6 +110,16 @@ export function createGateStateRouter(): Router {
       return;
     }
     res.json(item);
+  });
+
+  // GET /api/gate/items/:id/detail
+  router.get('/gate/items/:id/detail', (req: Request, res: Response) => {
+    const detail = getGateItemDetail(String(req.params.id));
+    if (!detail) {
+      res.status(404).json({ error: `no gate item ${req.params.id}` });
+      return;
+    }
+    res.json(detail);
   });
 
   // POST /api/gate/items/:id/events  { disposition, evidence, filedFollowon, deploySha, operator }

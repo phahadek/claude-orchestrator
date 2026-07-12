@@ -164,6 +164,122 @@ export function getGateItem(id: string): GateItem | undefined {
   return gateStore.getItem(id);
 }
 
+/** The item's full detail: its denormalized fields plus its sources and event history, by value. */
+export function getGateItemDetail(
+  id: string,
+): gateStore.GateItemDetail | undefined {
+  return gateStore.getItemDetail(id);
+}
+
+const DEFAULT_LIST_LIMIT = 20;
+const MAX_LIST_LIMIT = 100;
+
+export interface ListGateItemsOptions {
+  project?: string;
+  milestone?: string;
+  state?: string;
+  classification?: GateItemClassification;
+  runnable?: boolean;
+  page?: number;
+  limit?: number;
+}
+
+export interface ListGateItemsResult {
+  items: GateItem[];
+  total: number;
+  page: number;
+}
+
+/** Paginated, filtered read over gate items — never an unbounded load. */
+export function listGateItems(
+  options: ListGateItemsOptions = {},
+): ListGateItemsResult {
+  const page =
+    options.page !== undefined && options.page > 0
+      ? Math.floor(options.page)
+      : 1;
+  const limit = Math.min(
+    options.limit !== undefined && options.limit > 0
+      ? Math.floor(options.limit)
+      : DEFAULT_LIST_LIMIT,
+    MAX_LIST_LIMIT,
+  );
+  const offset = (page - 1) * limit;
+  const { items, total } = gateStore.listFiltered(
+    {
+      project: options.project,
+      milestone: options.milestone,
+      state: options.state,
+      classification: options.classification,
+      runnable: options.runnable,
+    },
+    limit,
+    offset,
+  );
+  return { items, total, page };
+}
+
+export interface MilestoneReadiness {
+  project: string;
+  milestone: string;
+  status: 'green' | 'blocked';
+  blockingCount: number;
+}
+
+export interface ListMilestoneReadinessOptions {
+  project?: string;
+}
+
+interface MilestoneGroup {
+  project: string;
+  milestone: string;
+  items: GateItem[];
+}
+
+/** The multi-milestone / multi-project readiness rollup: completion-gating's and the overview's input. */
+export function listMilestoneReadiness(
+  options: ListMilestoneReadinessOptions = {},
+): MilestoneReadiness[] {
+  const items = options.project
+    ? gateStore.listByProject(options.project)
+    : gateStore.listAll();
+
+  const groups = new Map<string, MilestoneGroup>();
+  for (const item of items) {
+    const key = JSON.stringify([item.project, item.milestone]);
+    const group = groups.get(key);
+    if (group) {
+      group.items.push(item);
+    } else {
+      groups.set(key, {
+        project: item.project,
+        milestone: item.milestone,
+        items: [item],
+      });
+    }
+  }
+
+  return Array.from(groups.values())
+    .map((group) => {
+      const blockingCount = group.items.filter(
+        (item) => !RESOLVED_STATES.has(item.state),
+      ).length;
+      const status: 'green' | 'blocked' =
+        blockingCount === 0 ? 'green' : 'blocked';
+      return {
+        project: group.project,
+        milestone: group.milestone,
+        status,
+        blockingCount,
+      };
+    })
+    .sort(
+      (a, b) =>
+        a.project.localeCompare(b.project) ||
+        a.milestone.localeCompare(b.milestone),
+    );
+}
+
 export interface AppendGateItemEventInput {
   disposition: string;
   evidence?: unknown;
