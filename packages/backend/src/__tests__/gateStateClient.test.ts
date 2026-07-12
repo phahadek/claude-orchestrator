@@ -103,7 +103,11 @@ describe('gate-state-client.mjs', () => {
       res.end(JSON.stringify({ id: 'gi-1' }));
     });
 
-    const result = await fetchGateItem({ port, token: 't', gateItemId: 'gi-1' });
+    const result = await fetchGateItem({
+      port,
+      token: 't',
+      gateItemId: 'gi-1',
+    });
 
     expect(receivedPath).toBe('/api/gate/items/gi-1');
     expect(JSON.parse(result.body)).toEqual({ id: 'gi-1' });
