@@ -225,6 +225,43 @@ export function runMigrations(target: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_ops_journal_project_milestone ON ops_journal(project, milestone);
 
+    CREATE TABLE IF NOT EXISTS gate_item (
+      id                     TEXT    PRIMARY KEY,
+      project                TEXT    NOT NULL,
+      milestone              TEXT    NOT NULL,
+      text                   TEXT    NOT NULL,
+      classification         TEXT    NOT NULL,
+      min_deployed_commit    TEXT,
+      state                  TEXT    NOT NULL,
+      current_disposition    TEXT,
+      updated_at             TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_gate_item_project_milestone ON gate_item(project, milestone);
+
+    CREATE TABLE IF NOT EXISTS gate_item_source (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      gate_item_id      TEXT    NOT NULL,
+      source_task_id    TEXT    NOT NULL,
+      source_task_title TEXT    NOT NULL,
+      merge_commit      TEXT,
+      added_at          TEXT    NOT NULL,
+      FOREIGN KEY (gate_item_id) REFERENCES gate_item(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_gate_item_source_gate_item_id ON gate_item_source(gate_item_id);
+
+    CREATE TABLE IF NOT EXISTS gate_item_event (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      gate_item_id   TEXT    NOT NULL,
+      disposition    TEXT    NOT NULL,
+      evidence       TEXT,
+      filed_followon TEXT,
+      deploy_sha     TEXT,
+      operator       TEXT,
+      at             TEXT    NOT NULL,
+      FOREIGN KEY (gate_item_id) REFERENCES gate_item(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_gate_item_event_gate_item_id ON gate_item_event(gate_item_id);
+
     CREATE TABLE IF NOT EXISTS pending_review_sync (
       pr_number  INTEGER NOT NULL,
       repo       TEXT    NOT NULL,
