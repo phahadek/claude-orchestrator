@@ -58,11 +58,9 @@ export function createOpsLaunchRouter(launcher: OpsSessionLauncher): Router {
       });
       res.status(202).json(result);
     } catch (err) {
-      res
-        .status(500)
-        .json({
-          error: err instanceof Error ? err.message : 'ops launch failed',
-        });
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'ops launch failed',
+      });
     }
   });
 

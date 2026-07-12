@@ -81,7 +81,7 @@ interface BoardRef {
   board: string; // Notion board (data source) id
 }
 
-export interface TaskRef {
+interface TaskRef {
   id: string;
   title: string;
   status: string;
