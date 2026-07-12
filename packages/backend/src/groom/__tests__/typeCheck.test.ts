@@ -46,9 +46,11 @@ describe('scanTypeCheck', () => {
   });
 
   it('is exempt (n/a) for Design tasks', () => {
-    expect(scanTypeCheck('📐 Design', 'implement the module for real')).toEqual({
-      decision: 'n/a',
-    });
+    expect(scanTypeCheck('📐 Design', 'implement the module for real')).toEqual(
+      {
+        decision: 'n/a',
+      },
+    );
   });
 
   it('handles a null/undefined body without error', () => {

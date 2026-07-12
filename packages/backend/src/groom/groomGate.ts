@@ -20,9 +20,11 @@ const SIZE_CHECK_DECISIONS = new Set([
 
 export interface GroomingGateEntry {
   size_check?: { decision?: unknown; [key: string]: unknown } | null;
-  type_check?:
-    | { decision?: unknown; disposition?: unknown; [key: string]: unknown }
-    | null;
+  type_check?: {
+    decision?: unknown;
+    disposition?: unknown;
+    [key: string]: unknown;
+  } | null;
 }
 
 export interface GroomingGateResult {

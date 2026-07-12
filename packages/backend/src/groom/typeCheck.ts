@@ -97,5 +97,7 @@ export function scanTypeCheck(
   if (!markers) return { decision: 'n/a' };
 
   const signals = findSignals(text, markers);
-  return signals.length > 0 ? { decision: 'flagged', signals } : { decision: 'none' };
+  return signals.length > 0
+    ? { decision: 'flagged', signals }
+    : { decision: 'none' };
 }
