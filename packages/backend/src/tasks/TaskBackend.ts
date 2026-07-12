@@ -1,5 +1,6 @@
 import type { ResolvedTask } from './types';
 import type { TaskBodySections } from './bodyRender';
+import type { GroomingGateEntry } from '../groom/groomGate';
 import { ProjectService } from '../projects/ProjectService';
 import { NotionClient } from '../notion/NotionClient';
 import { NotionTaskBackend } from './NotionTaskBackend';
@@ -40,6 +41,14 @@ export interface UpdateStatusOptions {
    * cannot set this.
    */
   readinessOverride?: { reason: string };
+  /**
+   * The /groom skill's recorded size_check / type_check disposition for this
+   * task, carried on the same task.setStatus intent as the Ready flip. Only
+   * honored by TaskWriteCommands.setStatus — when present, it is checked via
+   * checkGroomingPromotionGate (see groomGate.ts) before the transition lands,
+   * the command-layer successor to the retired groom-gate.mjs PreToolUse hook.
+   */
+  groomingGate?: GroomingGateEntry;
 }
 
 /** Provenance options shared by the write-side port methods (create / deps). */

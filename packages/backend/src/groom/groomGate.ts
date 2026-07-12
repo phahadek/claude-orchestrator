@@ -81,3 +81,17 @@ export function checkGroomingPromotionGate(
 
   return { allowed: reasons.length === 0, reasons };
 }
+
+/**
+ * Thrown by the command layer (TaskWriteCommands.setStatus) when a Ready
+ * transition carrying a grooming-gate entry fails checkGroomingPromotionGate.
+ * This is the enforcement point that replaces the groom-gate.mjs PreToolUse
+ * hook now that the Ready-flip goes through the staged-intent surface instead
+ * of a direct notion-update-page call the hook could intercept.
+ */
+export class GroomingGateError extends Error {
+  constructor(public readonly reasons: string[]) {
+    super(`grooming promotion gate blocked: ${reasons.join('; ')}`);
+    this.name = 'GroomingGateError';
+  }
+}

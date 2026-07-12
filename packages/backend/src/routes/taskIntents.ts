@@ -31,8 +31,13 @@ export function createTaskIntentsRouter(): Router {
         return;
       }
 
-      const body = req.body as { kind?: unknown; payload?: unknown };
+      const body = req.body as {
+        kind?: unknown;
+        payload?: unknown;
+        groupId?: unknown;
+      };
       const kind = typeof body.kind === 'string' ? body.kind : null;
+      const groupId = typeof body.groupId === 'string' ? body.groupId : null;
 
       if (!kind) {
         res.status(400).json({ error: 'kind is required' });
@@ -43,7 +48,12 @@ export function createTaskIntentsRouter(): Router {
         return;
       }
 
-      const intent = stageIntent(kind, body.payload, session.project_id);
+      const intent = stageIntent(
+        kind,
+        body.payload,
+        session.project_id,
+        groupId,
+      );
       res.status(201).json(intent);
     },
   );

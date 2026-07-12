@@ -173,6 +173,79 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
   });
 });
 
+describe('POST /api/staged-intents/:id/apply — grooming promotion gate', () => {
+  it('blocks a Ready transition whose staged groomingGate entry is undispositioned, and keeps the intent staged with an annotation', async () => {
+    const updateStatus = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll clear.'),
+      updateStatus,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-groom-blocked',
+      payload: {
+        taskId: 'notion:abc',
+        status: 'Ready',
+        groomingGate: { size_check: null, type_check: null },
+      },
+    });
+    expect(staged.status).toBe(201);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(409);
+    expect(applied.body.reasons.join(' ')).toMatch(/size_check/);
+    expect(updateStatus).not.toHaveBeenCalled();
+
+    const list = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-groom-blocked' });
+    expect(list.body.intents[0].annotation).toEqual({
+      blocked: true,
+      reasons: expect.arrayContaining([expect.stringMatching(/size_check/)]),
+    });
+  });
+
+  it('applies a Ready transition whose staged groomingGate entry is fully dispositioned', async () => {
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll clear.'),
+      updateStatus,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-groom-clean',
+      payload: {
+        taskId: 'notion:abc',
+        status: 'Ready',
+        groomingGate: {
+          size_check: { decision: 'no_split' },
+          type_check: { decision: 'none' },
+        },
+      },
+    });
+
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(200);
+    expect(updateStatus).toHaveBeenCalledWith(
+      'notion:abc',
+      '🗂️ Ready',
+      expect.objectContaining({ source: 'human' }),
+    );
+  });
+});
+
 describe('POST /api/staged-intents — kind validation', () => {
   it('accepts task.updateBody, task.setProperties, and task.archive', async () => {
     const app = makeApp();

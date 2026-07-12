@@ -12,6 +12,7 @@ import {
   ReadinessGateError,
   type ReadinessViolation,
 } from '../tasks/readinessGate';
+import { GroomingGateError, type GroomingGateEntry } from '../groom/groomGate';
 
 /**
  * The general staged-intent surface: a single chokepoint producers (Groom(N),
@@ -25,8 +26,14 @@ export interface StagedIntent {
   payload: unknown;
   projectId: string;
   createdAt: number;
-  /** Set when the last apply attempt was hard-blocked by the readiness gate. */
-  annotation?: { blocked: true; violations: ReadinessViolation[] } | null;
+  /**
+   * Set when the last apply attempt was hard-blocked by the readiness gate
+   * (violations) or the grooming promotion gate (reasons).
+   */
+  annotation?:
+    | { blocked: true; violations: ReadinessViolation[] }
+    | { blocked: true; reasons: string[] }
+    | null;
   /**
    * Correlates multiple intents that form one structural-change unit (e.g. a
    * split's updateBody + createTask + setDependsOn intents), so the shared
@@ -41,6 +48,8 @@ type CreateTaskPayload = NewTaskFields;
 interface SetStatusPayload {
   taskId: string;
   status: TaskStatus;
+  /** The /groom skill's size_check / type_check disposition — see groomGate.ts. */
+  groomingGate?: GroomingGateEntry;
 }
 interface SetDependsOnPayload {
   taskId: string;
@@ -138,6 +147,7 @@ async function applyIntent(
       await commands.setStatus(payload.taskId, payload.status, {
         source: 'human',
         readinessOverride: override,
+        groomingGate: payload.groomingGate,
       });
       return { ok: true };
     }
@@ -258,6 +268,14 @@ export function createStagedIntentsRouter(): Router {
           res.status(409).json({
             error: err.message,
             violations: err.violations,
+          });
+          return;
+        }
+        if (err instanceof GroomingGateError) {
+          intent.annotation = { blocked: true, reasons: err.reasons };
+          res.status(409).json({
+            error: err.message,
+            reasons: err.reasons,
           });
           return;
         }

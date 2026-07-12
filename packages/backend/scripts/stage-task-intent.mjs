@@ -12,11 +12,16 @@
 // one for a human to review and apply.
 //
 // Usage:
-//   node "$ORCHESTRATOR_STAGE_CLI" <kind> <json-payload>
+//   node "$ORCHESTRATOR_STAGE_CLI" <kind> <json-payload> [groupId]
 //
 // Example:
 //   node "$ORCHESTRATOR_STAGE_CLI" task.setStatus \
 //     '{"taskId":"notion-abc123","status":"In Review"}'
+//
+// The optional [groupId] correlates multiple intents that form one
+// structural-change unit (e.g. a grooming batch's setDependsOn + setStatus
+// intents for the same task) so the shared staged-intent panel can
+// present/apply them as a group.
 
 import http from 'node:http';
 
@@ -25,10 +30,10 @@ function fail(message) {
   process.exit(1);
 }
 
-const [kind, payloadJson] = process.argv.slice(2);
+const [kind, payloadJson, groupId] = process.argv.slice(2);
 if (!kind || payloadJson === undefined) {
   fail(
-    'usage: node stage-task-intent.mjs <kind> <json-payload>\n' +
+    'usage: node stage-task-intent.mjs <kind> <json-payload> [groupId]\n' +
       'example: node stage-task-intent.mjs task.setStatus \'{"taskId":"...","status":"In Review"}\'',
   );
 }
@@ -49,7 +54,9 @@ try {
   fail(`invalid JSON payload: ${payloadJson}`);
 }
 
-const body = JSON.stringify({ kind, payload });
+const body = JSON.stringify(
+  groupId ? { kind, payload, groupId } : { kind, payload },
+);
 
 const req = http.request(
   {
