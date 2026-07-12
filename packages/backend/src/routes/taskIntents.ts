@@ -27,9 +27,7 @@ export function createTaskIntentsRouter(): Router {
 
       const session = getSession(sessionId);
       if (!session?.project_id) {
-        res
-          .status(404)
-          .json({ error: 'session not found or has no project' });
+        res.status(404).json({ error: 'session not found or has no project' });
         return;
       }
 

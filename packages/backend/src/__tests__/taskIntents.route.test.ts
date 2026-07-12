@@ -2,12 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
 
-const { mockGetTaskBackend, mockGetSession, mockGetDeviceByToken } =
-  vi.hoisted(() => ({
+const { mockGetTaskBackend, mockGetSession, mockGetDeviceByToken } = vi.hoisted(
+  () => ({
     mockGetTaskBackend: vi.fn(),
     mockGetSession: vi.fn(),
     mockGetDeviceByToken: vi.fn(),
-  }));
+  }),
+);
 
 vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: mockGetTaskBackend,
@@ -52,7 +53,7 @@ beforeEach(() => {
 });
 
 describe('POST /api/task-intents — loopback session stage endpoint', () => {
-  it('stages an intent for the session credential\'s project without touching the task backend', async () => {
+  it("stages an intent for the session credential's project without touching the task backend", async () => {
     mockGetSession.mockReturnValue({
       session_id: 'session-1',
       project_id: 'proj-1',
@@ -62,7 +63,10 @@ describe('POST /api/task-intents — loopback session stage endpoint', () => {
     const res = await supertest(buildApp())
       .post('/api/task-intents')
       .set('Authorization', `Bearer ${token}`)
-      .send({ kind: 'task.setStatus', payload: { taskId: 't-1', status: 'Done' } });
+      .send({
+        kind: 'task.setStatus',
+        payload: { taskId: 't-1', status: 'Done' },
+      });
 
     expect(res.status).toBe(201);
     expect(res.body.kind).toBe('task.setStatus');

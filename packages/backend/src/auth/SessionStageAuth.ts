@@ -37,7 +37,9 @@ export function revokeStageCredential(sessionId: string): void {
 }
 
 /** Look up the session bound to a stage credential token, or null if invalid/revoked. */
-export function validateStageCredential(token: string): { sessionId: string } | null {
+export function validateStageCredential(
+  token: string,
+): { sessionId: string } | null {
   const cred = credentialsByToken.get(token);
   return cred ? { sessionId: cred.sessionId } : null;
 }
