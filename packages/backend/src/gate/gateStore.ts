@@ -5,6 +5,9 @@ import {
   listGateItemsByMilestone,
   listGateItemsByMilestoneAllProjects,
   listAllGateItems,
+  listGateItemsByProject,
+  listGateItemsFiltered,
+  countGateItemsFiltered,
   insertGateItem,
   updateGateItem,
   updateGateItemMinDeployedCommit,
@@ -16,6 +19,7 @@ import {
   getGateAccretion,
   upsertGateAccretion,
 } from '../db/queries';
+import type { GateItemFilter } from '../db/queries';
 import type {
   GateItemClassification,
   GateAccretionDecision,
@@ -95,6 +99,20 @@ export function getItem(id: string): GateItem | undefined {
   };
 }
 
+export interface GateItemDetail {
+  item: Omit<GateItem, 'sources' | 'events'>;
+  sources: GateItemSource[];
+  events: GateItemEvent[];
+}
+
+/** Full read of one gate item, split into its denormalized fields and its associations, by value. */
+export function getItemDetail(id: string): GateItemDetail | undefined {
+  const full = getItem(id);
+  if (!full) return undefined;
+  const { sources, events, ...item } = full;
+  return { item, sources, events };
+}
+
 /** All gate items for a milestone, each with its sources and event history. */
 export function listByMilestone(
   project: string,
@@ -117,6 +135,31 @@ export function listAll(): GateItem[] {
   return listAllGateItems()
     .map((row) => getItem(row.id))
     .filter((item): item is GateItem => item !== undefined);
+}
+
+/** Every gate item for a single project, regardless of milestone — the readiness rollup's per-project lookup. */
+export function listByProject(project: string): GateItem[] {
+  return listGateItemsByProject(project)
+    .map((row) => getItem(row.id))
+    .filter((item): item is GateItem => item !== undefined);
+}
+
+export interface ListFilteredResult {
+  items: GateItem[];
+  total: number;
+}
+
+/** Paginated, filtered read of gate items — never an unbounded load. */
+export function listFiltered(
+  filter: GateItemFilter,
+  limit: number,
+  offset: number,
+): ListFilteredResult {
+  const items = listGateItemsFiltered(filter, limit, offset)
+    .map((row) => getItem(row.id))
+    .filter((item): item is GateItem => item !== undefined);
+  const total = countGateItemsFiltered(filter);
+  return { items, total };
 }
 
 export interface NewGateItemInput {
