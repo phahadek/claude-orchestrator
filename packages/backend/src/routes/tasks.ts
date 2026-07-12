@@ -727,8 +727,7 @@ export function createTasksRouter(
       sourceMilestoneId?: unknown;
       targetMilestoneId?: unknown;
     };
-    const projectId =
-      typeof body.projectId === 'string' ? body.projectId : '';
+    const projectId = typeof body.projectId === 'string' ? body.projectId : '';
     const taskId = typeof body.taskId === 'string' ? body.taskId : '';
     const sourceMilestoneId =
       typeof body.sourceMilestoneId === 'string' ? body.sourceMilestoneId : '';
@@ -768,12 +767,14 @@ export function createTasksRouter(
       const plan = planMove({
         taskId,
         sourceMilestoneTasks: sourceGraph,
-        isLaterMove: targetMilestone.display_order > sourceMilestone.display_order,
+        isLaterMove:
+          targetMilestone.display_order > sourceMilestone.display_order,
       });
 
       res.json({
         ok: true,
-        isLaterMove: targetMilestone.display_order > sourceMilestone.display_order,
+        isLaterMove:
+          targetMilestone.display_order > sourceMilestone.display_order,
         cascadeSet: plan.cascadeSet,
         droppedEdges: plan.droppedEdges,
       });

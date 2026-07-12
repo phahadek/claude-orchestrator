@@ -174,7 +174,9 @@ export function TaskMoveDialog({
       onStaged(intent);
       onClose();
     } catch (err) {
-      setStageError(err instanceof Error ? err.message : 'Failed to stage move');
+      setStageError(
+        err instanceof Error ? err.message : 'Failed to stage move',
+      );
     } finally {
       setStaging(false);
     }

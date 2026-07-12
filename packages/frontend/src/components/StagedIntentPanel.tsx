@@ -20,9 +20,7 @@ interface TaskMovePayload {
 
 function isTaskMovePayload(payload: unknown): payload is TaskMovePayload {
   return (
-    !!payload &&
-    typeof payload === 'object' &&
-    'targetMilestoneName' in payload
+    !!payload && typeof payload === 'object' && 'targetMilestoneName' in payload
   );
 }
 
