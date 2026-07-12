@@ -13,10 +13,8 @@
  * deferral-phrase scan.
  */
 
-export type TypeCheckDecision = 'none' | 'flagged' | 'n/a';
-
 export interface TypeCheckResult {
-  decision: TypeCheckDecision;
+  decision: 'none' | 'flagged' | 'n/a';
   signals?: string[];
 }
 
