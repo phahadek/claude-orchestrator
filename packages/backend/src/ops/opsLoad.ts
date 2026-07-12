@@ -81,14 +81,14 @@ interface BoardRef {
   board: string; // Notion board (data source) id
 }
 
-interface TaskRef {
+export interface TaskRef {
   id: string;
   title: string;
   status: string;
   url: string;
 }
 
-interface OpsTaskEntry extends TaskRef {
+export interface OpsTaskEntry extends TaskRef {
   type: string;
   mode: 'operational' | 'investigation';
   priority?: string;

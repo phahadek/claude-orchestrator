@@ -26,10 +26,24 @@ export interface OpsJournalEntry {
   updatedAt: string;
 }
 
+export interface OpsLaunchResult {
+  launched: string[];
+  deferred: string[];
+}
+
 export const opsJournalApi = {
   listForMilestone(milestone: string): Promise<OpsJournalEntry[]> {
     return apiRequest<{ entries: OpsJournalEntry[] }>(
       `/api/ops-journal?milestone=${encodeURIComponent(milestone)}`,
     ).then((res) => res.entries);
+  },
+
+  /** Ops(N) button: launches one individual, dependency-ordered session per selected task. */
+  launch(milestoneId: string, taskIds: string[]): Promise<OpsLaunchResult> {
+    return apiRequest<OpsLaunchResult>('/api/ops/launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ milestoneId, taskIds }),
+    });
   },
 };

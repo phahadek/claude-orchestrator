@@ -272,8 +272,10 @@ export function TaskList({
   const [groomStubIntent, setGroomStubIntent] = useState<StagedIntent | null>(
     null,
   );
-  // Ops(N): the staged data already exists (ops_journal), so this renders real rows.
-  // The ops-session spawn itself is a placeholder — apply/reject is a no-op here.
+  // Ops(N): launches one individual, dependency-ordered session per selected
+  // task (mirrors the manual-UI launch path), then renders the ops_journal
+  // rows for the launched set. Apply/reject of the resulting staged intents
+  // is a separate, later surface.
   const [opsIntent, setOpsIntent] = useState<StagedIntent | null>(null);
   const [opsLoading, setOpsLoading] = useState(false);
   const [opsError, setOpsError] = useState<string | null>(null);
@@ -510,16 +512,18 @@ export function TaskList({
     (t) => OPS_TASK_TYPES.includes(t.taskType) && t.displayStatus !== 'done',
   );
 
-  // Reads existing per-task ops_journal rows via the backend route and stages them
-  // client-side for display in the shared StagedIntentPanel. No task-store write —
-  // the ops-session spawn (and its command-layer apply) is a separate, later task.
+  // Launches one individual, dependency-ordered session per selected 🔧/🔎
+  // task via the backend ops launcher, then reads back the ops_journal rows
+  // to render in the shared StagedIntentPanel. Launched sessions themselves
+  // render on the right panel like any other session.
   async function handleOpsLaunch() {
     if (!boardId || opsEligibleTasks.length === 0) return;
     setOpsLoading(true);
     setOpsError(null);
     try {
-      const entries = await opsJournalApi.listForMilestone(boardId);
       const eligibleIds = new Set(opsEligibleTasks.map((t) => t.taskId));
+      await opsJournalApi.launch(boardId, Array.from(eligibleIds));
+      const entries = await opsJournalApi.listForMilestone(boardId);
       const rows = entries.filter((e) => eligibleIds.has(e.taskId));
       setOpsIntent({
         id: 'ops-stub',
@@ -530,7 +534,7 @@ export function TaskList({
       });
     } catch (err) {
       setOpsError(
-        err instanceof Error ? err.message : 'Failed to load ops journal',
+        err instanceof Error ? err.message : 'Failed to launch ops sessions',
       );
     } finally {
       setOpsLoading(false);
