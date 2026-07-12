@@ -17,10 +17,10 @@
 export const SIZE_FLOOR_LOC = 500;
 
 /** Midpoint of the groom skill's "files touched × ~50-100 lines each" heuristic. */
-export const LOC_PER_FILE_ESTIMATE = 75;
+const LOC_PER_FILE_ESTIMATE = 75;
 
 /** A candidate more than this multiple over the floor auto-confirms without an operator. */
-export const AUTO_CONFIRM_FLOOR_MULTIPLE = 2;
+const AUTO_CONFIRM_FLOOR_MULTIPLE = 2;
 
 export interface SizeCheckSeed {
   /** Deduped changed-file count (groomLoad.ts's sizeCheckSeed.files). */

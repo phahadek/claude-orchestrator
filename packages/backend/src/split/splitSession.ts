@@ -20,7 +20,7 @@ import type { TaskBodySections } from '../tasks/bodyRender';
 
 export const ORIGINAL_REF = 'original';
 
-export interface SplitSiblingSpec {
+interface SplitSiblingSpec {
   /** Stable local reference for this sibling within the split, e.g. 'sibling-1'. */
   ref: string;
   fields: NewTaskFields;
@@ -38,7 +38,7 @@ export interface ComposeSplitInput {
   siblings: SplitSiblingSpec[];
 }
 
-export interface SplitStagedIntent {
+interface SplitStagedIntent {
   kind: string;
   projectId: string;
   payload: unknown;
@@ -46,7 +46,7 @@ export interface SplitStagedIntent {
   groupId: string;
 }
 
-export interface SplitSizeCheck {
+interface SplitSizeCheck {
   decision: 'split_now';
   /** `$ref:<ref>` placeholders for the new siblings — resolved to real task IDs post-apply. */
   splitInto: string[];
