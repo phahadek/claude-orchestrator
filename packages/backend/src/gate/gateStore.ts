@@ -21,7 +21,7 @@ import type {
   GateAccretionDecision,
 } from '../db/types';
 
-interface GateItemSource {
+export interface GateItemSource {
   sourceTaskId: string;
   sourceTaskTitle: string;
   mergeCommit?: string;
@@ -235,6 +235,36 @@ export function setMinDeployedCommit(
     throw new Error(`gate_item: no item ${gateItemId} to set a commit on`);
   }
   updateGateItemMinDeployedCommit(gateItemId, minDeployedCommit, updatedAt);
+}
+
+/**
+ * Attaches a new source to an existing item — the re-open path when a
+ * failing verification files a follow-up fix task (the reconciler service,
+ * sibling task 39b22f91-52f3-819e). Does not itself change item state; the
+ * caller advances state separately.
+ */
+export function addSource(
+  gateItemId: string,
+  source: Omit<GateItemSource, 'addedAt'>,
+  addedAt: string,
+): void {
+  const row = getGateItem(gateItemId);
+  if (!row) {
+    throw new Error(`gate_item: no item ${gateItemId} to add a source to`);
+  }
+  insertGateItemSource({
+    gate_item_id: gateItemId,
+    source_task_id: source.sourceTaskId,
+    source_task_title: source.sourceTaskTitle,
+    merge_commit: source.mergeCommit ?? null,
+    added_at: addedAt,
+  });
+  recordEvent({
+    event_type: 'gate_item_source_added',
+    actor_type: 'system',
+    project_id: row.project,
+    payload: { gateItemId, sourceTaskId: source.sourceTaskId },
+  });
 }
 
 /** Records the source PR's merge commit — filled at source-task merge, not at accretion. */

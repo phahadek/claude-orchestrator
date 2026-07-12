@@ -64,6 +64,7 @@ import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiv
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
 import { Scheduler } from './orchestration/Scheduler';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
+import { register as registerGateReconciler } from './gate/gateReconciler';
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
@@ -390,6 +391,11 @@ sessionEventsPruner.register(scheduler);
 stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 registerWorktreeReconciler(scheduler);
+// Gate-verification reconciler: built but not activated (no-coexistence rule) —
+// gated off by runtimeSettings.gate_verification_enabled until an operator
+// opts in. The deploy-advance trigger is a placeholder (see DeployAdvanceTrigger
+// in gateReconciler.ts) until the deploy-integration design lands.
+registerGateReconciler(scheduler);
 
 void runBootSequence({
   jsonlReader,
