@@ -32,7 +32,7 @@ export function createOpsJournalRouter(): Router {
 
   // POST /api/ops-journal/:taskId/state
   router.post('/ops-journal/:taskId/state', (req: Request, res: Response) => {
-    const { taskId } = req.params;
+    const taskId = String(req.params.taskId);
     const body = req.body as {
       state?: unknown;
       resolution?: unknown;
