@@ -73,9 +73,9 @@ const HUMAN_APPLY_ONLY_KINDS: ReadonlySet<string> = new Set([
   'task.archive',
 ]);
 
-export type ApplyActorType = 'human' | 'session';
+type ApplyActorType = 'human' | 'session';
 
-export class HumanApplyOnlyError extends Error {
+class HumanApplyOnlyError extends Error {
   constructor(kind: string) {
     super(
       `[stagedIntents] "${kind}" is human-apply-only and cannot be applied by a session credential`,
@@ -84,7 +84,7 @@ export class HumanApplyOnlyError extends Error {
   }
 }
 
-export async function applyIntent(
+async function applyIntent(
   intent: StagedIntent,
   override?: { reason: string },
   actorType: ApplyActorType = 'human',
