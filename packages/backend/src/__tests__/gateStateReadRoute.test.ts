@@ -70,7 +70,9 @@ describe('GET /api/gate/items/:id/detail', () => {
     const item = makeItem();
     appendGateItemEvent(item.id, { disposition: 'fail' });
 
-    const res = await request(makeApp()).get(`/api/gate/items/${item.id}/detail`);
+    const res = await request(makeApp()).get(
+      `/api/gate/items/${item.id}/detail`,
+    );
 
     expect(res.status).toBe(200);
     expect(res.body.item.id).toBe(item.id);
@@ -103,7 +105,9 @@ describe('GET /api/gate/milestones/readiness', () => {
       ]),
     );
     expect(
-      scoped.body.every((r: { project: string }) => r.project === 'polimarket-analyser'),
+      scoped.body.every(
+        (r: { project: string }) => r.project === 'polimarket-analyser',
+      ),
     ).toBe(true);
 
     const all = await request(makeApp()).get('/api/gate/milestones/readiness');

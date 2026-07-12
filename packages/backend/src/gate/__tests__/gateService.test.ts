@@ -218,7 +218,10 @@ describe('getGateItemDetail', () => {
     const item = makeItem({
       sources: [{ sourceTaskId: 'notion:abc', sourceTaskTitle: 'Add env var' }],
     });
-    appendGateItemEvent(item.id, { disposition: 'fail', evidence: { note: 'x' } });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      evidence: { note: 'x' },
+    });
 
     const detail = getGateItemDetail(item.id);
     expect(detail).toBeDefined();
@@ -265,9 +268,7 @@ describe('listGateItems', () => {
       c.id,
     ]);
     expect(
-      listGateItems({ classification: 'Prod-Mutating' }).items.map(
-        (i) => i.id,
-      ),
+      listGateItems({ classification: 'Prod-Mutating' }).items.map((i) => i.id),
     ).toEqual([b.id]);
     expect(listGateItems({ state: 'runnable' }).items.map((i) => i.id)).toEqual(
       [a.id],
@@ -276,7 +277,9 @@ describe('listGateItems', () => {
       a.id,
     ]);
     expect(
-      listGateItems({ runnable: false }).items.map((i) => i.id).sort(),
+      listGateItems({ runnable: false })
+        .items.map((i) => i.id)
+        .sort(),
     ).toEqual([b.id, c.id].sort());
   });
 

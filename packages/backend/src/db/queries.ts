@@ -3530,7 +3530,9 @@ function buildGateItemWhereClause(filter: GateItemFilter): {
     params.state = filter.state;
   }
   if (filter.runnable !== undefined) {
-    conditions.push(filter.runnable ? "state = 'runnable'" : "state != 'runnable'");
+    conditions.push(
+      filter.runnable ? "state = 'runnable'" : "state != 'runnable'",
+    );
   }
   return {
     clause: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
