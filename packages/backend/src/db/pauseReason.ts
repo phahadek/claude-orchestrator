@@ -72,8 +72,11 @@ export const PAUSE_REASON_REGISTRY: Record<
   },
   ci_failing: {
     source: 'ci',
+    // Recovery is session-driven: a verified-flaky disposition from the
+    // session actuates a same-commit gate re-run via the orchestrator
+    // (rerunFailedJobs / F2 test-result invalidation) without human input.
     severity: 'needs_attention',
-    retry_strategy: 'manual_action',
+    retry_strategy: 'automatic',
   },
   ci_billing_blocked: {
     source: 'ci',

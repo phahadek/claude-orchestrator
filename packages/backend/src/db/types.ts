@@ -342,6 +342,9 @@ export interface PullRequestRow {
   /** Unix ms timestamp stamped once requestReviewers has been called for this
    *  PR (corporate-mode reviewer auto-assignment); null means not yet fired. */
   reviewer_requested_at: number | null;
+  /** Count of verified-flaky same-SHA gate re-runs attempted for the current
+   *  ci_failing pause; resets to 0 when the pause clears or head_sha advances. */
+  flake_recovery_attempts: number;
 }
 
 // ─── task_repo_assignments ──────────────────────────────────────────────────

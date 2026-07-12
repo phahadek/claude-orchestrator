@@ -968,6 +968,7 @@ export function upsertPullRequest(
     | 'stalled_pr_retry_count'
     | 'session_initiated_close_at'
     | 'reviewer_requested_at'
+    | 'flake_recovery_attempts'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -1474,6 +1475,24 @@ export function setCiRemediationAttemptedSha(
   db.prepare(
     `UPDATE pull_requests SET ci_remediation_attempted_sha = ? WHERE pr_number = ? AND repo = ?`,
   ).run(sha, prNumber, repo);
+}
+
+export function incrementFlakeRecoveryAttempts(
+  prNumber: number,
+  repo: string,
+): void {
+  db.prepare(
+    `UPDATE pull_requests SET flake_recovery_attempts = flake_recovery_attempts + 1 WHERE pr_number = ? AND repo = ?`,
+  ).run(prNumber, repo);
+}
+
+export function resetFlakeRecoveryAttempts(
+  prNumber: number,
+  repo: string,
+): void {
+  db.prepare(
+    `UPDATE pull_requests SET flake_recovery_attempts = 0 WHERE pr_number = ? AND repo = ?`,
+  ).run(prNumber, repo);
 }
 
 export function setConflictNudgeSha(
@@ -2937,6 +2956,25 @@ export function getTestResult(
       `SELECT * FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
     )
     .get({ pr_number: prNumber, repo, sha }) as TestResultRow | undefined;
+}
+
+/**
+ * Invalidate the permanent per-(pr,repo,sha) F2 test result row so a
+ * verified-flaky disposition can trigger a same-SHA re-run. Callers must
+ * audit this via recordEvent — deletion alone is silent.
+ */
+export function deleteTestResult(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    sha: string;
+  }>(
+    `DELETE FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+  ).run({ pr_number: prNumber, repo, sha });
 }
 
 // ─── orchestrator_analyze_results ───────────────────────────────────────────

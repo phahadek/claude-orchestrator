@@ -59,7 +59,10 @@ type EventType =
   | 'task_type_updated'
   | 'task_properties_updated'
   | 'task_archived'
-  | 'readiness_override';
+  | 'readiness_override'
+  | 'flake_recovery_attempted'
+  | 'flake_recovery_f2_invalidated'
+  | 'flake_recovery_f2_rerun';
 
 type ActorType = 'ai' | 'human' | 'system';
 

@@ -1383,6 +1383,10 @@ export class SessionManager extends EventEmitter {
     session.on('dispositions_parsed', (payload: unknown) =>
       this.emit('dispositions_parsed', payload),
     );
+    // Forward verified_flaky_disposition so PRMergeWatcher can actuate a same-SHA re-run
+    session.on('verified_flaky_disposition', (payload: unknown) =>
+      this.emit('verified_flaky_disposition', payload),
+    );
 
     // Fire-and-forget — run() blocks until the subprocess exits, then clean up
     session
