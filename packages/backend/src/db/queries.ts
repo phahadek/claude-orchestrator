@@ -34,6 +34,11 @@ import type {
   TaskRepoAssignmentRow,
   FeedbackInboxRow,
   OpsJournalRow,
+  GateItemRow,
+  GateItemSourceRow,
+  NewGateItemSourceRow,
+  GateItemEventRow,
+  NewGateItemEventRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -3317,6 +3322,130 @@ export function deleteOpsJournalEntry(taskId: string): void {
     `DELETE FROM ops_journal WHERE task_id = @task_id`,
   );
   _stmtDeleteOpsJournalEntry.run({ task_id: taskId });
+}
+
+// ─── gate_item ────────────────────────────────────────────────────────────
+// Statements are cached lazily (prepared on first use, not at module load) so
+// importing this module doesn't fail on a not-yet-migrated db handle.
+
+let _stmtGetGateItem: Database.Statement | null = null;
+let _stmtListGateItemsByMilestone: Database.Statement | null = null;
+let _stmtInsertGateItem: Database.Statement | null = null;
+let _stmtUpdateGateItem: Database.Statement | null = null;
+let _stmtListGateItemSources: Database.Statement | null = null;
+let _stmtInsertGateItemSource: Database.Statement | null = null;
+let _stmtListGateItemEvents: Database.Statement | null = null;
+let _stmtInsertGateItemEvent: Database.Statement | null = null;
+
+export function getGateItem(id: string): GateItemRow | undefined {
+  _stmtGetGateItem ??= db.prepare<{ id: string }>(
+    `SELECT * FROM gate_item WHERE id = @id`,
+  );
+  return _stmtGetGateItem.get({ id }) as GateItemRow | undefined;
+}
+
+export function listGateItemsByMilestone(
+  project: string,
+  milestone: string,
+): GateItemRow[] {
+  _stmtListGateItemsByMilestone ??= db.prepare<{
+    project: string;
+    milestone: string;
+  }>(
+    `SELECT * FROM gate_item WHERE project = @project AND milestone = @milestone`,
+  );
+  return _stmtListGateItemsByMilestone.all({
+    project,
+    milestone,
+  }) as GateItemRow[];
+}
+
+export function insertGateItem(row: GateItemRow): void {
+  _stmtInsertGateItem ??= db.prepare<GateItemRow>(`
+    INSERT INTO gate_item
+      (id, project, milestone, text, classification, min_deployed_commit,
+       state, current_disposition, updated_at)
+    VALUES
+      (@id, @project, @milestone, @text, @classification, @min_deployed_commit,
+       @state, @current_disposition, @updated_at)
+  `);
+  _stmtInsertGateItem.run(row);
+}
+
+export function updateGateItem(row: GateItemRow): void {
+  _stmtUpdateGateItem ??= db.prepare<GateItemRow>(`
+    UPDATE gate_item SET
+      project = @project,
+      milestone = @milestone,
+      text = @text,
+      classification = @classification,
+      min_deployed_commit = @min_deployed_commit,
+      state = @state,
+      current_disposition = @current_disposition,
+      updated_at = @updated_at
+    WHERE id = @id
+  `);
+  _stmtUpdateGateItem.run(row);
+}
+
+export function listGateItemSources(gateItemId: string): GateItemSourceRow[] {
+  _stmtListGateItemSources ??= db.prepare<{ gate_item_id: string }>(
+    `SELECT * FROM gate_item_source WHERE gate_item_id = @gate_item_id ORDER BY id ASC`,
+  );
+  return _stmtListGateItemSources.all({
+    gate_item_id: gateItemId,
+  }) as GateItemSourceRow[];
+}
+
+export function insertGateItemSource(row: NewGateItemSourceRow): void {
+  _stmtInsertGateItemSource ??= db.prepare<NewGateItemSourceRow>(`
+    INSERT INTO gate_item_source
+      (gate_item_id, source_task_id, source_task_title, merge_commit, added_at)
+    VALUES
+      (@gate_item_id, @source_task_id, @source_task_title, @merge_commit, @added_at)
+  `);
+  _stmtInsertGateItemSource.run(row);
+}
+
+let _stmtUpdateGateItemSourceMergeCommit: Database.Statement | null = null;
+
+export function updateGateItemSourceMergeCommit(
+  gateItemId: string,
+  sourceTaskId: string,
+  mergeCommit: string,
+): void {
+  _stmtUpdateGateItemSourceMergeCommit ??= db.prepare<{
+    gate_item_id: string;
+    source_task_id: string;
+    merge_commit: string;
+  }>(`
+    UPDATE gate_item_source SET merge_commit = @merge_commit
+    WHERE gate_item_id = @gate_item_id AND source_task_id = @source_task_id
+  `);
+  _stmtUpdateGateItemSourceMergeCommit.run({
+    gate_item_id: gateItemId,
+    source_task_id: sourceTaskId,
+    merge_commit: mergeCommit,
+  });
+}
+
+export function listGateItemEvents(gateItemId: string): GateItemEventRow[] {
+  _stmtListGateItemEvents ??= db.prepare<{ gate_item_id: string }>(
+    `SELECT * FROM gate_item_event WHERE gate_item_id = @gate_item_id ORDER BY id ASC`,
+  );
+  return _stmtListGateItemEvents.all({
+    gate_item_id: gateItemId,
+  }) as GateItemEventRow[];
+}
+
+export function insertGateItemEvent(row: NewGateItemEventRow): void {
+  _stmtInsertGateItemEvent ??= db.prepare<NewGateItemEventRow>(`
+    INSERT INTO gate_item_event
+      (gate_item_id, disposition, evidence, filed_followon, deploy_sha, operator, at)
+    VALUES
+      (@gate_item_id, @disposition, @evidence, @filed_followon, @deploy_sha, @operator, @at)
+  `);
+  _stmtInsertGateItemEvent.run(row);
 }
 
 // ─── session_feedback_inbox ─────────────────────────────────────────────────

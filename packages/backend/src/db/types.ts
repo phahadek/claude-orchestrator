@@ -385,6 +385,50 @@ export interface OpsJournalRow {
   updated_at: string;
 }
 
+// ─── gate_item ────────────────────────────────────────────────────────────
+
+export type GateItemClassification =
+  | 'Read-Only'
+  | 'Prod-Mutating'
+  | 'Opportunistic'
+  | 'needs-triage';
+
+export interface GateItemRow {
+  id: string;
+  project: string;
+  milestone: string;
+  text: string;
+  classification: GateItemClassification;
+  min_deployed_commit: string | null;
+  state: string;
+  current_disposition: string | null;
+  updated_at: string;
+}
+
+export interface GateItemSourceRow {
+  id: number;
+  gate_item_id: string;
+  source_task_id: string;
+  source_task_title: string;
+  merge_commit: string | null;
+  added_at: string;
+}
+
+export type NewGateItemSourceRow = Omit<GateItemSourceRow, 'id'>;
+
+export interface GateItemEventRow {
+  id: number;
+  gate_item_id: string;
+  disposition: string;
+  evidence: string | null;
+  filed_followon: string | null;
+  deploy_sha: string | null;
+  operator: string | null;
+  at: string;
+}
+
+export type NewGateItemEventRow = Omit<GateItemEventRow, 'id'>;
+
 // ─── session_feedback_inbox ─────────────────────────────────────────────────
 
 export interface FeedbackInboxRow {
