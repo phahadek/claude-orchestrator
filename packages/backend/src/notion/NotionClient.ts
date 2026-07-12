@@ -599,6 +599,15 @@ export class NotionClient {
   }
 
   /**
+   * Archive a Notion task page. Notion has no delete for pages via the API —
+   * archiving is the store-level equivalent.
+   */
+  async archive(taskId: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    await notionRequest('PATCH', `/pages/${externalId}`, { archived: true });
+  }
+
+  /**
    * Fetch the full body of a Notion task page, parse it into sections, and
    * cache the result for 10 minutes using key `task:{taskId}`.
    */

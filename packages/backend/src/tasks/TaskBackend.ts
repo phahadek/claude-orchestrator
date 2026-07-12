@@ -178,6 +178,12 @@ export interface TaskBackend {
     patch: TaskPropertiesPatch,
     options?: TaskWriteOptions,
   ): Promise<void>;
+
+  /**
+   * Archive a task page. Notion has no delete via the API — archiving is the
+   * store-level equivalent. Optional for the same reason as createTask.
+   */
+  archive?(taskId: string, options?: TaskWriteOptions): Promise<void>;
 }
 
 // ── AuditingTaskBackend ──────────────────────────────────────────────────────
@@ -372,6 +378,24 @@ export class AuditingTaskBackend implements TaskBackend {
       project_id: this.projectId,
       task_id: taskId,
       payload: { patch, source },
+    });
+  }
+
+  async archive(taskId: string, options?: TaskWriteOptions): Promise<void> {
+    if (!this.inner.archive) {
+      throw new Error(
+        `[AuditingTaskBackend] archive is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    await this.inner.archive(taskId);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_archived',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { source },
     });
   }
 }

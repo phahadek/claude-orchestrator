@@ -34,6 +34,7 @@ function makeBackend(overrides: Partial<TaskBackend> = {}): TaskBackend {
     setDependsOn: vi.fn().mockResolvedValue(undefined),
     setType: vi.fn().mockResolvedValue(undefined),
     setProperties: vi.fn().mockResolvedValue(undefined),
+    archive: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -387,5 +388,27 @@ describe('TaskWriteCommands.setProperties', () => {
     await expect(
       commands.setProperties('notion:abc', { priority: '🔴 High' }),
     ).rejects.toThrow(/not supported/i);
+  });
+});
+
+describe('TaskWriteCommands.archive', () => {
+  it('delegates to backend.archive', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.archive('notion:abc', { source: 'human' });
+
+    expect(backend.archive).toHaveBeenCalledWith('notion:abc', {
+      source: 'human',
+    });
+  });
+
+  it('throws when the backend does not support archive', async () => {
+    const backend = makeBackend({ archive: undefined });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(commands.archive('notion:abc')).rejects.toThrow(
+      /not supported/i,
+    );
   });
 });

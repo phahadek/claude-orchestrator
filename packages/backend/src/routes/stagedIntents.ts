@@ -6,7 +6,8 @@ import {
   BackendTaskWriteCommands,
   type TaskStatus,
 } from '../tasks/TaskWriteCommands';
-import type { NewTaskFields } from '../tasks/TaskBackend';
+import type { NewTaskFields, TaskPropertiesPatch } from '../tasks/TaskBackend';
+import type { TaskBodySections } from '../tasks/bodyRender';
 import {
   ReadinessGateError,
   type ReadinessViolation,
@@ -39,11 +40,59 @@ interface SetDependsOnPayload {
   taskId: string;
   dependsOn: string[];
 }
+interface UpdateBodyPayload {
+  taskId: string;
+  sections: TaskBodySections;
+}
+interface SetPropertiesPayload {
+  taskId: string;
+  patch: TaskPropertiesPatch;
+}
+interface ArchivePayload {
+  taskId: string;
+}
 
-async function applyIntent(
+/** Intent kinds accepted by POST /staged-intents. */
+const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
+  'task.create',
+  'task.setStatus',
+  'task.setDependsOn',
+  'task.updateBody',
+  'task.setProperties',
+  'task.archive',
+]);
+
+/**
+ * Archive and the structural intents (body/property rewrites) are
+ * human-apply-only — applied through the device-auth apply path, never a
+ * session credential. See Technical Architecture § Authority-vs-drift.
+ */
+const HUMAN_APPLY_ONLY_KINDS: ReadonlySet<string> = new Set([
+  'task.updateBody',
+  'task.setProperties',
+  'task.archive',
+]);
+
+export type ApplyActorType = 'human' | 'session';
+
+export class HumanApplyOnlyError extends Error {
+  constructor(kind: string) {
+    super(
+      `[stagedIntents] "${kind}" is human-apply-only and cannot be applied by a session credential`,
+    );
+    this.name = 'HumanApplyOnlyError';
+  }
+}
+
+export async function applyIntent(
   intent: StagedIntent,
   override?: { reason: string },
+  actorType: ApplyActorType = 'human',
 ): Promise<unknown> {
+  if (HUMAN_APPLY_ONLY_KINDS.has(intent.kind) && actorType !== 'human') {
+    throw new HumanApplyOnlyError(intent.kind);
+  }
+
   const backend = getTaskBackend(intent.projectId);
   const commands = new BackendTaskWriteCommands(backend, intent.projectId);
 
@@ -66,6 +115,25 @@ async function applyIntent(
       await commands.setDependsOn(payload.taskId, payload.dependsOn, {
         source: 'human',
       });
+      return { ok: true };
+    }
+    case 'task.updateBody': {
+      const payload = intent.payload as UpdateBodyPayload;
+      await commands.updateBody(payload.taskId, payload.sections, {
+        source: 'human',
+      });
+      return { ok: true };
+    }
+    case 'task.setProperties': {
+      const payload = intent.payload as SetPropertiesPayload;
+      await commands.setProperties(payload.taskId, payload.patch, {
+        source: 'human',
+      });
+      return { ok: true };
+    }
+    case 'task.archive': {
+      const payload = intent.payload as ArchivePayload;
+      await commands.archive(payload.taskId, { source: 'human' });
       return { ok: true };
     }
     default:
@@ -101,6 +169,10 @@ export function createStagedIntentsRouter(): Router {
       res.status(400).json({ error: 'kind is required' });
       return;
     }
+    if (!KNOWN_INTENT_KINDS.has(kind)) {
+      res.status(400).json({ error: `unknown intent kind "${kind}"` });
+      return;
+    }
     if (!projectId) {
       res.status(400).json({ error: 'projectId is required' });
       return;
@@ -129,7 +201,11 @@ export function createStagedIntentsRouter(): Router {
         return;
       }
 
-      const body = req.body as { override?: unknown; reason?: unknown };
+      const body = req.body as {
+        override?: unknown;
+        reason?: unknown;
+        actorType?: unknown;
+      };
       const override = body?.override === true;
       const reason = typeof body?.reason === 'string' ? body.reason : '';
       if (override && !reason.trim()) {
@@ -138,11 +214,14 @@ export function createStagedIntentsRouter(): Router {
           .json({ error: 'reason is required when override is true' });
         return;
       }
+      const actorType: ApplyActorType =
+        body?.actorType === 'session' ? 'session' : 'human';
 
       try {
         const result = await applyIntent(
           intent,
           override ? { reason } : undefined,
+          actorType,
         );
         intent.annotation = null;
         store.delete(intent.id);
@@ -154,6 +233,10 @@ export function createStagedIntentsRouter(): Router {
             error: err.message,
             violations: err.violations,
           });
+          return;
+        }
+        if (err instanceof HumanApplyOnlyError) {
+          res.status(403).json({ error: err.message });
           return;
         }
         res.status(500).json({
