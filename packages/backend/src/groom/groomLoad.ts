@@ -20,6 +20,7 @@ import { NotionClient } from '../notion/NotionClient';
 import {
   buildCodeWorklist,
   resolveTaskRegions,
+  TaskRegions,
   WorklistTask,
 } from './codeWorklist';
 import {
@@ -27,6 +28,10 @@ import {
   type ReadinessViolation,
 } from '../tasks/readinessGate';
 import { scanTypeCheck, type TypeCheckResult } from './typeCheck';
+import {
+  computeMilestoneDependencyCandidates,
+  type TaskDependencyCandidates,
+} from '../orchestration/milestoneDependencyGraph';
 
 const execFileAsync = promisify(execFile);
 
@@ -66,6 +71,8 @@ interface TaskDoc extends TaskRow {
   sizeCheckSeed: { files: number; loc_method: 'estimated' };
   /** Deterministic keyword/heuristic type/content-mismatch scan. */
   typeCheck: TypeCheckResult;
+  /** This task's declared scope, resolved into package/file regions. */
+  regions: TaskRegions;
 }
 
 type FreshnessStatus = 'fresh' | 'stale' | 'missing';
@@ -85,6 +92,11 @@ export interface GroomLoadResult {
   codeWorklist: Map<string, string[]>;
   /** Per-package git freshness vs. the local integration branch. */
   gitFreshness: Record<string, FreshnessInfo>;
+  /**
+   * Per-task dependency candidates (region overlap ∪ declared Depends On),
+   * for the per-task grooming session to confirm — never auto-wired.
+   */
+  dependencyCandidates: TaskDependencyCandidates[];
 }
 
 interface GroomManifestMilestone {
@@ -108,6 +120,8 @@ export interface NotionTaskLike {
   type: string;
   priority?: string;
   notionUrl: string;
+  /** Raw Depends On page/task IDs, as declared on the task. */
+  dependsOn?: string[];
 }
 
 export interface NotionReadClient {
@@ -252,6 +266,9 @@ export async function loadGroomContext(
 
   const boardResolved = await notion.fetchReadyTasks(milestoneCfg.board);
   const board: TaskRow[] = boardResolved.map((r) => rowFromTask(r.task));
+  const dependsOnById = new Map(
+    boardResolved.map((r) => [r.task.id, r.task.dependsOn ?? []] as const),
+  );
 
   const neighbourBoards: TaskRow[] = [];
   for (const n of milestoneCfg.neighbours ?? []) {
@@ -290,8 +307,18 @@ export async function loadGroomContext(
       readinessViolations: checkReadiness(page.rawMarkdown),
       sizeCheckSeed: { files: regions.files.length, loc_method: 'estimated' },
       typeCheck: scanTypeCheck(row.type, page.rawMarkdown),
+      regions,
     });
   }
+
+  const dependencyCandidates = computeMilestoneDependencyCandidates(
+    targetTasks.map((t) => ({
+      id: t.id,
+      status: t.status,
+      dependsOn: dependsOnById.get(t.id) ?? [],
+      regions: t.regions,
+    })),
+  );
 
   const worklistTasks: WorklistTask[] = targetTasks.map((t) => ({
     id: t.id,
@@ -326,5 +353,6 @@ export async function loadGroomContext(
     targetTasks,
     codeWorklist,
     gitFreshness,
+    dependencyCandidates,
   };
 }
