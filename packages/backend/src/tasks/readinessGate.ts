@@ -26,7 +26,7 @@ export interface ReadinessViolation {
  * in-repo backend constant — NOT read from the config tree. Runtime-tunable
  * phrase lists are Future Scope.
  */
-export const DEFERRAL_PHRASES: readonly string[] = [
+const DEFERRAL_PHRASES: readonly string[] = [
   'decide at implementation time',
   'decide during implementation',
   'decided by the implementer',
