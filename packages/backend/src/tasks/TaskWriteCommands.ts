@@ -5,13 +5,14 @@ import type {
   TaskPropertiesPatch,
 } from './TaskBackend';
 import type { TaskBodySections } from './bodyRender';
-import { getTaskCache } from '../db/queries';
+import { getTaskCache, deleteTaskCacheRow } from '../db/queries';
 import { checkReadiness, ReadinessGateError } from './readinessGate';
 import {
   checkGroomingPromotionGate,
   GroomingGateError,
 } from '../groom/groomGate';
 import { recordEvent } from '../audit/AuditLog';
+import { planMove, type MoveGraphTask } from '../orchestration/moveTask';
 
 /**
  * Canonical task-write status vocabulary. Display strings (emoji-prefixed,
@@ -145,6 +146,44 @@ const ALLOWED_PROPERTY_KEYS: readonly (keyof TaskPropertiesPatch)[] = [
   'title',
 ];
 
+/** A milestone reference carrying the ordering info moveTask needs to pick a direction. */
+export interface MoveTaskMilestoneRef {
+  /** Internal DB milestone id. */
+  id: string;
+  displayOrder: number;
+}
+
+/** The target milestone also carries the board databaseId the new page is created under. */
+export interface MoveTaskTargetMilestone extends MoveTaskMilestoneRef {
+  databaseId: string;
+}
+
+/** Original task content copied onto the new page. */
+export interface MoveTaskContent {
+  title: string;
+  sections: TaskBodySections;
+  /** Display-format type, e.g. '💻 Code'. */
+  type?: string;
+  /** Display-format priority, e.g. '🔴 High'. */
+  priority?: string;
+  /** Canonical status to restore on the new page after it lands in Backlog. */
+  status: TaskStatus;
+}
+
+export interface MoveTaskParams {
+  taskId: string;
+  content: MoveTaskContent;
+  sourceMilestone: MoveTaskMilestoneRef;
+  targetMilestone: MoveTaskTargetMilestone;
+  originalDisposition: 'archive' | 'defer';
+}
+
+export interface MoveTaskResult {
+  newTaskId: string;
+  droppedEdges: { from: string; to: string }[];
+  cascadeSet: string[];
+}
+
 /**
  * The sanctioned write path atop the store-agnostic TaskBackend port. This is
  * the single chokepoint for validation and provenance for orchestrator-launched
@@ -182,6 +221,10 @@ interface TaskWriteCommands {
     options?: TaskWriteOptions,
   ): Promise<void>;
   archive(taskId: string, options?: TaskWriteOptions): Promise<void>;
+  moveTask(
+    params: MoveTaskParams,
+    options?: TaskWriteOptions,
+  ): Promise<MoveTaskResult>;
 }
 
 export class BackendTaskWriteCommands implements TaskWriteCommands {
@@ -321,5 +364,151 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       );
     }
     await this.backend.archive(taskId, options);
+  }
+
+  /**
+   * Cross-milestone move — one atomic, human-applied sequence: create the
+   * task on the target board, restore its original status (exempt from the
+   * transition state machine but still readiness-gated for a Ready
+   * restore), resolve intra-milestone Depends On edges via planMove,
+   * dispose of the original (archive, or Deferred with a successor
+   * pointer), write an origin back-reference on the new page, record one
+   * task_moved audit event, and invalidate both boards' task_cache.
+   *
+   * Accretion carry (gate/seed contribution re-homing) is explicitly out of
+   * scope — see moveTask.ts's module doc.
+   */
+  async moveTask(
+    params: MoveTaskParams,
+    options?: TaskWriteOptions,
+  ): Promise<MoveTaskResult> {
+    if (
+      !this.backend.createTask ||
+      !this.backend.updateBody ||
+      !this.backend.setDependsOn ||
+      !this.backend.archive
+    ) {
+      throw new Error(
+        `[TaskWriteCommands] moveTask is not supported by backend type "${this.backend.type}"`,
+      );
+    }
+    const { taskId, content, sourceMilestone, targetMilestone } = params;
+
+    if (targetMilestone.id === sourceMilestone.id) {
+      throw new Error(
+        `[TaskWriteCommands] moveTask: source and target milestone are the same (${sourceMilestone.id})`,
+      );
+    }
+
+    const sourceGraph: MoveGraphTask[] = (
+      await this.backend.fetchReadyTasks(sourceMilestone.id, true)
+    ).map((r) => ({ id: r.task.id, dependsOn: r.task.dependsOn }));
+
+    const plan = planMove({
+      taskId,
+      sourceMilestoneTasks: sourceGraph,
+      isLaterMove: targetMilestone.displayOrder > sourceMilestone.displayOrder,
+    });
+
+    const newTaskId = await this.backend.createTask(
+      {
+        databaseId: targetMilestone.databaseId,
+        title: content.title,
+        type: content.type,
+        priority: content.priority,
+        dependsOn: plan.newDependsOn,
+      },
+      options,
+    );
+
+    await this.backend.updateBody(newTaskId, content.sections, options);
+
+    if (content.status !== 'Backlog') {
+      await this.restoreStatus(newTaskId, content.status, options);
+    }
+
+    for (const rewrite of plan.dependentRewrites) {
+      await this.backend.setDependsOn(
+        rewrite.taskId,
+        rewrite.dependsOn,
+        options,
+      );
+    }
+
+    if (params.originalDisposition === 'archive') {
+      await this.backend.archive(taskId, options);
+    } else {
+      await this.restoreStatus(taskId, 'Deferred', options);
+      await this.backend.appendImplementationNote(
+        taskId,
+        `Moved to ${newTaskId} (milestone ${targetMilestone.id}).`,
+      );
+    }
+
+    await this.backend.appendImplementationNote(
+      newTaskId,
+      `Moved from ${taskId} (milestone ${sourceMilestone.id}).`,
+    );
+
+    recordEvent({
+      event_type: 'task_moved',
+      actor_type: 'human',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId ?? null,
+      task_id: taskId,
+      payload: {
+        sourceMilestone: sourceMilestone.id,
+        targetMilestone: targetMilestone.id,
+        originalTaskId: taskId,
+        newTaskId,
+        originalDisposition: params.originalDisposition,
+        droppedEdges: plan.droppedEdges,
+        cascadeSet: plan.cascadeSet,
+      },
+    });
+
+    deleteTaskCacheRow(`board:${sourceMilestone.id}`);
+    deleteTaskCacheRow(`board:${targetMilestone.id}`);
+
+    return {
+      newTaskId,
+      droppedEdges: plan.droppedEdges,
+      cascadeSet: plan.cascadeSet,
+    };
+  }
+
+  /**
+   * Authoritative status restore — bypasses isValidTransition (the moved
+   * page just landed in Backlog and the original status may not be a legal
+   * transition from it), but still runs the readiness gate when restoring
+   * Ready, honoring the same override + audit path as setStatus.
+   */
+  private async restoreStatus(
+    taskId: string,
+    status: TaskStatus,
+    options?: TaskWriteOptions,
+  ): Promise<void> {
+    if (status === 'Ready') {
+      const body = (await this.backend.fetchTaskPage(taskId)) ?? '';
+      const violations = checkReadiness(body);
+      if (violations.length > 0) {
+        if (!options?.readinessOverride) {
+          throw new ReadinessGateError(violations);
+        }
+        recordEvent({
+          event_type: 'readiness_override',
+          actor_type: 'human',
+          actor_id: options.sessionId ?? null,
+          project_id: this.projectId ?? null,
+          task_id: taskId,
+          payload: {
+            reason: options.readinessOverride.reason,
+            tiers: violations.map((v) => v.tier),
+            violations,
+          },
+        });
+      }
+    }
+    await this.backend.updateStatus(taskId, STATUS_DISPLAY[status], options);
   }
 }
