@@ -3,8 +3,11 @@ import { recordEvent } from '../audit/AuditLog';
 import {
   getGateItem,
   listGateItemsByMilestone,
+  listGateItemsByMilestoneAllProjects,
+  listAllGateItems,
   insertGateItem,
   updateGateItem,
+  updateGateItemMinDeployedCommit,
   listGateItemSources,
   insertGateItemSource,
   listGateItemEvents,
@@ -93,6 +96,20 @@ export function listByMilestone(
   milestone: string,
 ): GateItem[] {
   return listGateItemsByMilestone(project, milestone)
+    .map((row) => getItem(row.id))
+    .filter((item): item is GateItem => item !== undefined);
+}
+
+/** All gate items for a milestone, regardless of project — the readiness/runnability API's lookup. */
+export function listByMilestoneAllProjects(milestone: string): GateItem[] {
+  return listGateItemsByMilestoneAllProjects(milestone)
+    .map((row) => getItem(row.id))
+    .filter((item): item is GateItem => item !== undefined);
+}
+
+/** Every gate item across all projects/milestones — the reconciler's working set. */
+export function listAll(): GateItem[] {
+  return listAllGateItems()
     .map((row) => getItem(row.id))
     .filter((item): item is GateItem => item !== undefined);
 }
@@ -195,6 +212,24 @@ export function advanceState(
     project_id: row.project,
     payload: { gateItemId, from: row.state, to: state },
   });
+}
+
+/**
+ * Sets the commit a deploy must contain for this item to become runnable.
+ * Owned by whatever recomputes it from the item's sources (the reconciler
+ * service, sibling task 39b22f91-52f3-819e) — a later call with a
+ * later commit is how an already-passed item gets superseded.
+ */
+export function setMinDeployedCommit(
+  gateItemId: string,
+  minDeployedCommit: string,
+  updatedAt: string,
+): void {
+  const row = getGateItem(gateItemId);
+  if (!row) {
+    throw new Error(`gate_item: no item ${gateItemId} to set a commit on`);
+  }
+  updateGateItemMinDeployedCommit(gateItemId, minDeployedCommit, updatedAt);
 }
 
 /** Records the source PR's merge commit — filled at source-task merge, not at accretion. */
