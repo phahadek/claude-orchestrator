@@ -11,6 +11,12 @@ import {
   checkGroomingPromotionGate,
   GroomingGateError,
 } from '../groom/groomGate';
+import {
+  insertItem as insertGateItem,
+  recordAccretionMarker,
+  type GateAccretionMarker,
+} from '../gate/gateStore';
+import type { GateItemClassification } from '../db/types';
 import { recordEvent } from '../audit/AuditLog';
 import { planMove, type MoveGraphTask } from '../orchestration/moveTask';
 
@@ -184,6 +190,31 @@ export interface MoveTaskResult {
   cascadeSet: string[];
 }
 
+/** The Code/Tooling task whose runtime items are being accreted onto the milestone gate. */
+export interface GateContributionSourceTask {
+  id: string;
+  title: string;
+  project: string;
+  milestone: string;
+}
+
+/** One stripped runtime/launch-and-observe item to mint as a gate_item. */
+export interface GateContributionItemInput {
+  text: string;
+}
+
+/**
+ * The classification recorded on every minted gate_item when the source task
+ * has items to contribute, or the gate_accretion decision itself when it has
+ * none ('none') or is exempt from the check entirely ('n/a').
+ */
+export type GateContributionDecision = GateItemClassification | 'none' | 'n/a';
+
+export interface AccreteGateContributionResult {
+  itemIds: string[];
+  marker: GateAccretionMarker;
+}
+
 /**
  * The sanctioned write path atop the store-agnostic TaskBackend port. This is
  * the single chokepoint for validation and provenance for orchestrator-launched
@@ -221,6 +252,18 @@ interface TaskWriteCommands {
     options?: TaskWriteOptions,
   ): Promise<void>;
   archive(taskId: string, options?: TaskWriteOptions): Promise<void>;
+  /**
+   * Mints gate_item + gate_item_source rows for the source task's stripped
+   * runtime items (min_deployed_commit left empty — filled at source-task
+   * merge) and records a per-source gate_accretion marker distinguishing
+   * items / none / n/a, the marker checkGroomingPromotionGate's
+   * gate_contribution check reads before allowing a Ready flip.
+   */
+  accreteGateContribution(
+    sourceTask: GateContributionSourceTask,
+    items: GateContributionItemInput[],
+    classification: GateContributionDecision,
+  ): Promise<AccreteGateContributionResult>;
   moveTask(
     params: MoveTaskParams,
     options?: TaskWriteOptions,
@@ -260,7 +303,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       );
     }
     if (status === 'Ready' && options?.groomingGate) {
-      const gateResult = checkGroomingPromotionGate(options.groomingGate);
+      const gateResult = checkGroomingPromotionGate(
+        options.groomingGate,
+        taskId,
+      );
       if (!gateResult.allowed) {
         throw new GroomingGateError(gateResult.reasons);
       }
@@ -364,6 +410,60 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       );
     }
     await this.backend.archive(taskId, options);
+  }
+
+  /**
+   * Store-only — writes gate_item/gate_item_source rows and the
+   * gate_accretion marker directly via gateStore, no TaskBackend port call.
+   * "none"/"n/a" mint no items (the marker alone records the decision); any
+   * other classification requires at least one item and mints each as a
+   * gate_item sourced to this task, with the marker recorded as "items".
+   */
+  async accreteGateContribution(
+    sourceTask: GateContributionSourceTask,
+    items: GateContributionItemInput[],
+    classification: GateContributionDecision,
+  ): Promise<AccreteGateContributionResult> {
+    const isBareDecision = classification === 'none' || classification === 'n/a';
+    if (isBareDecision && items.length > 0) {
+      throw new Error(
+        `[TaskWriteCommands] accreteGateContribution: classification "${classification}" requires an empty items array`,
+      );
+    }
+    if (!isBareDecision && items.length === 0) {
+      throw new Error(
+        `[TaskWriteCommands] accreteGateContribution: at least one item is required unless classification is "none" or "n/a"`,
+      );
+    }
+
+    const accretedAt = new Date().toISOString();
+    const itemIds = items.map(
+      (item) =>
+        insertGateItem({
+          project: sourceTask.project,
+          milestone: sourceTask.milestone,
+          text: item.text,
+          classification: classification as GateItemClassification,
+          sources: [
+            {
+              sourceTaskId: sourceTask.id,
+              sourceTaskTitle: sourceTask.title,
+            },
+          ],
+          updatedAt: accretedAt,
+        }).id,
+    );
+
+    const marker: GateAccretionMarker = {
+      sourceTaskId: sourceTask.id,
+      project: sourceTask.project,
+      milestone: sourceTask.milestone,
+      decision: isBareDecision ? classification : 'items',
+      accretedAt,
+    };
+    recordAccretionMarker(marker);
+
+    return { itemIds, marker };
   }
 
   /**

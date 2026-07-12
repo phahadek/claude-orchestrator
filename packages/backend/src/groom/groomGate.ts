@@ -2,14 +2,20 @@
  * In-backend grooming promotion gate — the enforcement point the /groom
  * skill's gate usage rewires to as grooming state moves off the file-cache
  * PreToolUse hook (scripts/groom-gate.mjs) and into the orchestrator. Covers
- * the size_check and type_check artifacts; the hook's other checks (signoff,
- * hard_block_deps, repo_assignment, gate/seed_contribution) migrate here in
- * follow-on tasks as their state moves backend-side.
+ * the size_check, type_check, and gate_contribution artifacts; the hook's
+ * other checks (signoff, hard_block_deps, repo_assignment, seed_contribution)
+ * migrate here in follow-on tasks as their state moves backend-side.
  *
- * Both artifacts are "present-and-dispositioned" gates, not correctness
- * gates: the groomer must have recorded a decision, but a flagged type_check
- * never hard-blocks promotion on its own — see typeCheck.ts.
+ * size_check / type_check are "present-and-dispositioned" gates, not
+ * correctness gates: the groomer must have recorded a decision, but a
+ * flagged type_check never hard-blocks promotion on its own — see
+ * typeCheck.ts. gate_contribution instead reads a durable marker
+ * (gate_accretion, written by accreteGateContribution) rather than a field on
+ * the grooming-state entry, since it must survive independent of whatever
+ * cache produced the Ready-flip intent.
  */
+
+import { getAccretionMarker } from '../gate/gateStore';
 
 const SIZE_CHECK_DECISIONS = new Set([
   'no_split',
@@ -18,6 +24,9 @@ const SIZE_CHECK_DECISIONS = new Set([
   'n/a',
 ]);
 
+/** Task types that require a gate_contribution accretion marker before Ready. */
+const GATE_CONTRIBUTION_TYPES = new Set(['💻 Code', '🛠️ Tooling']);
+
 export interface GroomingGateEntry {
   size_check?: { decision?: unknown; [key: string]: unknown } | null;
   type_check?: {
@@ -25,6 +34,8 @@ export interface GroomingGateEntry {
     disposition?: unknown;
     [key: string]: unknown;
   } | null;
+  /** Display-format Task Type, e.g. '💻 Code' — decides whether gate_contribution is required. */
+  type?: string;
 }
 
 export interface GroomingGateResult {
@@ -58,9 +69,25 @@ function isTypeCheckDispositioned(entry: GroomingGateEntry): boolean {
   return false;
 }
 
-/** Checks the size_check / type_check artifacts of a grooming-state entry ahead of a Ready promotion. */
+/**
+ * gate_contribution requires a durable gate_accretion marker for the task
+ * being promoted (accreteGateContribution writes it, keyed by source task id
+ * — the task being promoted is its own source). Absent `type`, or a type
+ * outside Code/Tooling, fail-open (allow) — mirrors groom-gate.mjs's
+ * needsGate check.
+ */
+function isGateContributionRecorded(
+  entry: GroomingGateEntry,
+  taskId: string,
+): boolean {
+  if (!entry.type || !GATE_CONTRIBUTION_TYPES.has(entry.type)) return true;
+  return getAccretionMarker(taskId) !== undefined;
+}
+
+/** Checks the size_check / type_check / gate_contribution artifacts of a grooming-state entry ahead of a Ready promotion. */
 export function checkGroomingPromotionGate(
   entry: GroomingGateEntry,
+  taskId: string,
 ): GroomingGateResult {
   const reasons: string[] = [];
 
@@ -76,6 +103,14 @@ export function checkGroomingPromotionGate(
       'type_check is missing or undispositioned — the groomer must record {"decision":"none"} or ' +
         '{"decision":"n/a"} (exempt type), or, when the smuggle-scan flags the body, ' +
         '{"decision":"flagged","disposition":"split-filed:<id>"|"dismissed:<reason>"} before promotion.',
+    );
+  }
+
+  if (!isGateContributionRecorded(entry, taskId)) {
+    reasons.push(
+      'gate_contribution is not recorded — for 💻 Code and 🛠️ Tooling tasks, accreteGateContribution ' +
+        'must record a gate_accretion marker (items appended to the milestone gate, or an explicit ' +
+        '"none"/"n/a" decision) for this task before promotion.',
     );
   }
 
