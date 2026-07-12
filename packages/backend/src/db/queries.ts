@@ -3448,6 +3448,48 @@ export function insertGateItemEvent(row: NewGateItemEventRow): void {
   _stmtInsertGateItemEvent.run(row);
 }
 
+let _stmtListGateItemsByMilestoneAllProjects: Database.Statement | null =
+  null;
+let _stmtListAllGateItems: Database.Statement | null = null;
+let _stmtUpdateGateItemMinDeployedCommit: Database.Statement | null = null;
+
+/** All gate items for a milestone, regardless of project (mirrors ops_journal's milestone-only lookup). */
+export function listGateItemsByMilestoneAllProjects(
+  milestone: string,
+): GateItemRow[] {
+  _stmtListGateItemsByMilestoneAllProjects ??= db.prepare<{
+    milestone: string;
+  }>(`SELECT * FROM gate_item WHERE milestone = @milestone`);
+  return _stmtListGateItemsByMilestoneAllProjects.all({
+    milestone,
+  }) as GateItemRow[];
+}
+
+/** Every gate item across all projects/milestones — the reconciler's working set. */
+export function listAllGateItems(): GateItemRow[] {
+  _stmtListAllGateItems ??= db.prepare(`SELECT * FROM gate_item`);
+  return _stmtListAllGateItems.all() as GateItemRow[];
+}
+
+export function updateGateItemMinDeployedCommit(
+  id: string,
+  minDeployedCommit: string,
+  updatedAt: string,
+): void {
+  _stmtUpdateGateItemMinDeployedCommit ??= db.prepare<{
+    id: string;
+    min_deployed_commit: string;
+    updated_at: string;
+  }>(
+    `UPDATE gate_item SET min_deployed_commit = @min_deployed_commit, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtUpdateGateItemMinDeployedCommit.run({
+    id,
+    min_deployed_commit: minDeployedCommit,
+    updated_at: updatedAt,
+  });
+}
+
 // ─── session_feedback_inbox ─────────────────────────────────────────────────
 
 export function enqueueFeedbackItem(
