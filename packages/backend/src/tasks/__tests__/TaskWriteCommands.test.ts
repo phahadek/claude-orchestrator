@@ -1,9 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockGetTaskCache = vi.fn();
+const mockRecordEvent = vi.fn();
 
 vi.mock('../../db/queries', () => ({
   getTaskCache: (...args: unknown[]) => mockGetTaskCache(...args),
+}));
+
+vi.mock('../../audit/AuditLog', () => ({
+  recordEvent: (...args: unknown[]) => mockRecordEvent(...args),
 }));
 
 import {
@@ -11,6 +16,7 @@ import {
   isValidTransition,
   STATUS_DISPLAY,
 } from '../TaskWriteCommands';
+import { ReadinessGateError } from '../readinessGate';
 import type { TaskBackend } from '../TaskBackend';
 
 function makeBackend(overrides: Partial<TaskBackend> = {}): TaskBackend {
@@ -38,6 +44,7 @@ function cacheRowWithStatus(display: string) {
 
 beforeEach(() => {
   mockGetTaskCache.mockReset();
+  mockRecordEvent.mockReset();
 });
 
 describe('TaskWriteCommands.setStatus — state machine', () => {
@@ -116,6 +123,94 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
         source: 'human',
         sessionId: 'sess-1',
       },
+    );
+  });
+});
+
+describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () => {
+  it('rejects a Ready transition when the body has a violation, and returns the structured report', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
+    const backend = makeBackend({
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Open Questions\n- Which retry policy should we use?\n',
+        ),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    let caught: unknown;
+    try {
+      await commands.setStatus('notion:abc', 'Ready');
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(ReadinessGateError);
+    expect((caught as ReadinessGateError).violations).toEqual([
+      expect.objectContaining({ tier: 'structural' }),
+    ]);
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('applies a clean Ready transition (no violations)', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:abc', 'Ready');
+
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:abc',
+      '🗂️ Ready',
+      undefined,
+    );
+  });
+
+  it('applies with override + reason, and records an audit event with actor, reason, and tier', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
+    const backend = makeBackend({
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Open Questions\n- Which retry policy should we use?\n',
+        ),
+    });
+    const commands = new BackendTaskWriteCommands(backend, 'proj-1');
+
+    await commands.setStatus('notion:abc', 'Ready', {
+      source: 'human',
+      sessionId: 'sess-1',
+      readinessOverride: { reason: 'human reviewed and approved' },
+    });
+
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:abc',
+      '🗂️ Ready',
+      expect.objectContaining({
+        readinessOverride: { reason: 'human reviewed and approved' },
+      }),
+    );
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'readiness_override',
+        actor_type: 'human',
+        actor_id: 'sess-1',
+        project_id: 'proj-1',
+        task_id: 'notion:abc',
+        payload: expect.objectContaining({
+          reason: 'human reviewed and approved',
+          tiers: ['structural'],
+        }),
+      }),
     );
   });
 });
