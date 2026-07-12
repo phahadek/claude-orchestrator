@@ -17,11 +17,16 @@ import { join, resolve, basename } from 'path';
 import { promisify } from 'util';
 import { config } from '../config';
 import { NotionClient } from '../notion/NotionClient';
-import { buildCodeWorklist, WorklistTask } from './codeWorklist';
+import {
+  buildCodeWorklist,
+  resolveTaskRegions,
+  WorklistTask,
+} from './codeWorklist';
 import {
   checkReadiness,
   type ReadinessViolation,
 } from '../tasks/readinessGate';
+import { scanTypeCheck, type TypeCheckResult } from './typeCheck';
 
 const execFileAsync = promisify(execFile);
 
@@ -52,6 +57,15 @@ interface TaskDoc extends TaskRow {
    * TaskWriteCommands.setStatus is the sole authority.
    */
   readinessViolations: ReadinessViolation[];
+  /**
+   * Deterministic seed for size_check: the parsed changed-file count from
+   * `## Files / paths affected` (falling back to the whole body). `loc`
+   * itself stays a human estimate — the groomer derives it from `files` +
+   * the code-map digest and records it (with loc_method) in grooming-state.
+   */
+  sizeCheckSeed: { files: number; loc_method: 'estimated' };
+  /** Deterministic keyword/heuristic type/content-mismatch scan. */
+  typeCheck: TypeCheckResult;
 }
 
 type FreshnessStatus = 'fresh' | 'stale' | 'missing';
@@ -248,31 +262,44 @@ export async function loadGroomContext(
     }
   }
 
+  const trackedFiles = await listTrackedFiles(repoRoot);
+  const worklistOptions = {
+    sourceRoot: manifest.source_root ?? '',
+    packages: manifest.packages ?? [],
+    areaAliases: manifest.area_aliases ?? {},
+    trackedFiles,
+  };
+
   const targetTasks: TaskDoc[] = [];
   for (const row of board) {
     if (DONE_STATUSES.has(row.status)) continue;
     const page = await notion.fetchTaskPage(row.id);
+    const regions = resolveTaskRegions(
+      {
+        id: row.id,
+        title: row.title,
+        filesSection: page.filesSection,
+        rawMarkdown: page.rawMarkdown,
+      },
+      worklistOptions,
+    );
     targetTasks.push({
       ...row,
       filesSection: page.filesSection,
       rawMarkdown: page.rawMarkdown,
       readinessViolations: checkReadiness(page.rawMarkdown),
+      sizeCheckSeed: { files: regions.files.length, loc_method: 'estimated' },
+      typeCheck: scanTypeCheck(row.type, page.rawMarkdown),
     });
   }
 
-  const trackedFiles = await listTrackedFiles(repoRoot);
   const worklistTasks: WorklistTask[] = targetTasks.map((t) => ({
     id: t.id,
     title: t.title,
     filesSection: t.filesSection,
     rawMarkdown: t.rawMarkdown,
   }));
-  const codeWorklist = buildCodeWorklist(worklistTasks, {
-    sourceRoot: manifest.source_root ?? '',
-    packages: manifest.packages ?? [],
-    areaAliases: manifest.area_aliases ?? {},
-    trackedFiles,
-  });
+  const codeWorklist = buildCodeWorklist(worklistTasks, worklistOptions);
 
   const priorShaByPackage = opts?.priorShaByPackage ?? {};
   const gitFreshness: Record<string, FreshnessInfo> = {};

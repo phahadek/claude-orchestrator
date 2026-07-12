@@ -171,6 +171,65 @@ describe('loadGroomContext', () => {
     ]);
   });
 
+  it('computes a deterministic size_check.files seed per task from its declared Files section', async () => {
+    ({ repoDir } = setupRepo());
+    const result = await loadGroomContext('M-test', {
+      repoRoot: repoDir,
+      manifest: MANIFEST,
+      notionClient: fakeNotion(),
+    });
+
+    const codeTask = result.targetTasks.find((t) => t.id === CODE_ROW.id);
+    expect(codeTask?.sizeCheckSeed).toEqual({
+      files: 1,
+      loc_method: 'estimated',
+    });
+    const toolTask = result.targetTasks.find((t) => t.id === TOOL_ROW.id);
+    expect(toolTask?.sizeCheckSeed).toEqual({
+      files: 1,
+      loc_method: 'estimated',
+    });
+  });
+
+  it('yields files: 0 without error when a task has no parseable Files section', async () => {
+    ({ repoDir } = setupRepo());
+    const notion = fakeNotion();
+    const original = notion.fetchTaskPage.bind(notion);
+    notion.fetchTaskPage = async (taskId: string) => {
+      if (taskId === CODE_ROW.id) {
+        return {
+          name: CODE_ROW.title,
+          filesSection: '',
+          rawMarkdown: 'No files mentioned here.',
+        };
+      }
+      return original(taskId);
+    };
+    const result = await loadGroomContext('M-test', {
+      repoRoot: repoDir,
+      manifest: MANIFEST,
+      notionClient: notion,
+    });
+
+    const codeTask = result.targetTasks.find((t) => t.id === CODE_ROW.id);
+    expect(codeTask?.sizeCheckSeed).toEqual({
+      files: 0,
+      loc_method: 'estimated',
+    });
+  });
+
+  it('computes a type_check artifact per task', async () => {
+    ({ repoDir } = setupRepo());
+    const result = await loadGroomContext('M-test', {
+      repoRoot: repoDir,
+      manifest: MANIFEST,
+      notionClient: fakeNotion(),
+    });
+
+    const codeTask = result.targetTasks.find((t) => t.id === CODE_ROW.id);
+    expect(codeTask?.typeCheck).toEqual({ decision: 'none' });
+  });
+
   it('builds a deduped per-package code worklist from target task bodies', async () => {
     ({ repoDir } = setupRepo());
     const result = await loadGroomContext('M-test', {

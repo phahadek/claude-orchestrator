@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { buildCodeWorklist, WorklistTask } from '../codeWorklist';
+import {
+  buildCodeWorklist,
+  resolveTaskRegions,
+  WorklistTask,
+} from '../codeWorklist';
 
 const TRACKED_FILES = [
   'packages/backend/src/notion/NotionClient.ts',
@@ -117,5 +121,49 @@ describe('buildCodeWorklist', () => {
     expect(worklist.get('packages/backend/src/tasks')).toEqual([
       'packages/backend/src/tasks/NotionTaskBackend.ts',
     ]);
+  });
+});
+
+describe('resolveTaskRegions', () => {
+  it('resolves a single task declared Files list to its own package + file count', () => {
+    const task: WorklistTask = {
+      id: 'task-1',
+      title: 'Fix Notion client caching',
+      filesSection:
+        '- `packages/backend/src/notion/NotionClient.ts`\n- `packages/backend/src/notion/NotionClient.test.ts`',
+      rawMarkdown: '',
+    };
+
+    const regions = resolveTaskRegions(task, {
+      sourceRoot: 'packages',
+      packages: ['backend/src/notion'],
+      areaAliases: {},
+      trackedFiles: TRACKED_FILES,
+    });
+
+    expect(regions.files).toEqual([
+      'packages/backend/src/notion/NotionClient.test.ts',
+      'packages/backend/src/notion/NotionClient.ts',
+    ]);
+    expect(regions.packages).toEqual(['packages/backend/src/notion']);
+  });
+
+  it('yields an empty file list without error when nothing resolves', () => {
+    const task: WorklistTask = {
+      id: 'task-1',
+      title: 'Add try/except handling',
+      filesSection: 'Wrap the call in a try/except block.',
+      rawMarkdown: '',
+    };
+
+    const regions = resolveTaskRegions(task, {
+      sourceRoot: '',
+      packages: [],
+      areaAliases: {},
+      trackedFiles: TRACKED_FILES,
+    });
+
+    expect(regions.files).toEqual([]);
+    expect(regions.packages).toEqual([]);
   });
 });
