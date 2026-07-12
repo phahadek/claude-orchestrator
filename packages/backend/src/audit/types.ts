@@ -58,6 +58,7 @@ type EventType =
   | 'task_body_updated'
   | 'task_type_updated'
   | 'task_properties_updated'
+  | 'task_archived'
   | 'readiness_override';
 
 type ActorType = 'ai' | 'human' | 'system';

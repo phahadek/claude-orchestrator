@@ -229,4 +229,8 @@ export class NotionTaskBackend implements TaskBackend {
       // ignore malformed cache entries
     }
   }
+
+  async archive(taskId: string): Promise<void> {
+    await this.client.archive(taskId);
+  }
 }

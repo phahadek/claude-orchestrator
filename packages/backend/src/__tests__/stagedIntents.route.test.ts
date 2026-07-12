@@ -172,3 +172,126 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
     );
   });
 });
+
+describe('POST /api/staged-intents — kind validation', () => {
+  it('accepts task.updateBody, task.setProperties, and task.archive', async () => {
+    const app = makeApp();
+    const agent = supertest(app);
+
+    for (const kind of [
+      'task.updateBody',
+      'task.setProperties',
+      'task.archive',
+    ]) {
+      const res = await agent.post('/api/staged-intents').send({
+        kind,
+        projectId: 'proj-kinds',
+        payload: { taskId: 'notion:abc' },
+      });
+      expect(res.status).toBe(201);
+    }
+  });
+
+  it('rejects an unknown intent kind', async () => {
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const res = await agent
+      .post('/api/staged-intents')
+      .send({ kind: 'task.doSomethingUnknown', projectId: 'proj-kinds' });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /api/staged-intents/:id/apply — new kinds', () => {
+  it('applies task.updateBody, task.setProperties, and task.archive', async () => {
+    const updateBody = vi.fn().mockResolvedValue(undefined);
+    const setProperties = vi.fn().mockResolvedValue(undefined);
+    const archive = vi.fn().mockResolvedValue(undefined);
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      updateBody,
+      setProperties,
+      archive,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const bodyIntent = await agent.post('/api/staged-intents').send({
+      kind: 'task.updateBody',
+      projectId: 'proj-new-kinds',
+      payload: { taskId: 'notion:abc', sections: { summary: 'hi' } },
+    });
+    const bodyApplied = await agent
+      .post(`/api/staged-intents/${bodyIntent.body.id}/apply`)
+      .send({});
+    expect(bodyApplied.status).toBe(200);
+    expect(updateBody).toHaveBeenCalledWith(
+      'notion:abc',
+      { summary: 'hi' },
+      expect.objectContaining({ source: 'human' }),
+    );
+
+    const propsIntent = await agent.post('/api/staged-intents').send({
+      kind: 'task.setProperties',
+      projectId: 'proj-new-kinds',
+      payload: { taskId: 'notion:abc', patch: { priority: '🔴 High' } },
+    });
+    const propsApplied = await agent
+      .post(`/api/staged-intents/${propsIntent.body.id}/apply`)
+      .send({});
+    expect(propsApplied.status).toBe(200);
+    expect(setProperties).toHaveBeenCalledWith(
+      'notion:abc',
+      { priority: '🔴 High' },
+      expect.objectContaining({ source: 'human' }),
+    );
+
+    const archiveIntent = await agent.post('/api/staged-intents').send({
+      kind: 'task.archive',
+      projectId: 'proj-new-kinds',
+      payload: { taskId: 'notion:abc' },
+    });
+    const archiveApplied = await agent
+      .post(`/api/staged-intents/${archiveIntent.body.id}/apply`)
+      .send({});
+    expect(archiveApplied.status).toBe(200);
+    expect(archive).toHaveBeenCalledWith(
+      'notion:abc',
+      expect.objectContaining({ source: 'human' }),
+    );
+  });
+
+  it('rejects applying archive / structural intents with a session credential (human-apply-only)', async () => {
+    const archive = vi.fn().mockResolvedValue(undefined);
+    const updateBody = vi.fn().mockResolvedValue(undefined);
+    const setProperties = vi.fn().mockResolvedValue(undefined);
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      archive,
+      updateBody,
+      setProperties,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    for (const [kind, payload] of [
+      ['task.archive', { taskId: 'notion:abc' }],
+      ['task.updateBody', { taskId: 'notion:abc', sections: {} }],
+      ['task.setProperties', { taskId: 'notion:abc', patch: {} }],
+    ] as const) {
+      const staged = await agent.post('/api/staged-intents').send({
+        kind,
+        projectId: 'proj-session',
+        payload,
+      });
+      const applied = await agent
+        .post(`/api/staged-intents/${staged.body.id}/apply`)
+        .send({ actorType: 'session' });
+      expect(applied.status).toBe(403);
+    }
+    expect(archive).not.toHaveBeenCalled();
+    expect(updateBody).not.toHaveBeenCalled();
+    expect(setProperties).not.toHaveBeenCalled();
+  });
+});

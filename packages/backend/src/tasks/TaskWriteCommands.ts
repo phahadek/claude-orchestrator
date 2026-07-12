@@ -177,6 +177,7 @@ interface TaskWriteCommands {
     patch: TaskPropertiesPatch,
     options?: TaskWriteOptions,
   ): Promise<void>;
+  archive(taskId: string, options?: TaskWriteOptions): Promise<void>;
 }
 
 export class BackendTaskWriteCommands implements TaskWriteCommands {
@@ -301,5 +302,14 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       );
     }
     await this.backend.setProperties(taskId, patch, options);
+  }
+
+  async archive(taskId: string, options?: TaskWriteOptions): Promise<void> {
+    if (!this.backend.archive) {
+      throw new Error(
+        `[TaskWriteCommands] archive is not supported by backend type "${this.backend.type}"`,
+      );
+    }
+    await this.backend.archive(taskId, options);
   }
 }

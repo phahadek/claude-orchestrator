@@ -336,6 +336,19 @@ describe('NotionClient — prefix stripping in public methods', () => {
     const written = body.properties['Depends On'].rich_text[0].text.content;
     expect(parseDependsOn(written)).toEqual(['dep1', 'dep2']);
   });
+
+  it('archive PATCHes { archived: true } at /pages/abc (not /pages/notion:abc)', async () => {
+    fetchSpy.mockResolvedValue({ ok: true, json: async () => ({}) });
+
+    await client.archive('notion:abc');
+
+    const [url, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/pages/abc');
+    expect(url).not.toContain('notion:abc');
+    expect(options.method).toBe('PATCH');
+    const body = JSON.parse(options.body as string);
+    expect(body).toEqual({ archived: true });
+  });
 });
 
 // ─── NotionClient.readBoardCache — prefix-stripping on cache-hit ──────────────
