@@ -3448,8 +3448,7 @@ export function insertGateItemEvent(row: NewGateItemEventRow): void {
   _stmtInsertGateItemEvent.run(row);
 }
 
-let _stmtListGateItemsByMilestoneAllProjects: Database.Statement | null =
-  null;
+let _stmtListGateItemsByMilestoneAllProjects: Database.Statement | null = null;
 let _stmtListAllGateItems: Database.Statement | null = null;
 let _stmtUpdateGateItemMinDeployedCommit: Database.Statement | null = null;
 

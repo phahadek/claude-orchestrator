@@ -155,7 +155,9 @@ export function nextRunnableGateItems(
     TIER_ORDER.find((t) => runnable.some((item) => item.classification === t));
   if (!tier) return [];
 
-  return runnable.filter((item) => item.classification === tier).slice(0, limit);
+  return runnable
+    .filter((item) => item.classification === tier)
+    .slice(0, limit);
 }
 
 export function getGateItem(id: string): GateItem | undefined {
@@ -192,18 +194,26 @@ export function appendGateItemEvent(
   }
   const now = new Date().toISOString();
   gateStore.appendEvent(gateItemId, { ...event, at: now });
-  const nextState = nextStateForDisposition(event.disposition, item.classification);
+  const nextState = nextStateForDisposition(
+    event.disposition,
+    item.classification,
+  );
   gateStore.advanceState(gateItemId, nextState, event.disposition, now);
 
   const updated = gateStore.getItem(gateItemId);
   if (!updated) {
-    throw new Error(`gate_item: failed to read back item ${gateItemId} after event`);
+    throw new Error(
+      `gate_item: failed to read back item ${gateItemId} after event`,
+    );
   }
   return updated;
 }
 
 /** The Prod-Mutating consent gate: releases an item held at pending-approval to pass. */
-export function approveGateItem(gateItemId: string, operator?: string): GateItem {
+export function approveGateItem(
+  gateItemId: string,
+  operator?: string,
+): GateItem {
   const item = gateStore.getItem(gateItemId);
   if (!item) {
     throw new Error(`gate_item: no item ${gateItemId}`);
@@ -228,7 +238,9 @@ export function approveGateItem(gateItemId: string, operator?: string): GateItem
 
   const updated = gateStore.getItem(gateItemId);
   if (!updated) {
-    throw new Error(`gate_item: failed to read back item ${gateItemId} after approval`);
+    throw new Error(
+      `gate_item: failed to read back item ${gateItemId} after approval`,
+    );
   }
   return updated;
 }

@@ -95,8 +95,11 @@ export function createGateStateRouter(): Router {
         disposition,
         evidence: body.evidence,
         filedFollowon:
-          typeof body.filedFollowon === 'string' ? body.filedFollowon : undefined,
-        deploySha: typeof body.deploySha === 'string' ? body.deploySha : undefined,
+          typeof body.filedFollowon === 'string'
+            ? body.filedFollowon
+            : undefined,
+        deploySha:
+          typeof body.deploySha === 'string' ? body.deploySha : undefined,
         operator: typeof body.operator === 'string' ? body.operator : undefined,
       });
       res.json(updated);
