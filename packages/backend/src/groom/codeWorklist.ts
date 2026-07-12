@@ -137,14 +137,19 @@ function resolveTaskPackages(
   sourceRoot: string,
   packages: string[],
   areaAliases: Record<string, string>,
+  declared?: Set<string>,
 ): Map<string, Set<string>> {
   const pkgFiles = new Map<string, Set<string>>();
   for (const tok of extractCandidates(scope)) {
     if (tok.includes('/')) {
       const pkg = pathToPackage(tok, sourceRoot, packages);
-      if (pkgHasFiles(fileIndex, pkg)) addPath(pkgFiles, pkg, tok);
+      if (pkgHasFiles(fileIndex, pkg)) {
+        addPath(pkgFiles, pkg, tok);
+        declared?.add(tok);
+      }
     } else if (/\.[a-z0-9]+$/i.test(tok)) {
       const matches = fileIndex.byBasename.get(tok) ?? [];
+      if (matches.length) declared?.add(tok);
       for (const m of matches) {
         const pkg = pathToPackage(m, sourceRoot, packages);
         if (pkgHasFiles(fileIndex, pkg)) addPath(pkgFiles, pkg, m);
@@ -155,6 +160,49 @@ function resolveTaskPackages(
     if (pkgHasFiles(fileIndex, a)) addPath(pkgFiles, a);
   }
   return pkgFiles;
+}
+
+export interface TaskRegions {
+  /** Coarse package paths this task's declared scope resolves to. */
+  packages: string[];
+  /** Deduped, repo-validated tokens declared in the task's scope text (drives size_check.files). */
+  files: string[];
+}
+
+/**
+ * Per-task counterpart to `buildCodeWorklist` — resolves a single task's
+ * declared scope into its own package set and validated file-token count,
+ * without merging into the milestone-wide worklist. Ported from the vendored
+ * scripts/groom-load.mjs's `resolveRegions` (its `declared` return), which
+ * `buildCodeWorklist` never exposed per-task.
+ */
+export function resolveTaskRegions(
+  task: WorklistTask,
+  opts: CodeWorklistOptions,
+): TaskRegions {
+  const sourceRoot = (opts.sourceRoot ?? '').replace(/\/+$/, '');
+  const packages = [...(opts.packages ?? [])].sort(
+    (a, b) => b.length - a.length,
+  );
+  const areaAliases = opts.areaAliases ?? {};
+  const fileIndex = buildFileIndex(opts.trackedFiles);
+
+  const scope = task.filesSection || task.rawMarkdown;
+  const declared = new Set<string>();
+  const pkgFiles = resolveTaskPackages(
+    scope,
+    `${task.title}\n${task.filesSection}`,
+    fileIndex,
+    sourceRoot,
+    packages,
+    areaAliases,
+    declared,
+  );
+
+  return {
+    packages: [...pkgFiles.keys()].sort(),
+    files: [...declared].sort(),
+  };
 }
 
 /**
