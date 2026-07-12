@@ -1348,6 +1348,7 @@ export default function App() {
                           sessions={sessions}
                           onClose={() => history.back()}
                           projectId={activeProjectId ?? undefined}
+                          boardId={activeBoardId}
                           project={
                             projects.find((p) => p.id === activeProjectId) ??
                             null
