@@ -13,9 +13,7 @@ import {
 } from '../db/queries';
 import type { GateItemClassification } from '../db/types';
 
-export type { GateItemClassification };
-
-export interface GateItemSource {
+interface GateItemSource {
   sourceTaskId: string;
   sourceTaskTitle: string;
   mergeCommit?: string;
