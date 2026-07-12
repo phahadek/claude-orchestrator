@@ -59,6 +59,7 @@ type EventType =
   | 'task_type_updated'
   | 'task_properties_updated'
   | 'task_archived'
+  | 'task_moved'
   | 'readiness_override'
   | 'flake_recovery_attempted'
   | 'flake_recovery_f2_invalidated'

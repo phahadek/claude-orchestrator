@@ -255,6 +255,7 @@ describe('POST /api/staged-intents — kind validation', () => {
       'task.updateBody',
       'task.setProperties',
       'task.archive',
+      'task.move',
     ]) {
       const res = await agent.post('/api/staged-intents').send({
         kind,
@@ -352,6 +353,16 @@ describe('POST /api/staged-intents/:id/apply — new kinds', () => {
       ['task.archive', { taskId: 'notion:abc' }],
       ['task.updateBody', { taskId: 'notion:abc', sections: {} }],
       ['task.setProperties', { taskId: 'notion:abc', patch: {} }],
+      [
+        'task.move',
+        {
+          taskId: 'notion:abc',
+          content: { title: 't', sections: {}, status: 'Backlog' },
+          sourceMilestone: { id: 'm1', displayOrder: 0 },
+          targetMilestone: { id: 'm2', displayOrder: 1, databaseId: 'db2' },
+          originalDisposition: 'archive',
+        },
+      ],
     ] as const) {
       const staged = await agent.post('/api/staged-intents').send({
         kind,

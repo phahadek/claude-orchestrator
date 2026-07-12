@@ -5,6 +5,9 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   BackendTaskWriteCommands,
   type TaskStatus,
+  type MoveTaskContent,
+  type MoveTaskMilestoneRef,
+  type MoveTaskTargetMilestone,
 } from '../tasks/TaskWriteCommands';
 import type { NewTaskFields, TaskPropertiesPatch } from '../tasks/TaskBackend';
 import type { TaskBodySections } from '../tasks/bodyRender';
@@ -66,6 +69,13 @@ interface SetPropertiesPayload {
 interface ArchivePayload {
   taskId: string;
 }
+interface MoveTaskPayload {
+  taskId: string;
+  content: MoveTaskContent;
+  sourceMilestone: MoveTaskMilestoneRef;
+  targetMilestone: MoveTaskTargetMilestone;
+  originalDisposition: 'archive' | 'defer';
+}
 
 /** Intent kinds accepted by POST /staged-intents. */
 export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
@@ -75,6 +85,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'task.updateBody',
   'task.setProperties',
   'task.archive',
+  'task.move',
 ]);
 
 /**
@@ -111,6 +122,7 @@ const HUMAN_APPLY_ONLY_KINDS: ReadonlySet<string> = new Set([
   'task.updateBody',
   'task.setProperties',
   'task.archive',
+  'task.move',
 ]);
 
 type ApplyActorType = 'human' | 'session';
@@ -176,6 +188,20 @@ async function applyIntent(
       const payload = intent.payload as ArchivePayload;
       await commands.archive(payload.taskId, { source: 'human' });
       return { ok: true };
+    }
+    case 'task.move': {
+      const payload = intent.payload as MoveTaskPayload;
+      const result = await commands.moveTask(
+        {
+          taskId: payload.taskId,
+          content: payload.content,
+          sourceMilestone: payload.sourceMilestone,
+          targetMilestone: payload.targetMilestone,
+          originalDisposition: payload.originalDisposition,
+        },
+        { source: 'human', readinessOverride: override },
+      );
+      return result;
     }
     default:
       throw new Error(`[stagedIntents] unknown intent kind "${intent.kind}"`);
