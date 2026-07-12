@@ -424,7 +424,8 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     items: GateContributionItemInput[],
     classification: GateContributionDecision,
   ): Promise<AccreteGateContributionResult> {
-    const isBareDecision = classification === 'none' || classification === 'n/a';
+    const isBareDecision =
+      classification === 'none' || classification === 'n/a';
     if (isBareDecision && items.length > 0) {
       throw new Error(
         `[TaskWriteCommands] accreteGateContribution: classification "${classification}" requires an empty items array`,

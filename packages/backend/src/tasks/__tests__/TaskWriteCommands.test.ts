@@ -558,7 +558,10 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
 
     expect(mockInsertItem).not.toHaveBeenCalled();
     expect(mockRecordAccretionMarker).toHaveBeenCalledWith(
-      expect.objectContaining({ sourceTaskId: 'notion:src-1', decision: 'none' }),
+      expect.objectContaining({
+        sourceTaskId: 'notion:src-1',
+        decision: 'none',
+      }),
     );
     expect(result.itemIds).toEqual([]);
   });
@@ -571,7 +574,10 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
 
     expect(mockInsertItem).not.toHaveBeenCalled();
     expect(mockRecordAccretionMarker).toHaveBeenCalledWith(
-      expect.objectContaining({ sourceTaskId: 'notion:src-1', decision: 'n/a' }),
+      expect.objectContaining({
+        sourceTaskId: 'notion:src-1',
+        decision: 'n/a',
+      }),
     );
   });
 

@@ -282,9 +282,7 @@ export function getAccretionMarker(
  * exempt ('n/a'). checkGroomingPromotionGate reads this before allowing the
  * task's Ready flip.
  */
-export function recordAccretionMarker(
-  marker: GateAccretionMarker,
-): void {
+export function recordAccretionMarker(marker: GateAccretionMarker): void {
   upsertGateAccretion({
     source_task_id: marker.sourceTaskId,
     project: marker.project,
