@@ -98,7 +98,9 @@ const PRIORITY_RANK: Record<string, number> = {
 };
 
 /** Highest-ranked priority among the given values, or undefined if none are set. */
-function highestPriority(priorities: (string | undefined)[]): string | undefined {
+function highestPriority(
+  priorities: (string | undefined)[],
+): string | undefined {
   let best: string | undefined;
   let bestRank = -1;
   for (const p of priorities) {
@@ -156,7 +158,9 @@ function unionSections(tasks: MergeTaskContent[]): TaskBodySections {
   const automatedCriteria = dedupe(
     tasks.flatMap((t) => t.sections.automatedCriteria),
   );
-  const manualCriteria = dedupe(tasks.flatMap((t) => t.sections.manualCriteria));
+  const manualCriteria = dedupe(
+    tasks.flatMap((t) => t.sections.manualCriteria),
+  );
   const filesAffected = dedupe(
     tasks.flatMap((t) => t.sections.filesAffected ?? []),
   ).sort();
@@ -172,7 +176,8 @@ function unionSections(tasks: MergeTaskContent[]): TaskBodySections {
     manualCriteria,
   };
   if (filesAffected.length) sections.filesAffected = filesAffected;
-  if (notionPagesAffected.length) sections.notionPagesAffected = notionPagesAffected;
+  if (notionPagesAffected.length)
+    sections.notionPagesAffected = notionPagesAffected;
   return sections;
 }
 

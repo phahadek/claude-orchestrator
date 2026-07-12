@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { planMerge, type MergeTaskContent, type MergeGraphTask } from '../mergeSession';
+import {
+  planMerge,
+  type MergeTaskContent,
+  type MergeGraphTask,
+} from '../mergeSession';
 import type { TaskBodySections } from '../../tasks/bodyRender';
 
 function sections(overrides: Partial<TaskBodySections> = {}): TaskBodySections {
@@ -53,7 +57,14 @@ describe('planMerge', () => {
       dependsOn: ['notion:other'],
     };
 
-    const milestoneTasks = [a, b, dependent1, dependent2, dependentBoth, unrelated];
+    const milestoneTasks = [
+      a,
+      b,
+      dependent1,
+      dependent2,
+      dependentBoth,
+      unrelated,
+    ];
 
     const plan = planMerge({
       milestoneTasks,
@@ -66,18 +77,22 @@ describe('planMerge', () => {
 
     const updateBody = plan.intents.find((i) => i.kind === 'task.updateBody');
     expect(updateBody?.payload).toMatchObject({ taskId: 'notion:a' });
-    const unionedSummary = (updateBody?.payload as { sections: TaskBodySections })
-      .sections.summary;
+    const unionedSummary = (
+      updateBody?.payload as { sections: TaskBodySections }
+    ).sections.summary;
     expect(unionedSummary).toContain('Task A summary');
     expect(unionedSummary).toContain('Task B summary');
-    const unionedCriteria = (updateBody?.payload as { sections: TaskBodySections })
-      .sections.automatedCriteria;
+    const unionedCriteria = (
+      updateBody?.payload as { sections: TaskBodySections }
+    ).sections.automatedCriteria;
     expect(unionedCriteria).toEqual(['a1', 'b1']);
     const unionedFiles = (updateBody?.payload as { sections: TaskBodySections })
       .sections.filesAffected;
     expect(unionedFiles).toEqual(['src/a.ts', 'src/b.ts']);
 
-    const setProperties = plan.intents.find((i) => i.kind === 'task.setProperties');
+    const setProperties = plan.intents.find(
+      (i) => i.kind === 'task.setProperties',
+    );
     expect(setProperties?.payload).toEqual({
       taskId: 'notion:a',
       patch: { priority: '🔴 High' },
