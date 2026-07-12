@@ -99,10 +99,8 @@ export function getItem(id: string): GateItem | undefined {
   };
 }
 
-export type GateItemSummary = Omit<GateItem, 'sources' | 'events'>;
-
 export interface GateItemDetail {
-  item: GateItemSummary;
+  item: Omit<GateItem, 'sources' | 'events'>;
   sources: GateItemSource[];
   events: GateItemEvent[];
 }
