@@ -196,7 +196,31 @@ ${
 
 ---
 
-## Status Ownership
+${
+  gitMode === 'local-only'
+    ? ''
+    : `## Flaky / Transient CI or F2 Gate Failures
+
+When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
+
+Only disposition a failure as flaky after clearing this verification bar, in order:
+
+1. Run the failing test in isolation and confirm it fails or passes inconsistently on its own.
+2. Run the full test suite once more end-to-end and confirm it passes clean.
+3. Confirm the failure is unrelated to your diff (e.g. infra contention, test-ordering/parallelism interference, a timing race) — not a real regression you introduced.
+
+If all three hold, emit a verified-flaky disposition instead of pushing a commit. Include it as a JSON block in your response text, parsed the same way as review-thread dispositions:
+
+\`\`\`
+{"verified_flaky":{"gate":"ci","reason":"<one line: what you ran and what you concluded>"}}
+\`\`\`
+
+\`gate\` is \`"ci"\` for a failing GitHub check or \`"f2"\` for the orchestrator-run test gate — use whichever gate actually failed. The orchestrator re-runs that gate on the same commit (no new push) and re-drives the merge loop on a pass. This is bounded — after a small number of re-run attempts the PR stays paused for human attention, so only disposition a failure as flaky when you've genuinely cleared the verification bar above, not as a way to skip investigating.
+
+---
+
+`
+}## Status Ownership
 
 **Do NOT update ${taskAssignmentLabel(taskBackend)} status.**
 **Do NOT call any ${taskBackendApiName(taskBackend)} to change task status.**

@@ -11,6 +11,7 @@ const mockSetPreReviewStage = vi.fn();
 const mockSetPauseReason = vi.fn();
 const mockHasTestResultForSha = vi.fn().mockReturnValue(false);
 const mockUpsertTestResult = vi.fn();
+const mockDeleteTestResult = vi.fn();
 const mockHasAnalyzeResultForSha = vi.fn().mockReturnValue(false);
 const mockUpsertAnalyzeResult = vi.fn();
 const mockGetAnalyzeResult = vi.fn().mockReturnValue(null);
@@ -25,6 +26,7 @@ vi.mock('../../db/queries', () => ({
   setPauseReason: (...args: unknown[]) => mockSetPauseReason(...args),
   hasTestResultForSha: (...args: unknown[]) => mockHasTestResultForSha(...args),
   upsertTestResult: (...args: unknown[]) => mockUpsertTestResult(...args),
+  deleteTestResult: (...args: unknown[]) => mockDeleteTestResult(...args),
   hasAnalyzeResultForSha: (...args: unknown[]) =>
     mockHasAnalyzeResultForSha(...args),
   upsertAnalyzeResult: (...args: unknown[]) => mockUpsertAnalyzeResult(...args),
@@ -799,5 +801,96 @@ describe('PreReviewPipeline — setPreReviewStage transitions', () => {
     ).mock.calls.map(([, , s]) => s);
     expect(stages).toContain('blocked_verify');
     expect(stages).not.toContain('awaiting_review');
+  });
+});
+
+// ── rerunFlakyTests — F2 verified-flaky actuation ────────────────────────────
+
+describe('PreReviewPipeline.rerunFlakyTests', () => {
+  it('audits + invalidates the existing test result row, then re-runs on the same SHA (no new commit)', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+    });
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.rerunFlakyTests(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      WORKTREE,
+      makeProject(),
+    );
+
+    expect(result).toEqual({ passed: true, output: 'ok' });
+
+    // Audited: invalidation happened, recorded before the re-run.
+    expect(mockDeleteTestResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+    );
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'flake_recovery_f2_invalidated',
+        payload: expect.objectContaining({
+          prNumber: PR_NUMBER,
+          sha: HEAD_SHA,
+        }),
+      }),
+    );
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'flake_recovery_f2_rerun',
+        payload: expect.objectContaining({
+          prNumber: PR_NUMBER,
+          sha: HEAD_SHA,
+          passed: true,
+        }),
+      }),
+    );
+
+    // Re-run on the same SHA — no new commit, no new head_sha.
+    expect(mockRunTestCommands).toHaveBeenCalledWith(
+      WORKTREE,
+      ['npm test'],
+      300,
+      expect.any(Function),
+      { maxRssMb: 0, failFast: true },
+    );
+    expect(mockUpsertTestResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      true,
+      'ok',
+    );
+  });
+
+  it('returns null when the project has no F2 test commands configured', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test: [],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.rerunFlakyTests(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      WORKTREE,
+      makeProject(),
+    );
+
+    expect(result).toBeNull();
+    expect(mockDeleteTestResult).not.toHaveBeenCalled();
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
   });
 });

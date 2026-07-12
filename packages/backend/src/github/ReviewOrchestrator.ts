@@ -4,6 +4,7 @@ import {
   getProjectById,
   runtimeSettings,
 } from '../config';
+import type { ProjectConfig } from '../config';
 import { typedGetSetting } from '../config/settings';
 import {
   setPRReviewResult,
@@ -512,6 +513,28 @@ export class ReviewOrchestrator {
 
     logger.info(
       `[ReviewOrchestrator] tests ${passed ? 'PASSED' : 'FAILED'} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
+    );
+  }
+
+  /**
+   * Actuate a verified-flaky disposition on the F2 gate — delegates to
+   * PreReviewPipeline.rerunFlakyTests. Exposed here so PRMergeWatcher (which
+   * holds a ReviewOrchestrator reference, not a PreReviewPipeline one) can
+   * drive same-SHA F2 re-runs.
+   */
+  async rerunFlakyTests(
+    prNumber: number,
+    repo: string,
+    headSha: string,
+    worktreePath: string,
+    project: ProjectConfig,
+  ): Promise<{ passed: boolean; output: string } | null> {
+    return this.preReviewPipeline.rerunFlakyTests(
+      prNumber,
+      repo,
+      headSha,
+      worktreePath,
+      project,
     );
   }
 

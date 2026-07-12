@@ -1,5 +1,9 @@
 import type { GitHubClient } from './GitHubClient';
-import type { MergeabilityCategory, FailingCheck } from './types';
+import type {
+  MergeabilityCategory,
+  FailingCheck,
+  VerifiedFlakyDispositionPayload,
+} from './types';
 import { GitHubRateLimitError } from './types';
 import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -46,6 +50,8 @@ import {
   clearTerminalPRFlags,
   setHeadBranch,
   clearSessionInitiatedPRClose,
+  incrementFlakeRecoveryAttempts,
+  resetFlakeRecoveryAttempts,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
@@ -116,7 +122,15 @@ export class PRMergeWatcher {
      */
     private taskBackendOverride: TaskBackend | undefined,
     private broadcast: (msg: ServerMessage) => void,
-  ) {}
+  ) {
+    this.sessions.on(
+      'verified_flaky_disposition',
+      (payload: unknown) =>
+        void this.handleVerifiedFlakyDisposition(
+          payload as VerifiedFlakyDispositionPayload,
+        ),
+    );
+  }
 
   setAutoMerger(autoMerger: AutoMerger): void {
     this.autoMerger = autoMerger;
@@ -715,6 +729,122 @@ export class PRMergeWatcher {
       repo: pr.repo,
     });
     this.autoMerger?.attempt(pr.pr_number, pr.repo);
+  }
+
+  /**
+   * Actuate a session's verified-flaky disposition: re-run the same gate on the
+   * same commit (no new push) and, on pass, clear the ci_failing pause and
+   * re-drive the merge loop — including for a PR that hasn't been approved yet,
+   * which the approval-gated poll path (checkMergeability) never reaches.
+   * Bounded by flake_recovery_max_retries; exhaustion leaves the PR paused with
+   * a flake-recovery-exhausted detail instead of retrying forever.
+   */
+  async handleVerifiedFlakyDisposition(
+    payload: VerifiedFlakyDispositionPayload,
+  ): Promise<void> {
+    const pr = getPRByNumber(payload.prNumber, payload.repo);
+    if (!pr) return;
+
+    // Stale disposition — a new push landed since the session diagnosed the
+    // failure. The gate for the new SHA hasn't even run yet; nothing to re-run.
+    if (payload.headSha && pr.head_sha !== payload.headSha) {
+      logger.info(
+        `[PRMergeWatcher] verified-flaky disposition for PR #${pr.pr_number} is stale (sha mismatch) — ignoring`,
+      );
+      return;
+    }
+
+    const pauseStruct = parsePauseReason(pr.pause_reason);
+    if (pauseStruct?.reason !== 'ci_failing') return;
+
+    const maxRetries = typedGetSetting('flake_recovery_max_retries');
+    if (pr.flake_recovery_attempts >= maxRetries) {
+      setPauseReason(
+        pr.pr_number,
+        pr.repo,
+        'ci_failing',
+        'flake-recovery-exhausted',
+      );
+      logger.warn(
+        `[PRMergeWatcher] PR #${pr.pr_number}: flake recovery exhausted (${pr.flake_recovery_attempts}/${maxRetries}) — staying paused`,
+      );
+      return;
+    }
+    incrementFlakeRecoveryAttempts(pr.pr_number, pr.repo);
+
+    recordEvent({
+      event_type: 'flake_recovery_attempted',
+      actor_type: 'system',
+      task_id: pr.task_id ?? null,
+      payload: {
+        pr_number: pr.pr_number,
+        repo: pr.repo,
+        sha: pr.head_sha,
+        gate: payload.disposition.gate,
+        reason: payload.disposition.reason,
+        attempt: pr.flake_recovery_attempts + 1,
+      },
+    });
+
+    if (!pr.head_sha) return;
+    const project = getProjectByGithubRepo(pr.repo);
+    let passed: boolean;
+
+    if (payload.disposition.gate === 'f2') {
+      if (!project || !pr.session_id || !this.reviewOrchestrator) return;
+      const session = getSession(pr.session_id);
+      const worktreePath = session?.worktree_path ?? '';
+      if (!worktreePath) return;
+      const result = await this.reviewOrchestrator.rerunFlakyTests(
+        pr.pr_number,
+        pr.repo,
+        pr.head_sha,
+        worktreePath,
+        project,
+      );
+      if (!result) return;
+      passed = result.passed;
+    } else {
+      try {
+        await this.github.rerunFailedJobs(pr.head_sha, pr.repo);
+      } catch (err) {
+        logger.warn(
+          `[PRMergeWatcher] rerunFailedJobs failed for PR #${pr.pr_number}:`,
+          (err as Error).message,
+        );
+        return;
+      }
+      const ciCheckNames = project
+        ? loadOrchestratorConfig(project.projectDir).ci_check_name
+        : [];
+      const category = await this.github.categorizeMergeability(
+        pr.pr_number,
+        pr.repo,
+        ciCheckNames,
+      );
+      passed = category.category !== 'ci_failed';
+    }
+
+    if (passed) {
+      resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
+      setPauseReason(pr.pr_number, pr.repo, null);
+      this.broadcast({
+        type: 'pr_pause_cleared',
+        prNumber: pr.pr_number,
+        repo: pr.repo,
+      });
+      logger.info(
+        `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run passed — pause cleared, re-driving merge loop`,
+      );
+      // checkMergeabilityNow bypasses the approved-verdict gate that
+      // checkMergeability enforces, so a not-yet-approved PR is re-driven too.
+      await this.checkMergeabilityNow(pr.pr_number, pr.repo);
+      this.autoMerger?.attempt(pr.pr_number, pr.repo);
+    } else {
+      logger.info(
+        `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run still failing (attempt ${pr.flake_recovery_attempts + 1}/${maxRetries})`,
+      );
+    }
   }
 
   /**

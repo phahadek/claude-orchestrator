@@ -905,6 +905,13 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN flake_recovery_attempts INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
 
   // ── Git-Bash project_dir backfill (win32-only, idempotent) ──────────────────
   // Converts any /c/... or /D/... style project_dir stored by Git-Bash

@@ -28,6 +28,7 @@ const SettingsSchema = z.object({
   auto_archive_sweep_interval_minutes: z.coerce.number().int().min(1),
   reviewer_comment_quiescence_ms: z.coerce.number().int().min(0),
   session_pr_close_grace_minutes: z.coerce.number().int().min(0),
+  flake_recovery_max_retries: z.coerce.number().int().min(0),
 
   // Boolean settings (stored as 'true'/'false' strings; also accepts native booleans)
   auto_review: zodBoolCoerce,
@@ -72,6 +73,7 @@ export const SETTING_DEFAULTS: Settings = {
   auto_archive_sweep_interval_minutes: 5,
   reviewer_comment_quiescence_ms: 120_000,
   session_pr_close_grace_minutes: 5,
+  flake_recovery_max_retries: 2,
   auto_review: true,
   auto_archive_enabled: true,
   code_session_model: '',

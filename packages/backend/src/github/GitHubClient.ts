@@ -503,6 +503,45 @@ export class GitHubClient {
   }
 
   /**
+   * Re-run the failed check-runs for a commit SHA via GitHub's rerequest API —
+   * actuates a session's verified-flaky disposition without pushing a new commit.
+   * Best-effort per check run: a single rerequest failure is logged and skipped
+   * so the rest still fire. Returns the ids of check runs successfully rerequested.
+   */
+  async rerunFailedJobs(sha: string, repo?: string): Promise<number[]> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<{
+      check_runs: Array<{
+        id: number;
+        name: string;
+        status: string;
+        conclusion: string | null;
+      }>;
+    }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
+    const failing = data.check_runs.filter(
+      (c) =>
+        c.status === 'completed' &&
+        c.conclusion !== null &&
+        FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
+    );
+    const rerequested: number[] = [];
+    for (const c of failing) {
+      try {
+        await this.request(`/repos/${r}/check-runs/${c.id}/rerequest`, {
+          method: 'POST',
+        });
+        rerequested.push(c.id);
+      } catch (err) {
+        logger.warn(
+          `[GitHubClient] rerunFailedJobs: rerequest failed for check run ${c.id} (${c.name}) on ${sha}:`,
+          (err as Error).message,
+        );
+      }
+    }
+    return rerequested;
+  }
+
+  /**
    * Map GitHub's mergeable_state (plus check-runs when relevant) onto a single
    * category so the dashboard can tell merge conflicts apart from CI failures
    * and branch-protection blocks. Returns `clean` when mergeable, otherwise one

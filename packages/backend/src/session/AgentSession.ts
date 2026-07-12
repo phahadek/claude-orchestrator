@@ -67,6 +67,8 @@ import {
 import type {
   ParsedDispositionItem,
   DispositionsParsedPayload,
+  VerifiedFlakyDisposition,
+  VerifiedFlakyDispositionPayload,
 } from '../github/types';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
@@ -132,6 +134,48 @@ export function parseDispositionBlock(
     });
   }
   return items.length > 0 ? items : null;
+}
+
+/**
+ * Extract and validate a verified-flaky disposition block from session assistant
+ * text — emitted when the session has cleared the flake-verification bar (ran the
+ * failing test in isolation, re-ran the full suite, confirmed the failure is
+ * unrelated to its diff) instead of pushing an empty commit. Exported for testing.
+ */
+export function parseVerifiedFlakyDisposition(
+  text: string,
+): VerifiedFlakyDisposition | null {
+  const idx = text.indexOf('"verified_flaky"');
+  if (idx === -1) return null;
+  const openBrace = text.lastIndexOf('{', idx);
+  if (openBrace === -1) return null;
+  let depth = 0;
+  let closeBrace = -1;
+  for (let i = openBrace; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}') {
+      depth--;
+      if (depth === 0) {
+        closeBrace = i;
+        break;
+      }
+    }
+  }
+  if (closeBrace === -1) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(openBrace, closeBrace + 1));
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const block = (parsed as Record<string, unknown>).verified_flaky;
+  if (typeof block !== 'object' || block === null) return null;
+  const gate = (block as Record<string, unknown>).gate;
+  const reason = (block as Record<string, unknown>).reason;
+  if (gate !== 'ci' && gate !== 'f2') return null;
+  if (typeof reason !== 'string' || reason.length === 0) return null;
+  return { gate, reason };
 }
 
 /** Maximum number of rebase nudges sent to a session before escalating to needs_attention. */
@@ -337,6 +381,11 @@ export class AgentSession extends EventEmitter {
   private readonly processedDispositionMessageIds = new Set<string>();
   /** Dispositions parsed from the current turn's assistant text; cleared after result event. */
   private pendingParsedDispositions: ParsedDispositionItem[] | null = null;
+  /** Tracks message IDs whose verified-flaky disposition block has already been parsed (deduplicate streaming chunks). */
+  private readonly processedVerifiedFlakyMessageIds = new Set<string>();
+  /** Verified-flaky disposition parsed from the current turn's assistant text; cleared after result event. */
+  private pendingVerifiedFlakyDisposition: VerifiedFlakyDisposition | null =
+    null;
   /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
   private readonly warnedEscapeToolUseIds = new Set<string>();
   /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
@@ -1108,6 +1157,37 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         this.emit('dispositions_parsed', payload);
       }
 
+      // Actuate a verified-flaky disposition the session emitted this turn —
+      // same-commit gate re-run, not a new push.
+      if (
+        pr &&
+        event.is_error !== true &&
+        this.pendingVerifiedFlakyDisposition !== null
+      ) {
+        const disposition = this.pendingVerifiedFlakyDisposition;
+        this.pendingVerifiedFlakyDisposition = null;
+        let headSha: string | null = null;
+        if (this.worktreePath) {
+          try {
+            headSha = execSync('git rev-parse HEAD', {
+              cwd: this.worktreePath,
+            })
+              .toString()
+              .trim();
+          } catch {
+            // non-fatal
+          }
+        }
+        const payload: VerifiedFlakyDispositionPayload = {
+          sessionId: this.sessionId,
+          prNumber: pr.pr_number,
+          repo: pr.repo,
+          headSha,
+          disposition,
+        };
+        this.emit('verified_flaky_disposition', payload);
+      }
+
       // Deliver any undelivered inbox items at the turn boundary.
       if (event.is_error !== true) {
         void this.deliverInboxItems();
@@ -1195,7 +1275,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         // Both are guarded by message ID so streaming chunks don't fire multiple times.
         if (
           !this.processedPRBodyMessageIds.has(messageId) ||
-          !this.processedDispositionMessageIds.has(messageId)
+          !this.processedDispositionMessageIds.has(messageId) ||
+          !this.processedVerifiedFlakyMessageIds.has(messageId)
         ) {
           const accumulatedText = mergedContent
             .filter((b) => b.type === 'text' && typeof b.text === 'string')
@@ -1215,6 +1296,13 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             if (dispositions !== null) {
               this.processedDispositionMessageIds.add(messageId);
               this.pendingParsedDispositions = dispositions;
+            }
+          }
+          if (!this.processedVerifiedFlakyMessageIds.has(messageId)) {
+            const disposition = parseVerifiedFlakyDisposition(accumulatedText);
+            if (disposition !== null) {
+              this.processedVerifiedFlakyMessageIds.add(messageId);
+              this.pendingVerifiedFlakyDisposition = disposition;
             }
           }
         }

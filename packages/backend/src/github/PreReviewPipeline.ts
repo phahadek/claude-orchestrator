@@ -8,6 +8,7 @@ import {
   setPauseReason,
   hasTestResultForSha,
   upsertTestResult,
+  deleteTestResult,
   hasAnalyzeResultForSha,
   upsertAnalyzeResult,
   getAnalyzeResult,
@@ -379,6 +380,52 @@ export class PreReviewPipeline {
         );
       },
     };
+  }
+
+  /**
+   * Actuate a session's verified-flaky disposition on the F2 (orchestrator-run
+   * test) gate: audit + invalidate the permanent per-(pr,repo,sha) test result
+   * row, then re-run the same test commands against the same SHA — no new
+   * commit, no new SHA. Returns null when the project has no F2 tests configured.
+   */
+  async rerunFlakyTests(
+    prNumber: number,
+    repo: string,
+    headSha: string,
+    worktreePath: string,
+    project: ProjectConfig,
+  ): Promise<{ passed: boolean; output: string } | null> {
+    const config = loadOrchestratorConfig(project.projectDir);
+    if (!config.test?.length) return null;
+
+    recordEvent({
+      event_type: 'flake_recovery_f2_invalidated',
+      actor_type: 'system',
+      task_id: null,
+      payload: { prNumber, repo, sha: headSha },
+    });
+    deleteTestResult(prNumber, repo, headSha);
+
+    const { passed, output } = await runTestCommands(
+      worktreePath,
+      config.test,
+      config.test_timeout_sec,
+      (msg) =>
+        logger.info(`[PreReviewPipeline] flaky-rerun PR #${prNumber}: ${msg}`),
+      { maxRssMb: config.test_max_rss_mb, failFast: config.test_fail_fast },
+    );
+    upsertTestResult(prNumber, repo, headSha, passed, output);
+
+    recordEvent({
+      event_type: 'flake_recovery_f2_rerun',
+      actor_type: 'system',
+      task_id: null,
+      payload: { prNumber, repo, sha: headSha, passed },
+    });
+    logger.info(
+      `[PreReviewPipeline] flaky re-run ${passed ? 'PASSED' : 'FAILED'} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
+    );
+    return { passed, output };
   }
 
   /**
