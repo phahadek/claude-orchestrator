@@ -32,6 +32,14 @@ export interface NonMilestoneSourceConfig {
 export interface UpdateStatusOptions {
   source?: 'orchestrator' | 'human';
   sessionId?: string | null;
+  /**
+   * Human override for a Ready-transition readiness-gate violation (see
+   * readinessGate.ts). Only honored by TaskWriteCommands.setStatus — bypasses
+   * the hard block and records actor + reason + tier in audit_log instead.
+   * Auto-dispatched, stage-only producers have no apply path and therefore
+   * cannot set this.
+   */
+  readinessOverride?: { reason: string };
 }
 
 /** Provenance options shared by the write-side port methods (create / deps). */

@@ -6,6 +6,8 @@ import type {
 } from './TaskBackend';
 import type { TaskBodySections } from './bodyRender';
 import { getTaskCache } from '../db/queries';
+import { checkReadiness, ReadinessGateError } from './readinessGate';
+import { recordEvent } from '../audit/AuditLog';
 
 /**
  * Canonical task-write status vocabulary. Display strings (emoji-prefixed,
@@ -178,7 +180,10 @@ interface TaskWriteCommands {
 }
 
 export class BackendTaskWriteCommands implements TaskWriteCommands {
-  constructor(private readonly backend: TaskBackend) {}
+  constructor(
+    private readonly backend: TaskBackend,
+    private readonly projectId?: string,
+  ) {}
 
   async createTask(
     fields: NewTaskFields,
@@ -205,6 +210,27 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       throw new Error(
         `[TaskWriteCommands] invalid status transition for ${taskId}: ${current} -> ${status}`,
       );
+    }
+    if (status === 'Ready') {
+      const body = (await this.backend.fetchTaskPage(taskId)) ?? '';
+      const violations = checkReadiness(body);
+      if (violations.length > 0) {
+        if (!options?.readinessOverride) {
+          throw new ReadinessGateError(violations);
+        }
+        recordEvent({
+          event_type: 'readiness_override',
+          actor_type: 'human',
+          actor_id: options.sessionId ?? null,
+          project_id: this.projectId ?? null,
+          task_id: taskId,
+          payload: {
+            reason: options.readinessOverride.reason,
+            tiers: violations.map((v) => v.tier),
+            violations,
+          },
+        });
+      }
     }
     await this.backend.updateStatus(taskId, STATUS_DISPLAY[status], options);
   }

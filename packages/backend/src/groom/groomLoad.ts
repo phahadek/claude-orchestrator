@@ -18,6 +18,10 @@ import { promisify } from 'util';
 import { config } from '../config';
 import { NotionClient } from '../notion/NotionClient';
 import { buildCodeWorklist, WorklistTask } from './codeWorklist';
+import {
+  checkReadiness,
+  type ReadinessViolation,
+} from '../tasks/readinessGate';
 
 const execFileAsync = promisify(execFile);
 
@@ -41,6 +45,13 @@ interface TaskRow {
 interface TaskDoc extends TaskRow {
   filesSection: string;
   rawMarkdown: string;
+  /**
+   * Pre-stage self-check against the shared command-layer readiness gate
+   * (readinessGate.ts) — early feedback for the groomer before staging a
+   * Ready-flip. Not a second enforcement point; the command layer's
+   * TaskWriteCommands.setStatus is the sole authority.
+   */
+  readinessViolations: ReadinessViolation[];
 }
 
 type FreshnessStatus = 'fresh' | 'stale' | 'missing';
@@ -245,6 +256,7 @@ export async function loadGroomContext(
       ...row,
       filesSection: page.filesSection,
       rawMarkdown: page.rawMarkdown,
+      readinessViolations: checkReadiness(page.rawMarkdown),
     });
   }
 

@@ -7,6 +7,10 @@ import {
   type TaskStatus,
 } from '../tasks/TaskWriteCommands';
 import type { NewTaskFields } from '../tasks/TaskBackend';
+import {
+  ReadinessGateError,
+  type ReadinessViolation,
+} from '../tasks/readinessGate';
 
 /**
  * The general staged-intent surface: a single chokepoint producers (Groom(N),
@@ -20,6 +24,8 @@ interface StagedIntent {
   payload: unknown;
   projectId: string;
   createdAt: number;
+  /** Set when the last apply attempt was hard-blocked by the readiness gate. */
+  annotation?: { blocked: true; violations: ReadinessViolation[] } | null;
 }
 
 const store = new Map<string, StagedIntent>();
@@ -34,9 +40,12 @@ interface SetDependsOnPayload {
   dependsOn: string[];
 }
 
-async function applyIntent(intent: StagedIntent): Promise<unknown> {
+async function applyIntent(
+  intent: StagedIntent,
+  override?: { reason: string },
+): Promise<unknown> {
   const backend = getTaskBackend(intent.projectId);
-  const commands = new BackendTaskWriteCommands(backend);
+  const commands = new BackendTaskWriteCommands(backend, intent.projectId);
 
   switch (intent.kind) {
     case 'task.create': {
@@ -48,6 +57,7 @@ async function applyIntent(intent: StagedIntent): Promise<unknown> {
       const payload = intent.payload as SetStatusPayload;
       await commands.setStatus(payload.taskId, payload.status, {
         source: 'human',
+        readinessOverride: override,
       });
       return { ok: true };
     }
@@ -108,6 +118,8 @@ export function createStagedIntentsRouter(): Router {
   });
 
   // ── POST /api/staged-intents/:id/apply ───────────────────────────────────
+  // Human / device-authenticated surface only — the only place `override` is
+  // accepted. Auto-dispatched, stage-only producers never call this route.
   router.post(
     '/staged-intents/:id/apply',
     async (req: Request, res: Response) => {
@@ -117,11 +129,33 @@ export function createStagedIntentsRouter(): Router {
         return;
       }
 
+      const body = req.body as { override?: unknown; reason?: unknown };
+      const override = body?.override === true;
+      const reason = typeof body?.reason === 'string' ? body.reason : '';
+      if (override && !reason.trim()) {
+        res
+          .status(400)
+          .json({ error: 'reason is required when override is true' });
+        return;
+      }
+
       try {
-        const result = await applyIntent(intent);
+        const result = await applyIntent(
+          intent,
+          override ? { reason } : undefined,
+        );
+        intent.annotation = null;
         store.delete(intent.id);
         res.json({ ok: true, result });
       } catch (err) {
+        if (err instanceof ReadinessGateError) {
+          intent.annotation = { blocked: true, violations: err.violations };
+          res.status(409).json({
+            error: err.message,
+            violations: err.violations,
+          });
+          return;
+        }
         res.status(500).json({
           error: err instanceof Error ? err.message : 'Failed to apply intent',
         });
