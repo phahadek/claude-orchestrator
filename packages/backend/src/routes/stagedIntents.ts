@@ -27,6 +27,12 @@ interface StagedIntent {
   createdAt: number;
   /** Set when the last apply attempt was hard-blocked by the readiness gate. */
   annotation?: { blocked: true; violations: ReadinessViolation[] } | null;
+  /**
+   * Correlates multiple intents that form one structural-change unit (e.g. a
+   * split's updateBody + createTask + setDependsOn intents), so the shared
+   * display can present/apply them as a group rather than unrelated rows.
+   */
+  groupId?: string | null;
 }
 
 const store = new Map<string, StagedIntent>();
@@ -160,10 +166,12 @@ export function createStagedIntentsRouter(): Router {
       kind?: unknown;
       payload?: unknown;
       projectId?: unknown;
+      groupId?: unknown;
     };
     const kind = typeof body.kind === 'string' ? body.kind : null;
     const projectId =
       typeof body.projectId === 'string' ? body.projectId : null;
+    const groupId = typeof body.groupId === 'string' ? body.groupId : null;
 
     if (!kind) {
       res.status(400).json({ error: 'kind is required' });
@@ -184,6 +192,7 @@ export function createStagedIntentsRouter(): Router {
       payload: body.payload ?? null,
       projectId,
       createdAt: Date.now(),
+      groupId,
     };
     store.set(intent.id, intent);
     res.status(201).json(intent);
