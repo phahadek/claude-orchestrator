@@ -261,6 +261,10 @@ export interface RuntimeSettings {
   large_task_effort: string;
   /** TaskCacheRefresher: how often (ms) to refresh per-project board caches in background. */
   task_cache_refresh_interval_ms: number;
+  /** GateReconciler: built but not activated by default (no-coexistence rule) — off until an operator opts in. */
+  gate_verification_enabled: boolean;
+  /** GateReconciler: interval in milliseconds between reconcile ticks. */
+  gate_verification_interval_ms: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -310,5 +314,9 @@ export const runtimeSettings: RuntimeSettings = {
   large_task_effort: '',
   task_cache_refresh_interval_ms: Number(
     process.env.TASK_CACHE_REFRESH_INTERVAL_MS ?? 60_000,
+  ),
+  gate_verification_enabled: process.env.GATE_VERIFICATION_ENABLED === 'true',
+  gate_verification_interval_ms: Number(
+    process.env.GATE_VERIFICATION_INTERVAL_MS ?? 60_000,
   ),
 };
