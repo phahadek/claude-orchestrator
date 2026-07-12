@@ -94,6 +94,7 @@ export function confirmSplitCandidate(
   }
   return {
     confirmed: false,
-    reason: 'estimate is over the floor but within the auto-confirm margin — needs explicit operator approval',
+    reason:
+      'estimate is over the floor but within the auto-confirm margin — needs explicit operator approval',
   };
 }

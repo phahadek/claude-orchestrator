@@ -38,9 +38,9 @@ describe('composeSplitIntents', () => {
       (i) => i.kind === 'task.updateBody',
     );
     expect(updateBodyIntent).toBeDefined();
-    expect(
-      (updateBodyIntent!.payload as { taskId: string }).taskId,
-    ).toBe('notion:original-id');
+    expect((updateBodyIntent!.payload as { taskId: string }).taskId).toBe(
+      'notion:original-id',
+    );
     expect(
       (updateBodyIntent!.payload as { sections: TaskBodySections }).sections
         .summary,
@@ -51,9 +51,9 @@ describe('composeSplitIntents', () => {
       (i) => i.kind === 'task.create',
     );
     expect(createIntents).toHaveLength(2);
-    expect(createIntents.map((i) => (i.payload as { title: string }).title)).toEqual(
-      ['Subset B', 'Subset C'],
-    );
+    expect(
+      createIntents.map((i) => (i.payload as { title: string }).title),
+    ).toEqual(['Subset B', 'Subset C']);
 
     // Intra-split setDependsOn — only sibling-2 declared deps.
     const dependsOnIntents = result.intents.filter(
@@ -96,7 +96,9 @@ describe('composeSplitIntents', () => {
       composeSplitIntents({
         projectId: 'proj-1',
         original: { id: 'notion:original-id', sections: sections('x') },
-        siblings: [{ ref: ORIGINAL_REF, fields: { databaseId: 'db-1', title: 'x' } }],
+        siblings: [
+          { ref: ORIGINAL_REF, fields: { databaseId: 'db-1', title: 'x' } },
+        ],
       }),
     ).toThrow(/reserved/);
   });
