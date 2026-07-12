@@ -35,7 +35,7 @@ export interface MovePlanInput {
   isLaterMove: boolean;
 }
 
-export interface DroppedEdge {
+interface DroppedEdge {
   from: string;
   to: string;
 }
