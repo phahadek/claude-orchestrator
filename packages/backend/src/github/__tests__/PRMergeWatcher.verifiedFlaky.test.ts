@@ -75,7 +75,10 @@ import {
 } from '../../db/queries';
 import { getProjectByGithubRepo } from '../../config';
 import { typedGetSetting } from '../../config/settings';
-import { pauseReasonFromCanonical, serializePauseReason } from '../../db/pauseReason';
+import {
+  pauseReasonFromCanonical,
+  serializePauseReason,
+} from '../../db/pauseReason';
 import type { GitHubClient } from '../GitHubClient';
 import type { SessionManager } from '../../session/SessionManager';
 import type { AutoMerger } from '../AutoMerger';
@@ -170,7 +173,10 @@ function makeMockSessions(): SessionManager {
 }
 
 function makeMockAutoMerger(): AutoMerger {
-  return { attempt: vi.fn(), clearStalePauses: vi.fn() } as unknown as AutoMerger;
+  return {
+    attempt: vi.fn(),
+    clearStalePauses: vi.fn(),
+  } as unknown as AutoMerger;
 }
 
 function makeMockReviewOrchestrator(): ReviewOrchestrator {
@@ -296,10 +302,7 @@ describe('PRMergeWatcher.handleVerifiedFlakyDisposition — re-drive on pass', (
     // checkMergeabilityNow re-checks mergeability regardless of approval —
     // evidenced by updateMergeState firing off the categorizeMergeability result.
     expect(vi.mocked(updateMergeState)).toHaveBeenCalled();
-    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(
-      PR_NUMBER,
-      REPO,
-    );
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(PR_NUMBER, REPO);
   });
 
   it('does not clear the pause when the re-run still fails', async () => {

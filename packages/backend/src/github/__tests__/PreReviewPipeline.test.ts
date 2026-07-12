@@ -829,11 +829,18 @@ describe('PreReviewPipeline.rerunFlakyTests', () => {
     expect(result).toEqual({ passed: true, output: 'ok' });
 
     // Audited: invalidation happened, recorded before the re-run.
-    expect(mockDeleteTestResult).toHaveBeenCalledWith(PR_NUMBER, REPO, HEAD_SHA);
+    expect(mockDeleteTestResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+    );
     expect(mockRecordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'flake_recovery_f2_invalidated',
-        payload: expect.objectContaining({ prNumber: PR_NUMBER, sha: HEAD_SHA }),
+        payload: expect.objectContaining({
+          prNumber: PR_NUMBER,
+          sha: HEAD_SHA,
+        }),
       }),
     );
     expect(mockRecordEvent).toHaveBeenCalledWith(
