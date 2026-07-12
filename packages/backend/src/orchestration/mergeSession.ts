@@ -61,7 +61,7 @@ interface SetDependsOnPayload {
   dependsOn: string[];
 }
 
-export type MergeStagedIntent =
+type MergeStagedIntent =
   | { kind: 'task.updateBody'; payload: UpdateBodyPayload }
   | { kind: 'task.setProperties'; payload: SetPropertiesPayload }
   | { kind: 'task.archive'; payload: ArchivePayload }
