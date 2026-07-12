@@ -102,7 +102,9 @@ export const gateApi = {
     );
   },
 
-  listGateItems(params: ListGateItemsParams = {}): Promise<ListGateItemsResult> {
+  listGateItems(
+    params: ListGateItemsParams = {},
+  ): Promise<ListGateItemsResult> {
     return apiRequest<ListGateItemsResult>(
       `/api/gate/items${buildQuery(params)}`,
     );

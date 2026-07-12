@@ -128,8 +128,7 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
         state: stateFilter || undefined,
         classification:
           (classificationFilter as GateItemClassification) || undefined,
-        runnable:
-          runnableFilter === '' ? undefined : runnableFilter === 'true',
+        runnable: runnableFilter === '' ? undefined : runnableFilter === 'true',
         page,
         limit: PAGE_SIZE,
       })
@@ -192,7 +191,8 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
           >
             {milestones.map((m) => (
               <option key={`${m.project}:${m.milestone}`} value={m.milestone}>
-                {m.milestone} ({m.status === 'green' ? '✅' : `🚫 ${m.blockingCount}`})
+                {m.milestone} (
+                {m.status === 'green' ? '✅' : `🚫 ${m.blockingCount}`})
               </option>
             ))}
           </select>
@@ -206,17 +206,26 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
       )}
 
       {selectedMilestone && (
-        <div className={styles.readinessCard} data-testid="gate-readiness-status">
-          {readinessLoading && <p className={styles.muted}>Loading readiness…</p>}
+        <div
+          className={styles.readinessCard}
+          data-testid="gate-readiness-status"
+        >
+          {readinessLoading && (
+            <p className={styles.muted}>Loading readiness…</p>
+          )}
           {readinessError && <p className={styles.error}>{readinessError}</p>}
           {readiness && (
             <>
               <div
                 className={`${styles.statusBadge} ${
-                  readiness.status === 'green' ? styles.statusGreen : styles.statusBlocked
+                  readiness.status === 'green'
+                    ? styles.statusGreen
+                    : styles.statusBlocked
                 }`}
               >
-                {readiness.status === 'green' ? '✅ Green — ready' : '🚫 Blocked'}
+                {readiness.status === 'green'
+                  ? '✅ Green — ready'
+                  : '🚫 Blocked'}
               </div>
               {readiness.status === 'blocked' && (
                 <ul className={styles.blockingList}>
@@ -286,7 +295,10 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
 
           {!itemsLoading && !itemsError && (
             <>
-              <table className={styles.itemsTable} data-testid="gate-items-table">
+              <table
+                className={styles.itemsTable}
+                data-testid="gate-items-table"
+              >
                 <thead>
                   <tr>
                     <th>Item</th>
@@ -311,7 +323,10 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
                         <td>{new Date(item.updatedAt).toLocaleString()}</td>
                       </tr>
                       {expandedId === item.id && (
-                        <tr key={`${item.id}-detail`} className={styles.detailRow}>
+                        <tr
+                          key={`${item.id}-detail`}
+                          className={styles.detailRow}
+                        >
                           <td colSpan={5}>
                             {detailLoading && (
                               <p className={styles.muted}>Loading detail…</p>
@@ -345,7 +360,9 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
                                         <li key={i}>
                                           {e.disposition} —{' '}
                                           {new Date(e.at).toLocaleString()}
-                                          {e.operator ? ` by ${e.operator}` : ''}
+                                          {e.operator
+                                            ? ` by ${e.operator}`
+                                            : ''}
                                         </li>
                                       ))}
                                     </ul>
