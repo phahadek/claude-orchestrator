@@ -74,6 +74,26 @@ describe('POST /api/task-intents — loopback session stage endpoint', () => {
     expect(mockGetTaskBackend).not.toHaveBeenCalled();
   });
 
+  it('stages an intent with the provided groupId so correlated writes can be presented together', async () => {
+    mockGetSession.mockReturnValue({
+      session_id: 'session-1',
+      project_id: 'proj-1',
+    });
+    const token = mintStageCredential('session-1');
+
+    const res = await supertest(buildApp())
+      .post('/api/task-intents')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        kind: 'task.setDependsOn',
+        payload: { taskId: 't-1', dependsOn: ['t-0'] },
+        groupId: 'batch-1',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.groupId).toBe('batch-1');
+  });
+
   it('rejects an unknown intent kind', async () => {
     mockGetSession.mockReturnValue({
       session_id: 'session-1',

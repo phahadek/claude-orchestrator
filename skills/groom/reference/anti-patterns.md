@@ -12,7 +12,7 @@ code (or its code-map digest) before declaring an open question resolved.
 
 **Skipping / compressing Step 1.** The deterministic load is large and front-loaded,
 so a single agent under context pressure shortcuts it and "decides whatever." That
-is the entire reason `groom-load.mjs` exists — let it do the load; don't hand-fetch.
+is the entire reason the Step 1 loader route exists — let it do the load; don't hand-fetch.
 
 **Shelling out a throwaway script to edit the cache/state files.** `grooming-state.json`
 and `code-map.json` are loader-seeded JSON on disk. Writing a one-off
@@ -37,8 +37,9 @@ consult to know what blocks a task. Sequencing prose written into the task
 body — _"Best worked after the X task"_, _"Pick up last in M9"_, a numbered
 ordering in the Context section — is invisible to downstream sessions. They
 read the property; they don't re-read the body for hidden ordering. If you
-locked sequencing during grooming, it MUST be reflected in the property at
-the same `notion-update-page` call that flips the task to 🗂️ Ready (Step 4).
+locked sequencing during grooming, it MUST be reflected in the property via a
+`task.setDependsOn` intent staged with the same `groupId` as the `task.setStatus`
+call that flips the task to 🗂️ Ready (Step 4).
 A common variant of this failure: writing the sequence to the body during
 the batch discussion and then "remembering to mirror it to the property
 later" — by which point the task is already at Ready and downstream

@@ -7,6 +7,7 @@ import type {
 import type { TaskBodySections } from './bodyRender';
 import { getTaskCache } from '../db/queries';
 import { checkReadiness, ReadinessGateError } from './readinessGate';
+import { checkGroomingPromotionGate, GroomingGateError } from '../groom/groomGate';
 import { recordEvent } from '../audit/AuditLog';
 
 /**
@@ -211,6 +212,12 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       throw new Error(
         `[TaskWriteCommands] invalid status transition for ${taskId}: ${current} -> ${status}`,
       );
+    }
+    if (status === 'Ready' && options?.groomingGate) {
+      const gateResult = checkGroomingPromotionGate(options.groomingGate);
+      if (!gateResult.allowed) {
+        throw new GroomingGateError(gateResult.reasons);
+      }
     }
     if (status === 'Ready') {
       const body = (await this.backend.fetchTaskPage(taskId)) ?? '';

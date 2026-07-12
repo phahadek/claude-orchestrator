@@ -17,6 +17,7 @@ import {
   STATUS_DISPLAY,
 } from '../TaskWriteCommands';
 import { ReadinessGateError } from '../readinessGate';
+import { GroomingGateError } from '../../groom/groomGate';
 import type { TaskBackend } from '../TaskBackend';
 
 function makeBackend(overrides: Partial<TaskBackend> = {}): TaskBackend {
@@ -212,6 +213,79 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
           tiers: ['structural'],
         }),
       }),
+    );
+  });
+});
+
+describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
+  it('blocks a Ready transition when the grooming gate entry is missing/undispositioned', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    let caught: unknown;
+    try {
+      await commands.setStatus('notion:abc', 'Ready', {
+        groomingGate: { size_check: null, type_check: null },
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(GroomingGateError);
+    expect((caught as GroomingGateError).reasons.join(' ')).toMatch(
+      /size_check/,
+    );
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('allows a Ready transition when the grooming gate entry is fully dispositioned', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:abc', 'Ready', {
+      groomingGate: {
+        size_check: { decision: 'no_split' },
+        type_check: { decision: 'none' },
+      },
+    });
+
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:abc',
+      '🗂️ Ready',
+      expect.objectContaining({
+        groomingGate: {
+          size_check: { decision: 'no_split' },
+          type_check: { decision: 'none' },
+        },
+      }),
+    );
+  });
+
+  it('does not run the grooming gate when no groomingGate entry is supplied', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:abc', 'Ready');
+
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:abc',
+      '🗂️ Ready',
+      undefined,
     );
   });
 });

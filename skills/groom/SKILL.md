@@ -2,12 +2,12 @@
 name: groom
 description: >-
   Run a Backlog Grooming session for a milestone. Loads full project context
-  deterministically (via groom-load.mjs), explores the code regions tasks touch
-  with a git-fresh cache, presents 🔲 Backlog tasks in batches for human sign-off,
-  and marks them 🗂️ Ready. Use when the user says "groom", "grooming session",
-  "let's groom milestone X", "bring the backlog to Ready", or starts a Backlog
-  Grooming session. Requires a grooming manifest in the central config tree
-  (config/projects/<dir>/grooming.json).
+  deterministically (via the backend's GET /api/groom-context route), explores
+  the code regions tasks touch with a git-fresh cache, presents 🔲 Backlog tasks
+  in batches for human sign-off, and marks them 🗂️ Ready. Use when the user says
+  "groom", "grooming session", "let's groom milestone X", "bring the backlog to
+  Ready", or starts a Backlog Grooming session. Requires a grooming manifest in
+  the central config tree (config/projects/<dir>/grooming.json).
 ---
 
 # Backlog Grooming
@@ -55,35 +55,69 @@ branch in a worktree, stop and tell the human.
 
 ---
 
-## Step 1 — Deterministic load (the script, not you)
+## Step 1 — Deterministic load (the backend route, not you)
 
-Run the loader. **Do not hand-fetch context pages or task bodies yourself** — that
-is exactly the step that gets skipped. The script owns it.
+Load through the backend, not by hand-fetching context pages or task bodies
+yourself — that is exactly the step that gets skipped. **Do not shell out to
+Notion directly** (no `notion-query.mjs` / `notion-page.mjs`, no vendored
+`groom-load.mjs`) — the backend's `GET /api/groom-context` route (see
+`packages/backend/src/routes/groomContext.ts`) is the sole loader now; it wraps
+the same `loadGroomContext()` the dashboard's grooming panel calls, so the
+skill and the panel always see identical context.
 
 ```bash
-node ~/.claude/scripts/groom-load.mjs \
-  --milestone <M> \
-  --repo <repo-root> \
-  --env <manifest.notion_env>
+node "$ORCHESTRATOR_GROOM_CONTEXT_CLI" --milestone <M> [--project <project-id>]
 ```
 
-If it exits non-zero, **stop** — a partial load means a contaminated groom. Report
-the error.
+`$ORCHESTRATOR_GROOM_CONTEXT_CLI` resolves to `groom-context-client.mjs` (the
+sanctioned node client — curl/wget are off the auto-dispatch allowlist, `node`
+is not), which calls the loopback, device-authed route with
+`$ORCHESTRATOR_STAGE_PORT` / `$ORCHESTRATOR_DEVICE_TOKEN` and prints the
+`GroomLoadResult` bundle as JSON on stdout. If it exits non-zero, **stop** — a
+partial load means a contaminated groom. Report the error.
 
-On success it has written, under `.skill-cache/grooming/<milestone>/`:
+The bundle has:
 
-- `context-bundle.json` — the 7 context pages (bodies in `context/`), the target
-  board, neighbour boards, and every non-Done target task (bodies in `tasks/`),
-  each with its parsed `packages` (the code regions it touches).
-- `worklist.json` — per-package freshness (`fresh` / `stale` / `missing`) against
-  the **local** integration branch, plus `unresolved_tasks`.
-- `grooming-state.json` — per-Backlog-task skeleton (the artifact the promotion
-  gate will check); preserved across resumes.
+- `contextPages` — the context pages (`{id, title, markdown}`), fetched fresh
+  every load.
+- `board` — every non-Done target task (`{id, title, status, type, priority,
+url}`), and `neighbourBoards` — the same shape for neighbour milestones
+  (context-only).
+- `targetTasks` — the target board's tasks, each carrying its parsed
+  `filesSection` / `rawMarkdown`, plus **already-computed** judgment seeds:
+  `readinessViolations` (the shared readiness gate run ahead of time),
+  `sizeCheckSeed` (`{files, loc_method}` — a deterministic size-check seed),
+  `typeCheck` (the type/content-mismatch scan), and `regions` (resolved
+  package/file scope).
+- `codeWorklist` — per-package deduped file paths declared across target task
+  bodies (object form: package path → file list).
+- `gitFreshness` — per-package freshness (`fresh` / `stale` / `missing`) vs. the
+  **local** integration branch.
+- `dependencyCandidates` — per-task dependency candidates (region overlap ∪
+  declared Depends On) for the groomer to confirm — never auto-wired.
 
-Read `context-bundle.json` and `worklist.json`. Read the context-page bodies in
-`context/` — the master context, research goals, architecture, coding guidelines.
-Also read the universal task-authoring standard at `config/task-writing.md` (it is no
-longer a Notion context page — the skill reads it from local disk). **This is
+The bundle does not carry `milestone_gate_task_id` / `milestone_seed_task_id`
+directly — derive them from `board` exactly as the old loader did: the single
+row with `type === '🚦 Gate'` (null if absent), and the single `🔧 Operational`
+row whose title contains "config-seed" case-insensitively (null if zero or
+ambiguous if more than one match — surface either case rather than guessing).
+Record both in `context-bundle.json` for the rest of the session to read.
+
+Persist this session's working state locally exactly as before — the route is a
+pure read, so the skill still owns the on-disk cache under
+`.skill-cache/grooming/<milestone>/`: write `context-bundle.json` (context pages
++ board + neighbours + target tasks + the derived gate/seed task ids) and `worklist.json` (codeWorklist +
+gitFreshness) from the bundle with the **Write** tool, and seed/merge
+`grooming-state.json` (per-Backlog-task skeleton, preserved across resumes —
+same merge rule as before: carry forward human-entered fields, always refresh
+`status`/`title`/`type` from the live bundle, prune entries whose task is no
+longer a live non-Done target) with the **Edit** tool. This is what makes
+**resume** mode work and is unchanged from before the cutover — only the
+_source_ of the bundle moved from a shell-out to the route.
+
+Read the context-page bodies from `contextPages[].markdown`. Also read the
+universal task-authoring standard at `config/task-writing.md` (it is not a
+Notion context page — the skill reads it from local disk). **This is
 non-negotiable**: resolving a task without the architectural constraints loaded is how
 grooming produces confidently-wrong decisions.
 
@@ -157,12 +191,14 @@ Follow `reference/presentation.md`. In short:
 
 ## Step 3 — Incorporate feedback (one item at a time)
 
-Do not batch feedback. For each item: update Notion → confirm the change in chat →
+Do not batch feedback. For each item: stage the write → confirm the change in chat →
 continue.
 
-- Clarification / correction → edit the task page now, confirm.
-- New open question → add a `> ⚠️ Open question:` callout to the task's Context.
-- Missing task → **draft it inline for review first**; create in Notion only after the human okays it.
+- Clarification / correction → stage a `task.updateBody` intent for the task now, confirm.
+- New open question → stage a `task.updateBody` intent adding a `> ⚠️ Open question:`
+  callout to the task's Context.
+- Missing task → **draft it inline for review first**; stage a `task.create` intent
+  only after the human okays it.
 - Missing prerequisite (a sibling ingestion/storage/analyzer task the scope doesn't
   cover) → propose a **separate** new task. **Never silently widen** the existing scope.
 
@@ -199,7 +235,8 @@ the milestone 🚦 Gate task body. The Gate task id is in `context-bundle.json` 
 `milestone_gate_task_id`. Read the task body's `### 👁️ Manual verification` section —
 these are the items the task spec says are _"Covered by the Manual Verification Gate."_
 Append them to the Gate under a `#### <source-task-title>` heading, grouped by source
-task. Then write to `grooming-state.json`:
+task, **by staging a `task.updateBody` intent** (see _Ready-flip & dependency writes_
+below — never a direct `notion-update-page` body edit). Then write to `grooming-state.json`:
 
 - Items accreted: `{ "gate_task_id": "<id>", "items": ["<item 1>", "…"], "appended_at": "<iso>" }`
 - No standalone runtime item: `{ "decision": "none" }`
@@ -215,7 +252,8 @@ auto-dispatched PR (e.g. an `analyzer_configs` row, config-category defaults, al
 flags) — to the milestone **config-seed** task body, and add the one-line back-reference on
 the source task. The config-seed task id is in `context-bundle.json` as
 `milestone_seed_task_id`. Append the seed(s) under a `#### <source-task-title>` heading,
-grouped by source task. Then write to `grooming-state.json`:
+grouped by source task, **again by staging a `task.updateBody` intent**. Then write to
+`grooming-state.json`:
 
 - Seeds accreted: `{ "seed_task_id": "<id>", "seeds": ["<seed 1>", "…"], "appended_at": "<iso>" }` _(the array field is `seeds`, **not** the gate's `items`)_
 - No operational seed: `{ "decision": "none" }`
@@ -224,21 +262,34 @@ Confirm the accretion in chat before the Ready-flip. If the milestone has no con
 task yet (`milestone_seed_task_id: null` in context-bundle.json), surface it — do not
 silently skip accretion.
 
-2. **Then**, in a **single** `notion-update-page` call (`command:
-"update_properties"`) per task, write **both** the canonical hard-block deps
-   into the `Depends On` property **and** set `Status → 🗂️ Ready`. The
-   `Depends On` value is the rendered task-ID list (e.g.
-   `"38122f91-52f3-810f | 38122f91-52f3-8129"` — the project's existing pipe-separated
-   convention). **Hard-block deps live in the property, never in the task body** —
-   downstream sessions read the property; body sequencing is invisible to them.
-   - If the task has no hard-block deps, write an empty `Depends On` (or leave
-     it unchanged if already empty).
-   - If existing `Depends On` text on the page held free-form prose (notes,
-     hints, soft-order observations), it is overwritten by the canonical list.
-     Soft-order observations are not persisted on the task — they were a
-     batch-level conversation and live in the chat record.
-3. Confirm in chat what was marked Ready **and** what `Depends On` value was
-   written for each task. Then present the next batch.
+2. **Then**, stage the write per task through the sanctioned staged-intent CLI
+   client (`node "$ORCHESTRATOR_STAGE_CLI" <kind> <json-payload> [groupId]` —
+   see `packages/backend/scripts/stage-task-intent.mjs`), **never** a direct
+   `notion-update-page` call. Every write lands as a staged intent a human
+   reviews and applies through the shared staged-intent panel — grooming never
+   applies its own writes.
+   - Generate one `groupId` per task (any stable string, e.g. the task id) so
+     its writes present and apply as a unit.
+   - If the task has hard-block deps (or had any and now has none), stage a
+     `task.setDependsOn` intent: `{"taskId": "<id>", "dependsOn": ["<id>", …]}`
+     — the rendered array of hard-block task IDs. **Hard-block deps live in
+     the `Depends On` property, never in the task body** — downstream sessions
+     read the property; body sequencing is invisible to them. If existing
+     `Depends On` held free-form prose (notes, hints, soft-order
+     observations), the canonical array overwrites it — soft-order
+     observations are not persisted; they were a batch-level conversation and
+     live in the chat record.
+   - Then stage a `task.setStatus` intent with the **same `groupId`**:
+     `{"taskId": "<id>", "status": "Ready", "groomingGate": {"size_check":
+<the recorded size_check>, "type_check": <the recorded type_check>}}`. The
+     `groomingGate` field is **required** — it is the command layer's
+     promotion-gate check (`checkGroomingPromotionGate` in `groomGate.ts`,
+     wired into `TaskWriteCommands.setStatus`), the successor to the retired
+     `groom-gate.mjs` PreToolUse hook: a missing or undispositioned
+     `size_check` / `type_check` blocks the apply with a 409 and an
+     annotation on the staged intent, same failure mode as the old hook.
+3. Confirm in chat what was staged (Ready flip **and** `Depends On` value) for
+   each task, and that it is now waiting for human apply. Then present the next batch.
 
 **Gates last**: the milestone's **🚦 Gate** task is the final batch, after all code
 tasks are signed off. Accretion happens incrementally — as each 💻 Code / 🛠️ Tooling
@@ -273,7 +324,8 @@ off, confirm the milestone board is fully groomed.
   exception**. The **🚦 Gate** is the lone non-ordinary task: an accumulator that, by its
   type's definition, accretes manual-verification items while sitting at Ready —
   appending to it is its lifecycle, not a modify-a-Ready-task exception.
-- **No silent Notion updates.** Every change is confirmed in chat before moving on.
+- **No silent writes.** Every change is staged through `stage-task-intent.mjs` and
+  confirmed in chat before moving on — never a direct `notion-update-page` call.
 - **Cache/state files are edited with the Edit/Write tool, never a shell script.**
   `grooming-state.json` / `code-map.json` are loader-seeded JSON on disk — Edit them
   (or Read + Write the whole file). Never `node _foo.cjs && rm …` or any `cd … && …`
@@ -298,8 +350,8 @@ off, confirm the milestone board is fully groomed.
   open-question count, not LoC; write `{"decision": "n/a"}` for them.
 - **Hard-block dependencies live in the Notion `Depends On` property, never in
   the task body.** Soft-order observations are batch-level conversation only —
-  not persisted. The property write happens in the same `notion-update-page`
-  call as the Ready status flip (see Step 4). See `presentation.md` §
-  Dependencies for the hard-block-vs-soft-order test.
+  not persisted. The `task.setDependsOn` intent is staged with the same
+  `groupId` as the `task.setStatus` Ready flip (see Step 4). See `presentation.md`
+  § Dependencies for the hard-block-vs-soft-order test.
 
 See `reference/anti-patterns.md` for the failure modes these rules prevent.
