@@ -111,10 +111,7 @@ describe('computeMergeCandidates', () => {
   });
 
   it('a task with no parseable Files / paths affected (empty files) produces no candidate', () => {
-    const tasks = [
-      task('task-1', []),
-      task('task-2', ['a.ts', 'b.ts']),
-    ];
+    const tasks = [task('task-1', []), task('task-2', ['a.ts', 'b.ts'])];
     expect(computeMergeCandidates(tasks)).toEqual([]);
   });
 

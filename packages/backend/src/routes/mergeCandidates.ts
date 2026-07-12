@@ -69,54 +69,51 @@ export function createMergeCandidatesRouter(): Router {
   // POST /api/merge-candidates/confirm
   // Body: { projectId, milestoneTasks, mergeSet, survivorId? } — an
   // operator-confirmed candidate pair, routed to planMerge as its mergeSet.
-  router.post(
-    '/merge-candidates/confirm',
-    (req: Request, res: Response) => {
-      const body = req.body as {
-        projectId?: unknown;
-        milestoneTasks?: unknown;
-        mergeSet?: unknown;
-        survivorId?: unknown;
-      };
-      const projectId =
-        typeof body.projectId === 'string' ? body.projectId : null;
-      if (!projectId) {
-        res.status(400).json({ error: 'projectId is required' });
-        return;
-      }
-      if (!Array.isArray(body.milestoneTasks)) {
-        res.status(400).json({ error: 'milestoneTasks must be an array' });
-        return;
-      }
-      if (!Array.isArray(body.mergeSet) || body.mergeSet.length < 2) {
-        res
-          .status(400)
-          .json({ error: 'mergeSet must be an array of at least 2 tasks' });
-        return;
-      }
-      const survivorId =
-        typeof body.survivorId === 'string' ? body.survivorId : undefined;
+  router.post('/merge-candidates/confirm', (req: Request, res: Response) => {
+    const body = req.body as {
+      projectId?: unknown;
+      milestoneTasks?: unknown;
+      mergeSet?: unknown;
+      survivorId?: unknown;
+    };
+    const projectId =
+      typeof body.projectId === 'string' ? body.projectId : null;
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' });
+      return;
+    }
+    if (!Array.isArray(body.milestoneTasks)) {
+      res.status(400).json({ error: 'milestoneTasks must be an array' });
+      return;
+    }
+    if (!Array.isArray(body.mergeSet) || body.mergeSet.length < 2) {
+      res
+        .status(400)
+        .json({ error: 'mergeSet must be an array of at least 2 tasks' });
+      return;
+    }
+    const survivorId =
+      typeof body.survivorId === 'string' ? body.survivorId : undefined;
 
-      try {
-        const plan = planMerge({
-          milestoneTasks: body.milestoneTasks,
-          mergeSet: body.mergeSet,
-          survivorId,
-        } as MergePlanInput);
+    try {
+      const plan = planMerge({
+        milestoneTasks: body.milestoneTasks,
+        mergeSet: body.mergeSet,
+        survivorId,
+      } as MergePlanInput);
 
-        const groupId = `merge-${plan.survivorId}-${plan.mergedAwayIds.join('-')}`;
-        const staged = plan.intents.map((intent) =>
-          stageIntent(intent.kind, intent.payload, projectId, groupId),
-        );
+      const groupId = `merge-${plan.survivorId}-${plan.mergedAwayIds.join('-')}`;
+      const staged = plan.intents.map((intent) =>
+        stageIntent(intent.kind, intent.payload, projectId, groupId),
+      );
 
-        res.status(201).json({ plan, groupId, staged });
-      } catch (err) {
-        res.status(400).json({
-          error: err instanceof Error ? err.message : 'planMerge failed',
-        });
-      }
-    },
-  );
+      res.status(201).json({ plan, groupId, staged });
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'planMerge failed',
+      });
+    }
+  });
 
   return router;
 }

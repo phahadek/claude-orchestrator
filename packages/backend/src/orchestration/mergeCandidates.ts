@@ -117,9 +117,7 @@ export function computeMergeCandidates(
       const filesB = filteredFilesById.get(b.id)!;
       if (filesA.size === 0 || filesB.size === 0) continue;
 
-      const sharedFiles = [...filesA]
-        .filter((f) => filesB.has(f))
-        .sort();
+      const sharedFiles = [...filesA].filter((f) => filesB.has(f)).sort();
       if (!sharedFiles.length) continue;
 
       const ratio = sharedFiles.length / Math.min(filesA.size, filesB.size);
