@@ -239,11 +239,14 @@ describe('backfillGateBody', () => {
       milestone: 'M12',
       now: new Date(0).toISOString(),
     });
-    const result = backfillGateBody('#### Src [notion:src-x]\n- Edited wording\n', {
-      project: 'polimarket-analyser',
-      milestone: 'M12',
-      now: new Date(0).toISOString(),
-    });
+    const result = backfillGateBody(
+      '#### Src [notion:src-x]\n- Edited wording\n',
+      {
+        project: 'polimarket-analyser',
+        milestone: 'M12',
+        now: new Date(0).toISOString(),
+      },
+    );
     expect(result.created).toBe(1);
     expect(listByMilestone('polimarket-analyser', 'M12')).toHaveLength(2);
   });
@@ -252,16 +255,13 @@ describe('backfillGateBody', () => {
     const resolver: TaskIdResolver = {
       resolveByTitle: vi.fn().mockReturnValue('notion:injected'),
     };
-    const result = backfillGateBody(
-      '#### Untagged source\n- One item\n',
-      {
-        project: 'polimarket-analyser',
-        milestone: 'M12',
-        now: new Date(0).toISOString(),
-        resolver,
-        mergeCommitLookup: { getMergeCommit: () => 'injected-sha' },
-      },
-    );
+    const result = backfillGateBody('#### Untagged source\n- One item\n', {
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      now: new Date(0).toISOString(),
+      resolver,
+      mergeCommitLookup: { getMergeCommit: () => 'injected-sha' },
+    });
     expect(result.created).toBe(1);
     const item = getItem(result.itemIds[0]);
     expect(item?.sources[0].sourceTaskId).toBe('notion:injected');
