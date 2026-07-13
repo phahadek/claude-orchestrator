@@ -1,6 +1,6 @@
 import { apiRequest } from './projects';
 
-export type SeedItemState = 'pending' | 'applied' | 'confirmed' | 'blocked';
+type SeedItemState = 'pending' | 'applied' | 'confirmed' | 'blocked';
 
 interface SeedItemSource {
   sourceTaskId: string;
