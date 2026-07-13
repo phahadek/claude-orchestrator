@@ -2599,6 +2599,31 @@ export function getActiveDeviceCount(): number {
   return row.count;
 }
 
+// ─── project_deployed_sha ──────────────────────────────────────────────────────
+
+/**
+ * Records the SHA a project reported as deployed — reported in by the deploy
+ * flow (skill→orchestrator direction), one row per project, latest write wins.
+ */
+export function recordProjectDeployedSha(projectId: string, sha: string): void {
+  db.prepare(
+    `INSERT INTO project_deployed_sha (project_id, sha, recorded_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(project_id) DO UPDATE SET sha = excluded.sha, recorded_at = excluded.recorded_at`,
+  ).run(projectId, sha, new Date().toISOString());
+}
+
+export function getProjectDeployedShaRow(
+  projectId: string,
+): { sha: string; recordedAt: string } | null {
+  const row = db
+    .prepare(
+      `SELECT sha, recorded_at as recordedAt FROM project_deployed_sha WHERE project_id = ?`,
+    )
+    .get(projectId) as { sha: string; recordedAt: string } | undefined;
+  return row ?? null;
+}
+
 // ─── orchestrator_autofix_shas ────────────────────────────────────────────────
 
 export function addAutofixSha(

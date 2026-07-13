@@ -1,7 +1,8 @@
 import { logger } from '../logger';
 import type { Scheduler } from '../orchestration/Scheduler';
-import { getAllProjects, runtimeSettings } from '../config';
+import { getAllProjects, getProjectById, runtimeSettings } from '../config';
 import { getTaskBackend } from '../tasks/TaskBackend';
+import { getProjectDeployedSha } from '../deploy/deployService';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
 import {
@@ -9,24 +10,26 @@ import {
   reconcileGateRunnability,
   nextRunnableGateItems,
   appendGateItemEvent,
+  createLocalGitAncestrySource,
   type GateReadiness,
   type ReconcileGateRunnabilityResult,
+  type DeployAncestrySource,
 } from './gateService';
 import type { GateItemClassification } from '../db/types';
 
 /**
- * The live deploy-SHA source is a PLACEHOLDER — swappable when the
- * deploy-integration design lands (39b22f91-52f3-81bc). Until then, inject
- * a project-specific implementation; the default never advances.
+ * The live deploy-SHA source, per project — reported in by each project's
+ * deploy flow (see deployService.getProjectDeployedSha) and swappable for
+ * tests via the `deployAdvanceTrigger` option.
  */
 export interface DeployAdvanceTrigger {
-  /** The deploy SHA to reconcile against this tick, or null if nothing has advanced since the last tick. */
-  latestDeploySha(): string | null | Promise<string | null>;
+  /** The project's deployed SHA to reconcile against this tick, or null if never reported. */
+  latestDeploySha(project: string): string | null | Promise<string | null>;
 }
 
-const noopDeployAdvanceTrigger: DeployAdvanceTrigger = {
-  latestDeploySha() {
-    return null;
+const defaultDeployAdvanceTrigger: DeployAdvanceTrigger = {
+  latestDeploySha(project) {
+    return getProjectDeployedSha(project);
   },
 };
 
@@ -104,6 +107,8 @@ export interface GateReconcilerOptions {
   verifier?: GateItemVerifier;
   followupFiler?: FollowupFixTaskFiler;
   tierLimit?: number;
+  /** Per-project git-ancestry source; defaults to a local clone at that project's projectDir. */
+  ancestrySourceForProject?: (project: string) => DeployAncestrySource;
 }
 
 interface ProcessedGateItem {
@@ -113,10 +118,20 @@ interface ProcessedGateItem {
 }
 
 export interface GateReconcileTickResult {
-  deploySha: string | null;
+  deployShaByProject: Record<string, string | null>;
   reconciled: ReconcileGateRunnabilityResult | null;
   processed: ProcessedGateItem[];
   readiness: Record<string, GateReadiness>;
+}
+
+function defaultAncestrySourceForProject(project: string): DeployAncestrySource {
+  let projectDir: string | undefined;
+  try {
+    projectDir = getProjectById(project)?.projectDir;
+  } catch {
+    projectDir = undefined;
+  }
+  return createLocalGitAncestrySource(projectDir);
 }
 
 /** Appends the verifier's outcome and, on failure, files + attaches a follow-up fix task and re-opens the item. */
@@ -159,22 +174,46 @@ async function processItem(
 }
 
 /**
- * One reconcile tick: recomputes runnability against the injected deploy
- * SHA (if any advance is reported), pulls one classification tier at a time
- * per milestone (never a bulk load), routes execution, and rolls per-
- * milestone readiness into the completion signal.
+ * One reconcile tick: for each project with gate items, recomputes runnability
+ * against that project's reported-deployed SHA (if any advance is reported),
+ * then pulls one classification tier at a time per milestone (never a bulk
+ * load), routes execution, and rolls per-milestone readiness into the
+ * completion signal.
  */
 export async function runGateReconcilerTick(
   options: GateReconcilerOptions = {},
 ): Promise<GateReconcileTickResult> {
-  const trigger = options.deployAdvanceTrigger ?? noopDeployAdvanceTrigger;
+  const trigger = options.deployAdvanceTrigger ?? defaultDeployAdvanceTrigger;
   const limit = options.tierLimit ?? DEFAULT_TIER_LIMIT;
   const followupFiler = options.followupFiler ?? defaultFollowupFiler;
+  const ancestrySourceForProject =
+    options.ancestrySourceForProject ?? defaultAncestrySourceForProject;
 
-  const deploySha = await trigger.latestDeploySha();
-  const reconciled = deploySha ? reconcileGateRunnability(deploySha) : null;
+  const allItems = gateStore.listAll();
+  const projects = new Set(allItems.map((item) => item.project));
+  const deployShaByProject: Record<string, string | null> = {};
+  let reconciled: ReconcileGateRunnabilityResult | null = null;
 
-  const milestones = new Set(gateStore.listAll().map((item) => item.milestone));
+  for (const project of projects) {
+    const sha = await trigger.latestDeploySha(project);
+    deployShaByProject[project] = sha;
+    if (!sha) continue;
+    const result = reconcileGateRunnability(sha, {
+      project,
+      ancestrySource: ancestrySourceForProject(project),
+    });
+    reconciled = reconciled
+      ? {
+          markedRunnable: [
+            ...reconciled.markedRunnable,
+            ...result.markedRunnable,
+          ],
+          reopened: [...reconciled.reopened, ...result.reopened],
+        }
+      : result;
+  }
+
+  const milestones = new Set(allItems.map((item) => item.milestone));
   const processed: ProcessedGateItem[] = [];
 
   if (!options.verifier) {
@@ -193,7 +232,12 @@ export async function runGateReconcilerTick(
         });
         for (const item of batch) {
           processed.push(
-            await processItem(item, verifier, followupFiler, deploySha),
+            await processItem(
+              item,
+              verifier,
+              followupFiler,
+              deployShaByProject[item.project] ?? null,
+            ),
           );
         }
       }
@@ -205,7 +249,7 @@ export async function runGateReconcilerTick(
     readiness[milestone] = getGateReadiness(milestone);
   }
 
-  return { deploySha, reconciled, processed, readiness };
+  return { deployShaByProject, reconciled, processed, readiness };
 }
 
 /** Registers the reconciler with the Scheduler. Built, not activated — gated off by runtimeSettings.gate_verification_enabled. */

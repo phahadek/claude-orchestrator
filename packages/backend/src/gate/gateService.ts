@@ -16,21 +16,30 @@ export interface DeployAncestrySource {
 }
 
 /** The default git-ancestry deploy-integration surface, reused by seedService's applyability check. */
-export const gitAncestrySource: DeployAncestrySource = {
-  isAncestor(ancestorSha, descendantSha) {
-    if (ancestorSha === descendantSha) return true;
-    try {
-      execFileSync(
-        'git',
-        ['merge-base', '--is-ancestor', ancestorSha, descendantSha],
-        { stdio: 'ignore' },
-      );
-      return true;
-    } catch {
-      return false;
-    }
-  },
-};
+export const gitAncestrySource: DeployAncestrySource = createLocalGitAncestrySource();
+
+/**
+ * A git-ancestry source scoped to a specific local clone (a project's
+ * `projectDir`), rather than assuming the current process cwd is the right
+ * repo — the gate reconciler runs against multiple projects' local clones.
+ */
+export function createLocalGitAncestrySource(cwd?: string): DeployAncestrySource {
+  return {
+    isAncestor(ancestorSha, descendantSha) {
+      if (ancestorSha === descendantSha) return true;
+      try {
+        execFileSync(
+          'git',
+          ['merge-base', '--is-ancestor', ancestorSha, descendantSha],
+          { cwd, stdio: 'ignore' },
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
+}
 
 /** Terminal states: the item no longer blocks milestone completion. */
 const RESOLVED_STATES = new Set(['pass', 'deferred']);
@@ -72,6 +81,8 @@ export interface ReconcileGateRunnabilityResult {
 
 export interface ReconcileOptions {
   ancestrySource?: DeployAncestrySource;
+  /** Scope reconciliation to one project's items — every deploy SHA is project-specific. */
+  project?: string;
 }
 
 /**
@@ -89,7 +100,11 @@ export function reconcileGateRunnability(
   const markedRunnable: string[] = [];
   const reopened: string[] = [];
 
-  for (const item of gateStore.listAll()) {
+  const items = options.project
+    ? gateStore.listByProject(options.project)
+    : gateStore.listAll();
+
+  for (const item of items) {
     if (!item.minDeployedCommit) continue;
     const covered = ancestry.isAncestor(item.minDeployedCommit, deploySha);
 

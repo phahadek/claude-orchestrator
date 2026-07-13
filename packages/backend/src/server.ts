@@ -70,6 +70,7 @@ import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
 import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
+import { createDeployRouter, setDeployScheduler } from './routes/deploy';
 import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
 import { createStagedIntentsRouter } from './routes/stagedIntents';
 import { createTaskIntentsRouter } from './routes/taskIntents';
@@ -210,6 +211,7 @@ app.use('/api', createPlanUsageRouter());
 app.use('/api', createStagedIntentsRouter());
 app.use('/api', createOpsJournalRouter());
 app.use('/api', createGateStateRouter());
+app.use('/api', createDeployRouter());
 app.use('/api', createSeedStateRouter());
 app.use('/api', createGroomContextRouter());
 app.use('/api', createMergeCandidatesRouter());
@@ -246,6 +248,7 @@ setEnrollmentBroadcast(broadcast);
 const scheduler = new Scheduler();
 scheduler.setBroadcast(broadcast);
 setScheduler(scheduler);
+setDeployScheduler(scheduler);
 // Bound retention: prune scheduler_audit to last 1000 rows per job, daily.
 scheduler.register({
   name: 'scheduler_audit_pruner',
@@ -395,8 +398,9 @@ planUsagePoller.register(scheduler);
 registerWorktreeReconciler(scheduler);
 // Gate-verification reconciler: built but not activated (no-coexistence rule) —
 // gated off by runtimeSettings.gate_verification_enabled until an operator
-// opts in. The deploy-advance trigger is a placeholder (see DeployAdvanceTrigger
-// in gateReconciler.ts) until the deploy-integration design lands.
+// opts in. /api/deploy/report-in triggers this job immediately on report
+// (event-driven, nothing polled) but the same enabled flag still applies —
+// a report while disabled is a no-op tick.
 registerGateReconciler(scheduler);
 
 void runBootSequence({
