@@ -5,6 +5,9 @@ const mockRecordEvent = vi.fn();
 const mockInsertItem = vi.fn();
 const mockRecordAccretionMarker = vi.fn();
 const mockGetAccretionMarker = vi.fn();
+const mockInsertSeedItem = vi.fn();
+const mockRecordSeedAccretionMarker = vi.fn();
+const mockGetSeedAccretionMarker = vi.fn();
 
 vi.mock('../../db/queries', () => ({
   getTaskCache: (...args: unknown[]) => mockGetTaskCache(...args),
@@ -19,6 +22,14 @@ vi.mock('../../gate/gateStore', () => ({
   recordAccretionMarker: (...args: unknown[]) =>
     mockRecordAccretionMarker(...args),
   getAccretionMarker: (...args: unknown[]) => mockGetAccretionMarker(...args),
+}));
+
+vi.mock('../../seed/seedStore', () => ({
+  insertItem: (...args: unknown[]) => mockInsertSeedItem(...args),
+  recordAccretionMarker: (...args: unknown[]) =>
+    mockRecordSeedAccretionMarker(...args),
+  getAccretionMarker: (...args: unknown[]) =>
+    mockGetSeedAccretionMarker(...args),
 }));
 
 import {
@@ -60,6 +71,9 @@ beforeEach(() => {
   mockInsertItem.mockReset();
   mockRecordAccretionMarker.mockReset();
   mockGetAccretionMarker.mockReset();
+  mockInsertSeedItem.mockReset();
+  mockRecordSeedAccretionMarker.mockReset();
+  mockGetSeedAccretionMarker.mockReset();
 });
 
 describe('TaskWriteCommands.setStatus — state machine', () => {
@@ -601,5 +615,114 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
     await expect(
       commands.accreteGateContribution(sourceTask, [], 'Prod-Mutating'),
     ).rejects.toThrow(/at least one item/);
+  });
+});
+
+describe('TaskWriteCommands.stageSeedContribution', () => {
+  const sourceTask = {
+    id: 'notion:src-1',
+    title: 'Add the webhook',
+    project: 'polimarket-analyser',
+    milestone: 'M12',
+  };
+
+  it('mints a seed_item per seed (source id + title recorded) and records a "seeds" marker', async () => {
+    mockInsertSeedItem
+      .mockReturnValueOnce({ id: 'seed-item-1' })
+      .mockReturnValueOnce({ id: 'seed-item-2' });
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    const result = await commands.stageSeedContribution(
+      sourceTask,
+      [{ spec: 'Add webhook_url to config' }, { spec: 'Add retry_count to config' }],
+      'seeds',
+    );
+
+    expect(mockInsertSeedItem).toHaveBeenCalledTimes(2);
+    expect(mockInsertSeedItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: 'polimarket-analyser',
+        milestone: 'M12',
+        spec: 'Add webhook_url to config',
+        sources: [
+          { sourceTaskId: 'notion:src-1', sourceTaskTitle: 'Add the webhook' },
+        ],
+      }),
+    );
+    expect(mockInsertSeedItem.mock.calls[0][0].updatedAt).toBeDefined();
+
+    expect(mockRecordSeedAccretionMarker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceTaskId: 'notion:src-1',
+        project: 'polimarket-analyser',
+        milestone: 'M12',
+        decision: 'seeds',
+      }),
+    );
+    expect(result.itemIds).toEqual(['seed-item-1', 'seed-item-2']);
+  });
+
+  it('records a "none" marker and mints no seeds', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    const result = await commands.stageSeedContribution(sourceTask, [], 'none');
+
+    expect(mockInsertSeedItem).not.toHaveBeenCalled();
+    expect(mockRecordSeedAccretionMarker).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceTaskId: 'notion:src-1', decision: 'none' }),
+    );
+    expect(result.itemIds).toEqual([]);
+  });
+
+  it('records an "n/a" marker and mints no seeds', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.stageSeedContribution(sourceTask, [], 'n/a');
+
+    expect(mockInsertSeedItem).not.toHaveBeenCalled();
+    expect(mockRecordSeedAccretionMarker).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceTaskId: 'notion:src-1', decision: 'n/a' }),
+    );
+  });
+
+  it('leaves min_deployed_commit unset (not part of the insertItem call)', async () => {
+    mockInsertSeedItem.mockReturnValueOnce({ id: 'seed-item-1' });
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.stageSeedContribution(
+      sourceTask,
+      [{ spec: 'Add webhook_url to config' }],
+      'seeds',
+    );
+
+    expect(mockInsertSeedItem.mock.calls[0][0]).not.toHaveProperty(
+      'minDeployedCommit',
+    );
+  });
+
+  it('rejects "none"/"n/a" when seeds are non-empty', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.stageSeedContribution(
+        sourceTask,
+        [{ spec: 'stray seed' }],
+        'none',
+      ),
+    ).rejects.toThrow(/empty seeds array/);
+  });
+
+  it('rejects a "seeds" decision with an empty seeds array', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.stageSeedContribution(sourceTask, [], 'seeds'),
+    ).rejects.toThrow(/at least one seed/);
   });
 });

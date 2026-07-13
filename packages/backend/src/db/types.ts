@@ -457,6 +457,19 @@ export interface SeedItemRow {
   updated_at: string;
 }
 
+// ─── seed_accretion ───────────────────────────────────────────────────────
+
+/** Per-source-task marker recording whether the seed_contribution promotion check is satisfied. */
+export type SeedAccretionDecision = 'seeds' | 'none' | 'n/a';
+
+export interface SeedAccretionRow {
+  source_task_id: string;
+  project: string;
+  milestone: string;
+  decision: SeedAccretionDecision;
+  accreted_at: string;
+}
+
 export interface SeedItemSourceRow {
   id: number;
   seed_item_id: string;

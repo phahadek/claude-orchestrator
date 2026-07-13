@@ -25,12 +25,15 @@ import {
   setSourceMergeCommit,
   setMinDeployedCommit,
   addSource,
+  getAccretionMarker,
+  recordAccretionMarker,
 } from '../seedStore.js';
 
 beforeEach(() => {
   db.prepare('DELETE FROM seed_item_event').run();
   db.prepare('DELETE FROM seed_item_source').run();
   db.prepare('DELETE FROM seed_item').run();
+  db.prepare('DELETE FROM seed_accretion').run();
   db.prepare('DELETE FROM audit_log').run();
 });
 
@@ -214,5 +217,68 @@ describe('seedStore', () => {
     const m12Items = listByMilestone('polimarket-analyser', 'M12');
     expect(m12Items).toHaveLength(1);
     expect(m12Items[0].spec).toBe('Item A');
+  });
+});
+
+describe('seed_accretion marker', () => {
+  it('returns undefined for a source task with no marker recorded', () => {
+    expect(getAccretionMarker('notion:untouched')).toBeUndefined();
+  });
+
+  it('round-trips a recorded marker', () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:src-1',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'seeds',
+      accretedAt: new Date(0).toISOString(),
+    });
+
+    const marker = getAccretionMarker('notion:src-1');
+    expect(marker).toMatchObject({
+      sourceTaskId: 'notion:src-1',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'seeds',
+    });
+  });
+
+  it('distinguishes seeds / none / n/a decisions', () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:none-src',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'none',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordAccretionMarker({
+      sourceTaskId: 'notion:na-src',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+
+    expect(getAccretionMarker('notion:none-src')?.decision).toBe('none');
+    expect(getAccretionMarker('notion:na-src')?.decision).toBe('n/a');
+  });
+
+  it('replaces an existing marker for the same source task', () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:src-2',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'none',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordAccretionMarker({
+      sourceTaskId: 'notion:src-2',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'seeds',
+      accretedAt: new Date(1).toISOString(),
+    });
+
+    expect(getAccretionMarker('notion:src-2')?.decision).toBe('seeds');
   });
 });
