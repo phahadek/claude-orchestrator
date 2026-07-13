@@ -142,7 +142,9 @@ unattended while still keeping a human on every close.
   actor, and a post/signal/record landed. Authoring a row is not ingesting.
 - **"Done ≠ deployed ≠ seeded ≠ working."** A merged task may be un-deployed; a deployed code path
   may have **no operational seed applied** (a recurring silent-degradation trap). Confirm the seed
-  is present on prod, then that the behavior actually runs.
+  is present on prod, then that the behavior actually runs. When the task at hand *is* the
+  milestone's config-seed task, work it via **§ Milestone config-seed** below, not by reading its
+  task body as the worklist.
 - **No accepted gaps — every step closes or is filed.** A multi-step Operational task is Done only
   when **every** step is completed or filed as a follow-on that closes the gap. **"Accept the gap"
   is never an option to present** — silently dropping the price side of a backfill and shipping
@@ -272,6 +274,76 @@ Rules that make it safe:
   evidence: a fragile evidence append isn't worth it when the operator is present and the task page
   is the durable home. Don't carry the full staging ceremony when there's no handoff to protect.
 - This is ops-native and **distinct from `/wrap`** (which sweeps broad session residue).
+
+## Milestone config-seed — driven by the seed-state API
+
+The milestone's one accreted **config-seed** task (`config-template/task-writing.md` §
+Milestone config-seed) is orchestrator-tracked state, not a task-body checklist to read
+top to bottom. Every seed a Code task contributed at grooming time lives as a `seed_item`
+row — applyable once its `min_deployed_commit` is an ancestor of the target project's
+current deploy SHA. Every apply attempt is a `seed_item_event` — that log **is** the
+durable record, the operational twin of the gate's `gate_item_event`. **Do not read the
+config-seed task's body as the seed worklist** — the live worklist is `seed_item` rows,
+never a bulk load of the whole applyable set.
+
+This is a thin human-driven loop over the seed-state API
+(`packages/backend/src/routes/seedState.ts`, business logic in
+`packages/backend/src/seed/seedService.ts`), called through the sanctioned node client:
+
+```bash
+node "$ORCHESTRATOR_SEED_STATE_CLI" <command> ...
+```
+
+`$ORCHESTRATOR_SEED_STATE_CLI` resolves to
+`packages/backend/scripts/seed-state-client.mjs`, using `$ORCHESTRATOR_STAGE_PORT` /
+`$ORCHESTRATOR_DEVICE_TOKEN` the same way the other sanctioned session clients
+(`ops-client.mjs`, `gate-state-client.mjs`) do.
+
+1. **Readiness** — `node "$ORCHESTRATOR_SEED_STATE_CLI" readiness --milestone <M>` →
+   `{status: 'green'|'blocked', blocking}`. `green` — nothing left to apply this
+   milestone; report and stop. `blocked` — every unconfirmed seed with its
+   project/state, as a worklist **map only** — pull the actual batch via `next`, never
+   disposition straight off this summary.
+2. **Pull one applyable batch at a time** —
+   `node "$ORCHESTRATOR_SEED_STATE_CLI" next --milestone <M> --deploySha <sha> [--limit <N>]`
+   (default limit 1). `deploySha` is the **target project's** currently-deployed commit —
+   resolve it the project's own way (its `context.md` documents the deploy-tracking
+   surface); never guess it. Applyability = deploy-included (the seed's
+   `min_deployed_commit` is an ancestor of `deploySha`) AND not yet `confirmed`. Never
+   bulk-load the milestone's full seed set.
+3. **Apply through the target project's own audited config-CRUD, then record the
+   outcome.** For each pulled item: read `item.spec` (`node "$ORCHESTRATOR_SEED_STATE_CLI"
+   detail <id>` for sources + prior events before re-attempting one). **The operator
+   applies the seed via the target project's audited config-CRUD / ops affordance —
+   never raw SQL, and the orchestrator never applies another project's config on its
+   behalf** (that's why `next` requires a `deploySha` the caller supplies rather than
+   applying anything itself). Batch consent is fine here — one up-front "these N seeds,
+   go" per pulled batch, the same phase-level authorization an Operational execution
+   phase gets, not a prompt per seed. Then verify reconcile + capture the ops-native way
+   ("Done ≠ deployed ≠ seeded ≠ working" — confirm the row landed AND the consuming
+   worker picked it up AND the mechanism actually emits) and record every attempt, not
+   just resolving ones:
+
+   ```bash
+   node "$ORCHESTRATOR_SEED_STATE_CLI" event <seedItemId> \
+     '{"outcome":"applied","evidence":"<what was authored + how verified>"}'
+   ```
+
+   `outcome` is `applied` (authored, reconcile/capture not yet fully confirmed),
+   `confirmed` (reconcile + capture verified — resolves the item), or `blocked` (could
+   not apply — **must** carry `filedFollowon`, the id of the follow-on filed for the
+   blocker; the server rejects a `blocked` event without one). Include `evidence`
+   (freeform) and `operator` when known.
+4. **Loop** — repeat 2–3 until `readiness` reports `green`, or the operator stops for the
+   session; remaining seeds stay `pending`/`applied` and nothing is lost, state persists
+   server-side.
+
+**What this replaces:** it does not fetch or parse the config-seed task's body as the seed
+worklist, and it does not bulk-load a milestone's full seed set.
+
+**Built, not activated.** This ships in the skill now, but isn't wired live until the
+seed-activation task re-vendors it to `~/.claude` (via `deploy-grooming.mjs`) and sets
+`ORCHESTRATOR_SEED_STATE_CLI` in the session env — do not fold that actuation here.
 
 ## Flow
 
