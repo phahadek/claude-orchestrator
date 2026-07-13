@@ -15,7 +15,8 @@ export interface DeployAncestrySource {
   isAncestor(ancestorSha: string, descendantSha: string): boolean;
 }
 
-const gitAncestrySource: DeployAncestrySource = {
+/** The default git-ancestry deploy-integration surface, reused by seedService's applyability check. */
+export const gitAncestrySource: DeployAncestrySource = {
   isAncestor(ancestorSha, descendantSha) {
     if (ancestorSha === descendantSha) return true;
     try {

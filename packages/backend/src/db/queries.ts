@@ -3599,6 +3599,7 @@ export function upsertGateAccretion(row: GateAccretionRow): void {
 
 let _stmtGetSeedItem: Database.Statement | null = null;
 let _stmtListSeedItemsByMilestone: Database.Statement | null = null;
+let _stmtListSeedItemsByMilestoneAllProjects: Database.Statement | null = null;
 let _stmtInsertSeedItem: Database.Statement | null = null;
 let _stmtUpdateSeedItem: Database.Statement | null = null;
 let _stmtUpdateSeedItemMinDeployedCommit: Database.Statement | null = null;
@@ -3627,6 +3628,18 @@ export function listSeedItemsByMilestone(
   );
   return _stmtListSeedItemsByMilestone.all({
     project,
+    milestone,
+  }) as SeedItemRow[];
+}
+
+/** All seed items for a milestone, regardless of project — the readiness/applyability API's lookup. */
+export function listSeedItemsByMilestoneAllProjects(
+  milestone: string,
+): SeedItemRow[] {
+  _stmtListSeedItemsByMilestoneAllProjects ??= db.prepare<{
+    milestone: string;
+  }>(`SELECT * FROM seed_item WHERE milestone = @milestone`);
+  return _stmtListSeedItemsByMilestoneAllProjects.all({
     milestone,
   }) as SeedItemRow[];
 }
