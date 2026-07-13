@@ -1118,23 +1118,26 @@ describe('TaskList', () => {
     });
 
     it('clicking Ops(N) launches only the checked subset, not every eligible task', async () => {
-      mockOpsEndpoints(['op1', 'test1'], [
-        {
-          taskId: 'op1',
-          project: 'proj-1',
-          milestone: 'milestone-1',
-          state: 'candidate',
-          workedIn: 'session-abc',
-          updatedAt: '2026-01-01T00:00:00.000Z',
-        },
-        {
-          taskId: 'test1',
-          project: 'proj-1',
-          milestone: 'milestone-1',
-          state: 'candidate',
-          updatedAt: '2026-01-01T00:00:00.000Z',
-        },
-      ]);
+      mockOpsEndpoints(
+        ['op1', 'test1'],
+        [
+          {
+            taskId: 'op1',
+            project: 'proj-1',
+            milestone: 'milestone-1',
+            state: 'candidate',
+            workedIn: 'session-abc',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+          {
+            taskId: 'test1',
+            project: 'proj-1',
+            milestone: 'milestone-1',
+            state: 'candidate',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      );
 
       renderList(
         [
@@ -1181,9 +1184,9 @@ describe('TaskList', () => {
         expect(screen.getByTestId('ops-panel')).toBeDefined();
       });
 
-      const launchCall = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
-        ([url]) => (url as string).includes('/api/ops/launch'),
-      );
+      const launchCall = (
+        global.fetch as ReturnType<typeof vi.fn>
+      ).mock.calls.find(([url]) => (url as string).includes('/api/ops/launch'));
       expect(launchCall).toBeDefined();
       const body = JSON.parse((launchCall![1] as RequestInit).body as string);
       expect(body.taskIds.sort()).toEqual(['op1', 'test1']);
