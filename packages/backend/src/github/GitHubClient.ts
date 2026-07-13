@@ -124,7 +124,9 @@ export class GitHubClient {
     repo?: string,
   ): Promise<string | null> {
     const r = repo ?? GITHUB_REPO;
-    const data = await this.request<GitHubRawPR>(`/repos/${r}/pulls/${prNumber}`);
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${r}/pulls/${prNumber}`,
+    );
     return data.merge_commit_sha ?? null;
   }
 

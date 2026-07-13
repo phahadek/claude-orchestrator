@@ -9,9 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('../db.js', async () => {
-  const { setupTestDb } = await import(
-    '../../../test/helpers/setupTestDb.js'
-  );
+  const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
 });
 
