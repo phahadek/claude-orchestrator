@@ -189,7 +189,9 @@ describe('gateStore.rehomeItemsBySourceTask — moveTask accretion carry', () =>
       milestone: 'M12',
       text: 'Verify the deploy script writes the new env var',
       classification: 'needs-triage',
-      sources: [{ sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' }],
+      sources: [
+        { sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
 
@@ -210,7 +212,9 @@ describe('gateStore.rehomeItemsBySourceTask — moveTask accretion carry', () =>
       milestone: 'M12',
       text: 'Check the alert threshold',
       classification: 'Read-Only',
-      sources: [{ sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' }],
+      sources: [
+        { sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
     setMinDeployedCommit(item.id, 'deadbeef', new Date(0).toISOString());
@@ -231,7 +235,9 @@ describe('gateStore.rehomeItemsBySourceTask — moveTask accretion carry', () =>
       milestone: 'M12',
       text: 'Spot-check the new webhook',
       classification: 'Prod-Mutating',
-      sources: [{ sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' }],
+      sources: [
+        { sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
 
@@ -251,7 +257,9 @@ describe('gateStore.rehomeItemsBySourceTask — moveTask accretion carry', () =>
       milestone: 'M12',
       text: 'Unrelated item',
       classification: 'needs-triage',
-      sources: [{ sourceTaskId: 'notion:other', sourceTaskTitle: 'Other task' }],
+      sources: [
+        { sourceTaskId: 'notion:other', sourceTaskTitle: 'Other task' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
 

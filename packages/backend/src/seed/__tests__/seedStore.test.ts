@@ -227,7 +227,9 @@ describe('seedStore.rehomeItemsBySourceTask — moveTask accretion carry', () =>
       project: 'polimarket-analyser',
       milestone: 'M12',
       spec: 'Set ALERT_THRESHOLD_MS to 500 in config',
-      sources: [{ sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' }],
+      sources: [
+        { sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
 
@@ -247,7 +249,9 @@ describe('seedStore.rehomeItemsBySourceTask — moveTask accretion carry', () =>
       project: 'polimarket-analyser',
       milestone: 'M12',
       spec: 'Add the new webhook secret',
-      sources: [{ sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' }],
+      sources: [
+        { sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
     setMinDeployedCommit(item.id, 'deadbeef', new Date(0).toISOString());
@@ -267,7 +271,9 @@ describe('seedStore.rehomeItemsBySourceTask — moveTask accretion carry', () =>
       project: 'polimarket-analyser',
       milestone: 'M12',
       spec: 'Add the new webhook secret',
-      sources: [{ sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' }],
+      sources: [
+        { sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
 
@@ -286,7 +292,9 @@ describe('seedStore.rehomeItemsBySourceTask — moveTask accretion carry', () =>
       project: 'polimarket-analyser',
       milestone: 'M12',
       spec: 'Unrelated item',
-      sources: [{ sourceTaskId: 'notion:other', sourceTaskTitle: 'Other task' }],
+      sources: [
+        { sourceTaskId: 'notion:other', sourceTaskTitle: 'Other task' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
 

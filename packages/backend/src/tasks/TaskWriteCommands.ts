@@ -640,18 +640,8 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
 
     const rehomedAt = new Date().toISOString();
     if (this.projectId) {
-      rehomeGateItems(
-        this.projectId,
-        taskId,
-        targetMilestone.id,
-        rehomedAt,
-      );
-      rehomeSeedItems(
-        this.projectId,
-        taskId,
-        targetMilestone.id,
-        rehomedAt,
-      );
+      rehomeGateItems(this.projectId, taskId, targetMilestone.id, rehomedAt);
+      rehomeSeedItems(this.projectId, taskId, targetMilestone.id, rehomedAt);
     }
 
     if (params.originalDisposition === 'archive') {

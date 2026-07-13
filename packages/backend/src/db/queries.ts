@@ -3578,7 +3578,11 @@ export function rehomeGateItemsBySourceTask(
     `UPDATE gate_item SET milestone = @milestone, updated_at = @updated_at WHERE id = @id`,
   );
   for (const id of ids) {
-    _stmtRehomeGateItemsBySourceTask.run({ id, milestone, updated_at: updatedAt });
+    _stmtRehomeGateItemsBySourceTask.run({
+      id,
+      milestone,
+      updated_at: updatedAt,
+    });
   }
   return ids;
 }
@@ -3876,7 +3880,11 @@ export function rehomeSeedItemsBySourceTask(
     `UPDATE seed_item SET milestone = @milestone, updated_at = @updated_at WHERE id = @id`,
   );
   for (const id of ids) {
-    _stmtRehomeSeedItemsBySourceTask.run({ id, milestone, updated_at: updatedAt });
+    _stmtRehomeSeedItemsBySourceTask.run({
+      id,
+      milestone,
+      updated_at: updatedAt,
+    });
   }
   return ids;
 }

@@ -15,13 +15,11 @@ vi.mock('../../audit/AuditLog', () => ({
 }));
 
 vi.mock('../../gate/gateStore', () => ({
-  rehomeItemsBySourceTask: (...args: unknown[]) =>
-    mockRehomeGateItems(...args),
+  rehomeItemsBySourceTask: (...args: unknown[]) => mockRehomeGateItems(...args),
 }));
 
 vi.mock('../../seed/seedStore', () => ({
-  rehomeItemsBySourceTask: (...args: unknown[]) =>
-    mockRehomeSeedItems(...args),
+  rehomeItemsBySourceTask: (...args: unknown[]) => mockRehomeSeedItems(...args),
 }));
 
 import { planMove, MoveTaskError, type MoveGraphTask } from '../moveTask';
