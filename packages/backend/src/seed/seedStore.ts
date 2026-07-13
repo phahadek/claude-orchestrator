@@ -3,6 +3,7 @@ import { recordEvent } from '../audit/AuditLog';
 import {
   getSeedItem,
   listSeedItemsByMilestone,
+  listSeedItemsByMilestoneAllProjects,
   insertSeedItem,
   updateSeedItem,
   updateSeedItemMinDeployedCommit,
@@ -88,6 +89,13 @@ export function listByMilestone(
   milestone: string,
 ): SeedItem[] {
   return listSeedItemsByMilestone(project, milestone)
+    .map((row) => getItem(row.id))
+    .filter((item): item is SeedItem => item !== undefined);
+}
+
+/** All seed items for a milestone, regardless of project — the readiness/applyability API's lookup. */
+export function listByMilestoneAllProjects(milestone: string): SeedItem[] {
+  return listSeedItemsByMilestoneAllProjects(milestone)
     .map((row) => getItem(row.id))
     .filter((item): item is SeedItem => item !== undefined);
 }
