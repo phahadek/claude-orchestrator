@@ -635,7 +635,10 @@ describe('TaskWriteCommands.stageSeedContribution', () => {
 
     const result = await commands.stageSeedContribution(
       sourceTask,
-      [{ spec: 'Add webhook_url to config' }, { spec: 'Add retry_count to config' }],
+      [
+        { spec: 'Add webhook_url to config' },
+        { spec: 'Add retry_count to config' },
+      ],
       'seeds',
     );
 
@@ -671,7 +674,10 @@ describe('TaskWriteCommands.stageSeedContribution', () => {
 
     expect(mockInsertSeedItem).not.toHaveBeenCalled();
     expect(mockRecordSeedAccretionMarker).toHaveBeenCalledWith(
-      expect.objectContaining({ sourceTaskId: 'notion:src-1', decision: 'none' }),
+      expect.objectContaining({
+        sourceTaskId: 'notion:src-1',
+        decision: 'none',
+      }),
     );
     expect(result.itemIds).toEqual([]);
   });
@@ -684,7 +690,10 @@ describe('TaskWriteCommands.stageSeedContribution', () => {
 
     expect(mockInsertSeedItem).not.toHaveBeenCalled();
     expect(mockRecordSeedAccretionMarker).toHaveBeenCalledWith(
-      expect.objectContaining({ sourceTaskId: 'notion:src-1', decision: 'n/a' }),
+      expect.objectContaining({
+        sourceTaskId: 'notion:src-1',
+        decision: 'n/a',
+      }),
     );
   });
 
