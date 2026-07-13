@@ -22,6 +22,9 @@ import {
   getSeedReadiness,
   nextApplyableSeedItems,
   getSeedItem,
+  getSeedItemDetail,
+  listSeedItems,
+  listSeedMilestoneReadiness,
   appendSeedItemEvent,
 } from '../seedService.js';
 import type { DeployAncestrySource } from '../../gate/gateService.js';
@@ -171,6 +174,92 @@ describe('appendSeedItemEvent', () => {
       operator: 'pedro',
       evidence: { observed: 'config write succeeded' },
     });
+  });
+});
+
+describe('getSeedItemDetail', () => {
+  it('returns the item, its sources, and its full event history, by value', () => {
+    const item = makeItem();
+    appendSeedItemEvent(item.id, { outcome: 'applied', operator: 'pedro' });
+    appendSeedItemEvent(item.id, { outcome: 'confirmed', operator: 'pedro' });
+
+    const detail = getSeedItemDetail(item.id);
+    expect(detail?.item).toMatchObject({ id: item.id, state: 'confirmed' });
+    expect(detail?.sources).toHaveLength(1);
+    expect(detail?.sources[0]).toMatchObject({ sourceTaskId: 'notion:abc' });
+    expect(detail?.events.map((e) => e.outcome)).toEqual([
+      'applied',
+      'confirmed',
+    ]);
+  });
+
+  it('returns undefined for a missing item', () => {
+    expect(getSeedItemDetail('missing')).toBeUndefined();
+  });
+});
+
+describe('listSeedItems', () => {
+  it('filters by project, milestone, and state', () => {
+    makeItem({ project: 'p1', milestone: 'M12', spec: 'a' });
+    const other = makeItem({ project: 'p2', milestone: 'M12', spec: 'b' });
+    makeItem({ project: 'p1', milestone: 'M13', spec: 'c' });
+
+    const result = listSeedItems({ project: 'p2', milestone: 'M12' });
+    expect(result.items.map((i) => i.id)).toEqual([other.id]);
+    expect(result.total).toBe(1);
+    expect(result.page).toBe(1);
+  });
+
+  it('paginates instead of returning an unbounded load', () => {
+    for (let i = 0; i < 5; i++) {
+      makeItem({ spec: `seed ${i}` });
+    }
+
+    const page1 = listSeedItems({ limit: 2, page: 1 });
+    expect(page1.items).toHaveLength(2);
+    expect(page1.total).toBe(5);
+
+    const page2 = listSeedItems({ limit: 2, page: 2 });
+    expect(page2.items).toHaveLength(2);
+    expect(page2.items.map((i) => i.id)).not.toEqual(
+      page1.items.map((i) => i.id),
+    );
+  });
+
+  it('caps the limit and never returns an unbounded set', () => {
+    for (let i = 0; i < 3; i++) {
+      makeItem({ spec: `seed ${i}` });
+    }
+    const result = listSeedItems({ limit: 10000 });
+    expect(result.items).toHaveLength(3);
+  });
+});
+
+describe('listSeedMilestoneReadiness', () => {
+  it('rolls up per-milestone green/blocked within a project', () => {
+    const greenItem = makeItem({
+      project: 'p1',
+      milestone: 'M-green',
+      spec: 'a',
+    });
+    appendSeedItemEvent(greenItem.id, { outcome: 'applied' });
+    appendSeedItemEvent(greenItem.id, { outcome: 'confirmed' });
+    makeItem({ project: 'p1', milestone: 'M-blocked', spec: 'b' });
+
+    const result = listSeedMilestoneReadiness({ project: 'p1' });
+    expect(result).toEqual([
+      { project: 'p1', milestone: 'M-blocked', status: 'blocked', blockingCount: 1 },
+      { project: 'p1', milestone: 'M-green', status: 'green', blockingCount: 0 },
+    ]);
+  });
+
+  it('rolls up across projects when no project filter is given', () => {
+    makeItem({ project: 'p1', milestone: 'M12', spec: 'a' });
+    makeItem({ project: 'p2', milestone: 'M12', spec: 'b' });
+
+    const result = listSeedMilestoneReadiness();
+    expect(result.map((r) => r.project)).toEqual(['p1', 'p2']);
+    expect(result.every((r) => r.status === 'blocked')).toBe(true);
   });
 });
 

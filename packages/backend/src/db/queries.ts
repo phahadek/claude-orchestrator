@@ -3601,6 +3601,8 @@ export function upsertGateAccretion(row: GateAccretionRow): void {
 let _stmtGetSeedItem: Database.Statement | null = null;
 let _stmtListSeedItemsByMilestone: Database.Statement | null = null;
 let _stmtListSeedItemsByMilestoneAllProjects: Database.Statement | null = null;
+let _stmtListAllSeedItems: Database.Statement | null = null;
+let _stmtListSeedItemsByProject: Database.Statement | null = null;
 let _stmtInsertSeedItem: Database.Statement | null = null;
 let _stmtUpdateSeedItem: Database.Statement | null = null;
 let _stmtUpdateSeedItemMinDeployedCommit: Database.Statement | null = null;
@@ -3643,6 +3645,71 @@ export function listSeedItemsByMilestoneAllProjects(
   return _stmtListSeedItemsByMilestoneAllProjects.all({
     milestone,
   }) as SeedItemRow[];
+}
+
+/** Every seed item across all projects/milestones — the readiness rollup's working set. */
+export function listAllSeedItems(): SeedItemRow[] {
+  _stmtListAllSeedItems ??= db.prepare(`SELECT * FROM seed_item`);
+  return _stmtListAllSeedItems.all() as SeedItemRow[];
+}
+
+/** All seed items for a project, regardless of milestone — the readiness rollup's per-project lookup. */
+export function listSeedItemsByProject(project: string): SeedItemRow[] {
+  _stmtListSeedItemsByProject ??= db.prepare<{ project: string }>(
+    `SELECT * FROM seed_item WHERE project = @project`,
+  );
+  return _stmtListSeedItemsByProject.all({ project }) as SeedItemRow[];
+}
+
+export interface SeedItemFilter {
+  project?: string;
+  milestone?: string;
+  state?: string;
+}
+
+function buildSeedItemWhereClause(filter: SeedItemFilter): {
+  clause: string;
+  params: Record<string, string>;
+} {
+  const conditions: string[] = [];
+  const params: Record<string, string> = {};
+  if (filter.project) {
+    conditions.push('project = @project');
+    params.project = filter.project;
+  }
+  if (filter.milestone) {
+    conditions.push('milestone = @milestone');
+    params.milestone = filter.milestone;
+  }
+  if (filter.state) {
+    conditions.push('state = @state');
+    params.state = filter.state;
+  }
+  return {
+    clause: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
+    params,
+  };
+}
+
+/** Paginated, filtered read of seed_item — never an unbounded load; caller supplies limit/offset. */
+export function listSeedItemsFiltered(
+  filter: SeedItemFilter,
+  limit: number,
+  offset: number,
+): SeedItemRow[] {
+  const { clause, params } = buildSeedItemWhereClause(filter);
+  const stmt = db.prepare(
+    `SELECT * FROM seed_item ${clause} ORDER BY updated_at DESC, id ASC LIMIT @limit OFFSET @offset`,
+  );
+  return stmt.all({ ...params, limit, offset }) as SeedItemRow[];
+}
+
+/** Total count matching the same filter as listSeedItemsFiltered — powers the `total` in a paginated response. */
+export function countSeedItemsFiltered(filter: SeedItemFilter): number {
+  const { clause, params } = buildSeedItemWhereClause(filter);
+  const stmt = db.prepare(`SELECT COUNT(*) AS count FROM seed_item ${clause}`);
+  const row = stmt.get(params) as { count: number };
+  return row.count;
 }
 
 export function insertSeedItem(row: SeedItemRow): void {

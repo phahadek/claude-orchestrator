@@ -4,6 +4,10 @@ import {
   getSeedItem,
   listSeedItemsByMilestone,
   listSeedItemsByMilestoneAllProjects,
+  listAllSeedItems,
+  listSeedItemsByProject,
+  listSeedItemsFiltered,
+  countSeedItemsFiltered,
   insertSeedItem,
   updateSeedItem,
   updateSeedItemMinDeployedCommit,
@@ -15,6 +19,7 @@ import {
   getSeedAccretion,
   upsertSeedAccretion,
 } from '../db/queries';
+import type { SeedItemFilter } from '../db/queries';
 import type {
   SeedItemState,
   SeedItemEventOutcome,
@@ -104,6 +109,52 @@ export function listByMilestoneAllProjects(milestone: string): SeedItem[] {
   return listSeedItemsByMilestoneAllProjects(milestone)
     .map((row) => getItem(row.id))
     .filter((item): item is SeedItem => item !== undefined);
+}
+
+/** Every seed item across all projects/milestones — the readiness rollup's working set. */
+export function listAll(): SeedItem[] {
+  return listAllSeedItems()
+    .map((row) => getItem(row.id))
+    .filter((item): item is SeedItem => item !== undefined);
+}
+
+/** Every seed item for a single project, regardless of milestone — the readiness rollup's per-project lookup. */
+export function listByProject(project: string): SeedItem[] {
+  return listSeedItemsByProject(project)
+    .map((row) => getItem(row.id))
+    .filter((item): item is SeedItem => item !== undefined);
+}
+
+export interface SeedItemDetail {
+  item: Omit<SeedItem, 'sources' | 'events'>;
+  sources: SeedItemSource[];
+  events: SeedItemEvent[];
+}
+
+/** Full read of one seed item, split into its denormalized fields and its associations, by value. */
+export function getItemDetail(id: string): SeedItemDetail | undefined {
+  const full = getItem(id);
+  if (!full) return undefined;
+  const { sources, events, ...item } = full;
+  return { item, sources, events };
+}
+
+export interface ListFilteredResult {
+  items: SeedItem[];
+  total: number;
+}
+
+/** Paginated, filtered read of seed items — never an unbounded load. */
+export function listFiltered(
+  filter: SeedItemFilter,
+  limit: number,
+  offset: number,
+): ListFilteredResult {
+  const items = listSeedItemsFiltered(filter, limit, offset)
+    .map((row) => getItem(row.id))
+    .filter((item): item is SeedItem => item !== undefined);
+  const total = countSeedItemsFiltered(filter);
+  return { items, total };
 }
 
 export interface NewSeedItemInput {
