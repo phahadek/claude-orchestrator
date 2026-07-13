@@ -124,7 +124,9 @@ export interface GateReconcileTickResult {
   readiness: Record<string, GateReadiness>;
 }
 
-function defaultAncestrySourceForProject(project: string): DeployAncestrySource {
+function defaultAncestrySourceForProject(
+  project: string,
+): DeployAncestrySource {
   let projectDir: string | undefined;
   try {
     projectDir = getProjectById(project)?.projectDir;

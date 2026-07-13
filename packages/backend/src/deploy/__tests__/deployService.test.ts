@@ -17,7 +17,10 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { reportProjectDeploy, getProjectDeployedSha } from '../deployService.js';
+import {
+  reportProjectDeploy,
+  getProjectDeployedSha,
+} from '../deployService.js';
 
 beforeEach(() => {
   db.prepare('DELETE FROM project_deployed_sha').run();

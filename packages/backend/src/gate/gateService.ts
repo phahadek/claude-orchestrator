@@ -16,14 +16,17 @@ export interface DeployAncestrySource {
 }
 
 /** The default git-ancestry deploy-integration surface, reused by seedService's applyability check. */
-export const gitAncestrySource: DeployAncestrySource = createLocalGitAncestrySource();
+export const gitAncestrySource: DeployAncestrySource =
+  createLocalGitAncestrySource();
 
 /**
  * A git-ancestry source scoped to a specific local clone (a project's
  * `projectDir`), rather than assuming the current process cwd is the right
  * repo — the gate reconciler runs against multiple projects' local clones.
  */
-export function createLocalGitAncestrySource(cwd?: string): DeployAncestrySource {
+export function createLocalGitAncestrySource(
+  cwd?: string,
+): DeployAncestrySource {
   return {
     isAncestor(ancestorSha, descendantSha) {
       if (ancestorSha === descendantSha) return true;

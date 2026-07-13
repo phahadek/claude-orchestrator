@@ -42,7 +42,10 @@ describe('POST /api/deploy/report-in', () => {
       'abc123',
     );
     expect(res.status).toBe(202);
-    expect(res.body).toEqual({ projectId: 'claude-orchestrator', sha: 'abc123' });
+    expect(res.body).toEqual({
+      projectId: 'claude-orchestrator',
+      sha: 'abc123',
+    });
   });
 
   it('400s when projectId or sha is missing, never recording anything', async () => {

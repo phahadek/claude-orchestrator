@@ -23,7 +23,12 @@ const deployServiceMock = vi.hoisted(() => ({
 vi.mock('../../deploy/deployService.js', () => deployServiceMock);
 
 import { db } from '../../db/db.js';
-import { insertItem, setMinDeployedCommit, advanceState, getItem } from '../gateStore.js';
+import {
+  insertItem,
+  setMinDeployedCommit,
+  advanceState,
+  getItem,
+} from '../gateStore.js';
 import { approveGateItem, reconcileGateRunnability } from '../gateService.js';
 import {
   runGateReconcilerTick,
