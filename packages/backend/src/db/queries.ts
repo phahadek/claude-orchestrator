@@ -3543,6 +3543,46 @@ export function updateGateItemMinDeployedCommit(
   });
 }
 
+let _stmtRehomeGateItemsBySourceTask: Database.Statement | null = null;
+
+/**
+ * Re-homes every gate_item sourced (via gate_item_source) from a moved task
+ * by UPDATE-ing its milestone — the gate accretion carry for a cross-milestone
+ * move. min_deployed_commit is untouched: it's commit-based and project-scoped,
+ * not milestone-scoped, so a move never invalidates it. Returns the ids
+ * touched, for the audit payload.
+ */
+export function rehomeGateItemsBySourceTask(
+  project: string,
+  sourceTaskId: string,
+  milestone: string,
+  updatedAt: string,
+): string[] {
+  const ids = (
+    db
+      .prepare<{ project: string; source_task_id: string }>(
+        `SELECT DISTINCT gi.id AS id
+         FROM gate_item gi
+         JOIN gate_item_source gis ON gis.gate_item_id = gi.id
+         WHERE gi.project = @project AND gis.source_task_id = @source_task_id`,
+      )
+      .all({ project, source_task_id: sourceTaskId }) as { id: string }[]
+  ).map((row) => row.id);
+  if (ids.length === 0) return ids;
+
+  _stmtRehomeGateItemsBySourceTask ??= db.prepare<{
+    id: string;
+    milestone: string;
+    updated_at: string;
+  }>(
+    `UPDATE gate_item SET milestone = @milestone, updated_at = @updated_at WHERE id = @id`,
+  );
+  for (const id of ids) {
+    _stmtRehomeGateItemsBySourceTask.run({ id, milestone, updated_at: updatedAt });
+  }
+  return ids;
+}
+
 /** All gate items for a project, regardless of milestone — the readiness rollup's per-project lookup. */
 export function listGateItemsByProject(project: string): GateItemRow[] {
   const stmt = db.prepare<{ project: string }>(
@@ -3799,6 +3839,46 @@ export function updateSeedItemMinDeployedCommit(
     min_deployed_commit: minDeployedCommit,
     updated_at: updatedAt,
   });
+}
+
+let _stmtRehomeSeedItemsBySourceTask: Database.Statement | null = null;
+
+/**
+ * Re-homes every seed_item sourced (via seed_item_source) from a moved task
+ * by UPDATE-ing its milestone — the seed accretion carry for a cross-milestone
+ * move. min_deployed_commit is untouched: it's commit-based and project-scoped,
+ * not milestone-scoped, so a move never invalidates it. Returns the ids
+ * touched, for the audit payload.
+ */
+export function rehomeSeedItemsBySourceTask(
+  project: string,
+  sourceTaskId: string,
+  milestone: string,
+  updatedAt: string,
+): string[] {
+  const ids = (
+    db
+      .prepare<{ project: string; source_task_id: string }>(
+        `SELECT DISTINCT si.id AS id
+         FROM seed_item si
+         JOIN seed_item_source sis ON sis.seed_item_id = si.id
+         WHERE si.project = @project AND sis.source_task_id = @source_task_id`,
+      )
+      .all({ project, source_task_id: sourceTaskId }) as { id: string }[]
+  ).map((row) => row.id);
+  if (ids.length === 0) return ids;
+
+  _stmtRehomeSeedItemsBySourceTask ??= db.prepare<{
+    id: string;
+    milestone: string;
+    updated_at: string;
+  }>(
+    `UPDATE seed_item SET milestone = @milestone, updated_at = @updated_at WHERE id = @id`,
+  );
+  for (const id of ids) {
+    _stmtRehomeSeedItemsBySourceTask.run({ id, milestone, updated_at: updatedAt });
+  }
+  return ids;
 }
 
 export function listSeedItemSources(seedItemId: string): SeedItemSourceRow[] {
