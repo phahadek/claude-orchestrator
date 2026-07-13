@@ -39,6 +39,12 @@
   font-size: 0.875rem;
 }
 
+.readinessRow {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
 .readinessCard {
   border: 1px solid var(--border, #313244);
   border-radius: 8px;
@@ -46,6 +52,17 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1;
+  min-width: 240px;
+}
+
+.readinessCardTitle {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-muted, #a6adc8);
+  margin: 0;
 }
 
 .statusBadge {
