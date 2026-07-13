@@ -4,10 +4,8 @@ import type { ProjectMilestone } from '../api/projects';
 import { projectsApi, authedFetch } from '../api/projects';
 import { taskMoveApi } from '../api/taskMove';
 import { stagedIntentsApi, type StagedIntent } from '../api/stagedIntents';
-import {
-  toCanonicalStatus,
-  type MoveTaskContent,
-} from '@claude-orchestrator/backend/src/tasks/TaskWriteCommands';
+import { toCanonicalStatus } from '@claude-orchestrator/backend/src/tasks/statusCanonical';
+import type { MoveTaskContent } from '@claude-orchestrator/backend/src/tasks/TaskWriteCommands';
 import styles from './TaskMoveDialog.module.css';
 
 interface Props {
