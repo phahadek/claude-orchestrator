@@ -82,20 +82,6 @@ export function getItem(id: string): SeedItem | undefined {
   };
 }
 
-export interface SeedItemDetail {
-  item: Omit<SeedItem, 'sources' | 'events'>;
-  sources: SeedItemSource[];
-  events: SeedItemEvent[];
-}
-
-/** Full read of one seed item, split into its denormalized fields and its associations, by value. */
-export function getItemDetail(id: string): SeedItemDetail | undefined {
-  const full = getItem(id);
-  if (!full) return undefined;
-  const { sources, events, ...item } = full;
-  return { item, sources, events };
-}
-
 /** All seed items for a milestone, each with its sources and event history. */
 export function listByMilestone(
   project: string,
