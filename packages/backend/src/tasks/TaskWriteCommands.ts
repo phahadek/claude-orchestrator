@@ -14,11 +14,13 @@ import {
 import {
   insertItem as insertGateItem,
   recordAccretionMarker,
+  rehomeItemsBySourceTask as rehomeGateItems,
   type GateAccretionMarker,
 } from '../gate/gateStore';
 import {
   insertItem as insertSeedItem,
   recordAccretionMarker as recordSeedAccretionMarker,
+  rehomeItemsBySourceTask as rehomeSeedItems,
   type SeedAccretionMarker,
 } from '../seed/seedStore';
 import type { GateItemClassification } from '../db/types';
@@ -568,11 +570,16 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
    * transition state machine but still readiness-gated for a Ready
    * restore), resolve intra-milestone Depends On edges via planMove,
    * dispose of the original (archive, or Deferred with a successor
-   * pointer), write an origin back-reference on the new page, record one
-   * task_moved audit event, and invalidate both boards' task_cache.
+   * pointer), write an origin back-reference on the new page, carry the
+   * moved task's gate_item/seed_item accretions onto the target milestone,
+   * record one task_moved audit event, and invalidate both boards'
+   * task_cache.
    *
-   * Accretion carry (gate/seed contribution re-homing) is explicitly out of
-   * scope — see moveTask.ts's module doc.
+   * Depends On resolution is planned by moveTask.ts's planMove — see its
+   * module doc. The accretion carry re-homes gate_item/seed_item rows
+   * sourced from the original task id by UPDATE-ing their milestone;
+   * min_deployed_commit is untouched (commit-based and project-scoped, not
+   * milestone-scoped).
    */
   async moveTask(
     params: MoveTaskParams,
@@ -629,6 +636,12 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
         rewrite.dependsOn,
         options,
       );
+    }
+
+    const rehomedAt = new Date().toISOString();
+    if (this.projectId) {
+      rehomeGateItems(this.projectId, taskId, targetMilestone.id, rehomedAt);
+      rehomeSeedItems(this.projectId, taskId, targetMilestone.id, rehomedAt);
     }
 
     if (params.originalDisposition === 'archive') {

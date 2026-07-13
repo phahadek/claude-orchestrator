@@ -8,10 +8,9 @@
  * Pure and deterministic — no I/O, no Notion/backend calls, mirroring
  * mergeSession.ts. The caller (TaskWriteCommands.moveTask) fetches the
  * source milestone's task graph, calls planMove to resolve dependency
- * edges, then performs the actual create/restore/rewrite/dispose sequence.
- *
- * Accretion carry (re-homing gate_contribution / seed_contribution across
- * milestones) is explicitly excised — see task 39b22f91-52f3-81c3.
+ * edges, then performs the actual create/restore/rewrite/dispose sequence,
+ * including the gate_item/seed_item accretion carry (re-homing rows sourced
+ * from the moved task onto the target milestone via gateStore/seedStore).
  */
 
 /** Minimal task shape needed to resolve Depends On edges. */

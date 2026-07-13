@@ -14,6 +14,7 @@ import {
   listSeedItemSources,
   insertSeedItemSource,
   updateSeedItemSourceMergeCommit,
+  rehomeSeedItemsBySourceTask,
   listSeedItemEvents,
   insertSeedItemEvent,
   getSeedAccretion,
@@ -305,6 +306,37 @@ export function setSourceMergeCommit(
     );
   }
   updateSeedItemSourceMergeCommit(seedItemId, sourceTaskId, mergeCommit);
+}
+
+/**
+ * Re-homes a moved task's seed_item rows (identified via seed_item_source)
+ * onto the target milestone — the seed accretion carry for moveTask. Leaves
+ * seed_item_source.source_task_id pointing at the original task id (the
+ * audit trail of what accreted the item) and min_deployed_commit untouched
+ * (commit-based and project-scoped, unaffected by a cross-milestone move).
+ */
+export function rehomeItemsBySourceTask(
+  project: string,
+  sourceTaskId: string,
+  targetMilestone: string,
+  updatedAt: string,
+): string[] {
+  const seedItemIds = rehomeSeedItemsBySourceTask(
+    project,
+    sourceTaskId,
+    targetMilestone,
+    updatedAt,
+  );
+  for (const seedItemId of seedItemIds) {
+    recordEvent({
+      event_type: 'seed_item_rehomed',
+      actor_type: 'system',
+      project_id: project,
+      task_id: sourceTaskId,
+      payload: { seedItemId, milestone: targetMilestone },
+    });
+  }
+  return seedItemIds;
 }
 
 export interface SeedAccretionMarker {

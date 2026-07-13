@@ -27,6 +27,7 @@ import {
   addSource,
   getAccretionMarker,
   recordAccretionMarker,
+  rehomeItemsBySourceTask,
 } from '../seedStore.js';
 
 beforeEach(() => {
@@ -217,6 +218,95 @@ describe('seedStore', () => {
     const m12Items = listByMilestone('polimarket-analyser', 'M12');
     expect(m12Items).toHaveLength(1);
     expect(m12Items[0].spec).toBe('Item A');
+  });
+});
+
+describe('seedStore.rehomeItemsBySourceTask — moveTask accretion carry', () => {
+  it('re-homes every seed_item sourced from the moved task onto the target milestone', () => {
+    const item = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      spec: 'Set ALERT_THRESHOLD_MS to 500 in config',
+      sources: [
+        { sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    const rehomed = rehomeItemsBySourceTask(
+      'polimarket-analyser',
+      'notion:moved',
+      'M13',
+      new Date(1).toISOString(),
+    );
+
+    expect(rehomed).toEqual([item.id]);
+    expect(getItem(item.id)?.milestone).toBe('M13');
+  });
+
+  it('leaves min_deployed_commit unchanged — commit-based and project-scoped, no recompute on a move', () => {
+    const item = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      spec: 'Add the new webhook secret',
+      sources: [
+        { sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    setMinDeployedCommit(item.id, 'deadbeef', new Date(0).toISOString());
+
+    rehomeItemsBySourceTask(
+      'polimarket-analyser',
+      'notion:moved',
+      'M13',
+      new Date(1).toISOString(),
+    );
+
+    expect(getItem(item.id)?.minDeployedCommit).toBe('deadbeef');
+  });
+
+  it('leaves seed_item_source.source_task_id pointing at the original task id', () => {
+    const item = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      spec: 'Add the new webhook secret',
+      sources: [
+        { sourceTaskId: 'notion:moved', sourceTaskTitle: 'Moved task' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    rehomeItemsBySourceTask(
+      'polimarket-analyser',
+      'notion:moved',
+      'M13',
+      new Date(1).toISOString(),
+    );
+
+    expect(getItem(item.id)?.sources[0].sourceTaskId).toBe('notion:moved');
+  });
+
+  it('does not touch items from other projects or unrelated source tasks', () => {
+    const other = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      spec: 'Unrelated item',
+      sources: [
+        { sourceTaskId: 'notion:other', sourceTaskTitle: 'Other task' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    const rehomed = rehomeItemsBySourceTask(
+      'polimarket-analyser',
+      'notion:moved',
+      'M13',
+      new Date(1).toISOString(),
+    );
+
+    expect(rehomed).toEqual([]);
+    expect(getItem(other.id)?.milestone).toBe('M12');
   });
 });
 

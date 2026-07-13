@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockDeleteTaskCacheRow = vi.fn();
 const mockRecordEvent = vi.fn();
+const mockRehomeGateItems = vi.fn();
+const mockRehomeSeedItems = vi.fn();
 
 vi.mock('../../db/queries', () => ({
   getTaskCache: vi.fn().mockReturnValue(undefined),
@@ -10,6 +12,14 @@ vi.mock('../../db/queries', () => ({
 
 vi.mock('../../audit/AuditLog', () => ({
   recordEvent: (...args: unknown[]) => mockRecordEvent(...args),
+}));
+
+vi.mock('../../gate/gateStore', () => ({
+  rehomeItemsBySourceTask: (...args: unknown[]) => mockRehomeGateItems(...args),
+}));
+
+vi.mock('../../seed/seedStore', () => ({
+  rehomeItemsBySourceTask: (...args: unknown[]) => mockRehomeSeedItems(...args),
 }));
 
 import { planMove, MoveTaskError, type MoveGraphTask } from '../moveTask';
@@ -201,6 +211,8 @@ function baseParams(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   mockDeleteTaskCacheRow.mockReset();
   mockRecordEvent.mockReset();
+  mockRehomeGateItems.mockReset();
+  mockRehomeSeedItems.mockReset();
 });
 
 describe('BackendTaskWriteCommands.moveTask', () => {
@@ -361,5 +373,59 @@ describe('BackendTaskWriteCommands.moveTask', () => {
 
     expect(mockDeleteTaskCacheRow).toHaveBeenCalledWith('board:m-source');
     expect(mockDeleteTaskCacheRow).toHaveBeenCalledWith('board:m-target');
+  });
+
+  it('carries the gate_item and seed_item accretion re-home, after the Depends On rewrites, using the source task id and target milestone', async () => {
+    const calls: string[] = [];
+    const backend = makeBackend({
+      setDependsOn: vi.fn().mockImplementation(async () => {
+        calls.push('setDependsOn');
+      }),
+    });
+    mockRehomeGateItems.mockImplementationOnce(() => {
+      calls.push('rehomeGateItems');
+      return ['gate-item-1'];
+    });
+    mockRehomeSeedItems.mockImplementationOnce(() => {
+      calls.push('rehomeSeedItems');
+      return ['seed-item-1'];
+    });
+    const commands = new BackendTaskWriteCommands(backend, 'proj-1');
+
+    await commands.moveTask(baseParams());
+
+    expect(mockRehomeGateItems).toHaveBeenCalledWith(
+      'proj-1',
+      'notion:a',
+      'm-target',
+      expect.any(String),
+    );
+    expect(mockRehomeSeedItems).toHaveBeenCalledWith(
+      'proj-1',
+      'notion:a',
+      'm-target',
+      expect.any(String),
+    );
+    expect(calls).toEqual(['rehomeGateItems', 'rehomeSeedItems']);
+  });
+
+  it('passes no min_deployed_commit argument to the rehome calls — a move never recomputes it', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend, 'proj-1');
+
+    await commands.moveTask(baseParams());
+
+    expect(mockRehomeGateItems.mock.calls[0]).toHaveLength(4);
+    expect(mockRehomeSeedItems.mock.calls[0]).toHaveLength(4);
+  });
+
+  it('skips the accretion carry when no projectId is configured', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.moveTask(baseParams());
+
+    expect(mockRehomeGateItems).not.toHaveBeenCalled();
+    expect(mockRehomeSeedItems).not.toHaveBeenCalled();
   });
 });

@@ -16,6 +16,7 @@ import {
   listGateItemEvents,
   insertGateItemEvent,
   updateGateItemSourceMergeCommit,
+  rehomeGateItemsBySourceTask,
   getGateAccretion,
   upsertGateAccretion,
 } from '../db/queries';
@@ -323,6 +324,37 @@ export function setSourceMergeCommit(
     );
   }
   updateGateItemSourceMergeCommit(gateItemId, sourceTaskId, mergeCommit);
+}
+
+/**
+ * Re-homes a moved task's gate_item rows (identified via gate_item_source)
+ * onto the target milestone — the gate accretion carry for moveTask. Leaves
+ * gate_item_source.source_task_id pointing at the original task id (the
+ * audit trail of what accreted the item) and min_deployed_commit untouched
+ * (commit-based and project-scoped, unaffected by a cross-milestone move).
+ */
+export function rehomeItemsBySourceTask(
+  project: string,
+  sourceTaskId: string,
+  targetMilestone: string,
+  updatedAt: string,
+): string[] {
+  const gateItemIds = rehomeGateItemsBySourceTask(
+    project,
+    sourceTaskId,
+    targetMilestone,
+    updatedAt,
+  );
+  for (const gateItemId of gateItemIds) {
+    recordEvent({
+      event_type: 'gate_item_rehomed',
+      actor_type: 'system',
+      project_id: project,
+      task_id: sourceTaskId,
+      payload: { gateItemId, milestone: targetMilestone },
+    });
+  }
+  return gateItemIds;
 }
 
 export interface GateAccretionMarker {
