@@ -18,6 +18,43 @@ import {
 import { GroomingGateError, type GroomingGateEntry } from '../groom/groomGate';
 
 /**
+ * The durable replacement for groom-gate.mjs's self-reported hard_block_deps
+ * array field: a task.setStatus->Ready apply is only allowed when its intent
+ * group also carries a task.setDependsOn for the same task, forcing an
+ * explicit dep-classification decision (an empty array is a valid "no deps").
+ * Tracked per groupId+taskId so an applied sibling from an earlier apply in
+ * the same group still satisfies the invariant for a later apply.
+ */
+class DependsOnCompletenessError extends Error {
+  constructor(taskId: string) {
+    super(
+      `[stagedIntents] task.setStatus -> Ready for task "${taskId}" is blocked: ` +
+        'its intent group has no task.setDependsOn for this task. Stage an explicit ' +
+        'dependency classification (an empty array is a valid "no deps") in the same group before promoting.',
+    );
+    this.name = 'DependsOnCompletenessError';
+  }
+}
+
+const appliedSetDependsOn = new Set<string>();
+
+function dependsOnGroupKey(groupId: string, taskId: string): string {
+  return `${groupId}::${taskId}`;
+}
+
+function hasGroupDependsOn(groupId: string, taskId: string): boolean {
+  if (appliedSetDependsOn.has(dependsOnGroupKey(groupId, taskId))) return true;
+  for (const other of store.values()) {
+    if (other.kind !== 'task.setDependsOn' || other.groupId !== groupId) {
+      continue;
+    }
+    const payload = other.payload as SetDependsOnPayload;
+    if (payload.taskId === taskId) return true;
+  }
+  return false;
+}
+
+/**
  * The general staged-intent surface: a single chokepoint producers (Groom(N),
  * Ops(N), and future callers) stage generic { kind, payload } intents through,
  * and a human applies or rejects. Apply always dispatches through
@@ -156,6 +193,12 @@ async function applyIntent(
     }
     case 'task.setStatus': {
       const payload = intent.payload as SetStatusPayload;
+      if (
+        payload.status === 'Ready' &&
+        (!intent.groupId || !hasGroupDependsOn(intent.groupId, payload.taskId))
+      ) {
+        throw new DependsOnCompletenessError(payload.taskId);
+      }
       await commands.setStatus(payload.taskId, payload.status, {
         source: 'human',
         readinessOverride: override,
@@ -168,6 +211,11 @@ async function applyIntent(
       await commands.setDependsOn(payload.taskId, payload.dependsOn, {
         source: 'human',
       });
+      if (intent.groupId) {
+        appliedSetDependsOn.add(
+          dependsOnGroupKey(intent.groupId, payload.taskId),
+        );
+      }
       return { ok: true };
     }
     case 'task.updateBody': {
@@ -307,6 +355,10 @@ export function createStagedIntentsRouter(): Router {
         }
         if (err instanceof HumanApplyOnlyError) {
           res.status(403).json({ error: err.message });
+          return;
+        }
+        if (err instanceof DependsOnCompletenessError) {
+          res.status(409).json({ error: err.message });
           return;
         }
         res.status(500).json({
