@@ -11,6 +11,11 @@ interface Props {
   /** When provided, 🔲 Backlog-status tasks render a checkbox (Groom selection mode). */
   groomCheckedIds?: Set<string>;
   onGroomCheckChange?: (taskId: string, checked: boolean) => void;
+  /** When provided, tasks matching isOpsEligible render an Ops(N) selection checkbox — takes
+   * precedence over the Groom checkbox when a task qualifies for both. */
+  opsCheckedIds?: Set<string>;
+  onOpsCheckChange?: (taskId: string, checked: boolean) => void;
+  isOpsEligible?: (task: TaskView) => boolean;
 }
 
 const TYPE_ORDER = [
@@ -52,6 +57,9 @@ export function NonCodeTypeSection({
   onSelectTask,
   groomCheckedIds,
   onGroomCheckChange,
+  opsCheckedIds,
+  onOpsCheckChange,
+  isOpsEligible,
 }: Props) {
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
 
@@ -124,20 +132,29 @@ export function NonCodeTypeSection({
             {isExpanded && (
               <div className={styles.groupCards}>
                 {typeTasks.map((task) => {
+                  const opsEligible =
+                    opsCheckedIds !== undefined &&
+                    (isOpsEligible?.(task) ?? false);
                   const groomable =
+                    !opsEligible &&
                     groomCheckedIds !== undefined &&
                     task.displayStatus === 'backlog';
+                  const showCheckbox = opsEligible || groomable;
+                  const checked = opsEligible
+                    ? opsCheckedIds!.has(task.taskId)
+                    : groomable && groomCheckedIds!.has(task.taskId);
+                  const onCheckChange = opsEligible
+                    ? (onOpsCheckChange ?? (() => {}))
+                    : groomable
+                      ? (onGroomCheckChange ?? (() => {}))
+                      : () => {};
                   return (
                     <CompactTaskCard
                       key={task.taskId}
                       task={task}
-                      showCheckbox={groomable}
-                      checked={groomable && groomCheckedIds!.has(task.taskId)}
-                      onCheckChange={
-                        groomable
-                          ? (onGroomCheckChange ?? (() => {}))
-                          : () => {}
-                      }
+                      showCheckbox={showCheckbox}
+                      checked={checked}
+                      onCheckChange={onCheckChange}
                       onClick={() => onSelectTask(task.taskId)}
                       showStatus
                     />

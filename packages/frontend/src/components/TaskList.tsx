@@ -58,9 +58,11 @@ const GROUP_LABELS: Record<DisplayStatus, string> = {
   deferred: '⏭️ Deferred',
 };
 
-// Task types the Ops(N) button stages — the ops_journal is only pre-seeded
-// for 🔧 Operational / 🔎 Investigation tasks (see ops/opsLoad.ts).
-const OPS_TASK_TYPES = ['🔧 Operational', '🔎 Investigation'];
+// Task types eligible for the Ops(N) checkbox — 🧪 Testing here means observational
+// Testing, which opsLoad.ts folds into the ops worklist alongside 🔧 Operational and
+// 🔎 Investigation; authoring-Testing tasks are 💻 Code and are dropped server-side by
+// /ops/launch's worklist.executable filter (the frontend can't see Mode to exclude them).
+const OPS_TASK_TYPES = ['🔧 Operational', '🔎 Investigation', '🧪 Testing'];
 
 /** Group tasks by wave number, returning a map of wave → sorted tasks. */
 function groupByWave(tasks: TaskView[]): Map<number, TaskView[]> {
@@ -279,6 +281,7 @@ export function TaskList({
   const [opsIntent, setOpsIntent] = useState<StagedIntent | null>(null);
   const [opsLoading, setOpsLoading] = useState(false);
   const [opsError, setOpsError] = useState<string | null>(null);
+  const [opsCheckedIds, setOpsCheckedIds] = useState<Set<string>>(new Set());
   // Cross-milestone move: the shared staged-intent display renders whichever
   // task.move intent was most recently staged from a TaskCard on this board.
   const [moveIntent, setMoveIntent] = useState<StagedIntent | null>(null);
@@ -510,31 +513,65 @@ export function TaskList({
     });
   }
 
-  // Ops(N): selects every not-Done 🔧/🔎 task currently on the board.
-  const opsEligibleTasks = tasks.filter(
-    (t) => OPS_TASK_TYPES.includes(t.taskType) && t.displayStatus !== 'done',
-  );
+  // Ops(N) checkbox eligibility: every not-Done 🔧/🔎/observational-🧪 task on the board.
+  // Type-based only — the frontend can't see Mode, so an authoring-Testing task also
+  // renders a checkbox here; /ops/launch drops it server-side and handleOpsLaunch
+  // surfaces the gap via the launched[] reconciliation below.
+  function isOpsEligible(t: TaskView): boolean {
+    return OPS_TASK_TYPES.includes(t.taskType) && t.displayStatus !== 'done';
+  }
+  const opsEligibleTasks = tasks.filter(isOpsEligible);
+  const opsSelectedCount = opsEligibleTasks.filter((t) =>
+    opsCheckedIds.has(t.taskId),
+  ).length;
 
-  // Launches one individual, dependency-ordered session per selected 🔧/🔎
-  // task via the backend ops launcher, then reads back the ops_journal rows
-  // to render in the shared StagedIntentPanel. Launched sessions themselves
-  // render on the right panel like any other session.
+  function toggleOpsCheck(taskId: string, checked: boolean) {
+    setOpsCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(taskId);
+      else next.delete(taskId);
+      return next;
+    });
+  }
+
+  function handleOpsSelectAll() {
+    setOpsCheckedIds(new Set(opsEligibleTasks.map((t) => t.taskId)));
+  }
+
+  function handleOpsClearSelection() {
+    setOpsCheckedIds(new Set());
+  }
+
+  // Launches one individual, dependency-ordered session per checked, ops-eligible
+  // task via the backend ops launcher, then reads back the ops_journal rows to
+  // render in the shared StagedIntentPanel. Launched sessions themselves render
+  // on the right panel like any other session.
   async function handleOpsLaunch() {
-    if (!boardId || opsEligibleTasks.length === 0) return;
+    const selectedIds = opsEligibleTasks
+      .filter((t) => opsCheckedIds.has(t.taskId))
+      .map((t) => t.taskId);
+    if (!boardId || selectedIds.length === 0) return;
     setOpsLoading(true);
     setOpsError(null);
     try {
-      const eligibleIds = new Set(opsEligibleTasks.map((t) => t.taskId));
-      await opsJournalApi.launch(boardId, Array.from(eligibleIds));
+      const result = await opsJournalApi.launch(boardId, selectedIds);
+      const launchedIds = new Set(result.launched);
       const entries = await opsJournalApi.listForMilestone(boardId);
-      const rows = entries.filter((e) => eligibleIds.has(e.taskId));
+      const rows = entries.filter((e) => launchedIds.has(e.taskId));
       setOpsIntent({
         id: 'ops-stub',
         kind: 'ops',
-        payload: { taskIds: Array.from(eligibleIds), rows },
+        payload: { taskIds: result.launched, rows },
         projectId: activeProjectId ?? '',
         createdAt: 0,
       });
+      const notLaunched = selectedIds.filter((id) => !launchedIds.has(id));
+      setOpsError(
+        notLaunched.length > 0
+          ? `${notLaunched.length} selected task${notLaunched.length === 1 ? '' : 's'} did not launch (not ops-executable): ${notLaunched.join(', ')}`
+          : null,
+      );
+      setOpsCheckedIds(new Set());
     } catch (err) {
       setOpsError(
         err instanceof Error ? err.message : 'Failed to launch ops sessions',
@@ -641,14 +678,28 @@ export function TaskList({
               {opsEligibleTasks.length > 0 && (
                 <div className={styles.launchControls}>
                   <button
+                    className={styles.selectAllBtn}
+                    onClick={handleOpsSelectAll}
+                    disabled={opsLoading}
+                    data-testid="ops-select-all-btn"
+                  >
+                    Select All
+                  </button>
+                  <button
+                    className={styles.selectAllBtn}
+                    onClick={handleOpsClearSelection}
+                    disabled={opsLoading || opsSelectedCount === 0}
+                    data-testid="ops-clear-btn"
+                  >
+                    Clear
+                  </button>
+                  <button
                     className={styles.opsBtn}
                     onClick={() => void handleOpsLaunch()}
-                    disabled={opsLoading || !boardId}
+                    disabled={opsLoading || !boardId || opsSelectedCount === 0}
                     data-testid="ops-btn"
                   >
-                    {opsLoading
-                      ? 'Loading…'
-                      : `Ops (${opsEligibleTasks.length})`}
+                    {opsLoading ? 'Loading…' : `Ops (${opsSelectedCount})`}
                   </button>
                 </div>
               )}
@@ -663,6 +714,9 @@ export function TaskList({
               onSelectTask={onSelectTask}
               groomCheckedIds={groomCheckedIds}
               onGroomCheckChange={toggleGroomCheck}
+              opsCheckedIds={opsCheckedIds}
+              onOpsCheckChange={toggleOpsCheck}
+              isOpsEligible={isOpsEligible}
             />
           </div>
         )}

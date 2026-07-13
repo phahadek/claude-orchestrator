@@ -1015,15 +1015,26 @@ describe('TaskList', () => {
   });
 
   describe('Ops(N) button', () => {
-    function mockOpsJournalResponse(entries: unknown[]) {
-      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ entries }),
-      });
+    function mockOpsEndpoints(launched: string[], entries: unknown[]) {
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/ops/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched, deferred: [] }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ entries }),
+          });
+        },
+      );
     }
 
-    it('does not render when there are no 🔧/🔎 tasks', () => {
+    it('does not render when there are no 🔧/🔎/observational-🧪 tasks', () => {
       renderList([
         makeTask({
           taskId: 't1',
@@ -1035,7 +1046,7 @@ describe('TaskList', () => {
       expect(screen.queryByTestId('ops-btn')).toBeNull();
     });
 
-    it('renders Ops(N) with the count of not-Done 🔧/🔎 tasks', () => {
+    it('renders a checkbox for each not-Done 🔧/🔎/observational-🧪 task and none for 📝 Docs', () => {
       renderList(
         [
           makeTask({
@@ -1051,6 +1062,18 @@ describe('TaskList', () => {
             taskType: '🔎 Investigation',
           }),
           makeTask({
+            taskId: 'test1',
+            taskName: 'Observational Test Task',
+            displayStatus: 'in_progress',
+            taskType: '🧪 Testing',
+          }),
+          makeTask({
+            taskId: 'docs1',
+            taskName: 'Docs Task',
+            displayStatus: 'in_progress',
+            taskType: '📝 Docs',
+          }),
+          makeTask({
             taskId: 'op2',
             taskName: 'Done Op Task',
             displayStatus: 'done',
@@ -1061,11 +1084,41 @@ describe('TaskList', () => {
       );
 
       const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
-      expect(opsBtn.textContent).toContain('Ops (2)');
+      expect(opsBtn.textContent).toContain('Ops (0)');
+      expect(opsBtn.disabled).toBe(true);
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      fireEvent.click(screen.getByTestId('type-card-header-investigation'));
+      fireEvent.click(screen.getByTestId('type-card-header-testing'));
+      fireEvent.click(screen.getByTestId('type-card-header-docs'));
+
+      expect(
+        screen
+          .getByTestId('type-card-operational')
+          .querySelector('input[type="checkbox"]'),
+      ).not.toBeNull();
+      expect(
+        screen
+          .getByTestId('type-card-investigation')
+          .querySelector('input[type="checkbox"]'),
+      ).not.toBeNull();
+      expect(
+        screen
+          .getByTestId('type-card-testing')
+          .querySelector('input[type="checkbox"]'),
+      ).not.toBeNull();
+      expect(
+        screen
+          .getByTestId('type-card-docs')
+          .querySelector('input[type="checkbox"]'),
+      ).toBeNull();
+
+      fireEvent.click(screen.getByTestId('ops-select-all-btn'));
+      expect(opsBtn.textContent).toContain('Ops (3)');
     });
 
-    it('clicking Ops(N) fetches ops_journal rows and renders them, scoped to selected tasks, with state per row', async () => {
-      mockOpsJournalResponse([
+    it('clicking Ops(N) launches only the checked subset, not every eligible task', async () => {
+      mockOpsEndpoints(['op1', 'test1'], [
         {
           taskId: 'op1',
           project: 'proj-1',
@@ -1075,10 +1128,10 @@ describe('TaskList', () => {
           updatedAt: '2026-01-01T00:00:00.000Z',
         },
         {
-          taskId: 'other-task',
+          taskId: 'test1',
           project: 'proj-1',
           milestone: 'milestone-1',
-          state: 'resolved',
+          state: 'candidate',
           updatedAt: '2026-01-01T00:00:00.000Z',
         },
       ]);
@@ -1091,25 +1144,49 @@ describe('TaskList', () => {
             displayStatus: 'in_progress',
             taskType: '🔧 Operational',
           }),
+          makeTask({
+            taskId: 'inv1',
+            taskName: 'Investigation Task',
+            displayStatus: 'ready',
+            taskType: '🔎 Investigation',
+          }),
+          makeTask({
+            taskId: 'test1',
+            taskName: 'Observational Test Task',
+            displayStatus: 'in_progress',
+            taskType: '🧪 Testing',
+          }),
         ],
         { boardId: 'milestone-1' },
       );
 
-      fireEvent.click(screen.getByTestId('ops-btn'));
+      const opTaskCheckbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      fireEvent.click(opTaskCheckbox);
+
+      fireEvent.click(screen.getByTestId('type-card-header-testing'));
+      const testTaskCheckbox = screen
+        .getByTestId('type-card-testing')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(testTaskCheckbox);
+
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      expect(opsBtn.textContent).toContain('Ops (2)');
+
+      fireEvent.click(opsBtn);
 
       await waitFor(() => {
         expect(screen.getByTestId('ops-panel')).toBeDefined();
       });
 
-      expect(fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/ops-journal?milestone=milestone-1'),
-        expect.anything(),
+      const launchCall = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+        ([url]) => (url as string).includes('/api/ops/launch'),
       );
-
-      const panel = screen.getByTestId('ops-panel');
-      expect(panel.textContent).toContain('candidate');
-      expect(panel.textContent).not.toContain('resolved');
-      expect(panel.textContent).toContain('ops');
+      expect(launchCall).toBeDefined();
+      const body = JSON.parse((launchCall![1] as RequestInit).body as string);
+      expect(body.taskIds.sort()).toEqual(['op1', 'test1']);
     });
   });
 
