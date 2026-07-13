@@ -175,7 +175,7 @@ describe('appendSeedItemEvent', () => {
 });
 
 describe('no auto-apply path', () => {
-  it('exposes no function that applies config on the seed item\'s behalf', async () => {
+  it("exposes no function that applies config on the seed item's behalf", async () => {
     const seedService = await import('../seedService.js');
     const exportNames = Object.keys(seedService);
     const applyLike = exportNames.filter(

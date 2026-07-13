@@ -37,7 +37,9 @@ describe('GET /api/seed/readiness', () => {
     const readiness = { status: 'green', blocking: [] };
     seedServiceMock.getSeedReadiness.mockReturnValue(readiness);
 
-    const res = await request(makeApp()).get('/api/seed/readiness?milestone=M12');
+    const res = await request(makeApp()).get(
+      '/api/seed/readiness?milestone=M12',
+    );
 
     expect(seedServiceMock.getSeedReadiness).toHaveBeenCalledWith('M12');
     expect(res.status).toBe(200);
