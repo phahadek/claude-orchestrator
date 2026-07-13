@@ -25,7 +25,7 @@ import { GroomingGateError, type GroomingGateEntry } from '../groom/groomGate';
  * Tracked per groupId+taskId so an applied sibling from an earlier apply in
  * the same group still satisfies the invariant for a later apply.
  */
-export class DependsOnCompletenessError extends Error {
+class DependsOnCompletenessError extends Error {
   constructor(taskId: string) {
     super(
       `[stagedIntents] task.setStatus -> Ready for task "${taskId}" is blocked: ` +
