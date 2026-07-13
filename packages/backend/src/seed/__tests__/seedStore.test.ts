@@ -142,7 +142,9 @@ describe('seedStore', () => {
       project: 'polimarket-analyser',
       milestone: 'M12',
       spec: 'Verify the migration config change',
-      sources: [{ sourceTaskId: 'notion:m1', sourceTaskTitle: 'Add migration' }],
+      sources: [
+        { sourceTaskId: 'notion:m1', sourceTaskTitle: 'Add migration' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
 
