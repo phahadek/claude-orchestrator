@@ -248,8 +248,18 @@ describe('listSeedMilestoneReadiness', () => {
 
     const result = listSeedMilestoneReadiness({ project: 'p1' });
     expect(result).toEqual([
-      { project: 'p1', milestone: 'M-blocked', status: 'blocked', blockingCount: 1 },
-      { project: 'p1', milestone: 'M-green', status: 'green', blockingCount: 0 },
+      {
+        project: 'p1',
+        milestone: 'M-blocked',
+        status: 'blocked',
+        blockingCount: 1,
+      },
+      {
+        project: 'p1',
+        milestone: 'M-green',
+        status: 'green',
+        blockingCount: 0,
+      },
     ]);
   });
 
