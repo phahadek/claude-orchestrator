@@ -2430,6 +2430,27 @@ export function getApprovedLocalBranches(): LocalBranchRow[] {
     .all() as LocalBranchRow[];
 }
 
+/**
+ * Most recently merged local branch for a source task, joined via the
+ * session that carried it. Undefined when the task has no merged session
+ * (backfill callers treat that as "unmerged" -> null min_deployed_commit).
+ */
+export function getMergedLocalBranchForTaskId(
+  taskId: string,
+): LocalBranchRow | undefined {
+  return db
+    .prepare<{ task_id: string }>(
+      `
+    SELECT lb.* FROM local_branches lb
+    JOIN sessions s ON s.session_id = lb.session_id
+    WHERE s.task_id = @task_id AND lb.status = 'merged'
+    ORDER BY lb.updated_at DESC
+    LIMIT 1
+  `,
+    )
+    .get({ task_id: taskId }) as LocalBranchRow | undefined;
+}
+
 export function markLocalBranchMerged(
   id: number,
   commitSha: string | null,
