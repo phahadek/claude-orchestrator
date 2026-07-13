@@ -41,6 +41,11 @@ import type {
   NewGateItemEventRow,
   GateAccretionRow,
   GateItemClassification,
+  SeedItemRow,
+  SeedItemSourceRow,
+  NewSeedItemSourceRow,
+  SeedItemEventRow,
+  NewSeedItemEventRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -3588,6 +3593,143 @@ export function upsertGateAccretion(row: GateAccretionRow): void {
       accreted_at = excluded.accreted_at
   `);
   _stmtUpsertGateAccretion.run(row);
+}
+
+// ─── seed_item ────────────────────────────────────────────────────────────
+
+let _stmtGetSeedItem: Database.Statement | null = null;
+let _stmtListSeedItemsByMilestone: Database.Statement | null = null;
+let _stmtInsertSeedItem: Database.Statement | null = null;
+let _stmtUpdateSeedItem: Database.Statement | null = null;
+let _stmtUpdateSeedItemMinDeployedCommit: Database.Statement | null = null;
+let _stmtListSeedItemSources: Database.Statement | null = null;
+let _stmtInsertSeedItemSource: Database.Statement | null = null;
+let _stmtUpdateSeedItemSourceMergeCommit: Database.Statement | null = null;
+let _stmtListSeedItemEvents: Database.Statement | null = null;
+let _stmtInsertSeedItemEvent: Database.Statement | null = null;
+
+export function getSeedItem(id: string): SeedItemRow | undefined {
+  _stmtGetSeedItem ??= db.prepare<{ id: string }>(
+    `SELECT * FROM seed_item WHERE id = @id`,
+  );
+  return _stmtGetSeedItem.get({ id }) as SeedItemRow | undefined;
+}
+
+export function listSeedItemsByMilestone(
+  project: string,
+  milestone: string,
+): SeedItemRow[] {
+  _stmtListSeedItemsByMilestone ??= db.prepare<{
+    project: string;
+    milestone: string;
+  }>(
+    `SELECT * FROM seed_item WHERE project = @project AND milestone = @milestone`,
+  );
+  return _stmtListSeedItemsByMilestone.all({
+    project,
+    milestone,
+  }) as SeedItemRow[];
+}
+
+export function insertSeedItem(row: SeedItemRow): void {
+  _stmtInsertSeedItem ??= db.prepare<SeedItemRow>(`
+    INSERT INTO seed_item
+      (id, project, milestone, spec, min_deployed_commit, state, updated_at)
+    VALUES
+      (@id, @project, @milestone, @spec, @min_deployed_commit, @state, @updated_at)
+  `);
+  _stmtInsertSeedItem.run(row);
+}
+
+export function updateSeedItem(row: SeedItemRow): void {
+  _stmtUpdateSeedItem ??= db.prepare<SeedItemRow>(`
+    UPDATE seed_item SET
+      project = @project,
+      milestone = @milestone,
+      spec = @spec,
+      min_deployed_commit = @min_deployed_commit,
+      state = @state,
+      updated_at = @updated_at
+    WHERE id = @id
+  `);
+  _stmtUpdateSeedItem.run(row);
+}
+
+export function updateSeedItemMinDeployedCommit(
+  id: string,
+  minDeployedCommit: string,
+  updatedAt: string,
+): void {
+  _stmtUpdateSeedItemMinDeployedCommit ??= db.prepare<{
+    id: string;
+    min_deployed_commit: string;
+    updated_at: string;
+  }>(
+    `UPDATE seed_item SET min_deployed_commit = @min_deployed_commit, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtUpdateSeedItemMinDeployedCommit.run({
+    id,
+    min_deployed_commit: minDeployedCommit,
+    updated_at: updatedAt,
+  });
+}
+
+export function listSeedItemSources(seedItemId: string): SeedItemSourceRow[] {
+  _stmtListSeedItemSources ??= db.prepare<{ seed_item_id: string }>(
+    `SELECT * FROM seed_item_source WHERE seed_item_id = @seed_item_id ORDER BY id ASC`,
+  );
+  return _stmtListSeedItemSources.all({
+    seed_item_id: seedItemId,
+  }) as SeedItemSourceRow[];
+}
+
+export function insertSeedItemSource(row: NewSeedItemSourceRow): void {
+  _stmtInsertSeedItemSource ??= db.prepare<NewSeedItemSourceRow>(`
+    INSERT INTO seed_item_source
+      (seed_item_id, source_task_id, source_task_title, merge_commit, added_at)
+    VALUES
+      (@seed_item_id, @source_task_id, @source_task_title, @merge_commit, @added_at)
+  `);
+  _stmtInsertSeedItemSource.run(row);
+}
+
+export function updateSeedItemSourceMergeCommit(
+  seedItemId: string,
+  sourceTaskId: string,
+  mergeCommit: string,
+): void {
+  _stmtUpdateSeedItemSourceMergeCommit ??= db.prepare<{
+    seed_item_id: string;
+    source_task_id: string;
+    merge_commit: string;
+  }>(`
+    UPDATE seed_item_source SET merge_commit = @merge_commit
+    WHERE seed_item_id = @seed_item_id AND source_task_id = @source_task_id
+  `);
+  _stmtUpdateSeedItemSourceMergeCommit.run({
+    seed_item_id: seedItemId,
+    source_task_id: sourceTaskId,
+    merge_commit: mergeCommit,
+  });
+}
+
+export function listSeedItemEvents(seedItemId: string): SeedItemEventRow[] {
+  _stmtListSeedItemEvents ??= db.prepare<{ seed_item_id: string }>(
+    `SELECT * FROM seed_item_event WHERE seed_item_id = @seed_item_id ORDER BY id ASC`,
+  );
+  return _stmtListSeedItemEvents.all({
+    seed_item_id: seedItemId,
+  }) as SeedItemEventRow[];
+}
+
+export function insertSeedItemEvent(row: NewSeedItemEventRow): void {
+  _stmtInsertSeedItemEvent ??= db.prepare<NewSeedItemEventRow>(`
+    INSERT INTO seed_item_event
+      (seed_item_id, outcome, evidence, filed_followon, operator, at)
+    VALUES
+      (@seed_item_id, @outcome, @evidence, @filed_followon, @operator, @at)
+  `);
+  _stmtInsertSeedItemEvent.run(row);
 }
 
 // ─── session_feedback_inbox ─────────────────────────────────────────────────

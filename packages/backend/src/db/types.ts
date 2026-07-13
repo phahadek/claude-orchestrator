@@ -442,6 +442,46 @@ export interface GateAccretionRow {
 
 export type NewGateItemEventRow = Omit<GateItemEventRow, 'id'>;
 
+// ─── seed_item ────────────────────────────────────────────────────────────
+
+/** Single-field lifecycle: pending -> applied -> confirmed | blocked. */
+export type SeedItemState = 'pending' | 'applied' | 'confirmed' | 'blocked';
+
+export interface SeedItemRow {
+  id: string;
+  project: string;
+  milestone: string;
+  spec: string;
+  min_deployed_commit: string | null;
+  state: SeedItemState;
+  updated_at: string;
+}
+
+export interface SeedItemSourceRow {
+  id: number;
+  seed_item_id: string;
+  source_task_id: string;
+  source_task_title: string;
+  merge_commit: string | null;
+  added_at: string;
+}
+
+export type NewSeedItemSourceRow = Omit<SeedItemSourceRow, 'id'>;
+
+export type SeedItemEventOutcome = 'applied' | 'confirmed' | 'blocked';
+
+export interface SeedItemEventRow {
+  id: number;
+  seed_item_id: string;
+  outcome: SeedItemEventOutcome;
+  evidence: string | null;
+  filed_followon: string | null;
+  operator: string | null;
+  at: string;
+}
+
+export type NewSeedItemEventRow = Omit<SeedItemEventRow, 'id'>;
+
 // ─── session_feedback_inbox ─────────────────────────────────────────────────
 
 export interface FeedbackInboxRow {
