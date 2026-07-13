@@ -113,6 +113,23 @@ export class GitHubClient {
     return mapPR(data);
   }
 
+  /**
+   * Fetch the merge commit SHA for an already-merged PR. Used by
+   * PRMergeWatcher.handleMerged when the merge was detected via polling or a
+   * webhook/ingest event rather than a mergePR() call, so no sha is available
+   * up front.
+   */
+  async getMergeCommitSha(
+    prNumber: number,
+    repo?: string,
+  ): Promise<string | null> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${r}/pulls/${prNumber}`,
+    );
+    return data.merge_commit_sha ?? null;
+  }
+
   async getMergeability(
     prNumber: number,
     repo?: string,
@@ -1362,6 +1379,7 @@ interface GitHubRawPR {
   closed_at?: string | null;
   mergeable?: boolean | null;
   mergeable_state?: string | null;
+  merge_commit_sha?: string | null;
   draft: boolean;
 }
 

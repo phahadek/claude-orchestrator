@@ -2463,6 +2463,40 @@ export function markLocalBranchMerged(
 }
 
 /**
+ * Persist a resolved merge commit uniformly for a session, regardless of
+ * whether that session already has a local_branches row. GitHub PR sessions
+ * never get one from sessionRecovery (only git_mode='local-only' sessions
+ * do), so PRMergeWatcher.handleMerged creates it here on first merge —
+ * making local_branches.merge_commit_sha the single merge-commit source
+ * across both the local-only and GitHub-PR flows.
+ */
+export function recordMergeCommitForSession(params: {
+  sessionId: string;
+  projectId: string;
+  branchName: string;
+  baseBranch: string;
+  commitSha: string | null;
+}): void {
+  const existing = getLocalBranchBySession(params.sessionId);
+  if (existing) {
+    markLocalBranchMerged(existing.id, params.commitSha);
+    return;
+  }
+  const now = new Date().toISOString();
+  const inserted = insertLocalBranch({
+    project_id: params.projectId,
+    session_id: params.sessionId,
+    branch_name: params.branchName,
+    base_branch: params.baseBranch,
+    status: 'open',
+    review_result: null,
+    created_at: now,
+    updated_at: now,
+  });
+  markLocalBranchMerged(inserted.id, params.commitSha);
+}
+
+/**
  * Latest merge_commit_sha for a task's merged local branch (joined via
  * sessions.task_id, since local_branches has no task_id column of its own).
  * Null when the task has no merged branch — the gate/seed backfill tools'

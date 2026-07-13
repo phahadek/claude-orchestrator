@@ -26,6 +26,7 @@ vi.mock('../db/queries.js', () => ({
   setConflictNudgeSha: vi.fn(),
   setHeadBranch: vi.fn(),
   clearSessionInitiatedPRClose: vi.fn(),
+  recordMergeCommitForSession: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -66,6 +67,7 @@ import {
   updateSessionStatus,
   setPendingPush,
   setConflictNudgeSha,
+  recordMergeCommitForSession,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
@@ -93,6 +95,7 @@ function makeMockGitHub(): GitHubClient {
       .mockResolvedValue({ mergeable: null, mergeableState: null }),
     getFailingChecks: vi.fn().mockResolvedValue([]),
     fetchPR: vi.fn().mockResolvedValue({ headSha: null }),
+    getMergeCommitSha: vi.fn().mockResolvedValue(null),
     deleteBranch: vi.fn().mockResolvedValue(undefined),
     detectBillingBlock: vi
       .fn()
@@ -996,6 +999,161 @@ describe('PRMergeWatcher.handleMerged()', () => {
       expect.anything(),
       expect.anything(),
     );
+  });
+});
+
+// ── merge_completed signal ───────────────────────────────────────────────────
+
+describe('PRMergeWatcher merge_completed signal', () => {
+  it('emits merge_completed with the sha supplied by the caller (AutoMerger/mergePR path)', async () => {
+    const pr = makePRRow({ task_id: 'notion:task-abc' });
+    const github = makeMockGitHub();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    const received: unknown[] = [];
+    watcher.on('merge_completed', (payload) => received.push(payload));
+
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(vi.mocked(github.getMergeCommitSha)).not.toHaveBeenCalled();
+    expect(received).toEqual([
+      { notion_task_id: 'notion:task-abc', merge_commit: 'abc123' },
+    ]);
+  });
+
+  it('fetches the merge commit from GitHub and emits it when handleMerged is called with a null sha (poll/ingest path)', async () => {
+    const pr = makePRRow({ task_id: 'notion:task-abc' });
+    const github = makeMockGitHub();
+    vi.mocked(github.getMergeCommitSha).mockResolvedValue('fetched-sha');
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    const received: unknown[] = [];
+    watcher.on('merge_completed', (payload) => received.push(payload));
+
+    await watcher.handleMerged(pr, null);
+
+    expect(vi.mocked(github.getMergeCommitSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
+    expect(received).toEqual([
+      { notion_task_id: 'notion:task-abc', merge_commit: 'fetched-sha' },
+    ]);
+  });
+
+  it('uses the fetched merge commit for the pr_merged broadcast sha on the null-sha path', async () => {
+    const pr = makePRRow({ task_id: 'notion:task-abc' });
+    const github = makeMockGitHub();
+    vi.mocked(github.getMergeCommitSha).mockResolvedValue('fetched-sha');
+    const messages: ServerMessage[] = [];
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      (msg) => messages.push(msg),
+    );
+
+    await watcher.handleMerged(pr, null);
+
+    expect(messages).toContainEqual(
+      expect.objectContaining({ type: 'pr_merged', sha: 'fetched-sha' }),
+    );
+  });
+
+  it('persists the resolved merge commit to local_branches via recordMergeCommitForSession', async () => {
+    const pr = makePRRow({
+      task_id: 'notion:task-abc',
+      session_id: 'coding-session',
+      head_branch: 'feature/test',
+      base_branch: 'dev',
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+    } as unknown as ReturnType<typeof getProjectByGithubRepo>);
+    const github = makeMockGitHub();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(vi.mocked(recordMergeCommitForSession)).toHaveBeenCalledWith({
+      sessionId: 'coding-session',
+      projectId: 'proj-1',
+      branchName: 'feature/test',
+      baseBranch: 'dev',
+      commitSha: 'abc123',
+    });
+  });
+
+  it('does not emit merge_completed when the PR has no task_id', async () => {
+    const pr = makePRRow({ task_id: null });
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    const received: unknown[] = [];
+    watcher.on('merge_completed', (payload) => received.push(payload));
+
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(received).toHaveLength(0);
+  });
+
+  it('does not emit merge_completed when no merge commit could be resolved', async () => {
+    const pr = makePRRow({ task_id: 'notion:task-abc' });
+    const github = makeMockGitHub();
+    vi.mocked(github.getMergeCommitSha).mockResolvedValue(null);
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    const received: unknown[] = [];
+    watcher.on('merge_completed', (payload) => received.push(payload));
+
+    await watcher.handleMerged(pr, null);
+
+    expect(received).toHaveLength(0);
+  });
+
+  it('the merge flow is not coupled to any specific consumer — an unrelated subscriber also receives the event', async () => {
+    const pr = makePRRow({ task_id: 'notion:task-abc' });
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    const consumerA = vi.fn();
+    const consumerB = vi.fn();
+    watcher.on('merge_completed', consumerA);
+    watcher.on('merge_completed', consumerB);
+
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(consumerA).toHaveBeenCalledWith({
+      notion_task_id: 'notion:task-abc',
+      merge_commit: 'abc123',
+    });
+    expect(consumerB).toHaveBeenCalledWith({
+      notion_task_id: 'notion:task-abc',
+      merge_commit: 'abc123',
+    });
   });
 });
 
