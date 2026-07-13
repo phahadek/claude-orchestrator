@@ -31,7 +31,7 @@ export const STATUS_DISPLAY: Record<TaskStatus, string> = {
  * reopened through this path. Every other status can retreat to Backlog so a
  * task can always be pulled back for rework.
  */
-export const VALID_TRANSITIONS: Record<TaskStatus, ReadonlySet<TaskStatus>> = {
+const VALID_TRANSITIONS: Record<TaskStatus, ReadonlySet<TaskStatus>> = {
   Backlog: new Set(['Ready', 'Deferred']),
   Ready: new Set(['Backlog', 'In Progress', 'Deferred', 'Blocked']),
   'In Progress': new Set(['In Review', 'Blocked', 'Backlog', 'Deferred']),

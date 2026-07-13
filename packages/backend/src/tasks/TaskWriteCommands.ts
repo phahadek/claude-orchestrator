@@ -30,17 +30,10 @@ import {
   toCanonicalStatus,
   isValidTransition,
   STATUS_DISPLAY,
-  VALID_TRANSITIONS,
   type TaskStatus,
 } from './statusCanonical';
 
-export {
-  toCanonicalStatus,
-  isValidTransition,
-  STATUS_DISPLAY,
-  VALID_TRANSITIONS,
-  type TaskStatus,
-};
+export { isValidTransition, STATUS_DISPLAY, type TaskStatus };
 
 /** Reads the last-known status for a task from the task cache. */
 function getCachedStatus(taskId: string): TaskStatus | null {
