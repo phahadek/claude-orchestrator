@@ -2462,6 +2462,31 @@ export function markLocalBranchMerged(
   ).run(commitSha ?? null, now, id);
 }
 
+/**
+ * Latest merge_commit_sha for a task's merged local branch (joined via
+ * sessions.task_id, since local_branches has no task_id column of its own).
+ * Null when the task has no merged branch — the gate/seed backfill tools'
+ * min_deployed_commit source (local_branches, not pull_requests, which only
+ * carries head_sha).
+ */
+export function getMergeCommitForTask(taskId: string): string | null {
+  const row = db
+    .prepare<{ task_id: string }>(
+      `
+    SELECT lb.merge_commit_sha AS merge_commit_sha
+    FROM local_branches lb
+    JOIN sessions s ON s.session_id = lb.session_id
+    WHERE s.task_id = @task_id
+      AND lb.status = 'merged'
+      AND lb.merge_commit_sha IS NOT NULL
+    ORDER BY lb.updated_at DESC
+    LIMIT 1
+  `,
+    )
+    .get({ task_id: taskId }) as { merge_commit_sha: string } | undefined;
+  return row?.merge_commit_sha ?? null;
+}
+
 // ─── pr_review_comments_routed ────────────────────────────────────────────────
 
 /**
