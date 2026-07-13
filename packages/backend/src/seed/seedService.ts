@@ -85,6 +85,118 @@ export function getSeedItem(id: string): SeedItem | undefined {
   return seedStore.getItem(id);
 }
 
+/** The item's full detail: its denormalized fields plus its sources and event history, by value. */
+export function getSeedItemDetail(
+  id: string,
+): seedStore.SeedItemDetail | undefined {
+  return seedStore.getItemDetail(id);
+}
+
+const DEFAULT_LIST_LIMIT = 20;
+const MAX_LIST_LIMIT = 100;
+
+export interface ListSeedItemsOptions {
+  project?: string;
+  milestone?: string;
+  state?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface ListSeedItemsResult {
+  items: SeedItem[];
+  total: number;
+  page: number;
+}
+
+/** Paginated, filtered read over seed items — never an unbounded load. */
+export function listSeedItems(
+  options: ListSeedItemsOptions = {},
+): ListSeedItemsResult {
+  const page =
+    options.page !== undefined && options.page > 0
+      ? Math.floor(options.page)
+      : 1;
+  const limit = Math.min(
+    options.limit !== undefined && options.limit > 0
+      ? Math.floor(options.limit)
+      : DEFAULT_LIST_LIMIT,
+    MAX_LIST_LIMIT,
+  );
+  const offset = (page - 1) * limit;
+  const { items, total } = seedStore.listFiltered(
+    {
+      project: options.project,
+      milestone: options.milestone,
+      state: options.state,
+    },
+    limit,
+    offset,
+  );
+  return { items, total, page };
+}
+
+export interface SeedMilestoneReadiness {
+  project: string;
+  milestone: string;
+  status: 'green' | 'blocked';
+  blockingCount: number;
+}
+
+export interface ListSeedMilestoneReadinessOptions {
+  project?: string;
+}
+
+interface SeedMilestoneGroup {
+  project: string;
+  milestone: string;
+  items: SeedItem[];
+}
+
+/** The multi-milestone / multi-project seed readiness rollup: the dashboard's join input alongside listMilestoneReadiness (gate). */
+export function listSeedMilestoneReadiness(
+  options: ListSeedMilestoneReadinessOptions = {},
+): SeedMilestoneReadiness[] {
+  const items = options.project
+    ? seedStore.listByProject(options.project)
+    : seedStore.listAll();
+
+  const groups = new Map<string, SeedMilestoneGroup>();
+  for (const item of items) {
+    const key = JSON.stringify([item.project, item.milestone]);
+    const group = groups.get(key);
+    if (group) {
+      group.items.push(item);
+    } else {
+      groups.set(key, {
+        project: item.project,
+        milestone: item.milestone,
+        items: [item],
+      });
+    }
+  }
+
+  return Array.from(groups.values())
+    .map((group) => {
+      const blockingCount = group.items.filter(
+        (item) => item.state !== RESOLVED_STATE,
+      ).length;
+      const status: 'green' | 'blocked' =
+        blockingCount === 0 ? 'green' : 'blocked';
+      return {
+        project: group.project,
+        milestone: group.milestone,
+        status,
+        blockingCount,
+      };
+    })
+    .sort(
+      (a, b) =>
+        a.project.localeCompare(b.project) ||
+        a.milestone.localeCompare(b.milestone),
+    );
+}
+
 export interface AppendSeedItemEventInput {
   outcome: SeedItemEventOutcome;
   evidence?: unknown;

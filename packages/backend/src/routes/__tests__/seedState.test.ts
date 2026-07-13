@@ -14,6 +14,9 @@ const seedServiceMock = vi.hoisted(() => ({
   getSeedReadiness: vi.fn(),
   nextApplyableSeedItems: vi.fn(),
   getSeedItem: vi.fn(),
+  getSeedItemDetail: vi.fn(),
+  listSeedItems: vi.fn(),
+  listSeedMilestoneReadiness: vi.fn(),
   appendSeedItemEvent: vi.fn(),
 }));
 
@@ -86,6 +89,65 @@ describe('GET /api/seed/items/:id', () => {
   it('404s when getSeedItem returns undefined', async () => {
     seedServiceMock.getSeedItem.mockReturnValue(undefined);
     const res = await request(makeApp()).get('/api/seed/items/missing');
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /api/seed/items', () => {
+  it('calls listSeedItems with parsed filter/pagination params', async () => {
+    const result = { items: [{ id: 'seed-1' }], total: 1, page: 1 };
+    seedServiceMock.listSeedItems.mockReturnValue(result);
+
+    const res = await request(makeApp()).get(
+      '/api/seed/items?project=p1&milestone=M12&state=pending&page=2&limit=10',
+    );
+
+    expect(seedServiceMock.listSeedItems).toHaveBeenCalledWith({
+      project: 'p1',
+      milestone: 'M12',
+      state: 'pending',
+      page: 2,
+      limit: 10,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(result);
+  });
+});
+
+describe('GET /api/seed/milestones/readiness', () => {
+  it('calls listSeedMilestoneReadiness with the project and returns its result verbatim', async () => {
+    const readiness = [
+      { project: 'p1', milestone: 'M12', status: 'green', blockingCount: 0 },
+    ];
+    seedServiceMock.listSeedMilestoneReadiness.mockReturnValue(readiness);
+
+    const res = await request(makeApp()).get(
+      '/api/seed/milestones/readiness?project=p1',
+    );
+
+    expect(seedServiceMock.listSeedMilestoneReadiness).toHaveBeenCalledWith({
+      project: 'p1',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(readiness);
+  });
+});
+
+describe('GET /api/seed/items/:id/detail', () => {
+  it('calls getSeedItemDetail with the id and returns its result verbatim', async () => {
+    const detail = { item: { id: 'seed-1' }, sources: [], events: [] };
+    seedServiceMock.getSeedItemDetail.mockReturnValue(detail);
+
+    const res = await request(makeApp()).get('/api/seed/items/seed-1/detail');
+
+    expect(seedServiceMock.getSeedItemDetail).toHaveBeenCalledWith('seed-1');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(detail);
+  });
+
+  it('404s when getSeedItemDetail returns undefined', async () => {
+    seedServiceMock.getSeedItemDetail.mockReturnValue(undefined);
+    const res = await request(makeApp()).get('/api/seed/items/missing/detail');
     expect(res.status).toBe(404);
   });
 });

@@ -4,6 +4,9 @@ import {
   getSeedReadiness,
   nextApplyableSeedItems,
   getSeedItem,
+  getSeedItemDetail,
+  listSeedItems,
+  listSeedMilestoneReadiness,
   appendSeedItemEvent,
 } from '../seed/seedService';
 import type { SeedItemEventOutcome } from '../db/types';
@@ -51,6 +54,35 @@ export function createSeedStateRouter(): Router {
     );
   });
 
+  // GET /api/seed/items?project=P&milestone=M12&state=pending&page=1&limit=20
+  router.get('/seed/items', (req: Request, res: Response) => {
+    const query = req.query as Record<string, unknown>;
+    const stringParam = (key: string): string | undefined =>
+      typeof query[key] === 'string' ? (query[key] as string) : undefined;
+    const numberParam = (key: string): number | undefined => {
+      const raw = stringParam(key);
+      if (raw === undefined) return undefined;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    res.json(
+      listSeedItems({
+        project: stringParam('project'),
+        milestone: stringParam('milestone'),
+        state: stringParam('state'),
+        page: numberParam('page'),
+        limit: numberParam('limit'),
+      }),
+    );
+  });
+
+  // GET /api/seed/milestones/readiness?project=P
+  router.get('/seed/milestones/readiness', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : undefined;
+    res.json(listSeedMilestoneReadiness({ project }));
+  });
+
   // GET /api/seed/items/:id
   router.get('/seed/items/:id', (req: Request, res: Response) => {
     const item = getSeedItem(String(req.params.id));
@@ -59,6 +91,16 @@ export function createSeedStateRouter(): Router {
       return;
     }
     res.json(item);
+  });
+
+  // GET /api/seed/items/:id/detail
+  router.get('/seed/items/:id/detail', (req: Request, res: Response) => {
+    const detail = getSeedItemDetail(String(req.params.id));
+    if (!detail) {
+      res.status(404).json({ error: `no seed item ${req.params.id}` });
+      return;
+    }
+    res.json(detail);
   });
 
   // POST /api/seed/items/:id/events  { outcome, evidence, filedFollowon, operator }
