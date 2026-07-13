@@ -16,7 +16,6 @@ import {
   updatePRDraftStatus,
   getSessionsByProject,
   lookupSessionByBranch,
-  markSessionDone,
   clearTerminalPRFlags,
 } from '../db/queries';
 import { parsePauseReason } from '../db/pauseReason';
@@ -470,38 +469,19 @@ export function createPrsRouter(
         }
 
         const result = await github.mergePR(prNumber, commitTitle, repo);
-        updatePRState(prNumber, repo, 'merged');
-        clearTerminalPRFlags(prNumber, repo, 'merged');
 
-        // Transition session DB status idle → done (must precede endSession subprocess cleanup)
-        if (prRow?.session_id) {
-          markSessionDone(
-            prRow.session_id,
-            Date.now(),
-            prRow.pr_url ?? null,
-            'manual_merge_rest',
+        // Delegate all post-merge handling (state transition, autofix-sha
+        // cleanup, origin-branch deletion, session/task completion, broadcast)
+        // to the same path the detected-merge flows (AutoMerger, poll, ingest)
+        // use, so operator merges get identical cleanup.
+        if (mergeWatcher && prRow) {
+          await mergeWatcher.handleMerged(
+            prRow,
+            (result as { sha?: string }).sha ?? null,
           );
-        }
-        if (prRow?.review_session_id) {
-          markSessionDone(
-            prRow.review_session_id,
-            Date.now(),
-            prRow.pr_url ?? null,
-            'manual_merge_rest',
-          );
-        }
-
-        // End coding session gracefully (stdin close → clean CLI exit)
-        if (prRow?.session_id) {
-          if (prRow.head_branch?.startsWith('feature/')) {
-            sessionManager.markForBranchDeletion(prRow.session_id);
-          }
-          sessionManager.endSession(prRow.session_id);
-        }
-
-        // End review session gracefully (stdin close → clean CLI exit)
-        if (prRow?.review_session_id) {
-          sessionManager.endSession(prRow.review_session_id);
+        } else {
+          updatePRState(prNumber, repo, 'merged');
+          clearTerminalPRFlags(prNumber, repo, 'merged');
         }
 
         // Audit event — mirrors the AutoMerger path
@@ -516,37 +496,6 @@ export function createPrsRouter(
             repo,
             merge_sha: (result as { sha?: string }).sha ?? null,
           },
-        });
-
-        // Update task to Done via the project-scoped task backend and broadcast task_updated
-        if (prRow?.task_id) {
-          const taskId = prRow.task_id;
-          const backend = resolveBackendForRepo(repo);
-          if (backend) {
-            try {
-              await backend.updateStatus(taskId, '✅ Done', {
-                source: 'orchestrator',
-              });
-              _broadcast({
-                type: 'task_status_changed',
-                notionTaskId: taskId,
-                newStatus: '✅ Done',
-              });
-              emitTaskUpdated(taskId);
-            } catch (err: unknown) {
-              logger.warn(
-                '[prs] task backend updateStatus failed:',
-                (err as Error).message,
-              );
-            }
-          }
-        }
-
-        _broadcast({
-          type: 'pr_merged',
-          prNumber,
-          repo,
-          sha: (result as { sha?: string }).sha ?? '',
         });
 
         res.json(result);
