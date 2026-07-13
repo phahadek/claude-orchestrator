@@ -958,6 +958,42 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS seed_item (
+      id                     TEXT    PRIMARY KEY,
+      project                TEXT    NOT NULL,
+      milestone              TEXT    NOT NULL,
+      spec                   TEXT    NOT NULL,
+      min_deployed_commit    TEXT,
+      state                  TEXT    NOT NULL,
+      updated_at             TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_seed_item_project_milestone ON seed_item(project, milestone);
+
+    CREATE TABLE IF NOT EXISTS seed_item_source (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      seed_item_id      TEXT    NOT NULL,
+      source_task_id    TEXT    NOT NULL,
+      source_task_title TEXT    NOT NULL,
+      merge_commit      TEXT,
+      added_at          TEXT    NOT NULL,
+      FOREIGN KEY (seed_item_id) REFERENCES seed_item(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_seed_item_source_seed_item_id ON seed_item_source(seed_item_id);
+
+    CREATE TABLE IF NOT EXISTS seed_item_event (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      seed_item_id   TEXT    NOT NULL,
+      outcome        TEXT    NOT NULL,
+      evidence       TEXT,
+      filed_followon TEXT,
+      operator       TEXT,
+      at             TEXT    NOT NULL,
+      FOREIGN KEY (seed_item_id) REFERENCES seed_item(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_seed_item_event_seed_item_id ON seed_item_event(seed_item_id);
+  `);
+
   // ── Git-Bash project_dir backfill (win32-only, idempotent) ──────────────────
   // Converts any /c/... or /D/... style project_dir stored by Git-Bash
   // into the native Win32 form C:/... / D:/... so exec cwd is valid.
