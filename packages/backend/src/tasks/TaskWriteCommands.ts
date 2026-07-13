@@ -16,6 +16,11 @@ import {
   recordAccretionMarker,
   type GateAccretionMarker,
 } from '../gate/gateStore';
+import {
+  insertItem as insertSeedItem,
+  recordAccretionMarker as recordSeedAccretionMarker,
+  type SeedAccretionMarker,
+} from '../seed/seedStore';
 import type { GateItemClassification } from '../db/types';
 import { recordEvent } from '../audit/AuditLog';
 import { planMove, type MoveGraphTask } from '../orchestration/moveTask';
@@ -215,6 +220,31 @@ export interface AccreteGateContributionResult {
   marker: GateAccretionMarker;
 }
 
+/** The Code/Tooling task whose config-change seeds are being staged onto the milestone seed store. */
+export interface SeedContributionSourceTask {
+  id: string;
+  title: string;
+  project: string;
+  milestone: string;
+}
+
+/** One operational data/config seed (config-change spec) to mint as a seed_item. */
+export interface SeedContributionItemInput {
+  spec: string;
+}
+
+/**
+ * The seed_accretion decision: 'seeds' when the source task has config-change
+ * seeds to contribute, or 'none'/'n/a' when it has none or is exempt from the
+ * check entirely.
+ */
+export type SeedContributionDecision = 'seeds' | 'none' | 'n/a';
+
+export interface StageSeedContributionResult {
+  itemIds: string[];
+  marker: SeedAccretionMarker;
+}
+
 /**
  * The sanctioned write path atop the store-agnostic TaskBackend port. This is
  * the single chokepoint for validation and provenance for orchestrator-launched
@@ -264,6 +294,18 @@ interface TaskWriteCommands {
     items: GateContributionItemInput[],
     classification: GateContributionDecision,
   ): Promise<AccreteGateContributionResult>;
+  /**
+   * Mints seed_item + seed_item_source rows for the source task's
+   * config-change seeds (min_deployed_commit left empty — filled at
+   * source-task merge) and records a per-source seed_accretion marker
+   * distinguishing seeds / none / n/a, the marker checkGroomingPromotionGate's
+   * seed_contribution check reads before allowing a Ready flip.
+   */
+  stageSeedContribution(
+    sourceTask: SeedContributionSourceTask,
+    seeds: SeedContributionItemInput[],
+    decision: SeedContributionDecision,
+  ): Promise<StageSeedContributionResult>;
   moveTask(
     params: MoveTaskParams,
     options?: TaskWriteOptions,
@@ -463,6 +505,59 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       accretedAt,
     };
     recordAccretionMarker(marker);
+
+    return { itemIds, marker };
+  }
+
+  /**
+   * Store-only — writes seed_item/seed_item_source rows and the
+   * seed_accretion marker directly via seedStore, no TaskBackend port call.
+   * "none"/"n/a" mint no items (the marker alone records the decision); a
+   * "seeds" decision requires at least one seed and mints each as its own
+   * seed_item sourced to this task, with the marker recorded as "seeds".
+   */
+  async stageSeedContribution(
+    sourceTask: SeedContributionSourceTask,
+    seeds: SeedContributionItemInput[],
+    decision: SeedContributionDecision,
+  ): Promise<StageSeedContributionResult> {
+    const isBareDecision = decision === 'none' || decision === 'n/a';
+    if (isBareDecision && seeds.length > 0) {
+      throw new Error(
+        `[TaskWriteCommands] stageSeedContribution: decision "${decision}" requires an empty seeds array`,
+      );
+    }
+    if (!isBareDecision && seeds.length === 0) {
+      throw new Error(
+        `[TaskWriteCommands] stageSeedContribution: at least one seed is required unless decision is "none" or "n/a"`,
+      );
+    }
+
+    const accretedAt = new Date().toISOString();
+    const itemIds = seeds.map(
+      (seed) =>
+        insertSeedItem({
+          project: sourceTask.project,
+          milestone: sourceTask.milestone,
+          spec: seed.spec,
+          sources: [
+            {
+              sourceTaskId: sourceTask.id,
+              sourceTaskTitle: sourceTask.title,
+            },
+          ],
+          updatedAt: accretedAt,
+        }).id,
+    );
+
+    const marker: SeedAccretionMarker = {
+      sourceTaskId: sourceTask.id,
+      project: sourceTask.project,
+      milestone: sourceTask.milestone,
+      decision,
+      accretedAt,
+    };
+    recordSeedAccretionMarker(marker);
 
     return { itemIds, marker };
   }

@@ -992,6 +992,14 @@ export function runMigrations(target: Database.Database): void {
       FOREIGN KEY (seed_item_id) REFERENCES seed_item(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_seed_item_event_seed_item_id ON seed_item_event(seed_item_id);
+
+    CREATE TABLE IF NOT EXISTS seed_accretion (
+      source_task_id TEXT    PRIMARY KEY,
+      project         TEXT    NOT NULL,
+      milestone       TEXT    NOT NULL,
+      decision        TEXT    NOT NULL,
+      accreted_at     TEXT    NOT NULL
+    );
   `);
 
   // ── Git-Bash project_dir backfill (win32-only, idempotent) ──────────────────

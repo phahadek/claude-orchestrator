@@ -12,8 +12,14 @@ import {
   updateSeedItemSourceMergeCommit,
   listSeedItemEvents,
   insertSeedItemEvent,
+  getSeedAccretion,
+  upsertSeedAccretion,
 } from '../db/queries';
-import type { SeedItemState, SeedItemEventOutcome } from '../db/types';
+import type {
+  SeedItemState,
+  SeedItemEventOutcome,
+  SeedAccretionDecision,
+} from '../db/types';
 
 export interface SeedItemSource {
   sourceTaskId: string;
@@ -248,4 +254,44 @@ export function setSourceMergeCommit(
     );
   }
   updateSeedItemSourceMergeCommit(seedItemId, sourceTaskId, mergeCommit);
+}
+
+export interface SeedAccretionMarker {
+  sourceTaskId: string;
+  project: string;
+  milestone: string;
+  decision: SeedAccretionDecision;
+  accretedAt: string;
+}
+
+/** Reads the per-source seed_accretion marker the promotion gate checks for. */
+export function getAccretionMarker(
+  sourceTaskId: string,
+): SeedAccretionMarker | undefined {
+  const row = getSeedAccretion(sourceTaskId);
+  if (!row) return undefined;
+  return {
+    sourceTaskId: row.source_task_id,
+    project: row.project,
+    milestone: row.milestone,
+    decision: row.decision,
+    accretedAt: row.accreted_at,
+  };
+}
+
+/**
+ * Records (or replaces) the per-source seed_accretion marker — written once a
+ * Code/Tooling task has either minted its config-change seeds onto the
+ * milestone seed store ('seeds') or explicitly recorded that it has none
+ * ('none') or is exempt ('n/a'). checkGroomingPromotionGate reads this before
+ * allowing the task's Ready flip.
+ */
+export function recordAccretionMarker(marker: SeedAccretionMarker): void {
+  upsertSeedAccretion({
+    source_task_id: marker.sourceTaskId,
+    project: marker.project,
+    milestone: marker.milestone,
+    decision: marker.decision,
+    accreted_at: marker.accretedAt,
+  });
 }

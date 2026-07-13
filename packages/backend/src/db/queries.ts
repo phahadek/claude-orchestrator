@@ -46,6 +46,7 @@ import type {
   NewSeedItemSourceRow,
   SeedItemEventRow,
   NewSeedItemEventRow,
+  SeedAccretionRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -3743,6 +3744,35 @@ export function insertSeedItemEvent(row: NewSeedItemEventRow): void {
       (@seed_item_id, @outcome, @evidence, @filed_followon, @operator, @at)
   `);
   _stmtInsertSeedItemEvent.run(row);
+}
+
+// ─── seed_accretion ─────────────────────────────────────────────────────────
+
+let _stmtGetSeedAccretion: Database.Statement | null = null;
+let _stmtUpsertSeedAccretion: Database.Statement | null = null;
+
+export function getSeedAccretion(
+  sourceTaskId: string,
+): SeedAccretionRow | undefined {
+  _stmtGetSeedAccretion ??= db.prepare<{ source_task_id: string }>(
+    `SELECT * FROM seed_accretion WHERE source_task_id = @source_task_id`,
+  );
+  return _stmtGetSeedAccretion.get({
+    source_task_id: sourceTaskId,
+  }) as SeedAccretionRow | undefined;
+}
+
+export function upsertSeedAccretion(row: SeedAccretionRow): void {
+  _stmtUpsertSeedAccretion ??= db.prepare<SeedAccretionRow>(`
+    INSERT INTO seed_accretion (source_task_id, project, milestone, decision, accreted_at)
+    VALUES (@source_task_id, @project, @milestone, @decision, @accreted_at)
+    ON CONFLICT(source_task_id) DO UPDATE SET
+      project = excluded.project,
+      milestone = excluded.milestone,
+      decision = excluded.decision,
+      accreted_at = excluded.accreted_at
+  `);
+  _stmtUpsertSeedAccretion.run(row);
 }
 
 // ─── session_feedback_inbox ─────────────────────────────────────────────────
