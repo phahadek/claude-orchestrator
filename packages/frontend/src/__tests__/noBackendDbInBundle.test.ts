@@ -95,7 +95,9 @@ describe('no-backend-db-in-bundle guard', () => {
     ];
 
     function relativeToFrontend(p: string): string {
-      return p.startsWith(FRONTEND_ROOT) ? p.slice(FRONTEND_ROOT.length + 1) : p;
+      return p.startsWith(FRONTEND_ROOT)
+        ? p.slice(FRONTEND_ROOT.length + 1)
+        : p;
     }
 
     while (queue.length > 0) {
@@ -104,7 +106,9 @@ describe('no-backend-db-in-bundle guard', () => {
       visited.add(file);
 
       if (FORBIDDEN_BACKEND_FILES.includes(file)) {
-        violations.push(`${chain.join(' -> ')} -> [FORBIDDEN: ${relativeToFrontend(file)}]`);
+        violations.push(
+          `${chain.join(' -> ')} -> [FORBIDDEN: ${relativeToFrontend(file)}]`,
+        );
         continue;
       }
 
