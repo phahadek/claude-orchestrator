@@ -65,7 +65,7 @@ import { logger } from '../logger';
  * Delivery is fire-and-forget; a missed event must be caught up by the
  * consumer reconciling against local_branches/pull_requests state.
  */
-export interface MergeCompletedPayload {
+interface MergeCompletedPayload {
   notion_task_id: string;
   merge_commit: string;
 }
