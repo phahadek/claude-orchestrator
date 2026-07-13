@@ -262,6 +262,12 @@ export function runMigrations(target: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_gate_item_event_gate_item_id ON gate_item_event(gate_item_id);
 
+    CREATE TABLE IF NOT EXISTS project_deployed_sha (
+      project_id  TEXT    PRIMARY KEY,
+      sha         TEXT    NOT NULL,
+      recorded_at TEXT    NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS gate_accretion (
       source_task_id TEXT    PRIMARY KEY,
       project         TEXT    NOT NULL,

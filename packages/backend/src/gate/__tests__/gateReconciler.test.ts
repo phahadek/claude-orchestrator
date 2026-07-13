@@ -17,8 +17,18 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+const deployServiceMock = vi.hoisted(() => ({
+  getProjectDeployedSha: vi.fn(() => null as string | null),
+}));
+vi.mock('../../deploy/deployService.js', () => deployServiceMock);
+
 import { db } from '../../db/db.js';
-import { insertItem, setMinDeployedCommit, getItem } from '../gateStore.js';
+import {
+  insertItem,
+  setMinDeployedCommit,
+  advanceState,
+  getItem,
+} from '../gateStore.js';
 import { approveGateItem, reconcileGateRunnability } from '../gateService.js';
 import {
   runGateReconcilerTick,
@@ -33,6 +43,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM gate_item_source').run();
   db.prepare('DELETE FROM gate_item').run();
   db.prepare('DELETE FROM audit_log').run();
+  deployServiceMock.getProjectDeployedSha.mockReset().mockReturnValue(null);
 });
 
 function makeItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
@@ -174,7 +185,7 @@ describe('runGateReconcilerTick', () => {
     const result = await runGateReconcilerTick({
       deployAdvanceTrigger: fixedTrigger(null),
     });
-    expect(result.deploySha).toBeNull();
+    expect(result.deployShaByProject['polimarket-analyser']).toBeNull();
     expect(result.reconciled).toBeNull();
     expect(getItem(item.id)?.state).toBe('open');
   });
@@ -185,5 +196,57 @@ describe('runGateReconcilerTick', () => {
       deployAdvanceTrigger: fixedTrigger(null),
     });
     expect(result.readiness['M20'].status).toBe('blocked');
+  });
+});
+
+describe('runGateReconcilerTick — default deploy-advance trigger (getProjectDeployedSha)', () => {
+  const exactMatchAncestrySource = () => ({
+    isAncestor: (ancestorSha: string, descendantSha: string) =>
+      ancestorSha === descendantSha,
+  });
+
+  it('leaves a commit-gated item blocked when the project has never reported a deployed sha', async () => {
+    deployServiceMock.getProjectDeployedSha.mockReturnValue(null);
+    const gated = makeItem();
+    setMinDeployedCommit(gated.id, 'sha1', new Date(1).toISOString());
+
+    const result = await runGateReconcilerTick({
+      ancestrySourceForProject: exactMatchAncestrySource,
+    });
+
+    expect(deployServiceMock.getProjectDeployedSha).toHaveBeenCalledWith(
+      'polimarket-analyser',
+    );
+    expect(result.deployShaByProject['polimarket-analyser']).toBeNull();
+    expect(getItem(gated.id)?.state).toBe('open');
+  });
+
+  it('still auto-runs an un-gated (null min-commit) item that is already runnable, even with no deployed sha', async () => {
+    deployServiceMock.getProjectDeployedSha.mockReturnValue(null);
+    const ungated = makeItem({ classification: 'Read-Only' });
+    advanceState(ungated.id, 'runnable', undefined, new Date(1).toISOString());
+    const verifier: GateItemVerifier = {
+      verify: async () => ({ disposition: 'pass' }),
+    };
+
+    await runGateReconcilerTick({
+      ancestrySourceForProject: exactMatchAncestrySource,
+      verifier,
+    });
+
+    expect(getItem(ungated.id)?.state).toBe('pass');
+  });
+
+  it('marks a commit-gated item runnable once getProjectDeployedSha reports a covering sha', async () => {
+    deployServiceMock.getProjectDeployedSha.mockReturnValue('sha1');
+    const gated = makeItem();
+    setMinDeployedCommit(gated.id, 'sha1', new Date(1).toISOString());
+
+    const result = await runGateReconcilerTick({
+      ancestrySourceForProject: exactMatchAncestrySource,
+    });
+
+    expect(result.deployShaByProject['polimarket-analyser']).toBe('sha1');
+    expect(getItem(gated.id)?.state).toBe('runnable');
   });
 });
