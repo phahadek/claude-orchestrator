@@ -1,3 +1,4 @@
+import { EventEmitter } from 'events';
 import type { GitHubClient } from './GitHubClient';
 import type {
   MergeabilityCategory,
@@ -52,9 +53,22 @@ import {
   clearSessionInitiatedPRClose,
   incrementFlakeRecoveryAttempts,
   resetFlakeRecoveryAttempts,
+  recordMergeCommitForSession,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
+
+/**
+ * Emitted by PRMergeWatcher.handleMerged once a merge commit has been
+ * resolved and persisted — the orchestrator-internal "task X merged (commit
+ * Y)" signal. Consumer-agnostic: subscribe via `.on('merge_completed', ...)`.
+ * Delivery is fire-and-forget; a missed event must be caught up by the
+ * consumer reconciling against local_branches/pull_requests state.
+ */
+export interface MergeCompletedPayload {
+  notion_task_id: string;
+  merge_commit: string;
+}
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const PUSH_REVIEW_TIMEOUT_MS = 240_000;
@@ -97,7 +111,7 @@ function isSessionTerminal(status: string | null | undefined): boolean {
   return status != null && TERMINAL_SESSION_STATUSES.has(status);
 }
 
-export class PRMergeWatcher {
+export class PRMergeWatcher extends EventEmitter {
   /**
    * True until the first poll after boot completes. On that first poll, PRs
    * that GitHub reports as already merged are state-transitioned in SQLite
@@ -123,6 +137,7 @@ export class PRMergeWatcher {
     private taskBackendOverride: TaskBackend | undefined,
     private broadcast: (msg: ServerMessage) => void,
   ) {
+    super();
     this.sessions.on(
       'verified_flaky_disposition',
       (payload: unknown) =>
@@ -1299,6 +1314,8 @@ export class PRMergeWatcher {
     clearTerminalPRFlags(pr.pr_number, pr.repo, 'merged');
     deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
 
+    const mergeCommit = await this.completeMerge(pr, sha);
+
     // Delete the origin branch for feature/* branches.
     if (pr.head_branch?.startsWith('feature/')) {
       await this.github
@@ -1375,9 +1392,63 @@ export class PRMergeWatcher {
         type: 'pr_merged',
         prNumber: pr.pr_number,
         repo: pr.repo,
-        sha: sha ?? '',
+        sha: mergeCommit ?? sha ?? '',
       });
     }
+  }
+
+  /**
+   * Single merge-completion convergence point: resolves the merge commit
+   * (from the caller-supplied sha where present, else fetched from GitHub for
+   * the poll/ingest paths that only know the PR merged), persists it to
+   * local_branches.merge_commit_sha uniformly across every merge path, and
+   * emits merge_completed for internal consumers (e.g. the gate's
+   * min_deployed_commit fill). Emission is fire-and-forget and synchronous —
+   * a missed event is expected to be caught up by the consumer's own
+   * reconciliation against persisted state.
+   */
+  private async completeMerge(
+    pr: PullRequestRow,
+    sha: string | null,
+  ): Promise<string | null> {
+    let mergeCommit = sha;
+    if (!mergeCommit) {
+      try {
+        mergeCommit = await this.github.getMergeCommitSha(
+          pr.pr_number,
+          pr.repo,
+        );
+      } catch (err) {
+        logger.warn(
+          `[PRMergeWatcher] getMergeCommitSha failed for PR #${pr.pr_number}:`,
+          (err as Error).message,
+        );
+        mergeCommit = null;
+      }
+    }
+
+    if (pr.session_id) {
+      const project = getProjectByGithubRepo(pr.repo);
+      if (project) {
+        recordMergeCommitForSession({
+          sessionId: pr.session_id,
+          projectId: project.id,
+          branchName: pr.head_branch ?? '',
+          baseBranch: pr.base_branch ?? 'dev',
+          commitSha: mergeCommit,
+        });
+      }
+    }
+
+    if (pr.task_id && mergeCommit) {
+      const payload: MergeCompletedPayload = {
+        notion_task_id: pr.task_id,
+        merge_commit: mergeCommit,
+      };
+      this.emit('merge_completed', payload);
+    }
+
+    return mergeCommit;
   }
 }
 
