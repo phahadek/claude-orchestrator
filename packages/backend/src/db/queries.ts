@@ -3550,9 +3550,9 @@ export function updateGateItemSourceMergeCommit(
 export function listGateItemIdsBySourceTask(sourceTaskId: string): string[] {
   return (
     db
-      .prepare<{ source_task_id: string }>(
-        `SELECT DISTINCT gate_item_id AS id FROM gate_item_source WHERE source_task_id = @source_task_id`,
-      )
+      .prepare<{
+        source_task_id: string;
+      }>(`SELECT DISTINCT gate_item_id AS id FROM gate_item_source WHERE source_task_id = @source_task_id`)
       .all({ source_task_id: sourceTaskId }) as { id: string }[]
   ).map((row) => row.id);
 }

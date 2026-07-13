@@ -1,6 +1,9 @@
 import { getMergeCommitForTask } from '../db/queries';
 import { logger } from '../logger';
-import type { PRMergeWatcher, MergeCompletedPayload } from '../github/PRMergeWatcher';
+import type {
+  PRMergeWatcher,
+  MergeCompletedPayload,
+} from '../github/PRMergeWatcher';
 import * as gateStore from './gateStore';
 
 /**

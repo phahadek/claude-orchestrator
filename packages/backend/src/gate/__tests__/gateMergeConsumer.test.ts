@@ -77,11 +77,16 @@ describe('handleMergeCompleted', () => {
       milestone: 'M12',
       text: 'Verify the migration ran cleanly',
       classification: 'needs-triage',
-      sources: [{ sourceTaskId: 'notion:m1', sourceTaskTitle: 'Add migration' }],
+      sources: [
+        { sourceTaskId: 'notion:m1', sourceTaskTitle: 'Add migration' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
 
-    handleMergeCompleted({ notion_task_id: 'notion:m1', merge_commit: 'abc123' });
+    handleMergeCompleted({
+      notion_task_id: 'notion:m1',
+      merge_commit: 'abc123',
+    });
 
     const updated = getItem(item.id);
     expect(updated?.sources[0].mergeCommit).toBe('abc123');
@@ -101,10 +106,16 @@ describe('handleMergeCompleted', () => {
       updatedAt: new Date(0).toISOString(),
     });
 
-    handleMergeCompleted({ notion_task_id: 'notion:s1', merge_commit: 'sha-1' });
+    handleMergeCompleted({
+      notion_task_id: 'notion:s1',
+      merge_commit: 'sha-1',
+    });
     expect(getItem(item.id)?.minDeployedCommit).toBe('sha-1');
 
-    handleMergeCompleted({ notion_task_id: 'notion:s2', merge_commit: 'sha-2' });
+    handleMergeCompleted({
+      notion_task_id: 'notion:s2',
+      merge_commit: 'sha-2',
+    });
     expect(getItem(item.id)?.minDeployedCommit).toBe('sha-2');
   });
 
@@ -114,10 +125,15 @@ describe('handleMergeCompleted', () => {
       milestone: 'M12',
       text: 'Check the alert threshold',
       classification: 'Read-Only',
-      sources: [{ sourceTaskId: 'notion:orig', sourceTaskTitle: 'Original fix' }],
+      sources: [
+        { sourceTaskId: 'notion:orig', sourceTaskTitle: 'Original fix' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
-    handleMergeCompleted({ notion_task_id: 'notion:orig', merge_commit: 'sha-orig' });
+    handleMergeCompleted({
+      notion_task_id: 'notion:orig',
+      merge_commit: 'sha-orig',
+    });
 
     // Simulate: verified and passed against a deploy that contained sha-orig.
     appendEvent(item.id, {
@@ -151,7 +167,10 @@ describe('handleMergeCompleted', () => {
 
   it('is a no-op when no gate item sources from the merged task', () => {
     expect(() =>
-      handleMergeCompleted({ notion_task_id: 'notion:unrelated', merge_commit: 'x' }),
+      handleMergeCompleted({
+        notion_task_id: 'notion:unrelated',
+        merge_commit: 'x',
+      }),
     ).not.toThrow();
   });
 });
@@ -163,7 +182,9 @@ describe('registerGateMergeConsumer — the gate consumes the signal, decoupled 
       milestone: 'M12',
       text: 'Decoupling check',
       classification: 'needs-triage',
-      sources: [{ sourceTaskId: 'notion:decoupled', sourceTaskTitle: 'Decoupled task' }],
+      sources: [
+        { sourceTaskId: 'notion:decoupled', sourceTaskTitle: 'Decoupled task' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
 
@@ -185,7 +206,9 @@ describe('catchUpMergeCommits — reconciler durability net', () => {
       milestone: 'M12',
       text: 'Recovered after a missed event',
       classification: 'needs-triage',
-      sources: [{ sourceTaskId: 'notion:missed', sourceTaskTitle: 'Missed event task' }],
+      sources: [
+        { sourceTaskId: 'notion:missed', sourceTaskTitle: 'Missed event task' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
     expect(getItem(item.id)?.sources[0].mergeCommit).toBeUndefined();
@@ -206,7 +229,9 @@ describe('catchUpMergeCommits — reconciler durability net', () => {
       milestone: 'M12',
       text: 'Still unmerged',
       classification: 'needs-triage',
-      sources: [{ sourceTaskId: 'notion:pending', sourceTaskTitle: 'Pending task' }],
+      sources: [
+        { sourceTaskId: 'notion:pending', sourceTaskTitle: 'Pending task' },
+      ],
       updatedAt: new Date(0).toISOString(),
     });
 
