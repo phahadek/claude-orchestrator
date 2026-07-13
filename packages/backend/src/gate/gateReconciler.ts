@@ -5,6 +5,7 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import { getProjectDeployedSha } from '../deploy/deployService';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
+import { catchUpMergeCommits } from './gateMergeConsumer';
 import {
   getGateReadiness,
   reconcileGateRunnability,
@@ -190,6 +191,10 @@ export async function runGateReconcilerTick(
   const followupFiler = options.followupFiler ?? defaultFollowupFiler;
   const ancestrySourceForProject =
     options.ancestrySourceForProject ?? defaultAncestrySourceForProject;
+
+  // Durability net: catch up any gate_item_source.merge_commit a missed
+  // merge_completed event left unfilled before reconciling runnability.
+  catchUpMergeCommits();
 
   const allItems = gateStore.listAll();
   const projects = new Set(allItems.map((item) => item.project));

@@ -65,6 +65,7 @@ import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
 import { Scheduler } from './orchestration/Scheduler';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
 import { register as registerGateReconciler } from './gate/gateReconciler';
+import { registerGateMergeConsumer } from './gate/gateMergeConsumer';
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
@@ -182,6 +183,8 @@ const autoMerger = new AutoMerger(
 prMergeWatcher.setAutoMerger(autoMerger);
 prMergeWatcher.setPRReviewService(prReviewService);
 prMergeWatcher.setReviewOrchestrator(reviewOrchestrator);
+// Gate consumes the merge-completion signal; PRMergeWatcher stays unaware of gate state.
+registerGateMergeConsumer(prMergeWatcher);
 prReviewService.setAutoMerger(autoMerger);
 setAutoMerger(autoMerger);
 const reviewerCommentsWatcher = new ReviewerCommentsWatcher(

@@ -3542,6 +3542,40 @@ export function updateGateItemSourceMergeCommit(
   });
 }
 
+/**
+ * Every gate_item id sourced (via gate_item_source) from a task, across every
+ * project — the merge-completion consumer's fan-out from `notion_task_id` to
+ * the gate_item rows it needs to fill/recompute.
+ */
+export function listGateItemIdsBySourceTask(sourceTaskId: string): string[] {
+  return (
+    db
+      .prepare<{
+        source_task_id: string;
+      }>(
+        `SELECT DISTINCT gate_item_id AS id FROM gate_item_source WHERE source_task_id = @source_task_id`,
+      )
+      .all({ source_task_id: sourceTaskId }) as { id: string }[]
+  ).map((row) => row.id);
+}
+
+/**
+ * Every distinct source_task_id still missing gate_item_source.merge_commit —
+ * the reconciler catch-up net's candidate set. Callers cross-check each
+ * against local_branches (getMergeCommitForTask) to find the ones that are
+ * actually merged already; a merge_completed event dropped mid-emit (e.g. a
+ * restart) otherwise leaves the fill permanently missing.
+ */
+export function listUnfilledGateItemSourceTaskIds(): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT DISTINCT source_task_id AS id FROM gate_item_source WHERE merge_commit IS NULL`,
+      )
+      .all() as { id: string }[]
+  ).map((row) => row.id);
+}
+
 export function listGateItemEvents(gateItemId: string): GateItemEventRow[] {
   _stmtListGateItemEvents ??= db.prepare<{ gate_item_id: string }>(
     `SELECT * FROM gate_item_event WHERE gate_item_id = @gate_item_id ORDER BY id ASC`,

@@ -19,6 +19,8 @@ import {
   rehomeGateItemsBySourceTask,
   getGateAccretion,
   upsertGateAccretion,
+  listGateItemIdsBySourceTask,
+  listUnfilledGateItemSourceTaskIds,
 } from '../db/queries';
 import type { GateItemFilter } from '../db/queries';
 import type {
@@ -324,6 +326,44 @@ export function setSourceMergeCommit(
     );
   }
   updateGateItemSourceMergeCommit(gateItemId, sourceTaskId, mergeCommit);
+}
+
+/**
+ * Every gate_item id sourced from a task, across every project — the
+ * merge-completion consumer's fan-out from a merged `notion_task_id` to the
+ * gate_item rows that need their source filled and commit recomputed.
+ */
+export function itemIdsBySourceTask(sourceTaskId: string): string[] {
+  return listGateItemIdsBySourceTask(sourceTaskId);
+}
+
+/**
+ * Every distinct source task id with at least one still-unfilled
+ * gate_item_source.merge_commit — the reconciler catch-up net's candidate
+ * set (see `catchUpMergeCommits` in gateMergeConsumer.ts).
+ */
+export function unfilledSourceTaskIds(): string[] {
+  return listUnfilledGateItemSourceTaskIds();
+}
+
+/**
+ * Recomputes min_deployed_commit as the latest merge commit across an item's
+ * sources — "latest" meaning the most recently filled one, taken as the last
+ * (by insertion order, `listGateItemSources`' id-ASC order) source that
+ * carries a merge_commit. A follow-on source (always appended after its
+ * predecessors — see `addSource`) only outranks earlier sources once its own
+ * merge event fills it in, so this only ever advances forward in time.
+ * No-op (returns undefined) when no source has merged yet.
+ */
+export function recomputeMinDeployedCommit(
+  gateItemId: string,
+  updatedAt: string,
+): string | undefined {
+  const merged = listGateItemSources(gateItemId).filter((s) => s.merge_commit);
+  if (merged.length === 0) return undefined;
+  const latest = merged[merged.length - 1].merge_commit as string;
+  updateGateItemMinDeployedCommit(gateItemId, latest, updatedAt);
+  return latest;
 }
 
 /**
