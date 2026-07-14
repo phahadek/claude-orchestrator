@@ -13,8 +13,9 @@
 //   node groom-context-client.mjs --milestone <M> [--project <id>]
 //
 // Env:
-//   ORCHESTRATOR_STAGE_PORT   backend loopback port (the same var the
-//                             sanctioned stage-task-intent.mjs client uses)
+//   ORCHESTRATOR_BACKEND_HOST backend loopback host (default 127.0.0.1)
+//   ORCHESTRATOR_BACKEND_PORT backend loopback port (default 3000; the same
+//                             pair the other sanctioned session clients use)
 //   ORCHESTRATOR_DEVICE_TOKEN device bearer token authorizing the read
 
 import http from 'node:http';
@@ -78,18 +79,20 @@ async function main() {
     return;
   }
 
-  const port = process.env.ORCHESTRATOR_STAGE_PORT;
+  const host = process.env.ORCHESTRATOR_BACKEND_HOST ?? '127.0.0.1';
+  const port = process.env.ORCHESTRATOR_BACKEND_PORT ?? '3000';
   const token = process.env.ORCHESTRATOR_DEVICE_TOKEN;
-  if (!port || !token) {
+  if (!token) {
     fail(
-      'ORCHESTRATOR_STAGE_PORT / ORCHESTRATOR_DEVICE_TOKEN not set — this script ' +
-        'must be run with the backend loopback port and a device credential available.',
+      'ORCHESTRATOR_DEVICE_TOKEN not set — this script must be run with a ' +
+        'device credential available.',
     );
     return;
   }
 
   try {
     const { statusCode, body } = await fetchGroomContext({
+      host,
       port,
       token,
       milestone,

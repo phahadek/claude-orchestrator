@@ -291,29 +291,32 @@ This is a thin human-driven loop over the seed-state API
 `packages/backend/src/seed/seedService.ts`), called through the sanctioned node client:
 
 ```bash
-node "$ORCHESTRATOR_SEED_STATE_CLI" <command> ...
+node ~/.claude/scripts/seed-state-client.mjs <command> ...
 ```
 
-`$ORCHESTRATOR_SEED_STATE_CLI` resolves to
-`packages/backend/scripts/seed-state-client.mjs`, using `$ORCHESTRATOR_STAGE_PORT` /
-`$ORCHESTRATOR_DEVICE_TOKEN` the same way the other sanctioned session clients
-(`ops-client.mjs`, `gate-state-client.mjs`) do.
+`seed-state-client.mjs` is the vendored sanctioned node client (see
+`packages/backend/scripts/seed-state-client.mjs` and
+`scripts/deploy-grooming.mjs`), using `$ORCHESTRATOR_DEVICE_TOKEN` (host/port
+default to `127.0.0.1:3000`, overridable via `$ORCHESTRATOR_BACKEND_HOST` /
+`$ORCHESTRATOR_BACKEND_PORT`) the same way the other sanctioned session
+clients (`ops-client.mjs`, `gate-state-client.mjs`) do.
 
-1. **Readiness** — `node "$ORCHESTRATOR_SEED_STATE_CLI" readiness --milestone <M>` →
+1. **Readiness** — `node ~/.claude/scripts/seed-state-client.mjs readiness --milestone <M>` →
    `{status: 'green'|'blocked', blocking}`. `green` — nothing left to apply this
    milestone; report and stop. `blocked` — every unconfirmed seed with its
    project/state, as a worklist **map only** — pull the actual batch via `next`, never
    disposition straight off this summary.
 2. **Pull one applyable batch at a time** —
-   `node "$ORCHESTRATOR_SEED_STATE_CLI" next --milestone <M> --deploySha <sha> [--limit <N>]`
+   `node ~/.claude/scripts/seed-state-client.mjs next --milestone <M> --deploySha <sha> [--limit <N>]`
    (default limit 1). `deploySha` is the **target project's** currently-deployed commit —
    resolve it the project's own way (its `context.md` documents the deploy-tracking
    surface); never guess it. Applyability = deploy-included (the seed's
    `min_deployed_commit` is an ancestor of `deploySha`) AND not yet `confirmed`. Never
    bulk-load the milestone's full seed set.
 3. **Apply through the target project's own audited config-CRUD, then record the
-   outcome.** For each pulled item: read `item.spec` (`node "$ORCHESTRATOR_SEED_STATE_CLI"
-   detail <id>` for sources + prior events before re-attempting one). **The operator
+   outcome.** For each pulled item: read `item.spec` (`node
+   ~/.claude/scripts/seed-state-client.mjs detail <id>` for sources + prior events
+   before re-attempting one). **The operator
    applies the seed via the target project's audited config-CRUD / ops affordance —
    never raw SQL, and the orchestrator never applies another project's config on its
    behalf** (that's why `next` requires a `deploySha` the caller supplies rather than
@@ -325,7 +328,7 @@ node "$ORCHESTRATOR_SEED_STATE_CLI" <command> ...
    just resolving ones:
 
    ```bash
-   node "$ORCHESTRATOR_SEED_STATE_CLI" event <seedItemId> \
+   node ~/.claude/scripts/seed-state-client.mjs event <seedItemId> \
      '{"outcome":"applied","evidence":"<what was authored + how verified>"}'
    ```
 
@@ -341,9 +344,10 @@ node "$ORCHESTRATOR_SEED_STATE_CLI" <command> ...
 **What this replaces:** it does not fetch or parse the config-seed task's body as the seed
 worklist, and it does not bulk-load a milestone's full seed set.
 
-**Built, not activated.** This ships in the skill now, but isn't wired live until the
-seed-activation task re-vendors it to `~/.claude` (via `deploy-grooming.mjs`) and sets
-`ORCHESTRATOR_SEED_STATE_CLI` in the session env — do not fold that actuation here.
+**Built, not activated.** This ships in the skill now, and `seed-state-client.mjs` is
+vendored to `~/.claude/scripts` (via `deploy-grooming.mjs`), but the seed-activation
+task still owns confirming it runs live end-to-end for a real milestone — do not fold
+that actuation here.
 
 ## Flow
 

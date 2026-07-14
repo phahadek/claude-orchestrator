@@ -8,10 +8,19 @@
  *   node scripts/deploy-grooming.mjs [--dry-run]
  *
  * Idempotent and cross-platform (Node fs; Windows + Linux). Copies:
- *   scripts/{groom-load,design-load,groom-gate,ops-load,ops-journal-set,
- *            check-task-status,notion-page}.mjs               → ~/.claude/scripts/
+ *   scripts/{design-load,check-task-status,sync-guidelines-load,notion-page,
+ *            ops-client}.mjs                                   → ~/.claude/scripts/
+ *   packages/backend/scripts/{groom-context-client,gate-state-client,
+ *            seed-state-client,stage-task-intent}.mjs           → ~/.claude/scripts/
  *   skills/{groom,design,ops,deploy,wrap,sync-guidelines}/** → ~/.claude/skills/
  *   config-template/hooks/load-procedures.mjs → <config-tree>/hooks/  (overwrite)
+ *
+ * groom-load.mjs, ops-load.mjs and ops-journal-set.mjs (Notion-shell-out loaders) and the
+ * groom-gate.mjs PreToolUse hook are retired and no longer vendored: groom/ops context loads
+ * and ops-journal writes now go through the backend's device-authed routes (the route clients
+ * above), and the promotion gate groom-gate.mjs enforced on `notion-update-page` is superseded
+ * by the command-layer `checkGroomingPromotionGate` (`groomGate.ts`), enforced server-side on
+ * staged-intent apply.
  *
  * The config-template/hooks/* artifacts go into the central config tree (a `config/` dir inside
  * the projects root, beside each managed repo), not ~/.claude — that's where the Remote
@@ -28,13 +37,12 @@
  *
  * By design there is NO auto-run (no postinstall, no symlink, no watcher) — see the M9
  * "Productize the Backlog Grooming procedure" task. It also does NOT register any hooks in
- * ~/.claude/settings.json — the `groom-gate.mjs` + `check-task-status.mjs` PreToolUse hooks
- * and the `load-procedures.mjs` SessionStart hook stay documented one-time manual steps
- * (auto-editing user-global settings is riskier). See README § Grooming/design skills.
+ * ~/.claude/settings.json — the `check-task-status.mjs` PreToolUse hook and the
+ * `load-procedures.mjs` SessionStart hook stay documented one-time manual steps (auto-editing
+ * user-global settings is riskier). See README § Grooming/design skills.
  *
  * Note: the loaders also call sibling scripts notion-query.mjs and notion-move-tasks.mjs,
- * which are deployed to ~/.claude/scripts separately (they predate this script). This deploy
- * owns the seven grooming/design/ops scripts above + the five skills.
+ * which are deployed to ~/.claude/scripts separately (they predate this script).
  */
 import { cpSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname, resolve } from 'path';
@@ -45,15 +53,22 @@ const dryRun = process.argv.includes('--dry-run');
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..'); // <repo>/scripts → <repo>
 const claudeHome = join(homedir(), '.claude');
 
+// Repo-root scripts.
 const SCRIPTS = [
-  'groom-load.mjs',
   'design-load.mjs',
-  'groom-gate.mjs',
-  'ops-load.mjs',
-  'ops-journal-set.mjs',
   'check-task-status.mjs',
   'sync-guidelines-load.mjs',
   'notion-page.mjs',
+  'ops-client.mjs',
+];
+// Route-based clients that live under packages/backend/scripts/ (they're
+// exercised in-process by packages/backend's own tests) but are sanctioned
+// session-side CLIs like the ones above — vendored to the same ~/.claude/scripts/.
+const BACKEND_SCRIPTS = [
+  'groom-context-client.mjs',
+  'gate-state-client.mjs',
+  'seed-state-client.mjs',
+  'stage-task-intent.mjs',
 ];
 const SKILLS = ['groom', 'design', 'ops', 'deploy', 'wrap', 'sync-guidelines'];
 
@@ -98,6 +113,12 @@ for (const s of SCRIPTS)
     join(claudeHome, 'scripts', s),
     `scripts/${s}`,
   );
+for (const s of BACKEND_SCRIPTS)
+  copy(
+    join(repoRoot, 'packages', 'backend', 'scripts', s),
+    join(claudeHome, 'scripts', s),
+    `packages/backend/scripts/${s}`,
+  );
 for (const s of SKILLS)
   copy(
     join(repoRoot, 'skills', s),
@@ -125,6 +146,6 @@ console.log(
 console.log(dryRun ? 'dry-run complete (no changes).' : 'deploy complete.');
 console.log(
   'Reminder: register the hooks once in ~/.claude/settings.json (manual — see README ' +
-    '§ Grooming/design skills): the groom-gate.mjs + check-task-status.mjs PreToolUse gates ' +
-    'and the load-procedures.mjs SessionStart bootstrap.',
+    '§ Grooming/design skills): the check-task-status.mjs PreToolUse gate and the ' +
+    'load-procedures.mjs SessionStart bootstrap.',
 );

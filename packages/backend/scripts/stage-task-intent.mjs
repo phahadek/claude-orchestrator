@@ -12,16 +12,23 @@
 // one for a human to review and apply.
 //
 // Usage:
-//   node "$ORCHESTRATOR_STAGE_CLI" <kind> <json-payload> [groupId]
+//   node stage-task-intent.mjs <kind> <json-payload> [groupId]
 //
 // Example:
-//   node "$ORCHESTRATOR_STAGE_CLI" task.setStatus \
+//   node stage-task-intent.mjs task.setStatus \
 //     '{"taskId":"notion-abc123","status":"In Review"}'
 //
 // The optional [groupId] correlates multiple intents that form one
 // structural-change unit (e.g. a grooming batch's setDependsOn + setStatus
-// intents for the same task) so the shared staged-intent panel can
-// present/apply them as a group.
+// intents for the same task) so they present/apply together.
+//
+// Env:
+//   ORCHESTRATOR_BACKEND_HOST backend loopback host (default 127.0.0.1)
+//   ORCHESTRATOR_BACKEND_PORT backend loopback port (default 3000; shared
+//                             with the other sanctioned session clients)
+//   ORCHESTRATOR_STAGE_TOKEN  the per-session, stage-only scoped credential
+//                             (distinct from ORCHESTRATOR_DEVICE_TOKEN — this
+//                             one can never apply, only stage)
 
 import http from 'node:http';
 
@@ -38,12 +45,13 @@ if (!kind || payloadJson === undefined) {
   );
 }
 
-const port = process.env.ORCHESTRATOR_STAGE_PORT;
+const host = process.env.ORCHESTRATOR_BACKEND_HOST ?? '127.0.0.1';
+const port = process.env.ORCHESTRATOR_BACKEND_PORT ?? '3000';
 const token = process.env.ORCHESTRATOR_STAGE_TOKEN;
-if (!port || !token) {
+if (!token) {
   fail(
-    'ORCHESTRATOR_STAGE_PORT / ORCHESTRATOR_STAGE_TOKEN not set — this script ' +
-      'must be run inside an orchestrator-launched session.',
+    'ORCHESTRATOR_STAGE_TOKEN not set — this script must be run inside an ' +
+      'orchestrator-launched session.',
   );
 }
 
@@ -60,7 +68,7 @@ const body = JSON.stringify(
 
 const req = http.request(
   {
-    host: '127.0.0.1',
+    host,
     port: Number(port),
     path: '/api/task-intents',
     method: 'POST',

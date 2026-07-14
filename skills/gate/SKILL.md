@@ -26,15 +26,17 @@ node client `gate-state-client.mjs` (loopback-only, device-authed — never
 shell out to Notion or hand-fetch a task body for this).
 
 ```bash
-node "$ORCHESTRATOR_GATE_STATE_CLI" <command> ...
+node ~/.claude/scripts/gate-state-client.mjs <command> ...
 ```
 
-`$ORCHESTRATOR_GATE_STATE_CLI` resolves to
-`packages/backend/scripts/gate-state-client.mjs`, using
-`$ORCHESTRATOR_STAGE_PORT` / `$ORCHESTRATOR_DEVICE_TOKEN` the same way the
-other sanctioned session clients (`groom-context-client.mjs`,
-`stage-task-intent.mjs`) do. If either env var is unset, **stop** — this
-skill only runs inside an orchestrator-launched session.
+`gate-state-client.mjs` is the vendored sanctioned node client (see
+`packages/backend/scripts/gate-state-client.mjs` and
+`scripts/deploy-grooming.mjs`), using `$ORCHESTRATOR_DEVICE_TOKEN` (host/port
+default to `127.0.0.1:3000`, overridable via `$ORCHESTRATOR_BACKEND_HOST` /
+`$ORCHESTRATOR_BACKEND_PORT`) the same way the other sanctioned session
+clients (`groom-context-client.mjs`, `stage-task-intent.mjs`) do. If
+`ORCHESTRATOR_DEVICE_TOKEN` is unset, **stop** — this skill only runs inside
+an orchestrator-launched session.
 
 ---
 
@@ -46,7 +48,7 @@ not improvise one — ask if it's ambiguous.
 ## Step 1 — Check readiness
 
 ```bash
-node "$ORCHESTRATOR_GATE_STATE_CLI" readiness --milestone <M>
+node ~/.claude/scripts/gate-state-client.mjs readiness --milestone <M>
 ```
 
 Returns `{status: 'green' | 'blocked', blocking: GateBlockingItem[]}`.
@@ -62,7 +64,7 @@ Returns `{status: 'green' | 'blocked', blocking: GateBlockingItem[]}`.
 ## Step 2 — Pull one runnable tier at a time
 
 ```bash
-node "$ORCHESTRATOR_GATE_STATE_CLI" next --milestone <M> [--classification <C>] [--limit <N>]
+node ~/.claude/scripts/gate-state-client.mjs next --milestone <M> [--classification <C>] [--limit <N>]
 ```
 
 Returns up to `limit` (default 10) `runnable` items from **one** tier. Tier
@@ -79,7 +81,7 @@ classification to let the server advance to the next non-empty tier.
 
 For every item in the pulled batch:
 
-1. Read `item.text` (and `node "$ORCHESTRATOR_GATE_STATE_CLI" item <id>` for
+1. Read `item.text` (and `node ~/.claude/scripts/gate-state-client.mjs item <id>` for
    the full record, including prior `events`, if you need history before
    re-attempting one).
 2. Perform the check the item describes:
@@ -98,7 +100,7 @@ For every item in the pulled batch:
    this for every attempt, not just resolving ones:
 
    ```bash
-   node "$ORCHESTRATOR_GATE_STATE_CLI" event <gateItemId> \
+   node ~/.claude/scripts/gate-state-client.mjs event <gateItemId> \
      '{"disposition":"pass","evidence":"<what you observed>"}'
    ```
 
@@ -118,7 +120,7 @@ For every item in the pulled batch:
    evidence, then:
 
    ```bash
-   node "$ORCHESTRATOR_GATE_STATE_CLI" approve <gateItemId> [operator]
+   node ~/.claude/scripts/gate-state-client.mjs approve <gateItemId> [operator]
    ```
 
    This is the only way a `Prod-Mutating` item resolves to `pass`. Never
