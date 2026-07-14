@@ -26,8 +26,9 @@
 //     '{"outcome":"blocked","evidence":"CRUD rejected: missing dependent row","filedFollowon":"81f3"}'
 //
 // Env:
-//   ORCHESTRATOR_STAGE_PORT   backend loopback port (shared with the other
-//                             sanctioned session clients)
+//   ORCHESTRATOR_BACKEND_HOST backend loopback host (default 127.0.0.1)
+//   ORCHESTRATOR_BACKEND_PORT backend loopback port (default 3000; shared
+//                             with the other sanctioned session clients)
 //   ORCHESTRATOR_DEVICE_TOKEN device bearer token authorizing the request
 
 import http from 'node:http';
@@ -167,12 +168,13 @@ async function main() {
     return;
   }
 
-  const port = process.env.ORCHESTRATOR_STAGE_PORT;
+  const host = process.env.ORCHESTRATOR_BACKEND_HOST ?? '127.0.0.1';
+  const port = process.env.ORCHESTRATOR_BACKEND_PORT ?? '3000';
   const token = process.env.ORCHESTRATOR_DEVICE_TOKEN;
-  if (!port || !token) {
+  if (!token) {
     fail(
-      'ORCHESTRATOR_STAGE_PORT / ORCHESTRATOR_DEVICE_TOKEN not set — this script ' +
-        'must be run with the backend loopback port and a device credential available.',
+      'ORCHESTRATOR_DEVICE_TOKEN not set — this script must be run with a ' +
+        'device credential available.',
     );
     return;
   }
@@ -182,11 +184,12 @@ async function main() {
     if (command === 'readiness') {
       const { milestone } = parseFlags(rest);
       if (!milestone) return fail(USAGE);
-      result = await fetchSeedReadiness({ port, token, milestone });
+      result = await fetchSeedReadiness({ host, port, token, milestone });
     } else if (command === 'next') {
       const { milestone, deploySha, limit } = parseFlags(rest);
       if (!milestone || !deploySha) return fail(USAGE);
       result = await fetchNextApplyableSeedItems({
+        host,
         port,
         token,
         milestone,
@@ -196,11 +199,11 @@ async function main() {
     } else if (command === 'item') {
       const [seedItemId] = rest;
       if (!seedItemId) return fail(USAGE);
-      result = await fetchSeedItem({ port, token, seedItemId });
+      result = await fetchSeedItem({ host, port, token, seedItemId });
     } else if (command === 'detail') {
       const [seedItemId] = rest;
       if (!seedItemId) return fail(USAGE);
-      result = await fetchSeedItemDetail({ port, token, seedItemId });
+      result = await fetchSeedItemDetail({ host, port, token, seedItemId });
     } else if (command === 'event') {
       const [seedItemId, payloadJson] = rest;
       if (!seedItemId || payloadJson === undefined) return fail(USAGE);
@@ -210,7 +213,13 @@ async function main() {
       } catch {
         return fail(`invalid JSON payload: ${payloadJson}`);
       }
-      result = await appendSeedItemEvent({ port, token, seedItemId, event });
+      result = await appendSeedItemEvent({
+        host,
+        port,
+        token,
+        seedItemId,
+        event,
+      });
     } else {
       return fail(USAGE);
     }

@@ -610,18 +610,14 @@ The full task spec and all rules are in your system prompt. Begin implementing d
               ? this._escalationDisableAutoCompact
               : !!runtimeSettings.large_task_model,
           extraEnv: {
-            ORCHESTRATOR_STAGE_PORT: String(
+            ORCHESTRATOR_BACKEND_PORT: String(
               getOrchestratorConfig().server.port,
             ),
             ORCHESTRATOR_STAGE_TOKEN: stageToken,
-            // Sanctioned node CLI client — sessions submit staged task-write
-            // intents through this script (curl/wget are off the
-            // auto-dispatch allowlist; node is). Lives outside any worktree,
-            // one level up from src/ and dist/ alike.
-            ORCHESTRATOR_STAGE_CLI: path.resolve(
-              __dirname,
-              '../../scripts/stage-task-intent.mjs',
-            ),
+            // Sessions submit staged task-write intents via the vendored
+            // ~/.claude/scripts/stage-task-intent.mjs client (curl/wget are
+            // off the auto-dispatch allowlist; node is) — see
+            // scripts/deploy-grooming.mjs.
           },
         },
         (event) => {

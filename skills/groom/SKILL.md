@@ -66,15 +66,17 @@ the same `loadGroomContext()` the dashboard's grooming panel calls, so the
 skill and the panel always see identical context.
 
 ```bash
-node "$ORCHESTRATOR_GROOM_CONTEXT_CLI" --milestone <M> [--project <project-id>]
+node ~/.claude/scripts/groom-context-client.mjs --milestone <M> [--project <project-id>]
 ```
 
-`$ORCHESTRATOR_GROOM_CONTEXT_CLI` resolves to `groom-context-client.mjs` (the
-sanctioned node client — curl/wget are off the auto-dispatch allowlist, `node`
-is not), which calls the loopback, device-authed route with
-`$ORCHESTRATOR_STAGE_PORT` / `$ORCHESTRATOR_DEVICE_TOKEN` and prints the
-`GroomLoadResult` bundle as JSON on stdout. If it exits non-zero, **stop** — a
-partial load means a contaminated groom. Report the error.
+`groom-context-client.mjs` is the vendored sanctioned node client (curl/wget
+are off the auto-dispatch allowlist, `node` is not — see
+`scripts/deploy-grooming.mjs`), which calls the loopback, device-authed route
+with `$ORCHESTRATOR_DEVICE_TOKEN` (host/port default to
+`127.0.0.1:3000`, overridable via `$ORCHESTRATOR_BACKEND_HOST` /
+`$ORCHESTRATOR_BACKEND_PORT`) and prints the `GroomLoadResult` bundle as JSON
+on stdout. If it exits non-zero, **stop** — a partial load means a
+contaminated groom. Report the error.
 
 The bundle has:
 
@@ -263,11 +265,16 @@ task yet (`milestone_seed_task_id: null` in context-bundle.json), surface it —
 silently skip accretion.
 
 2. **Then**, stage the write per task through the sanctioned staged-intent CLI
-   client (`node "$ORCHESTRATOR_STAGE_CLI" <kind> <json-payload> [groupId]` —
-   see `packages/backend/scripts/stage-task-intent.mjs`), **never** a direct
-   `notion-update-page` call. Every write lands as a staged intent a human
-   reviews and applies through the shared staged-intent panel — grooming never
-   applies its own writes.
+   client (`node ~/.claude/scripts/stage-task-intent.mjs <kind> <json-payload>
+   [groupId]` — see `packages/backend/scripts/stage-task-intent.mjs`),
+   **never** a direct `notion-update-page` call. This stages the intent
+   (`POST /api/task-intents`, authenticated by this session's scoped,
+   write-only `ORCHESTRATOR_STAGE_TOKEN` — it can never apply). After
+   conversational sign-off in this session, the intent is applied via the
+   device-authed `POST /api/staged-intents/:id/apply` route — the
+   readiness/groomGate guards still enforce on apply. This is not a UI
+   panel: the session stages and applies its own writes, but only after the
+   human has signed off in chat.
    - Generate one `groupId` per task (any stable string, e.g. the task id) so
      its writes present and apply as a unit.
    - If the task has hard-block deps (or had any and now has none), stage a

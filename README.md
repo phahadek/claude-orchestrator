@@ -142,10 +142,14 @@ The Analytics tab tracks per-session token usage and per-model cost across the p
 The `/groom` (Backlog Grooming) and `/design` (Design Execution) Claude Code skills are
 source-controlled here and deployed to `~/.claude` by a run-by-hand script:
 
-- **Vendored artifacts:** `scripts/{groom-load,design-load,groom-gate,ops-load,ops-journal-set,
-check-task-status,sync-guidelines-load,notion-page}.mjs`,
+- **Vendored artifacts:** `scripts/{design-load,check-task-status,sync-guidelines-load,
+notion-page,ops-client}.mjs`, `packages/backend/scripts/{groom-context-client,
+gate-state-client,seed-state-client,stage-task-intent}.mjs`,
   `skills/{groom,design,ops,deploy,wrap,sync-guidelines}/**`, and `config-template/**` (the
-  Remote Control bootstrap — see below).
+  Remote Control bootstrap — see below). `groom-load.mjs`, `ops-load.mjs`,
+  `ops-journal-set.mjs` and the `groom-gate.mjs` PreToolUse hook are retired — groom/ops
+  context and journal writes go through the device-authed route clients above, and the
+  promotion gate is enforced server-side (`groomGate.ts`) on staged-intent apply.
 - **Deploy — two tracks:**
   - **Mechanism (`node scripts/deploy-grooming.mjs`, `--dry-run` to preview).** Run it by hand
     whenever a vendored script/skill/hook changes — no auto-sync. It copies the scripts into
@@ -162,23 +166,21 @@ check-task-status,sync-guidelines-load,notion-page}.mjs`,
   resolve it by repo basename via `$ORCHESTRATOR_CONFIG_DIR` / `--config-dir` / a host-aware
   default (a `config/` dir beside the projects root: dev `<repo>/../config`, prod
   `<repo>/../../config`). See `skills/groom/reference/manifest.example.json`.
-- **One-time hook registration (manual):** two `PreToolUse` gates run on the task-source MCP
-  tools — `groom-gate.mjs` (blocks promoting a task to Ready without a recorded sign-off) and
-  `check-task-status.mjs` (blocks creating a task at any status other than `🔲 Backlog`). The
-  deploy script does **not** edit user-global settings, so register them once in
-  `~/.claude/settings.json` (below shows `groom-gate.mjs`; add `check-task-status.mjs` the same
-  way on the create/update matchers):
+- **One-time hook registration (manual):** a `PreToolUse` gate runs on the task-source MCP
+  tools — `check-task-status.mjs` (blocks creating a task at any status other than
+  `🔲 Backlog`). The deploy script does **not** edit user-global settings, so register it once
+  in `~/.claude/settings.json`:
 
   ```json
   {
     "hooks": {
       "PreToolUse": [
         {
-          "matcher": "mcp__claude_ai_Notion__notion-update-page",
+          "matcher": "mcp__claude_ai_Notion__notion-create-pages",
           "hooks": [
             {
               "type": "command",
-              "command": "node ~/.claude/scripts/groom-gate.mjs"
+              "command": "node ~/.claude/scripts/check-task-status.mjs"
             }
           ]
         }

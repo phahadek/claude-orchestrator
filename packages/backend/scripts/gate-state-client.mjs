@@ -23,8 +23,9 @@
 //     '{"disposition":"pass","evidence":"manually clicked through checkout"}'
 //
 // Env:
-//   ORCHESTRATOR_STAGE_PORT   backend loopback port (shared with the other
-//                             sanctioned session clients)
+//   ORCHESTRATOR_BACKEND_HOST backend loopback host (default 127.0.0.1)
+//   ORCHESTRATOR_BACKEND_PORT backend loopback port (default 3000; shared
+//                             with the other sanctioned session clients)
 //   ORCHESTRATOR_DEVICE_TOKEN device bearer token authorizing the request
 
 import http from 'node:http';
@@ -166,12 +167,13 @@ async function main() {
     return;
   }
 
-  const port = process.env.ORCHESTRATOR_STAGE_PORT;
+  const host = process.env.ORCHESTRATOR_BACKEND_HOST ?? '127.0.0.1';
+  const port = process.env.ORCHESTRATOR_BACKEND_PORT ?? '3000';
   const token = process.env.ORCHESTRATOR_DEVICE_TOKEN;
-  if (!port || !token) {
+  if (!token) {
     fail(
-      'ORCHESTRATOR_STAGE_PORT / ORCHESTRATOR_DEVICE_TOKEN not set — this script ' +
-        'must be run with the backend loopback port and a device credential available.',
+      'ORCHESTRATOR_DEVICE_TOKEN not set — this script must be run with a ' +
+        'device credential available.',
     );
     return;
   }
@@ -181,11 +183,12 @@ async function main() {
     if (command === 'readiness') {
       const { milestone } = parseFlags(rest);
       if (!milestone) return fail(USAGE);
-      result = await fetchGateReadiness({ port, token, milestone });
+      result = await fetchGateReadiness({ host, port, token, milestone });
     } else if (command === 'next') {
       const { milestone, classification, limit } = parseFlags(rest);
       if (!milestone) return fail(USAGE);
       result = await fetchNextRunnableGateItems({
+        host,
         port,
         token,
         milestone,
@@ -195,7 +198,7 @@ async function main() {
     } else if (command === 'item') {
       const [gateItemId] = rest;
       if (!gateItemId) return fail(USAGE);
-      result = await fetchGateItem({ port, token, gateItemId });
+      result = await fetchGateItem({ host, port, token, gateItemId });
     } else if (command === 'event') {
       const [gateItemId, payloadJson] = rest;
       if (!gateItemId || payloadJson === undefined) return fail(USAGE);
@@ -205,11 +208,23 @@ async function main() {
       } catch {
         return fail(`invalid JSON payload: ${payloadJson}`);
       }
-      result = await appendGateItemEvent({ port, token, gateItemId, event });
+      result = await appendGateItemEvent({
+        host,
+        port,
+        token,
+        gateItemId,
+        event,
+      });
     } else if (command === 'approve') {
       const [gateItemId, operator] = rest;
       if (!gateItemId) return fail(USAGE);
-      result = await approveGateItem({ port, token, gateItemId, operator });
+      result = await approveGateItem({
+        host,
+        port,
+        token,
+        gateItemId,
+        operator,
+      });
     } else {
       return fail(USAGE);
     }
