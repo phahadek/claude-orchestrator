@@ -3,7 +3,6 @@ import {
   getPRByNumber,
   getProjectRowById,
   getSession,
-  insertLocalBranch,
   insertSessionAudit,
 } from '../db/queries';
 import { logger } from '../logger';
@@ -11,6 +10,7 @@ import {
   getCurrentBranch,
   hasNonEmptyDiff,
 } from '../orchestration/localBranchHelpers';
+import { submitLocalBranch } from '../orchestration/localBranchSubmission';
 import { emitTaskUpdated } from '../routes/tasks';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -51,8 +51,9 @@ export interface RecoverSessionOpts {
  * invoked by StuckSessionMonitor for periodic stuck-session recovery.
  *
  * The scope parameter gates certain side-effects (no-op investigator spawn,
- * pr_opened emission, insertLocalBranch) and is recorded in the
- * session_backfilled audit event for telemetry.
+ * pr_opened emission) and is recorded in the session_backfilled audit event
+ * for telemetry. Local-only branch submission runs for every scope via
+ * submitLocalBranch, which is idempotent per session.
  */
 export async function recoverSession(
   sessionId: string,
@@ -213,53 +214,24 @@ export async function recoverSession(
           );
       }
 
-      // Local-only project submission — skipped for periodic scope.
-      if (projectId && scope !== 'periodic') {
-        const project = getProjectRowById(projectId);
-        if (project?.git_mode === 'local-only') {
-          try {
-            if (
-              featureBranchName &&
-              featureBranchName !== baseBranch &&
-              hasDiff
-            ) {
-              const now = new Date().toISOString();
-              insertLocalBranch({
-                project_id: projectId,
-                session_id: sessionId,
-                branch_name: featureBranchName,
-                base_branch: baseBranch,
-                status: 'open',
-                review_result: null,
-                created_at: now,
-                updated_at: now,
-              });
-              broadcast({
-                type: 'local_branch_submitted',
-                projectId,
-                sessionId,
-                branchName: featureBranchName,
-                baseBranch,
-              });
-              taskBackend
-                .updateStatus(taskId, '👀 In Review')
-                .then(() => {
-                  broadcast({
-                    type: 'task_status_changed',
-                    notionTaskId: taskId,
-                    newStatus: '👀 In Review',
-                  });
-                  emitTaskUpdated(taskId);
-                })
-                .catch((e) =>
-                  logger.error(`[recoverSession] updateStatus failed: ${e}`),
-                );
-            }
-          } catch (e) {
-            logger.error(
-              `[recoverSession] local-only submission check failed: ${e}`,
-            );
-          }
+      // Local-only project submission — shared with StuckSessionMonitor's
+      // idle-transition path via submitLocalBranch.
+      if (projectId) {
+        try {
+          submitLocalBranch({
+            projectId,
+            sessionId,
+            taskId,
+            featureBranchName,
+            baseBranch,
+            hasDiff,
+            taskBackend,
+            broadcast,
+          });
+        } catch (e) {
+          logger.error(
+            `[recoverSession] local-only submission check failed: ${e}`,
+          );
         }
       }
     } catch (e) {
