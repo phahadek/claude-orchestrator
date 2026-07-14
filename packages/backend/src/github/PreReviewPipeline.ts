@@ -27,6 +27,7 @@ import type { GitHubClient } from './GitHubClient';
 import type { ReviewJob } from './types';
 import type { ProjectConfig } from '../config';
 import type { PauseReason } from '../db/types';
+import { parsePauseReason } from '../db/pauseReason';
 
 interface GateFailureDetail {
   failedCommand?: string;
@@ -593,6 +594,39 @@ export class PreReviewPipeline {
     }
 
     setPreReviewStage(job.prNumber, job.repo, 'awaiting_review');
+    this.clearStalePauseOnSuccess(job);
     return { passed: true };
+  }
+
+  /**
+   * Pauses this pipeline itself sets on gate failure: every stage descriptor's
+   * pauseReason, plus 'autofix_git_infra_failure' which handleGateFailure sets
+   * imperatively (outside the stage array) on git-infra failures.
+   */
+  private gateOwnedPauseReasons(): Set<PauseReason> {
+    const owned = new Set<PauseReason>(['autofix_git_infra_failure']);
+    for (const stage of this.stages) {
+      if (stage.mode === 'gate' && stage.pauseReason) {
+        owned.add(stage.pauseReason);
+      }
+    }
+    return owned;
+  }
+
+  private clearStalePauseOnSuccess(job: ReviewJob): void {
+    const prRow = getPRByNumber(job.prNumber, job.repo);
+    const pauseStruct = parsePauseReason(prRow?.pause_reason ?? null);
+    if (!pauseStruct || !this.gateOwnedPauseReasons().has(pauseStruct.reason)) {
+      return;
+    }
+    setPauseReason(job.prNumber, job.repo, null);
+    logger.info(
+      `[PreReviewPipeline] PR #${job.prNumber}: cleared stale pause_reason=${pauseStruct.reason} after pipeline success`,
+    );
+    this.sessionManager.emit('message', {
+      type: 'pr_pause_cleared',
+      prNumber: job.prNumber,
+      repo: job.repo,
+    });
   }
 }
