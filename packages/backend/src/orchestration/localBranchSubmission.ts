@@ -43,7 +43,12 @@ export function submitLocalBranch(opts: SubmitLocalBranchOpts): boolean {
     broadcast,
   } = opts;
 
-  if (!projectId || !featureBranchName || featureBranchName === baseBranch || !hasDiff) {
+  if (
+    !projectId ||
+    !featureBranchName ||
+    featureBranchName === baseBranch ||
+    !hasDiff
+  ) {
     return false;
   }
 
