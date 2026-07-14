@@ -32,6 +32,7 @@ import {
   computeMilestoneDependencyCandidates,
   type TaskDependencyCandidates,
 } from '../orchestration/milestoneDependencyGraph';
+import { formatTaskId } from '../tasks/taskId';
 
 const execFileAsync = promisify(execFile);
 
@@ -290,7 +291,7 @@ export async function loadGroomContext(
   const targetTasks: TaskDoc[] = [];
   for (const row of board) {
     if (DONE_STATUSES.has(row.status)) continue;
-    const page = await notion.fetchTaskPage(row.id);
+    const page = await notion.fetchTaskPage(formatTaskId('notion', row.id));
     const regions = resolveTaskRegions(
       {
         id: row.id,
@@ -338,7 +339,7 @@ export async function loadGroomContext(
 
   const contextPages: PageDoc[] = [];
   for (const pg of manifest.context_pages ?? []) {
-    const page = await notion.fetchTaskPage(pg.id);
+    const page = await notion.fetchTaskPage(formatTaskId('notion', pg.id));
     contextPages.push({
       id: pg.id,
       title: pg.title ?? page.name,

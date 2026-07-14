@@ -9,6 +9,7 @@ import {
   NotionReadClient,
   NotionTaskLike,
 } from '../groomLoad';
+import { toExternalId } from '../../tasks/taskId';
 
 function git(args: string[], cwd: string) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -130,8 +131,9 @@ function fakeNotion(): NotionReadClient {
       return [];
     },
     async fetchTaskPage(taskId: string) {
-      const page = TASK_PAGES[taskId];
-      if (!page) throw new Error(`no fixture page for ${taskId}`);
+      const externalId = toExternalId(taskId);
+      const page = TASK_PAGES[externalId];
+      if (!page) throw new Error(`no fixture page for ${externalId}`);
       return page;
     },
   };
@@ -196,7 +198,7 @@ describe('loadGroomContext', () => {
     const notion = fakeNotion();
     const original = notion.fetchTaskPage.bind(notion);
     notion.fetchTaskPage = async (taskId: string) => {
-      if (taskId === CODE_ROW.id) {
+      if (toExternalId(taskId) === CODE_ROW.id) {
         return {
           name: CODE_ROW.title,
           filesSection: '',
@@ -287,6 +289,30 @@ describe('loadGroomContext', () => {
     expect(
       result.gitFreshness['packages/backend/src/notion'].priorSha,
     ).toBeNull();
+  });
+
+  it('passes task IDs in source:externalId form to fetchTaskPage, matching real NotionClient parsing', async () => {
+    ({ repoDir } = setupRepo());
+    const notion = fakeNotion();
+    const seenIds: string[] = [];
+    const original = notion.fetchTaskPage.bind(notion);
+    notion.fetchTaskPage = async (taskId: string) => {
+      seenIds.push(taskId);
+      // Mirrors NotionClient.fetchTaskPage, which calls toExternalId(taskId)
+      // and throws "Invalid task ID (no colon)" on an unprefixed raw ID.
+      expect(() => toExternalId(taskId)).not.toThrow();
+      return original(taskId);
+    };
+
+    await expect(
+      loadGroomContext('M-test', {
+        repoRoot: repoDir,
+        manifest: MANIFEST,
+        notionClient: notion,
+      }),
+    ).resolves.toBeDefined();
+    expect(seenIds).toContain(`notion:${CODE_ROW.id}`);
+    expect(seenIds).toContain('notion:ctx-page-1');
   });
 
   it('throws for an unregistered milestone', async () => {
