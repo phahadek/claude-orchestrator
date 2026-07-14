@@ -208,7 +208,9 @@ describe('PreReviewPipeline.run — all stages skipped when no config', () => {
 
 describe('PreReviewPipeline.run — clears stale gate-owned pause on success', () => {
   it('clears pause_reason=analyze_failing to null and emits pr_pause_cleared', async () => {
-    mockGetPRByNumber.mockReturnValue(makePRRow({ pause_reason: 'analyze_failing' }));
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({ pause_reason: 'analyze_failing' }),
+    );
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -237,7 +239,9 @@ describe('PreReviewPipeline.run — clears stale gate-owned pause on success', (
   });
 
   it('preserves a non-gate pause (max_reviews) at success time', async () => {
-    mockGetPRByNumber.mockReturnValue(makePRRow({ pause_reason: 'max_reviews' }));
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({ pause_reason: 'max_reviews' }),
+    );
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -252,7 +256,9 @@ describe('PreReviewPipeline.run — clears stale gate-owned pause on success', (
   });
 
   it('does not clear pause and keeps existing gate-failure behavior when a gate stage fails', async () => {
-    mockGetPRByNumber.mockReturnValue(makePRRow({ pause_reason: 'analyze_failing' }));
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({ pause_reason: 'analyze_failing' }),
+    );
     mockLoadOrchestratorConfig.mockReturnValue({
       verify: [],
       autofix: [],
