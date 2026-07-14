@@ -20,7 +20,10 @@ const DEVICE_AUTH_CLIENTS = [
   resolve(backendRoot, 'scripts/gate-state-client.mjs'),
   resolve(backendRoot, 'scripts/seed-state-client.mjs'),
 ];
-const STAGE_TOKEN_CLIENT = resolve(backendRoot, 'scripts/stage-task-intent.mjs');
+const STAGE_TOKEN_CLIENT = resolve(
+  backendRoot,
+  'scripts/stage-task-intent.mjs',
+);
 const ALL_CLIENTS = [...DEVICE_AUTH_CLIENTS, STAGE_TOKEN_CLIENT];
 
 describe('route client env-var naming', () => {
