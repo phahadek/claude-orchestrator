@@ -103,10 +103,7 @@ export class NotionTaskBackend implements TaskBackend {
   }
 
   async appendImplementationNote(taskId: string, note: string): Promise<void> {
-    return this.client.appendImplementationNote(
-      normalizeTaskId(taskId),
-      note,
-    );
+    return this.client.appendImplementationNote(normalizeTaskId(taskId), note);
   }
 
   async listTasksByStatus(status: string): Promise<ResolvedTask[]> {
