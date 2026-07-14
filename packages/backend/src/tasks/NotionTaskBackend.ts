@@ -6,7 +6,7 @@ import type {
 } from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
-import { formatTaskId } from './taskId';
+import { formatTaskId, normalizeTaskId } from './taskId';
 import { NotionClient } from '../notion/NotionClient';
 import { ProjectService } from '../projects/ProjectService';
 import {
@@ -20,8 +20,9 @@ import { renderTaskBody, type TaskBodySections } from './bodyRender';
  * Notion-backed implementation of TaskBackend. Resolves the Notion database ID
  * from the milestone row's `source_id`, then delegates to NotionClient.
  *
- * All public methods accept prefixed task IDs (e.g. 'notion:abc123') and strip
- * the prefix before calling the Notion API.
+ * Public methods that take a `taskId` accept either an already-prefixed task
+ * ID (e.g. 'notion:abc123') or a raw Notion UUID, and normalize it to
+ * `notion:<id>` before calling into NotionClient/cache lookups.
  */
 export class NotionTaskBackend implements TaskBackend {
   readonly type = 'notion' as const;
@@ -85,24 +86,24 @@ export class NotionTaskBackend implements TaskBackend {
   }
 
   async attachPR(taskId: string, prUrl: string): Promise<void> {
-    return this.client.attachPR(taskId, prUrl);
+    return this.client.attachPR(normalizeTaskId(taskId), prUrl);
   }
 
   async updateStatus(taskId: string, status: string): Promise<void> {
-    return this.client.updateStatus(taskId, status);
+    return this.client.updateStatus(normalizeTaskId(taskId), status);
   }
 
   async fetchTaskPage(taskId: string): Promise<string> {
-    const page = await this.client.fetchTaskPage(taskId);
+    const page = await this.client.fetchTaskPage(normalizeTaskId(taskId));
     return page.rawMarkdown;
   }
 
   async updateNotes(taskId: string, notes: string): Promise<void> {
-    return this.client.updateNotes(taskId, notes);
+    return this.client.updateNotes(normalizeTaskId(taskId), notes);
   }
 
   async appendImplementationNote(taskId: string, note: string): Promise<void> {
-    return this.client.appendImplementationNote(taskId, note);
+    return this.client.appendImplementationNote(normalizeTaskId(taskId), note);
   }
 
   async listTasksByStatus(status: string): Promise<ResolvedTask[]> {
@@ -183,13 +184,14 @@ export class NotionTaskBackend implements TaskBackend {
   }
 
   async setDependsOn(taskId: string, dependsOn: string[]): Promise<void> {
-    await this.client.setDependsOn(taskId, dependsOn);
-    const row = getTaskCache(taskId);
+    const normalizedId = normalizeTaskId(taskId);
+    await this.client.setDependsOn(normalizedId, dependsOn);
+    const row = getTaskCache(normalizedId);
     if (!row) return;
     try {
       const parsed = JSON.parse(row.raw_json);
       parsed.dependsOn = dependsOn;
-      upsertTaskCache(taskId, JSON.stringify(parsed));
+      upsertTaskCache(normalizedId, JSON.stringify(parsed));
     } catch {
       // ignore malformed cache entries
     }
@@ -197,17 +199,18 @@ export class NotionTaskBackend implements TaskBackend {
 
   async updateBody(taskId: string, sections: TaskBodySections): Promise<void> {
     const blocks = renderTaskBody(sections);
-    await this.client.updateBody(taskId, blocks);
+    await this.client.updateBody(normalizeTaskId(taskId), blocks);
   }
 
   async setType(taskId: string, type: string): Promise<void> {
-    await this.client.setType(taskId, type);
-    const row = getTaskCache(taskId);
+    const normalizedId = normalizeTaskId(taskId);
+    await this.client.setType(normalizedId, type);
+    const row = getTaskCache(normalizedId);
     if (!row) return;
     try {
       const parsed = JSON.parse(row.raw_json);
       parsed.type = type;
-      upsertTaskCache(taskId, JSON.stringify(parsed));
+      upsertTaskCache(normalizedId, JSON.stringify(parsed));
     } catch {
       // ignore malformed cache entries
     }
@@ -217,20 +220,21 @@ export class NotionTaskBackend implements TaskBackend {
     taskId: string,
     patch: TaskPropertiesPatch,
   ): Promise<void> {
-    await this.client.setProperties(taskId, patch);
-    const row = getTaskCache(taskId);
+    const normalizedId = normalizeTaskId(taskId);
+    await this.client.setProperties(normalizedId, patch);
+    const row = getTaskCache(normalizedId);
     if (!row) return;
     try {
       const parsed = JSON.parse(row.raw_json);
       if (patch.priority !== undefined) parsed.priority = patch.priority;
       if (patch.title !== undefined) parsed.title = patch.title;
-      upsertTaskCache(taskId, JSON.stringify(parsed));
+      upsertTaskCache(normalizedId, JSON.stringify(parsed));
     } catch {
       // ignore malformed cache entries
     }
   }
 
   async archive(taskId: string): Promise<void> {
-    await this.client.archive(taskId);
+    await this.client.archive(normalizeTaskId(taskId));
   }
 }

@@ -40,6 +40,8 @@ import {
 import { ReadinessGateError } from '../readinessGate';
 import { GroomingGateError } from '../../groom/groomGate';
 import type { TaskBackend } from '../TaskBackend';
+import { NotionTaskBackend } from '../NotionTaskBackend';
+import type { NotionClient } from '../../notion/NotionClient';
 
 function makeBackend(overrides: Partial<TaskBackend> = {}): TaskBackend {
   return {
@@ -733,5 +735,54 @@ describe('TaskWriteCommands.stageSeedContribution', () => {
     await expect(
       commands.stageSeedContribution(sourceTask, [], 'seeds'),
     ).rejects.toThrow(/at least one seed/);
+  });
+});
+
+describe('TaskWriteCommands + NotionTaskBackend — raw Notion UUID taskId (regression)', () => {
+  // The groom-context bundle hands sessions raw Notion UUIDs (no 'notion:'
+  // prefix). Applying a staged intent through the real NotionTaskBackend must
+  // not throw "Invalid task ID (no colon)" for those ids.
+  const rawTaskId = '39d22f91-52f3-813e-987d-df4e94649436';
+
+  function makeNotionBackend(clientOverrides: Partial<NotionClient> = {}) {
+    const client = {
+      updateStatus: vi.fn().mockResolvedValue(undefined),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue({ rawMarkdown: '## Summary\nAll good.' }),
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
+      ...clientOverrides,
+    } as unknown as NotionClient;
+    return { client, backend: new NotionTaskBackend(client) };
+  }
+
+  it('applies setStatus without throwing when taskId is a raw Notion UUID', async () => {
+    mockGetTaskCache.mockReturnValue(undefined);
+    const { client, backend } = makeNotionBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.setStatus(rawTaskId, 'Ready'),
+    ).resolves.toBeUndefined();
+
+    expect(client.fetchTaskPage).toHaveBeenCalledWith(`notion:${rawTaskId}`);
+    expect(client.updateStatus).toHaveBeenCalledWith(
+      `notion:${rawTaskId}`,
+      '🗂️ Ready',
+    );
+  });
+
+  it('applies setDependsOn without throwing when taskId is a raw Notion UUID', async () => {
+    mockGetTaskCache.mockReturnValue(undefined);
+    const { client, backend } = makeNotionBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.setDependsOn(rawTaskId, ['notion:other-task']),
+    ).resolves.toBeUndefined();
+
+    expect(client.setDependsOn).toHaveBeenCalledWith(`notion:${rawTaskId}`, [
+      'notion:other-task',
+    ]);
   });
 });
