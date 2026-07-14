@@ -96,7 +96,19 @@ echo "Built: ${DEB_FILE}"
 if [ -n "${LINUX_GPG_PRIVATE_KEY:-}" ]; then
     echo "Importing GPG key and signing .deb..."
     echo "${LINUX_GPG_PRIVATE_KEY}" | base64 -d | gpg --batch --import
-    echo "${LINUX_GPG_PASSPHRASE}" | dpkg-sig --gpg-options "--batch --passphrase-fd 0" --sign builder "${DEB_FILE}"
+    # Derive the signing key's long key ID from the key material (show-only, no re-import).
+    KEY_ID=$(echo "${LINUX_GPG_PRIVATE_KEY}" | base64 -d \
+        | gpg --import-options show-only --import --with-colons 2>/dev/null \
+        | awk -F: '/^sec:/ {print $5; exit}')
+    # debsigs shells out to gpg non-interactively; supply the passphrase via a 0600 temp file
+    # and loopback pinentry (correct flag is --gpg-options, not --gpgopts/--pgp).
+    PASS_FILE=$(mktemp)
+    chmod 600 "${PASS_FILE}"
+    printf '%s' "${LINUX_GPG_PASSPHRASE}" > "${PASS_FILE}"
+    debsigs --sign=origin --default-key="${KEY_ID}" \
+        --gpg-options="--batch --pinentry-mode loopback --passphrase-file ${PASS_FILE}" \
+        "${DEB_FILE}"
+    rm -f "${PASS_FILE}"
     echo "Signed: ${DEB_FILE}"
 else
     echo "LINUX_GPG_PRIVATE_KEY not set — skipping GPG signing."
