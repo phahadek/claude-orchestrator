@@ -206,6 +206,88 @@ describe('PreReviewPipeline.run — all stages skipped when no config', () => {
   });
 });
 
+describe('PreReviewPipeline.run — clears stale gate-owned pause on success', () => {
+  it('clears pause_reason=analyze_failing to null and emits pr_pause_cleared', async () => {
+    mockGetPRByNumber.mockReturnValue(makePRRow({ pause_reason: 'analyze_failing' }));
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockSetPauseReason).toHaveBeenCalledWith(PR_NUMBER, REPO, null);
+    expect(sm.emit).toHaveBeenCalledWith('message', {
+      type: 'pr_pause_cleared',
+      prNumber: PR_NUMBER,
+      repo: REPO,
+    });
+  });
+
+  it('clears pause_reason=autofix_git_infra_failure to null on success', async () => {
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({ pause_reason: 'autofix_git_infra_failure' }),
+    );
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockSetPauseReason).toHaveBeenCalledWith(PR_NUMBER, REPO, null);
+  });
+
+  it('preserves a non-gate pause (max_reviews) at success time', async () => {
+    mockGetPRByNumber.mockReturnValue(makePRRow({ pause_reason: 'max_reviews' }));
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockSetPauseReason).not.toHaveBeenCalled();
+    expect(sm.emit).not.toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({ type: 'pr_pause_cleared' }),
+    );
+  });
+
+  it('does not clear pause and keeps existing gate-failure behavior when a gate stage fails', async () => {
+    mockGetPRByNumber.mockReturnValue(makePRRow({ pause_reason: 'analyze_failing' }));
+    mockLoadOrchestratorConfig.mockReturnValue({
+      verify: [],
+      autofix: [],
+      analyze: ['eslint .'],
+      test: [],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    mockRunTestCommands.mockResolvedValue({
+      passed: false,
+      output: 'lint errors',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'analyze_failing',
+    );
+    expect(mockSetPauseReason).not.toHaveBeenCalledWith(PR_NUMBER, REPO, null);
+  });
+});
+
 describe('PreReviewPipeline — autofix gate', () => {
   it('skips autofix when no commands configured', async () => {
     mockLoadAutofixCommands.mockReturnValue([]);
