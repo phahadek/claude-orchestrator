@@ -30,3 +30,21 @@ export function formatTaskId(source: TaskSource, externalId: string): string {
 export function toExternalId(taskId: string): string {
   return parseTaskId(taskId).externalId;
 }
+
+/**
+ * Idempotently normalize a task ID to `source:externalId` form. If `id` is
+ * already a valid prefixed task ID, it is returned unchanged; otherwise it is
+ * wrapped as `notion:<id>`. This lets Notion adapter methods accept both the
+ * raw Notion UUIDs exposed by the groom-context bundle and already-prefixed
+ * ids (e.g. from createTask) without double-prefixing the latter.
+ */
+export function normalizeTaskId(id: string): string {
+  const colonIndex = id.indexOf(':');
+  if (colonIndex >= 0) {
+    const source = id.substring(0, colonIndex);
+    if (VALID_SOURCES.has(source) && id.length > colonIndex + 1) {
+      return id;
+    }
+  }
+  return formatTaskId('notion', id);
+}
