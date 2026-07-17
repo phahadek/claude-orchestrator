@@ -98,10 +98,7 @@ describe('backfillSeedTask', () => {
 
   it('throws an already-started error when the task has left Backlog/Ready', async () => {
     mockGetTaskBackend.mockReturnValue(makeBackend());
-    upsertTaskCache(
-      'notion:seed-task',
-      JSON.stringify({ status: '✅ Done' }),
-    );
+    upsertTaskCache('notion:seed-task', JSON.stringify({ status: '✅ Done' }));
 
     await expect(
       backfillSeedTask({
