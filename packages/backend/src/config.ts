@@ -230,6 +230,22 @@ export interface RuntimeSettings {
   auto_launch_concurrency: number;
   /** AutoLauncher poll interval in milliseconds. */
   auto_launch_poll_interval_ms: number;
+  /**
+   * Memory admission floor: AutoLauncher defers dispatch when projected free
+   * host memory (current free minus per_session_reserve_mb) would drop below
+   * this many MB. Default 4096 (4GB) leaves headroom for the OS and other
+   * processes beyond the orchestrator's own sessions.
+   */
+  min_host_free_memory_mb: number;
+  /**
+   * Estimated memory (MB) a single dispatched session consumes, used to
+   * project free memory before admitting the next launch. Default 3072 (3GB)
+   * is derived from the 2026-07-16 incident on this box (~31GB total RAM):
+   * 14 concurrent sessions exhausted swap, 5 was safe, the knee was ~8 —
+   * consistent with each session costing roughly 3GB under a memory-heavy
+   * verify phase.
+   */
+  per_session_reserve_mb: number;
   /** Stuck-session timer: seconds before emitting a notify toast. */
   session_notify_threshold_seconds: number;
   /** Stuck-session timer: seconds before injecting a pause message. */
@@ -284,6 +300,8 @@ export const runtimeSettings: RuntimeSettings = {
   auto_launch_poll_interval_ms: Number(
     process.env.AUTO_LAUNCH_POLL_INTERVAL_MS ?? 60_000,
   ),
+  min_host_free_memory_mb: Number(process.env.MIN_HOST_FREE_MEMORY_MB ?? 4096),
+  per_session_reserve_mb: Number(process.env.PER_SESSION_RESERVE_MB ?? 3072),
   session_notify_threshold_seconds: Number(
     process.env.SESSION_NOTIFY_THRESHOLD_SECONDS ?? 3600,
   ),
