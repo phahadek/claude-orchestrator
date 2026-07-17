@@ -18,12 +18,16 @@
 //   node seed-state-client.mjs item <seedItemId>
 //   node seed-state-client.mjs detail <seedItemId>
 //   node seed-state-client.mjs event <seedItemId> <json-payload>
+//   node seed-state-client.mjs accrete <json-payload>
 //
 // Example:
 //   node seed-state-client.mjs event si-42 \
 //     '{"outcome":"applied","evidence":"row inserted via analyzer_configs CRUD"}'
 //   node seed-state-client.mjs event si-43 \
 //     '{"outcome":"blocked","evidence":"CRUD rejected: missing dependent row","filedFollowon":"81f3"}'
+//   node seed-state-client.mjs accrete \
+//     '{"project":"p1","taskId":"notion:t1","title":"Add retry","milestone":"M12",
+//       "decision":"seeds","seeds":[{"spec":"analyzer_configs row for retry-backoff"}]}'
 //
 // Env:
 //   ORCHESTRATOR_BACKEND_HOST backend loopback host (default 127.0.0.1)
@@ -135,6 +139,17 @@ export function appendSeedItemEvent({ host, port, token, seedItemId, event }) {
   });
 }
 
+export function accreteSeedContribution({ host, port, token, contribution }) {
+  return requestSeedState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: '/api/seed/accrete-contribution',
+    payload: contribution,
+  });
+}
+
 function parseFlags(argv) {
   function option(name) {
     const i = argv.indexOf(name);
@@ -154,7 +169,8 @@ const USAGE =
   '  node seed-state-client.mjs next --milestone <M> --deploySha <sha> [--limit <N>]\n' +
   '  node seed-state-client.mjs item <seedItemId>\n' +
   '  node seed-state-client.mjs detail <seedItemId>\n' +
-  '  node seed-state-client.mjs event <seedItemId> <json-payload>';
+  '  node seed-state-client.mjs event <seedItemId> <json-payload>\n' +
+  '  node seed-state-client.mjs accrete <json-payload>';
 
 async function main() {
   function fail(message) {
@@ -219,6 +235,21 @@ async function main() {
         token,
         seedItemId,
         event,
+      });
+    } else if (command === 'accrete') {
+      const [payloadJson] = rest;
+      if (payloadJson === undefined) return fail(USAGE);
+      let contribution;
+      try {
+        contribution = JSON.parse(payloadJson);
+      } catch {
+        return fail(`invalid JSON payload: ${payloadJson}`);
+      }
+      result = await accreteSeedContribution({
+        host,
+        port,
+        token,
+        contribution,
       });
     } else {
       return fail(USAGE);

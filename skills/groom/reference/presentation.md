@@ -202,20 +202,19 @@ Then the five points:
    means the chain is contaminated — surface it, don't paper over it.
 3. **Automated tests** — what the task's `### 🤖 Automated tests` section will verify.
 4. **Manual verification** — enumerate the stripped runtime / launch-and-observe items
-   this task contributes to the milestone 🚦 Gate. These are the items removed from the
+   this task contributes to the milestone gate. These are the items removed from the
    task body with _"Covered by the Manual Verification Gate."_ If the task has no
-   standalone runtime item, write _None._ The groomer accretes these items to the Gate
-   and records `gate_contribution` in `grooming-state.json` before the Ready-flip (see
-   Step 4 — Gate accretion). Omitting accretion loses the test permanently: the item is
-   stripped from the body and never lands on the Gate.
+   standalone runtime item, write _None._ The groomer accretes these items onto the
+   milestone gate store via the gate-accretion route before the Ready-flip (see Step 4
+   — Gate accretion). Omitting accretion loses the test permanently: the item is
+   stripped from the body and never lands on the gate store.
 5. **Operational seed** — the operational data/config seed this task contributes to the
-   milestone **config-seed** task: a prod-data row/flag/default deliberately kept out of its
+   milestone config-seed run: a prod-data row/flag/default deliberately kept out of its
    auto-dispatched PR (e.g. an `analyzer_configs` row, config defaults, alias/cohort flags).
-   Write _None._ if it has none. The groomer accretes the seed(s) to the config-seed task,
-   adds the back-reference on the source task, and records `seed_contribution` in
-   `grooming-state.json` before the Ready-flip (see Step 4 — Seed accretion). The array
-   field is `seeds`, not the gate's `items`. Omitting accretion loses the seed permanently:
-   the code sits dark after merge until someone hand-seeds it.
+   Write _None._ if it has none. The groomer accretes the seed(s) onto the milestone seed
+   store via the seed-accretion route before the Ready-flip (see Step 4 — Seed accretion).
+   The array field is `seeds`, not the gate's `items`. Omitting accretion loses the seed
+   permanently: the code sits dark after merge until someone hand-seeds it.
 
 Then, at the end of the batch, under a **Context (no action needed)** heading, list
 the non-Backlog tasks by name + type + status — same Type-first convention as the
