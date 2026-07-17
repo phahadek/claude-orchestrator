@@ -14,10 +14,7 @@ vi.mock('../../config.js', () => ({
 
 import os from 'os';
 import { runtimeSettings } from '../../config.js';
-import {
-  evaluateMemoryHeadroom,
-  hasMemoryHeadroom,
-} from '../memoryAdmission';
+import { evaluateMemoryHeadroom, hasMemoryHeadroom } from '../memoryAdmission';
 
 describe('evaluateMemoryHeadroom', () => {
   it('permits dispatch when projected free memory is at or above the budget', () => {

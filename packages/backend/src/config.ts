@@ -300,9 +300,7 @@ export const runtimeSettings: RuntimeSettings = {
   auto_launch_poll_interval_ms: Number(
     process.env.AUTO_LAUNCH_POLL_INTERVAL_MS ?? 60_000,
   ),
-  min_host_free_memory_mb: Number(
-    process.env.MIN_HOST_FREE_MEMORY_MB ?? 4096,
-  ),
+  min_host_free_memory_mb: Number(process.env.MIN_HOST_FREE_MEMORY_MB ?? 4096),
   per_session_reserve_mb: Number(process.env.PER_SESSION_RESERVE_MB ?? 3072),
   session_notify_threshold_seconds: Number(
     process.env.SESSION_NOTIFY_THRESHOLD_SECONDS ?? 3600,
