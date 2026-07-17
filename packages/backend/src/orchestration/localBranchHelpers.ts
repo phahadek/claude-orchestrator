@@ -1,5 +1,6 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { recoverStaleIndexLock } from './staleIndexLock';
 
 const execFileAsync = promisify(execFile);
 
@@ -7,6 +8,7 @@ async function gitExec(
   args: string[],
   cwd: string,
 ): Promise<{ stdout: string; stderr: string }> {
+  await recoverStaleIndexLock(cwd);
   return execFileAsync('git', args, { cwd });
 }
 
