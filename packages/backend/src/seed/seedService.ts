@@ -272,6 +272,7 @@ export async function backfillSeedTask(
   } catch (err) {
     throw new Error(
       `seed backfill: task ${input.taskId} not found (${err instanceof Error ? err.message : String(err)})`,
+      { cause: err },
     );
   }
 

@@ -412,6 +412,7 @@ export async function backfillGateTask(
   } catch (err) {
     throw new Error(
       `gate backfill: task ${input.taskId} not found (${err instanceof Error ? err.message : String(err)})`,
+      { cause: err },
     );
   }
 
