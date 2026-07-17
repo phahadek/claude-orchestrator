@@ -8,6 +8,7 @@ import {
   listSeedItems,
   listSeedMilestoneReadiness,
   appendSeedItemEvent,
+  backfillSeedTask,
 } from '../seed/seedService';
 import type { SeedItemEventOutcome } from '../db/types';
 
@@ -134,6 +135,57 @@ export function createSeedStateRouter(): Router {
     } catch (err) {
       res.status(400).json({
         error: err instanceof Error ? err.message : 'seed item event failed',
+      });
+    }
+  });
+
+  // POST /api/seed/backfill  { project, taskId, milestone, candidates }
+  router.post('/seed/backfill', async (req: Request, res: Response) => {
+    const body = req.body as {
+      project?: unknown;
+      taskId?: unknown;
+      milestone?: unknown;
+      candidates?: unknown;
+    };
+    const project = typeof body.project === 'string' ? body.project : null;
+    const taskId = typeof body.taskId === 'string' ? body.taskId : null;
+    const milestone =
+      typeof body.milestone === 'string' ? body.milestone : null;
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    if (!taskId) {
+      res.status(400).json({ error: 'taskId is required' });
+      return;
+    }
+    if (!milestone) {
+      res.status(400).json({ error: 'milestone is required' });
+      return;
+    }
+    const candidates = Array.isArray(body.candidates)
+      ? body.candidates.filter(
+          (c): c is { id: string; title: string } =>
+            typeof c === 'object' &&
+            c !== null &&
+            typeof (c as { id?: unknown }).id === 'string' &&
+            typeof (c as { title?: unknown }).title === 'string',
+        )
+      : undefined;
+
+    try {
+      const result = await backfillSeedTask({
+        project,
+        taskId,
+        milestone,
+        candidates,
+      });
+      res.json(result);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'seed backfill failed';
+      res.status(message.includes('not found') ? 404 : 409).json({
+        error: message,
       });
     }
   });

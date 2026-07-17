@@ -10,6 +10,7 @@ import {
   listMilestoneReadiness,
   appendGateItemEvent,
   approveGateItem,
+  backfillGateTask,
 } from '../gate/gateService';
 import type { GateItemClassification } from '../db/types';
 
@@ -171,6 +172,53 @@ export function createGateStateRouter(): Router {
     } catch (err) {
       res.status(400).json({
         error: err instanceof Error ? err.message : 'gate item approval failed',
+      });
+    }
+  });
+
+  // POST /api/gate/backfill  { project, taskId, milestone, milestoneBoardIds }
+  router.post('/gate/backfill', async (req: Request, res: Response) => {
+    const body = req.body as {
+      project?: unknown;
+      taskId?: unknown;
+      milestone?: unknown;
+      milestoneBoardIds?: unknown;
+    };
+    const project = typeof body.project === 'string' ? body.project : null;
+    const taskId = typeof body.taskId === 'string' ? body.taskId : null;
+    const milestone =
+      typeof body.milestone === 'string' ? body.milestone : null;
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    if (!taskId) {
+      res.status(400).json({ error: 'taskId is required' });
+      return;
+    }
+    if (!milestone) {
+      res.status(400).json({ error: 'milestone is required' });
+      return;
+    }
+    const milestoneBoardIds = Array.isArray(body.milestoneBoardIds)
+      ? body.milestoneBoardIds.filter(
+          (id): id is string => typeof id === 'string',
+        )
+      : undefined;
+
+    try {
+      const result = await backfillGateTask({
+        project,
+        taskId,
+        milestone,
+        milestoneBoardIds,
+      });
+      res.json(result);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'gate backfill failed';
+      res.status(message.includes('not found') ? 404 : 409).json({
+        error: message,
       });
     }
   });

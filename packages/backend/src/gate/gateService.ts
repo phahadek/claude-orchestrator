@@ -2,6 +2,9 @@ import { execFileSync } from 'child_process';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
 import type { GateItemClassification } from '../db/types';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import { getTaskCache } from '../db/queries';
+import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
 
 /**
  * Recomputes whether a deploy contains a given commit. This is the git-ancestry
@@ -378,4 +381,60 @@ export function approveGateItem(
     );
   }
   return updated;
+}
+
+/** A raw Notion-style status string counts as not-started when it hasn't left Backlog/Ready. */
+function isNotStartedStatus(notionStatus: string): boolean {
+  if (!notionStatus) return true;
+  return notionStatus.includes('Backlog') || notionStatus.includes('Ready');
+}
+
+export interface BackfillGateTaskInput {
+  project: string;
+  taskId: string;
+  milestone: string;
+  milestoneBoardIds?: string[];
+}
+
+/**
+ * The gate/gateBackfill.ts library's only invoker: fetches a Gate task's
+ * live body and hands it to backfillGateBody. Only runs against a
+ * not-yet-started task — a started Gate has run-history the backfill's
+ * lossless-parse contract doesn't account for.
+ */
+export async function backfillGateTask(
+  input: BackfillGateTaskInput,
+): Promise<GateBackfillResult> {
+  const backend = getTaskBackend(input.project);
+  let body: string;
+  try {
+    body = await backend.fetchTaskPage(input.taskId);
+  } catch (err) {
+    throw new Error(
+      `gate backfill: task ${input.taskId} not found (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+
+  const cacheRow = getTaskCache(input.taskId);
+  let notionStatus = '';
+  if (cacheRow) {
+    try {
+      const parsed = JSON.parse(cacheRow.raw_json) as { status?: string };
+      notionStatus = parsed.status ?? '';
+    } catch {
+      // ignore malformed cache; treated as not-started below
+    }
+  }
+  if (!isNotStartedStatus(notionStatus)) {
+    throw new Error(
+      `gate backfill: task ${input.taskId} already started (status=${notionStatus})`,
+    );
+  }
+
+  return backfillGateBody(body, {
+    project: input.project,
+    milestone: input.milestone,
+    milestoneBoardIds: input.milestoneBoardIds,
+    now: new Date().toISOString(),
+  });
 }

@@ -18,6 +18,7 @@ const seedServiceMock = vi.hoisted(() => ({
   listSeedItems: vi.fn(),
   listSeedMilestoneReadiness: vi.fn(),
   appendSeedItemEvent: vi.fn(),
+  backfillSeedTask: vi.fn(),
 }));
 
 vi.mock('../../seed/seedService.js', () => seedServiceMock);
@@ -182,5 +183,60 @@ describe('POST /api/seed/items/:id/events', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/filedFollowon/);
+  });
+});
+
+describe('POST /api/seed/backfill', () => {
+  it('calls backfillSeedTask with the parsed body and returns its result', async () => {
+    const result = { createdIds: ['a'], skippedIds: [], unresolvedSources: [] };
+    seedServiceMock.backfillSeedTask.mockResolvedValue(result);
+
+    const res = await request(makeApp())
+      .post('/api/seed/backfill')
+      .send({ project: 'p1', taskId: 'notion:seed-task', milestone: 'M12' });
+
+    expect(seedServiceMock.backfillSeedTask).toHaveBeenCalledWith({
+      project: 'p1',
+      taskId: 'notion:seed-task',
+      milestone: 'M12',
+      candidates: undefined,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(result);
+  });
+
+  it('400s without a taskId, never calling the service', async () => {
+    const res = await request(makeApp())
+      .post('/api/seed/backfill')
+      .send({ project: 'p1', milestone: 'M12' });
+
+    expect(res.status).toBe(400);
+    expect(seedServiceMock.backfillSeedTask).not.toHaveBeenCalled();
+  });
+
+  it('404s when the service reports the task was not found', async () => {
+    seedServiceMock.backfillSeedTask.mockRejectedValue(
+      new Error('seed backfill: task notion:missing not found (404)'),
+    );
+
+    const res = await request(makeApp())
+      .post('/api/seed/backfill')
+      .send({ project: 'p1', taskId: 'notion:missing', milestone: 'M12' });
+
+    expect(res.status).toBe(404);
+  });
+
+  it('409s when the service reports the task already started', async () => {
+    seedServiceMock.backfillSeedTask.mockRejectedValue(
+      new Error(
+        'seed backfill: task notion:seed-task already started (status=🔄 In Progress)',
+      ),
+    );
+
+    const res = await request(makeApp())
+      .post('/api/seed/backfill')
+      .send({ project: 'p1', taskId: 'notion:seed-task', milestone: 'M12' });
+
+    expect(res.status).toBe(409);
   });
 });
