@@ -22,6 +22,7 @@ describe('deploy-grooming.mjs manifest', () => {
       'packages/backend/scripts/gate-state-client.mjs',
       'packages/backend/scripts/seed-state-client.mjs',
       'packages/backend/scripts/stage-task-intent.mjs',
+      'skills/gate/',
     ]) {
       expect(output).toContain(client);
     }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * deploy-grooming.mjs — copy the vendored grooming/design/ops skill artifacts from this
- * repo into ~/.claude so the /groom, /design, /ops, /deploy and /wrap skills + their
+ * deploy-grooming.mjs — copy the vendored grooming/design/ops/gate skill artifacts from this
+ * repo into ~/.claude so the /groom, /design, /ops, /deploy, /wrap and /gate skills + their
  * loaders run user-globally.
  *
  * Run by hand after changing any vendored artifact:
@@ -12,7 +12,7 @@
  *            ops-client}.mjs                                   → ~/.claude/scripts/
  *   packages/backend/scripts/{groom-context-client,gate-state-client,
  *            seed-state-client,stage-task-intent}.mjs           → ~/.claude/scripts/
- *   skills/{groom,design,ops,deploy,wrap,sync-guidelines}/** → ~/.claude/skills/
+ *   skills/{groom,design,ops,deploy,wrap,sync-guidelines,gate}/** → ~/.claude/skills/
  *   config-template/hooks/load-procedures.mjs → <config-tree>/hooks/  (overwrite)
  *
  * groom-load.mjs, ops-load.mjs and ops-journal-set.mjs (Notion-shell-out loaders) and the
@@ -70,7 +70,15 @@ const BACKEND_SCRIPTS = [
   'seed-state-client.mjs',
   'stage-task-intent.mjs',
 ];
-const SKILLS = ['groom', 'design', 'ops', 'deploy', 'wrap', 'sync-guidelines'];
+const SKILLS = [
+  'groom',
+  'design',
+  'ops',
+  'deploy',
+  'wrap',
+  'sync-guidelines',
+  'gate',
+];
 
 function copy(src, dest, label) {
   if (!existsSync(src)) {
