@@ -13,6 +13,12 @@ import {
   backfillGateTask,
 } from '../gate/gateService';
 import type { GateItemClassification } from '../db/types';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import { BackendTaskWriteCommands } from '../tasks/TaskWriteCommands';
+import type {
+  GateContributionDecision,
+  GateContributionItemInput,
+} from '../tasks/TaskWriteCommands';
 
 /**
  * Thin read/write surface over gateService's module functions — the
@@ -219,6 +225,78 @@ export function createGateStateRouter(): Router {
         err instanceof Error ? err.message : 'gate backfill failed';
       res.status(message.includes('not found') ? 404 : 409).json({
         error: message,
+      });
+    }
+  });
+
+  // POST /api/gate/accrete-contribution
+  //   { project, taskId, title, milestone, classification, items: [{ text }] }
+  // The grooming write-path for gate_contribution: mints gate_item rows for
+  // the source task's stripped runtime items and records the gate_accretion
+  // marker checkGroomingPromotionGate reads before a Code/Tooling Ready-flip.
+  // "none"/"n/a" mint the marker alone, with an empty items array.
+  router.post('/gate/accrete-contribution', async (req: Request, res: Response) => {
+    const body = req.body as {
+      project?: unknown;
+      taskId?: unknown;
+      title?: unknown;
+      milestone?: unknown;
+      classification?: unknown;
+      items?: unknown;
+    };
+    const project = typeof body.project === 'string' ? body.project : null;
+    const taskId = typeof body.taskId === 'string' ? body.taskId : null;
+    const title = typeof body.title === 'string' ? body.title : null;
+    const milestone =
+      typeof body.milestone === 'string' ? body.milestone : null;
+    const classification =
+      typeof body.classification === 'string'
+        ? (body.classification as GateContributionDecision)
+        : null;
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    if (!taskId) {
+      res.status(400).json({ error: 'taskId is required' });
+      return;
+    }
+    if (!title) {
+      res.status(400).json({ error: 'title is required' });
+      return;
+    }
+    if (!milestone) {
+      res.status(400).json({ error: 'milestone is required' });
+      return;
+    }
+    if (!classification) {
+      res.status(400).json({ error: 'classification is required' });
+      return;
+    }
+    const items: GateContributionItemInput[] = Array.isArray(body.items)
+      ? body.items
+          .filter(
+            (item): item is { text: string } =>
+              typeof item === 'object' &&
+              item !== null &&
+              typeof (item as { text?: unknown }).text === 'string',
+          )
+          .map((item) => ({ text: item.text }))
+      : [];
+
+    try {
+      const backend = getTaskBackend(project);
+      const commands = new BackendTaskWriteCommands(backend, project);
+      const result = await commands.accreteGateContribution(
+        { id: taskId, title, project, milestone },
+        items,
+        classification,
+      );
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({
+        error:
+          err instanceof Error ? err.message : 'gate accretion failed',
       });
     }
   });

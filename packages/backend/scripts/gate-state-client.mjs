@@ -17,10 +17,14 @@
 //   node gate-state-client.mjs item <gateItemId>
 //   node gate-state-client.mjs event <gateItemId> <json-payload>
 //   node gate-state-client.mjs approve <gateItemId> [operator]
+//   node gate-state-client.mjs accrete <json-payload>
 //
 // Example:
 //   node gate-state-client.mjs event gi-42 \
 //     '{"disposition":"pass","evidence":"manually clicked through checkout"}'
+//   node gate-state-client.mjs accrete \
+//     '{"project":"p1","taskId":"notion:t1","title":"Add retry","milestone":"M12",
+//       "classification":"Read-Only","items":[{"text":"Click through checkout once"}]}'
 //
 // Env:
 //   ORCHESTRATOR_BACKEND_HOST backend loopback host (default 127.0.0.1)
@@ -134,6 +138,17 @@ export function approveGateItem({ host, port, token, gateItemId, operator }) {
   });
 }
 
+export function accreteGateContribution({ host, port, token, contribution }) {
+  return requestGateState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: '/api/gate/accrete-contribution',
+    payload: contribution,
+  });
+}
+
 function parseFlags(argv) {
   function option(name) {
     const i = argv.indexOf(name);
@@ -153,7 +168,8 @@ const USAGE =
   '  node gate-state-client.mjs next --milestone <M> [--classification <C>] [--limit <N>]\n' +
   '  node gate-state-client.mjs item <gateItemId>\n' +
   '  node gate-state-client.mjs event <gateItemId> <json-payload>\n' +
-  '  node gate-state-client.mjs approve <gateItemId> [operator]';
+  '  node gate-state-client.mjs approve <gateItemId> [operator]\n' +
+  '  node gate-state-client.mjs accrete <json-payload>';
 
 async function main() {
   function fail(message) {
@@ -224,6 +240,21 @@ async function main() {
         token,
         gateItemId,
         operator,
+      });
+    } else if (command === 'accrete') {
+      const [payloadJson] = rest;
+      if (payloadJson === undefined) return fail(USAGE);
+      let contribution;
+      try {
+        contribution = JSON.parse(payloadJson);
+      } catch {
+        return fail(`invalid JSON payload: ${payloadJson}`);
+      }
+      result = await accreteGateContribution({
+        host,
+        port,
+        token,
+        contribution,
       });
     } else {
       return fail(USAGE);

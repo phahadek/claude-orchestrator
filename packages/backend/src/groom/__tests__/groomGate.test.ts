@@ -9,10 +9,28 @@ import { db } from '../../db/db.js';
 import { checkGroomingPromotionGate } from '../groomGate';
 import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
+import { BackendTaskWriteCommands } from '../../tasks/TaskWriteCommands';
+import type { TaskBackend } from '../../tasks/TaskBackend';
+
+function makeBackend(): TaskBackend {
+  return {
+    type: 'notion',
+    fetchReadyTasks: vi.fn(),
+    attachPR: vi.fn(),
+    updateStatus: vi.fn(),
+    fetchTaskPage: vi.fn(),
+    fetchNonMilestoneReadyTasks: vi.fn(),
+    updateNotes: vi.fn(),
+    appendImplementationNote: vi.fn(),
+    listTasksByStatus: vi.fn(),
+  };
+}
 
 beforeEach(() => {
   db.prepare('DELETE FROM gate_accretion').run();
   db.prepare('DELETE FROM seed_accretion').run();
+  db.prepare('DELETE FROM gate_item').run();
+  db.prepare('DELETE FROM seed_item').run();
 });
 
 describe('checkGroomingPromotionGate', () => {
@@ -270,5 +288,42 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
       'notion:design-task-2',
     );
     expect(result.allowed).toBe(true);
+  });
+});
+
+describe('checkGroomingPromotionGate — via the accretion write-surface', () => {
+  it('blocks a Code-task Ready flip before accretion runs, and allows it once accreteGateContribution/stageSeedContribution have written their markers', async () => {
+    const commands = new BackendTaskWriteCommands(makeBackend());
+    const sourceTask = {
+      id: 'notion:accreted',
+      title: 'Add retry to checkout',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+    };
+    const entry = {
+      size_check: { decision: 'n/a' },
+      type_check: { decision: 'none' },
+      type: '💻 Code',
+    };
+
+    expect(checkGroomingPromotionGate(entry, sourceTask.id).allowed).toBe(
+      false,
+    );
+
+    await commands.accreteGateContribution(
+      sourceTask,
+      [{ text: 'Click through checkout once' }],
+      'Read-Only',
+    );
+    // gate_contribution now recorded, but seed_contribution is still missing.
+    expect(checkGroomingPromotionGate(entry, sourceTask.id).allowed).toBe(
+      false,
+    );
+
+    await commands.stageSeedContribution(sourceTask, [], 'none');
+
+    const result = checkGroomingPromotionGate(entry, sourceTask.id);
+    expect(result.allowed).toBe(true);
+    expect(result.reasons).toEqual([]);
   });
 });

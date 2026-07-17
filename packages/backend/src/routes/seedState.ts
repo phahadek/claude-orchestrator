@@ -11,6 +11,12 @@ import {
   backfillSeedTask,
 } from '../seed/seedService';
 import type { SeedItemEventOutcome } from '../db/types';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import { BackendTaskWriteCommands } from '../tasks/TaskWriteCommands';
+import type {
+  SeedContributionDecision,
+  SeedContributionItemInput,
+} from '../tasks/TaskWriteCommands';
 
 /**
  * Thin read/write surface over seedService's module functions — the
@@ -186,6 +192,79 @@ export function createSeedStateRouter(): Router {
         err instanceof Error ? err.message : 'seed backfill failed';
       res.status(message.includes('not found') ? 404 : 409).json({
         error: message,
+      });
+    }
+  });
+
+  // POST /api/seed/accrete-contribution
+  //   { project, taskId, title, milestone, decision, seeds: [{ spec }] }
+  // The grooming write-path for seed_contribution: mints seed_item rows for
+  // the source task's operational data/config seeds and records the
+  // seed_accretion marker checkGroomingPromotionGate reads before a
+  // Code/Tooling Ready-flip. "none"/"n/a" mint the marker alone, with an
+  // empty seeds array.
+  router.post('/seed/accrete-contribution', async (req: Request, res: Response) => {
+    const body = req.body as {
+      project?: unknown;
+      taskId?: unknown;
+      title?: unknown;
+      milestone?: unknown;
+      decision?: unknown;
+      seeds?: unknown;
+    };
+    const project = typeof body.project === 'string' ? body.project : null;
+    const taskId = typeof body.taskId === 'string' ? body.taskId : null;
+    const title = typeof body.title === 'string' ? body.title : null;
+    const milestone =
+      typeof body.milestone === 'string' ? body.milestone : null;
+    const decision =
+      typeof body.decision === 'string'
+        ? (body.decision as SeedContributionDecision)
+        : null;
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
+    if (!taskId) {
+      res.status(400).json({ error: 'taskId is required' });
+      return;
+    }
+    if (!title) {
+      res.status(400).json({ error: 'title is required' });
+      return;
+    }
+    if (!milestone) {
+      res.status(400).json({ error: 'milestone is required' });
+      return;
+    }
+    if (!decision) {
+      res.status(400).json({ error: 'decision is required' });
+      return;
+    }
+    const seeds: SeedContributionItemInput[] = Array.isArray(body.seeds)
+      ? body.seeds
+          .filter(
+            (seed): seed is { spec: string } =>
+              typeof seed === 'object' &&
+              seed !== null &&
+              typeof (seed as { spec?: unknown }).spec === 'string',
+          )
+          .map((seed) => ({ spec: seed.spec }))
+      : [];
+
+    try {
+      const backend = getTaskBackend(project);
+      const commands = new BackendTaskWriteCommands(backend, project);
+      const result = await commands.stageSeedContribution(
+        { id: taskId, title, project, milestone },
+        seeds,
+        decision,
+      );
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({
+        error:
+          err instanceof Error ? err.message : 'seed accretion failed',
       });
     }
   });
