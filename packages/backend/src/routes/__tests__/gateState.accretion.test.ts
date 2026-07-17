@@ -123,7 +123,12 @@ describe('POST /api/gate/accrete-contribution', () => {
   it('400s without a classification, never calling accreteGateContribution', async () => {
     const res = await request(makeApp())
       .post('/api/gate/accrete-contribution')
-      .send({ project: 'p1', taskId: 't1', title: 'Add retry', milestone: 'M12' });
+      .send({
+        project: 'p1',
+        taskId: 't1',
+        title: 'Add retry',
+        milestone: 'M12',
+      });
 
     expect(res.status).toBe(400);
     expect(accreteGateContributionMock).not.toHaveBeenCalled();
@@ -145,7 +150,9 @@ describe('POST /api/gate/accrete-contribution', () => {
 
   it('400s when accreteGateContribution rejects (e.g. classification/items mismatch)', async () => {
     accreteGateContributionMock.mockRejectedValue(
-      new Error('at least one item is required unless classification is "none" or "n/a"'),
+      new Error(
+        'at least one item is required unless classification is "none" or "n/a"',
+      ),
     );
 
     const res = await request(makeApp())

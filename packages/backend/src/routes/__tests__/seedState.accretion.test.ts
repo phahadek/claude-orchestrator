@@ -121,7 +121,12 @@ describe('POST /api/seed/accrete-contribution', () => {
   it('400s without a decision, never calling stageSeedContribution', async () => {
     const res = await request(makeApp())
       .post('/api/seed/accrete-contribution')
-      .send({ project: 'p1', taskId: 't1', title: 'Add retry', milestone: 'M12' });
+      .send({
+        project: 'p1',
+        taskId: 't1',
+        title: 'Add retry',
+        milestone: 'M12',
+      });
 
     expect(res.status).toBe(400);
     expect(stageSeedContributionMock).not.toHaveBeenCalled();
@@ -143,7 +148,9 @@ describe('POST /api/seed/accrete-contribution', () => {
 
   it('400s when stageSeedContribution rejects (e.g. decision/seeds mismatch)', async () => {
     stageSeedContributionMock.mockRejectedValue(
-      new Error('at least one seed is required unless decision is "none" or "n/a"'),
+      new Error(
+        'at least one seed is required unless decision is "none" or "n/a"',
+      ),
     );
 
     const res = await request(makeApp())
