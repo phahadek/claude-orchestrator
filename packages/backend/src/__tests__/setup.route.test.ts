@@ -153,10 +153,12 @@ describe('setup writes bust the config cache', () => {
     expect(primed.body.missing).toContain('github.token');
     expect(primed.body.missing).toContain('notion.apiKey');
 
-    const res = await supertest(buildApp()).post('/api/setup/save-credentials').send({
-      githubToken: 'ghp-saved',
-      notionApiKey: 'ntn-saved',
-    });
+    const res = await supertest(buildApp())
+      .post('/api/setup/save-credentials')
+      .send({
+        githubToken: 'ghp-saved',
+        notionApiKey: 'ntn-saved',
+      });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
 
@@ -169,7 +171,9 @@ describe('setup writes bust the config cache', () => {
     const envFile = path.join(tmpDir, '.env');
     fs.writeFileSync(
       envFile,
-      ['GITHUB_TOKEN=ghp-from-import', 'NOTION_API_KEY=ntn-from-import'].join('\n'),
+      ['GITHUB_TOKEN=ghp-from-import', 'NOTION_API_KEY=ntn-from-import'].join(
+        '\n',
+      ),
       'utf8',
     );
 

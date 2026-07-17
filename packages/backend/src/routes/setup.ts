@@ -3,7 +3,10 @@ import type { RequestHandler } from 'express';
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { getOrchestratorConfig, writeOrchestratorConfig } from '../config/appConfig';
+import {
+  getOrchestratorConfig,
+  writeOrchestratorConfig,
+} from '../config/appConfig';
 import { claudeCredentialsPath } from '../config/credentialsPath';
 import { countProjects } from '../db/queries';
 import type { DeepPartial, OrchestratorConfig } from '../config/types';
