@@ -28,6 +28,8 @@ const SETTING_KEYS = [
   'session_mode',
   'auto_launch_concurrency',
   'auto_launch_poll_interval_ms',
+  'min_host_free_memory_mb',
+  'per_session_reserve_mb',
   'session_notify_threshold_seconds',
   'session_pause_threshold_seconds',
   'session_hard_stop_window_seconds',
@@ -82,6 +84,12 @@ function applyToRuntime(
       break;
     case 'auto_launch_poll_interval_ms':
       runtimeSettings.auto_launch_poll_interval_ms = value as number;
+      break;
+    case 'min_host_free_memory_mb':
+      runtimeSettings.min_host_free_memory_mb = value as number;
+      break;
+    case 'per_session_reserve_mb':
+      runtimeSettings.per_session_reserve_mb = value as number;
       break;
     case 'session_notify_threshold_seconds':
       runtimeSettings.session_notify_threshold_seconds = value as number;
@@ -146,6 +154,8 @@ function runtimeSettingsAsRecord(): Record<RouteSettingKey, string> {
     auto_launch_poll_interval_ms: String(
       runtimeSettings.auto_launch_poll_interval_ms,
     ),
+    min_host_free_memory_mb: String(runtimeSettings.min_host_free_memory_mb),
+    per_session_reserve_mb: String(runtimeSettings.per_session_reserve_mb),
     session_notify_threshold_seconds: String(
       runtimeSettings.session_notify_threshold_seconds,
     ),

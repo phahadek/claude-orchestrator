@@ -18,7 +18,13 @@ vi.mock('../../config.js', () => ({
   runtimeSettings: {
     auto_launch_concurrency: 2,
     auto_launch_poll_interval_ms: 60_000,
+    min_host_free_memory_mb: 4096,
+    per_session_reserve_mb: 3072,
   },
+}));
+
+vi.mock('../memoryAdmission.js', () => ({
+  hasMemoryHeadroom: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../../tasks/TaskBackend.js', () => ({
