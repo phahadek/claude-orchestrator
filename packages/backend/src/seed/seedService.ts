@@ -5,6 +5,13 @@ import {
   type DeployAncestrySource,
 } from '../gate/gateService';
 import type { SeedItemEventOutcome } from '../db/types';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import { getTaskCache } from '../db/queries';
+import {
+  backfillConfigSeedTask,
+  type BackfillConfigSeedResult,
+  type TaskCandidate,
+} from './seedBackfill';
 
 /** Terminal state: the item no longer blocks milestone completion. */
 const RESOLVED_STATE = 'confirmed';
@@ -234,4 +241,62 @@ export function appendSeedItemEvent(
     );
   }
   return updated;
+}
+
+/** A raw Notion-style status string counts as not-started when it hasn't left Backlog/Ready. */
+function isNotStartedStatus(notionStatus: string): boolean {
+  if (!notionStatus) return true;
+  return notionStatus.includes('Backlog') || notionStatus.includes('Ready');
+}
+
+export interface BackfillSeedTaskInput {
+  project: string;
+  taskId: string;
+  milestone: string;
+  candidates?: TaskCandidate[];
+}
+
+/**
+ * The seed/seedBackfill.ts library's only invoker: fetches a config-seed
+ * task's live body and hands it to backfillConfigSeedTask. Only runs
+ * against a not-yet-started task — a started config-seed has run-history
+ * the backfill's lossless-parse contract doesn't account for.
+ */
+export async function backfillSeedTask(
+  input: BackfillSeedTaskInput,
+): Promise<BackfillConfigSeedResult> {
+  const backend = getTaskBackend(input.project);
+  let taskBody: string;
+  try {
+    taskBody = await backend.fetchTaskPage(input.taskId);
+  } catch (err) {
+    throw new Error(
+      `seed backfill: task ${input.taskId} not found (${err instanceof Error ? err.message : String(err)})`,
+      { cause: err },
+    );
+  }
+
+  const cacheRow = getTaskCache(input.taskId);
+  let notionStatus = '';
+  if (cacheRow) {
+    try {
+      const parsed = JSON.parse(cacheRow.raw_json) as { status?: string };
+      notionStatus = parsed.status ?? '';
+    } catch {
+      // ignore malformed cache; treated as not-started below
+    }
+  }
+  if (!isNotStartedStatus(notionStatus)) {
+    throw new Error(
+      `seed backfill: task ${input.taskId} already started (status=${notionStatus})`,
+    );
+  }
+
+  return backfillConfigSeedTask({
+    project: input.project,
+    milestone: input.milestone,
+    taskBody,
+    candidates: input.candidates,
+    now: new Date().toISOString(),
+  });
 }
