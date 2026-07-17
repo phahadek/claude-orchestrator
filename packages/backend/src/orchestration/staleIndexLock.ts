@@ -17,11 +17,9 @@ async function defaultResolveGitDir(
   worktreePath: string,
 ): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['rev-parse', '--git-dir'],
-      { cwd: worktreePath },
-    );
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--git-dir'], {
+      cwd: worktreePath,
+    });
     const gitDir = stdout.trim();
     return gitDir ? path.resolve(worktreePath, gitDir) : null;
   } catch {
@@ -75,10 +73,7 @@ async function defaultHasLiveGitProcess(
 
       const cwdLink = await fs.promises.readlink(`/proc/${pid}/cwd`);
       const resolvedCwd = path.resolve(cwdLink);
-      if (
-        resolvedCwd === target ||
-        resolvedCwd.startsWith(target + path.sep)
-      ) {
+      if (resolvedCwd === target || resolvedCwd.startsWith(target + path.sep)) {
         return true;
       }
     } catch {
