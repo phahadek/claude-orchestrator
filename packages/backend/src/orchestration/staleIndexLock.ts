@@ -83,7 +83,7 @@ async function defaultHasLiveGitProcess(
   return false;
 }
 
-export const defaultStaleIndexLockDeps: StaleIndexLockDeps = {
+const defaultStaleIndexLockDeps: StaleIndexLockDeps = {
   resolveGitDir: defaultResolveGitDir,
   statLock: defaultStatLock,
   hasLiveGitProcess: defaultHasLiveGitProcess,
