@@ -34,7 +34,7 @@ node ~/.claude/scripts/gate-state-client.mjs <command> ...
 `scripts/deploy-grooming.mjs`), using `$ORCHESTRATOR_DEVICE_TOKEN` (host/port
 default to `127.0.0.1:3000`, overridable via `$ORCHESTRATOR_BACKEND_HOST` /
 `$ORCHESTRATOR_BACKEND_PORT`) the same way the other sanctioned session
-clients (`groom-context-client.mjs`, `stage-task-intent.mjs`) do. If
+clients (`groom-context-client.mjs`, `staged-intents-client.mjs`) do. If
 `ORCHESTRATOR_DEVICE_TOKEN` is unset, **stop** — this skill only runs inside
 an orchestrator-launched session.
 

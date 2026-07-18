@@ -276,17 +276,21 @@ flip — again, the call itself is the durable record.
 
 Confirm the accretion in chat before the Ready-flip.
 
-2. **Then**, stage the write per task through the sanctioned staged-intent CLI
-   client (`node ~/.claude/scripts/stage-task-intent.mjs <kind> <json-payload>
-   [groupId]` — see `packages/backend/scripts/stage-task-intent.mjs`),
-   **never** a direct `notion-update-page` call. This stages the intent
-   (`POST /api/task-intents`, authenticated by this session's scoped,
-   write-only `ORCHESTRATOR_STAGE_TOKEN` — it can never apply). After
-   conversational sign-off in this session, the intent is applied via the
-   device-authed `POST /api/staged-intents/:id/apply` route — the
-   readiness/groomGate guards still enforce on apply. This is not a UI
-   panel: the session stages and applies its own writes, but only after the
-   human has signed off in chat.
+2. **Then**, stage the write per task through the sanctioned device-authed
+   staged-intents CLI client (`node ~/.claude/scripts/staged-intents-client.mjs
+   create <kind> <json-payload> <projectId> [groupId]` — see
+   `packages/backend/scripts/staged-intents-client.mjs`), **never** a direct
+   `notion-update-page` call. This runs in the trusted Remote-Control session,
+   so it stages through the same device-authed surface the dashboard panels
+   use (`POST /api/staged-intents`, authenticated by
+   `$ORCHESTRATOR_DEVICE_TOKEN` — **not** the stage-only
+   `ORCHESTRATOR_STAGE_TOKEN` transport, which is reserved for unattended
+   orchestrator-launched worktree sessions, see `stage-task-intent.mjs`).
+   After conversational sign-off in this session, apply each staged intent
+   with `node ~/.claude/scripts/staged-intents-client.mjs apply <intentId>`
+   (`POST /api/staged-intents/:id/apply`) — the readiness/groomGate guards
+   still enforce on apply. This is not a UI panel: the session stages and
+   applies its own writes, but only after the human has signed off in chat.
    - Generate one `groupId` per task (any stable string, e.g. the task id) so
      its writes present and apply as a unit.
    - If the task has hard-block deps (or had any and now has none), stage a
@@ -307,6 +311,10 @@ Confirm the accretion in chat before the Ready-flip.
      `groom-gate.mjs` PreToolUse hook: a missing or undispositioned
      `size_check` / `type_check` blocks the apply with a 409 and an
      annotation on the staged intent, same failure mode as the old hook.
+   - Apply the `task.setDependsOn` intent before (or together with) the
+     `task.setStatus` intent — the Ready flip is blocked with a 409 unless its
+     group already carries an applied (or concurrently-applied)
+     `task.setDependsOn` for the same task.
 3. Confirm in chat what was staged (Ready flip **and** `Depends On` value) for
    each task, and that it is now waiting for human apply. Then present the next batch.
 
@@ -344,7 +352,7 @@ off, confirm the milestone board is fully groomed.
   exception**. The **🚦 Gate** is the lone non-ordinary task: an accumulator that, by its
   type's definition, accretes manual-verification items while sitting at Ready —
   appending to it is its lifecycle, not a modify-a-Ready-task exception.
-- **No silent writes.** Every change is staged through `stage-task-intent.mjs` and
+- **No silent writes.** Every change is staged through `staged-intents-client.mjs` and
   confirmed in chat before moving on — never a direct `notion-update-page` call.
 - **Cache/state files are edited with the Edit/Write tool, never a shell script.**
   `grooming-state.json` / `code-map.json` are loader-seeded JSON on disk — Edit them

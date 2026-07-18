@@ -9,7 +9,7 @@ const repoRoot = resolve(
 );
 
 describe('deploy-grooming.mjs manifest', () => {
-  it('vendors the five route clients and drops the retired loaders (dry-run)', () => {
+  it('vendors the six route clients and drops the retired loaders (dry-run)', () => {
     const output = execFileSync(
       process.execPath,
       [resolve(repoRoot, 'scripts/deploy-grooming.mjs'), '--dry-run'],
@@ -22,6 +22,7 @@ describe('deploy-grooming.mjs manifest', () => {
       'packages/backend/scripts/gate-state-client.mjs',
       'packages/backend/scripts/seed-state-client.mjs',
       'packages/backend/scripts/stage-task-intent.mjs',
+      'packages/backend/scripts/staged-intents-client.mjs',
       'skills/gate/',
     ]) {
       expect(output).toContain(client);
