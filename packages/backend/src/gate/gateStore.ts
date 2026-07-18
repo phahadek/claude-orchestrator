@@ -27,6 +27,7 @@ import type {
   GateItemClassification,
   GateAccretionDecision,
 } from '../db/types';
+import { normalizeTaskId } from '../tasks/taskId';
 
 export interface GateItemSource {
   sourceTaskId: string;
@@ -181,13 +182,15 @@ export interface NewGateItemInput {
  */
 export function insertItem(input: NewGateItemInput): GateItem {
   const id = crypto.randomUUID();
+  const alreadyMergedCommit =
+    input.sources.find((s) => s.mergeCommit)?.mergeCommit ?? null;
   insertGateItem({
     id,
     project: input.project,
     milestone: input.milestone,
     text: input.text,
     classification: input.classification,
-    min_deployed_commit: null,
+    min_deployed_commit: alreadyMergedCommit,
     state: 'open',
     current_disposition: null,
     updated_at: input.updatedAt,
@@ -375,13 +378,14 @@ export function setSourceMergeCommit(
   sourceTaskId: string,
   mergeCommit: string,
 ): void {
+  const normalizedSourceTaskId = normalizeTaskId(sourceTaskId);
   const sources = listGateItemSources(gateItemId);
-  if (!sources.some((s) => s.source_task_id === sourceTaskId)) {
+  if (!sources.some((s) => s.source_task_id === normalizedSourceTaskId)) {
     throw new Error(
       `gate_item_source: no source ${sourceTaskId} on item ${gateItemId}`,
     );
   }
-  updateGateItemSourceMergeCommit(gateItemId, sourceTaskId, mergeCommit);
+  updateGateItemSourceMergeCommit(gateItemId, normalizedSourceTaskId, mergeCommit);
 }
 
 /**

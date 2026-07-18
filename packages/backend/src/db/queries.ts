@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { db } from './db';
 import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
+import { normalizeTaskId } from '../tasks/taskId';
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
@@ -2517,7 +2518,9 @@ export function getMergeCommitForTask(taskId: string): string | null {
     LIMIT 1
   `,
     )
-    .get({ task_id: taskId }) as { merge_commit_sha: string } | undefined;
+    .get({ task_id: normalizeTaskId(taskId) }) as
+    | { merge_commit_sha: string }
+    | undefined;
   return row?.merge_commit_sha ?? null;
 }
 
@@ -3517,7 +3520,10 @@ export function insertGateItemSource(row: NewGateItemSourceRow): void {
     VALUES
       (@gate_item_id, @source_task_id, @source_task_title, @merge_commit, @added_at)
   `);
-  _stmtInsertGateItemSource.run(row);
+  _stmtInsertGateItemSource.run({
+    ...row,
+    source_task_id: normalizeTaskId(row.source_task_id),
+  });
 }
 
 let _stmtUpdateGateItemSourceMergeCommit: Database.Statement | null = null;
@@ -3537,7 +3543,7 @@ export function updateGateItemSourceMergeCommit(
   `);
   _stmtUpdateGateItemSourceMergeCommit.run({
     gate_item_id: gateItemId,
-    source_task_id: sourceTaskId,
+    source_task_id: normalizeTaskId(sourceTaskId),
     merge_commit: mergeCommit,
   });
 }
@@ -3555,7 +3561,9 @@ export function listGateItemIdsBySourceTask(sourceTaskId: string): string[] {
       }>(
         `SELECT DISTINCT gate_item_id AS id FROM gate_item_source WHERE source_task_id = @source_task_id`,
       )
-      .all({ source_task_id: sourceTaskId }) as { id: string }[]
+      .all({ source_task_id: normalizeTaskId(sourceTaskId) }) as {
+      id: string;
+    }[]
   ).map((row) => row.id);
 }
 
@@ -3659,7 +3667,10 @@ export function rehomeGateItemsBySourceTask(
          JOIN gate_item_source gis ON gis.gate_item_id = gi.id
          WHERE gi.project = @project AND gis.source_task_id = @source_task_id`,
       )
-      .all({ project, source_task_id: sourceTaskId }) as { id: string }[]
+      .all({
+        project,
+        source_task_id: normalizeTaskId(sourceTaskId),
+      }) as { id: string }[]
   ).map((row) => row.id);
   if (ids.length === 0) return ids;
 
