@@ -4111,3 +4111,12 @@ export function listSessionsWithUndeliveredInboxItems(): string[] {
     .all() as { session_id: string }[];
   return rows.map((r) => r.session_id);
 }
+
+export function countUndeliveredInboxItems(sessionId: string): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS count FROM session_feedback_inbox WHERE session_id = ? AND delivered_at IS NULL`,
+    )
+    .get(sessionId) as { count: number };
+  return row.count;
+}

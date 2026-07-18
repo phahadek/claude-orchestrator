@@ -417,7 +417,8 @@ export type ServerMessage =
         | 'gate_failed'
         | 'analyze_failing'
         | 'pre_review_interrupted'
-        | 'conflict_dead_session';
+        | 'conflict_dead_session'
+        | 'undelivered_review_feedback';
     };
 
 // ── Client → Server ──────────────────────────────────────────────
