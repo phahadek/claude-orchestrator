@@ -11,7 +11,8 @@
  *   scripts/{design-load,check-task-status,sync-guidelines-load,notion-page,
  *            ops-client}.mjs                                   → ~/.claude/scripts/
  *   packages/backend/scripts/{groom-context-client,gate-state-client,
- *            seed-state-client,stage-task-intent}.mjs           → ~/.claude/scripts/
+ *            seed-state-client,stage-task-intent,
+ *            staged-intents-client}.mjs                         → ~/.claude/scripts/
  *   skills/{groom,design,ops,deploy,wrap,sync-guidelines,gate}/** → ~/.claude/skills/
  *   config-template/hooks/load-procedures.mjs → <config-tree>/hooks/  (overwrite)
  *
@@ -64,11 +65,18 @@ const SCRIPTS = [
 // Route-based clients that live under packages/backend/scripts/ (they're
 // exercised in-process by packages/backend's own tests) but are sanctioned
 // session-side CLIs like the ones above — vendored to the same ~/.claude/scripts/.
+// staged-intents-client.mjs is the device-authed create/apply/reject client the
+// interactive skills (/groom, /design, /ops) use to stage and apply task-write
+// intents from a Remote-Control session; stage-task-intent.mjs remains the
+// separate, stage-only transport for unattended orchestrator-launched worktree
+// sessions (see packages/backend/src/auth/SessionStageAuth.ts) — it is not
+// retired, just no longer what the interactive skills use.
 const BACKEND_SCRIPTS = [
   'groom-context-client.mjs',
   'gate-state-client.mjs',
   'seed-state-client.mjs',
   'stage-task-intent.mjs',
+  'staged-intents-client.mjs',
 ];
 const SKILLS = [
   'groom',

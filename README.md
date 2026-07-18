@@ -144,7 +144,7 @@ source-controlled here and deployed to `~/.claude` by a run-by-hand script:
 
 - **Vendored artifacts:** `scripts/{design-load,check-task-status,sync-guidelines-load,
 notion-page,ops-client}.mjs`, `packages/backend/scripts/{groom-context-client,
-gate-state-client,seed-state-client,stage-task-intent}.mjs`,
+gate-state-client,seed-state-client,stage-task-intent,staged-intents-client}.mjs`,
   `skills/{groom,design,ops,deploy,wrap,sync-guidelines}/**`, and `config-template/**` (the
   Remote Control bootstrap — see below). `groom-load.mjs`, `ops-load.mjs`,
   `ops-journal-set.mjs` and the `groom-gate.mjs` PreToolUse hook are retired — groom/ops
