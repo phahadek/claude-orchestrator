@@ -124,8 +124,8 @@ Aim for **5–10 items total** across both subsections.
 
 **Code tasks must not put runtime/launch-and-observe items in their own
 acceptance criteria** — those belong to the milestone's **Manual Verification Gate**
-task (below). A Code task's manual-verification subsection reads:
-`Covered by the **Manual Verification Gate** task.` *(🔧 Operational / 🔎 Investigation
+(below; orchestrator-tracked state, not a task). A Code task's manual-verification subsection reads:
+`Covered by the **Manual Verification Gate**.` *(🔧 Operational / 🔎 Investigation
 tasks are the exception — they verify in-session and do NOT accrete to the gate; see
 their section below.)*
 
@@ -157,7 +157,7 @@ runs interactively) and the **`Depends On`** convention. This is the authoring s
 | Property | Guidance |
 | --- | --- |
 | **Task Name** | Verb phrase starting with an action word (*Implement, Scaffold, Add, Fix, Migrate, Lock*). Include the primary file/class/decision. |
-| **Type** | One of `💻 Code` / `📐 Design` / `📋 Planning` / `🔧 Operational` / `🔎 Investigation` / `🧪 Testing` / `🚦 Gate` / `📝 Docs` / `🎨 Assets`. Exactly one. See `procedures.md` § Task types. *(`🛠️ Tooling` is retired — split into `🔧 Operational` + `🔎 Investigation`; it survives only on grandfathered pre-split tasks, never author a new one. `🧪 Testing` is observational/E2E only → `ops` as an Investigation variant; **pure test implementation is `💻 Code`**.)* |
+| **Type** | One of `💻 Code` / `📐 Design` / `📋 Planning` / `🔧 Operational` / `🔎 Investigation` / `🧪 Testing` / `📝 Docs` / `🎨 Assets`. Exactly one. See `procedures.md` § Task types. *(`🛠️ Tooling` is retired — split into `🔧 Operational` + `🔎 Investigation`; it survives only on grandfathered pre-split tasks, never author a new one. `🚦 Gate` is also retired — the Manual Verification Gate is now orchestrator-tracked state (`gate_item` rows), not a task Type; see § Manual Verification Gate. `🧪 Testing` is observational/E2E only → `ops` as an Investigation variant; **pure test implementation is `💻 Code`**.)* |
 | **Priority** | `🔴 High` = blocks others / on the critical path. `🟡 Medium` = important, not blocking. `🟢 Low` = nice-to-have this milestone. |
 | **Status** | New tasks always start at `🔲 Backlog`. See Readiness gate below, and `procedures.md` § Status values for the full set (incl. the rare, orchestrator-set `🚫 Blocked`). |
 | **Depends On** | Pipe-delimited page IDs of *direct* dependencies, machine-consumed. Blank if none. The body `## Dependencies` section is its human-readable mirror. |
@@ -196,46 +196,46 @@ no Notion grooming-procedure page).
 
 ## Manual Verification Gate
 
-Runtime/manual checks must **not** be scattered across code tasks. Each milestone (or
-logical cluster of code tasks) gets one dedicated **Manual Verification** task acting
-as a gate.
+Runtime/manual checks must **not** be scattered across code tasks. Each milestone gets one
+**Manual Verification Gate** acting as a single runtime-verification checkpoint. The gate is
+**orchestrator-tracked state, not a Notion task or a Type** — every verification item lives as a
+`gate_item` row, and every attempt is a `gate_item_event` (that event log **is** the durable run
+record — there is no dated run-note written back into a task body).
 
 - **Why:** checking runtime behaviour after every code task means repeated
   context-switching and re-launching. One focused gate keeps the automated/manual
   split clean inside every code task.
 - **In code tasks:** include only what's verifiable without a running app (type
-  check, lint, unit tests, build). Strip every "launch and observe" item.
-- **The gate task:** Type `🚦 Gate` (its own type — not `🧪 Testing`); one per milestone
-  (or per cluster); lists every runtime item stripped from the code tasks, grouped by
-  source task. It **rests at `🗂️ Ready` and accretes** — `/groom` appends each code task's
-  stripped manual items as they're groomed; that is the Gate type's defined lifecycle, not
-  an edit-a-Ready-task exception. Never auto-dispatched (non-Code); a human runs it once at
-  milestone end. Leave `Depends On` empty (the dependency on all code tasks is implicit;
-  documented in Notes: *"Run after all upstream code tasks are merged."*). Implementation
-  Notes record pass/fail per item + links to any follow-up bug tasks.
+  check, lint, unit tests, build). Strip every "launch and observe" item; the code task's
+  manual-verification subsection reads `Covered by the **Manual Verification Gate**.`
+- **The gate items:** each `gate_item` row carries a **classification** (e.g. `Prod-Mutating`
+  vs read-only) and a **state machine** — `open` → `runnable` → `pass` / `fail` / `deferred`,
+  with `Prod-Mutating` passes parked at `pending-approval` until a human consents. Items become
+  **runnable** when deploy-gated (the source change is deployed). There is no `Depends On` to
+  manage and no task body to edit.
+- **Running the gate:** a human runs it once at milestone end via the **`/gate` skill** — a thin
+  loop over the gate-state API (`readiness` → pull runnable items by tier → human disposition →
+  record the `gate_item_event`). `readiness` reports `green` when every item is `pass` or
+  `deferred`, `blocked` otherwise (the blocking items are the worklist). Nothing is auto-dispatched.
 - **Accretion is mandatory and promotion-gated — not best-effort.** Because a
   💻 Code task's body is *required* to strip its runtime items (above),
-  those items live nowhere else — if the groomer doesn't append them to the gate, they
+  those items live nowhere else — if the groomer doesn't accrete them to the gate, they
   are lost from the body **and** the gate (a silent coverage leak; e.g. a launch-only manual
   check was stripped from a task body but never landed on the gate — found only by a later
   coverage audit). So **before** any 💻 Code
-  task is marked `🗂️ Ready`, the groomer MUST either (a) append its stripped
-  runtime / launch-and-observe items to the milestone's `🚦 Gate` task body (grouped by
-  source task), or (b) confirm it has none — and record the outcome as a `gate_contribution`
-  artifact in `grooming-state.json`: `{ "gate_task_id": "…", "items": [...], "appended_at": "…" }`
+  task is marked `🗂️ Ready`, the groomer MUST either (a) accrete its stripped
+  runtime / launch-and-observe items to the milestone's gate via `accreteGateContribution`
+  (which writes the `gate_item` rows, keyed by milestone display name, grouped by source task),
+  or (b) confirm it has none — and record the outcome as a `gate_contribution`
+  artifact in `grooming-state.json`: `{ "items": [...], "accreted_at": "…" }`
   or `{ "decision": "none" }`. This is symmetric with `size_check` / `hard_block_deps` /
   `signoff` — same shape, same load-bearing weight. A Ready-flip that strips manual items
   from the body without accreting them to the gate is the same class of failure as locking
   sequencing in the task body instead of the `Depends On` property: the downstream artifact
-  (here, the gate) is the only place the information survives. *(Mechanical enforcement — the
-  `gate_contribution` field seeding in the loader + a 4th promotion-gate hook check — is
-  tracked by a follow-up Code task on the milestone board, **Enforce Manual-Verification-Gate
-  accretion in /groom**; until it ships, groomers apply this rule by hand.)*
-- **Placement:** at the end of its cluster. Follow-up tasks that depend on confirmed
-  runtime behaviour list the gate task in `Depends On`, not the individual code tasks.
-- **Acceptance criteria:** still uses the two-subsection format — `### 🤖 Automated
-  tests` reads `*N/A — manual verification task only.*`; all runtime checks live under
-  `### 👁️ Manual verification`.
+  (here, the `gate_item` store) is the only place the information survives.
+- **Follow-up tasks** that depend on confirmed runtime behaviour cannot list a gate *task* in
+  `Depends On` (there is none) — sequence them after the milestone's gate run, or on the specific
+  Code task whose behaviour they need.
 
 ---
 
@@ -249,7 +249,16 @@ category's default values, alias/cohort flags, etc. Left as an
 inline "applied operationally on prod" note, that seed is owned by no one, and after merge the code
 sits **dark until someone hand-seeds it** — the "Done ≠ deployed ≠ seeded ≠ working" / silent-0
 failure class, un-owned. So each milestone gets one dedicated **config-seed** task that
-accretes every code task's operational seed — the exact operational mirror of the Gate.
+accretes every code task's operational seed — the exact operational mirror of the Manual
+Verification Gate.
+
+> **Moving to a sibling state store.** Like the gate (now `gate_item` rows), the config-seed's
+> accretion target moves from a task body to a sibling **`seed_item`** state store — each seed a
+> `seed_item` row (accreted via `stageSeedContribution`, deploy-gated for applyability), applied at
+> milestone end through the audited config-CRUD and recorded as a `seed_item_event`, driven by the
+> `/ops` skill's § Milestone config-seed loop. The mechanics below (what accretes, reconcile +
+> capture) carry over unchanged; only the storage moved off the task body. Detail lives in the
+> config-seed-as-state model.
 
 - **Schema vs data — the load-bearing split.** *Schema / DDL* → a **migration in the Code task's
   own PR** (auto-dispatched, forward-only). *Data / config seed* (rows, defaults, flags) → the
@@ -384,7 +393,7 @@ shape, don't pre-hedge.)*
 - **Under-specifying interfaces.** If a task produces a class/function other tasks
   import, fully specify the signature here — type signatures are load-bearing.
 - **Runtime items in code-task acceptance criteria.** They belong in the Manual
-  Verification Gate task.
+  Verification Gate (accreted as `gate_item` rows), not the code task's body.
 - **Creating tasks at Ready without investigation.** "Investigate and fix X" is
   Backlog, not Ready — do the root-cause analysis first, then specify the fix.
 - **Skipping open-question resolution.** Trade-offs unresolved → stays Backlog.
