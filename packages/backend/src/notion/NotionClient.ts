@@ -250,10 +250,10 @@ function richTextToString(items: NotionRichText[]): string {
   return items.map((t) => t.plain_text ?? t.text?.content ?? '').join('');
 }
 
-function blockToLine(block: NotionBlock): string {
+export function blockToLine(block: NotionBlock): string {
   const type = block.type as string;
   const inner = block[type] as
-    | { rich_text?: NotionRichText[]; language?: string }
+    | { rich_text?: NotionRichText[]; language?: string; checked?: boolean }
     | undefined;
   if (!inner) return '';
   const text = inner.rich_text ? richTextToString(inner.rich_text) : '';
@@ -264,6 +264,10 @@ function blockToLine(block: NotionBlock): string {
       return `## ${text}`;
     case 'heading_3':
       return `### ${text}`;
+    case 'heading_4':
+      return `#### ${text}`;
+    case 'to_do':
+      return `- ${text}`;
     case 'code':
       return `\`\`\`${inner.language ?? ''}\n${text}\n\`\`\``;
     case 'bulleted_list_item':

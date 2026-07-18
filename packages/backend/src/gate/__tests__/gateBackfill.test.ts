@@ -29,6 +29,7 @@ import {
   type TaskIdResolver,
 } from '../gateBackfill.js';
 import { getItem, listByMilestone } from '../gateStore.js';
+import { blockToLine } from '../../notion/NotionClient.js';
 
 beforeEach(() => {
   db.prepare('DELETE FROM gate_item_event').run();
@@ -87,6 +88,92 @@ const SAMPLE_BODY = `
 #### M9/M10 carryover: retag backfill [notion:src-carryover]
 - Spot-check ten retagged rows
 `;
+
+// Raw Notion API block shapes, as returned by the blocks-children endpoint
+// for a real Gate body (source-group titles as heading_4, items as to_do).
+// This is the fixture that closes the gap that let heading_4/to_do render
+// as unprefixed plain text and silently produce zero parsed groups/items.
+const NOTION_RENDERED_BLOCKS = [
+  {
+    type: 'heading_4',
+    heading_4: {
+      rich_text: [
+        { plain_text: 'Add env var to deploy script [notion:src-a]' },
+      ],
+    },
+  },
+  {
+    type: 'to_do',
+    to_do: {
+      rich_text: [
+        { plain_text: 'Verify the deploy script writes the new env var' },
+      ],
+      checked: false,
+    },
+  },
+  {
+    type: 'to_do',
+    to_do: {
+      rich_text: [
+        { plain_text: 'Confirm the var is read at boot (Prod-Mutating)' },
+      ],
+      checked: true,
+    },
+  },
+  {
+    type: 'heading_4',
+    heading_4: {
+      rich_text: [{ plain_text: 'Rename the config key [notion:src-b]' }],
+    },
+  },
+  {
+    type: 'to_do',
+    to_do: {
+      rich_text: [
+        { plain_text: 'Confirm no stale references to the old key name' },
+      ],
+      checked: false,
+    },
+  },
+];
+
+const NOTION_RENDERED_BODY = NOTION_RENDERED_BLOCKS.map(blockToLine).join('\n');
+
+describe('parseGateBody — real Notion-rendered body (heading_4 + to_do)', () => {
+  it('parses groups and items from a NotionClient-rendered body, not a synthetic markdown string', () => {
+    const groups = parseGateBody(NOTION_RENDERED_BODY);
+    expect(groups).toHaveLength(2);
+    expect(groups[0]).toMatchObject({
+      sourceTitle: 'Add env var to deploy script',
+      sourceId: 'notion:src-a',
+      items: [
+        'Verify the deploy script writes the new env var',
+        'Confirm the var is read at boot (Prod-Mutating)',
+      ],
+    });
+    expect(groups[1]).toMatchObject({
+      sourceTitle: 'Rename the config key',
+      sourceId: 'notion:src-b',
+      items: ['Confirm no stale references to the old key name'],
+    });
+  });
+
+  it('backfills gate_item rows from a NotionClient-rendered body', () => {
+    mergeSourceTask('notion:src-a', 'abc123');
+    const result = backfillGateBody(NOTION_RENDERED_BODY, {
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      now: new Date(0).toISOString(),
+    });
+    expect(result.created).toBe(3);
+    const items = listByMilestone('polimarket-analyser', 'M12');
+    expect(
+      items.find(
+        (i) => i.text === 'Verify the deploy script writes the new env var',
+      )?.minDeployedCommit,
+    ).toBe('abc123');
+  });
+});
 
 describe('parseGateBody', () => {
   it('groups items under their #### <source-task> [id] heading', () => {

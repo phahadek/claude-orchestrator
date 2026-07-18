@@ -18,6 +18,7 @@ import {
   parseSection,
   parseDependsOn,
   parseExpectedSize,
+  blockToLine,
   NotionClient,
 } from './NotionClient';
 import {
@@ -78,6 +79,35 @@ Some context here.
 
 Details here.
 `.trim();
+
+describe('blockToLine()', () => {
+  it('renders a heading_4 block with a #### prefix', () => {
+    const line = blockToLine({
+      type: 'heading_4',
+      heading_4: { rich_text: [{ plain_text: 'Add env var [notion:src-a]' }] },
+    });
+    expect(line).toBe('#### Add env var [notion:src-a]');
+  });
+
+  it('renders a to_do block with a - prefix, regardless of checked state', () => {
+    const unchecked = blockToLine({
+      type: 'to_do',
+      to_do: {
+        rich_text: [{ plain_text: 'Verify the thing' }],
+        checked: false,
+      },
+    });
+    const checked = blockToLine({
+      type: 'to_do',
+      to_do: {
+        rich_text: [{ plain_text: 'Confirm the thing' }],
+        checked: true,
+      },
+    });
+    expect(unchecked).toBe('- Verify the thing');
+    expect(checked).toBe('- Confirm the thing');
+  });
+});
 
 describe('parseSection()', () => {
   it('captures acceptance criteria including sub-headings', () => {
