@@ -314,7 +314,9 @@ export function setClassification(
   });
   const item = getItem(gateItemId);
   if (!item) {
-    throw new Error(`gate_item: failed to read back item ${gateItemId} after reclassify`);
+    throw new Error(
+      `gate_item: failed to read back item ${gateItemId} after reclassify`,
+    );
   }
   return item;
 }

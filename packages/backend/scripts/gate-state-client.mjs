@@ -154,7 +154,10 @@ export function reclassifyGateItem({
     token,
     method: 'POST',
     path: `/api/gate/items/${encodeURIComponent(gateItemId)}/classification`,
-    payload: operator === undefined ? { classification } : { classification, operator },
+    payload:
+      operator === undefined
+        ? { classification }
+        : { classification, operator },
   });
 }
 
