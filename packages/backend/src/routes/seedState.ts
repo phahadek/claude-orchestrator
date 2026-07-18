@@ -17,6 +17,11 @@ import type {
   SeedContributionDecision,
   SeedContributionItemInput,
 } from '../tasks/TaskWriteCommands';
+import {
+  resolveMilestoneForProject,
+  resolveMilestoneAnyProject,
+  UnknownMilestoneError,
+} from '../projects/milestoneResolver';
 
 /**
  * Thin read/write surface over seedService's module functions — the
@@ -35,7 +40,15 @@ export function createSeedStateRouter(): Router {
       res.status(400).json({ error: 'milestone is required' });
       return;
     }
-    res.json(getSeedReadiness(milestone));
+    try {
+      res.json(getSeedReadiness(resolveMilestoneAnyProject(milestone)));
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
   });
 
   // GET /api/seed/next?milestone=M12&deploySha=abc123&limit=1
@@ -54,11 +67,19 @@ export function createSeedStateRouter(): Router {
     }
     const limit =
       typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
-    res.json(
-      nextApplyableSeedItems(milestone, deploySha, {
-        limit: Number.isFinite(limit) ? limit : undefined,
-      }),
-    );
+    try {
+      res.json(
+        nextApplyableSeedItems(resolveMilestoneAnyProject(milestone), deploySha, {
+          limit: Number.isFinite(limit) ? limit : undefined,
+        }),
+      );
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
   });
 
   // GET /api/seed/items?project=P&milestone=M12&state=pending&page=1&limit=20
@@ -72,10 +93,26 @@ export function createSeedStateRouter(): Router {
       const n = Number(raw);
       return Number.isFinite(n) ? n : undefined;
     };
+    const project = stringParam('project');
+    const milestoneParam = stringParam('milestone');
+    let milestone: string | undefined;
+    try {
+      if (milestoneParam !== undefined) {
+        milestone = project
+          ? resolveMilestoneForProject(project, milestoneParam)
+          : resolveMilestoneAnyProject(milestoneParam);
+      }
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
     res.json(
       listSeedItems({
-        project: stringParam('project'),
-        milestone: stringParam('milestone'),
+        project,
+        milestone,
         state: stringParam('state'),
         page: numberParam('page'),
         limit: numberParam('limit'),
@@ -179,11 +216,22 @@ export function createSeedStateRouter(): Router {
         )
       : undefined;
 
+    let canonicalMilestone: string;
+    try {
+      canonicalMilestone = resolveMilestoneForProject(project, milestone);
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+
     try {
       const result = await backfillSeedTask({
         project,
         taskId,
-        milestone,
+        milestone: canonicalMilestone,
         candidates,
       });
       res.json(result);
@@ -255,10 +303,14 @@ export function createSeedStateRouter(): Router {
         : [];
 
       try {
+        const canonicalMilestone = resolveMilestoneForProject(
+          project,
+          milestone,
+        );
         const backend = getTaskBackend(project);
         const commands = new BackendTaskWriteCommands(backend, project);
         const result = await commands.stageSeedContribution(
-          { id: taskId, title, project, milestone },
+          { id: taskId, title, project, milestone: canonicalMilestone },
           seeds,
           decision,
         );

@@ -39,6 +39,14 @@ vi.mock('../../tasks/TaskWriteCommands.js', () => ({
   })),
 }));
 
+const milestoneResolverMock = vi.hoisted(() => ({
+  resolveMilestoneForProject: vi.fn((_project: string, milestone: string) => milestone),
+  resolveMilestoneAnyProject: vi.fn((milestone: string) => milestone),
+  UnknownMilestoneError: class UnknownMilestoneError extends Error {},
+}));
+
+vi.mock('../../projects/milestoneResolver.js', () => milestoneResolverMock);
+
 import { createGateStateRouter } from '../gateState.js';
 
 function makeApp() {
@@ -166,5 +174,28 @@ describe('POST /api/gate/accrete-contribution', () => {
       });
 
     expect(res.status).toBe(400);
+  });
+
+  it('400s a non-canonical milestone (e.g. a UUID), never calling accreteGateContribution', async () => {
+    milestoneResolverMock.resolveMilestoneForProject.mockImplementationOnce(
+      () => {
+        throw new milestoneResolverMock.UnknownMilestoneError(
+          '"9b1e..." is not a known milestone for project "p1"',
+        );
+      },
+    );
+
+    const res = await request(makeApp())
+      .post('/api/gate/accrete-contribution')
+      .send({
+        project: 'p1',
+        taskId: 't1',
+        title: 'Add retry',
+        milestone: '9b1e...',
+        classification: 'none',
+      });
+
+    expect(res.status).toBe(400);
+    expect(accreteGateContributionMock).not.toHaveBeenCalled();
   });
 });

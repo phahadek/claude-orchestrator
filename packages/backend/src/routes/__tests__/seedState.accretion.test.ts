@@ -37,6 +37,14 @@ vi.mock('../../tasks/TaskWriteCommands.js', () => ({
   })),
 }));
 
+const milestoneResolverMock = vi.hoisted(() => ({
+  resolveMilestoneForProject: vi.fn((_project: string, milestone: string) => milestone),
+  resolveMilestoneAnyProject: vi.fn((milestone: string) => milestone),
+  UnknownMilestoneError: class UnknownMilestoneError extends Error {},
+}));
+
+vi.mock('../../projects/milestoneResolver.js', () => milestoneResolverMock);
+
 import { createSeedStateRouter } from '../seedState.js';
 
 function makeApp() {
@@ -164,5 +172,28 @@ describe('POST /api/seed/accrete-contribution', () => {
       });
 
     expect(res.status).toBe(400);
+  });
+
+  it('400s a non-canonical milestone (e.g. a UUID), never calling stageSeedContribution', async () => {
+    milestoneResolverMock.resolveMilestoneForProject.mockImplementationOnce(
+      () => {
+        throw new milestoneResolverMock.UnknownMilestoneError(
+          '"9b1e..." is not a known milestone for project "p1"',
+        );
+      },
+    );
+
+    const res = await request(makeApp())
+      .post('/api/seed/accrete-contribution')
+      .send({
+        project: 'p1',
+        taskId: 't1',
+        title: 'Add retry',
+        milestone: '9b1e...',
+        decision: 'n/a',
+      });
+
+    expect(res.status).toBe(400);
+    expect(stageSeedContributionMock).not.toHaveBeenCalled();
   });
 });

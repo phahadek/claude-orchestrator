@@ -19,6 +19,11 @@ import type {
   GateContributionDecision,
   GateContributionItemInput,
 } from '../tasks/TaskWriteCommands';
+import {
+  resolveMilestoneForProject,
+  resolveMilestoneAnyProject,
+  UnknownMilestoneError,
+} from '../projects/milestoneResolver';
 
 /**
  * Thin read/write surface over gateService's module functions — the
@@ -37,7 +42,15 @@ export function createGateStateRouter(): Router {
       res.status(400).json({ error: 'milestone is required' });
       return;
     }
-    res.json(getGateReadiness(milestone));
+    try {
+      res.json(getGateReadiness(resolveMilestoneAnyProject(milestone)));
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
   });
 
   // POST /api/gate/reconcile  { deploySha }
@@ -66,12 +79,20 @@ export function createGateStateRouter(): Router {
         : undefined;
     const limit =
       typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
-    res.json(
-      nextRunnableGateItems(milestone, {
-        classification,
-        limit: Number.isFinite(limit) ? limit : undefined,
-      }),
-    );
+    try {
+      res.json(
+        nextRunnableGateItems(resolveMilestoneAnyProject(milestone), {
+          classification,
+          limit: Number.isFinite(limit) ? limit : undefined,
+        }),
+      );
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
   });
 
   // GET /api/gate/items?project=P&milestone=M12&state=open&classification=Read-Only&runnable=true&page=1&limit=20
@@ -86,10 +107,26 @@ export function createGateStateRouter(): Router {
       return Number.isFinite(n) ? n : undefined;
     };
     const runnableRaw = stringParam('runnable');
+    const project = stringParam('project');
+    const milestoneParam = stringParam('milestone');
+    let milestone: string | undefined;
+    try {
+      if (milestoneParam !== undefined) {
+        milestone = project
+          ? resolveMilestoneForProject(project, milestoneParam)
+          : resolveMilestoneAnyProject(milestoneParam);
+      }
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
     res.json(
       listGateItems({
-        project: stringParam('project'),
-        milestone: stringParam('milestone'),
+        project,
+        milestone,
         state: stringParam('state'),
         classification: stringParam('classification') as
           | GateItemClassification
@@ -212,11 +249,22 @@ export function createGateStateRouter(): Router {
         )
       : undefined;
 
+    let canonicalMilestone: string;
+    try {
+      canonicalMilestone = resolveMilestoneForProject(project, milestone);
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+
     try {
       const result = await backfillGateTask({
         project,
         taskId,
-        milestone,
+        milestone: canonicalMilestone,
         milestoneBoardIds,
       });
       res.json(result);
@@ -287,10 +335,14 @@ export function createGateStateRouter(): Router {
         : [];
 
       try {
+        const canonicalMilestone = resolveMilestoneForProject(
+          project,
+          milestone,
+        );
         const backend = getTaskBackend(project);
         const commands = new BackendTaskWriteCommands(backend, project);
         const result = await commands.accreteGateContribution(
-          { id: taskId, title, project, milestone },
+          { id: taskId, title, project, milestone: canonicalMilestone },
           items,
           classification,
         );
