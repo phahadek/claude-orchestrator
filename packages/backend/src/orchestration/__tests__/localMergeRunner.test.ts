@@ -132,6 +132,70 @@ describe('squashMergeLocal — success path', () => {
   });
 });
 
+describe('squashMergeLocal — worktree model (base checked out in primary tree)', () => {
+  let primaryDir: string;
+  let linkedDir: string;
+
+  beforeEach(async () => {
+    primaryDir = await makeRepo();
+    linkedDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'local-merge-runner-linked-'),
+    );
+    fs.rmdirSync(linkedDir);
+    await git(
+      ['worktree', 'add', '-b', 'feature/my-task', linkedDir, 'dev'],
+      primaryDir,
+    );
+    fs.writeFileSync(path.join(linkedDir, 'new.txt'), 'feature content\n');
+    await git(['add', '.'], linkedDir);
+    await git(['commit', '-m', 'feature commit'], linkedDir);
+    // primaryDir stays checked out on dev the whole time — this is the
+    // scenario that used to fail with "already used by worktree".
+  });
+
+  afterEach(async () => {
+    await git(['worktree', 'remove', '--force', linkedDir], primaryDir).catch(
+      () => {},
+    );
+    fs.rmSync(primaryDir, { recursive: true, force: true });
+    fs.rmSync(linkedDir, { recursive: true, force: true });
+  });
+
+  it('squash-merges without checking out dev anywhere, advancing the base ref', async () => {
+    const result = await squashMergeLocal({
+      worktreePath: linkedDir,
+      baseBranch: 'dev',
+      featureBranch: 'feature/my-task',
+      taskName: 'my task name',
+    });
+
+    expect(result.merged).toBe(true);
+    expect(result.commitSha).toBeTruthy();
+
+    const devSha = await git(['rev-parse', 'dev'], primaryDir);
+    expect(devSha).toBe(result.commitSha);
+
+    // Primary tree's checked-out branch never changed.
+    const primaryBranch = await git(
+      ['rev-parse', '--abbrev-ref', 'HEAD'],
+      primaryDir,
+    );
+    expect(primaryBranch).toBe('dev');
+  });
+
+  it('deletes the feature branch after landing', async () => {
+    await squashMergeLocal({
+      worktreePath: linkedDir,
+      baseBranch: 'dev',
+      featureBranch: 'feature/my-task',
+      taskName: 'my task name',
+    });
+
+    const branches = await git(['branch', '--list'], primaryDir);
+    expect(branches).not.toContain('feature/my-task');
+  });
+});
+
 describe('squashMergeLocal — conflict path', () => {
   let repoDir: string;
 
@@ -179,7 +243,12 @@ describe('squashMergeLocal — conflict path', () => {
     expect(branches).toContain('feature/conflict-task');
   });
 
-  it('leaves worktree in pre-merge state (no conflict markers) on conflict', async () => {
+  it('never checks out or mutates the worktree on conflict', async () => {
+    const branchBefore = await git(
+      ['rev-parse', '--abbrev-ref', 'HEAD'],
+      repoDir,
+    );
+
     await squashMergeLocal({
       worktreePath: repoDir,
       baseBranch: 'dev',
@@ -191,7 +260,7 @@ describe('squashMergeLocal — conflict path', () => {
       ['rev-parse', '--abbrev-ref', 'HEAD'],
       repoDir,
     );
-    expect(currentBranch).toBe('feature/conflict-task');
+    expect(currentBranch).toBe(branchBefore);
 
     const fileContent = fs.readFileSync(
       path.join(repoDir, 'base.txt'),

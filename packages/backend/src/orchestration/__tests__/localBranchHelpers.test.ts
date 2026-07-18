@@ -128,17 +128,55 @@ describe('detectMergeConflict', () => {
     expect(result).toBe(false);
   });
 
-  it('leaves the worktree in pre-merge state (on baseBranch) after clean merge', async () => {
+  it('never checks out or mutates the worktree', async () => {
     await git(['checkout', '-b', 'feature/clean'], repoDir);
     fs.writeFileSync(path.join(repoDir, 'new.txt'), 'new content\n');
     await git(['add', '.'], repoDir);
     await git(['commit', '-m', 'add file'], repoDir);
     await git(['checkout', 'dev'], repoDir);
 
+    const branchBefore = await git(
+      ['rev-parse', '--abbrev-ref', 'HEAD'],
+      repoDir,
+    );
+    const statusBefore = await git(['status', '--porcelain'], repoDir);
+
     await detectMergeConflict(repoDir, 'dev', 'feature/clean');
 
-    const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], repoDir);
-    expect(branch).toBe('dev');
+    const branchAfter = await git(
+      ['rev-parse', '--abbrev-ref', 'HEAD'],
+      repoDir,
+    );
+    const statusAfter = await git(['status', '--porcelain'], repoDir);
+    expect(branchAfter).toBe(branchBefore);
+    expect(statusAfter).toBe(statusBefore);
+  });
+
+  it('does not check out baseBranch when it is checked out in another worktree', async () => {
+    await git(['checkout', '-b', 'feature/clean'], repoDir);
+    fs.writeFileSync(path.join(repoDir, 'new.txt'), 'new content\n');
+    await git(['add', '.'], repoDir);
+    await git(['commit', '-m', 'add file'], repoDir);
+
+    const linkedDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'local-branch-linked-'),
+    );
+    fs.rmdirSync(linkedDir);
+    await git(['worktree', 'add', linkedDir, 'dev'], repoDir);
+
+    try {
+      const result = await detectMergeConflict(
+        repoDir,
+        'dev',
+        'feature/clean',
+      );
+      expect(result).toBe(false);
+    } finally {
+      await git(['worktree', 'remove', '--force', linkedDir], repoDir).catch(
+        () => {},
+      );
+      fs.rmSync(linkedDir, { recursive: true, force: true });
+    }
   });
 
   it('returns true when git merge --no-commit --no-ff would conflict', async () => {
@@ -162,7 +200,7 @@ describe('detectMergeConflict', () => {
     expect(result).toBe(true);
   });
 
-  it('cleans up via git merge --abort — worktree left in pre-merge state', async () => {
+  it('never mutates the worktree on conflict', async () => {
     await git(['checkout', '-b', 'feature/conflict'], repoDir);
     fs.writeFileSync(path.join(repoDir, 'base.txt'), 'feature version\n');
     await git(['add', '.'], repoDir);
@@ -175,7 +213,7 @@ describe('detectMergeConflict', () => {
 
     await detectMergeConflict(repoDir, 'dev', 'feature/conflict');
 
-    // Worktree should be on dev with no conflict markers
+    // Worktree should be untouched — still on dev, no conflict markers
     const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], repoDir);
     expect(branch).toBe('dev');
 
