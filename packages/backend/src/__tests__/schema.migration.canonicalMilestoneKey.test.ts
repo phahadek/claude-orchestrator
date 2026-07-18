@@ -92,9 +92,9 @@ describe('canonical milestone key + source_task_id migration', () => {
        VALUES ('abc123', 'p1', 'M11', 'items', '2026-01-01')`,
     ).run();
     runMigrations(db);
-    const row = db
-      .prepare('SELECT * FROM gate_accretion')
-      .get() as { source_task_id: string };
+    const row = db.prepare('SELECT * FROM gate_accretion').get() as {
+      source_task_id: string;
+    };
     expect(row.source_task_id).toBe('notion:abc123');
   });
 
@@ -104,9 +104,9 @@ describe('canonical milestone key + source_task_id migration', () => {
        VALUES ('abc123', 'p1', 'M11', 'seeds', '2026-01-01')`,
     ).run();
     runMigrations(db);
-    const row = db
-      .prepare('SELECT * FROM seed_accretion')
-      .get() as { source_task_id: string };
+    const row = db.prepare('SELECT * FROM seed_accretion').get() as {
+      source_task_id: string;
+    };
     expect(row.source_task_id).toBe('notion:abc123');
   });
 
@@ -120,9 +120,10 @@ describe('canonical milestone key + source_task_id migration', () => {
        VALUES ('abc123', 'p1', 'M11', 'items', '2026-02-01')`,
     ).run();
     runMigrations(db);
-    const rows = db
-      .prepare('SELECT * FROM gate_accretion')
-      .all() as { source_task_id: string; decision: string }[];
+    const rows = db.prepare('SELECT * FROM gate_accretion').all() as {
+      source_task_id: string;
+      decision: string;
+    }[];
     expect(rows).toHaveLength(1);
     expect(rows[0].source_task_id).toBe('notion:abc123');
     expect(rows[0].decision).toBe('items');

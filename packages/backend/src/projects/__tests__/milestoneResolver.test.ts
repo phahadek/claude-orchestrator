@@ -94,10 +94,7 @@ describe('resolveMilestoneForProject', () => {
       project([M11, M12, M13_FULL_TITLE]),
     );
     expect(
-      resolveMilestoneForProject(
-        'p1',
-        'M13 — Orchestrator-Owned Planning',
-      ),
+      resolveMilestoneForProject('p1', 'M13 — Orchestrator-Owned Planning'),
     ).toBe('M13');
   });
 });

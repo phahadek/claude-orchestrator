@@ -3976,8 +3976,8 @@ export function rehomeSeedItemsBySourceTask(
          WHERE si.project = @project AND sis.source_task_id = @source_task_id`,
       )
       .all({ project, source_task_id: normalizeTaskId(sourceTaskId) }) as {
-        id: string;
-      }[]
+      id: string;
+    }[]
   ).map((row) => row.id);
   if (ids.length === 0) return ids;
 

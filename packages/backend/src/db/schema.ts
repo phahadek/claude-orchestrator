@@ -1048,7 +1048,12 @@ export function runMigrations(target: Database.Database): void {
     const match = /^([Mm]\d+[A-Za-z]?)(?=[\s—:-]|$)/.exec(name);
     return match ? match[1] : null;
   };
-  for (const table of ['gate_item', 'seed_item', 'gate_accretion', 'seed_accretion']) {
+  for (const table of [
+    'gate_item',
+    'seed_item',
+    'gate_accretion',
+    'seed_accretion',
+  ]) {
     const rows = target
       .prepare(`SELECT DISTINCT milestone FROM ${table}`)
       .all() as { milestone: string }[];
@@ -1080,9 +1085,7 @@ export function runMigrations(target: Database.Database): void {
   // to avoid a PK collision.
   for (const table of ['gate_accretion', 'seed_accretion']) {
     const rawRows = target
-      .prepare(
-        `SELECT * FROM ${table} WHERE source_task_id NOT LIKE '%:%'`,
-      )
+      .prepare(`SELECT * FROM ${table} WHERE source_task_id NOT LIKE '%:%'`)
       .all() as {
       source_task_id: string;
       project: string;
