@@ -50,16 +50,16 @@ bootstrap_script: ''
 
 ## Fields
 
-| Field              | Type       | Default | Description                                                                                                           |
-| ------------------ | ---------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
-| `autofix`          | `string[]` | `[]`    | Commands run by the orchestrator before the PR is opened. Failures are logged but do not block.                       |
-| `verify`           | `string[]` | `[]`    | Commands injected into the CLAUDE.md Pre-PR Gate section. The session is instructed to run these before opening a PR. |
-| `ci_check_name`    | `string[]` | `[]`    | GitHub check-run names the orchestrator treats as authoritative. Empty = all checks count.                            |
-| `allowed_tools`    | `string[]` | `[]`    | Extra Bash tool permission patterns (e.g. `Bash(dotnet:*)`) added on top of the base set.                             |
-| `bash_rules`       | `string[]` | `[]`    | Replacement Bash rules (Rule 5+) injected into CLAUDE.md. Each string's first line is the heading.                    |
-| `session_rules`    | `string[]` | `[]`    | Per-project coding-session guidance, rendered as a "## Project Rules" section (distinct from `bash_rules`).           |
+| Field              | Type       | Default | Description                                                                                                              |
+| ------------------ | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `autofix`          | `string[]` | `[]`    | Commands run by the orchestrator before the PR is opened. Failures are logged but do not block.                          |
+| `verify`           | `string[]` | `[]`    | Commands injected into the CLAUDE.md Pre-PR Gate section. The session is instructed to run these before opening a PR.    |
+| `ci_check_name`    | `string[]` | `[]`    | GitHub check-run names the orchestrator treats as authoritative. Empty = all checks count.                               |
+| `allowed_tools`    | `string[]` | `[]`    | Extra Bash tool permission patterns (e.g. `Bash(dotnet:*)`) added on top of the base set.                                |
+| `bash_rules`       | `string[]` | `[]`    | Replacement Bash rules (Rule 5+) injected into CLAUDE.md. Each string's first line is the heading.                       |
+| `session_rules`    | `string[]` | `[]`    | Per-project coding-session guidance, rendered as a "## Project Rules" section (distinct from `bash_rules`).              |
 | `review_rules`     | `string[]` | `[]`    | Per-project review-session enforcement criteria, rendered into the review-session prompt. Can drive `escalate` verdicts. |
-| `bootstrap_script` | `string`   | `""`    | Relative path to a script executed after worktree creation. Receives the worktree path as `$1`.                       |
+| `bootstrap_script` | `string`   | `""`    | Relative path to a script executed after worktree creation. Receives the worktree path as `$1`.                          |
 
 All fields are optional. Missing fields fall back to their defaults — a partial config is valid.
 
