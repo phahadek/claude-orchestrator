@@ -26,6 +26,8 @@ import {
 import type { GateItemClassification } from '../db/types';
 import { recordEvent } from '../audit/AuditLog';
 import { planMove, type MoveGraphTask } from '../orchestration/moveTask';
+import { normalizeTaskId, toExternalId } from './taskId';
+import { resolveMilestoneForProject } from '../projects/milestoneResolver';
 import {
   toCanonicalStatus,
   isValidTransition,
@@ -598,8 +600,23 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
 
     const rehomedAt = new Date().toISOString();
     if (this.projectId) {
-      rehomeGateItems(this.projectId, taskId, targetMilestone.id, rehomedAt);
-      rehomeSeedItems(this.projectId, taskId, targetMilestone.id, rehomedAt);
+      const sourceTaskId = toExternalId(normalizeTaskId(taskId));
+      const targetMilestoneName = resolveMilestoneForProject(
+        this.projectId,
+        targetMilestone.id,
+      );
+      rehomeGateItems(
+        this.projectId,
+        sourceTaskId,
+        targetMilestoneName,
+        rehomedAt,
+      );
+      rehomeSeedItems(
+        this.projectId,
+        sourceTaskId,
+        targetMilestoneName,
+        rehomedAt,
+      );
     }
 
     if (params.originalDisposition === 'archive') {
