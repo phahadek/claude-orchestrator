@@ -57,7 +57,15 @@ import { homedir } from 'os';
 // The two integrated guideline docs, relative to the repo's config-template/ (upstream) and
 // the config tree root (live). Everything else in config-template/ besides the hook is mechanical.
 const GUIDELINES = ['task-writing.md', 'procedures.md'];
-const SKILLS = ['groom', 'design', 'ops', 'deploy', 'wrap', 'sync-guidelines', 'gate'];
+const SKILLS = [
+  'groom',
+  'design',
+  'ops',
+  'deploy',
+  'wrap',
+  'sync-guidelines',
+  'gate',
+];
 const SCRIPT_SOURCES = [
   {
     dir: 'scripts',
@@ -246,7 +254,11 @@ for (const item of ALL_ITEMS) {
 
 if (wantJson) {
   console.log(
-    JSON.stringify({ repo, configDir, claudeHome, baselinePath, plan }, null, 2),
+    JSON.stringify(
+      { repo, configDir, claudeHome, baselinePath, plan },
+      null,
+      2,
+    ),
   );
   process.exit(0);
 }
