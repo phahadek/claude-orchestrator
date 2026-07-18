@@ -385,7 +385,11 @@ export function setSourceMergeCommit(
       `gate_item_source: no source ${sourceTaskId} on item ${gateItemId}`,
     );
   }
-  updateGateItemSourceMergeCommit(gateItemId, normalizedSourceTaskId, mergeCommit);
+  updateGateItemSourceMergeCommit(
+    gateItemId,
+    normalizedSourceTaskId,
+    mergeCommit,
+  );
 }
 
 /**

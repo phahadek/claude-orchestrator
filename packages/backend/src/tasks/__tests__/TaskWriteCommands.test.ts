@@ -665,9 +665,7 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
     expect(mockGetMergeCommitForTask).toHaveBeenCalledWith('notion:src-1');
     expect(mockInsertItem).toHaveBeenCalledWith(
       expect.objectContaining({
-        sources: [
-          expect.objectContaining({ sourceTaskId: 'notion:src-1' }),
-        ],
+        sources: [expect.objectContaining({ sourceTaskId: 'notion:src-1' })],
       }),
     );
     expect(mockRecordAccretionMarker).toHaveBeenCalledWith(
