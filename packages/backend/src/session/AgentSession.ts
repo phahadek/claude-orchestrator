@@ -625,8 +625,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             ORCHESTRATOR_STAGE_TOKEN: stageToken,
             // Sessions submit staged task-write intents via the vendored
             // ~/.claude/scripts/stage-task-intent.mjs client (curl/wget are
-            // off the auto-dispatch allowlist; node is) — see
-            // scripts/deploy-grooming.mjs.
+            // off the auto-dispatch allowlist; node is) — re-vendored via
+            // scripts/sync-guidelines-load.mjs (the /sync-guidelines skill).
           },
         },
         (event) => {

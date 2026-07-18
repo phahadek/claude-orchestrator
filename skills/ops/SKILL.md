@@ -295,8 +295,8 @@ node ~/.claude/scripts/seed-state-client.mjs <command> ...
 ```
 
 `seed-state-client.mjs` is the vendored sanctioned node client (see
-`packages/backend/scripts/seed-state-client.mjs` and
-`scripts/deploy-grooming.mjs`), using `$ORCHESTRATOR_DEVICE_TOKEN` (host/port
+`packages/backend/scripts/seed-state-client.mjs`, re-vendored via the
+`/sync-guidelines` skill), using `$ORCHESTRATOR_DEVICE_TOKEN` (host/port
 default to `127.0.0.1:3000`, overridable via `$ORCHESTRATOR_BACKEND_HOST` /
 `$ORCHESTRATOR_BACKEND_PORT`) the same way the other sanctioned session
 clients (`ops-client.mjs`, `gate-state-client.mjs`) do.
@@ -345,7 +345,7 @@ clients (`ops-client.mjs`, `gate-state-client.mjs`) do.
 worklist, and it does not bulk-load a milestone's full seed set.
 
 **Built, not activated.** This ships in the skill now, and `seed-state-client.mjs` is
-vendored to `~/.claude/scripts` (via `deploy-grooming.mjs`), but the seed-activation
+vendored to `~/.claude/scripts` (via the `/sync-guidelines` skill), but the seed-activation
 task still owns confirming it runs live end-to-end for a real milestone — do not fold
 that actuation here.
 

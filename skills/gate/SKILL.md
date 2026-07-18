@@ -30,8 +30,8 @@ node ~/.claude/scripts/gate-state-client.mjs <command> ...
 ```
 
 `gate-state-client.mjs` is the vendored sanctioned node client (see
-`packages/backend/scripts/gate-state-client.mjs` and
-`scripts/deploy-grooming.mjs`), using `$ORCHESTRATOR_DEVICE_TOKEN` (host/port
+`packages/backend/scripts/gate-state-client.mjs`, re-vendored via the
+`/sync-guidelines` skill), using `$ORCHESTRATOR_DEVICE_TOKEN` (host/port
 default to `127.0.0.1:3000`, overridable via `$ORCHESTRATOR_BACKEND_HOST` /
 `$ORCHESTRATOR_BACKEND_PORT`) the same way the other sanctioned session
 clients (`groom-context-client.mjs`, `staged-intents-client.mjs`) do. If
