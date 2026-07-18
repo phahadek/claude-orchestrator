@@ -92,7 +92,7 @@ Copy-Item (Join-Path $ScriptDir "start.bat") (Join-Path $PayloadDir "start.bat")
 
 # app/ directory
 $AppDir = Join-Path $PayloadDir "app"
-New-Item -ItemType Directory -Path $AppDir | Out-Null
+New-Item -ItemType Directory -Path $AppDir -Force | Out-Null
 
 # Backend dist/
 $BackendDist = Join-Path $RepoRoot "packages\backend\dist"
@@ -103,7 +103,7 @@ Get-ChildItem -Path $BackendDist | ForEach-Object {
 # Frontend dist/ → app/public/
 $FrontendDist = Join-Path $RepoRoot "packages\frontend\dist"
 $PublicDir = Join-Path $AppDir "public"
-New-Item -ItemType Directory -Path $PublicDir | Out-Null
+New-Item -ItemType Directory -Path $PublicDir -Force | Out-Null
 Get-ChildItem -Path $FrontendDist | ForEach-Object {
   Copy-Item -Path $_.FullName -Destination $PublicDir -Recurse -Force
 }
