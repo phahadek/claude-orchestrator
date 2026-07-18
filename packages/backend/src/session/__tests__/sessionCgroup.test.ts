@@ -129,7 +129,9 @@ describe('placeSessionPid no-op when not set up', () => {
   });
 
   it('writes the pid to cgroup.procs once the sessions path is set up', () => {
-    _setSessionsPathForTesting('/sys/fs/cgroup/system.slice/orchestrator.service/sessions');
+    _setSessionsPathForTesting(
+      '/sys/fs/cgroup/system.slice/orchestrator.service/sessions',
+    );
     const writeSpy = vi
       .spyOn(fs, 'writeFileSync')
       .mockImplementation(() => undefined);

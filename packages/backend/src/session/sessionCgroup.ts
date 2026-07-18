@@ -53,9 +53,7 @@ function warnNoop(reason: string): void {
 /** Resolves the backend's own cgroup-v2 path from /proc/self/cgroup, or null if not v2. */
 function readOwnCgroupPath(): string | null {
   const raw = fs.readFileSync('/proc/self/cgroup', 'utf8');
-  const line = raw
-    .split('\n')
-    .find((l) => l.startsWith('0::'));
+  const line = raw.split('\n').find((l) => l.startsWith('0::'));
   if (!line) return null;
   const relPath = line.slice('0::'.length).trim();
   if (!relPath) return null;
@@ -112,10 +110,7 @@ export function setupSessionCgroup(): void {
     }
 
     // Enable the memory controller for child cgroups of our own leaf.
-    fs.writeFileSync(
-      path.join(ownPath, 'cgroup.subtree_control'),
-      '+memory',
-    );
+    fs.writeFileSync(path.join(ownPath, 'cgroup.subtree_control'), '+memory');
 
     const mainPath = path.join(ownPath, MAIN_LEAF);
     const sessionsPath = path.join(ownPath, SESSIONS_LEAF);
@@ -124,10 +119,7 @@ export function setupSessionCgroup(): void {
 
     // Move the backend's own process into main/ — cgroup-v2 forbids a
     // cgroup from holding both processes and controller-enabled children.
-    fs.writeFileSync(
-      path.join(mainPath, 'cgroup.procs'),
-      String(process.pid),
-    );
+    fs.writeFileSync(path.join(mainPath, 'cgroup.procs'), String(process.pid));
 
     sessionsCgroupPath = sessionsPath;
     writeLimits(currentLimits());
