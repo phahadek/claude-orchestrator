@@ -111,10 +111,13 @@ export function reconcileGateRunnability(
     : gateStore.listAll();
 
   for (const item of items) {
-    if (!item.minDeployedCommit) continue;
-    const covered = ancestry.isAncestor(item.minDeployedCommit, deploySha);
+    const covered = item.minDeployedCommit
+      ? ancestry.isAncestor(item.minDeployedCommit, deploySha)
+      : true;
 
     if (item.state === 'pass') {
+      // No commit to invalidate a pass against — assumed deployed, never auto-reopened.
+      if (!item.minDeployedCommit) continue;
       const lastPass = [...item.events]
         .reverse()
         .find((e) => e.disposition === 'pass');
