@@ -109,17 +109,19 @@ export function setupSessionCgroup(): void {
       return;
     }
 
-    // Enable the memory controller for child cgroups of our own leaf.
-    fs.writeFileSync(path.join(ownPath, 'cgroup.subtree_control'), '+memory');
-
     const mainPath = path.join(ownPath, MAIN_LEAF);
     const sessionsPath = path.join(ownPath, SESSIONS_LEAF);
     fs.mkdirSync(mainPath, { recursive: true });
     fs.mkdirSync(sessionsPath, { recursive: true });
 
-    // Move the backend's own process into main/ — cgroup-v2 forbids a
-    // cgroup from holding both processes and controller-enabled children.
+    // Move the backend's own process into main/ first — cgroup-v2's
+    // no-internal-processes rule forbids enabling subtree_control while
+    // this cgroup still holds member processes (fails with EBUSY).
     fs.writeFileSync(path.join(mainPath, 'cgroup.procs'), String(process.pid));
+
+    // Now that the parent holds no processes, enable the memory
+    // controller for its child cgroups.
+    fs.writeFileSync(path.join(ownPath, 'cgroup.subtree_control'), '+memory');
 
     sessionsCgroupPath = sessionsPath;
     writeLimits(currentLimits());

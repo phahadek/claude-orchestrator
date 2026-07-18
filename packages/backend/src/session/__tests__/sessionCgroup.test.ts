@@ -116,6 +116,44 @@ describe('setupSessionCgroup graceful no-op', () => {
   });
 });
 
+describe('setupSessionCgroup write ordering', () => {
+  beforeEach(() => {
+    _resetForTesting();
+    vi.clearAllMocks();
+  });
+
+  it('evacuates the own pid into main/cgroup.procs before enabling +memory on the parent subtree_control', () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockImplementation((p) => {
+      if (String(p).endsWith('/proc/self/cgroup')) {
+        return '0::/system.slice/orchestrator.service';
+      }
+      if (String(p).endsWith('cgroup.controllers')) {
+        return 'cpu memory io';
+      }
+      return '';
+    });
+    vi.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined as any);
+    const writeSpy = vi
+      .spyOn(fs, 'writeFileSync')
+      .mockImplementation(() => undefined);
+
+    setupSessionCgroup();
+
+    const writtenPaths = writeSpy.mock.calls.map((c) => String(c[0]));
+    const procsIndex = writtenPaths.findIndex((p) =>
+      p.endsWith('/main/cgroup.procs'),
+    );
+    const subtreeControlIndex = writtenPaths.findIndex((p) =>
+      p.endsWith('cgroup.subtree_control'),
+    );
+
+    expect(procsIndex).toBeGreaterThanOrEqual(0);
+    expect(subtreeControlIndex).toBeGreaterThanOrEqual(0);
+    expect(procsIndex).toBeLessThan(subtreeControlIndex);
+  });
+});
+
 describe('placeSessionPid no-op when not set up', () => {
   beforeEach(() => {
     _resetForTesting();
