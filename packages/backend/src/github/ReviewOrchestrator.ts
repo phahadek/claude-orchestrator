@@ -986,11 +986,12 @@ export class ReviewOrchestrator {
       ...(draftTransitioned && { draft: false }),
     });
 
-    // Route feedback to coding session via the inbox — delivered at next turn boundary
+    // Route feedback to coding session via the inbox — delivered immediately if the
+    // session is live-but-idle, otherwise at its next turn boundary or via respawn.
     if (result.verdict === 'needs_changes') {
       const prRow = getPRByNumber(job.prNumber, job.repo);
       if (prRow?.session_id) {
-        enqueueFeedbackItem(
+        await this.sessionManager.enqueueFeedback(
           prRow.session_id,
           'ai-reviewer',
           formatReviewFeedback(result, 0, {
@@ -1009,7 +1010,7 @@ export class ReviewOrchestrator {
         message,
       });
       if (prRow?.session_id) {
-        enqueueFeedbackItem(
+        await this.sessionManager.enqueueFeedback(
           prRow.session_id,
           'ai-reviewer',
           formatReviewFeedback(result, 0, {

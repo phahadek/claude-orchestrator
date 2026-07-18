@@ -1,13 +1,17 @@
 /**
  * Tests for SessionManager.enqueueFeedback(): the shared routing point used by
- * OrphanedTaskSweeper (nudges) and ReviewOrchestrator (local-branch CI-gate
- * failures) so both bypass session.send() entirely.
+ * OrphanedTaskSweeper (nudges) and ReviewOrchestrator (needs_changes/incomplete
+ * verdicts, local-branch CI-gate failures) so both bypass session.send() entirely.
  *
- * - Live session: item is enqueued only — delivery happens at the next turn
- *   boundary via AgentSession.deliverInboxItems(), so sendOrResume must NOT
- *   be called here (that would be a raw mid-teardown write risk).
- * - Idle/exited session: item is enqueued, then delivered immediately via a
- *   clean respawn (sendOrResume) and marked delivered.
+ * - Live, mid-turn session (hasActiveTurn() === true): item is enqueued only —
+ *   delivery happens at the next turn boundary via
+ *   AgentSession.deliverInboxItems(), so sendOrResume must NOT be called here
+ *   (that would interleave into an in-flight turn / risk a mid-teardown write).
+ * - Live, idle session (in-map but hasActiveTurn() === false): a turn boundary
+ *   will never arrive on its own, so the item is delivered immediately via
+ *   sendOrResume (a direct send() for a live session) and marked delivered.
+ * - Idle/exited session (not in-map): item is enqueued, then delivered
+ *   immediately via a clean respawn (sendOrResume) and marked delivered.
  * - Terminal session (done/error/killed): item is enqueued but left
  *   undelivered without resending, matching reconcileInboxAtBoot's handling.
  */
@@ -209,12 +213,12 @@ beforeEach(() => {
 });
 
 describe('SessionManager.enqueueFeedback()', () => {
-  it('live session: enqueues only — no sendOrResume (turn boundary delivers it)', async () => {
+  it('live, mid-turn session: enqueues only — no sendOrResume (turn boundary delivers it)', async () => {
     const sm = new SessionManager();
-    // Simulate a live in-memory session without going through the full spawn path.
+    // Simulate a live in-memory session mid-turn, without going through the full spawn path.
     (sm as unknown as { sessions: Map<string, unknown> }).sessions.set(
       'sess-live',
-      {},
+      { hasActiveTurn: () => true },
     );
     const sendSpy = vi.spyOn(sm, 'sendOrResume');
 
@@ -227,6 +231,43 @@ describe('SessionManager.enqueueFeedback()', () => {
     );
     expect(sendSpy).not.toHaveBeenCalled();
     expect(queries.listUndeliveredInboxItems('sess-live')).toHaveLength(1);
+  });
+
+  it('live, idle session: enqueues and delivers exactly once, marking items delivered', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-live-idle',
+      status: 'running',
+    } as never);
+
+    const sm = new SessionManager();
+    (sm as unknown as { sessions: Map<string, unknown> }).sessions.set(
+      'sess-live-idle',
+      { hasActiveTurn: () => false },
+    );
+    const sendSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValue('sess-live-idle');
+
+    await sm.enqueueFeedback(
+      'sess-live-idle',
+      'ai-reviewer',
+      'needs_changes feedback',
+    );
+
+    expect(queries.enqueueFeedbackItem).toHaveBeenCalledWith(
+      'sess-live-idle',
+      'ai-reviewer',
+      'needs_changes feedback',
+    );
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(sendSpy).toHaveBeenCalledWith(
+      'sess-live-idle',
+      expect.stringContaining('needs_changes feedback'),
+    );
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalledTimes(1);
+    expect(queries.listUndeliveredInboxItems('sess-live-idle')).toHaveLength(
+      0,
+    );
   });
 
   it('idle session: enqueues and immediately delivers via a clean respawn', async () => {
