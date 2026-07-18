@@ -17,11 +17,13 @@
 //   node gate-state-client.mjs item <gateItemId>
 //   node gate-state-client.mjs event <gateItemId> <json-payload>
 //   node gate-state-client.mjs approve <gateItemId> [operator]
+//   node gate-state-client.mjs reclassify <gateItemId> <classification> [operator]
 //   node gate-state-client.mjs accrete <json-payload>
 //
 // Example:
 //   node gate-state-client.mjs event gi-42 \
 //     '{"disposition":"pass","evidence":"manually clicked through checkout"}'
+//   node gate-state-client.mjs reclassify gi-42 Read-Only
 //   node gate-state-client.mjs accrete \
 //     '{"project":"p1","taskId":"notion:t1","title":"Add retry","milestone":"M12",
 //       "classification":"Read-Only","items":[{"text":"Click through checkout once"}]}'
@@ -138,6 +140,24 @@ export function approveGateItem({ host, port, token, gateItemId, operator }) {
   });
 }
 
+export function reclassifyGateItem({
+  host,
+  port,
+  token,
+  gateItemId,
+  classification,
+  operator,
+}) {
+  return requestGateState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/gate/items/${encodeURIComponent(gateItemId)}/classification`,
+    payload: operator === undefined ? { classification } : { classification, operator },
+  });
+}
+
 export function accreteGateContribution({ host, port, token, contribution }) {
   return requestGateState({
     host,
@@ -169,6 +189,7 @@ const USAGE =
   '  node gate-state-client.mjs item <gateItemId>\n' +
   '  node gate-state-client.mjs event <gateItemId> <json-payload>\n' +
   '  node gate-state-client.mjs approve <gateItemId> [operator]\n' +
+  '  node gate-state-client.mjs reclassify <gateItemId> <classification> [operator]\n' +
   '  node gate-state-client.mjs accrete <json-payload>';
 
 async function main() {
@@ -239,6 +260,17 @@ async function main() {
         port,
         token,
         gateItemId,
+        operator,
+      });
+    } else if (command === 'reclassify') {
+      const [gateItemId, classification, operator] = rest;
+      if (!gateItemId || !classification) return fail(USAGE);
+      result = await reclassifyGateItem({
+        host,
+        port,
+        token,
+        gateItemId,
+        classification,
         operator,
       });
     } else if (command === 'accrete') {

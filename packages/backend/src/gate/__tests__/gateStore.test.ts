@@ -22,6 +22,7 @@ import {
   insertItem,
   appendEvent,
   advanceState,
+  setClassification,
   setSourceMergeCommit,
   setMinDeployedCommit,
   getAccretionMarker,
@@ -179,6 +180,51 @@ describe('gateStore', () => {
     const m12Items = listByMilestone('polimarket-analyser', 'M12');
     expect(m12Items).toHaveLength(1);
     expect(m12Items[0].text).toBe('Item A');
+  });
+
+  it('reclassifies a needs-triage item into a resolved tier and records an event', () => {
+    const created = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Check the new gate reconciler tier',
+      classification: 'needs-triage',
+      sources: [{ sourceTaskId: 'notion:r1', sourceTaskTitle: 'Add tier' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    const updated = setClassification(
+      created.id,
+      'Read-Only',
+      new Date(1).toISOString(),
+      'pedro',
+    );
+
+    expect(updated.classification).toBe('Read-Only');
+    expect(updated.events).toHaveLength(1);
+    expect(updated.events[0]).toMatchObject({
+      disposition: 'reclassified',
+      operator: 'pedro',
+      evidence: { from: 'needs-triage', to: 'Read-Only' },
+    });
+  });
+
+  it('rejects an invalid reclassification target', () => {
+    const created = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Check the new gate reconciler tier',
+      classification: 'needs-triage',
+      sources: [{ sourceTaskId: 'notion:r2', sourceTaskTitle: 'Add tier' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    expect(() =>
+      setClassification(
+        created.id,
+        'bogus-tier' as never,
+        new Date(1).toISOString(),
+      ),
+    ).toThrow(/invalid reclassification target/);
   });
 });
 

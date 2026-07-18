@@ -10,6 +10,7 @@ import {
   listMilestoneReadiness,
   appendGateItemEvent,
   approveGateItem,
+  reclassifyGateItem,
   backfillGateTask,
 } from '../gate/gateService';
 import type { GateItemClassification } from '../db/types';
@@ -218,6 +219,34 @@ export function createGateStateRouter(): Router {
       });
     }
   });
+
+  // POST /api/gate/items/:id/classification  { classification, operator }
+  router.post(
+    '/gate/items/:id/classification',
+    (req: Request, res: Response) => {
+      const id = String(req.params.id);
+      const body = req.body as { classification?: unknown; operator?: unknown };
+      const classification =
+        typeof body.classification === 'string' ? body.classification : null;
+      if (!classification) {
+        res.status(400).json({ error: 'classification is required' });
+        return;
+      }
+      try {
+        const updated = reclassifyGateItem(
+          id,
+          classification as GateItemClassification,
+          typeof body.operator === 'string' ? body.operator : undefined,
+        );
+        res.json(updated);
+      } catch (err) {
+        res.status(400).json({
+          error:
+            err instanceof Error ? err.message : 'gate item reclassify failed',
+        });
+      }
+    },
+  );
 
   // POST /api/gate/backfill  { project, taskId, milestone, milestoneBoardIds }
   router.post('/gate/backfill', async (req: Request, res: Response) => {

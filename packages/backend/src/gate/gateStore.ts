@@ -265,6 +265,60 @@ export function advanceState(
   });
 }
 
+const VALID_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
+  'Read-Only',
+  'Prod-Mutating',
+  'Opportunistic',
+]);
+
+/**
+ * Triages a `needs-triage` (or any) item into one of the resolved tiers —
+ * the /gate skill's reclassify step. Refuses to set `needs-triage` back:
+ * that state is only ever a default at insert time, never a target.
+ */
+export function setClassification(
+  gateItemId: string,
+  classification: GateItemClassification,
+  updatedAt: string,
+  operator?: string,
+): GateItem {
+  if (!VALID_RECLASSIFY_TARGETS.has(classification)) {
+    throw new Error(
+      `gate_item: invalid reclassification target ${classification}`,
+    );
+  }
+  const row = getGateItem(gateItemId);
+  if (!row) {
+    throw new Error(`gate_item: no item ${gateItemId} to reclassify`);
+  }
+  const from = row.classification;
+  updateGateItem({
+    ...row,
+    classification,
+    updated_at: updatedAt,
+  });
+  insertGateItemEvent({
+    gate_item_id: gateItemId,
+    disposition: 'reclassified',
+    evidence: stringifyJson({ from, to: classification }),
+    filed_followon: null,
+    deploy_sha: null,
+    operator: operator ?? null,
+    at: updatedAt,
+  });
+  recordEvent({
+    event_type: 'gate_item_reclassified',
+    actor_type: 'system',
+    project_id: row.project,
+    payload: { gateItemId, from, to: classification },
+  });
+  const item = getItem(gateItemId);
+  if (!item) {
+    throw new Error(`gate_item: failed to read back item ${gateItemId} after reclassify`);
+  }
+  return item;
+}
+
 /**
  * Sets the commit a deploy must contain for this item to become runnable.
  * Owned by whatever recomputes it from the item's sources (the reconciler
