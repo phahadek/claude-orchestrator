@@ -35,6 +35,12 @@ const M11 = {
   updatedAt: 0,
 };
 const M12 = { ...M11, id: 'ms-uuid-12', name: 'M12', displayOrder: 1 };
+const M13_FULL_TITLE = {
+  ...M11,
+  id: 'ms-uuid-13',
+  name: 'M13 — Orchestrator-Owned Planning',
+  displayOrder: 2,
+};
 
 function project(milestones: (typeof M11)[] = [M11, M12]) {
   return { id: 'p1', milestones } as any;
@@ -75,6 +81,22 @@ describe('resolveMilestoneForProject', () => {
       UnknownMilestoneError,
     );
   });
+
+  it('accepts the short form when the milestone is stored under its full Notion title and returns the short form', () => {
+    projectServiceMock.getById.mockReturnValue(
+      project([M11, M12, M13_FULL_TITLE]),
+    );
+    expect(resolveMilestoneForProject('p1', 'M13')).toBe('M13');
+  });
+
+  it('accepts the full Notion title and still returns the short form', () => {
+    projectServiceMock.getById.mockReturnValue(
+      project([M11, M12, M13_FULL_TITLE]),
+    );
+    expect(
+      resolveMilestoneForProject('p1', 'M13 — Orchestrator-Owned Planning'),
+    ).toBe('M13');
+  });
 });
 
 describe('resolveMilestoneAnyProject', () => {
@@ -100,5 +122,12 @@ describe('resolveMilestoneAnyProject', () => {
     expect(() => resolveMilestoneAnyProject('M99')).toThrow(
       UnknownMilestoneError,
     );
+  });
+
+  it('accepts the short form when a project stores the milestone under its full Notion title', () => {
+    projectServiceMock.list.mockReturnValue([
+      project([M11, M12, M13_FULL_TITLE]),
+    ]);
+    expect(resolveMilestoneAnyProject('M13')).toBe('M13');
   });
 });

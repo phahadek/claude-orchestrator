@@ -503,6 +503,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     }
 
     const accretedAt = new Date().toISOString();
+    const sourceTaskId = normalizeTaskId(sourceTask.id);
     const itemIds = seeds.map(
       (seed) =>
         insertSeedItem({
@@ -511,7 +512,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
           spec: seed.spec,
           sources: [
             {
-              sourceTaskId: sourceTask.id,
+              sourceTaskId,
               sourceTaskTitle: sourceTask.title,
             },
           ],
@@ -520,7 +521,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     );
 
     const marker: SeedAccretionMarker = {
-      sourceTaskId: sourceTask.id,
+      sourceTaskId,
       project: sourceTask.project,
       milestone: sourceTask.milestone,
       decision,

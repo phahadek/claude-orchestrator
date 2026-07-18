@@ -26,6 +26,7 @@ import type {
   SeedItemEventOutcome,
   SeedAccretionDecision,
 } from '../db/types';
+import { normalizeTaskId } from '../tasks/taskId';
 
 export interface SeedItemSource {
   sourceTaskId: string;
@@ -299,13 +300,18 @@ export function setSourceMergeCommit(
   sourceTaskId: string,
   mergeCommit: string,
 ): void {
+  const normalizedSourceTaskId = normalizeTaskId(sourceTaskId);
   const sources = listSeedItemSources(seedItemId);
-  if (!sources.some((s) => s.source_task_id === sourceTaskId)) {
+  if (!sources.some((s) => s.source_task_id === normalizedSourceTaskId)) {
     throw new Error(
       `seed_item_source: no source ${sourceTaskId} on item ${seedItemId}`,
     );
   }
-  updateSeedItemSourceMergeCommit(seedItemId, sourceTaskId, mergeCommit);
+  updateSeedItemSourceMergeCommit(
+    seedItemId,
+    normalizedSourceTaskId,
+    mergeCommit,
+  );
 }
 
 /**
