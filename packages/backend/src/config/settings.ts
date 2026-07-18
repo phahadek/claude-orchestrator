@@ -31,10 +31,13 @@ const SettingsSchema = z.object({
   reviewer_comment_quiescence_ms: z.coerce.number().int().min(0),
   session_pr_close_grace_minutes: z.coerce.number().int().min(0),
   flake_recovery_max_retries: z.coerce.number().int().min(0),
+  session_cgroup_prod_reserve_mb: z.coerce.number().int().min(0),
+  session_cgroup_memory_high_fraction: z.coerce.number().min(0).max(1),
 
   // Boolean settings (stored as 'true'/'false' strings; also accepts native booleans)
   auto_review: zodBoolCoerce,
   auto_archive_enabled: zodBoolCoerce,
+  session_cgroup_deny_swap: zodBoolCoerce,
 
   // Free-form string settings (model names, empty string = feature off)
   code_session_model: z.string(),
@@ -78,8 +81,11 @@ export const SETTING_DEFAULTS: Settings = {
   reviewer_comment_quiescence_ms: 120_000,
   session_pr_close_grace_minutes: 5,
   flake_recovery_max_retries: 2,
+  session_cgroup_prod_reserve_mb: 4096,
+  session_cgroup_memory_high_fraction: 0.9,
   auto_review: true,
   auto_archive_enabled: true,
+  session_cgroup_deny_swap: true,
   code_session_model: '',
   review_session_model: '',
   large_task_model: '',

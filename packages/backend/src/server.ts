@@ -89,9 +89,11 @@ import {
   handleUncaughtException,
   handleUnhandledRejection,
 } from './audit/recordFault';
+import { setupSessionCgroup } from './session/sessionCgroup';
 
 runMigrations(db);
 loadRuntimeSettingsFromDb();
+setupSessionCgroup();
 importProjectsFromEnv(process.env.PROJECTS);
 
 const _cm = getCorporateMode();
