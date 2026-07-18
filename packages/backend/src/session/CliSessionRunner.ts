@@ -11,6 +11,7 @@ import type {
   SessionRunnerOptions,
 } from './SessionRunner';
 import { logger } from '../logger';
+import { placeSessionPid } from './sessionCgroup';
 
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
@@ -97,6 +98,10 @@ export class CliSessionRunner implements ISessionRunner {
       },
       ...(process.platform !== 'win32' && { detached: true }),
     });
+
+    if (this.proc.pid) {
+      placeSessionPid(this.proc.pid);
+    }
 
     // Async stdin errors (e.g. EPIPE when the child exits) must not bubble up
     // as unhandled 'error' events on the process.
