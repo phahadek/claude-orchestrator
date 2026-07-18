@@ -1036,4 +1036,89 @@ export function runMigrations(target: Database.Database): void {
     SET source_task_id = 'notion:' || source_task_id
     WHERE source_task_id NOT LIKE '%:%';
   `);
+
+  // ── milestone key: full Notion title → short M<n> canonical token ──────────
+  // resolveMilestoneForProject used to return a milestone's full display name
+  // (e.g. "M11 — Orchestrator-Owned Planning") instead of the short form every
+  // other write/read/loader/row keys on. Rows minted as accretion stopgaps
+  // while that bug stood are re-keyed here to the short token every other
+  // store already used. Idempotent: a milestone value already in short form
+  // (or with no leading M<n> token) is left untouched.
+  const shortMilestoneToken = (name: string): string | null => {
+    const match = /^([Mm]\d+[A-Za-z]?)(?=[\s—:-]|$)/.exec(name);
+    return match ? match[1] : null;
+  };
+  for (const table of ['gate_item', 'seed_item', 'gate_accretion', 'seed_accretion']) {
+    const rows = target
+      .prepare(`SELECT DISTINCT milestone FROM ${table}`)
+      .all() as { milestone: string }[];
+    for (const { milestone } of rows) {
+      const short = shortMilestoneToken(milestone);
+      if (short && short !== milestone) {
+        target
+          .prepare(`UPDATE ${table} SET milestone = ? WHERE milestone = ?`)
+          .run(short, milestone);
+      }
+    }
+  }
+
+  // ── seed_item_source.source_task_id: raw Notion id → prefixed 'notion:<id>' ──
+  // Mirrors the gate_item_source migration above so seed accretion keys on
+  // the same store-wide 'notion:<id>' convention as gate accretion.
+  target.exec(`
+    UPDATE seed_item_source
+    SET source_task_id = 'notion:' || source_task_id
+    WHERE source_task_id NOT LIKE '%:%';
+  `);
+
+  // ── gate_accretion / seed_accretion source_task_id: raw → prefixed ─────────
+  // The promotion-gate marker lookup (groomGate.ts) and the accretion writers
+  // (accreteGateContribution / stageSeedContribution) must agree on one
+  // taskId form. source_task_id is the PRIMARY KEY here, so a raw-keyed row
+  // is merged into any pre-existing prefixed row for the same underlying
+  // task (keeping whichever marker is newer) rather than blindly UPDATEd,
+  // to avoid a PK collision.
+  for (const table of ['gate_accretion', 'seed_accretion']) {
+    const rawRows = target
+      .prepare(
+        `SELECT * FROM ${table} WHERE source_task_id NOT LIKE '%:%'`,
+      )
+      .all() as {
+      source_task_id: string;
+      project: string;
+      milestone: string;
+      decision: string;
+      accreted_at: string;
+    }[];
+    for (const row of rawRows) {
+      const normalized = `notion:${row.source_task_id}`;
+      const existing = target
+        .prepare(`SELECT * FROM ${table} WHERE source_task_id = ?`)
+        .get(normalized) as { accreted_at: string } | undefined;
+      if (existing) {
+        if (row.accreted_at > existing.accreted_at) {
+          target
+            .prepare(
+              `UPDATE ${table} SET project = ?, milestone = ?, decision = ?, accreted_at = ? WHERE source_task_id = ?`,
+            )
+            .run(
+              row.project,
+              row.milestone,
+              row.decision,
+              row.accreted_at,
+              normalized,
+            );
+        }
+        target
+          .prepare(`DELETE FROM ${table} WHERE source_task_id = ?`)
+          .run(row.source_task_id);
+      } else {
+        target
+          .prepare(
+            `UPDATE ${table} SET source_task_id = ? WHERE source_task_id = ?`,
+          )
+          .run(normalized, row.source_task_id);
+      }
+    }
+  }
 }

@@ -3773,7 +3773,7 @@ export function getGateAccretion(
     `SELECT * FROM gate_accretion WHERE source_task_id = @source_task_id`,
   );
   return _stmtGetGateAccretion.get({
-    source_task_id: sourceTaskId,
+    source_task_id: normalizeTaskId(sourceTaskId),
   }) as GateAccretionRow | undefined;
 }
 
@@ -3787,7 +3787,10 @@ export function upsertGateAccretion(row: GateAccretionRow): void {
       decision = excluded.decision,
       accreted_at = excluded.accreted_at
   `);
-  _stmtUpsertGateAccretion.run(row);
+  _stmtUpsertGateAccretion.run({
+    ...row,
+    source_task_id: normalizeTaskId(row.source_task_id),
+  });
 }
 
 // ─── seed_item ────────────────────────────────────────────────────────────
@@ -3972,7 +3975,9 @@ export function rehomeSeedItemsBySourceTask(
          JOIN seed_item_source sis ON sis.seed_item_id = si.id
          WHERE si.project = @project AND sis.source_task_id = @source_task_id`,
       )
-      .all({ project, source_task_id: sourceTaskId }) as { id: string }[]
+      .all({ project, source_task_id: normalizeTaskId(sourceTaskId) }) as {
+        id: string;
+      }[]
   ).map((row) => row.id);
   if (ids.length === 0) return ids;
 
@@ -4009,7 +4014,10 @@ export function insertSeedItemSource(row: NewSeedItemSourceRow): void {
     VALUES
       (@seed_item_id, @source_task_id, @source_task_title, @merge_commit, @added_at)
   `);
-  _stmtInsertSeedItemSource.run(row);
+  _stmtInsertSeedItemSource.run({
+    ...row,
+    source_task_id: normalizeTaskId(row.source_task_id),
+  });
 }
 
 export function updateSeedItemSourceMergeCommit(
@@ -4063,7 +4071,7 @@ export function getSeedAccretion(
     `SELECT * FROM seed_accretion WHERE source_task_id = @source_task_id`,
   );
   return _stmtGetSeedAccretion.get({
-    source_task_id: sourceTaskId,
+    source_task_id: normalizeTaskId(sourceTaskId),
   }) as SeedAccretionRow | undefined;
 }
 
@@ -4077,7 +4085,10 @@ export function upsertSeedAccretion(row: SeedAccretionRow): void {
       decision = excluded.decision,
       accreted_at = excluded.accreted_at
   `);
-  _stmtUpsertSeedAccretion.run(row);
+  _stmtUpsertSeedAccretion.run({
+    ...row,
+    source_task_id: normalizeTaskId(row.source_task_id),
+  });
 }
 
 // ─── session_feedback_inbox ─────────────────────────────────────────────────
