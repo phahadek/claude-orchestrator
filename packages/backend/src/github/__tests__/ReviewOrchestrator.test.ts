@@ -104,6 +104,15 @@ const REPO = 'org/repo';
 function makeSessionManager(): SessionManager {
   const sm = new EventEmitter() as unknown as SessionManager;
   (sm as any).sendOrResume = vi.fn().mockResolvedValue(CODER_SESSION_ID);
+  // ReviewOrchestrator routes needs_changes/incomplete feedback through the
+  // wake-aware enqueueFeedback rather than a raw sendOrResume call. Delegate
+  // straight through to the sendOrResume mock so existing assertions on
+  // sendOrResume's call args keep verifying the routed session ID + payload.
+  (sm as any).enqueueFeedback = vi.fn(
+    async (sessionId: string, _source: string, payload: string) => {
+      await (sm as any).sendOrResume(sessionId, payload);
+    },
+  );
   return sm;
 }
 
@@ -182,6 +191,20 @@ describe('ReviewOrchestrator — needs_changes verdict routing', () => {
     );
   });
 
+  it('regression #858/#859: routes needs_changes through the wake-aware enqueueFeedback (not a raw enqueueFeedbackItem insert), so a live-but-idle coding session is delivered to with no boot reconcile', async () => {
+    const reviewService = makeReviewService('needs_changes');
+    new ReviewOrchestrator(reviewService, sm, true);
+
+    sm.emit('pr_opened', makeReviewJob());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect((sm as any).enqueueFeedback).toHaveBeenCalledWith(
+      CODER_SESSION_ID,
+      'ai-reviewer',
+      expect.any(String),
+    );
+  });
+
   it('passes the formatted feedback to sendOrResume', async () => {
     const reviewService = makeReviewService('needs_changes');
     new ReviewOrchestrator(reviewService, sm, true);
@@ -196,6 +219,7 @@ describe('ReviewOrchestrator — needs_changes verdict routing', () => {
     expect(vi.mocked(formatReviewFeedback)).toHaveBeenCalledWith(
       expect.objectContaining({ verdict: 'needs_changes' }),
       0,
+      expect.anything(),
     );
     expect(calledText).toBe('feedback:needs_changes:iter0');
   });

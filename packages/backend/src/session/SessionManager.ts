@@ -2297,12 +2297,16 @@ export class SessionManager extends EventEmitter {
 
   /**
    * Enqueue a feedback item to a session's inbox instead of writing to stdin
-   * directly. A live session picks it up at its next turn boundary via
-   * AgentSession.deliverInboxItems() — no further action is taken here. An
-   * idle/exited session is delivered immediately via a clean respawn
-   * (sendOrResume), never a raw stdin write into a possibly mid-teardown
-   * process. Terminal sessions (done/error/killed) are left undelivered —
-   * marked delivered without resending, matching reconcileInboxAtBoot.
+   * directly. A live session that is mid-turn picks the item up at its next
+   * turn boundary via AgentSession.deliverInboxItems() — no further action is
+   * taken here, so an in-flight turn is never interleaved with feedback. A
+   * live session that is idle (registered in `this.sessions` but with no turn
+   * in flight) would otherwise never reach another boundary, so it is woken
+   * immediately via the same delivery path used for idle/exited sessions
+   * (sendOrResume — a direct send() for a live session, a clean respawn
+   * otherwise), never a raw stdin write into a possibly mid-teardown process.
+   * Terminal sessions (done/error/killed) are left undelivered — marked
+   * delivered without resending, matching reconcileInboxAtBoot.
    */
   async enqueueFeedback(
     sessionId: string,
@@ -2311,9 +2315,26 @@ export class SessionManager extends EventEmitter {
   ): Promise<void> {
     enqueueFeedbackItem(sessionId, source, payload);
 
-    // Live session — the next turn boundary (deliverInboxItems) will deliver it.
-    if (this.sessions.has(sessionId)) return;
+    // Live, mid-turn session — the next turn boundary (deliverInboxItems) will deliver it.
+    const liveSession = this.sessions.get(sessionId);
+    if (liveSession && liveSession.hasActiveTurn()) return;
 
+    await this.deliverUndeliveredInboxItems(sessionId, 'enqueueFeedback');
+  }
+
+  /**
+   * Deliver all currently-undelivered inbox items for a session right now.
+   * Shared by enqueueFeedback (live-but-idle / respawn case) and
+   * reconcileInboxAtBoot so the two never diverge:
+   *  - terminal sessions (done/error/killed): mark delivered without resending.
+   *  - otherwise: coalesce undelivered items into one message and deliver via
+   *    sendOrResume (direct send() for a live session, a clean --resume
+   *    respawn otherwise), then mark delivered only after a successful send.
+   */
+  private async deliverUndeliveredInboxItems(
+    sessionId: string,
+    logContext: string,
+  ): Promise<void> {
     const row = getSession(sessionId);
     if (
       !row ||
@@ -2340,7 +2361,7 @@ export class SessionManager extends EventEmitter {
       await this.sendOrResume(sessionId, combined);
     } catch (err) {
       logger.warn(
-        `[SessionManager] enqueueFeedback: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
+        `[SessionManager] ${logContext}: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
       );
       return;
     }
@@ -2886,37 +2907,12 @@ export class SessionManager extends EventEmitter {
     );
 
     await Promise.allSettled(
-      sessionIds.map(async (sessionId) => {
-        const row = getSession(sessionId);
-        if (!row) return;
-        if (
-          row.status === 'done' ||
-          row.status === 'error' ||
-          row.status === 'killed'
-        ) {
-          // Terminal sessions: mark items delivered without resending
-          const items = listUndeliveredInboxItems(sessionId);
-          if (items.length > 0) markInboxItemsDelivered(items.map((i) => i.id));
-          return;
-        }
-
-        const items = listUndeliveredInboxItems(sessionId);
-        if (items.length === 0) return;
-
-        const combined = items
-          .map((item) => `[${item.source}]\n${item.payload}`)
-          .join('\n\n');
-
-        try {
-          await this.sendOrResume(sessionId, combined);
-        } catch (err) {
-          logger.warn(
-            `[SessionManager] inbox boot reconciliation: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
-          );
-          return;
-        }
-        markInboxItemsDelivered(items.map((i) => i.id));
-      }),
+      sessionIds.map((sessionId) =>
+        this.deliverUndeliveredInboxItems(
+          sessionId,
+          'inbox boot reconciliation',
+        ),
+      ),
     );
   }
 }

@@ -398,6 +398,15 @@ export class AgentSession extends EventEmitter {
   private _proactiveEscalation = false;
   /** Number of rebase nudges sent for diverged-branch recovery. Bounded by MAX_REBASE_NUDGES. */
   private rebaseNudgeCount = 0;
+  /**
+   * True while a turn is in flight (from the moment input is sent — initial
+   * prompt or a follow-up sendMessage — until the matching 'result' event is
+   * processed). Starts true: a freshly constructed session is always about
+   * to begin its first turn. Used by SessionManager.enqueueFeedback to decide
+   * whether a live in-map session can be woken immediately or must wait for
+   * the next turn boundary.
+   */
+  private _turnInFlight = true;
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -1083,6 +1092,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // Extract permission_denials from result event and broadcast to UI.
     // Also signal turn completion so the server can check for new commits.
     if (rawType === 'result') {
+      this._turnInFlight = false;
       const pr = getPRBySessionId(this.sessionId);
       if (pr?.review_session_id) {
         // Gate on actual HEAD SHA advance — skip when no new commits were made.
@@ -2495,7 +2505,17 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * Delegates to the underlying runner (stdin for CLI, message queue for API).
    */
   sendMessage(message: string): void {
+    this._turnInFlight = true;
     this.runner.sendMessage(message);
+  }
+
+  /**
+   * True while a turn is in flight (input sent, matching 'result' event not
+   * yet processed). Used by SessionManager.enqueueFeedback to decide whether
+   * a live in-map session is safe to wake immediately with a delivery turn.
+   */
+  hasActiveTurn(): boolean {
+    return this._turnInFlight;
   }
 
   /**
