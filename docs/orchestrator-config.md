@@ -32,6 +32,17 @@ allowed_tools: []
 # The first line becomes the bold heading; subsequent lines become the body.
 bash_rules: []
 
+# Per-project coding-session guidance. Rendered as its own "## Project Rules"
+# section in the coding-session CLAUDE.md — separate from bash_rules.
+session_rules: []
+
+# Per-project review-session enforcement criteria. Rendered as a
+# "## Project Review Criteria" section in the review-session CLAUDE.md.
+# The reviewer may set "escalate": true in its verdict when these criteria
+# indicate the PR needs operator attention instead of another coding-session
+# iteration (routes to review_escalated instead of needs_changes feedback).
+review_rules: []
+
 # Path to a script run after worktree creation, relative to the project root.
 # The script receives the worktree path as $1.
 bootstrap_script: ''
@@ -46,6 +57,8 @@ bootstrap_script: ''
 | `ci_check_name`    | `string[]` | `[]`    | GitHub check-run names the orchestrator treats as authoritative. Empty = all checks count.                            |
 | `allowed_tools`    | `string[]` | `[]`    | Extra Bash tool permission patterns (e.g. `Bash(dotnet:*)`) added on top of the base set.                             |
 | `bash_rules`       | `string[]` | `[]`    | Replacement Bash rules (Rule 5+) injected into CLAUDE.md. Each string's first line is the heading.                    |
+| `session_rules`    | `string[]` | `[]`    | Per-project coding-session guidance, rendered as a "## Project Rules" section (distinct from `bash_rules`).           |
+| `review_rules`     | `string[]` | `[]`    | Per-project review-session enforcement criteria, rendered into the review-session prompt. Can drive `escalate` verdicts. |
 | `bootstrap_script` | `string`   | `""`    | Relative path to a script executed after worktree creation. Receives the worktree path as `$1`.                       |
 
 All fields are optional. Missing fields fall back to their defaults — a partial config is valid.

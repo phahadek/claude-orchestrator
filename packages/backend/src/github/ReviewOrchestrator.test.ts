@@ -387,6 +387,45 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     expect(message).toContain('Missing export.');
   });
 
+  it('routes to review_escalated instead of coding-session feedback when the verdict sets escalate', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [],
+      summary: 'Policy violation.',
+      reviewedAt: new Date().toISOString(),
+      escalate: true,
+      escalationReason: 'Touches a protected file per project review rules.',
+    });
+
+    const messages: unknown[] = [];
+    sm.on('message', (m: unknown) => messages.push(m));
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'review_rules_escalation',
+    );
+    expect(
+      messages.some(
+        (m) =>
+          (m as { type: string }).type === 'review_escalated' &&
+          (m as { message: string }).message ===
+            'Touches a protected file per project review rules.',
+      ),
+    ).toBe(true);
+  });
+
   it('does not send feedback when verdict is approved', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 

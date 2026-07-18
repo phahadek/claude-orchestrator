@@ -1153,7 +1153,12 @@ export class SessionManager extends EventEmitter {
 
     let sessionContextContent: string | undefined;
     if (sessionType === 'review') {
-      sessionContextContent = buildReviewClaudeMd(taskName ?? taskUrl);
+      sessionContextContent = buildReviewClaudeMd(
+        taskName ?? taskUrl,
+        orchConfig.review_rules.length > 0
+          ? orchConfig.review_rules
+          : undefined,
+      );
     } else {
       try {
         sessionContextContent = buildSessionContext({
@@ -1167,6 +1172,10 @@ export class SessionManager extends EventEmitter {
           bashRules:
             orchConfig.bash_rules.length > 0
               ? orchConfig.bash_rules
+              : undefined,
+          sessionRules:
+            orchConfig.session_rules.length > 0
+              ? orchConfig.session_rules
               : undefined,
           taskBackend:
             project.taskSource === 'yaml'
@@ -1515,6 +1524,10 @@ export class SessionManager extends EventEmitter {
         verify: orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
         bashRules:
           orchConfig.bash_rules.length > 0 ? orchConfig.bash_rules : undefined,
+        sessionRules:
+          orchConfig.session_rules.length > 0
+            ? orchConfig.session_rules
+            : undefined,
         taskBackend:
           project.taskSource === 'yaml'
             ? 'local'

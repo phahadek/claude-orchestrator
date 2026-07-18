@@ -204,6 +204,35 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain('**Rule 6 — Rule B.**');
   });
 
+  it('omits the Project Rules section when sessionRules is empty or absent', () => {
+    const withoutParam = buildOrchestratorClaudeMd(defaultParams);
+    const withEmptyArray = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      sessionRules: [],
+    });
+    expect(withoutParam).not.toContain('## Project Rules');
+    expect(withEmptyArray).not.toContain('## Project Rules');
+  });
+
+  it('renders sessionRules as a Project Rules section, separate from Bash Rules', () => {
+    const result = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      sessionRules: ['Migration numbers come from db/migrations/LATEST.txt.'],
+    });
+    expect(result).toContain('## Project Rules');
+    expect(result).toContain(
+      'Migration numbers come from db/migrations/LATEST.txt.',
+    );
+    // Rendered as its own section, not folded into Bash Rules.
+    const bashSection = result.slice(
+      result.indexOf('## Bash Rules (Permission System)'),
+      result.indexOf('## Project Rules'),
+    );
+    expect(bashSection).not.toContain(
+      'Migration numbers come from db/migrations/LATEST.txt.',
+    );
+  });
+
   it('shows fallback message when verify is omitted, renders npx rule default', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
     expect(result).toContain(
@@ -557,6 +586,29 @@ describe('loadOrchestratorConfig', () => {
     expect(config.verify).toEqual([]);
     expect(config.bootstrap_script).toBe('');
     expect(config.bash_rules).toEqual([]);
+    expect(config.session_rules).toEqual([]);
+    expect(config.review_rules).toEqual([]);
+  });
+
+  it('reads session_rules and review_rules from .claude-orchestrator.yml', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'session_rules:',
+        '  - Migration numbers come from db/migrations/LATEST.txt.',
+        'review_rules:',
+        '  - Flag any PR that edits db/migrations/LATEST.txt directly.',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.session_rules).toEqual([
+      'Migration numbers come from db/migrations/LATEST.txt.',
+    ]);
+    expect(config.review_rules).toEqual([
+      'Flag any PR that edits db/migrations/LATEST.txt directly.',
+    ]);
   });
 
   it('reads custom config from .claude-orchestrator.yml', () => {
@@ -636,5 +688,26 @@ describe('buildReviewClaudeMd', () => {
     expect(result).toContain('PR review session');
     expect(result).toContain('Do NOT implement code');
     expect(result).toContain('Do NOT fetch Notion pages');
+  });
+
+  it('omits the Project Review Criteria section when reviewRules is empty or absent', () => {
+    const withoutParam = buildReviewClaudeMd('Some task');
+    const withEmptyArray = buildReviewClaudeMd('Some task', []);
+
+    expect(withoutParam).not.toContain('Project Review Criteria');
+    expect(withEmptyArray).not.toContain('Project Review Criteria');
+    expect(withEmptyArray).toBe(withoutParam);
+  });
+
+  it('renders reviewRules as a Project Review Criteria section', () => {
+    const result = buildReviewClaudeMd('Some task', [
+      'Flag any PR that edits db/migrations/LATEST.txt directly.',
+    ]);
+
+    expect(result).toContain('## Project Review Criteria');
+    expect(result).toContain(
+      'Flag any PR that edits db/migrations/LATEST.txt directly.',
+    );
+    expect(result).toContain('"escalate": true');
   });
 });
