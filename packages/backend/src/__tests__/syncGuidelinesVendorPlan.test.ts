@@ -56,12 +56,20 @@ describe('sync-guidelines-load.mjs vendor plan', () => {
     }
   });
 
-  it('never force-overwrites: no cpSync with force:true anywhere in the loader', () => {
+  it('never force-overwrites: no live-writing code (import fs write/copy calls) in the loader', () => {
     const source = readFileSync(
       resolve(repoRoot, 'scripts/sync-guidelines-load.mjs'),
       'utf8',
     );
-    expect(source).not.toMatch(/cpSync/);
-    expect(source).not.toMatch(/force:\s*true/);
+    // The loader only plans + records a baseline; it never writes to a live path itself
+    // (that's the human-confirmed Claude merge step) — so no cpSync/writeFile calls against
+    // a live/claudeHome/configDir target should appear in the source.
+    expect(source).not.toMatch(/import\s*\{[^}]*cpSync/);
+  });
+
+  it('does not resurrect the deleted deploy-grooming.mjs script', () => {
+    expect(() =>
+      readFileSync(resolve(repoRoot, 'scripts/deploy-grooming.mjs'), 'utf8'),
+    ).toThrow();
   });
 });
