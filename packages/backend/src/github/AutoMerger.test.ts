@@ -934,6 +934,82 @@ describe('AutoMerger.pollOnce() — local branch dispatch', () => {
   });
 });
 
+// ── sweepApprovedLocalBranches() / register() — scheduled driver ─────────────
+
+describe('AutoMerger.sweepApprovedLocalBranches() — scheduled local-branch merge', () => {
+  it('squash-merges an approved local branch with no GitHub/PR configuration present', async () => {
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([]);
+    vi.mocked(getApprovedLocalBranches).mockReturnValue([makeLocalBranchRow()]);
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(detectMergeConflict).mockResolvedValueOnce(false);
+    vi.mocked(squashMergeLocal).mockResolvedValueOnce({
+      merged: true,
+      commitSha: 'abc123',
+    });
+
+    const mockBackend = { updateStatus: vi.fn().mockResolvedValue(undefined) };
+    vi.mocked(getTaskBackend).mockReturnValueOnce(
+      mockBackend as unknown as ReturnType<typeof getTaskBackend>,
+    );
+
+    const sessions = makeMockSessions();
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      () => {},
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    // No GitHub calls should be needed for this path — only the local-branch
+    // merge helpers are exercised.
+    await merger.sweepApprovedLocalBranches();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(squashMergeLocal).toHaveBeenCalledWith({
+      worktreePath: '/tmp/worktree-1',
+      baseBranch: 'dev',
+      featureBranch: 'feature/my-task',
+      taskName: 'My Task',
+    });
+    expect(markLocalBranchMerged).toHaveBeenCalledWith(10, 'abc123');
+    expect(mockBackend.updateStatus).toHaveBeenCalledWith(
+      'notion:task-abc',
+      '✅ Done',
+    );
+    expect(github.fetchPRStatusConditional).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call attempt() for PRs — register() only schedules the local-branch sweep', () => {
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+
+    const registered: { name: string; run: () => Promise<void> }[] = [];
+    const fakeScheduler = {
+      register: vi.fn((opts: { name: string; run: () => Promise<void> }) => {
+        registered.push(opts);
+      }),
+    };
+
+    merger.register(fakeScheduler as unknown as import('../orchestration/Scheduler').Scheduler);
+
+    expect(fakeScheduler.register).toHaveBeenCalledTimes(1);
+    expect(registered[0].name).toBe('auto_merger_local_branch_sweep');
+
+    const attemptSpy = vi.spyOn(merger, 'attempt');
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([makePRRow()]);
+    vi.mocked(getApprovedLocalBranches).mockReturnValue([]);
+
+    // Running the registered job must only sweep local branches, never touch
+    // the PR path — that stays driven by PRMergeWatcher/PRReviewService.
+    return registered[0].run().then(() => {
+      expect(attemptSpy).not.toHaveBeenCalled();
+    });
+  });
+});
+
 // ── Corporate mode — human approval gate ──────────────────────────────────────
 
 function makeCorporateMode(requireHumanApproval: boolean) {

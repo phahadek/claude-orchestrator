@@ -394,6 +394,9 @@ updateChecker.register(scheduler);
 // Register all periodic sweepers with the Scheduler.
 autoLauncher.register(scheduler);
 opsSessionLauncher.register(scheduler);
+// Local-branch merge sweep — independent of GitHub/PRMergeWatcher so
+// local-only projects (no PR) still get approved branches squash-merged.
+autoMerger.register(scheduler);
 orphanedTaskSweeper.register(scheduler);
 stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
