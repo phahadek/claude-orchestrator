@@ -296,13 +296,11 @@ describe('POST /api/seed/backfill', () => {
       },
     );
 
-    const res = await request(makeApp())
-      .post('/api/seed/backfill')
-      .send({
-        project: 'p1',
-        taskId: 'notion:seed-task',
-        milestone: '9b1e...',
-      });
+    const res = await request(makeApp()).post('/api/seed/backfill').send({
+      project: 'p1',
+      taskId: 'notion:seed-task',
+      milestone: '9b1e...',
+    });
 
     expect(res.status).toBe(400);
     expect(seedServiceMock.backfillSeedTask).not.toHaveBeenCalled();
