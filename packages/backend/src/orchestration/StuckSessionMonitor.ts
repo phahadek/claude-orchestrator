@@ -153,7 +153,12 @@ export class StuckSessionMonitor {
                   baseBranch,
                   hasDiff,
                   taskBackend,
-                  broadcast: this.broadcast,
+                  // Route through sessionManager's internal 'message' bus (not
+                  // the WS-only this.broadcast) so ReviewOrchestrator, which
+                  // subscribes to sessionManager.on('message', ...), actually
+                  // receives local_branch_submitted. server.ts still relays
+                  // this to WS clients via sessionManager.on('message', broadcast).
+                  broadcast: (msg) => this.sessionManager.emit('message', msg),
                 });
               }
             } catch (e) {
@@ -191,7 +196,10 @@ export class StuckSessionMonitor {
           githubClient: this.githubClient,
           taskBackend,
           sessionManager: this.sessionManager,
-          broadcast: this.broadcast,
+          // See comment above submitLocalBranch call in scanForStuckSessions:
+          // recoverSession forwards this into submitLocalBranch, which must
+          // reach sessionManager's internal 'message' bus, not just WS clients.
+          broadcast: (msg) => this.sessionManager.emit('message', msg),
           emitPrOpened: () => {},
         }).catch((e) =>
           logger.error(
