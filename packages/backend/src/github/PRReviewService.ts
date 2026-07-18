@@ -77,6 +77,14 @@ export interface PRReviewResult {
   manualItemsForHuman?: string[];
   /** Full error detail when the session errored before producing output. */
   errorDetail?: string;
+  /**
+   * When true, the reviewer determined — per the project's review_rules — that
+   * this finding requires operator attention rather than another coding-session
+   * iteration. Routes to review_escalated instead of needs_changes feedback.
+   */
+  escalate?: boolean;
+  /** Why the reviewer escalated. Present when escalate is true. */
+  escalationReason?: string;
 }
 
 export type WorkItem =
@@ -117,9 +125,13 @@ Evaluate the PR across exactly these 5 dimensions and respond with this JSON sch
     { "name": "${SIZE_DIMENSION_NAME}",                          "passed": bool, "notes": "..." }
   ],
   "summary": "2–4 sentence overall assessment",
-  "manualItemsForHuman": ["verbatim item text", ...]
+  "manualItemsForHuman": ["verbatim item text", ...],
+  "escalate": bool (optional, default false),
+  "escalationReason": "..." (required when escalate is true)
 }
 verdict rules: "approved" = all 5 passed. "needs_changes" = 1–4 passed. "incomplete" = 0 passed.
+
+Set "escalate": true only when your CLAUDE.md's "Project Review Criteria" section (if present) indicates this PR requires human/operator attention rather than another coding-session iteration — e.g. a policy violation only a human can adjudicate. Do not escalate for ordinary needs_changes findings a coding session can fix itself.
 
 For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task OR are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files unrelated to the task's intent.
 
@@ -903,6 +915,12 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
               ...(parsed.manualItemsForHuman
                 ? { manualItemsForHuman: parsed.manualItemsForHuman }
                 : {}),
+              ...(parsed.escalate
+                ? {
+                    escalate: parsed.escalate,
+                    escalationReason: parsed.escalationReason,
+                  }
+                : {}),
             };
           }
         }
@@ -919,6 +937,8 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     dimensions: ReviewDimension[];
     summary: string;
     manualItemsForHuman?: string[];
+    escalate?: boolean;
+    escalationReason?: string;
   } | null {
     const candidate = this.extractJsonCandidate(text.trim());
     if (!candidate) {
@@ -945,6 +965,8 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     dimensions: ReviewDimension[];
     summary: string;
     manualItemsForHuman?: string[];
+    escalate?: boolean;
+    escalationReason?: string;
   } | null {
     try {
       const parsed = JSON.parse(json) as Record<string, unknown>;
@@ -959,6 +981,11 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
               (item) => typeof item === 'string',
             )
           : undefined;
+        const escalate = parsed.escalate === true;
+        const escalationReason =
+          typeof parsed.escalationReason === 'string'
+            ? parsed.escalationReason
+            : undefined;
         return {
           verdict: parsed.verdict as PRReviewResult['verdict'],
           dimensions,
@@ -966,6 +993,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
           ...(manualItems && manualItems.length > 0
             ? { manualItemsForHuman: manualItems }
             : {}),
+          ...(escalate ? { escalate, escalationReason } : {}),
         };
       }
     } catch {
@@ -1273,6 +1301,12 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         reviewedAt: new Date().toISOString(),
         ...(parsed.manualItemsForHuman
           ? { manualItemsForHuman: parsed.manualItemsForHuman }
+          : {}),
+        ...(parsed.escalate
+          ? {
+              escalate: parsed.escalate,
+              escalationReason: parsed.escalationReason,
+            }
           : {}),
       };
     }

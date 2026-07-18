@@ -100,6 +100,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Push rejected: the auto-dispatch PAT lacks the `workflow` scope and cannot modify .github/workflows/. Re-type this task as 🛠️ Tooling and land it interactively with a workflow-scoped credential.',
   resume_failed:
     'Session could not be resumed at boot (missing worktree, or the resumed process failed immediately) — review and redispatch when ready.',
+  review_rules_escalation:
+    'Reviewer escalated per project-specific review rules — see the review summary for details and resolve manually.',
 };
 
 function verdictLabel(verdict: string): string {

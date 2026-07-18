@@ -19,6 +19,12 @@ export interface OrchestratorClaudeMdParams {
    */
   bashRules?: string[];
   /**
+   * Per-project coding-session guidance from `.claude-orchestrator.yml`'s
+   * `session_rules`. Rendered as its own "## Project Rules" section, separate
+   * from the Bash Rules section. Omitted or empty → no section rendered.
+   */
+  sessionRules?: string[];
+  /**
    * Task backend type. Controls wording throughout the generated CLAUDE.md
    * (task label, fetch instruction, status ownership, PR body section header).
    * 'notion' is the default; 'local' reads tasks.yaml instead of fetching remotely.
@@ -128,6 +134,7 @@ export function buildOrchestratorClaudeMd(
     worktreePath,
     verify,
     bashRules,
+    sessionRules,
     taskBackend = 'notion',
     taskContent,
     projectContextContent,
@@ -373,6 +380,16 @@ Use repeated \`-m\` flags instead: \`git commit -m "subject" -m "body"\` — git
 Use the Write tool; never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
 
 ${bashRulesText}${
+    sessionRules && sessionRules.length > 0
+      ? `
+
+---
+
+## Project Rules
+
+${sessionRules.map((rule) => `- ${rule}`).join('\n')}`
+      : ''
+  }${
     taskContent
       ? `
 
@@ -407,7 +424,10 @@ ${projectContextContent}`
  * pre-PR gate, Notion fetching, etc.). They only need to know they are a reviewer
  * and should output JSON verdicts.
  */
-export function buildReviewClaudeMd(taskName: string): string {
+export function buildReviewClaudeMd(
+  taskName: string,
+  reviewRules?: string[],
+): string {
   return `# Review Session Rules
 
 You are a **PR review session**. Your only job is to evaluate pull request diffs
@@ -448,7 +468,20 @@ actions. Your verdict must be based solely on the automated, code-checkable item
 
 ## Task
 ${taskName}
+${
+  reviewRules && reviewRules.length > 0
+    ? `
+## Project Review Criteria
 
+> Per-project enforcement criteria this review must apply, in addition to the
+> standard dimensions in your prompt's JSON schema. If any of these indicate
+> the PR requires human/operator attention rather than another coding-session
+> iteration, set "escalate": true and explain why in "escalationReason".
+
+${reviewRules.map((rule) => `- ${rule}`).join('\n')}
+`
+    : ''
+}
 ## On session resume
 If this session is resumed or receives a follow-up message, it means there is
 a new diff to review. Wait for the diff content, then output a new JSON verdict.
