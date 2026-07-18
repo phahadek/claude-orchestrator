@@ -4,6 +4,7 @@ const mockDeleteTaskCacheRow = vi.fn();
 const mockRecordEvent = vi.fn();
 const mockRehomeGateItems = vi.fn();
 const mockRehomeSeedItems = vi.fn();
+const mockResolveMilestoneForProject = vi.fn();
 
 vi.mock('../../db/queries', () => ({
   getTaskCache: vi.fn().mockReturnValue(undefined),
@@ -20,6 +21,11 @@ vi.mock('../../gate/gateStore', () => ({
 
 vi.mock('../../seed/seedStore', () => ({
   rehomeItemsBySourceTask: (...args: unknown[]) => mockRehomeSeedItems(...args),
+}));
+
+vi.mock('../../projects/milestoneResolver', () => ({
+  resolveMilestoneForProject: (...args: unknown[]) =>
+    mockResolveMilestoneForProject(...args),
 }));
 
 import { planMove, MoveTaskError, type MoveGraphTask } from '../moveTask';
@@ -213,6 +219,8 @@ beforeEach(() => {
   mockRecordEvent.mockReset();
   mockRehomeGateItems.mockReset();
   mockRehomeSeedItems.mockReset();
+  mockResolveMilestoneForProject.mockReset();
+  mockResolveMilestoneForProject.mockReturnValue('M-Target');
 });
 
 describe('BackendTaskWriteCommands.moveTask', () => {
@@ -375,7 +383,7 @@ describe('BackendTaskWriteCommands.moveTask', () => {
     expect(mockDeleteTaskCacheRow).toHaveBeenCalledWith('board:m-target');
   });
 
-  it('carries the gate_item and seed_item accretion re-home, after the Depends On rewrites, using the source task id and target milestone', async () => {
+  it('carries the gate_item and seed_item accretion re-home, after the Depends On rewrites, using the normalized (unprefixed) source task id and the target milestone display name', async () => {
     const calls: string[] = [];
     const backend = makeBackend({
       setDependsOn: vi.fn().mockImplementation(async () => {
@@ -394,16 +402,20 @@ describe('BackendTaskWriteCommands.moveTask', () => {
 
     await commands.moveTask(baseParams());
 
+    expect(mockResolveMilestoneForProject).toHaveBeenCalledWith(
+      'proj-1',
+      'm-target',
+    );
     expect(mockRehomeGateItems).toHaveBeenCalledWith(
       'proj-1',
-      'notion:a',
-      'm-target',
+      'a',
+      'M-Target',
       expect.any(String),
     );
     expect(mockRehomeSeedItems).toHaveBeenCalledWith(
       'proj-1',
-      'notion:a',
-      'm-target',
+      'a',
+      'M-Target',
       expect.any(String),
     );
     expect(calls).toEqual(['rehomeGateItems', 'rehomeSeedItems']);
