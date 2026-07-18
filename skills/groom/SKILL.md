@@ -70,8 +70,8 @@ node ~/.claude/scripts/groom-context-client.mjs --milestone <M> [--project <proj
 ```
 
 `groom-context-client.mjs` is the vendored sanctioned node client (curl/wget
-are off the auto-dispatch allowlist, `node` is not — see
-`scripts/deploy-grooming.mjs`), which calls the loopback, device-authed route
+are off the auto-dispatch allowlist, `node` is not — re-vendored via the
+`/sync-guidelines` skill), which calls the loopback, device-authed route
 with `$ORCHESTRATOR_DEVICE_TOKEN` (host/port default to
 `127.0.0.1:3000`, overridable via `$ORCHESTRATOR_BACKEND_HOST` /
 `$ORCHESTRATOR_BACKEND_PORT`) and prints the `GroomLoadResult` bundle as JSON
