@@ -2908,7 +2908,10 @@ export class SessionManager extends EventEmitter {
 
     await Promise.allSettled(
       sessionIds.map((sessionId) =>
-        this.deliverUndeliveredInboxItems(sessionId, 'inbox boot reconciliation'),
+        this.deliverUndeliveredInboxItems(
+          sessionId,
+          'inbox boot reconciliation',
+        ),
       ),
     );
   }

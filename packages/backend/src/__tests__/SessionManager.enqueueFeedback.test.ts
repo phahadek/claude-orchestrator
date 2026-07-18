@@ -265,9 +265,7 @@ describe('SessionManager.enqueueFeedback()', () => {
       expect.stringContaining('needs_changes feedback'),
     );
     expect(queries.markInboxItemsDelivered).toHaveBeenCalledTimes(1);
-    expect(queries.listUndeliveredInboxItems('sess-live-idle')).toHaveLength(
-      0,
-    );
+    expect(queries.listUndeliveredInboxItems('sess-live-idle')).toHaveLength(0);
   });
 
   it('idle session: enqueues and immediately delivers via a clean respawn', async () => {
