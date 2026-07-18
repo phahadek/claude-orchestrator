@@ -137,9 +137,7 @@ const NOTION_RENDERED_BLOCKS = [
   },
 ];
 
-const NOTION_RENDERED_BODY = NOTION_RENDERED_BLOCKS.map(blockToLine).join(
-  '\n',
-);
+const NOTION_RENDERED_BODY = NOTION_RENDERED_BLOCKS.map(blockToLine).join('\n');
 
 describe('parseGateBody — real Notion-rendered body (heading_4 + to_do)', () => {
   it('parses groups and items from a NotionClient-rendered body, not a synthetic markdown string', () => {

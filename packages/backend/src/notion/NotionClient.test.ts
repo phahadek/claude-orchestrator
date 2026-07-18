@@ -92,11 +92,17 @@ describe('blockToLine()', () => {
   it('renders a to_do block with a - prefix, regardless of checked state', () => {
     const unchecked = blockToLine({
       type: 'to_do',
-      to_do: { rich_text: [{ plain_text: 'Verify the thing' }], checked: false },
+      to_do: {
+        rich_text: [{ plain_text: 'Verify the thing' }],
+        checked: false,
+      },
     });
     const checked = blockToLine({
       type: 'to_do',
-      to_do: { rich_text: [{ plain_text: 'Confirm the thing' }], checked: true },
+      to_do: {
+        rich_text: [{ plain_text: 'Confirm the thing' }],
+        checked: true,
+      },
     });
     expect(unchecked).toBe('- Verify the thing');
     expect(checked).toBe('- Confirm the thing');
