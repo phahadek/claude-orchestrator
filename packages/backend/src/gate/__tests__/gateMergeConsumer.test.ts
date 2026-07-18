@@ -173,6 +173,35 @@ describe('handleMergeCompleted', () => {
       }),
     ).not.toThrow();
   });
+
+  it('fills a source stored with the raw (unprefixed) Notion id when the merge event carries the prefixed id', () => {
+    // Accretion/backfill historically wrote the raw Notion id while
+    // PRMergeWatcher always emits the prefixed canonical id — the id-form
+    // mismatch that left every min_deployed_commit null.
+    const item = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M11',
+      text: 'Raw-id source item',
+      classification: 'needs-triage',
+      sources: [
+        {
+          sourceTaskId: 'raw-uuid-1234',
+          sourceTaskTitle: 'Raw-id source task',
+        },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    handleMergeCompleted({
+      notion_task_id: 'notion:raw-uuid-1234',
+      merge_commit: 'sha-raw',
+    });
+
+    const updated = getItem(item.id);
+    expect(updated?.sources[0].sourceTaskId).toBe('notion:raw-uuid-1234');
+    expect(updated?.sources[0].mergeCommit).toBe('sha-raw');
+    expect(updated?.minDeployedCommit).toBe('sha-raw');
+  });
 });
 
 describe('registerGateMergeConsumer — the gate consumes the signal, decoupled from the merge flow', () => {
@@ -221,6 +250,29 @@ describe('catchUpMergeCommits — reconciler durability net', () => {
     const updated = getItem(item.id);
     expect(updated?.sources[0].mergeCommit).toBe('catchup-sha');
     expect(updated?.minDeployedCommit).toBe('catchup-sha');
+  });
+
+  it('fills a raw-id source whose merged session is keyed by the prefixed task id (gap A)', () => {
+    const item = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M11',
+      text: 'GitHub-merged source stored raw',
+      classification: 'needs-triage',
+      sources: [
+        { sourceTaskId: 'raw-github-task', sourceTaskTitle: 'GitHub task' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    // sessions.task_id is always the prefixed canonical form.
+    seedMergedSession('notion:raw-github-task', 'github-merged-sha');
+
+    const result = catchUpMergeCommits();
+
+    expect(result.filled).toBe(1);
+    const updated = getItem(item.id);
+    expect(updated?.sources[0].mergeCommit).toBe('github-merged-sha');
+    expect(updated?.minDeployedCommit).toBe('github-merged-sha');
   });
 
   it('is a no-op when every source is either filled or still unmerged', () => {

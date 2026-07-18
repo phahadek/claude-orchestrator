@@ -5,7 +5,11 @@ import type {
   TaskPropertiesPatch,
 } from './TaskBackend';
 import type { TaskBodySections } from './bodyRender';
-import { getTaskCache, deleteTaskCacheRow } from '../db/queries';
+import {
+  getTaskCache,
+  deleteTaskCacheRow,
+  getMergeCommitForTask,
+} from '../db/queries';
 import { checkReadiness, ReadinessGateError } from './readinessGate';
 import {
   checkGroomingPromotionGate,
@@ -442,6 +446,8 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     }
 
     const accretedAt = new Date().toISOString();
+    const sourceTaskId = normalizeTaskId(sourceTask.id);
+    const mergeCommit = getMergeCommitForTask(sourceTaskId) ?? undefined;
     const itemIds = items.map(
       (item) =>
         insertGateItem({
@@ -451,8 +457,9 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
           classification: classification as GateItemClassification,
           sources: [
             {
-              sourceTaskId: sourceTask.id,
+              sourceTaskId,
               sourceTaskTitle: sourceTask.title,
+              mergeCommit,
             },
           ],
           updatedAt: accretedAt,
@@ -460,7 +467,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     );
 
     const marker: GateAccretionMarker = {
-      sourceTaskId: sourceTask.id,
+      sourceTaskId,
       project: sourceTask.project,
       milestone: sourceTask.milestone,
       decision: isBareDecision ? classification : 'items',

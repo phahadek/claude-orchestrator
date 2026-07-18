@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockGetTaskCache = vi.fn();
+const mockGetMergeCommitForTask = vi.fn();
 const mockRecordEvent = vi.fn();
 const mockInsertItem = vi.fn();
 const mockRecordAccretionMarker = vi.fn();
@@ -11,6 +12,8 @@ const mockGetSeedAccretionMarker = vi.fn();
 
 vi.mock('../../db/queries', () => ({
   getTaskCache: (...args: unknown[]) => mockGetTaskCache(...args),
+  getMergeCommitForTask: (...args: unknown[]) =>
+    mockGetMergeCommitForTask(...args),
 }));
 
 vi.mock('../../audit/AuditLog', () => ({
@@ -69,6 +72,8 @@ function cacheRowWithStatus(display: string) {
 
 beforeEach(() => {
   mockGetTaskCache.mockReset();
+  mockGetMergeCommitForTask.mockReset();
+  mockGetMergeCommitForTask.mockReturnValue(null);
   mockRecordEvent.mockReset();
   mockInsertItem.mockReset();
   mockRecordAccretionMarker.mockReset();
@@ -617,6 +622,55 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
     await expect(
       commands.accreteGateContribution(sourceTask, [], 'Prod-Mutating'),
     ).rejects.toThrow(/at least one item/);
+  });
+
+  it('fills the source merge commit immediately when the source task is already merged', async () => {
+    mockGetMergeCommitForTask.mockReturnValue('already-merged-sha');
+    mockInsertItem.mockReturnValueOnce({ id: 'gate-item-1' });
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.accreteGateContribution(
+      sourceTask,
+      [{ text: 'Verify the webhook fires' }],
+      'Read-Only',
+    );
+
+    expect(mockGetMergeCommitForTask).toHaveBeenCalledWith('notion:src-1');
+    expect(mockInsertItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sources: [
+          {
+            sourceTaskId: 'notion:src-1',
+            sourceTaskTitle: 'Add the webhook',
+            mergeCommit: 'already-merged-sha',
+          },
+        ],
+      }),
+    );
+  });
+
+  it('normalizes a raw (unprefixed) source task id to the canonical prefixed form', async () => {
+    mockInsertItem.mockReturnValueOnce({ id: 'gate-item-1' });
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+    const rawSourceTask = { ...sourceTask, id: 'src-1' };
+
+    await commands.accreteGateContribution(
+      rawSourceTask,
+      [{ text: 'Verify the webhook fires' }],
+      'Read-Only',
+    );
+
+    expect(mockGetMergeCommitForTask).toHaveBeenCalledWith('notion:src-1');
+    expect(mockInsertItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sources: [expect.objectContaining({ sourceTaskId: 'notion:src-1' })],
+      }),
+    );
+    expect(mockRecordAccretionMarker).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceTaskId: 'notion:src-1' }),
+    );
   });
 });
 

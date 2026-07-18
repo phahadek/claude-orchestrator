@@ -1024,4 +1024,16 @@ export function runMigrations(target: Database.Database): void {
         )
     `);
   }
+
+  // ── gate_item_source.source_task_id: raw Notion id → prefixed 'notion:<id>' ──
+  // Accretion/backfill historically stored the raw Notion id while
+  // merge_completed's payload.notion_task_id (from pull_requests.task_id) is
+  // always the prefixed canonical form, so the consumer's WHERE source_task_id
+  // = ? join never matched and min_deployed_commit was never filled. Idempotent:
+  // guarded by NOT LIKE '%:%', re-running is a no-op.
+  target.exec(`
+    UPDATE gate_item_source
+    SET source_task_id = 'notion:' || source_task_id
+    WHERE source_task_id NOT LIKE '%:%';
+  `);
 }
