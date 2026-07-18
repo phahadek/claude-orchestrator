@@ -44,7 +44,14 @@ import { pathToFileURL } from 'node:url';
  * resolves with `{statusCode, body}`. Exported so tests can exercise it
  * directly without spawning a child process.
  */
-export function requestStagedIntents({ host, port, token, method, path, payload }) {
+export function requestStagedIntents({
+  host,
+  port,
+  token,
+  method,
+  path,
+  payload,
+}) {
   const body = payload === undefined ? undefined : JSON.stringify(payload);
   return new Promise((resolve, reject) => {
     const req = http.request(
