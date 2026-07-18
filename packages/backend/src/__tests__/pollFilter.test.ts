@@ -747,6 +747,79 @@ describe('classifyStalledPR conflict_dead_session', () => {
   });
 });
 
+// ── classifyStalledPR: undelivered_review_feedback ────────────────────────────
+
+describe('classifyStalledPR undelivered_review_feedback', () => {
+  it('returns undelivered_review_feedback for needs_changes with undelivered inbox and idle implementing session', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+    });
+    expect(classifyStalledPR(pr, null, 'idle', true)).toEqual({
+      kind: 'undelivered_review_feedback',
+    });
+  });
+
+  it('returns null when the inbox feedback was already delivered', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+    });
+    expect(classifyStalledPR(pr, null, 'idle', false)).toBeNull();
+  });
+
+  it('returns null when the implementing session is live mid-turn (delivered live by the wake-aware path)', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+    });
+    expect(classifyStalledPR(pr, null, 'running', true)).toBeNull();
+  });
+});
+
+// ── classifyStalledPR: approved + unmergeable ─────────────────────────────────
+
+describe('classifyStalledPR approved + unmergeable', () => {
+  for (const mergeState of ['unknown', 'dirty', 'blocked'] as const) {
+    for (const sessionStatus of ['done', 'error', 'killed', 'idle'] as const) {
+      it(`returns conflict_dead_session for approved+mergeable=0+merge_state=${mergeState} with a ${sessionStatus} implementing session`, () => {
+        const pr = makePR({
+          review_result: JSON.stringify({ verdict: 'approved' }),
+          head_sha: 'sha-abc',
+          mergeable: 0,
+          merge_state: mergeState,
+        });
+        expect(classifyStalledPR(pr, null, sessionStatus)).toEqual({
+          kind: 'conflict_dead_session',
+        });
+      });
+    }
+  }
+
+  it('returns null for approved+mergeable=0+merge_state=unknown when the implementing session is live', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+      head_sha: 'sha-abc',
+      mergeable: 0,
+      merge_state: 'unknown',
+    });
+    expect(classifyStalledPR(pr, null, 'running')).toBeNull();
+  });
+
+  it('returns null when mergeable is not 0', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+      head_sha: 'sha-abc',
+      mergeable: 1,
+      merge_state: 'unknown',
+    });
+    expect(classifyStalledPR(pr, null, 'idle')).toBeNull();
+  });
+});
+
 // ── Integration: 20 PRs, 5 paused/stale → only active PRs trigger API calls ──
 
 describe('integration: only non-skipped PRs trigger API calls in one cycle', () => {

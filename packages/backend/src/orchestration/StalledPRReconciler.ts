@@ -12,13 +12,16 @@ import {
   deleteAnalyzeResult,
   setHeadSha,
   clearTerminalPRFlags,
+  countUndeliveredInboxItems,
+  updateMergeState,
 } from '../db/queries';
 import { parsePauseReason } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
+import { typedGetSetting } from '../config/settings';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
-import { classifyStalledPR } from '../github/pollUtils';
+import { classifyStalledPR, parseVerdict } from '../github/pollUtils';
 import type { StalledPRKind } from '../github/pollUtils';
 import {
   formatCIFailureFeedback,
@@ -107,21 +110,45 @@ export class StalledPRReconciler {
         ? (getSession(pr.session_id)?.status ?? null)
         : null;
 
+      // GitHub computes mergeability asynchronously — an approved PR can be
+      // recorded as mergeable=0 with a stale merge_state='unknown' from before
+      // the check finished. Refresh it here (I/O) before handing the row to
+      // the pure classifier.
+      let effectivePr = pr;
+      if (
+        this.githubClient &&
+        parseVerdict(pr.review_result) === 'approved' &&
+        pr.mergeable === 0 &&
+        pr.merge_state === 'unknown'
+      ) {
+        effectivePr = await this.refreshStaleMergeState(pr);
+      }
+
+      const hasUndeliveredFeedback = pr.session_id
+        ? countUndeliveredInboxItems(pr.session_id) > 0
+        : false;
+
       const stalled = classifyStalledPR(
-        pr,
+        effectivePr,
         reviewSessionStatus,
         implementingSessionStatus,
+        hasUndeliveredFeedback,
       );
       if (!stalled) continue;
 
-      const count = pr.stalled_pr_retry_count ?? 0;
+      const count = effectivePr.stalled_pr_retry_count ?? 0;
       if (count >= retryCap) {
-        this.escalate(pr.pr_number, pr.repo, stalled.kind, count);
+        this.escalate(
+          effectivePr.pr_number,
+          effectivePr.repo,
+          stalled.kind,
+          count,
+        );
         itemsProcessed++;
         continue;
       }
 
-      const drove = await this.reDrive(pr, stalled.kind, count);
+      const drove = await this.reDrive(effectivePr, stalled.kind, count);
       if (drove) itemsProcessed++;
     }
 
@@ -129,6 +156,50 @@ export class StalledPRReconciler {
       logger.info(
         `[StalledPRReconciler] processed ${itemsProcessed} stalled PR(s)`,
       );
+    }
+  }
+
+  /**
+   * Re-check mergeability via GitHub for a PR whose merge_state='unknown' is
+   * stale relative to an already-recorded mergeable=0. Persists the refresh
+   * and returns an updated row for the pure classifier to reason about — the
+   * I/O happens here so classifyStalledPR stays a pure function.
+   */
+  private async refreshStaleMergeState(
+    pr: PullRequestRow,
+  ): Promise<PullRequestRow> {
+    if (!this.githubClient) return pr;
+    try {
+      const category = await this.githubClient.categorizeMergeability(
+        pr.pr_number,
+        pr.repo,
+      );
+      // GitHub hasn't finished computing mergeability yet — nothing to refresh.
+      if (
+        category.category === 'unknown' &&
+        category.rawMergeableState === null
+      ) {
+        return pr;
+      }
+      const mergeableInt = category.category === 'clean' ? 1 : 0;
+      const failingNames = category.failingChecks.map((c) => c.name);
+      updateMergeState(
+        pr.pr_number,
+        pr.repo,
+        mergeableInt,
+        category.mergeState,
+        failingNames.length > 0 ? failingNames : null,
+      );
+      return {
+        ...pr,
+        mergeable: mergeableInt,
+        merge_state: category.mergeState,
+      };
+    } catch (err) {
+      logger.warn(
+        `[StalledPRReconciler] PR #${pr.pr_number} (${pr.repo}): refreshStaleMergeState failed — ${(err as Error).message}`,
+      );
+      return pr;
     }
   }
 
@@ -144,6 +215,10 @@ export class StalledPRReconciler {
 
     if (kind === 'gate_failed' || kind === 'conflict_dead_session') {
       return this.reDriveViaFixerRelaunch(pr, kind);
+    }
+
+    if (kind === 'undelivered_review_feedback') {
+      return this.reDriveViaFeedbackRedelivery(pr);
     }
 
     if (!this.reviewOrchestrator) {
@@ -267,6 +342,58 @@ export class StalledPRReconciler {
     await this.sessionManager.relaunchFixerForPR(pr, prompt);
 
     return true;
+  }
+
+  /**
+   * undelivered_review_feedback: needs_changes feedback is sitting in the
+   * implementing session's inbox but the session went idle before ever
+   * picking it up. Redeliver via SessionManager rather than re-enqueuing a
+   * review — the review already happened. Respects the review-iteration cap
+   * (max_review_iterations) so this doesn't loop past what PRMergeWatcher's
+   * own needs_changes re-review flow would allow.
+   */
+  private async reDriveViaFeedbackRedelivery(
+    pr: PullRequestRow,
+  ): Promise<boolean> {
+    const { pr_number: prNumber, repo } = pr;
+
+    const maxIter = typedGetSetting('max_review_iterations');
+    if (pr.review_iteration >= maxIter) {
+      logger.info(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): undelivered_review_feedback at review-iteration cap (${pr.review_iteration}/${maxIter}) — not re-driving`,
+      );
+      return false;
+    }
+
+    if (!this.sessionManager || !pr.session_id) {
+      logger.warn(
+        `[StalledPRReconciler] sessionManager/session_id not set — cannot redeliver feedback for PR #${prNumber}`,
+      );
+      return false;
+    }
+
+    const newCount = incrementStalledPRRetryCount(prNumber, repo);
+    const project = getProjectByGithubRepo(repo);
+
+    logger.info(
+      `[StalledPRReconciler] PR #${prNumber} (${repo}): re-driving undelivered_review_feedback (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP})`,
+    );
+
+    recordEvent({
+      event_type: 'stalled_pr_reconcile_attempt',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: project?.id ?? null,
+      task_id: pr.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        kind: 'undelivered_review_feedback',
+        attempt: newCount,
+      },
+    });
+
+    return this.sessionManager.redeliverUndeliveredFeedback(pr.session_id);
   }
 
   /**

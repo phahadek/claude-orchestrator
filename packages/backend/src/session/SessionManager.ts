@@ -2915,4 +2915,23 @@ export class SessionManager extends EventEmitter {
       ),
     );
   }
+
+  /**
+   * Redeliver whatever is sitting undelivered in a session's feedback inbox.
+   * Thin public wrapper around deliverUndeliveredInboxItems for callers (e.g.
+   * StalledPRReconciler re-driving a needs_changes PR whose feedback never
+   * reached an idle implementing session) that need to know whether delivery
+   * actually happened.
+   *
+   * Returns true when items were found and (re)sent to the session.
+   */
+  async redeliverUndeliveredFeedback(sessionId: string): Promise<boolean> {
+    const before = listUndeliveredInboxItems(sessionId).length;
+    if (before === 0) return false;
+    await this.deliverUndeliveredInboxItems(
+      sessionId,
+      'redeliverUndeliveredFeedback',
+    );
+    return listUndeliveredInboxItems(sessionId).length < before;
+  }
 }
