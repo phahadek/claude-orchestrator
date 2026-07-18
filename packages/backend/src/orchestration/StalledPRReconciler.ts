@@ -138,7 +138,12 @@ export class StalledPRReconciler {
 
       const count = effectivePr.stalled_pr_retry_count ?? 0;
       if (count >= retryCap) {
-        this.escalate(effectivePr.pr_number, effectivePr.repo, stalled.kind, count);
+        this.escalate(
+          effectivePr.pr_number,
+          effectivePr.repo,
+          stalled.kind,
+          count,
+        );
         itemsProcessed++;
         continue;
       }
@@ -170,7 +175,10 @@ export class StalledPRReconciler {
         pr.repo,
       );
       // GitHub hasn't finished computing mergeability yet — nothing to refresh.
-      if (category.category === 'unknown' && category.rawMergeableState === null) {
+      if (
+        category.category === 'unknown' &&
+        category.rawMergeableState === null
+      ) {
         return pr;
       }
       const mergeableInt = category.category === 'clean' ? 1 : 0;
@@ -182,7 +190,11 @@ export class StalledPRReconciler {
         category.mergeState,
         failingNames.length > 0 ? failingNames : null,
       );
-      return { ...pr, mergeable: mergeableInt, merge_state: category.mergeState };
+      return {
+        ...pr,
+        mergeable: mergeableInt,
+        merge_state: category.mergeState,
+      };
     } catch (err) {
       logger.warn(
         `[StalledPRReconciler] PR #${pr.pr_number} (${pr.repo}): refreshStaleMergeState failed — ${(err as Error).message}`,

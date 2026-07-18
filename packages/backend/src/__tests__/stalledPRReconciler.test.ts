@@ -747,7 +747,13 @@ describe('StalledPRReconciler', () => {
     await reconciler.reconcileOnce();
 
     expect(gh.categorizeMergeability).toHaveBeenCalledWith(42, 'org/repo');
-    expect(updateMergeState).toHaveBeenCalledWith(42, 'org/repo', 0, 'dirty', null);
+    expect(updateMergeState).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      0,
+      'dirty',
+      null,
+    );
     expect(sm.relaunchFixerForPR).toHaveBeenCalledWith(
       expect.objectContaining({ pr_number: 42, repo: 'org/repo' }),
       expect.stringContaining('Rebase'),
