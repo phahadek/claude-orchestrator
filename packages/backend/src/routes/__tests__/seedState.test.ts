@@ -23,6 +23,16 @@ const seedServiceMock = vi.hoisted(() => ({
 
 vi.mock('../../seed/seedService.js', () => seedServiceMock);
 
+const milestoneResolverMock = vi.hoisted(() => ({
+  resolveMilestoneForProject: vi.fn(
+    (_project: string, milestone: string) => milestone,
+  ),
+  resolveMilestoneAnyProject: vi.fn((milestone: string) => milestone),
+  UnknownMilestoneError: class UnknownMilestoneError extends Error {},
+}));
+
+vi.mock('../../projects/milestoneResolver.js', () => milestoneResolverMock);
+
 import { createSeedStateRouter } from '../seedState.js';
 
 function makeApp() {
@@ -52,6 +62,23 @@ describe('GET /api/seed/readiness', () => {
 
   it('400s without a milestone, never calling the service', async () => {
     const res = await request(makeApp()).get('/api/seed/readiness');
+    expect(res.status).toBe(400);
+    expect(seedServiceMock.getSeedReadiness).not.toHaveBeenCalled();
+  });
+
+  it('400s a non-canonical milestone (e.g. a UUID), never calling the service', async () => {
+    milestoneResolverMock.resolveMilestoneAnyProject.mockImplementationOnce(
+      () => {
+        throw new milestoneResolverMock.UnknownMilestoneError(
+          '"9b1e..." is not a known milestone display name for any project',
+        );
+      },
+    );
+
+    const res = await request(makeApp()).get(
+      '/api/seed/readiness?milestone=9b1e...',
+    );
+
     expect(res.status).toBe(400);
     expect(seedServiceMock.getSeedReadiness).not.toHaveBeenCalled();
   });
@@ -112,6 +139,26 @@ describe('GET /api/seed/items', () => {
     });
     expect(res.status).toBe(200);
     expect(res.body).toEqual(result);
+  });
+
+  it('400s a non-canonical milestone scoped to a project, never calling the service', async () => {
+    milestoneResolverMock.resolveMilestoneForProject.mockImplementationOnce(
+      () => {
+        throw new milestoneResolverMock.UnknownMilestoneError(
+          '"9b1e..." is not a known milestone for project "p1"',
+        );
+      },
+    );
+
+    const res = await request(makeApp()).get(
+      '/api/seed/items?project=p1&milestone=9b1e...',
+    );
+
+    expect(
+      milestoneResolverMock.resolveMilestoneForProject,
+    ).toHaveBeenCalledWith('p1', '9b1e...');
+    expect(res.status).toBe(400);
+    expect(seedServiceMock.listSeedItems).not.toHaveBeenCalled();
   });
 });
 
@@ -238,5 +285,46 @@ describe('POST /api/seed/backfill', () => {
       .send({ project: 'p1', taskId: 'notion:seed-task', milestone: 'M12' });
 
     expect(res.status).toBe(409);
+  });
+
+  it('400s a non-canonical milestone (e.g. a UUID), never calling the service', async () => {
+    milestoneResolverMock.resolveMilestoneForProject.mockImplementationOnce(
+      () => {
+        throw new milestoneResolverMock.UnknownMilestoneError(
+          '"9b1e..." is not a known milestone for project "p1"',
+        );
+      },
+    );
+
+    const res = await request(makeApp()).post('/api/seed/backfill').send({
+      project: 'p1',
+      taskId: 'notion:seed-task',
+      milestone: '9b1e...',
+    });
+
+    expect(res.status).toBe(400);
+    expect(seedServiceMock.backfillSeedTask).not.toHaveBeenCalled();
+  });
+
+  it('normalizes a canonical milestone id to its display name before calling the service', async () => {
+    const result = { createdIds: ['a'], skippedIds: [], unresolvedSources: [] };
+    seedServiceMock.backfillSeedTask.mockResolvedValue(result);
+    milestoneResolverMock.resolveMilestoneForProject.mockImplementationOnce(
+      () => 'M12',
+    );
+
+    const res = await request(makeApp()).post('/api/seed/backfill').send({
+      project: 'p1',
+      taskId: 'notion:seed-task',
+      milestone: 'milestone-db-uuid',
+    });
+
+    expect(seedServiceMock.backfillSeedTask).toHaveBeenCalledWith({
+      project: 'p1',
+      taskId: 'notion:seed-task',
+      milestone: 'M12',
+      candidates: undefined,
+    });
+    expect(res.status).toBe(200);
   });
 });
