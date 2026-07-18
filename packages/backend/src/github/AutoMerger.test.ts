@@ -993,7 +993,9 @@ describe('AutoMerger.sweepApprovedLocalBranches() — scheduled local-branch mer
       }),
     };
 
-    merger.register(fakeScheduler as unknown as import('../orchestration/Scheduler').Scheduler);
+    merger.register(
+      fakeScheduler as unknown as import('../orchestration/Scheduler').Scheduler,
+    );
 
     expect(fakeScheduler.register).toHaveBeenCalledTimes(1);
     expect(registered[0].name).toBe('auto_merger_local_branch_sweep');
