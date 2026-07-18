@@ -34,7 +34,9 @@ export function resolveMilestoneForProject(
     const known = project.milestones.map((m) => m.name).join(', ');
     throw new UnknownMilestoneError(
       `"${milestone}" is not a known milestone for project "${projectId}"` +
-        (known ? ` — expected one of: ${known}` : ' — project has no milestones configured'),
+        (known
+          ? ` — expected one of: ${known}`
+          : ' — project has no milestones configured'),
     );
   }
   return match.name;

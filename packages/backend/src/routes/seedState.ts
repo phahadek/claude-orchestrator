@@ -69,9 +69,13 @@ export function createSeedStateRouter(): Router {
       typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
     try {
       res.json(
-        nextApplyableSeedItems(resolveMilestoneAnyProject(milestone), deploySha, {
-          limit: Number.isFinite(limit) ? limit : undefined,
-        }),
+        nextApplyableSeedItems(
+          resolveMilestoneAnyProject(milestone),
+          deploySha,
+          {
+            limit: Number.isFinite(limit) ? limit : undefined,
+          },
+        ),
       );
     } catch (err) {
       if (err instanceof UnknownMilestoneError) {

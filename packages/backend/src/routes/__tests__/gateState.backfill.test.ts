@@ -26,7 +26,9 @@ const gateServiceMock = vi.hoisted(() => ({
 vi.mock('../../gate/gateService.js', () => gateServiceMock);
 
 const milestoneResolverMock = vi.hoisted(() => ({
-  resolveMilestoneForProject: vi.fn((_project: string, milestone: string) => milestone),
+  resolveMilestoneForProject: vi.fn(
+    (_project: string, milestone: string) => milestone,
+  ),
   resolveMilestoneAnyProject: vi.fn((milestone: string) => milestone),
   UnknownMilestoneError: class UnknownMilestoneError extends Error {},
 }));
@@ -109,13 +111,11 @@ describe('POST /api/gate/backfill', () => {
       },
     );
 
-    const res = await request(makeApp())
-      .post('/api/gate/backfill')
-      .send({
-        project: 'p1',
-        taskId: 'notion:gate-task',
-        milestone: '9b1e...',
-      });
+    const res = await request(makeApp()).post('/api/gate/backfill').send({
+      project: 'p1',
+      taskId: 'notion:gate-task',
+      milestone: '9b1e...',
+    });
 
     expect(res.status).toBe(400);
     expect(gateServiceMock.backfillGateTask).not.toHaveBeenCalled();
@@ -128,13 +128,11 @@ describe('POST /api/gate/backfill', () => {
       () => 'M12',
     );
 
-    const res = await request(makeApp())
-      .post('/api/gate/backfill')
-      .send({
-        project: 'p1',
-        taskId: 'notion:gate-task',
-        milestone: 'milestone-db-uuid',
-      });
+    const res = await request(makeApp()).post('/api/gate/backfill').send({
+      project: 'p1',
+      taskId: 'notion:gate-task',
+      milestone: 'milestone-db-uuid',
+    });
 
     expect(gateServiceMock.backfillGateTask).toHaveBeenCalledWith({
       project: 'p1',

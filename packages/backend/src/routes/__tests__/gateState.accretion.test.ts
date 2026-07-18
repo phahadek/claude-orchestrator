@@ -40,7 +40,9 @@ vi.mock('../../tasks/TaskWriteCommands.js', () => ({
 }));
 
 const milestoneResolverMock = vi.hoisted(() => ({
-  resolveMilestoneForProject: vi.fn((_project: string, milestone: string) => milestone),
+  resolveMilestoneForProject: vi.fn(
+    (_project: string, milestone: string) => milestone,
+  ),
   resolveMilestoneAnyProject: vi.fn((milestone: string) => milestone),
   UnknownMilestoneError: class UnknownMilestoneError extends Error {},
 }));

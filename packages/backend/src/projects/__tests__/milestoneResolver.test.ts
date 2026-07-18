@@ -36,7 +36,7 @@ const M11 = {
 };
 const M12 = { ...M11, id: 'ms-uuid-12', name: 'M12', displayOrder: 1 };
 
-function project(milestones: typeof M11[] = [M11, M12]) {
+function project(milestones: (typeof M11)[] = [M11, M12]) {
   return { id: 'p1', milestones } as any;
 }
 

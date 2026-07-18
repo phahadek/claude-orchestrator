@@ -28,7 +28,9 @@ const gateServiceMock = vi.hoisted(() => ({
 vi.mock('../../gate/gateService.js', () => gateServiceMock);
 
 const milestoneResolverMock = vi.hoisted(() => ({
-  resolveMilestoneForProject: vi.fn((_project: string, milestone: string) => milestone),
+  resolveMilestoneForProject: vi.fn(
+    (_project: string, milestone: string) => milestone,
+  ),
   resolveMilestoneAnyProject: vi.fn((milestone: string) => milestone),
   UnknownMilestoneError: class UnknownMilestoneError extends Error {},
 }));
@@ -59,7 +61,9 @@ describe('GET /api/gate/readiness', () => {
     const readiness = { status: 'green', blocking: [] };
     gateServiceMock.getGateReadiness.mockReturnValue(readiness);
 
-    const res = await request(makeApp()).get('/api/gate/readiness?milestone=M12');
+    const res = await request(makeApp()).get(
+      '/api/gate/readiness?milestone=M12',
+    );
 
     expect(gateServiceMock.getGateReadiness).toHaveBeenCalledWith('M12');
     expect(res.status).toBe(200);
@@ -67,11 +71,13 @@ describe('GET /api/gate/readiness', () => {
   });
 
   it('400s a non-canonical milestone (e.g. a UUID), never calling the service', async () => {
-    milestoneResolverMock.resolveMilestoneAnyProject.mockImplementationOnce(() => {
-      throw new milestoneResolverMock.UnknownMilestoneError(
-        '"9b1e..." is not a known milestone display name for any project',
-      );
-    });
+    milestoneResolverMock.resolveMilestoneAnyProject.mockImplementationOnce(
+      () => {
+        throw new milestoneResolverMock.UnknownMilestoneError(
+          '"9b1e..." is not a known milestone display name for any project',
+        );
+      },
+    );
 
     const res = await request(makeApp()).get(
       '/api/gate/readiness?milestone=9b1e...',
@@ -82,8 +88,13 @@ describe('GET /api/gate/readiness', () => {
   });
 
   it('normalizes a canonical milestone id to its display name before calling the service', async () => {
-    gateServiceMock.getGateReadiness.mockReturnValue({ status: 'green', blocking: [] });
-    milestoneResolverMock.resolveMilestoneAnyProject.mockImplementationOnce(() => 'M12');
+    gateServiceMock.getGateReadiness.mockReturnValue({
+      status: 'green',
+      blocking: [],
+    });
+    milestoneResolverMock.resolveMilestoneAnyProject.mockImplementationOnce(
+      () => 'M12',
+    );
 
     const res = await request(makeApp()).get(
       '/api/gate/readiness?milestone=milestone-db-uuid',
@@ -96,11 +107,17 @@ describe('GET /api/gate/readiness', () => {
 
 describe('GET /api/gate/next', () => {
   it('400s a non-canonical milestone, never calling the service', async () => {
-    milestoneResolverMock.resolveMilestoneAnyProject.mockImplementationOnce(() => {
-      throw new milestoneResolverMock.UnknownMilestoneError('unknown milestone');
-    });
+    milestoneResolverMock.resolveMilestoneAnyProject.mockImplementationOnce(
+      () => {
+        throw new milestoneResolverMock.UnknownMilestoneError(
+          'unknown milestone',
+        );
+      },
+    );
 
-    const res = await request(makeApp()).get('/api/gate/next?milestone=9b1e...');
+    const res = await request(makeApp()).get(
+      '/api/gate/next?milestone=9b1e...',
+    );
 
     expect(res.status).toBe(400);
     expect(gateServiceMock.nextRunnableGateItems).not.toHaveBeenCalled();
@@ -109,25 +126,30 @@ describe('GET /api/gate/next', () => {
 
 describe('GET /api/gate/items', () => {
   it('resolves the milestone against the given project when both are present', async () => {
-    gateServiceMock.listGateItems.mockReturnValue({ items: [], total: 0, page: 1 });
+    gateServiceMock.listGateItems.mockReturnValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
 
     const res = await request(makeApp()).get(
       '/api/gate/items?project=p1&milestone=M12',
     );
 
-    expect(milestoneResolverMock.resolveMilestoneForProject).toHaveBeenCalledWith(
-      'p1',
-      'M12',
-    );
+    expect(
+      milestoneResolverMock.resolveMilestoneForProject,
+    ).toHaveBeenCalledWith('p1', 'M12');
     expect(res.status).toBe(200);
   });
 
   it('400s a non-canonical milestone scoped to a project, never calling the service', async () => {
-    milestoneResolverMock.resolveMilestoneForProject.mockImplementationOnce(() => {
-      throw new milestoneResolverMock.UnknownMilestoneError(
-        '"9b1e..." is not a known milestone for project "p1"',
-      );
-    });
+    milestoneResolverMock.resolveMilestoneForProject.mockImplementationOnce(
+      () => {
+        throw new milestoneResolverMock.UnknownMilestoneError(
+          '"9b1e..." is not a known milestone for project "p1"',
+        );
+      },
+    );
 
     const res = await request(makeApp()).get(
       '/api/gate/items?project=p1&milestone=9b1e...',
@@ -138,12 +160,20 @@ describe('GET /api/gate/items', () => {
   });
 
   it('skips milestone resolution entirely when no milestone filter is given', async () => {
-    gateServiceMock.listGateItems.mockReturnValue({ items: [], total: 0, page: 1 });
+    gateServiceMock.listGateItems.mockReturnValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
 
     const res = await request(makeApp()).get('/api/gate/items?project=p1');
 
-    expect(milestoneResolverMock.resolveMilestoneForProject).not.toHaveBeenCalled();
-    expect(milestoneResolverMock.resolveMilestoneAnyProject).not.toHaveBeenCalled();
+    expect(
+      milestoneResolverMock.resolveMilestoneForProject,
+    ).not.toHaveBeenCalled();
+    expect(
+      milestoneResolverMock.resolveMilestoneAnyProject,
+    ).not.toHaveBeenCalled();
     expect(res.status).toBe(200);
   });
 });

@@ -24,7 +24,9 @@ const seedServiceMock = vi.hoisted(() => ({
 vi.mock('../../seed/seedService.js', () => seedServiceMock);
 
 const milestoneResolverMock = vi.hoisted(() => ({
-  resolveMilestoneForProject: vi.fn((_project: string, milestone: string) => milestone),
+  resolveMilestoneForProject: vi.fn(
+    (_project: string, milestone: string) => milestone,
+  ),
   resolveMilestoneAnyProject: vi.fn((milestone: string) => milestone),
   UnknownMilestoneError: class UnknownMilestoneError extends Error {},
 }));
@@ -152,10 +154,9 @@ describe('GET /api/seed/items', () => {
       '/api/seed/items?project=p1&milestone=9b1e...',
     );
 
-    expect(milestoneResolverMock.resolveMilestoneForProject).toHaveBeenCalledWith(
-      'p1',
-      '9b1e...',
-    );
+    expect(
+      milestoneResolverMock.resolveMilestoneForProject,
+    ).toHaveBeenCalledWith('p1', '9b1e...');
     expect(res.status).toBe(400);
     expect(seedServiceMock.listSeedItems).not.toHaveBeenCalled();
   });
@@ -297,7 +298,11 @@ describe('POST /api/seed/backfill', () => {
 
     const res = await request(makeApp())
       .post('/api/seed/backfill')
-      .send({ project: 'p1', taskId: 'notion:seed-task', milestone: '9b1e...' });
+      .send({
+        project: 'p1',
+        taskId: 'notion:seed-task',
+        milestone: '9b1e...',
+      });
 
     expect(res.status).toBe(400);
     expect(seedServiceMock.backfillSeedTask).not.toHaveBeenCalled();
@@ -310,13 +315,11 @@ describe('POST /api/seed/backfill', () => {
       () => 'M12',
     );
 
-    const res = await request(makeApp())
-      .post('/api/seed/backfill')
-      .send({
-        project: 'p1',
-        taskId: 'notion:seed-task',
-        milestone: 'milestone-db-uuid',
-      });
+    const res = await request(makeApp()).post('/api/seed/backfill').send({
+      project: 'p1',
+      taskId: 'notion:seed-task',
+      milestone: 'milestone-db-uuid',
+    });
 
     expect(seedServiceMock.backfillSeedTask).toHaveBeenCalledWith({
       project: 'p1',
