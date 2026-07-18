@@ -137,6 +137,40 @@ describe('reconcileGateRunnability', () => {
     expect(result.reopened).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('pass');
   });
+
+  it('treats a null min_deployed_commit as assume-deployed and marks the item runnable', () => {
+    const item = makeItem();
+    expect(getGateItem(item.id)?.minDeployedCommit).toBeFalsy();
+
+    const result = reconcileGateRunnability('sha1', {
+      ancestrySource: orderedAncestry,
+    });
+    expect(result.markedRunnable).toEqual([item.id]);
+    expect(getGateItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('still leaves an item open when its known min_deployed_commit is not covered', () => {
+    const item = makeItem();
+    setMinDeployedCommit(item.id, 'sha3', new Date(1).toISOString());
+
+    const result = reconcileGateRunnability('sha2', {
+      ancestrySource: orderedAncestry,
+    });
+    expect(result.markedRunnable).toEqual([]);
+    expect(getGateItem(item.id)?.state).toBe('open');
+  });
+
+  it('does not auto-reopen a pass item with a null min_deployed_commit', () => {
+    const item = makeItem();
+    appendGateItemEvent(item.id, { disposition: 'pass', deploySha: 'sha1' });
+    expect(getGateItem(item.id)?.state).toBe('pass');
+
+    const result = reconcileGateRunnability('sha2', {
+      ancestrySource: orderedAncestry,
+    });
+    expect(result.reopened).toEqual([]);
+    expect(getGateItem(item.id)?.state).toBe('pass');
+  });
 });
 
 describe('nextRunnableGateItems', () => {
@@ -259,6 +293,8 @@ describe('listGateItems', () => {
       classification: 'Read-Only',
     });
     setMinDeployedCommit(a.id, 'sha1', new Date(1).toISOString());
+    setMinDeployedCommit(b.id, 'sha2', new Date(1).toISOString());
+    setMinDeployedCommit(c.id, 'sha2', new Date(1).toISOString());
     reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
 
     expect(
