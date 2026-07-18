@@ -383,6 +383,31 @@ export function approveGateItem(
   return updated;
 }
 
+const RECLASSIFY_TARGETS = new Set<GateItemClassification>([
+  'Read-Only',
+  'Prod-Mutating',
+  'Opportunistic',
+]);
+
+/** The /gate skill's triage step: moves a needs-triage (or any) item into a resolved classification. */
+export function reclassifyGateItem(
+  gateItemId: string,
+  classification: GateItemClassification,
+  operator?: string,
+): GateItem {
+  if (!RECLASSIFY_TARGETS.has(classification)) {
+    throw new Error(
+      `gate_item: invalid reclassification target ${classification} — must be one of ${[...RECLASSIFY_TARGETS].join(', ')}`,
+    );
+  }
+  const item = gateStore.getItem(gateItemId);
+  if (!item) {
+    throw new Error(`gate_item: no item ${gateItemId}`);
+  }
+  const now = new Date().toISOString();
+  return gateStore.setClassification(gateItemId, classification, now, operator);
+}
+
 /** A raw Notion-style status string counts as not-started when it hasn't left Backlog/Ready. */
 function isNotStartedStatus(notionStatus: string): boolean {
   if (!notionStatus) return true;

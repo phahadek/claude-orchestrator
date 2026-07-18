@@ -56,6 +56,7 @@ type EventType =
   | 'gate_item_created'
   | 'gate_item_event_appended'
   | 'gate_item_state_changed'
+  | 'gate_item_reclassified'
   | 'gate_item_source_added'
   | 'gate_item_rehomed'
   | 'seed_item_created'

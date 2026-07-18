@@ -93,9 +93,22 @@ For every item in the pulled batch:
      explicit go-ahead before performing anything that mutates production,
      and never mark one `pass` without a human present for it.
    - **needs-triage** — classification hasn't been resolved yet for this
-     item. There is currently no reclassification route; treat it like any
-     other item for disposition purposes and flag the triage gap to the
-     human rather than guessing a classification.
+     item. Read `item.text` and judge which tier it belongs to (mechanical
+     read-only check → `Read-Only`; on-demand/low-risk → `Opportunistic`;
+     anything that mutates production → `Prod-Mutating`). When you're
+     confident, reclassify before dispositioning:
+
+     ```bash
+     node ~/.claude/scripts/gate-state-client.mjs reclassify <gateItemId> <classification> [operator]
+     ```
+
+     `classification` must be one of `Read-Only`, `Prod-Mutating`,
+     `Opportunistic` — the server rejects anything else, including
+     `needs-triage` itself. Once reclassified, the item is picked up by its
+     new tier on the next `next` pull (and by the continuous reconciler's
+     auto-run path for `Read-Only`/`Prod-Mutating`). If you're genuinely
+     unsure which tier fits, don't guess — flag it to the human instead of
+     reclassifying blind.
 3. Record the attempt as an event — this is what makes the log durable, do
    this for every attempt, not just resolving ones:
 
