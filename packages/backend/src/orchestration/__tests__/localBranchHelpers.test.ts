@@ -165,11 +165,7 @@ describe('detectMergeConflict', () => {
     await git(['worktree', 'add', linkedDir, 'dev'], repoDir);
 
     try {
-      const result = await detectMergeConflict(
-        repoDir,
-        'dev',
-        'feature/clean',
-      );
+      const result = await detectMergeConflict(repoDir, 'dev', 'feature/clean');
       expect(result).toBe(false);
     } finally {
       await git(['worktree', 'remove', '--force', linkedDir], repoDir).catch(
