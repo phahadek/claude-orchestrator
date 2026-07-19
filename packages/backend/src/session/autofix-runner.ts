@@ -156,18 +156,17 @@ export async function runAutofix(
     };
   }
 
-  // Resolve {{changed_files}} once upfront if any command uses the placeholder.
-  let changedFiles: string[] | undefined;
-  if (commands.some((c) => c.includes('{{changed_files}}'))) {
-    changedFiles = await getChangedFiles(worktreePath, baseBranch);
-  }
+  // Resolve the PR's changed files upfront: used both to expand {{changed_files}}
+  // placeholders and to scope what the autofix commit is allowed to stage, so a
+  // whole-repo formatter can't sweep unrelated pre-existing debt into the commit.
+  const changedFiles = await getChangedFiles(worktreePath, baseBranch);
 
   const failures: string[] = [];
   // exit-1 output from linting tools that fixed what they could but left violations behind
   const violationChunks: string[] = [];
 
   for (const rawCmd of commands) {
-    const cmd = expandAutofixCommand(rawCmd, changedFiles ?? []);
+    const cmd = expandAutofixCommand(rawCmd, changedFiles);
     if (cmd === null) {
       log(`[autofix] skipping (no changed files): ${rawCmd}\n`);
       continue;
@@ -210,23 +209,29 @@ export async function runAutofix(
   // Commit the diff with bot identity
   const env = { ...process.env, ...BOT_GIT_ENV };
 
-  const addResult = await spawnCmd('git', ['add', '-A'], {
-    cwd: worktreePath,
-    env,
-  });
-  if (addResult.exitCode !== 0) {
-    const gitReason = addResult.stdout.trim();
-    const msg = `git add -A failed (exit ${addResult.exitCode})`;
-    log(`[autofix] ERROR: ${msg}\n`);
-    if (addResult.exitCode === 128) {
-      return {
-        success: false,
-        isGitInfraFailure: true,
-        gitFailureReason: gitReason,
-        summary: gitReason ? `${msg}: ${gitReason}` : msg,
-      };
+  // Stage only the PR's own changed files (not `git add -A`) so a whole-repo
+  // formatter can't sweep unrelated, pre-existing formatting debt into the
+  // autofix commit. `git add --` handles modified/added/deleted paths alike;
+  // paths the formatter didn't touch are simply no-ops.
+  if (changedFiles.length > 0) {
+    const addResult = await spawnCmd('git', ['add', '--', ...changedFiles], {
+      cwd: worktreePath,
+      env,
+    });
+    if (addResult.exitCode !== 0) {
+      const gitReason = addResult.stdout.trim();
+      const msg = `git add failed (exit ${addResult.exitCode})`;
+      log(`[autofix] ERROR: ${msg}\n`);
+      if (addResult.exitCode === 128) {
+        return {
+          success: false,
+          isGitInfraFailure: true,
+          gitFailureReason: gitReason,
+          summary: gitReason ? `${msg}: ${gitReason}` : msg,
+        };
+      }
+      failures.push(msg);
     }
-    failures.push(msg);
   }
 
   // Proactively un-stage hard-banned files so they never appear in the commit.
@@ -254,7 +259,9 @@ export async function runAutofix(
     }
   }
 
-  // If un-staging banned files left nothing staged, skip the commit entirely.
+  // Nothing staged either because the only changes were to out-of-scope files
+  // (formatter touched files outside the PR diff) or because un-staging banned
+  // files left nothing behind. Either way, skip the commit entirely.
   const remainingResult = await spawnCmd(
     'git',
     ['diff', '--cached', '--name-only'],
@@ -264,12 +271,12 @@ export async function runAutofix(
     if (failures.length > 0) {
       return {
         success: false,
-        summary: `autofix: only banned files were staged; skipped commit (failures: ${failures.join('; ')})`,
+        summary: `autofix: no in-scope changes staged; skipped commit (failures: ${failures.join('; ')})`,
       };
     }
     return {
       success: true,
-      summary: 'autofix: only banned files were staged; skipped commit',
+      summary: 'autofix: no in-scope changes staged; skipped commit',
       unfixableViolations,
     };
   }
