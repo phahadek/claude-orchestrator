@@ -229,7 +229,12 @@ describe('runAutofix — diff produced → commit + push', () => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  src/foo.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'src/foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
@@ -268,7 +273,12 @@ describe('runAutofix — diff produced → commit + push', () => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  src/foo.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'src/foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
@@ -311,7 +321,12 @@ describe('runAutofix — diff produced → commit + push', () => {
       const o = (opts ?? {}) as { env?: NodeJS.ProcessEnv };
 
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
@@ -365,7 +380,12 @@ describe('runAutofix — fail open on non-zero exit', () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
@@ -405,7 +425,12 @@ describe('runAutofix — syncedTo after fetch + reset', () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
@@ -497,7 +522,12 @@ describe('runAutofix — syncedTo after fetch + reset', () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
@@ -538,7 +568,12 @@ describe('runAutofix — proactive banned-file unstaging', () => {
 
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  src/foo.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'CLAUDE.md\nsrc/foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached') {
@@ -592,7 +627,12 @@ describe('runAutofix — proactive banned-file unstaging', () => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  CLAUDE.MD\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'CLAUDE.MD\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'restore') {
@@ -620,7 +660,12 @@ describe('runAutofix — proactive banned-file unstaging', () => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  commit-msg.draft\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'commit-msg.draft\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'restore') {
@@ -654,7 +699,12 @@ describe('runAutofix — proactive banned-file unstaging', () => {
       spawnCalls.push({ cmd: cmd as string, args: a });
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  src/clean.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'src/clean.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
@@ -688,7 +738,12 @@ describe('runAutofix — proactive banned-file unstaging', () => {
       spawnCalls.push({ cmd: cmd as string, args: a });
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  CLAUDE.md\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'CLAUDE.md\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'restore') return makeProc(0, '');
@@ -857,7 +912,12 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add')
         return makeProc(128, '', 'fatal: bad config line 1 in .git/config');
@@ -882,7 +942,12 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
@@ -942,7 +1007,12 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(1, '', 'some error');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
@@ -970,7 +1040,12 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
@@ -997,7 +1072,12 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(128, stderr, '');
       return makeProc(0, '');
@@ -1242,14 +1322,24 @@ describe('runAutofix — scoped commit (PR-changed files only)', () => {
 
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  src/a.ts\nM  src/unrelated.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'src/a.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
         return makeProc(0, 'src/a.ts\n');
       if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'HEAD~1')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'HEAD~1'
+      )
         return makeProc(0, 'src/a.ts\n');
       if (cmd === 'git' && a[0] === 'rev-parse') {
         if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/x\n');
@@ -1285,14 +1375,24 @@ describe('runAutofix — scoped commit (PR-changed files only)', () => {
 
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  src/a.ts\nM  src/b.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'src/a.ts\nsrc/b.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
         return makeProc(0, 'src/a.ts\nsrc/b.ts\n');
       if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'HEAD~1')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'HEAD~1'
+      )
         return makeProc(0, 'src/a.ts\nsrc/b.ts\n');
       if (cmd === 'git' && a[0] === 'rev-parse') {
         if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/x\n');
@@ -1328,7 +1428,12 @@ describe('runAutofix — scoped commit (PR-changed files only)', () => {
 
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  CLAUDE.md\nM  src/app.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'CLAUDE.md\nsrc/app.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'restore') {
@@ -1342,7 +1447,12 @@ describe('runAutofix — scoped commit (PR-changed files only)', () => {
       }
       if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'HEAD~1')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'HEAD~1'
+      )
         return makeProc(0, 'src/app.ts\n');
       if (cmd === 'git' && a[0] === 'rev-parse') {
         if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/x\n');
@@ -1372,7 +1482,12 @@ describe('runAutofix — scoped commit (PR-changed files only)', () => {
 
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'D  src/removed.ts\n');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
         return makeProc(0, 'src/removed.ts\n');
       // git add -- src/removed.ts stages the deletion; succeeds regardless of args
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
@@ -1380,7 +1495,12 @@ describe('runAutofix — scoped commit (PR-changed files only)', () => {
         return makeProc(0, 'src/removed.ts\n');
       if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'HEAD~1')
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'HEAD~1'
+      )
         return makeProc(0, 'src/removed.ts\n');
       if (cmd === 'git' && a[0] === 'rev-parse') {
         if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/x\n');
