@@ -4,10 +4,11 @@
  * AC: getGateReadiness is blocked while any item is unresolved and green once
  * all items are pass/deferred; reconcileGateRunnability marks items runnable
  * only when the injected deploy SHA contains min_deployed_commit (via the
- * injected ancestry source) and re-opens a pass superseded by a later-commit
- * source; nextRunnableGateItems returns a bounded, single-tier batch;
- * appendGateItemEvent advances denormalized state; approveGateItem releases a
- * Prod-Mutating item held at pending-approval.
+ * injected ancestry source) and never re-opens a pass — a pass is terminal
+ * for runnability, regardless of min_deployed_commit or whether its pass
+ * event recorded a deploySha; nextRunnableGateItems returns a bounded,
+ * single-tier batch; appendGateItemEvent advances denormalized state;
+ * approveGateItem releases a Prod-Mutating item held at pending-approval.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -102,7 +103,7 @@ describe('reconcileGateRunnability', () => {
     expect(getGateItem(item.id)?.state).toBe('runnable');
   });
 
-  it('re-opens a pass superseded by a later-commit source', () => {
+  it('never re-opens a pass, even when a later source pushes min_deployed_commit past pass-time', () => {
     const item = makeItem();
     setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
     reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
@@ -115,14 +116,22 @@ describe('reconcileGateRunnability', () => {
     const stillOnSha1 = reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
-    expect(stillOnSha1.reopened).toEqual([item.id]);
-    expect(getGateItem(item.id)?.state).toBe('open');
+    expect(stillOnSha1.reopened).toEqual([]);
+    expect(getGateItem(item.id)?.state).toBe('pass');
+  });
 
-    const advanced = reconcileGateRunnability('sha2', {
+  it('stays pass when the last pass event recorded no deploySha, regardless of min_deployed_commit ancestry', () => {
+    const item = makeItem();
+    setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
+    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    appendGateItemEvent(item.id, { disposition: 'pass' });
+    expect(getGateItem(item.id)?.state).toBe('pass');
+
+    const result = reconcileGateRunnability('sha1', {
       ancestrySource: orderedAncestry,
     });
-    expect(advanced.markedRunnable).toEqual([item.id]);
-    expect(getGateItem(item.id)?.state).toBe('runnable');
+    expect(result.reopened).toEqual([]);
+    expect(getGateItem(item.id)?.state).toBe('pass');
   });
 
   it('leaves a still-valid pass alone', () => {
