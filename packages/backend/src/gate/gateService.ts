@@ -94,8 +94,8 @@ export interface ReconcileOptions {
 /**
  * Recomputes runnability against `deploySha` (injected — see DeployAncestrySource
  * above for the swappable half). An item becomes runnable once deploySha
- * contains its min_deployed_commit; a prior pass is re-opened if a later-commit
- * source has since moved min_deployed_commit past what was deployed when it passed.
+ * contains its min_deployed_commit. A pass is terminal for runnability — a
+ * redeploy only unblocks previously-blocked items, it never re-opens a pass.
  */
 export function reconcileGateRunnability(
   deploySha: string,
@@ -116,20 +116,7 @@ export function reconcileGateRunnability(
       : true;
 
     if (item.state === 'pass') {
-      // No commit to invalidate a pass against — assumed deployed, never auto-reopened.
-      if (!item.minDeployedCommit) continue;
-      const lastPass = [...item.events]
-        .reverse()
-        .find((e) => e.disposition === 'pass');
-      const stillValid =
-        lastPass?.deploySha !== undefined &&
-        ancestry.isAncestor(item.minDeployedCommit, lastPass.deploySha);
-      if (!stillValid) {
-        const nextState = covered ? 'runnable' : 'open';
-        gateStore.advanceState(item.id, nextState, undefined, now);
-        reopened.push(item.id);
-        if (nextState === 'runnable') markedRunnable.push(item.id);
-      }
+      // A pass is terminal for runnability — a redeploy never re-opens it.
       continue;
     }
 
