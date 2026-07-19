@@ -92,7 +92,7 @@ describe('TaskMoveDialog', () => {
     await selectTarget('m12');
 
     const stageButton = await screen.findByRole('button', { name: /stage move/i });
-    await waitFor(() => expect(stageButton).not.toBeDisabled());
+    await waitFor(() => expect(stageButton.hasAttribute('disabled')).toBe(false));
   });
 
   it('enables Stage Move for a later move with no dependents, without requiring cascade confirm', async () => {
@@ -116,8 +116,8 @@ describe('TaskMoveDialog', () => {
     await selectTarget('m12');
 
     const stageButton = await screen.findByRole('button', { name: /stage move/i });
-    await waitFor(() => expect(stageButton).not.toBeDisabled());
-    expect(screen.queryByText(/i confirm moving this whole set/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(stageButton.hasAttribute('disabled')).toBe(false));
+    expect(screen.queryByText(/i confirm moving this whole set/i)).toBeNull();
   });
 
   it('keeps Stage Move disabled for a later move with dependents until cascade is confirmed', async () => {
@@ -141,13 +141,13 @@ describe('TaskMoveDialog', () => {
     await selectTarget('m12');
 
     const stageButton = await screen.findByRole('button', { name: /stage move/i });
-    await waitFor(() => expect(stageButton).toBeDisabled());
+    await waitFor(() => expect(stageButton.hasAttribute('disabled')).toBe(true));
 
     const checkbox = await screen.findByRole('checkbox');
     const { fireEvent } = await import('@testing-library/react');
     fireEvent.click(checkbox);
 
-    await waitFor(() => expect(stageButton).not.toBeDisabled());
+    await waitFor(() => expect(stageButton.hasAttribute('disabled')).toBe(false));
   });
 
   it('keeps Stage Move disabled and shows the refusal reason for a refused move', async () => {
@@ -166,9 +166,9 @@ describe('TaskMoveDialog', () => {
     await selectTarget('m12');
 
     const refusal = await screen.findByTestId('move-refusal-reason');
-    expect(refusal).toHaveTextContent('Move would break dependency order');
+    expect(refusal.textContent).toContain('Move would break dependency order');
 
     const stageButton = screen.getByRole('button', { name: /stage move/i });
-    expect(stageButton).toBeDisabled();
+    expect(stageButton.hasAttribute('disabled')).toBe(true);
   });
 });
