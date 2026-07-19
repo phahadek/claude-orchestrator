@@ -229,7 +229,7 @@ describe('registerGateMergeConsumer — the gate consumes the signal, decoupled 
 });
 
 describe('catchUpMergeCommits — reconciler durability net', () => {
-  it('fills a merge_commit for a source whose merge_completed event was missed', () => {
+  it('fills a merge_commit for a source whose merge_completed event was missed', async () => {
     const item = insertItem({
       project: 'polimarket-analyser',
       milestone: 'M12',
@@ -244,7 +244,7 @@ describe('catchUpMergeCommits — reconciler durability net', () => {
 
     seedMergedSession('notion:missed', 'catchup-sha');
 
-    const result = catchUpMergeCommits();
+    const result = await catchUpMergeCommits();
 
     expect(result.filled).toBe(1);
     const updated = getItem(item.id);
@@ -252,7 +252,7 @@ describe('catchUpMergeCommits — reconciler durability net', () => {
     expect(updated?.minDeployedCommit).toBe('catchup-sha');
   });
 
-  it('fills a raw-id source whose merged session is keyed by the prefixed task id (gap A)', () => {
+  it('fills a raw-id source whose merged session is keyed by the prefixed task id (gap A)', async () => {
     const item = insertItem({
       project: 'polimarket-analyser',
       milestone: 'M11',
@@ -267,7 +267,7 @@ describe('catchUpMergeCommits — reconciler durability net', () => {
     // sessions.task_id is always the prefixed canonical form.
     seedMergedSession('notion:raw-github-task', 'github-merged-sha');
 
-    const result = catchUpMergeCommits();
+    const result = await catchUpMergeCommits();
 
     expect(result.filled).toBe(1);
     const updated = getItem(item.id);
@@ -275,7 +275,7 @@ describe('catchUpMergeCommits — reconciler durability net', () => {
     expect(updated?.minDeployedCommit).toBe('github-merged-sha');
   });
 
-  it('is a no-op when every source is either filled or still unmerged', () => {
+  it('is a no-op when every source is either filled or still unmerged', async () => {
     insertItem({
       project: 'polimarket-analyser',
       milestone: 'M12',
@@ -287,6 +287,6 @@ describe('catchUpMergeCommits — reconciler durability net', () => {
       updatedAt: new Date(0).toISOString(),
     });
 
-    expect(catchUpMergeCommits()).toEqual({ filled: 0 });
+    expect(await catchUpMergeCommits()).toEqual({ filled: 0 });
   });
 });

@@ -2500,11 +2500,9 @@ export function recordMergeCommitForSession(params: {
 /**
  * Latest merge_commit_sha for a task's merged local branch (joined via
  * sessions.task_id, since local_branches has no task_id column of its own).
- * Null when the task has no merged branch — the gate/seed backfill tools'
- * min_deployed_commit source (local_branches, not pull_requests, which only
- * carries head_sha).
+ * Null when the task has no merged branch.
  */
-export function getMergeCommitForTask(taskId: string): string | null {
+export function getMergeCommitFromLocalBranches(taskId: string): string | null {
   const row = db
     .prepare<{ task_id: string }>(
       `
@@ -2522,6 +2520,52 @@ export function getMergeCommitForTask(taskId: string): string | null {
     | { merge_commit_sha: string }
     | undefined;
   return row?.merge_commit_sha ?? null;
+}
+
+/**
+ * The gate/seed backfill tools' min_deployed_commit source: local_branches
+ * first, falling back to the task's merged GitHub PR when local_branches has
+ * no covering row (e.g. sessions that predate local_branches tracking). That
+ * fallback needs a live lookup: pull_requests only ever persists head_sha,
+ * the pre-merge feature-branch tip, never the actual commit landed on the
+ * base branch (GitHub's squash/merge/rebase all produce a distinct commit) —
+ * substituting head_sha would silently break the deploy-ancestry check. The
+ * PR's true merge commit is fetched from GitHub, which retains it
+ * indefinitely regardless of how long ago the PR merged.
+ */
+export async function getMergeCommitForTask(
+  taskId: string,
+): Promise<string | null> {
+  const normalized = normalizeTaskId(taskId);
+  const fromLocalBranches = getMergeCommitFromLocalBranches(normalized);
+  if (fromLocalBranches) return fromLocalBranches;
+
+  const pr = db
+    .prepare<{ task_id: string }>(
+      `
+    SELECT pr_number, repo
+    FROM pull_requests
+    WHERE task_id = @task_id
+      AND state = 'merged'
+    ORDER BY pr_number DESC
+    LIMIT 1
+  `,
+    )
+    .get({ task_id: normalized }) as
+    | { pr_number: number; repo: string }
+    | undefined;
+  if (!pr) return null;
+
+  const { GitHubClient } = await import('../github/GitHubClient');
+  try {
+    return await new GitHubClient().getMergeCommitSha(pr.pr_number, pr.repo);
+  } catch (err) {
+    logger.warn(
+      `[getMergeCommitForTask] GitHub merge-commit lookup failed for PR #${pr.pr_number} in ${pr.repo}:`,
+      (err as Error).message,
+    );
+    return null;
+  }
 }
 
 // ─── pr_review_comments_routed ────────────────────────────────────────────────

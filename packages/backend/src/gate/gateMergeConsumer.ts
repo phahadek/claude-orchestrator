@@ -55,11 +55,11 @@ export interface CatchUpMergeCommitsResult {
  * merged in local_branches — recovering a merge_completed event that was
  * missed (e.g. a backend restart mid-emit) without a permanently-lost fill.
  */
-export function catchUpMergeCommits(): CatchUpMergeCommitsResult {
+export async function catchUpMergeCommits(): Promise<CatchUpMergeCommitsResult> {
   const now = new Date().toISOString();
   let filled = 0;
   for (const sourceTaskId of gateStore.unfilledSourceTaskIds()) {
-    const mergeCommit = getMergeCommitForTask(sourceTaskId);
+    const mergeCommit = await getMergeCommitForTask(sourceTaskId);
     if (!mergeCommit) continue;
     for (const itemId of gateStore.itemIdsBySourceTask(sourceTaskId)) {
       gateStore.setSourceMergeCommit(itemId, sourceTaskId, mergeCommit);
