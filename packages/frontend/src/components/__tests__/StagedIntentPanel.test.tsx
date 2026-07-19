@@ -67,4 +67,52 @@ describe('StagedIntentPanel', () => {
     });
     await waitFor(() => expect(onRejected).toHaveBeenCalled());
   });
+
+  it('Apply dismisses the panel (not stuck on error) when the server returns not-found', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      json: async () => ({ error: 'staged intent not found' }),
+    } as Response);
+    const onApplied = vi.fn();
+    const onDismiss = vi.fn();
+
+    render(
+      <StagedIntentPanel
+        intent={makeIntent()}
+        onApplied={onApplied}
+        onDismiss={onDismiss}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /apply/i }));
+
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledWith(makeIntent()));
+    expect(onApplied).not.toHaveBeenCalled();
+    expect(screen.queryByText(/staged intent not found/i)).toBeNull();
+  });
+
+  it('Reject dismisses the panel (not stuck on error) when the server returns not-found', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+      json: async () => ({ error: 'staged intent not found' }),
+    } as Response);
+    const onRejected = vi.fn();
+    const onDismiss = vi.fn();
+
+    render(
+      <StagedIntentPanel
+        intent={makeIntent()}
+        onRejected={onRejected}
+        onDismiss={onDismiss}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /reject/i }));
+
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledWith(makeIntent()));
+    expect(onRejected).not.toHaveBeenCalled();
+    expect(screen.queryByText(/staged intent not found/i)).toBeNull();
+  });
 });

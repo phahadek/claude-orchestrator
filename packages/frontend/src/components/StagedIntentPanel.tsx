@@ -7,6 +7,17 @@ interface Props {
   intent: StagedIntent;
   onApplied?: (intent: StagedIntent, result: unknown) => void;
   onRejected?: (intent: StagedIntent) => void;
+  /**
+   * Called when the server reports the intent no longer exists (already
+   * applied/rejected elsewhere, or a stale client-side stub). Distinct from
+   * onRejected because nothing was actually rejected — the panel just needs
+   * to stop displaying a dead intent instead of getting stuck on an error.
+   */
+  onDismiss?: (intent: StagedIntent) => void;
+}
+
+function isNotFoundError(err: unknown): boolean {
+  return err instanceof Error && /not found/i.test(err.message);
 }
 
 interface TaskMovePayload {
@@ -76,7 +87,12 @@ function renderPayload(kind: string, payload: unknown): ReactNode {
  * general command/stage surface (never a bespoke per-producer write); Reject
  * discards the intent. Producer-specific rendering lives entirely in payload.
  */
-export function StagedIntentPanel({ intent, onApplied, onRejected }: Props) {
+export function StagedIntentPanel({
+  intent,
+  onApplied,
+  onRejected,
+  onDismiss,
+}: Props) {
   const [inFlight, setInFlight] = useState<'apply' | 'reject' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -87,6 +103,10 @@ export function StagedIntentPanel({ intent, onApplied, onRejected }: Props) {
       const { result } = await stagedIntentsApi.apply(intent.id);
       onApplied?.(intent, result);
     } catch (err) {
+      if (isNotFoundError(err)) {
+        onDismiss?.(intent);
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Failed to apply intent');
     } finally {
       setInFlight(null);
@@ -100,6 +120,10 @@ export function StagedIntentPanel({ intent, onApplied, onRejected }: Props) {
       await stagedIntentsApi.reject(intent.id);
       onRejected?.(intent);
     } catch (err) {
+      if (isNotFoundError(err)) {
+        onDismiss?.(intent);
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Failed to reject intent');
     } finally {
       setInFlight(null);

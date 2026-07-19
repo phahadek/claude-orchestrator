@@ -64,6 +64,12 @@ const GROUP_LABELS: Record<DisplayStatus, string> = {
 // /ops/launch's worklist.executable filter (the frontend can't see Mode to exclude them).
 const OPS_TASK_TYPES = ['🔧 Operational', '🔎 Investigation', '🧪 Testing'];
 
+/** An ops intent with no task IDs has nothing to stage/apply — not actionable. */
+function opsIntentHasTasks(intent: StagedIntent): boolean {
+  const payload = intent.payload as { taskIds?: unknown } | null | undefined;
+  return Array.isArray(payload?.taskIds) && payload.taskIds.length > 0;
+}
+
 /** Group tasks by wave number, returning a map of wave → sorted tasks. */
 function groupByWave(tasks: TaskView[]): Map<number, TaskView[]> {
   const map = new Map<number, TaskView[]>();
@@ -285,6 +291,16 @@ export function TaskList({
   // Cross-milestone move: the shared staged-intent display renders whichever
   // task.move intent was most recently staged from a TaskCard on this board.
   const [moveIntent, setMoveIntent] = useState<StagedIntent | null>(null);
+
+  // Reset the shared staged-intent display when the active milestone/project
+  // changes so a stale intent from the previous board never carries over.
+  useEffect(() => {
+    setGroomStubIntent(null);
+    setOpsIntent(null);
+    setOpsError(null);
+    setOpsCheckedIds(new Set());
+    setMoveIntent(null);
+  }, [activeProjectId, boardId]);
 
   const toggleGroup = useCallback((status: string) => {
     setCollapsed((prev) => {
@@ -558,13 +574,19 @@ export function TaskList({
       const launchedIds = new Set(result.launched);
       const entries = await opsJournalApi.listForMilestone(boardId);
       const rows = entries.filter((e) => launchedIds.has(e.taskId));
-      setOpsIntent({
-        id: 'ops-stub',
-        kind: 'ops',
-        payload: { taskIds: result.launched, rows },
-        projectId: activeProjectId ?? '',
-        createdAt: 0,
-      });
+      // An ops intent with no launched task IDs has nothing to stage/apply —
+      // don't render it as an actionable panel.
+      setOpsIntent(
+        result.launched.length > 0
+          ? {
+              id: 'ops-stub',
+              kind: 'ops',
+              payload: { taskIds: result.launched, rows },
+              projectId: activeProjectId ?? '',
+              createdAt: 0,
+            }
+          : null,
+      );
       const notLaunched = selectedIds.filter((id) => !launchedIds.has(id));
       setOpsError(
         notLaunched.length > 0
@@ -730,16 +752,18 @@ export function TaskList({
               intent={groomStubIntent}
               onApplied={() => setGroomStubIntent(null)}
               onRejected={() => setGroomStubIntent(null)}
+              onDismiss={() => setGroomStubIntent(null)}
             />
           </div>
         )}
 
-        {opsIntent && (
+        {opsIntent && opsIntentHasTasks(opsIntent) && (
           <div className={styles.opsPlaceholderPanel} data-testid="ops-panel">
             <StagedIntentPanel
               intent={opsIntent}
               onApplied={() => setOpsIntent(null)}
               onRejected={() => setOpsIntent(null)}
+              onDismiss={() => setOpsIntent(null)}
             />
           </div>
         )}
@@ -750,6 +774,7 @@ export function TaskList({
               intent={moveIntent}
               onApplied={() => setMoveIntent(null)}
               onRejected={() => setMoveIntent(null)}
+              onDismiss={() => setMoveIntent(null)}
             />
           </div>
         )}
