@@ -447,7 +447,8 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
 
     const accretedAt = new Date().toISOString();
     const sourceTaskId = normalizeTaskId(sourceTask.id);
-    const mergeCommit = (await getMergeCommitForTask(sourceTaskId)) ?? undefined;
+    const mergeCommit =
+      (await getMergeCommitForTask(sourceTaskId)) ?? undefined;
     const itemIds = items.map(
       (item) =>
         insertGateItem({
