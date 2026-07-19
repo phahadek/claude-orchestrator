@@ -106,12 +106,15 @@ export function TaskMoveDialog({
   }, [projectId, task.taskId, currentMilestone, targetMilestoneId]);
 
   const targetMilestone = targetOptions.find((m) => m.id === targetMilestoneId);
+  // Cascade confirmation is only required when the move actually pulls
+  // dependents along; a later move with no dependents has nothing to confirm.
+  const hasCascadeImpact = isLaterMove && cascadeSet.length > 0;
   const canStage =
     !!currentMilestone &&
     !!targetMilestone &&
     !refusalReason &&
     !previewLoading &&
-    (!isLaterMove || cascadeConfirmed) &&
+    (!hasCascadeImpact || cascadeConfirmed) &&
     !staging;
 
   async function handleStage() {
@@ -242,7 +245,7 @@ export function TaskMoveDialog({
               </div>
             )}
 
-            {!refusalReason && isLaterMove && targetMilestoneId && (
+            {!refusalReason && isLaterMove && targetMilestone && (
               <div className={styles.cascadeBox} data-testid="move-cascade-set">
                 <p>
                   {cascadeSet.length > 0
@@ -256,14 +259,16 @@ export function TaskMoveDialog({
                     ))}
                   </ul>
                 )}
-                <label className={styles.confirmCascade}>
-                  <input
-                    type="checkbox"
-                    checked={cascadeConfirmed}
-                    onChange={(e) => setCascadeConfirmed(e.target.checked)}
-                  />
-                  I confirm moving this whole set
-                </label>
+                {hasCascadeImpact && (
+                  <label className={styles.confirmCascade}>
+                    <input
+                      type="checkbox"
+                      checked={cascadeConfirmed}
+                      onChange={(e) => setCascadeConfirmed(e.target.checked)}
+                    />
+                    I confirm moving this whole set
+                  </label>
+                )}
               </div>
             )}
 
