@@ -229,6 +229,8 @@ describe('runAutofix — diff produced → commit + push', () => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  src/foo.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'src/foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
         return makeProc(0, 'src/foo.ts\n');
@@ -266,6 +268,8 @@ describe('runAutofix — diff produced → commit + push', () => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  src/foo.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'src/foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
         return makeProc(0, 'src/foo.ts\n');
@@ -307,6 +311,8 @@ describe('runAutofix — diff produced → commit + push', () => {
       const o = (opts ?? {}) as { env?: NodeJS.ProcessEnv };
 
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
         return makeProc(0, 'foo.ts\n');
@@ -359,6 +365,8 @@ describe('runAutofix — fail open on non-zero exit', () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
         return makeProc(0, 'foo.ts\n');
@@ -397,6 +405,8 @@ describe('runAutofix — syncedTo after fetch + reset', () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
         return makeProc(0, 'foo.ts\n');
@@ -487,6 +497,8 @@ describe('runAutofix — syncedTo after fetch + reset', () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
         return makeProc(0, 'foo.ts\n');
@@ -526,6 +538,8 @@ describe('runAutofix — proactive banned-file unstaging', () => {
 
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  src/foo.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'CLAUDE.md\nsrc/foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached') {
         // First call: staged list; second call: remaining after restore
@@ -578,6 +592,8 @@ describe('runAutofix — proactive banned-file unstaging', () => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  CLAUDE.MD\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'CLAUDE.MD\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'restore') {
         restoreCalls.push(a);
@@ -604,6 +620,8 @@ describe('runAutofix — proactive banned-file unstaging', () => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  commit-msg.draft\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'commit-msg.draft\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'restore') {
         restoreCalls.push(a);
@@ -636,6 +654,9 @@ describe('runAutofix — proactive banned-file unstaging', () => {
       spawnCalls.push({ cmd: cmd as string, args: a });
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  src/clean.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'src/clean.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
         return makeProc(0, 'src/clean.ts\n');
       if (cmd === 'git' && a[0] === 'rev-parse') {
@@ -667,6 +688,8 @@ describe('runAutofix — proactive banned-file unstaging', () => {
       spawnCalls.push({ cmd: cmd as string, args: a });
       if (cmd === 'git' && a[0] === 'status')
         return makeProc(0, 'M  CLAUDE.md\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'CLAUDE.md\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'restore') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached') {
@@ -834,6 +857,8 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add')
         return makeProc(128, '', 'fatal: bad config line 1 in .git/config');
       return makeProc(0, '');
@@ -849,7 +874,7 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
     expect(result.success).toBe(false);
     expect(result.isGitInfraFailure).toBe(true);
     expect(result.gitFailureReason).toContain('fatal: bad config');
-    expect(result.summary).toContain('git add -A failed (exit 128)');
+    expect(result.summary).toContain('git add failed (exit 128)');
     expect(result.summary).toContain('fatal: bad config');
   });
 
@@ -857,6 +882,8 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
         return makeProc(0, 'foo.ts\n');
@@ -915,6 +942,8 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(1, '', 'some error');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
         return makeProc(0, 'foo.ts\n');
@@ -941,6 +970,8 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
         return makeProc(0, 'foo.ts\n');
@@ -966,6 +997,8 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(128, stderr, '');
       return makeProc(0, '');
     };
@@ -977,7 +1010,7 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
       () => {},
     );
 
-    expect(result.summary).toContain('git add -A failed (exit 128)');
+    expect(result.summary).toContain('git add failed (exit 128)');
     expect(result.summary).toContain(stderr);
     expect(result.gitFailureReason).toBe(stderr);
   });
@@ -1040,7 +1073,7 @@ describe('runAutofix — {{changed_files}} placeholder', () => {
     expect(shellCmds[0]).toBe("fmt 'src/foo.ts'");
   });
 
-  it('command without {{changed_files}} runs unchanged (no git diff call)', async () => {
+  it('command without {{changed_files}} runs unchanged (changed-files diff always runs)', async () => {
     const shellCmds: string[] = [];
     const gitDiffCalls: string[][] = [];
 
@@ -1062,7 +1095,11 @@ describe('runAutofix — {{changed_files}} placeholder', () => {
 
     await runAutofix('/worktree', '/project', ['npm run fmt'], () => {});
 
-    expect(gitDiffCalls).toHaveLength(0);
+    // The changed-files diff now always runs unconditionally, regardless of
+    // whether the command uses the {{changed_files}} placeholder — it's used
+    // both for placeholder expansion AND for scoping the autofix commit to
+    // the PR's own changed files.
+    expect(gitDiffCalls).toHaveLength(1);
     expect(shellCmds).toContain('npm run fmt');
   });
 
@@ -1190,5 +1227,176 @@ describe('runAutofix — cwd-missing guard', () => {
     );
 
     expect(result.summary).not.toContain('no longer exists');
+  });
+});
+
+// ── runAutofix — scoped commit (PR-changed files only) ────────────────────────
+
+describe('runAutofix — scoped commit (PR-changed files only)', () => {
+  it('stages the in-scope file the formatter touched and excludes an out-of-scope file it also reformatted', async () => {
+    const spawnCalls: Array<{ cmd: string; args: string[] }> = [];
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      spawnCalls.push({ cmd: cmd as string, args: a });
+
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  src/a.ts\nM  src/unrelated.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'src/a.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, 'src/a.ts\n');
+      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'HEAD~1')
+        return makeProc(0, 'src/a.ts\n');
+      if (cmd === 'git' && a[0] === 'rev-parse') {
+        if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/x\n');
+        return makeProc(0, 'sha-a\n');
+      }
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run fmt'],
+      () => {},
+    );
+
+    const addCall = spawnCalls.find(
+      (c) => c.cmd === 'git' && c.args[0] === 'add',
+    );
+    expect(addCall).toBeDefined();
+    expect(addCall!.args).toContain('src/a.ts');
+    expect(addCall!.args).not.toContain('src/unrelated.ts');
+
+    expect(result.touchedFiles).toEqual(['src/a.ts']);
+    expect(result.touchedFiles).not.toContain('src/unrelated.ts');
+  });
+
+  it('stages and commits all files in a multi-file PR', async () => {
+    const spawnCalls: Array<{ cmd: string; args: string[] }> = [];
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      spawnCalls.push({ cmd: cmd as string, args: a });
+
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  src/a.ts\nM  src/b.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'src/a.ts\nsrc/b.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, 'src/a.ts\nsrc/b.ts\n');
+      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'HEAD~1')
+        return makeProc(0, 'src/a.ts\nsrc/b.ts\n');
+      if (cmd === 'git' && a[0] === 'rev-parse') {
+        if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/x\n');
+        return makeProc(0, 'sha-ab\n');
+      }
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run fmt'],
+      () => {},
+    );
+
+    const addCall = spawnCalls.find(
+      (c) => c.cmd === 'git' && c.args[0] === 'add',
+    );
+    expect(addCall).toBeDefined();
+    expect(addCall!.args).toContain('src/a.ts');
+    expect(addCall!.args).toContain('src/b.ts');
+
+    expect(result.touchedFiles).toEqual(['src/a.ts', 'src/b.ts']);
+  });
+
+  it('un-stages hard-banned files even when they are within the PR-changed-file set', async () => {
+    const spawnCalls: Array<{ cmd: string; args: string[] }> = [];
+    const restoreCalls: string[][] = [];
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      spawnCalls.push({ cmd: cmd as string, args: a });
+
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  CLAUDE.md\nM  src/app.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'CLAUDE.md\nsrc/app.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'restore') {
+        restoreCalls.push(a);
+        return makeProc(0, '');
+      }
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached') {
+        if (restoreCalls.length === 0)
+          return makeProc(0, 'CLAUDE.md\nsrc/app.ts\n');
+        return makeProc(0, 'src/app.ts\n');
+      }
+      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'HEAD~1')
+        return makeProc(0, 'src/app.ts\n');
+      if (cmd === 'git' && a[0] === 'rev-parse') {
+        if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/x\n');
+        return makeProc(0, 'sha-banned\n');
+      }
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run fmt'],
+      () => {},
+    );
+
+    expect(restoreCalls).toHaveLength(1);
+    expect(restoreCalls[0]).toContain('CLAUDE.md');
+
+    expect(result.commitSha).toBe('sha-banned');
+    expect(result.touchedFiles).toEqual(['src/app.ts']);
+    expect(result.touchedFiles).not.toContain('CLAUDE.md');
+  });
+
+  it('handles a deleted changed file without throwing', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'D  src/removed.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'dev...HEAD')
+        return makeProc(0, 'src/removed.ts\n');
+      // git add -- src/removed.ts stages the deletion; succeeds regardless of args
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, 'src/removed.ts\n');
+      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only' && a[2] === 'HEAD~1')
+        return makeProc(0, 'src/removed.ts\n');
+      if (cmd === 'git' && a[0] === 'rev-parse') {
+        if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/x\n');
+        return makeProc(0, 'sha-removed\n');
+      }
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run fmt'],
+      () => {},
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.commitSha).toBeDefined();
   });
 });
