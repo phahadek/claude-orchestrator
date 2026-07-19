@@ -1191,6 +1191,98 @@ describe('TaskList', () => {
       const body = JSON.parse((launchCall![1] as RequestInit).body as string);
       expect(body.taskIds.sort()).toEqual(['op1', 'test1']);
     });
+
+    it('does not render an ops panel when nothing launched (empty taskIds)', async () => {
+      mockOpsEndpoints([], []);
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'op1',
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      const checkbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(checkbox);
+
+      fireEvent.click(screen.getByTestId('ops-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('ops-error')).toBeDefined();
+      });
+      expect(screen.queryByTestId('ops-panel')).toBeNull();
+    });
+
+    it('resets the staged ops panel when switching to a different milestone', async () => {
+      mockOpsEndpoints(
+        ['op1'],
+        [
+          {
+            taskId: 'op1',
+            project: 'proj-1',
+            milestone: 'milestone-1',
+            state: 'candidate',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      );
+
+      const task = makeTask({
+        taskId: 'op1',
+        taskName: 'Op Task',
+        displayStatus: 'in_progress',
+        taskType: '🔧 Operational',
+      });
+
+      const { rerender } = render(
+        <TaskList
+          activeProjectId="proj-1"
+          boardId="milestone-1"
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          tasks={[task]}
+          loading={false}
+          onOptimisticDispatch={noopOptimistic}
+          send={noop}
+          project={null}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      const checkbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(checkbox);
+      fireEvent.click(screen.getByTestId('ops-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('ops-panel')).toBeDefined();
+      });
+
+      rerender(
+        <TaskList
+          activeProjectId="proj-1"
+          boardId="milestone-2"
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          tasks={[]}
+          loading={false}
+          onOptimisticDispatch={noopOptimistic}
+          send={noop}
+          project={null}
+        />,
+      );
+
+      expect(screen.queryByTestId('ops-panel')).toBeNull();
+    });
   });
 
   describe('Sync button — send() boolean return and safety timeout', () => {
