@@ -7,9 +7,10 @@ import type { TaskView } from '../../types/taskView';
 import type { ProjectMilestone } from '../../api/projects';
 
 vi.mock('../../api/projects', async () => {
-  const actual = await vi.importActual<typeof import('../../api/projects')>(
-    '../../api/projects',
-  );
+  const actual =
+    await vi.importActual<typeof import('../../api/projects')>(
+      '../../api/projects',
+    );
   return {
     ...actual,
     projectsApi: { listMilestones: vi.fn() },
@@ -21,7 +22,9 @@ vi.mock('../../api/taskMove', () => ({
   taskMoveApi: { preview: vi.fn() },
 }));
 
-function makeMilestone(overrides: Partial<ProjectMilestone> = {}): ProjectMilestone {
+function makeMilestone(
+  overrides: Partial<ProjectMilestone> = {},
+): ProjectMilestone {
   return {
     id: 'm1',
     projectId: 'p1',
@@ -91,8 +94,12 @@ describe('TaskMoveDialog', () => {
 
     await selectTarget('m12');
 
-    const stageButton = await screen.findByRole('button', { name: /stage move/i });
-    await waitFor(() => expect(stageButton.hasAttribute('disabled')).toBe(false));
+    const stageButton = await screen.findByRole('button', {
+      name: /stage move/i,
+    });
+    await waitFor(() =>
+      expect(stageButton.hasAttribute('disabled')).toBe(false),
+    );
   });
 
   it('enables Stage Move for a later move with no dependents, without requiring cascade confirm', async () => {
@@ -115,8 +122,12 @@ describe('TaskMoveDialog', () => {
 
     await selectTarget('m12');
 
-    const stageButton = await screen.findByRole('button', { name: /stage move/i });
-    await waitFor(() => expect(stageButton.hasAttribute('disabled')).toBe(false));
+    const stageButton = await screen.findByRole('button', {
+      name: /stage move/i,
+    });
+    await waitFor(() =>
+      expect(stageButton.hasAttribute('disabled')).toBe(false),
+    );
     expect(screen.queryByText(/i confirm moving this whole set/i)).toBeNull();
   });
 
@@ -140,18 +151,26 @@ describe('TaskMoveDialog', () => {
 
     await selectTarget('m12');
 
-    const stageButton = await screen.findByRole('button', { name: /stage move/i });
-    await waitFor(() => expect(stageButton.hasAttribute('disabled')).toBe(true));
+    const stageButton = await screen.findByRole('button', {
+      name: /stage move/i,
+    });
+    await waitFor(() =>
+      expect(stageButton.hasAttribute('disabled')).toBe(true),
+    );
 
     const checkbox = await screen.findByRole('checkbox');
     const { fireEvent } = await import('@testing-library/react');
     fireEvent.click(checkbox);
 
-    await waitFor(() => expect(stageButton.hasAttribute('disabled')).toBe(false));
+    await waitFor(() =>
+      expect(stageButton.hasAttribute('disabled')).toBe(false),
+    );
   });
 
   it('keeps Stage Move disabled and shows the refusal reason for a refused move', async () => {
-    vi.mocked(taskMoveApi.preview).mockRejectedValue(new Error('Move would break dependency order'));
+    vi.mocked(taskMoveApi.preview).mockRejectedValue(
+      new Error('Move would break dependency order'),
+    );
 
     render(
       <TaskMoveDialog
