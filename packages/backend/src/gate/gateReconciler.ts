@@ -194,7 +194,7 @@ export async function runGateReconcilerTick(
 
   // Durability net: catch up any gate_item_source.merge_commit a missed
   // merge_completed event left unfilled before reconciling runnability.
-  catchUpMergeCommits();
+  await catchUpMergeCommits();
 
   const allItems = gateStore.listAll();
   const projects = new Set(allItems.map((item) => item.project));
