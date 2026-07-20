@@ -1,0 +1,16 @@
+[Unit]
+Description=Off-box backup of the orchestrator database (dashboard.db)
+Documentation=file:///srv/orchestrator/projects/claude-orchestrator/docs/orchestrator-db-backup-runbook.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as the invoking user. Installed as a --user unit under paulie, so it
+# never runs as root. The script itself also refuses to run as uid 0.
+ExecStart=/srv/orchestrator/projects/claude-orchestrator/scripts/backup/backup-orchestrator-db.sh
+# Be a good neighbour to the live backend on the shared host.
+Nice=10
+IOSchedulingClass=idle
+# The snapshot + upload of a ~1.3 GB DB should finish well within this.
+TimeoutStartSec=1800

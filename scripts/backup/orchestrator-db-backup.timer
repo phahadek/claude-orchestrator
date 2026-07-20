@@ -1,0 +1,14 @@
+[Unit]
+Description=Nightly off-box backup of the orchestrator database (dashboard.db)
+Documentation=file:///srv/orchestrator/projects/claude-orchestrator/docs/orchestrator-db-backup-runbook.md
+
+[Timer]
+# Nightly at ~03:00 local, jittered up to 30 min so the firing time is not
+# perfectly predictable and does not thundering-herd with other host timers.
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=1800
+# Catch up on a firing missed while the host was down.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
