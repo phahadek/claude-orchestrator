@@ -6,13 +6,13 @@ import { apiRequest } from './projects';
  * apply is dispatched server-side through TaskWriteCommands — the frontend
  * never interprets payload itself, it only displays and forwards it.
  */
-export interface StagedIntentViolation {
+interface StagedIntentViolation {
   tier: 'structural' | 'lexical';
   detail: string;
   location: string;
 }
 
-export interface StagedIntentAdvisory {
+interface StagedIntentAdvisory {
   tier: 'semantic';
   status: 'pending' | 'clean' | 'flagged' | 'errored';
   confidence: number;
@@ -21,7 +21,7 @@ export interface StagedIntentAdvisory {
   checkedAt: number;
 }
 
-export type StagedIntentState =
+type StagedIntentState =
   | 'staged'
   | 'approved'
   | 'committed'

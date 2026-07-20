@@ -7,7 +7,7 @@
  * section names as the proposed sections.
  */
 
-export interface DiffLine {
+interface DiffLine {
   kind: 'added' | 'removed' | 'unchanged';
   text: string;
 }
