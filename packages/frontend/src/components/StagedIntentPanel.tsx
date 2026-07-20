@@ -27,6 +27,8 @@ function isNotFoundError(err: unknown): boolean {
   return err instanceof Error && /not found/i.test(err.message);
 }
 
+const TERMINAL_INTENT_STATES = new Set(['committed', 'rejected', 'superseded']);
+
 interface TaskMovePayload {
   taskName?: string;
   sourceMilestoneName?: string;
@@ -321,6 +323,26 @@ function ArchiveHeadline({ intent }: { intent: StagedIntent }) {
   );
 }
 
+interface CapabilityRequestPayload {
+  capability: string;
+  plan: string;
+  evidence: string;
+}
+
+/** The grant-approval kind: a dispatched session requesting exactly one write capability. */
+function CapabilityRequestHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as CapabilityRequestPayload;
+  return (
+    <div className={styles.text} data-testid="staged-intent-capability-request">
+      <p>
+        Requests capability: <code>{payload.capability}</code>
+      </p>
+      <p>Plan: {payload.plan}</p>
+      <p>Evidence: {payload.evidence}</p>
+    </div>
+  );
+}
+
 function renderHeadline(intent: StagedIntent): ReactNode {
   switch (intent.kind) {
     case 'task.updateBody':
@@ -339,6 +361,8 @@ function renderHeadline(intent: StagedIntent): ReactNode {
       return isTaskMovePayload(intent.payload)
         ? renderTaskMovePayload(intent.payload)
         : renderFallback(intent.payload);
+    case 'session.requestCapability':
+      return <CapabilityRequestHeadline intent={intent} />;
     default:
       return renderFallback(intent.payload);
   }
@@ -378,6 +402,9 @@ export function StagedIntentPanel({
   const [overrideReason, setOverrideReason] = useState('');
 
   const blocked = intent.annotation?.blocked === true;
+  // The grant-approval kind: never applied — dispositioned only through
+  // approve / reject / pushback, the existing consent vocabulary.
+  const isCapabilityRequest = intent.kind === 'session.requestCapability';
 
   const handleApply = async (override?: { reason: string }) => {
     setInFlight(override ? 'override' : 'apply');
@@ -404,7 +431,14 @@ export function StagedIntentPanel({
     setError(null);
     try {
       const updated = await stagedIntentsApi.approve(intent.id);
-      onApproved?.(updated);
+      // A capability-request approve has no separate apply step — it
+      // resolves straight to a terminal state (granted + re-dispatched), so
+      // it comes off the surface the same way an applied intent does.
+      if (updated.state && TERMINAL_INTENT_STATES.has(updated.state)) {
+        onApplied?.(intent, updated);
+      } else {
+        onApproved?.(updated);
+      }
     } catch (err) {
       if (isNotFoundError(err)) {
         onDismiss?.(intent);
@@ -502,7 +536,7 @@ export function StagedIntentPanel({
       )}
 
       <div className={styles.permissionButtons}>
-        {!blocked && (
+        {!blocked && !isCapabilityRequest && (
           <button
             type="button"
             className={styles.approveButton}
@@ -512,7 +546,7 @@ export function StagedIntentPanel({
             {inFlight === 'apply' ? 'Applying...' : '✓ Apply'}
           </button>
         )}
-        {blocked && !showOverride && (
+        {blocked && !isCapabilityRequest && !showOverride && (
           <button
             type="button"
             className={styles.approveButton}
@@ -522,16 +556,21 @@ export function StagedIntentPanel({
             Override block…
           </button>
         )}
-        {intent.groupId && intent.state !== 'approved' && (
-          <button
-            type="button"
-            className={styles.approveButton}
-            disabled={inFlight !== null}
-            onClick={() => void handleApprove()}
-          >
-            {inFlight === 'approve' ? 'Approving...' : 'Approve'}
-          </button>
-        )}
+        {(intent.groupId || isCapabilityRequest) &&
+          intent.state !== 'approved' && (
+            <button
+              type="button"
+              className={styles.approveButton}
+              disabled={inFlight !== null}
+              onClick={() => void handleApprove()}
+            >
+              {inFlight === 'approve'
+                ? 'Approving...'
+                : isCapabilityRequest
+                  ? '✓ Grant'
+                  : 'Approve'}
+            </button>
+          )}
         <button
           type="button"
           className={styles.denyButton}

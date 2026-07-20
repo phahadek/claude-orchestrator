@@ -223,7 +223,7 @@ app.use('/api', configRouter);
 app.use('/api', updateRouter);
 app.use('/api/diagnostics', createDiagnosticsRouter());
 app.use('/api', createPlanUsageRouter());
-app.use('/api', createStagedIntentsRouter(planningOrchestrator));
+app.use('/api', createStagedIntentsRouter(planningOrchestrator, sessionManager));
 app.use('/api', createOpsJournalRouter());
 app.use('/api', createGateStateRouter());
 app.use('/api', createDeployRouter());
