@@ -7,9 +7,6 @@ import {
   deriveDesignDigestSlice,
   deriveOpsDigestSlice,
   WORKFLOW_LOADERS,
-  type GroomDigestSlice,
-  type DesignDigestSlice,
-  type OpsDigestSlice,
   type PlanningDigest,
 } from '../procedureAssembler';
 import type { GroomLoadResult } from '../../groom/groomLoad';
