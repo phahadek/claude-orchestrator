@@ -410,6 +410,97 @@ function extractThemeTags(md) {
   return [...tags];
 }
 
+/**
+ * Parse body-locked decisions out of a Design task body: `LOCKED → <question
+ * ref>: <decision>` markers (anywhere in the body — typically Implementation
+ * notes) and an "Open questions resolved" markdown table. Returns raw
+ * {questionRef, decision, signed_off_at} locks, unmatched to open_questions
+ * yet — matching happens per-task against the seeded question text (see
+ * matchBodyLock). Tolerant of absent markers (returns []).
+ */
+function extractBodyLocks(md) {
+  const locks = [];
+
+  const lockedRe = /^\s*(?:[-*+]\s+)?\**LOCKED\**\s*→\s*(.+)$/gim;
+  for (const m of md.matchAll(lockedRe)) {
+    const rest = m[1].trim();
+    const colon = rest.indexOf(':');
+    if (colon === -1) continue; // no "<question ref>:" — nothing to match against
+    const questionRef = rest.slice(0, colon).trim();
+    let decision = rest.slice(colon + 1).trim();
+    let signed_off_at = null;
+    const dateMatch = decision.match(/\((\d{4}-\d{2}-\d{2})\)\s*$/);
+    if (dateMatch) {
+      signed_off_at = dateMatch[1];
+      decision = decision.slice(0, dateMatch.index).trim();
+    }
+    if (questionRef && decision)
+      locks.push({ questionRef, decision, signed_off_at });
+  }
+
+  const headRe = /^#{1,4}\s+open\s+questions?\s+resolved:?\s*$/i;
+  const tableBody = sectionBody(md, headRe);
+  if (tableBody.trim()) {
+    const rows = tableBody.split('\n').filter((l) => /^\s*\|/.test(l));
+    if (rows.length >= 2) {
+      const cells = (l) =>
+        l
+          .trim()
+          .replace(/^\|/, '')
+          .replace(/\|$/, '')
+          .split('|')
+          .map((c) => c.trim());
+      const header = cells(rows[0]);
+      const qIdx = header.findIndex((h) => /question/i.test(h));
+      const decIdx = header.findIndex((h) =>
+        /decision|resolution|answer|locked/i.test(h),
+      );
+      const dateIdx = header.findIndex((h) =>
+        /date|signed|locked.*at/i.test(h),
+      );
+      const questionCol = qIdx === -1 ? 0 : qIdx;
+      const decisionCol = decIdx === -1 ? 1 : decIdx;
+      for (const line of rows.slice(1)) {
+        if (/^\s*\|?\s*:?-{2,}/.test(line)) continue; // separator row
+        const row = cells(line);
+        const questionRef = row[questionCol];
+        const decision = row[decisionCol];
+        if (!questionRef || !decision) continue;
+        locks.push({
+          questionRef,
+          decision,
+          signed_off_at: dateIdx !== -1 ? row[dateIdx] || null : null,
+        });
+      }
+    }
+  }
+
+  return locks;
+}
+
+/** Normalise text for fuzzy question/lock matching: strip markdown emphasis,
+ *  collapse whitespace, lowercase. */
+function normaliseForMatch(text) {
+  return text.replace(/[*_`]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/** Match a raw body lock's questionRef against an open question's verbatim
+ *  text. Tolerant of paraphrase: containment either direction on normalised
+ *  text; prefers the longest (most specific) matching ref. */
+function matchBodyLock(questionText, rawLocks) {
+  const q = normaliseForMatch(questionText);
+  let best = null;
+  for (const lock of rawLocks) {
+    const ref = normaliseForMatch(lock.questionRef);
+    if (!ref) continue;
+    if (q.includes(ref) || ref.includes(q)) {
+      if (!best || ref.length > normaliseForMatch(best.questionRef).length)
+        best = lock;
+    }
+  }
+  return best;
+}
+
 // ── Step 1: load context pages ───────────────────────────────────────
 const contextPages = [];
 for (const pg of contextPagesCfg) {
@@ -468,6 +559,7 @@ const tasks = {
   // for dep resolution (a dep on a Deferred task is satisfied, not blocked).
 };
 const unresolvedPageRefs = [];
+const bodyLocksByTaskId = new Map(); // task id → raw {questionRef, decision, signed_off_at}[]
 
 for (const row of targetRows) {
   const type = row['Type'] ?? '';
@@ -495,6 +587,8 @@ for (const row of targetRows) {
   writeFileSync(bodyPath, md, 'utf8');
 
   const openQ = extractOpenQuestions(md);
+  const bodyLocks = extractBodyLocks(md);
+  if (bodyLocks.length) bodyLocksByTaskId.set(row.id, bodyLocks);
   const pagesAffected = extractPagesAffected(md).map((p) => {
     const page_id = resolvePageId(p.title);
     if (!page_id)
@@ -579,6 +673,7 @@ const priorState = readJson(join(cacheDir, 'design-state.json'), {});
 // — a design task done since the last session would keep its old recorded status
 // and a resumed session would read it as still open.
 const state = {};
+const partialLockTasks = []; // {id, title, unmatched} — body locks that named no matching open question
 
 for (const t of [
   ...tasks.executable,
@@ -592,8 +687,29 @@ for (const t of [
     ? priorTask.open_questions
     : [];
   const priorByText = new Map(priorQs.map((q) => [q.q, q]));
+
+  // Body-locked decisions (LOCKED → markers / "Open questions resolved" table):
+  // a resumed or reclassified task may already carry answers in its body that
+  // never made it into design-state.json. Pre-populate those so the task
+  // doesn't present settled questions as fresh. Prior signed-off entries
+  // (already locked in state) always win over the body.
+  const rawLocks = bodyLocksByTaskId.get(t.id) ?? [];
+  const matchedLocks = new Set();
   const seededQs = t.open_questions.map((q) => {
     const p = priorByText.get(q);
+    if (p && p.locked_decision) return p;
+    const lock = matchBodyLock(q, rawLocks);
+    if (lock) {
+      matchedLocks.add(lock);
+      return {
+        q,
+        investigated: p?.investigated ?? false,
+        recommendation: p?.recommendation ?? null,
+        locked_decision: lock.decision,
+        locked_source: 'body',
+        signed_off_at: lock.signed_off_at ?? p?.signed_off_at ?? null,
+      };
+    }
     return (
       p ?? {
         q,
@@ -604,6 +720,14 @@ for (const t of [
       }
     );
   });
+  const unmatchedLocks = rawLocks.filter((l) => !matchedLocks.has(l));
+  const partialLocksPresent = unmatchedLocks.length > 0;
+  if (partialLocksPresent)
+    partialLockTasks.push({
+      id: t.id,
+      title: t.title,
+      unmatched: unmatchedLocks.length,
+    });
 
   // Pages-affected: preserve applied_at / applied_diff if the page title matches.
   const priorPages = Array.isArray(priorTask.pages_affected)
@@ -630,11 +754,41 @@ for (const t of [
     followon_tasks: Array.isArray(priorTask.followon_tasks)
       ? priorTask.followon_tasks
       : [],
+    // carries: [{to_task, note}] — decisions on this task that constrain a
+    // sibling task, e.g. an atomic-apply constraint or a shared hard-block.
+    // Written by the skill during Step 3; the loader only seeds/preserves it
+    // and surfaces inbound carries on the sibling (see below).
+    carries: Array.isArray(priorTask.carries) ? priorTask.carries : [],
+    partial_locks_present: partialLocksPresent,
     implementation_notes_written_at:
       priorTask.implementation_notes_written_at ?? null,
     moved_to_done_at:
       priorTask.moved_to_done_at ?? priorTask.moved_to_in_review_at ?? null,
   };
+}
+
+// Inbound carries: for every task, collect carries filed by OTHER tasks whose
+// to_task points at it, so the sibling sees the constraint at task start
+// without scanning every other task's carries by hand.
+const inboundCarriesByTaskId = new Map();
+for (const [taskId, entry] of Object.entries(state)) {
+  for (const carry of entry.carries) {
+    if (!carry || !carry.to_task) continue;
+    const list = inboundCarriesByTaskId.get(carry.to_task) ?? [];
+    list.push({
+      from_task: taskId,
+      from_title: entry.title,
+      note: carry.note ?? null,
+    });
+    inboundCarriesByTaskId.set(carry.to_task, list);
+  }
+}
+for (const t of [
+  ...tasks.executable,
+  ...tasks.needs_grooming,
+  ...tasks.closed_not_done,
+]) {
+  t.inbound_carries = inboundCarriesByTaskId.get(t.id) ?? [];
 }
 
 const prunedStateIds = Object.keys(priorState).filter((id) => !(id in state));
@@ -722,6 +876,26 @@ if (unresolvedPageRefs.length) {
     console.log(
       `     … and ${unresolvedPageRefs.length - 8} more (see design-worklist.json)`,
     );
+}
+if (partialLockTasks.length) {
+  console.log(
+    `  ⚠ ${partialLockTasks.length} task(s) have body-locked decisions that didn't match a seeded open question — reconcile design-state.json by hand:`,
+  );
+  for (const p of partialLockTasks)
+    console.log(`     - ${p.title} (${p.unmatched} unmatched body lock(s))`);
+}
+const tasksWithInboundCarries = [
+  ...tasks.executable,
+  ...tasks.needs_grooming,
+  ...tasks.closed_not_done,
+].filter((t) => t.inbound_carries.length);
+if (tasksWithInboundCarries.length) {
+  console.log(
+    `  ⚠ ${tasksWithInboundCarries.length} task(s) have inbound carries from a sibling task:`,
+  );
+  for (const t of tasksWithInboundCarries)
+    for (const c of t.inbound_carries)
+      console.log(`     - ${t.title} ← "${c.note}" (from: ${c.from_title})`);
 }
 const tasksMissingQs = tasks.executable.filter(
   (t) => t.open_questions.length === 0,
