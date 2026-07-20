@@ -13,6 +13,8 @@ import {
 import type { NewTaskFields, TaskPropertiesPatch } from '../tasks/TaskBackend';
 import type { TaskBodySections } from '../tasks/bodyRender';
 import {
+  checkReadiness,
+  composeProposedBody,
   ReadinessGateError,
   type ReadinessViolation,
 } from '../tasks/readinessGate';
@@ -355,6 +357,37 @@ function getActiveStagedIntent(id: string): StagedIntentRow | undefined {
   return row && ACTIVE_STATES.includes(row.state) ? row : undefined;
 }
 
+/** A task.setStatus -> Ready intent — the single arming write that must commit LAST within a group. */
+function isArmingReadyIntent(row: StagedIntentRow): boolean {
+  if (row.kind !== 'task.setStatus') return false;
+  const payload = JSON.parse(row.payload) as SetStatusPayload;
+  return payload.status === 'Ready';
+}
+
+/**
+ * Composes the proposed body a Ready readiness check should see: the stored
+ * page body with any live (staged/approved) task.updateBody for this task in
+ * the same group applied over it — used by both the eager approve-time check
+ * and (implicitly, via commit ordering) authoritative at commit time.
+ */
+async function computeProposedBody(
+  backend: ReturnType<typeof getTaskBackend>,
+  groupId: string | null | undefined,
+  taskId: string,
+): Promise<string> {
+  const stored = (await backend.fetchTaskPage(taskId)) ?? '';
+  if (!groupId) return stored;
+  const updateBodyRow = listStagedIntentsByGroup(groupId).find(
+    (row) =>
+      row.kind === 'task.updateBody' &&
+      ACTIVE_STATES.includes(row.state) &&
+      (JSON.parse(row.payload) as UpdateBodyPayload).taskId === taskId,
+  );
+  if (!updateBodyRow) return stored;
+  const payload = JSON.parse(updateBodyRow.payload) as UpdateBodyPayload;
+  return composeProposedBody(stored, payload.sections);
+}
+
 export function createStagedIntentsRouter(): Router {
   const router = Router();
 
@@ -470,6 +503,178 @@ export function createStagedIntentsRouter(): Router {
           error: err instanceof Error ? err.message : 'Failed to apply intent',
         });
       }
+    },
+  );
+
+  // ── POST /api/staged-intents/:id/approve ─────────────────────────────────
+  // Marks the intent approved — nothing is written to the task backend. For
+  // a task.setStatus -> Ready intent, eagerly runs the readiness gate against
+  // the composed proposed body (a live sibling task.updateBody in the same
+  // group, if any) so blocks/advisories surface at review time rather than
+  // as a surprise 409 on commit. This eager check never blocks the approve
+  // itself — the commit-time check remains the sole authority.
+  router.post(
+    '/staged-intents/:id/approve',
+    async (req: Request, res: Response) => {
+      const row = getActiveStagedIntent(String(req.params.id));
+      if (!row) {
+        res.status(404).json({ error: 'staged intent not found' });
+        return;
+      }
+      const intent = rowToApi(row);
+
+      let annotation: StagedIntent['annotation'] = null;
+      if (intent.kind === 'task.setStatus') {
+        const payload = intent.payload as SetStatusPayload;
+        if (payload.status === 'Ready') {
+          const backend = getTaskBackend(intent.projectId);
+          const body = await computeProposedBody(
+            backend,
+            intent.groupId,
+            payload.taskId,
+          );
+          const violations = checkReadiness(body);
+          if (violations.length > 0) {
+            annotation = { blocked: true, violations };
+          }
+        }
+      }
+
+      const updated = transitionStagedIntent(intent.id, 'approved', {
+        annotation: annotation ? JSON.stringify(annotation) : null,
+      });
+      res.json(rowToApi(updated));
+    },
+  );
+
+  // ── POST /api/staged-intents/group/:groupId/commit ───────────────────────
+  // Atomic, dependency-ordered group commit: requires every live (staged |
+  // approved) intent in the group to be approved, then applies them
+  // all-or-nothing — updateBody / setDependsOn / setProperties (and other
+  // non-arming kinds) first, task.setStatus -> Ready LAST. A failure halts
+  // immediately, before the Ready flip, leaving the failed and not-yet-run
+  // intents in `approved` state so the group can be retried; intents applied
+  // before the failure stay `committed` (the task store is not
+  // transactional, so their writes cannot be rolled back — halting before
+  // Ready is what keeps a partial commit safe, since Ready is the only write
+  // that arms auto-dispatch).
+  router.post(
+    '/staged-intents/group/:groupId/commit',
+    async (req: Request, res: Response) => {
+      const groupId = String(req.params.groupId);
+      const body = req.body as {
+        override?: unknown;
+        reason?: unknown;
+        actorType?: unknown;
+      };
+      const override = body?.override === true;
+      const reason = typeof body?.reason === 'string' ? body.reason : '';
+      if (override && !reason.trim()) {
+        res
+          .status(400)
+          .json({ error: 'reason is required when override is true' });
+        return;
+      }
+      const actorType: ApplyActorType =
+        body?.actorType === 'session' ? 'session' : 'human';
+
+      const live = listStagedIntentsByGroup(groupId).filter((r) =>
+        ACTIVE_STATES.includes(r.state),
+      );
+      if (live.length === 0) {
+        res
+          .status(404)
+          .json({ error: `no live staged intents found for group "${groupId}"` });
+        return;
+      }
+      const notApproved = live.filter((r) => r.state !== 'approved');
+      if (notApproved.length > 0) {
+        res.status(409).json({
+          error: `group "${groupId}" has ${notApproved.length} intent(s) not yet approved`,
+          pendingIds: notApproved.map((r) => r.id),
+        });
+        return;
+      }
+
+      const ordered = [
+        ...live.filter((r) => !isArmingReadyIntent(r)),
+        ...live.filter((r) => isArmingReadyIntent(r)),
+      ];
+
+      const committed: string[] = [];
+      for (const row of ordered) {
+        const intent = rowToApi(row);
+        try {
+          await applyIntent(
+            intent,
+            override ? { reason } : undefined,
+            actorType,
+          );
+          transitionStagedIntent(intent.id, 'committed', { annotation: null });
+          committed.push(intent.id);
+        } catch (err) {
+          const remaining = ordered
+            .map((r) => r.id)
+            .filter((id) => id !== intent.id && !committed.includes(id));
+
+          if (err instanceof ReadinessGateError) {
+            setStagedIntentAnnotation(
+              intent.id,
+              JSON.stringify({ blocked: true, violations: err.violations }),
+            );
+            res.status(409).json({
+              error: err.message,
+              violations: err.violations,
+              committed,
+              failedId: intent.id,
+              remaining,
+            });
+            return;
+          }
+          if (err instanceof GroomingGateError) {
+            setStagedIntentAnnotation(
+              intent.id,
+              JSON.stringify({ blocked: true, reasons: err.reasons }),
+            );
+            res.status(409).json({
+              error: err.message,
+              reasons: err.reasons,
+              committed,
+              failedId: intent.id,
+              remaining,
+            });
+            return;
+          }
+          if (err instanceof HumanApplyOnlyError) {
+            res.status(403).json({
+              error: err.message,
+              committed,
+              failedId: intent.id,
+              remaining,
+            });
+            return;
+          }
+          if (err instanceof DependsOnCompletenessError) {
+            res.status(409).json({
+              error: err.message,
+              committed,
+              failedId: intent.id,
+              remaining,
+            });
+            return;
+          }
+          res.status(500).json({
+            error:
+              err instanceof Error ? err.message : 'Failed to commit group',
+            committed,
+            failedId: intent.id,
+            remaining,
+          });
+          return;
+        }
+      }
+
+      res.json({ ok: true, committed });
     },
   );
 
