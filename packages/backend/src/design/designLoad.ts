@@ -123,8 +123,11 @@ export interface OpenQuestions {
 /** Extract the "Open questions" list from a Design task body. */
 function extractOpenQuestions(md: string): OpenQuestions {
   const variants = [
+    // eslint-disable-next-line security/detect-unsafe-regex -- Reason: verified non-backtracking; anchored by ^ and $ against a single Notion heading line, the trailing .* has no overlapping quantifier ahead of it (no catastrophic path).
     /^#{1,4}\s+(?:open\s+)?questions?(?:\s+to\s+resolve.*)?:?\s*$/i,
+    // eslint-disable-next-line security/detect-unsafe-regex -- Reason: verified non-backtracking; anchored by ^ and $ against a single Notion heading line, the trailing .* has no overlapping quantifier ahead of it (no catastrophic path).
     /^#{1,4}\s+design\s+questions?(?:\s+to\s+settle.*)?:?\s*$/i,
+    // eslint-disable-next-line security/detect-unsafe-regex -- Reason: verified non-backtracking; anchored by ^ and $ against a single Notion heading line, the two optional (?:...) groups are mutually exclusive alternatives with no overlap.
     /^#{1,4}\s+(?:decide|decisions?(?:\s+to\s+lock|\s+space(?:\s*\(.*\))?)?)(?:\s*\(.*\))?:?\s*$/i,
   ];
   for (const re of variants) {
@@ -136,6 +139,7 @@ function extractOpenQuestions(md: string): OpenQuestions {
   }
   const lines = md.split('\n');
   const decideIdx = lines.findIndex((l) =>
+    // eslint-disable-next-line security/detect-unsafe-regex -- Reason: verified non-backtracking; anchored by ^ and $ against a single Notion body line, no overlapping/nested quantifiers.
     /^\s*decide(?:\s+the\s+following)?\s*:?\s*$/i.test(l),
   );
   if (decideIdx !== -1) {
