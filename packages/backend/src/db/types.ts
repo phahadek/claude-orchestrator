@@ -442,6 +442,33 @@ export interface GateAccretionRow {
 
 export type NewGateItemEventRow = Omit<GateItemEventRow, 'id'>;
 
+// ─── deploy_run ───────────────────────────────────────────────────────────
+
+/** Single-field lifecycle: running -> succeeded | failed | aborted. */
+export type DeployRunStatus = 'running' | 'succeeded' | 'failed' | 'aborted';
+
+export interface DeployRunRow {
+  run_id: string;
+  project: string;
+  target_sha: string;
+  current_step: string | null;
+  status: DeployRunStatus;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface DeployRunEventRow {
+  id: number;
+  run_id: string;
+  step: string;
+  event_type: string;
+  disposition: string | null;
+  detail: string | null;
+  at: string;
+}
+
+export type NewDeployRunEventRow = Omit<DeployRunEventRow, 'id'>;
+
 // ─── seed_item ────────────────────────────────────────────────────────────
 
 /** Single-field lifecycle: pending -> applied -> confirmed | blocked. */

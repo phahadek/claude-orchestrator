@@ -268,6 +268,32 @@ export function runMigrations(target: Database.Database): void {
       recorded_at TEXT    NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS deploy_run (
+      run_id       TEXT    PRIMARY KEY,
+      project      TEXT    NOT NULL,
+      target_sha   TEXT    NOT NULL,
+      current_step TEXT,
+      status       TEXT    NOT NULL,
+      started_at   TEXT    NOT NULL,
+      completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_deploy_run_project_status ON deploy_run(project, status);
+    -- At most one active (status = 'running') run per project.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_deploy_run_active_per_project
+      ON deploy_run(project) WHERE status = 'running';
+
+    CREATE TABLE IF NOT EXISTS deploy_run_event (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id      TEXT    NOT NULL,
+      step        TEXT    NOT NULL,
+      event_type  TEXT    NOT NULL,
+      disposition TEXT,
+      detail      TEXT,
+      at          TEXT    NOT NULL,
+      FOREIGN KEY (run_id) REFERENCES deploy_run(run_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_deploy_run_event_run_id ON deploy_run_event(run_id);
+
     CREATE TABLE IF NOT EXISTS gate_accretion (
       source_task_id TEXT    PRIMARY KEY,
       project         TEXT    NOT NULL,
