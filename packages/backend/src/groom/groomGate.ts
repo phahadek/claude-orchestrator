@@ -78,39 +78,52 @@ function isTypeCheckDispositioned(entry: GroomingGateEntry): boolean {
 /**
  * gate_contribution requires a durable gate_accretion marker for the task
  * being promoted (accreteGateContribution writes it, keyed by source task id
- * — the task being promoted is its own source). Absent `type`, or a type
- * outside Code/Tooling, fail-open (allow) — mirrors groom-gate.mjs's
+ * — the task being promoted is its own source). Absent a resolved type, or a
+ * type outside Code/Tooling, fail-open (allow) — mirrors groom-gate.mjs's
  * needsGate check.
  */
 function isGateContributionRecorded(
-  entry: GroomingGateEntry,
+  type: string | undefined,
   taskId: string,
 ): boolean {
-  if (!entry.type || !GATE_CONTRIBUTION_TYPES.has(entry.type)) return true;
+  if (!type || !GATE_CONTRIBUTION_TYPES.has(type)) return true;
   return getGateAccretionMarker(taskId) !== undefined;
 }
 
 /**
  * seed_contribution requires a durable seed_accretion marker for the task
  * being promoted (stageSeedContribution writes it, keyed by source task id —
- * the task being promoted is its own source). Absent `type`, or a type
- * outside Code/Tooling, fail-open (allow) — mirrors gate_contribution's
+ * the task being promoted is its own source). Absent a resolved type, or a
+ * type outside Code/Tooling, fail-open (allow) — mirrors gate_contribution's
  * treatment and groom-gate.mjs's needsSeed check.
  */
 function isSeedContributionRecorded(
-  entry: GroomingGateEntry,
+  type: string | undefined,
   taskId: string,
 ): boolean {
-  if (!entry.type || !SEED_CONTRIBUTION_TYPES.has(entry.type)) return true;
+  if (!type || !SEED_CONTRIBUTION_TYPES.has(type)) return true;
   return getSeedAccretionMarker(taskId) !== undefined;
 }
 
-/** Checks the size_check / type_check / gate_contribution / seed_contribution artifacts of a grooming-state entry ahead of a Ready promotion. */
+/**
+ * Checks the size_check / type_check / gate_contribution / seed_contribution
+ * artifacts of a grooming-state entry ahead of a Ready promotion.
+ *
+ * `authoritativeType` is the task's real, server-derived display-format Type
+ * (e.g. read from the task cache by the command layer). It takes precedence
+ * over `entry.type` — the caller-supplied payload — when deciding whether
+ * gate_contribution / seed_contribution are required, since `entry.type`
+ * alone is not trustworthy: a caller can omit it to dodge accretion
+ * enforcement. `entry.type` is only used as a fallback when no authoritative
+ * type could be resolved.
+ */
 export function checkGroomingPromotionGate(
   entry: GroomingGateEntry,
   taskId: string,
+  authoritativeType?: string,
 ): GroomingGateResult {
   const reasons: string[] = [];
+  const resolvedType = authoritativeType ?? entry.type;
 
   if (!isSizeCheckClassified(entry)) {
     reasons.push(
@@ -127,7 +140,7 @@ export function checkGroomingPromotionGate(
     );
   }
 
-  if (!isGateContributionRecorded(entry, taskId)) {
+  if (!isGateContributionRecorded(resolvedType, taskId)) {
     reasons.push(
       'gate_contribution is not recorded — for 💻 Code and 🛠️ Tooling tasks, accreteGateContribution ' +
         'must record a gate_accretion marker (items appended to the milestone gate, or an explicit ' +
@@ -135,7 +148,7 @@ export function checkGroomingPromotionGate(
     );
   }
 
-  if (!isSeedContributionRecorded(entry, taskId)) {
+  if (!isSeedContributionRecorded(resolvedType, taskId)) {
     reasons.push(
       'seed_contribution is not recorded — for 💻 Code and 🛠️ Tooling tasks, stageSeedContribution ' +
         'must record a seed_accretion marker (config-change seeds minted onto the milestone seed store, ' +

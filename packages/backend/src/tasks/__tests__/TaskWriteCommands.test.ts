@@ -73,6 +73,10 @@ function cacheRowWithStatus(display: string) {
   return { raw_json: JSON.stringify({ status: display }) };
 }
 
+function cacheRowWithStatusAndType(display: string, type: string) {
+  return { raw_json: JSON.stringify({ status: display, type }) };
+}
+
 beforeEach(() => {
   mockGetTaskCache.mockReset();
   mockGetMergeCommitForTask.mockReset();
@@ -394,6 +398,117 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
         },
       }),
     );
+  });
+
+  it('blocks a Ready transition for a cached 💻 Code task when the groomingGate payload omits `type` and no gate_accretion marker exists (accretion fail-open closed)', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '💻 Code'),
+    );
+    mockGetAccretionMarker.mockReturnValue(undefined);
+    mockGetSeedAccretionMarker.mockReturnValue(undefined);
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    let caught: unknown;
+    try {
+      await commands.setStatus('notion:abc', 'Ready', {
+        groomingGate: {
+          size_check: { decision: 'no_split' },
+          type_check: { decision: 'none' },
+        },
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(GroomingGateError);
+    expect((caught as GroomingGateError).reasons.join(' ')).toMatch(
+      /gate_contribution/,
+    );
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('blocks a Ready transition for a cached 💻 Code task when a gate_accretion marker exists but no seed_accretion marker exists', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '💻 Code'),
+    );
+    mockGetAccretionMarker.mockReturnValue({ decision: 'none' });
+    mockGetSeedAccretionMarker.mockReturnValue(undefined);
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    let caught: unknown;
+    try {
+      await commands.setStatus('notion:abc', 'Ready', {
+        groomingGate: {
+          size_check: { decision: 'no_split' },
+          type_check: { decision: 'none' },
+        },
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(GroomingGateError);
+    expect((caught as GroomingGateError).reasons.join(' ')).toMatch(
+      /seed_contribution/,
+    );
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('allows a Ready transition for a cached 💻 Code task once gate_accretion and seed_accretion markers are both recorded, even though the payload omits `type`', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '💻 Code'),
+    );
+    mockGetAccretionMarker.mockReturnValue({ decision: 'items' });
+    mockGetSeedAccretionMarker.mockReturnValue({ decision: 'none' });
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:abc', 'Ready', {
+      groomingGate: {
+        size_check: { decision: 'no_split' },
+        type_check: { decision: 'none' },
+      },
+    });
+
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:abc',
+      '🗂️ Ready',
+      expect.objectContaining({
+        groomingGate: {
+          size_check: { decision: 'no_split' },
+          type_check: { decision: 'none' },
+        },
+      }),
+    );
+  });
+
+  it('allows a Ready transition for a cached 📐 Design task with no accretion markers at all (non-gated type still fails open)', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '📐 Design'),
+    );
+    mockGetAccretionMarker.mockReturnValue(undefined);
+    mockGetSeedAccretionMarker.mockReturnValue(undefined);
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:abc', 'Ready', {
+      groomingGate: {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'n/a' },
+      },
+    });
+
+    expect(backend.updateStatus).toHaveBeenCalled();
   });
 });
 
