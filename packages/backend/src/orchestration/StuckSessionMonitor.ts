@@ -14,11 +14,14 @@ import {
   markSessionDone,
   markSessionIdle,
   getSession,
+  getProjectRowById,
 } from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 import type { GitHubClient } from '../github/GitHubClient';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { recoverSession } from '../session/sessionRecovery';
+import { getCurrentBranch, hasNonEmptyDiff } from './localBranchHelpers';
+import { submitLocalBranch } from './localBranchSubmission';
 
 interface TimerState {
   taskName: string;
@@ -127,6 +130,43 @@ export class StuckSessionMonitor {
             taskId: row.task_id ?? null,
             prUrl: row.pr_url ?? null,
           });
+          if (row.project_id && row.task_id && row.worktree_path) {
+            try {
+              const project = getProjectRowById(row.project_id);
+              if (project?.git_mode === 'local-only') {
+                const baseBranch = project.base_branch || 'dev';
+                const branchName = await getCurrentBranch(row.worktree_path);
+                const hasDiff =
+                  !!branchName && branchName !== baseBranch
+                    ? await hasNonEmptyDiff(
+                        row.worktree_path,
+                        baseBranch,
+                        branchName,
+                      )
+                    : false;
+                const taskBackend = getTaskBackend(row.project_id);
+                submitLocalBranch({
+                  projectId: row.project_id,
+                  sessionId: row.session_id,
+                  taskId: row.task_id,
+                  featureBranchName: branchName ?? undefined,
+                  baseBranch,
+                  hasDiff,
+                  taskBackend,
+                  // Route through sessionManager's internal 'message' bus (not
+                  // the WS-only this.broadcast) so ReviewOrchestrator, which
+                  // subscribes to sessionManager.on('message', ...), actually
+                  // receives local_branch_submitted. server.ts still relays
+                  // this to WS clients via sessionManager.on('message', broadcast).
+                  broadcast: (msg) => this.sessionManager.emit('message', msg),
+                });
+              }
+            } catch (e) {
+              logger.error(
+                `[StuckSessionMonitor] local branch submission failed for ${row.session_id}: ${e}`,
+              );
+            }
+          }
           continue;
         }
 
@@ -156,7 +196,10 @@ export class StuckSessionMonitor {
           githubClient: this.githubClient,
           taskBackend,
           sessionManager: this.sessionManager,
-          broadcast: this.broadcast,
+          // See comment above submitLocalBranch call in scanForStuckSessions:
+          // recoverSession forwards this into submitLocalBranch, which must
+          // reach sessionManager's internal 'message' bus, not just WS clients.
+          broadcast: (msg) => this.sessionManager.emit('message', msg),
           emitPrOpened: () => {},
         }).catch((e) =>
           logger.error(

@@ -142,7 +142,9 @@ unattended while still keeping a human on every close.
   actor, and a post/signal/record landed. Authoring a row is not ingesting.
 - **"Done ≠ deployed ≠ seeded ≠ working."** A merged task may be un-deployed; a deployed code path
   may have **no operational seed applied** (a recurring silent-degradation trap). Confirm the seed
-  is present on prod, then that the behavior actually runs.
+  is present on prod, then that the behavior actually runs. When the task at hand *is* the
+  milestone's config-seed task, work it via **§ Milestone config-seed** below, not by reading its
+  task body as the worklist.
 - **No accepted gaps — every step closes or is filed.** A multi-step Operational task is Done only
   when **every** step is completed or filed as a follow-on that closes the gap. **"Accept the gap"
   is never an option to present** — silently dropping the price side of a backfill and shipping
@@ -219,9 +221,11 @@ Long ops runs must not discard expensive research, but must not persist unverifi
 either. Those reconcile only if research and verdicts live in **different places with different
 durability rules**.
 
-The **staging journal** lives at `config/projects/<dir>/.ops-cache/<milestone>/ops-state.json` —
-one entry per **eligible** task, **pre-seeded and reconciled by `ops-load.mjs`** (Flow step 2).
-Documented shape:
+The **staging journal** lives in the backend's `ops_journal` DB table — one row per
+**eligible** task, **pre-seeded and reconciled server-side by `GET /api/ops-context`**
+(Flow step 2; same reconcile job `loadOpsContext` always did, now the only path to it).
+Read it with `node ~/.claude/scripts/ops-client.mjs journal --milestone <M>` (wraps
+`GET /api/ops-journal?milestone=<M>`). Documented shape (one entry per task id):
 
 - `mode` (`operational`|`investigation`), `flavor` (`directed`|`research-first`|`null`),
   `worked_in` (`autonomous`|`interactive`)
@@ -238,7 +242,7 @@ Documented shape:
   persisted_to }` (task page / follow-on / arch page)
 - `disposition` — **🧪 Testing variant only:** `pass` | `blocked-pending-fix` | `pass-with-caveat`
   | `null` (loader-seeded null; **no "fail"** — a surfaced issue → `blocked-pending-fix` + a filed
-  fix + a `Depends On`). Set with `ops-journal-set.mjs … --disposition <value>`.
+  fix + a `Depends On`). Set with `ops-client.mjs set-state … --disposition <value>`.
 
 Rules that make it safe:
 - **Research persists** in `evidence[]`, always tagged provisional by `state`. A fresh interactive
@@ -251,28 +255,99 @@ Rules that make it safe:
   residue is persisted to its proper home.
 - **Trimming — the journal holds *open* work, not history.** Once an entry reaches `resolved` and
   its residue is persisted to its proper home, that home (the task page / follow-on / arch page) is
-  the audit trail — so **drop the entry**. Trim at two moments: **immediately** when you mark an
-  entry `resolved` during a run, and **on load**, reconciling against the board — any entry whose
-  task is now ✅ Done or no longer on the open board is dropped (`ops-load.mjs` does this
-  deterministically on every run). **Never hand-delete entries mid-run** — hand-editing the large
-  JSON is what breaks it (duplicate `resolution` keys, botched block deletions). On resolve, set
-  `state: resolved` + `resolution` **in place** with **`ops-journal-set.mjs --task <id> --state
-  <state> [--resolution '<json>']`** (deterministic field write; no touching the big file by hand),
-  and let the next `ops-load.mjs` load trim it: **deletion is the fragile part, not the write.**
-  Without trimming the journal grows unbounded and
-  every run reloads dead entries. *(Want a raw-`evidence[]` audit trail? Move resolved entries to a
-  sibling `ops-state.archive.json` instead of deleting — but the default is delete; the task page
-  holds the outcome.)*
+  the audit trail — so **drop the entry**. Trimming happens **server-side**, on every
+  `GET /api/ops-context` call: any `ops_journal` row whose task is now ✅ Done or no longer on the
+  open board is deleted as part of that request's reconcile (the DB-backed twin of the old loader's
+  job 3 — see `reconcileJournal` in `packages/backend/src/ops/opsJournal.ts`). **Never hand-edit the
+  DB.** On resolve, set `state: resolved` + `resolution` with **`ops-client.mjs set-state --task <id>
+  --state resolved [--resolution '<json>']`** (wraps `POST /api/ops-journal/:taskId/state` —
+  deterministic field write, validated against the allowed state-transition graph server-side); the
+  next `ops-context` call trims it: **deletion is the fragile part, not the write, and it's no longer
+  yours to get wrong.**
 - **Interactive-throughout is a lighter path.** The full `pending` → `candidate` /
   `staged-proposal` / `applied-pending-confirm` → `resolved` vocabulary exists to protect the
   **autonomous→interactive handoff**. When a run is interactive from minute one (no autonomous pass
   to hand off), the journal is a live scratchpad, not a handoff artifact — you may collapse the
   provisional states to just `pending` → `resolved`, still recording `resolution` per task. Here
   **`evidence[]` can stay in-conversation and land on the task page** (that's what worked) — by
-  design `ops-journal-set.mjs` writes only `state` / `resolution` / `disposition`, **not** evidence:
-  a fragile big-JSON evidence append isn't worth it when the operator is present and the task page is
-  the durable home. Don't carry the full staging ceremony when there's no handoff to protect.
+  design `ops-client.mjs set-state` writes only `state` / `resolution` / `disposition`, **not**
+  evidence: a fragile evidence append isn't worth it when the operator is present and the task page
+  is the durable home. Don't carry the full staging ceremony when there's no handoff to protect.
 - This is ops-native and **distinct from `/wrap`** (which sweeps broad session residue).
+
+## Milestone config-seed — driven by the seed-state API
+
+The milestone's one accreted **config-seed** task (`config-template/task-writing.md` §
+Milestone config-seed) is orchestrator-tracked state, not a task-body checklist to read
+top to bottom. Every seed a Code task contributed at grooming time lives as a `seed_item`
+row — applyable once its `min_deployed_commit` is an ancestor of the target project's
+current deploy SHA. Every apply attempt is a `seed_item_event` — that log **is** the
+durable record, the operational twin of the gate's `gate_item_event`. **Do not read the
+config-seed task's body as the seed worklist** — the live worklist is `seed_item` rows,
+never a bulk load of the whole applyable set.
+
+This is a thin human-driven loop over the seed-state API
+(`packages/backend/src/routes/seedState.ts`, business logic in
+`packages/backend/src/seed/seedService.ts`), called through the sanctioned node client:
+
+```bash
+node ~/.claude/scripts/seed-state-client.mjs <command> ...
+```
+
+`seed-state-client.mjs` is the vendored sanctioned node client (see
+`packages/backend/scripts/seed-state-client.mjs`, re-vendored via the
+`/sync-guidelines` skill), using `$ORCHESTRATOR_DEVICE_TOKEN` (host/port
+default to `127.0.0.1:3000`, overridable via `$ORCHESTRATOR_BACKEND_HOST` /
+`$ORCHESTRATOR_BACKEND_PORT`) the same way the other sanctioned session
+clients (`ops-client.mjs`, `gate-state-client.mjs`) do.
+
+1. **Readiness** — `node ~/.claude/scripts/seed-state-client.mjs readiness --milestone <M>` →
+   `{status: 'green'|'blocked', blocking}`. `green` — nothing left to apply this
+   milestone; report and stop. `blocked` — every unconfirmed seed with its
+   project/state, as a worklist **map only** — pull the actual batch via `next`, never
+   disposition straight off this summary.
+2. **Pull one applyable batch at a time** —
+   `node ~/.claude/scripts/seed-state-client.mjs next --milestone <M> --deploySha <sha> [--limit <N>]`
+   (default limit 1). `deploySha` is the **target project's** currently-deployed commit —
+   resolve it the project's own way (its `context.md` documents the deploy-tracking
+   surface); never guess it. Applyability = deploy-included (the seed's
+   `min_deployed_commit` is an ancestor of `deploySha`) AND not yet `confirmed`. Never
+   bulk-load the milestone's full seed set.
+3. **Apply through the target project's own audited config-CRUD, then record the
+   outcome.** For each pulled item: read `item.spec` (`node
+   ~/.claude/scripts/seed-state-client.mjs detail <id>` for sources + prior events
+   before re-attempting one). **The operator
+   applies the seed via the target project's audited config-CRUD / ops affordance —
+   never raw SQL, and the orchestrator never applies another project's config on its
+   behalf** (that's why `next` requires a `deploySha` the caller supplies rather than
+   applying anything itself). Batch consent is fine here — one up-front "these N seeds,
+   go" per pulled batch, the same phase-level authorization an Operational execution
+   phase gets, not a prompt per seed. Then verify reconcile + capture the ops-native way
+   ("Done ≠ deployed ≠ seeded ≠ working" — confirm the row landed AND the consuming
+   worker picked it up AND the mechanism actually emits) and record every attempt, not
+   just resolving ones:
+
+   ```bash
+   node ~/.claude/scripts/seed-state-client.mjs event <seedItemId> \
+     '{"outcome":"applied","evidence":"<what was authored + how verified>"}'
+   ```
+
+   `outcome` is `applied` (authored, reconcile/capture not yet fully confirmed),
+   `confirmed` (reconcile + capture verified — resolves the item), or `blocked` (could
+   not apply — **must** carry `filedFollowon`, the id of the follow-on filed for the
+   blocker; the server rejects a `blocked` event without one). Include `evidence`
+   (freeform) and `operator` when known.
+4. **Loop** — repeat 2–3 until `readiness` reports `green`, or the operator stops for the
+   session; remaining seeds stay `pending`/`applied` and nothing is lost, state persists
+   server-side.
+
+**What this replaces:** it does not fetch or parse the config-seed task's body as the seed
+worklist, and it does not bulk-load a milestone's full seed set.
+
+**Built, not activated.** This ships in the skill now, and `seed-state-client.mjs` is
+vendored to `~/.claude/scripts` (via the `/sync-guidelines` skill), but the seed-activation
+task still owns confirming it runs live end-to-end for a real milestone — do not fold
+that actuation here.
 
 ## Flow
 
@@ -282,25 +357,28 @@ Rules that make it safe:
    Operational → *operational execution phase*). **It isn't only writes that trip the auto-mode
    classifier — break-glass reads (fetching a DSN from `/etc/…` secrets) and daemon restarts do
    too**; scope the up-front authorization to all three.
-2. **Load context deterministically — run the `ops-load.mjs` loader.** It is the sanctioned Flow-2
-   loader (sister to `groom-load.mjs` / `design-load.mjs`):
-   `node ~/.claude/scripts/ops-load.mjs --milestone <M> --project <dir>` (env auto-resolves from the
-   manifest's `notion_env`). It deterministically (a) loads the fixed context pages — the **master
-   Project Context page + the source-of-truth docs** (findings / retrospective / architecture /
-   guidelines), surfaced in `context-bundle.json`; (b) enumerates the 🔧 Operational / 🔎 Investigation
-   tasks — **plus observational / E2E 🧪 Testing folded in as an Investigation variant** (mode
-   `investigation`, flavor `testing`), while **excluding test-authoring** Testing to the
-   `test_authoring` triage list (reclassify → 💻 Code) — into `ops-worklist.json`; and (c)
-   pre-seeds + reconciles the journal `ops-state.json` — one entry per **eligible** (Ready /
-   In-Progress) task at `state:"pending"`, preserving prior worked fields and **trimming** entries
-   whose task is now Done / off-board. Everything lands in
-   `config/projects/<dir>/.ops-cache/<milestone>/`. Then also `Read` the project's `context.md`
-   (write paths, prod/deploy, operator read-surface & break-glass). **Do not hand-load a partial
-   subset** — skipping the master page / source-of-truth docs is the #1 load failure the loader
-   exists to prevent. (If the loader is truly unavailable, load all of the above by hand — and record
-   what you loaded as a `context_loaded: [...]` list in `ops-state.json`.) **This load is a
-   precondition: `context-bundle.json` (loader) — or a non-empty `context_loaded` (hand-load) — MUST
-   exist before you interpret any zero/anomaly.** A missing loader must never silently become a
+2. **Load context deterministically — call the ops-context backend route.** It is the sanctioned
+   Flow-2 load, now served in-process by the backend instead of a vendored shell-out:
+   `node ~/.claude/scripts/ops-client.mjs context --milestone <M> --project <dir>` (wraps
+   `GET /api/ops-context?milestone=<M>&project=<dir>`; loopback + device-authed — set
+   `ORCHESTRATOR_DEVICE_TOKEN` in the session env first). It deterministically (a) loads the fixed
+   context pages — the **master Project Context page + the source-of-truth docs** (findings /
+   retrospective / architecture / guidelines), returned in the response's `contextPages`; (b)
+   enumerates the 🔧 Operational / 🔎 Investigation tasks — **plus observational / E2E 🧪 Testing
+   folded in as an Investigation variant** (mode `investigation`, flavor `testing`), while
+   **excluding test-authoring** Testing to the `worklist.test_authoring` triage list (reclassify →
+   💻 Code) — into `worklist.executable` / `dep_blocked` / `needs_grooming` / `closed_not_done`; and
+   (c) pre-seeds + reconciles the `ops_journal` DB table server-side — one row per **eligible**
+   (Ready / In-Progress) task at `state:"pending"`, preserving prior worked fields and **trimming**
+   rows whose task is now Done / off-board (same job the old loader did to its on-disk journal, now
+   done to the DB on every call — see `reconcileJournal` in
+   `packages/backend/src/ops/opsLoad.ts` / `opsJournal.ts`). Then also `Read` the project's
+   `context.md` (write paths, prod/deploy, operator read-surface & break-glass). **Do not hand-load a
+   partial subset** — skipping the master page / source-of-truth docs is the #1 load failure this
+   route exists to prevent. (If the route is truly unreachable, load all of the above by hand — and
+   record what you loaded as a `context_loaded: [...]` note for the run.) **This load is a
+   precondition: a successful `ops-context` response — or a hand-load with `context_loaded` recorded
+   — MUST exist before you interpret any zero/anomaly.** A failed call must never silently become a
    skipped load; that is exactly how the master Project Context + source-of-truth docs get skipped.
 3. **First-pass — work every eligible task. Mandatory in every context, before resolving any one.**
    Order doesn't matter *here*. Respect `Depends On` (only ✅ Done
@@ -317,14 +395,15 @@ Rules that make it safe:
    stall the run.
 
    > **GATE — do not start step 5 (resolving) until step 3 has advanced _every_ journal entry off
-   > `pending`.** `ops-load.mjs` seeds one entry per eligible task at `pending`; the first-pass must
-   > move each to a worked state (`candidate` / `staged-proposal` / `applied-pending-confirm` /
-   > `blocked` / `incident-frozen`). The dominant failure is grabbing the first interesting task and
-   > resolving it before the rest are diagnosed — resist it; the cost is an uninformed order and
-   > missed cross-task context. **Any `pending` entry means the first-pass isn't done.**
+   > `pending`.** The ops-context load seeds one `ops_journal` row per eligible task at `pending`;
+   > the first-pass must move each to a worked state (`candidate` / `staged-proposal` /
+   > `applied-pending-confirm` / `blocked` / `incident-frozen`) via `ops-client.mjs set-state`. The
+   > dominant failure is grabbing the first interesting task and resolving it before the rest are
+   > diagnosed — resist it; the cost is an uninformed order and missed cross-task context. **Any
+   > `pending` entry means the first-pass isn't done.**
 4. **Present the overview + a suggested review order.** Open with the **coverage line — "N eligible ·
-   N advanced off `pending`"** (they must match; any entry still `pending` in `ops-state.json` means
-   step 3 isn't finished — go back). Summarize: what's staged, what's blocked
+   N advanced off `pending`"** (they must match; any entry still `pending` in
+   `ops-client.mjs journal --milestone <M>`'s output means step 3 isn't finished — go back). Summarize: what's staged, what's blocked
    and on what, what was filed, incidents frozen. Then propose a review order (like `design`),
    favoring in this priority:
    1. **Incidents / blockers** — safety, first eyes.
@@ -412,6 +491,6 @@ review; the next task opens in its own message *after* this one is confirmed.
 **Dispositions land on the board, not only the journal.** The journal is **evidence**; the board is
 **truth**. Any disposition that changes how a task should be groomed, worked, or run — *supersede,
 re-scope, defer, "don't run as-is"* — must be written to the **task page** (body / Notes + the
-proposed status) once confirmed. Recording it only in `ops-state.json` is a **silent loss**: /groom
+proposed status) once confirmed. Recording it only in `ops_journal` is a **silent loss**: /groom
 and future workers never read the journal. *(Autonomous stages the disposition as a candidate in the
 journal; the interactive pass lands it on the board.)*

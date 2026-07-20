@@ -31,6 +31,7 @@ import { Settings } from './components/Settings';
 import { UpdateBanner } from './components/UpdateBanner';
 import { RateLimitBanner } from './components/RateLimitBanner';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
+import { GateReadinessPanel } from './components/GateReadinessPanel';
 import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
 import { SessionFilterBar } from './components/SessionFilterBar';
@@ -1348,6 +1349,7 @@ export default function App() {
                           sessions={sessions}
                           onClose={() => history.back()}
                           projectId={activeProjectId ?? undefined}
+                          boardId={activeBoardId}
                           project={
                             projects.find((p) => p.id === activeProjectId) ??
                             null
@@ -1554,6 +1556,14 @@ export default function App() {
           <ErrorBoundary name="AnalyticsView">
             <div className={styles.analyticsView}>
               <AnalyticsPanel activeProjectId={activeProjectId} />
+            </div>
+          </ErrorBoundary>
+        )}
+
+        {topView === 'gate' && (
+          <ErrorBoundary name="GateReadinessView">
+            <div className={styles.analyticsView}>
+              <GateReadinessPanel activeProjectId={activeProjectId} />
             </div>
           </ErrorBoundary>
         )}

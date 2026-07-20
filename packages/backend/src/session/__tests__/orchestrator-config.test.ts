@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { loadOrchestratorConfig } from '../orchestrator-config';
+import {
+  loadOrchestratorConfig,
+  getSessionAllowedTools,
+} from '../orchestrator-config';
 
 describe('loadOrchestratorConfig', () => {
   let tmpDir: string;
@@ -159,5 +162,31 @@ describe('loadOrchestratorConfig', () => {
 
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.autofix_skip_ci).toBe(true);
+  });
+});
+
+describe('getSessionAllowedTools', () => {
+  it('merges base ALLOWED_TOOLS with per-project allowed_tools', () => {
+    const merged = getSessionAllowedTools({
+      allowed_tools: ['Bash(custom:*)'],
+    });
+    expect(merged).toContain('Bash(git:*)');
+    expect(merged).toContain('Bash(custom:*)');
+  });
+
+  it('grants no Notion tool — read or write — to orchestrator-launched sessions', () => {
+    const merged = getSessionAllowedTools({ allowed_tools: [] });
+    expect(merged.some((t) => t.startsWith('mcp__claude_ai_Notion__'))).toBe(
+      false,
+    );
+  });
+
+  it('still excludes Notion tools when a project grants extra allowed_tools', () => {
+    const merged = getSessionAllowedTools({
+      allowed_tools: ['Bash(custom:*)'],
+    });
+    expect(merged.some((t) => t.startsWith('mcp__claude_ai_Notion__'))).toBe(
+      false,
+    );
   });
 });

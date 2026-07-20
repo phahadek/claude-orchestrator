@@ -49,6 +49,12 @@
   color: var(--accent);
 }
 
+.navLinkIcon {
+  padding: 4px 8px;
+  font-size: 0.9375rem;
+  line-height: 1;
+}
+
 .divider {
   width: 1px;
   height: 20px;
@@ -84,7 +90,7 @@
 .autoLaunchPill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   background: #313244;
   border: 1px solid #45475a;
   border-radius: 999px;
@@ -121,14 +127,10 @@
   border-color: var(--accent, #89b4fa);
 }
 
-.autoLaunchLabel {
-  font-weight: 500;
-}
-
-.autoLaunchState {
-  font-weight: 700;
+.autoLaunchCounterText {
+  font-weight: 600;
   font-size: 0.75rem;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
 }
 
 .tokenSummary {
@@ -150,26 +152,17 @@
   background: var(--bg-elevated, #313244);
 }
 
-.autoLaunchCounter {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: var(--accent-dim, #313a55);
-  border: 1px solid var(--accent, #89b4fa);
-  border-radius: 999px;
-  color: var(--accent, #89b4fa);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  padding: 4px 12px;
-  white-space: nowrap;
-  cursor: default;
-  user-select: none;
-}
-
 .autoLaunchQueued {
   color: var(--color-yellow, #f9e2af);
   font-size: 0.75rem;
   font-weight: 500;
+}
+
+.tokenStack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
 }
 
 .incompleteBadge {

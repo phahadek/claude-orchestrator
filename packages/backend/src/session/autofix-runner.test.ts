@@ -34,6 +34,24 @@ async function setupTestRepo(): Promise<{
   await git(['add', 'readme.txt'], worktreeDir);
   await git([...GIT_AUTHOR, 'commit', '-m', 'init'], worktreeDir);
   await git(['branch', '-M', 'feature/test'], worktreeDir);
+
+  // runAutofix (default baseBranch = 'dev') now unconditionally computes the
+  // PR's changed-file set via `git diff --name-only dev...HEAD` and scopes
+  // `git add` to those paths. Create a 'dev' branch at the initial commit, then
+  // add a placeholder commit on feature/test that already touches the file the
+  // autofix command will rewrite, so it's part of the "PR-owned" changed-file
+  // set the autofix commit is allowed to stage.
+  await git(['branch', 'dev'], worktreeDir);
+  fs.writeFileSync(
+    path.join(worktreeDir, 'autofix_output.txt'),
+    'placeholder\n',
+  );
+  await git(['add', 'autofix_output.txt'], worktreeDir);
+  await git(
+    [...GIT_AUTHOR, 'commit', '-m', 'add placeholder autofix_output.txt'],
+    worktreeDir,
+  );
+
   await git(['push', '-u', 'origin', 'feature/test'], worktreeDir);
 
   return {

@@ -3,8 +3,10 @@ import type { RequestHandler } from 'express';
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { DataDirConfigSource } from '../config/DataDirConfigSource';
-import { getOrchestratorConfig } from '../config/appConfig';
+import {
+  getOrchestratorConfig,
+  writeOrchestratorConfig,
+} from '../config/appConfig';
 import { claudeCredentialsPath } from '../config/credentialsPath';
 import { countProjects } from '../db/queries';
 import type { DeepPartial, OrchestratorConfig } from '../config/types';
@@ -240,13 +242,12 @@ router.post('/setup/import', (req, res) => {
   }
 
   const parsed = parseEnvFile(content);
-  const src = new DataDirConfigSource();
   const imported: string[] = [];
 
   for (const [key, mapper] of Object.entries(ENV_KEY_MAP)) {
     if (key in parsed && parsed[key]) {
       const partial = mapper(parsed[key]);
-      src.write(partial);
+      writeOrchestratorConfig(partial);
       // Collect the dotted config key(s) imported
       const section = Object.keys(partial)[0] as keyof OrchestratorConfig;
       const fields = Object.keys(partial[section] as object);
@@ -270,23 +271,21 @@ router.post('/setup/save-credentials', (req, res) => {
     githubToken?: string;
     notionApiKey?: string;
   };
-  const src = new DataDirConfigSource();
-  const partial: Parameters<typeof src.write>[0] = {};
+  const partial: DeepPartial<OrchestratorConfig> = {};
   if (typeof githubToken === 'string' && githubToken) {
     partial.github = { token: githubToken };
   }
   if (typeof notionApiKey === 'string' && notionApiKey) {
     partial.notion = { apiKey: notionApiKey };
   }
-  src.write(partial);
+  writeOrchestratorConfig(partial);
   res.json({ ok: true });
 });
 
 // ── Complete / Skip ───────────────────────────────────────────────────────────
 
 router.post('/setup/complete', (_req, res) => {
-  const src = new DataDirConfigSource();
-  src.write({ setupComplete: true } as Parameters<typeof src.write>[0]);
+  writeOrchestratorConfig({ setupComplete: true });
   res.json({ ok: true });
 });
 

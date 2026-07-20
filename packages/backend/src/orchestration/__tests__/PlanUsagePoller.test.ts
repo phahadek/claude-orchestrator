@@ -130,4 +130,52 @@ describe('PlanUsagePoller', () => {
     expect(poller.getCache()).toEqual({ available: false });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('retains and re-serves the last-good snapshot across transient failures, only clearing after the threshold', async () => {
+    mockReadFileSync.mockReturnValue(VALID_CREDS);
+    mockFetch(SAMPLE_PAYLOAD);
+
+    const broadcast = vi.fn();
+    const poller = new PlanUsagePoller(broadcast);
+    await poller.poll();
+    const good = poller.getCache();
+    expect(good).toEqual(expect.objectContaining({ available: true }));
+
+    mockFetch({}, 500);
+
+    await poller.poll();
+    expect(poller.getCache()).toEqual({ ...good, stale: true });
+
+    await poller.poll();
+    expect(poller.getCache()).toEqual({ ...good, stale: true });
+
+    await poller.poll();
+    expect(poller.getCache()).toEqual({ ...good, stale: true });
+
+    // Fourth consecutive transient failure exceeds the threshold (N = 3).
+    await poller.poll();
+    expect(poller.getCache()).toEqual({ available: false });
+  });
+
+  it('emits unavailable immediately and resets lastGood on a definitive-unavailable signal (401)', async () => {
+    mockReadFileSync.mockReturnValue(VALID_CREDS);
+    mockFetch(SAMPLE_PAYLOAD);
+
+    const broadcast = vi.fn();
+    const poller = new PlanUsagePoller(broadcast);
+    await poller.poll();
+    expect(poller.getCache()).toEqual(
+      expect.objectContaining({ available: true }),
+    );
+
+    mockFetch({}, 401);
+    await poller.poll();
+    expect(poller.getCache()).toEqual({ available: false });
+
+    // A subsequent transient failure should not resurrect the old snapshot,
+    // since the definitive signal reset lastGood.
+    mockFetch({}, 500);
+    await poller.poll();
+    expect(poller.getCache()).toEqual({ available: false });
+  });
 });

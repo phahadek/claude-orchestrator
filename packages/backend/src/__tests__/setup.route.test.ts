@@ -42,6 +42,7 @@ import {
 import {
   _setConfigSourceForTesting,
   _resetAppConfigCache,
+  getOrchestratorConfig,
 } from '../config/appConfig.js';
 
 const mockedCountProjects = countProjects as MockedFunction<
@@ -112,6 +113,82 @@ describe('GET /api/setup/status', () => {
     const res = await supertest(buildApp()).get('/api/setup/status');
     expect(res.body.missing).toContain('github.token');
     expect(res.body.missing).not.toContain('notion.apiKey');
+  });
+});
+
+// ── Setup writes invalidate the config cache (no restart required) ────────────
+
+describe('setup writes bust the config cache', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-setup-cache-'));
+    mockedGetDataDir.mockReturnValue(tmpDir);
+    _setConfigSourceForTesting(new DataDirConfigSource(tmpDir));
+  });
+
+  afterEach(() => {
+    _resetAppConfigCache();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  it('POST /setup/complete makes GET /setup/status report setupNeeded=false without a restart', async () => {
+    // Prime the cache with the pre-complete config, as the running process would have.
+    const before = await supertest(buildApp()).get('/api/setup/status');
+    expect(before.body.setupNeeded).toBe(true);
+
+    const app = buildApp();
+    const complete = await supertest(app).post('/api/setup/complete');
+    expect(complete.status).toBe(200);
+    expect(complete.body.ok).toBe(true);
+
+    const after = await supertest(app).get('/api/setup/status');
+    expect(after.body.setupNeeded).toBe(false);
+  });
+
+  it('POST /setup/save-credentials makes getOrchestratorConfig() reflect the new tokens without a restart', async () => {
+    // Prime the cache with the pre-save config.
+    const primed = await supertest(buildApp()).get('/api/setup/status');
+    expect(primed.body.missing).toContain('github.token');
+    expect(primed.body.missing).toContain('notion.apiKey');
+
+    const res = await supertest(buildApp())
+      .post('/api/setup/save-credentials')
+      .send({
+        githubToken: 'ghp-saved',
+        notionApiKey: 'ntn-saved',
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    const cfg = getOrchestratorConfig();
+    expect(cfg.github.token).toBe('ghp-saved');
+    expect(cfg.notion.apiKey).toBe('ntn-saved');
+  });
+
+  it('POST /setup/import makes getOrchestratorConfig() reflect imported values without a restart', async () => {
+    const envFile = path.join(tmpDir, '.env');
+    fs.writeFileSync(
+      envFile,
+      ['GITHUB_TOKEN=ghp-from-import', 'NOTION_API_KEY=ntn-from-import'].join(
+        '\n',
+      ),
+      'utf8',
+    );
+
+    // Prime the cache with the pre-import config.
+    const primed = await supertest(buildApp()).get('/api/setup/status');
+    expect(primed.body.missing).toContain('github.token');
+
+    const res = await supertest(buildApp())
+      .post('/api/setup/import')
+      .send({ path: envFile });
+    expect(res.status).toBe(200);
+
+    const cfg = getOrchestratorConfig();
+    expect(cfg.github.token).toBe('ghp-from-import');
+    expect(cfg.notion.apiKey).toBe('ntn-from-import');
   });
 });
 

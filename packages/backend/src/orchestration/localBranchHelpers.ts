@@ -1,5 +1,6 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { recoverStaleIndexLock } from './staleIndexLock';
 
 const execFileAsync = promisify(execFile);
 
@@ -7,6 +8,7 @@ async function gitExec(
   args: string[],
   cwd: string,
 ): Promise<{ stdout: string; stderr: string }> {
+  await recoverStaleIndexLock(cwd);
   return execFileAsync('git', args, { cwd });
 }
 
@@ -50,31 +52,23 @@ export async function hasNonEmptyDiff(
 
 /**
  * Returns true when merging featureBranch into baseBranch would produce conflicts.
- * Checks out baseBranch, runs git merge --no-commit --no-ff <featureBranch>,
- * then runs git merge --abort to restore the worktree to the pre-merge state
- * (on baseBranch with no in-progress merge).
+ * Checkout-free: uses `git merge-tree --write-tree` to compute the merge
+ * result without touching any working tree or index, so this is safe to call
+ * even when baseBranch is checked out in another worktree (e.g. the
+ * project's primary working tree).
  */
 export async function detectMergeConflict(
   worktreePath: string,
   baseBranch: string,
   featureBranch: string,
 ): Promise<boolean> {
-  await gitExec(['checkout', baseBranch], worktreePath);
-
-  let hasConflict = false;
   try {
     await gitExec(
-      ['merge', '--no-commit', '--no-ff', featureBranch],
+      ['merge-tree', '--write-tree', baseBranch, featureBranch],
       worktreePath,
     );
+    return false;
   } catch {
-    // Non-zero exit = merge had conflicts
-    hasConflict = true;
+    return true;
   }
-
-  // Abort the in-progress merge to restore worktree to clean baseBranch state.
-  // Ignore errors when there is no in-progress merge (e.g. "Already up to date").
-  await gitExec(['merge', '--abort'], worktreePath).catch(() => {});
-
-  return hasConflict;
 }

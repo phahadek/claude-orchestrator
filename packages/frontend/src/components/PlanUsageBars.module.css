@@ -28,3 +28,7 @@
 .severityCritical {
   background: var(--color-red, #f38ba8);
 }
+
+.stale {
+  opacity: 0.5;
+}

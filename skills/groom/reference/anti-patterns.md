@@ -12,7 +12,7 @@ code (or its code-map digest) before declaring an open question resolved.
 
 **Skipping / compressing Step 1.** The deterministic load is large and front-loaded,
 so a single agent under context pressure shortcuts it and "decides whatever." That
-is the entire reason `groom-load.mjs` exists — let it do the load; don't hand-fetch.
+is the entire reason the Step 1 loader route exists — let it do the load; don't hand-fetch.
 
 **Shelling out a throwaway script to edit the cache/state files.** `grooming-state.json`
 and `code-map.json` are loader-seeded JSON on disk. Writing a one-off
@@ -37,8 +37,9 @@ consult to know what blocks a task. Sequencing prose written into the task
 body — _"Best worked after the X task"_, _"Pick up last in M9"_, a numbered
 ordering in the Context section — is invisible to downstream sessions. They
 read the property; they don't re-read the body for hidden ordering. If you
-locked sequencing during grooming, it MUST be reflected in the property at
-the same `notion-update-page` call that flips the task to 🗂️ Ready (Step 4).
+locked sequencing during grooming, it MUST be reflected in the property via a
+`task.setDependsOn` intent staged with the same `groupId` as the `task.setStatus`
+call that flips the task to 🗂️ Ready (Step 4).
 A common variant of this failure: writing the sequence to the body during
 the batch discussion and then "remembering to mirror it to the property
 later" — by which point the task is already at Ready and downstream
@@ -68,35 +69,36 @@ the classification down and not naming it in the header. The 500-LoC bound only
 constrains behavior when sessions present and lock the estimate; otherwise it
 silently dilutes.
 
-**Stripping a task's runtime item from the body but never accreting it to the Gate
-(the "stripped-then-dropped" pattern).** Code/Tooling tasks are required to strip their
-runtime / launch-and-observe manual items and note _"Covered by the Manual Verification
-Gate."_ But stripping is only half the contract — the stripped items must **land on the
-milestone 🚦 Gate** during grooming (Step 4 — Gate accretion). When the groomer strips
-without accreting, the item vanishes entirely: absent from the task body (which now says
-"Covered by gate") and absent from the Gate (never appended). No coverage audit can find
-it; the manual tester never runs it. This already produced a real gap: an M9
-PowerShell-5.1 launch-script check was stripped from a task body but never landed on the
-Gate — discovered only by a 2026-06-29 coverage audit. The promotion hook now blocks
-this: `gate_contribution: null` on a Code/Tooling task prevents the Ready-flip until the
-groomer either records the accreted items (`{ "gate_task_id": "…", "items": […],
-"appended_at": "…" }`) or explicitly records `{ "decision": "none" }` to confirm the
-task has no standalone runtime item.
+**Stripping a task's runtime item from the body but never accreting it to the gate
+store (the "stripped-then-dropped" pattern).** Code/Tooling tasks are required to strip
+their runtime / launch-and-observe manual items and note _"Covered by the Manual
+Verification Gate."_ But stripping is only half the contract — the stripped items must
+**land on the milestone gate store** during grooming (Step 4 — Gate accretion, via the
+`gate-state-client.mjs accrete` route call). When the groomer strips without accreting,
+the item vanishes entirely: absent from the task body (which now says "Covered by
+gate") and absent from the gate store (never accreted). No coverage audit can find it;
+the manual tester never runs it. This already produced a real gap: an M9 PowerShell-5.1
+launch-script check was stripped from a task body but never landed on the Gate —
+discovered only by a 2026-06-29 coverage audit. The promotion gate now blocks this: a
+missing `gate_accretion` marker on a Code/Tooling task prevents the Ready-flip until the
+groomer either accretes the items (`{"classification": "<tier>", "items": [{"text":
+"…"}]}`) or explicitly accretes `{"classification": "none"}` to confirm the task has no
+standalone runtime item.
 
 **Leaving a task's operational seed in an inline note but never accreting it to the
-config-seed task (the "seeded-then-dropped" pattern).** The operational twin of
+seed store (the "seeded-then-dropped" pattern).** The operational twin of
 stripped-then-dropped. A Code/Tooling task frequently ships pure dispatchable code plus a
 prod-data/config seed (an `analyzer_configs` row, config defaults, alias/cohort flags)
 that is _correctly_ kept out of the auto-dispatched PR. Left as a free-floating "applied
 operationally on prod" note, that seed is owned by no one: after merge the code sits dark
 until someone hand-seeds it (the "Done ≠ deployed ≠ seeded ≠ working" / silent-0 class).
-The seed must **land on the milestone config-seed task** during grooming (Step 4 — Seed
-accretion), with a back-reference on the source task. Observed grooming M13 (~17 scattered
-inline seed notes, fixed by hand). The promotion hook now blocks this: `seed_contribution:
-null` on a Code/Tooling task prevents the Ready-flip until the groomer either records the
-accreted seeds (`{ "seed_task_id": "…", "seeds": […], "appended_at": "…" }` — the array
-field is `seeds`, **not** the gate's `items`) or explicitly records `{ "decision": "none" }`
-to confirm the task has no operational seed.
+The seed must **land on the milestone seed store** during grooming (Step 4 — Seed
+accretion, via the `seed-state-client.mjs accrete` route call). Observed grooming M13
+(~17 scattered inline seed notes, fixed by hand). The promotion gate now blocks this: a
+missing `seed_accretion` marker on a Code/Tooling task prevents the Ready-flip until the
+groomer either accretes the seeds (`{"decision": "seeds", "seeds": [{"spec": "…"}]}` —
+the array field is `seeds`, **not** the gate's `items`) or explicitly accretes
+`{"decision": "none"}` to confirm the task has no operational seed.
 
 **Promoting oversized Code/Tooling tasks without splitting.** The temptation is
 to wave a 1,200-LoC task through because it _"feels coherent"_ — but a Code task

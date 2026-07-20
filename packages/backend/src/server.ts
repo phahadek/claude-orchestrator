@@ -64,21 +64,36 @@ import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiv
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
 import { Scheduler } from './orchestration/Scheduler';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
+import { register as registerGateReconciler } from './gate/gateReconciler';
+import { registerGateMergeConsumer } from './gate/gateMergeConsumer';
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
 import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
+import { createDeployRouter, setDeployScheduler } from './routes/deploy';
 import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
+import { createStagedIntentsRouter } from './routes/stagedIntents';
+import { createTaskIntentsRouter } from './routes/taskIntents';
+import { createOpsJournalRouter } from './routes/opsJournal';
+import { createGateStateRouter } from './routes/gateState';
+import { createSeedStateRouter } from './routes/seedState';
+import { createGroomContextRouter } from './routes/groomContext';
+import { createMergeCandidatesRouter } from './routes/mergeCandidates';
+import { createOpsContextRouter } from './routes/opsContext';
+import { createOpsLaunchRouter } from './routes/opsLaunch';
+import { OpsSessionLauncher } from './orchestration/OpsSessionLauncher';
 import { runBootSequence, getActiveBootTracker } from './bootSequence';
 import { logger } from './logger';
 import {
   handleUncaughtException,
   handleUnhandledRejection,
 } from './audit/recordFault';
+import { setupSessionCgroup } from './session/sessionCgroup';
 
 runMigrations(db);
 loadRuntimeSettingsFromDb();
+setupSessionCgroup();
 importProjectsFromEnv(process.env.PROJECTS);
 
 const _cm = getCorporateMode();
@@ -129,6 +144,11 @@ const app = express();
 app.use(express.json());
 // Public enrollment routes (bootstrap, request, status) — no token required
 app.use('/api/enrollment', createPublicEnrollmentRouter());
+// Loopback-only session stage endpoint: authed by its own scoped session
+// credential (never a device token), so it is mounted ahead of
+// requireDeviceAuth deliberately — it must stay reachable only via
+// requireSessionStageAuth, never fall back to the device-auth surface.
+app.use('/api', createTaskIntentsRouter());
 // Setup endpoints are public — wizard UI uses them before credentials exist
 app.use('/api', setupRouter);
 // Gate all other /api routes when setup has not been completed
@@ -165,6 +185,8 @@ const autoMerger = new AutoMerger(
 prMergeWatcher.setAutoMerger(autoMerger);
 prMergeWatcher.setPRReviewService(prReviewService);
 prMergeWatcher.setReviewOrchestrator(reviewOrchestrator);
+// Gate consumes the merge-completion signal; PRMergeWatcher stays unaware of gate state.
+registerGateMergeConsumer(prMergeWatcher);
 prReviewService.setAutoMerger(autoMerger);
 setAutoMerger(autoMerger);
 const reviewerCommentsWatcher = new ReviewerCommentsWatcher(
@@ -191,6 +213,16 @@ app.use('/api', configRouter);
 app.use('/api', updateRouter);
 app.use('/api/diagnostics', createDiagnosticsRouter());
 app.use('/api', createPlanUsageRouter());
+app.use('/api', createStagedIntentsRouter());
+app.use('/api', createOpsJournalRouter());
+app.use('/api', createGateStateRouter());
+app.use('/api', createDeployRouter());
+app.use('/api', createSeedStateRouter());
+app.use('/api', createGroomContextRouter());
+app.use('/api', createMergeCandidatesRouter());
+app.use('/api', createOpsContextRouter());
+const opsSessionLauncher = new OpsSessionLauncher(sessionManager);
+app.use('/api', createOpsLaunchRouter(opsSessionLauncher));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')),
@@ -221,6 +253,7 @@ setEnrollmentBroadcast(broadcast);
 const scheduler = new Scheduler();
 scheduler.setBroadcast(broadcast);
 setScheduler(scheduler);
+setDeployScheduler(scheduler);
 // Bound retention: prune scheduler_audit to last 1000 rows per job, daily.
 scheduler.register({
   name: 'scheduler_audit_pruner',
@@ -360,6 +393,10 @@ updateChecker.register(scheduler);
 
 // Register all periodic sweepers with the Scheduler.
 autoLauncher.register(scheduler);
+opsSessionLauncher.register(scheduler);
+// Local-branch merge sweep — independent of GitHub/PRMergeWatcher so
+// local-only projects (no PR) still get approved branches squash-merged.
+autoMerger.register(scheduler);
 orphanedTaskSweeper.register(scheduler);
 stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
@@ -367,6 +404,12 @@ sessionEventsPruner.register(scheduler);
 stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 registerWorktreeReconciler(scheduler);
+// Gate-verification reconciler: built but not activated (no-coexistence rule) —
+// gated off by runtimeSettings.gate_verification_enabled until an operator
+// opts in. /api/deploy/report-in triggers this job immediately on report
+// (event-driven, nothing polled) but the same enabled flag still applies —
+// a report while disabled is a no-op tick.
+registerGateReconciler(scheduler);
 
 void runBootSequence({
   jsonlReader,

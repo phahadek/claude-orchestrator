@@ -8,6 +8,14 @@ interface Props {
   /** Non-code, not-Done tasks across all statuses (ready, backlog, in_progress, etc). */
   tasks: TaskView[];
   onSelectTask: (taskId: string) => void;
+  /** When provided, 🔲 Backlog-status tasks render a checkbox (Groom selection mode). */
+  groomCheckedIds?: Set<string>;
+  onGroomCheckChange?: (taskId: string, checked: boolean) => void;
+  /** When provided, tasks matching isOpsEligible render an Ops(N) selection checkbox — takes
+   * precedence over the Groom checkbox when a task qualifies for both. */
+  opsCheckedIds?: Set<string>;
+  onOpsCheckChange?: (taskId: string, checked: boolean) => void;
+  isOpsEligible?: (task: TaskView) => boolean;
 }
 
 const TYPE_ORDER = [
@@ -44,7 +52,15 @@ function sortTypes(types: string[]): string[] {
 }
 
 /** One summary card per non-code Type, each expandable into its remaining (not-Done) tasks. */
-export function NonCodeTypeSection({ tasks, onSelectTask }: Props) {
+export function NonCodeTypeSection({
+  tasks,
+  onSelectTask,
+  groomCheckedIds,
+  onGroomCheckChange,
+  opsCheckedIds,
+  onOpsCheckChange,
+  isOpsEligible,
+}: Props) {
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
 
   if (tasks.length === 0) return null;
@@ -115,17 +131,35 @@ export function NonCodeTypeSection({ tasks, onSelectTask }: Props) {
 
             {isExpanded && (
               <div className={styles.groupCards}>
-                {typeTasks.map((task) => (
-                  <CompactTaskCard
-                    key={task.taskId}
-                    task={task}
-                    showCheckbox={false}
-                    checked={false}
-                    onCheckChange={() => {}}
-                    onClick={() => onSelectTask(task.taskId)}
-                    showStatus
-                  />
-                ))}
+                {typeTasks.map((task) => {
+                  const opsEligible =
+                    opsCheckedIds !== undefined &&
+                    (isOpsEligible?.(task) ?? false);
+                  const groomable =
+                    !opsEligible &&
+                    groomCheckedIds !== undefined &&
+                    task.displayStatus === 'backlog';
+                  const showCheckbox = opsEligible || groomable;
+                  const checked = opsEligible
+                    ? opsCheckedIds!.has(task.taskId)
+                    : groomable && groomCheckedIds!.has(task.taskId);
+                  const onCheckChange = opsEligible
+                    ? (onOpsCheckChange ?? (() => {}))
+                    : groomable
+                      ? (onGroomCheckChange ?? (() => {}))
+                      : () => {};
+                  return (
+                    <CompactTaskCard
+                      key={task.taskId}
+                      task={task}
+                      showCheckbox={showCheckbox}
+                      checked={checked}
+                      onCheckChange={onCheckChange}
+                      onClick={() => onSelectTask(task.taskId)}
+                      showStatus
+                    />
+                  );
+                })}
               </div>
             )}
           </div>

@@ -11,6 +11,7 @@ import type {
   SessionRunnerOptions,
 } from './SessionRunner';
 import { logger } from '../logger';
+import { placeSessionPid } from './sessionCgroup';
 
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
@@ -46,6 +47,7 @@ export class CliSessionRunner implements ISessionRunner {
       mcpConfigPath,
       systemPromptFilePath,
       disableAutoCompact,
+      extraEnv,
     } = options;
 
     const spawnArgs = [
@@ -92,9 +94,14 @@ export class CliSessionRunner implements ISessionRunner {
         ...process.env,
         BASH_MAX_OUTPUT_LENGTH: String(BASH_MAX_OUTPUT_LENGTH),
         BASH_DEFAULT_TIMEOUT_MS: String(BASH_DEFAULT_TIMEOUT_MS),
+        ...extraEnv,
       },
       ...(process.platform !== 'win32' && { detached: true }),
     });
+
+    if (this.proc.pid) {
+      placeSessionPid(this.proc.pid);
+    }
 
     // Async stdin errors (e.g. EPIPE when the child exits) must not bubble up
     // as unhandled 'error' events on the process.

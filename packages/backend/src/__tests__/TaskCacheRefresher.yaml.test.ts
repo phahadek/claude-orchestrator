@@ -149,7 +149,7 @@ describe('TaskCacheRefresher — YAML reconcile and sourceId routing (M9)', () =
     expect(reconcileOrder).toBeLessThan(listOrder);
   });
 
-  it('passes milestone.sourceId (yaml id) to fetchReadyTasks, not milestone.id (DB PK)', async () => {
+  it('passes milestone.sourceId (yaml id) to fetchReadyTasks, but broadcasts milestone.id (DB PK) as boardId', async () => {
     const yamlProject = makeYamlProject();
     vi.mocked(getAllProjects).mockReturnValue([yamlProject] as never);
 
@@ -169,12 +169,15 @@ describe('TaskCacheRefresher — YAML reconcile and sourceId routing (M9)', () =
 
     await refresher.refreshOnce();
 
+    // fetchReadyTasks still needs the yaml source id to locate the milestone
+    // inside tasks.yaml, but the broadcast (and the board cache key) must use
+    // the DB milestone UUID so it matches the write side and the ws/router read side.
     expect(backend.fetchReadyTasks).toHaveBeenCalledWith('yaml-m1');
     expect(broadcasts).toHaveLength(1);
     expect(broadcasts[0]).toMatchObject({
       type: 'task_cache_updated',
       projectId: 'proj-yaml',
-      boardId: 'yaml-m1',
+      boardId: 'db-uuid-pk',
       taskCount: 1,
     });
   });
@@ -248,7 +251,7 @@ describe('TaskCacheRefresher — YAML reconcile and sourceId routing (M9)', () =
     expect(backend.fetchReadyTasks).toHaveBeenCalledWith('yaml-milestone-sync');
     expect(broadcasts[0]).toMatchObject({
       type: 'task_cache_updated',
-      boardId: 'yaml-milestone-sync',
+      boardId: 'db-uuid',
       taskCount: 1,
     });
   });

@@ -41,8 +41,10 @@ import { detectMergeConflict } from '../orchestration/localBranchHelpers';
 import { formatMergeConflictFeedback } from './reviewUtils';
 import { sendConflictNudge, type ConflictNudgeCause } from './conflictNudge';
 import { logger } from '../logger';
+import type { Scheduler } from '../orchestration/Scheduler';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
+const LOCAL_BRANCH_SWEEP_INTERVAL_MS = 15_000;
 
 /**
  * Drives the post-approval auto-merge flow. After review reaches an approved
@@ -220,6 +222,12 @@ export class AutoMerger {
    * Poll both pull_requests and local_branches for merge-ready items and
    * dispatch to the appropriate merge handler. PRs go through the existing
    * attempt() loop; local branches are squash-merged immediately.
+   *
+   * Nothing in production src/ calls this method directly — the PR path is
+   * driven by PRMergeWatcher/PRReviewService events (attempt()), and the
+   * local-branch path is driven independently by the scheduled
+   * sweepApprovedLocalBranches() job registered via register(). This method
+   * remains for tests and for callers that want both paths swept together.
    */
   async pollOnce(): Promise<void> {
     if (this.pausedUntil !== null) {
@@ -236,12 +244,42 @@ export class AutoMerger {
       this.attempt(pr.pr_number, pr.repo);
     }
 
+    await this.sweepApprovedLocalBranches();
+
+    await this.conflictNudgeSweep();
+  }
+
+  /**
+   * Registers the local-branch merge sweep with the Scheduler, independent of
+   * GitHub/PRMergeWatcher so local-only projects (no PR, no GitHub config)
+   * still get their approved branches squash-merged. Deliberately does NOT
+   * schedule the PR path (getApprovedOpenPRs -> attempt()) here — that path
+   * is already event-driven via PRMergeWatcher/PRReviewService, and attempt()
+   * is idempotent per PR via the `active` set, so scheduling it again here
+   * would be redundant rather than harmful, but keeping the two paths
+   * separate avoids coupling local-branch merging to GitHub polling cadence.
+   */
+  register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'auto_merger_local_branch_sweep',
+      intervalMs: LOCAL_BRANCH_SWEEP_INTERVAL_MS,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.sweepApprovedLocalBranches();
+      },
+    });
+  }
+
+  /**
+   * Squash-merges every approved local branch (project auto_merge_enabled,
+   * review approved, no pause_reason). The only code path that drives
+   * handleLocalBranchMerge() for local-only projects — see register().
+   */
+  async sweepApprovedLocalBranches(): Promise<void> {
     const approvedLocalBranches = getApprovedLocalBranches();
     for (const row of approvedLocalBranches) {
       await this.handleLocalBranchMerge(row);
     }
-
-    await this.conflictNudgeSweep();
   }
 
   private async handleLocalBranchMerge(

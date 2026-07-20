@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { logger } from '../logger';
 import { getProjectById, runtimeSettings } from '../config';
-import { ProjectService, getProjectRepos } from '../projects/ProjectService';
+import { getProjectRepos } from '../projects/ProjectService';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   getTaskCache,
@@ -14,10 +14,12 @@ import {
   setTaskRepoAssignment,
   getPRByNotionTaskId,
   clearTerminalPRFlags,
+  getMilestoneById,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { typedGetSetting } from '../config/settings';
 import type { TaskAggregateRow } from '../db/queries';
+import { planMove, MoveTaskError } from '../orchestration/moveTask';
 import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';
 import type { NotionTask } from '../notion/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
@@ -32,18 +34,6 @@ export interface TasksActiveResponse {
   lastRefreshedAt: number | null;
   stale: boolean;
   coldCache: boolean;
-}
-
-/**
- * The frontend sends milestone row ids as `boardId` after the milestone schema migration.
- * Resolve to the milestone's `source_id` (the Notion database id) for cache key lookup.
- * Falls back to the input value when no matching milestone exists (back-compat for callers
- * that still pass a raw source_id).
- */
-function resolveBoardCacheKey(boardId: string): string {
-  const milestone = ProjectService.getMilestone(boardId);
-  if (milestone?.sourceId) return milestone.sourceId;
-  return boardId;
 }
 
 function getReviewIterationCap(): number {
@@ -403,7 +393,7 @@ export function createTasksRouter(
       return;
     }
 
-    const cacheKey = `board:${resolveBoardCacheKey(boardId)}`;
+    const cacheKey = `board:${boardId}`;
     const boardCacheRow = getTaskCache(cacheKey);
     if (!boardCacheRow) {
       res
@@ -524,8 +514,8 @@ export function createTasksRouter(
         : project.boardId;
 
     // Read the board cache to get the list of task IDs for this board.
-    // boardId arrives as the milestone row id; resolve to the underlying source_id.
-    const cacheKey = `board:${resolveBoardCacheKey(boardId)}`;
+    // boardId is the DB milestone UUID, matching the write-side cache key.
+    const cacheKey = `board:${boardId}`;
     const boardCacheRow = getTaskCache(cacheKey);
 
     // Cold cache: no data yet — return immediately without blocking on Notion.
@@ -721,6 +711,80 @@ export function createTasksRouter(
     } catch (err) {
       res.status(404).json({
         error: err instanceof Error ? err.message : `task not found: ${taskId}`,
+      });
+    }
+  });
+
+  // ── POST /api/tasks/move-preview ────────────────────────────────────────────
+  // Read-only preview for the move confirm UI: runs the same planMove used by
+  // TaskWriteCommands.moveTask (via the source milestone's dependency graph) so
+  // the operator sees the cascade set or refusal reason before staging a
+  // task.move intent through the general staged-intent surface.
+  router.post('/tasks/move-preview', async (req: Request, res: Response) => {
+    const body = req.body as {
+      projectId?: unknown;
+      taskId?: unknown;
+      sourceMilestoneId?: unknown;
+      targetMilestoneId?: unknown;
+    };
+    const projectId = typeof body.projectId === 'string' ? body.projectId : '';
+    const taskId = typeof body.taskId === 'string' ? body.taskId : '';
+    const sourceMilestoneId =
+      typeof body.sourceMilestoneId === 'string' ? body.sourceMilestoneId : '';
+    const targetMilestoneId =
+      typeof body.targetMilestoneId === 'string' ? body.targetMilestoneId : '';
+
+    if (!projectId || !taskId || !sourceMilestoneId || !targetMilestoneId) {
+      res.status(400).json({
+        error:
+          'projectId, taskId, sourceMilestoneId and targetMilestoneId are required',
+      });
+      return;
+    }
+
+    const sourceMilestone = getMilestoneById(sourceMilestoneId);
+    const targetMilestone = getMilestoneById(targetMilestoneId);
+    if (!sourceMilestone || !targetMilestone) {
+      res.status(404).json({ error: 'unknown milestone' });
+      return;
+    }
+
+    let backend: ReturnType<typeof getTaskBackend>;
+    try {
+      backend = getTaskBackend(projectId);
+    } catch {
+      res
+        .status(400)
+        .json({ error: `Cannot resolve backend for project '${projectId}'` });
+      return;
+    }
+
+    try {
+      const sourceGraph = (
+        await backend.fetchReadyTasks(sourceMilestone.id, true)
+      ).map((r) => ({ id: r.task.id, dependsOn: r.task.dependsOn }));
+
+      const plan = planMove({
+        taskId,
+        sourceMilestoneTasks: sourceGraph,
+        isLaterMove:
+          targetMilestone.display_order > sourceMilestone.display_order,
+      });
+
+      res.json({
+        ok: true,
+        isLaterMove:
+          targetMilestone.display_order > sourceMilestone.display_order,
+        cascadeSet: plan.cascadeSet,
+        droppedEdges: plan.droppedEdges,
+      });
+    } catch (err) {
+      if (err instanceof MoveTaskError) {
+        res.status(409).json({ ok: false, error: err.message });
+        return;
+      }
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to preview move',
       });
     }
   });

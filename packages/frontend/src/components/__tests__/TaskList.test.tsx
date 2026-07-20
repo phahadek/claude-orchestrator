@@ -923,6 +923,368 @@ describe('TaskList', () => {
     expect(screen.getByText('Task Alpha')).toBeDefined();
   });
 
+  describe('Groom(N) button', () => {
+    it('does not render when there are no Backlog tasks', () => {
+      renderList([
+        makeTask({
+          taskId: 't1',
+          taskName: 'In Progress Task',
+          displayStatus: 'in_progress',
+        }),
+      ]);
+      expect(screen.queryByTestId('groom-btn')).toBeNull();
+    });
+
+    it('renders on the Backlog section and reflects the selected count', () => {
+      renderList([
+        makeTask({
+          taskId: 'bc1',
+          taskName: 'Backlog Code Task',
+          displayStatus: 'backlog',
+          taskType: '💻 Code',
+        }),
+      ]);
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      expect(groomBtn.textContent).toContain('Groom (0)');
+      expect(groomBtn.disabled).toBe(true);
+
+      fireEvent.click(within(backlogSection).getByRole('checkbox'));
+      expect(groomBtn.textContent).toContain('Groom (1)');
+      expect(groomBtn.disabled).toBe(false);
+    });
+
+    it('Select All selects both code and non-code Backlog tasks', () => {
+      renderList([
+        makeTask({
+          taskId: 'bc1',
+          taskName: 'Backlog Code Task',
+          displayStatus: 'backlog',
+          taskType: '💻 Code',
+        }),
+        makeTask({
+          taskId: 'bn1',
+          taskName: 'Backlog Design Task',
+          displayStatus: 'backlog',
+          taskType: '📐 Design',
+        }),
+      ]);
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      fireEvent.click(
+        within(backlogSection).getByTestId('groom-select-all-btn'),
+      );
+
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      expect(groomBtn.textContent).toContain('Groom (2)');
+    });
+
+    it('clicking Groom(N) shows the StagedIntentPanel placeholder without a network write', () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockClear();
+      renderList([
+        makeTask({
+          taskId: 'bc1',
+          taskName: 'Backlog Code Task',
+          displayStatus: 'backlog',
+          taskType: '💻 Code',
+        }),
+      ]);
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      fireEvent.click(within(backlogSection).getByRole('checkbox'));
+      fireEvent.click(within(backlogSection).getByTestId('groom-btn'));
+
+      expect(screen.getByTestId('groom-placeholder-panel')).toBeDefined();
+      expect(fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Ops(N) button', () => {
+    function mockOpsEndpoints(launched: string[], entries: unknown[]) {
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/ops/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched, deferred: [] }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ entries }),
+          });
+        },
+      );
+    }
+
+    it('does not render when there are no 🔧/🔎/observational-🧪 tasks', () => {
+      renderList([
+        makeTask({
+          taskId: 't1',
+          taskName: 'Code Task',
+          displayStatus: 'in_progress',
+          taskType: '💻 Code',
+        }),
+      ]);
+      expect(screen.queryByTestId('ops-btn')).toBeNull();
+    });
+
+    it('renders a checkbox for each not-Done 🔧/🔎/observational-🧪 task and none for 📝 Docs', () => {
+      renderList(
+        [
+          makeTask({
+            taskId: 'op1',
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+          makeTask({
+            taskId: 'inv1',
+            taskName: 'Investigation Task',
+            displayStatus: 'ready',
+            taskType: '🔎 Investigation',
+          }),
+          makeTask({
+            taskId: 'test1',
+            taskName: 'Observational Test Task',
+            displayStatus: 'in_progress',
+            taskType: '🧪 Testing',
+          }),
+          makeTask({
+            taskId: 'docs1',
+            taskName: 'Docs Task',
+            displayStatus: 'in_progress',
+            taskType: '📝 Docs',
+          }),
+          makeTask({
+            taskId: 'op2',
+            taskName: 'Done Op Task',
+            displayStatus: 'done',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      expect(opsBtn.textContent).toContain('Ops (0)');
+      expect(opsBtn.disabled).toBe(true);
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      fireEvent.click(screen.getByTestId('type-card-header-investigation'));
+      fireEvent.click(screen.getByTestId('type-card-header-testing'));
+      fireEvent.click(screen.getByTestId('type-card-header-docs'));
+
+      expect(
+        screen
+          .getByTestId('type-card-operational')
+          .querySelector('input[type="checkbox"]'),
+      ).not.toBeNull();
+      expect(
+        screen
+          .getByTestId('type-card-investigation')
+          .querySelector('input[type="checkbox"]'),
+      ).not.toBeNull();
+      expect(
+        screen
+          .getByTestId('type-card-testing')
+          .querySelector('input[type="checkbox"]'),
+      ).not.toBeNull();
+      expect(
+        screen
+          .getByTestId('type-card-docs')
+          .querySelector('input[type="checkbox"]'),
+      ).toBeNull();
+
+      fireEvent.click(screen.getByTestId('ops-select-all-btn'));
+      expect(opsBtn.textContent).toContain('Ops (3)');
+    });
+
+    it('clicking Ops(N) launches only the checked subset, not every eligible task', async () => {
+      mockOpsEndpoints(
+        ['op1', 'test1'],
+        [
+          {
+            taskId: 'op1',
+            project: 'proj-1',
+            milestone: 'milestone-1',
+            state: 'candidate',
+            workedIn: 'session-abc',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+          {
+            taskId: 'test1',
+            project: 'proj-1',
+            milestone: 'milestone-1',
+            state: 'candidate',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'op1',
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+          makeTask({
+            taskId: 'inv1',
+            taskName: 'Investigation Task',
+            displayStatus: 'ready',
+            taskType: '🔎 Investigation',
+          }),
+          makeTask({
+            taskId: 'test1',
+            taskName: 'Observational Test Task',
+            displayStatus: 'in_progress',
+            taskType: '🧪 Testing',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      const opTaskCheckbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      fireEvent.click(opTaskCheckbox);
+
+      fireEvent.click(screen.getByTestId('type-card-header-testing'));
+      const testTaskCheckbox = screen
+        .getByTestId('type-card-testing')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(testTaskCheckbox);
+
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      expect(opsBtn.textContent).toContain('Ops (2)');
+
+      fireEvent.click(opsBtn);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('ops-panel')).toBeDefined();
+      });
+
+      const launchCall = (
+        global.fetch as ReturnType<typeof vi.fn>
+      ).mock.calls.find(([url]) => (url as string).includes('/api/ops/launch'));
+      expect(launchCall).toBeDefined();
+      const body = JSON.parse((launchCall![1] as RequestInit).body as string);
+      expect(body.taskIds.sort()).toEqual(['op1', 'test1']);
+    });
+
+    it('does not render an ops panel when nothing launched (empty taskIds)', async () => {
+      mockOpsEndpoints([], []);
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'op1',
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      const checkbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(checkbox);
+
+      fireEvent.click(screen.getByTestId('ops-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('ops-error')).toBeDefined();
+      });
+      expect(screen.queryByTestId('ops-panel')).toBeNull();
+    });
+
+    it('resets the staged ops panel when switching to a different milestone', async () => {
+      mockOpsEndpoints(
+        ['op1'],
+        [
+          {
+            taskId: 'op1',
+            project: 'proj-1',
+            milestone: 'milestone-1',
+            state: 'candidate',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      );
+
+      const task = makeTask({
+        taskId: 'op1',
+        taskName: 'Op Task',
+        displayStatus: 'in_progress',
+        taskType: '🔧 Operational',
+      });
+
+      const { rerender } = render(
+        <TaskList
+          activeProjectId="proj-1"
+          boardId="milestone-1"
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          tasks={[task]}
+          loading={false}
+          onOptimisticDispatch={noopOptimistic}
+          send={noop}
+          project={null}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      const checkbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(checkbox);
+      fireEvent.click(screen.getByTestId('ops-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('ops-panel')).toBeDefined();
+      });
+
+      rerender(
+        <TaskList
+          activeProjectId="proj-1"
+          boardId="milestone-2"
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          tasks={[]}
+          loading={false}
+          onOptimisticDispatch={noopOptimistic}
+          send={noop}
+          project={null}
+        />,
+      );
+
+      expect(screen.queryByTestId('ops-panel')).toBeNull();
+    });
+  });
+
   describe('Sync button — send() boolean return and safety timeout', () => {
     it('clears syncing immediately when send() returns false (WS disconnected)', () => {
       const disconnectedSend = vi.fn().mockReturnValue(false);

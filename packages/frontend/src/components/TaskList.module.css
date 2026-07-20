@@ -257,6 +257,74 @@
   cursor: not-allowed;
 }
 
+.groomBtn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  transition:
+    background-color 0.1s ease,
+    color 0.1s ease;
+}
+
+.groomBtn:hover:not(:disabled) {
+  background: #a855f7;
+  color: #fff;
+  border-color: #a855f7;
+}
+
+.groomBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* No-op groom launch placeholder — stands in for the future groom-session right panel */
+.groomPlaceholderPanel {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+
+.opsBtn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  transition:
+    background-color 0.1s ease,
+    color 0.1s ease;
+}
+
+.opsBtn:hover:not(:disabled) {
+  background: #22c55e;
+  color: #fff;
+  border-color: #22c55e;
+}
+
+.opsBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.error {
+  font-size: 11px;
+  color: var(--color-danger, #ef4444);
+  padding: 2px 2px 4px;
+}
+
+/* Ops(N) staged-intent panel — renders real ops_journal rows fetched from the backend */
+.opsPlaceholderPanel {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+
 /* Wave sub-groups inside Ready section */
 .waveGroup {
   display: flex;

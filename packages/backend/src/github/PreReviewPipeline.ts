@@ -8,6 +8,7 @@ import {
   setPauseReason,
   hasTestResultForSha,
   upsertTestResult,
+  deleteTestResult,
   hasAnalyzeResultForSha,
   upsertAnalyzeResult,
   getAnalyzeResult,
@@ -26,6 +27,7 @@ import type { GitHubClient } from './GitHubClient';
 import type { ReviewJob } from './types';
 import type { ProjectConfig } from '../config';
 import type { PauseReason } from '../db/types';
+import { parsePauseReason } from '../db/pauseReason';
 
 interface GateFailureDetail {
   failedCommand?: string;
@@ -382,6 +384,52 @@ export class PreReviewPipeline {
   }
 
   /**
+   * Actuate a session's verified-flaky disposition on the F2 (orchestrator-run
+   * test) gate: audit + invalidate the permanent per-(pr,repo,sha) test result
+   * row, then re-run the same test commands against the same SHA — no new
+   * commit, no new SHA. Returns null when the project has no F2 tests configured.
+   */
+  async rerunFlakyTests(
+    prNumber: number,
+    repo: string,
+    headSha: string,
+    worktreePath: string,
+    project: ProjectConfig,
+  ): Promise<{ passed: boolean; output: string } | null> {
+    const config = loadOrchestratorConfig(project.projectDir);
+    if (!config.test?.length) return null;
+
+    recordEvent({
+      event_type: 'flake_recovery_f2_invalidated',
+      actor_type: 'system',
+      task_id: null,
+      payload: { prNumber, repo, sha: headSha },
+    });
+    deleteTestResult(prNumber, repo, headSha);
+
+    const { passed, output } = await runTestCommands(
+      worktreePath,
+      config.test,
+      config.test_timeout_sec,
+      (msg) =>
+        logger.info(`[PreReviewPipeline] flaky-rerun PR #${prNumber}: ${msg}`),
+      { maxRssMb: config.test_max_rss_mb, failFast: config.test_fail_fast },
+    );
+    upsertTestResult(prNumber, repo, headSha, passed, output);
+
+    recordEvent({
+      event_type: 'flake_recovery_f2_rerun',
+      actor_type: 'system',
+      task_id: null,
+      payload: { prNumber, repo, sha: headSha, passed },
+    });
+    logger.info(
+      `[PreReviewPipeline] flaky re-run ${passed ? 'PASSED' : 'FAILED'} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
+    );
+    return { passed, output };
+  }
+
+  /**
    * Gate failure handler:
    * 1. setPRReviewResult(verdict)
    * 2. setLastReviewedSha
@@ -546,6 +594,39 @@ export class PreReviewPipeline {
     }
 
     setPreReviewStage(job.prNumber, job.repo, 'awaiting_review');
+    this.clearStalePauseOnSuccess(job);
     return { passed: true };
+  }
+
+  /**
+   * Pauses this pipeline itself sets on gate failure: every stage descriptor's
+   * pauseReason, plus 'autofix_git_infra_failure' which handleGateFailure sets
+   * imperatively (outside the stage array) on git-infra failures.
+   */
+  private gateOwnedPauseReasons(): Set<PauseReason> {
+    const owned = new Set<PauseReason>(['autofix_git_infra_failure']);
+    for (const stage of this.stages) {
+      if (stage.mode === 'gate' && stage.pauseReason) {
+        owned.add(stage.pauseReason);
+      }
+    }
+    return owned;
+  }
+
+  private clearStalePauseOnSuccess(job: ReviewJob): void {
+    const prRow = getPRByNumber(job.prNumber, job.repo);
+    const pauseStruct = parsePauseReason(prRow?.pause_reason ?? null);
+    if (!pauseStruct || !this.gateOwnedPauseReasons().has(pauseStruct.reason)) {
+      return;
+    }
+    setPauseReason(job.prNumber, job.repo, null);
+    logger.info(
+      `[PreReviewPipeline] PR #${job.prNumber}: cleared stale pause_reason=${pauseStruct.reason} after pipeline success`,
+    );
+    this.sessionManager.emit('message', {
+      type: 'pr_pause_cleared',
+      prNumber: job.prNumber,
+      repo: job.repo,
+    });
   }
 }

@@ -11,6 +11,7 @@ const mockSetPreReviewStage = vi.fn();
 const mockSetPauseReason = vi.fn();
 const mockHasTestResultForSha = vi.fn().mockReturnValue(false);
 const mockUpsertTestResult = vi.fn();
+const mockDeleteTestResult = vi.fn();
 const mockHasAnalyzeResultForSha = vi.fn().mockReturnValue(false);
 const mockUpsertAnalyzeResult = vi.fn();
 const mockGetAnalyzeResult = vi.fn().mockReturnValue(null);
@@ -25,6 +26,7 @@ vi.mock('../../db/queries', () => ({
   setPauseReason: (...args: unknown[]) => mockSetPauseReason(...args),
   hasTestResultForSha: (...args: unknown[]) => mockHasTestResultForSha(...args),
   upsertTestResult: (...args: unknown[]) => mockUpsertTestResult(...args),
+  deleteTestResult: (...args: unknown[]) => mockDeleteTestResult(...args),
   hasAnalyzeResultForSha: (...args: unknown[]) =>
     mockHasAnalyzeResultForSha(...args),
   upsertAnalyzeResult: (...args: unknown[]) => mockUpsertAnalyzeResult(...args),
@@ -201,6 +203,94 @@ describe('PreReviewPipeline.run — all stages skipped when no config', () => {
       REPO,
       'awaiting_review',
     );
+  });
+});
+
+describe('PreReviewPipeline.run — clears stale gate-owned pause on success', () => {
+  it('clears pause_reason=analyze_failing to null and emits pr_pause_cleared', async () => {
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({ pause_reason: 'analyze_failing' }),
+    );
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockSetPauseReason).toHaveBeenCalledWith(PR_NUMBER, REPO, null);
+    expect(sm.emit).toHaveBeenCalledWith('message', {
+      type: 'pr_pause_cleared',
+      prNumber: PR_NUMBER,
+      repo: REPO,
+    });
+  });
+
+  it('clears pause_reason=autofix_git_infra_failure to null on success', async () => {
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({ pause_reason: 'autofix_git_infra_failure' }),
+    );
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockSetPauseReason).toHaveBeenCalledWith(PR_NUMBER, REPO, null);
+  });
+
+  it('preserves a non-gate pause (max_reviews) at success time', async () => {
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({ pause_reason: 'max_reviews' }),
+    );
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(true);
+    expect(mockSetPauseReason).not.toHaveBeenCalled();
+    expect(sm.emit).not.toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({ type: 'pr_pause_cleared' }),
+    );
+  });
+
+  it('does not clear pause and keeps existing gate-failure behavior when a gate stage fails', async () => {
+    mockGetPRByNumber.mockReturnValue(
+      makePRRow({ pause_reason: 'analyze_failing' }),
+    );
+    mockLoadOrchestratorConfig.mockReturnValue({
+      verify: [],
+      autofix: [],
+      analyze: ['eslint .'],
+      test: [],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+      analyze_timeout_sec: 300,
+      analyze_max_rss_mb: 0,
+      analyze_fail_fast: true,
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    mockRunTestCommands.mockResolvedValue({
+      passed: false,
+      output: 'lint errors',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.run(makeJob(), makeProject());
+
+    expect(result.passed).toBe(false);
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'analyze_failing',
+    );
+    expect(mockSetPauseReason).not.toHaveBeenCalledWith(PR_NUMBER, REPO, null);
   });
 });
 
@@ -799,5 +889,96 @@ describe('PreReviewPipeline — setPreReviewStage transitions', () => {
     ).mock.calls.map(([, , s]) => s);
     expect(stages).toContain('blocked_verify');
     expect(stages).not.toContain('awaiting_review');
+  });
+});
+
+// ── rerunFlakyTests — F2 verified-flaky actuation ────────────────────────────
+
+describe('PreReviewPipeline.rerunFlakyTests', () => {
+  it('audits + invalidates the existing test result row, then re-runs on the same SHA (no new commit)', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+    });
+    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.rerunFlakyTests(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      WORKTREE,
+      makeProject(),
+    );
+
+    expect(result).toEqual({ passed: true, output: 'ok' });
+
+    // Audited: invalidation happened, recorded before the re-run.
+    expect(mockDeleteTestResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+    );
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'flake_recovery_f2_invalidated',
+        payload: expect.objectContaining({
+          prNumber: PR_NUMBER,
+          sha: HEAD_SHA,
+        }),
+      }),
+    );
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'flake_recovery_f2_rerun',
+        payload: expect.objectContaining({
+          prNumber: PR_NUMBER,
+          sha: HEAD_SHA,
+          passed: true,
+        }),
+      }),
+    );
+
+    // Re-run on the same SHA — no new commit, no new head_sha.
+    expect(mockRunTestCommands).toHaveBeenCalledWith(
+      WORKTREE,
+      ['npm test'],
+      300,
+      expect.any(Function),
+      { maxRssMb: 0, failFast: true },
+    );
+    expect(mockUpsertTestResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      true,
+      'ok',
+    );
+  });
+
+  it('returns null when the project has no F2 test commands configured', async () => {
+    mockLoadOrchestratorConfig.mockReturnValue({
+      test: [],
+      test_timeout_sec: 300,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    const result = await pipeline.rerunFlakyTests(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+      WORKTREE,
+      makeProject(),
+    );
+
+    expect(result).toBeNull();
+    expect(mockDeleteTestResult).not.toHaveBeenCalled();
+    expect(mockRunTestCommands).not.toHaveBeenCalled();
   });
 });

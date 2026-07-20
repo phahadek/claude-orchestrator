@@ -140,45 +140,47 @@ The Analytics tab tracks per-session token usage and per-model cost across the p
 ## Grooming & design skills
 
 The `/groom` (Backlog Grooming) and `/design` (Design Execution) Claude Code skills are
-source-controlled here and deployed to `~/.claude` by a run-by-hand script:
+source-controlled here and re-vendored to `~/.claude` via the run-by-hand `/sync-guidelines`
+skill (a reconcile, never a file-copy deploy):
 
-- **Vendored artifacts:** `scripts/{groom-load,design-load,groom-gate,ops-load,ops-journal-set,
-check-task-status,sync-guidelines-load,notion-page}.mjs`,
+- **Vendored artifacts:** `scripts/{design-load,check-task-status,sync-guidelines-load,
+notion-page,ops-client}.mjs`, `packages/backend/scripts/{groom-context-client,
+gate-state-client,seed-state-client,stage-task-intent,staged-intents-client}.mjs`,
   `skills/{groom,design,ops,deploy,wrap,sync-guidelines}/**`, and `config-template/**` (the
-  Remote Control bootstrap — see below).
-- **Deploy — two tracks:**
-  - **Mechanism (`node scripts/deploy-grooming.mjs`, `--dry-run` to preview).** Run it by hand
-    whenever a vendored script/skill/hook changes — no auto-sync. It copies the scripts into
-    `~/.claude/scripts/`, the skill trees into `~/.claude/skills/`, and
-    `config-template/hooks/load-procedures.mjs` into the central config tree (overwritten each
-    run — pure mechanism).
-  - **Guideline docs (`/sync-guidelines` skill).** `config-template/{task-writing,procedures}.md`
-    are **not** copied by the deploy script — they are the _upstream_ guideline sources, and the
-    live copies carry host/project content (the filled Project index; project examples) that must
-    be preserved. Deploying an update to them is a Claude-led three-way merge via `/sync-guidelines`
-    (diffs the upstream delta since the recorded baseline, weaves it into the live doc, confirm-gated).
+  Remote Control bootstrap — see below). `groom-load.mjs`, `ops-load.mjs`,
+  `ops-journal-set.mjs` and the `groom-gate.mjs` PreToolUse hook are retired — groom/ops
+  context and journal writes go through the device-authed route clients above, and the
+  promotion gate is enforced server-side (`groomGate.ts`) on staged-intent apply.
+- **Deploy — one mechanism, always a reconcile.** Re-vendoring anything this repo deploys — the
+  scripts into `~/.claude/scripts/`, the skill trees into `~/.claude/skills/`, the hook into the
+  central config tree, and the guideline docs — goes through the **`/sync-guidelines` skill**
+  (`node ~/.claude/scripts/sync-guidelines-load.mjs` for the deterministic plan step). There is no
+  force-overwrite deploy script: a previous one, `scripts/deploy-grooming.mjs`, blind-copied with
+  `cpSync(..., { force: true })` and silently destroyed vendored-local content; it has been
+  removed. `/sync-guidelines` diffs the upstream delta since the recorded per-item baseline and
+  weaves it into the live copy — preserving any local content (a refined skill instruction, an
+  emergency script hotfix, the guideline docs' filled Project index) — confirm-gated before it
+  writes anything.
 - **Manifest:** each managed repo's grooming manifest lives in the **central config tree** at
   `config/projects/<repo-dir>/grooming.json` (outside the repo), not in `.claude/`. The loaders
   resolve it by repo basename via `$ORCHESTRATOR_CONFIG_DIR` / `--config-dir` / a host-aware
   default (a `config/` dir beside the projects root: dev `<repo>/../config`, prod
   `<repo>/../../config`). See `skills/groom/reference/manifest.example.json`.
-- **One-time hook registration (manual):** two `PreToolUse` gates run on the task-source MCP
-  tools — `groom-gate.mjs` (blocks promoting a task to Ready without a recorded sign-off) and
-  `check-task-status.mjs` (blocks creating a task at any status other than `🔲 Backlog`). The
-  deploy script does **not** edit user-global settings, so register them once in
-  `~/.claude/settings.json` (below shows `groom-gate.mjs`; add `check-task-status.mjs` the same
-  way on the create/update matchers):
+- **One-time hook registration (manual):** a `PreToolUse` gate runs on the task-source MCP
+  tools — `check-task-status.mjs` (blocks creating a task at any status other than
+  `🔲 Backlog`). `/sync-guidelines` does **not** edit user-global settings, so register it once
+  in `~/.claude/settings.json`:
 
   ```json
   {
     "hooks": {
       "PreToolUse": [
         {
-          "matcher": "mcp__claude_ai_Notion__notion-update-page",
+          "matcher": "mcp__claude_ai_Notion__notion-create-pages",
           "hooks": [
             {
               "type": "command",
-              "command": "node ~/.claude/scripts/groom-gate.mjs"
+              "command": "node ~/.claude/scripts/check-task-status.mjs"
             }
           ]
         }
@@ -190,11 +192,11 @@ check-task-status,sync-guidelines-load,notion-page}.mjs`,
 ### Remote Control bootstrap (config tree + SessionStart hook)
 
 Human-driven **Remote Control** sessions get the universal `procedures.md` (the project index +
-session flow grooming/design rely on) via a **SessionStart** hook. `deploy-grooming.mjs` installs
-the hook script; the guideline docs themselves (`procedures.md`, `task-writing.md`) are integrated
-into the config tree via the `/sync-guidelines` skill, not the deploy script (see
-`config-template/README.md`). You then register the hook once and launch the server. On a fresh
-host, run `/sync-guidelines` once to seed the guideline docs and record the baseline.
+session flow grooming/design rely on) via a **SessionStart** hook. `/sync-guidelines` installs
+the hook script and integrates the guideline docs themselves (`procedures.md`, `task-writing.md`)
+into the config tree (see `config-template/README.md`). You then register the hook once and
+launch the server. On a fresh host, run `/sync-guidelines` once to seed everything and record the
+baseline.
 
 - **Launch (durable, multi-session):**
   `claude --permission-mode acceptEdits remote-control`, run from the **projects root**. Note

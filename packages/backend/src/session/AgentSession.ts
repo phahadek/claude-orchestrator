@@ -2,12 +2,9 @@ import { EventEmitter } from 'events';
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import {
-  ALLOWED_TOOLS,
-  GITHUB_REPO,
-  runtimeSettings,
-  getProjectById,
-} from '../config';
+import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
+import { getOrchestratorConfig } from '../config/appConfig';
+import { mintStageCredential } from '../auth/SessionStageAuth';
 import {
   upsertSessionEvent,
   updateSessionStatus,
@@ -43,7 +40,10 @@ import {
   buildValidationComment,
 } from '../github/PRBodyValidator';
 import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCheck';
-import { loadOrchestratorConfig } from './orchestrator-config';
+import {
+  loadOrchestratorConfig,
+  getSessionAllowedTools,
+} from './orchestrator-config';
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
 import { recordEvent, countPushFailureEvents } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
@@ -67,6 +67,8 @@ import {
 import type {
   ParsedDispositionItem,
   DispositionsParsedPayload,
+  VerifiedFlakyDisposition,
+  VerifiedFlakyDispositionPayload,
 } from '../github/types';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
@@ -132,6 +134,48 @@ export function parseDispositionBlock(
     });
   }
   return items.length > 0 ? items : null;
+}
+
+/**
+ * Extract and validate a verified-flaky disposition block from session assistant
+ * text — emitted when the session has cleared the flake-verification bar (ran the
+ * failing test in isolation, re-ran the full suite, confirmed the failure is
+ * unrelated to its diff) instead of pushing an empty commit. Exported for testing.
+ */
+export function parseVerifiedFlakyDisposition(
+  text: string,
+): VerifiedFlakyDisposition | null {
+  const idx = text.indexOf('"verified_flaky"');
+  if (idx === -1) return null;
+  const openBrace = text.lastIndexOf('{', idx);
+  if (openBrace === -1) return null;
+  let depth = 0;
+  let closeBrace = -1;
+  for (let i = openBrace; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}') {
+      depth--;
+      if (depth === 0) {
+        closeBrace = i;
+        break;
+      }
+    }
+  }
+  if (closeBrace === -1) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(openBrace, closeBrace + 1));
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const block = (parsed as Record<string, unknown>).verified_flaky;
+  if (typeof block !== 'object' || block === null) return null;
+  const gate = (block as Record<string, unknown>).gate;
+  const reason = (block as Record<string, unknown>).reason;
+  if (gate !== 'ci' && gate !== 'f2') return null;
+  if (typeof reason !== 'string' || reason.length === 0) return null;
+  return { gate, reason };
 }
 
 /** Maximum number of rebase nudges sent to a session before escalating to needs_attention. */
@@ -337,6 +381,11 @@ export class AgentSession extends EventEmitter {
   private readonly processedDispositionMessageIds = new Set<string>();
   /** Dispositions parsed from the current turn's assistant text; cleared after result event. */
   private pendingParsedDispositions: ParsedDispositionItem[] | null = null;
+  /** Tracks message IDs whose verified-flaky disposition block has already been parsed (deduplicate streaming chunks). */
+  private readonly processedVerifiedFlakyMessageIds = new Set<string>();
+  /** Verified-flaky disposition parsed from the current turn's assistant text; cleared after result event. */
+  private pendingVerifiedFlakyDisposition: VerifiedFlakyDisposition | null =
+    null;
   /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
   private readonly warnedEscapeToolUseIds = new Set<string>();
   /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
@@ -349,6 +398,15 @@ export class AgentSession extends EventEmitter {
   private _proactiveEscalation = false;
   /** Number of rebase nudges sent for diverged-branch recovery. Bounded by MAX_REBASE_NUDGES. */
   private rebaseNudgeCount = 0;
+  /**
+   * True while a turn is in flight (from the moment input is sent — initial
+   * prompt or a follow-up sendMessage — until the matching 'result' event is
+   * processed). Starts true: a freshly constructed session is always about
+   * to begin its first turn. Used by SessionManager.enqueueFeedback to decide
+   * whether a live in-map session can be woken immediately or must wait for
+   * the next turn boundary.
+   */
+  private _turnInFlight = true;
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -539,6 +597,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         escalationWatchdog.unref?.();
       }
 
+      const stageToken = mintStageCredential(this.sessionId);
       const exitCode = await this.runner.run(
         resumeIdForSpawn ? undefined : initialPrompt,
         resumeIdForSpawn,
@@ -549,7 +608,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             (this._escalationModel
               ? runtimeSettings.large_task_effort
               : effortSetting) || undefined,
-          allowedTools: [...ALLOWED_TOOLS, ...this.extraAllowedTools],
+          allowedTools: getSessionAllowedTools({
+            allowed_tools: this.extraAllowedTools,
+          }),
           systemPrompt: this.systemPromptContent,
           mcpConfigPath: this.mcpConfigPath,
           systemPromptFilePath: this.systemPromptFilePath,
@@ -557,6 +618,16 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             this._escalationDisableAutoCompact !== null
               ? this._escalationDisableAutoCompact
               : !!runtimeSettings.large_task_model,
+          extraEnv: {
+            ORCHESTRATOR_BACKEND_PORT: String(
+              getOrchestratorConfig().server.port,
+            ),
+            ORCHESTRATOR_STAGE_TOKEN: stageToken,
+            // Sessions submit staged task-write intents via the vendored
+            // ~/.claude/scripts/stage-task-intent.mjs client (curl/wget are
+            // off the auto-dispatch allowlist; node is) — re-vendored via
+            // scripts/sync-guidelines-load.mjs (the /sync-guidelines skill).
+          },
         },
         (event) => {
           // On the first event of an escalated spawn: cancel pending timers and
@@ -1021,6 +1092,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // Extract permission_denials from result event and broadcast to UI.
     // Also signal turn completion so the server can check for new commits.
     if (rawType === 'result') {
+      this._turnInFlight = false;
       const pr = getPRBySessionId(this.sessionId);
       if (pr?.review_session_id) {
         // Gate on actual HEAD SHA advance — skip when no new commits were made.
@@ -1089,6 +1161,37 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           dispositions,
         };
         this.emit('dispositions_parsed', payload);
+      }
+
+      // Actuate a verified-flaky disposition the session emitted this turn —
+      // same-commit gate re-run, not a new push.
+      if (
+        pr &&
+        event.is_error !== true &&
+        this.pendingVerifiedFlakyDisposition !== null
+      ) {
+        const disposition = this.pendingVerifiedFlakyDisposition;
+        this.pendingVerifiedFlakyDisposition = null;
+        let headSha: string | null = null;
+        if (this.worktreePath) {
+          try {
+            headSha = execSync('git rev-parse HEAD', {
+              cwd: this.worktreePath,
+            })
+              .toString()
+              .trim();
+          } catch {
+            // non-fatal
+          }
+        }
+        const payload: VerifiedFlakyDispositionPayload = {
+          sessionId: this.sessionId,
+          prNumber: pr.pr_number,
+          repo: pr.repo,
+          headSha,
+          disposition,
+        };
+        this.emit('verified_flaky_disposition', payload);
       }
 
       // Deliver any undelivered inbox items at the turn boundary.
@@ -1178,7 +1281,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         // Both are guarded by message ID so streaming chunks don't fire multiple times.
         if (
           !this.processedPRBodyMessageIds.has(messageId) ||
-          !this.processedDispositionMessageIds.has(messageId)
+          !this.processedDispositionMessageIds.has(messageId) ||
+          !this.processedVerifiedFlakyMessageIds.has(messageId)
         ) {
           const accumulatedText = mergedContent
             .filter((b) => b.type === 'text' && typeof b.text === 'string')
@@ -1198,6 +1302,13 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             if (dispositions !== null) {
               this.processedDispositionMessageIds.add(messageId);
               this.pendingParsedDispositions = dispositions;
+            }
+          }
+          if (!this.processedVerifiedFlakyMessageIds.has(messageId)) {
+            const disposition = parseVerifiedFlakyDisposition(accumulatedText);
+            if (disposition !== null) {
+              this.processedVerifiedFlakyMessageIds.add(messageId);
+              this.pendingVerifiedFlakyDisposition = disposition;
             }
           }
         }
@@ -2394,7 +2505,17 @@ The full task spec and all rules are in your system prompt. Begin implementing d
    * Delegates to the underlying runner (stdin for CLI, message queue for API).
    */
   sendMessage(message: string): void {
+    this._turnInFlight = true;
     this.runner.sendMessage(message);
+  }
+
+  /**
+   * True while a turn is in flight (input sent, matching 'result' event not
+   * yet processed). Used by SessionManager.enqueueFeedback to decide whether
+   * a live in-map session is safe to wake immediately with a delivery turn.
+   */
+  hasActiveTurn(): boolean {
+    return this._turnInFlight;
   }
 
   /**

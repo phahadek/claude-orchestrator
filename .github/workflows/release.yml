@@ -14,7 +14,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Extract version
@@ -51,7 +51,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Extract version
@@ -62,7 +62,7 @@ jobs:
         run: npm ci
 
       - name: Build macOS installer
-        run: ./installers/macos/build.sh
+        run: bash installers/macos/build.sh
 
       - name: Rename artifact
         run: |
@@ -85,7 +85,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Extract version
@@ -98,7 +98,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y dpkg-sig
+          sudo apt-get install -y debsigs
 
       - name: Download appimagetool
         run: |
@@ -111,12 +111,12 @@ jobs:
         env:
           LINUX_GPG_PRIVATE_KEY: ${{ secrets.LINUX_GPG_PRIVATE_KEY }}
           LINUX_GPG_PASSPHRASE: ${{ secrets.LINUX_GPG_PASSPHRASE }}
-        run: ./installers/linux/build-deb.sh "${{ steps.version.outputs.VERSION }}"
+        run: bash installers/linux/build-deb.sh "${{ steps.version.outputs.VERSION }}"
 
       - name: Build AppImage
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
-        run: ./installers/linux/build-appimage.sh "${{ steps.version.outputs.VERSION }}"
+        run: bash installers/linux/build-appimage.sh "${{ steps.version.outputs.VERSION }}"
 
       - name: Rename artifacts
         run: |

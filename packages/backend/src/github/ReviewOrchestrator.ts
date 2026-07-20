@@ -4,6 +4,7 @@ import {
   getProjectById,
   runtimeSettings,
 } from '../config';
+import type { ProjectConfig } from '../config';
 import { typedGetSetting } from '../config/settings';
 import {
   setPRReviewResult,
@@ -516,6 +517,28 @@ export class ReviewOrchestrator {
   }
 
   /**
+   * Actuate a verified-flaky disposition on the F2 gate — delegates to
+   * PreReviewPipeline.rerunFlakyTests. Exposed here so PRMergeWatcher (which
+   * holds a ReviewOrchestrator reference, not a PreReviewPipeline one) can
+   * drive same-SHA F2 re-runs.
+   */
+  async rerunFlakyTests(
+    prNumber: number,
+    repo: string,
+    headSha: string,
+    worktreePath: string,
+    project: ProjectConfig,
+  ): Promise<{ passed: boolean; output: string } | null> {
+    return this.preReviewPipeline.rerunFlakyTests(
+      prNumber,
+      repo,
+      headSha,
+      worktreePath,
+      project,
+    );
+  }
+
+  /**
    * Run the configured analyze: commands for a PR's head SHA.
    * Deduplicates: if a result already exists for this SHA, returns the cached result.
    * Persists { passed, output } keyed by (prNumber, repo, sha).
@@ -774,6 +797,21 @@ export class ReviewOrchestrator {
       summary: result.summary,
     });
 
+    if (result.escalate) {
+      const message =
+        result.escalationReason ??
+        `Review for local branch ${job.branchName} was escalated per project review rules.`;
+      logger.warn(`[ReviewOrchestrator] ${message}`);
+      setLocalBranchPauseReason(job.localBranchId, 'review_rules_escalation');
+      this.sessionManager.emit('message', {
+        type: 'review_escalated',
+        prNumber: job.localBranchId,
+        repo: `local/${job.branchName}`,
+        message,
+      });
+      return;
+    }
+
     if (result.verdict === 'needs_changes') {
       enqueueFeedbackItem(
         job.sessionId,
@@ -963,11 +1001,30 @@ export class ReviewOrchestrator {
       ...(draftTransitioned && { draft: false }),
     });
 
-    // Route feedback to coding session via the inbox — delivered at next turn boundary
+    // A review_rules-driven finding routes to operator escalation instead of
+    // another coding-session iteration, regardless of the raw verdict.
+    if (result.escalate) {
+      const message =
+        result.escalationReason ??
+        `Review for PR #${job.prNumber} was escalated per project review rules.`;
+      logger.warn(`[ReviewOrchestrator] ${message}`);
+      setPauseReason(job.prNumber, job.repo, 'review_rules_escalation');
+      this.sessionManager.emit('message', {
+        type: 'review_escalated',
+        prNumber: job.prNumber,
+        repo: job.repo,
+        message,
+      });
+      this.consumePendingPushIfSet(job.prNumber, job.repo);
+      return;
+    }
+
+    // Route feedback to coding session via the inbox — delivered immediately if the
+    // session is live-but-idle, otherwise at its next turn boundary or via respawn.
     if (result.verdict === 'needs_changes') {
       const prRow = getPRByNumber(job.prNumber, job.repo);
       if (prRow?.session_id) {
-        enqueueFeedbackItem(
+        await this.sessionManager.enqueueFeedback(
           prRow.session_id,
           'ai-reviewer',
           formatReviewFeedback(result, 0, {
@@ -986,7 +1043,7 @@ export class ReviewOrchestrator {
         message,
       });
       if (prRow?.session_id) {
-        enqueueFeedbackItem(
+        await this.sessionManager.enqueueFeedback(
           prRow.session_id,
           'ai-reviewer',
           formatReviewFeedback(result, 0, {

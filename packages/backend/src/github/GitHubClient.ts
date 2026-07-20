@@ -113,6 +113,23 @@ export class GitHubClient {
     return mapPR(data);
   }
 
+  /**
+   * Fetch the merge commit SHA for an already-merged PR. Used by
+   * PRMergeWatcher.handleMerged when the merge was detected via polling or a
+   * webhook/ingest event rather than a mergePR() call, so no sha is available
+   * up front.
+   */
+  async getMergeCommitSha(
+    prNumber: number,
+    repo?: string,
+  ): Promise<string | null> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${r}/pulls/${prNumber}`,
+    );
+    return data.merge_commit_sha ?? null;
+  }
+
   async getMergeability(
     prNumber: number,
     repo?: string,
@@ -500,6 +517,45 @@ export class GitHubClient {
         conclusion: c.conclusion as string,
         detailsUrl: c.details_url ?? c.html_url,
       }));
+  }
+
+  /**
+   * Re-run the failed check-runs for a commit SHA via GitHub's rerequest API —
+   * actuates a session's verified-flaky disposition without pushing a new commit.
+   * Best-effort per check run: a single rerequest failure is logged and skipped
+   * so the rest still fire. Returns the ids of check runs successfully rerequested.
+   */
+  async rerunFailedJobs(sha: string, repo?: string): Promise<number[]> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<{
+      check_runs: Array<{
+        id: number;
+        name: string;
+        status: string;
+        conclusion: string | null;
+      }>;
+    }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
+    const failing = data.check_runs.filter(
+      (c) =>
+        c.status === 'completed' &&
+        c.conclusion !== null &&
+        FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
+    );
+    const rerequested: number[] = [];
+    for (const c of failing) {
+      try {
+        await this.request(`/repos/${r}/check-runs/${c.id}/rerequest`, {
+          method: 'POST',
+        });
+        rerequested.push(c.id);
+      } catch (err) {
+        logger.warn(
+          `[GitHubClient] rerunFailedJobs: rerequest failed for check run ${c.id} (${c.name}) on ${sha}:`,
+          (err as Error).message,
+        );
+      }
+    }
+    return rerequested;
   }
 
   /**
@@ -1323,6 +1379,7 @@ interface GitHubRawPR {
   closed_at?: string | null;
   mergeable?: boolean | null;
   mergeable_state?: string | null;
+  merge_commit_sha?: string | null;
   draft: boolean;
 }
 

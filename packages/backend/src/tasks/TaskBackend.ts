@@ -1,4 +1,6 @@
 import type { ResolvedTask } from './types';
+import type { TaskBodySections } from './bodyRender';
+import type { GroomingGateEntry } from '../groom/groomGate';
 import { ProjectService } from '../projects/ProjectService';
 import { NotionClient } from '../notion/NotionClient';
 import { NotionTaskBackend } from './NotionTaskBackend';
@@ -31,6 +33,53 @@ export interface NonMilestoneSourceConfig {
 export interface UpdateStatusOptions {
   source?: 'orchestrator' | 'human';
   sessionId?: string | null;
+  /**
+   * Human override for a Ready-transition readiness-gate violation (see
+   * readinessGate.ts). Only honored by TaskWriteCommands.setStatus — bypasses
+   * the hard block and records actor + reason + tier in audit_log instead.
+   * Auto-dispatched, stage-only producers have no apply path and therefore
+   * cannot set this.
+   */
+  readinessOverride?: { reason: string };
+  /**
+   * The /groom skill's recorded size_check / type_check disposition for this
+   * task, carried on the same task.setStatus intent as the Ready flip. Only
+   * honored by TaskWriteCommands.setStatus — when present, it is checked via
+   * checkGroomingPromotionGate (see groomGate.ts) before the transition lands,
+   * the command-layer successor to the retired groom-gate.mjs PreToolUse hook.
+   */
+  groomingGate?: GroomingGateEntry;
+}
+
+/** Provenance options shared by the write-side port methods (create / deps). */
+export type TaskWriteOptions = UpdateStatusOptions;
+
+/**
+ * Fields accepted by createTask. Status is intentionally absent — every
+ * implementation hard-codes the initial Backlog status regardless of input.
+ */
+export interface NewTaskFields {
+  /** Parent database/board ID (e.g. Notion database ID) the task is created under. */
+  databaseId: string;
+  title: string;
+  /** Display-format type, e.g. '💻 Code'. */
+  type?: string;
+  /** Display-format priority, e.g. '🔴 High'. */
+  priority?: string;
+  /** Task IDs (prefixed, e.g. 'notion:abc123') this task depends on. */
+  dependsOn?: string[];
+}
+
+/**
+ * Cosmetic properties settable via setProperties — Priority and Task Name
+ * only. Status, Type, and Depends On are execution-governing and have their
+ * own validated write commands.
+ */
+export interface TaskPropertiesPatch {
+  /** Display-format priority, e.g. '🔴 High'. */
+  priority?: string;
+  /** Task Name (title property), plain text. */
+  title?: string;
 }
 
 /**
@@ -87,6 +136,63 @@ export interface TaskBackend {
    * Implementations may return from cache rather than making live API calls.
    */
   listTasksByStatus(status: string): Promise<ResolvedTask[]>;
+
+  /**
+   * Create a new task page. Always created at the initial Backlog status,
+   * regardless of any status implied by `fields`. Optional — only backends
+   * that support programmatic task creation implement this (Notion today;
+   * other stores can add support later since the port stays store-agnostic).
+   */
+  createTask?(
+    fields: NewTaskFields,
+    options?: TaskWriteOptions,
+  ): Promise<string>;
+
+  /**
+   * Overwrite the Depends On property with the given task IDs. Optional for
+   * the same reason as createTask.
+   */
+  setDependsOn?(
+    taskId: string,
+    dependsOn: string[],
+    options?: TaskWriteOptions,
+  ): Promise<void>;
+
+  /**
+   * Render the task-writing.md section model into the page body, replacing
+   * any existing content. Optional for the same reason as createTask.
+   */
+  updateBody?(
+    taskId: string,
+    sections: TaskBodySections,
+    options?: TaskWriteOptions,
+  ): Promise<void>;
+
+  /**
+   * Overwrite the Type select property (display-format, e.g. '💻 Code').
+   * Optional for the same reason as createTask.
+   */
+  setType?(
+    taskId: string,
+    type: string,
+    options?: TaskWriteOptions,
+  ): Promise<void>;
+
+  /**
+   * Overwrite cosmetic properties (Priority / Task Name). Optional for the
+   * same reason as createTask.
+   */
+  setProperties?(
+    taskId: string,
+    patch: TaskPropertiesPatch,
+    options?: TaskWriteOptions,
+  ): Promise<void>;
+
+  /**
+   * Archive a task page. Notion has no delete via the API — archiving is the
+   * store-level equivalent. Optional for the same reason as createTask.
+   */
+  archive?(taskId: string, options?: TaskWriteOptions): Promise<void>;
 }
 
 // ── AuditingTaskBackend ──────────────────────────────────────────────────────
@@ -173,6 +279,134 @@ export class AuditingTaskBackend implements TaskBackend {
   listTasksByStatus(status: string) {
     return this.inner.listTasksByStatus(status);
   }
+
+  async createTask(
+    fields: NewTaskFields,
+    options?: TaskWriteOptions,
+  ): Promise<string> {
+    if (!this.inner.createTask) {
+      throw new Error(
+        `[AuditingTaskBackend] createTask is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    const taskId = await this.inner.createTask(fields);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_created',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { title: fields.title, source },
+    });
+    return taskId;
+  }
+
+  async setDependsOn(
+    taskId: string,
+    dependsOn: string[],
+    options?: TaskWriteOptions,
+  ): Promise<void> {
+    if (!this.inner.setDependsOn) {
+      throw new Error(
+        `[AuditingTaskBackend] setDependsOn is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    await this.inner.setDependsOn(taskId, dependsOn);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_deps_updated',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { dependsOn, source },
+    });
+  }
+
+  async updateBody(
+    taskId: string,
+    sections: TaskBodySections,
+    options?: TaskWriteOptions,
+  ): Promise<void> {
+    if (!this.inner.updateBody) {
+      throw new Error(
+        `[AuditingTaskBackend] updateBody is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    await this.inner.updateBody(taskId, sections);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_body_updated',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { source },
+    });
+  }
+
+  async setType(
+    taskId: string,
+    type: string,
+    options?: TaskWriteOptions,
+  ): Promise<void> {
+    if (!this.inner.setType) {
+      throw new Error(
+        `[AuditingTaskBackend] setType is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    await this.inner.setType(taskId, type);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_type_updated',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { type, source },
+    });
+  }
+
+  async setProperties(
+    taskId: string,
+    patch: TaskPropertiesPatch,
+    options?: TaskWriteOptions,
+  ): Promise<void> {
+    if (!this.inner.setProperties) {
+      throw new Error(
+        `[AuditingTaskBackend] setProperties is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    await this.inner.setProperties(taskId, patch);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_properties_updated',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { patch, source },
+    });
+  }
+
+  async archive(taskId: string, options?: TaskWriteOptions): Promise<void> {
+    if (!this.inner.archive) {
+      throw new Error(
+        `[AuditingTaskBackend] archive is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    await this.inner.archive(taskId);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_archived',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { source },
+    });
+  }
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -195,7 +429,7 @@ export function getTaskBackend(projectId: string): TaskBackend {
   }
   let inner: TaskBackend;
   if (project.taskSource === 'yaml') {
-    inner = new LocalTaskBackend(project.projectDir);
+    inner = new LocalTaskBackend(project.projectDir, project.id);
   } else if (project.taskSource === 'jira') {
     inner = buildJiraBackend(project.taskSourceConfig);
   } else if (project.taskSource === 'github') {

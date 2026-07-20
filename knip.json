@@ -27,7 +27,8 @@
         "src/server.ts",
         "src/bootSequence.ts",
         "test/helpers/**/*.ts",
-        "**/*.test.ts"
+        "**/*.test.ts",
+        "scripts/*.mjs"
       ],
       "ignoreDependencies": ["ts-node"]
     },

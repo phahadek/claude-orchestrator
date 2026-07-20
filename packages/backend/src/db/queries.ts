@@ -1,6 +1,8 @@
+import type Database from 'better-sqlite3';
 import { db } from './db';
 import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
+import { normalizeTaskId } from '../tasks/taskId';
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
@@ -32,6 +34,20 @@ import type {
   SessionPauseInterval,
   TaskRepoAssignmentRow,
   FeedbackInboxRow,
+  OpsJournalRow,
+  GateItemRow,
+  GateItemSourceRow,
+  NewGateItemSourceRow,
+  GateItemEventRow,
+  NewGateItemEventRow,
+  GateAccretionRow,
+  GateItemClassification,
+  SeedItemRow,
+  SeedItemSourceRow,
+  NewSeedItemSourceRow,
+  SeedItemEventRow,
+  NewSeedItemEventRow,
+  SeedAccretionRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -966,6 +982,7 @@ export function upsertPullRequest(
     | 'stalled_pr_retry_count'
     | 'session_initiated_close_at'
     | 'reviewer_requested_at'
+    | 'flake_recovery_attempts'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -1474,6 +1491,24 @@ export function setCiRemediationAttemptedSha(
   ).run(sha, prNumber, repo);
 }
 
+export function incrementFlakeRecoveryAttempts(
+  prNumber: number,
+  repo: string,
+): void {
+  db.prepare(
+    `UPDATE pull_requests SET flake_recovery_attempts = flake_recovery_attempts + 1 WHERE pr_number = ? AND repo = ?`,
+  ).run(prNumber, repo);
+}
+
+export function resetFlakeRecoveryAttempts(
+  prNumber: number,
+  repo: string,
+): void {
+  db.prepare(
+    `UPDATE pull_requests SET flake_recovery_attempts = 0 WHERE pr_number = ? AND repo = ?`,
+  ).run(prNumber, repo);
+}
+
 export function setConflictNudgeSha(
   prNumber: number,
   repo: string,
@@ -1880,22 +1915,19 @@ export function getMergeReadyPRs(
   projectId: string,
   milestoneId: string,
 ): PullRequestRow[] {
-  // Resolve milestone source_id to build the board cache key.
   const milestone = db
     .prepare<{
       id: string;
       project_id: string;
-    }>(
-      `SELECT source_id FROM milestones WHERE id = @id AND project_id = @project_id`,
-    )
+    }>(`SELECT id FROM milestones WHERE id = @id AND project_id = @project_id`)
     .get({ id: milestoneId, project_id: projectId }) as
-    | { source_id: string | null }
+    | { id: string }
     | undefined;
 
   if (!milestone) return [];
 
-  const boardKey = milestone.source_id ?? milestoneId;
-  const cacheKey = `board:${boardKey}`;
+  // Board cache is keyed on the DB milestone UUID, matching every backend's write side.
+  const cacheKey = `board:${milestoneId}`;
 
   const boardCache = db
     .prepare<{
@@ -2400,6 +2432,27 @@ export function getApprovedLocalBranches(): LocalBranchRow[] {
     .all() as LocalBranchRow[];
 }
 
+/**
+ * Most recently merged local branch for a source task, joined via the
+ * session that carried it. Undefined when the task has no merged session
+ * (backfill callers treat that as "unmerged" -> null min_deployed_commit).
+ */
+export function getMergedLocalBranchForTaskId(
+  taskId: string,
+): LocalBranchRow | undefined {
+  return db
+    .prepare<{ task_id: string }>(
+      `
+    SELECT lb.* FROM local_branches lb
+    JOIN sessions s ON s.session_id = lb.session_id
+    WHERE s.task_id = @task_id AND lb.status = 'merged'
+    ORDER BY lb.updated_at DESC
+    LIMIT 1
+  `,
+    )
+    .get({ task_id: taskId }) as LocalBranchRow | undefined;
+}
+
 export function markLocalBranchMerged(
   id: number,
   commitSha: string | null,
@@ -2408,6 +2461,111 @@ export function markLocalBranchMerged(
   db.prepare(
     `UPDATE local_branches SET status = 'merged', merge_commit_sha = ?, updated_at = ? WHERE id = ?`,
   ).run(commitSha ?? null, now, id);
+}
+
+/**
+ * Persist a resolved merge commit uniformly for a session, regardless of
+ * whether that session already has a local_branches row. GitHub PR sessions
+ * never get one from sessionRecovery (only git_mode='local-only' sessions
+ * do), so PRMergeWatcher.handleMerged creates it here on first merge —
+ * making local_branches.merge_commit_sha the single merge-commit source
+ * across both the local-only and GitHub-PR flows.
+ */
+export function recordMergeCommitForSession(params: {
+  sessionId: string;
+  projectId: string;
+  branchName: string;
+  baseBranch: string;
+  commitSha: string | null;
+}): void {
+  const existing = getLocalBranchBySession(params.sessionId);
+  if (existing) {
+    markLocalBranchMerged(existing.id, params.commitSha);
+    return;
+  }
+  const now = new Date().toISOString();
+  const inserted = insertLocalBranch({
+    project_id: params.projectId,
+    session_id: params.sessionId,
+    branch_name: params.branchName,
+    base_branch: params.baseBranch,
+    status: 'open',
+    review_result: null,
+    created_at: now,
+    updated_at: now,
+  });
+  markLocalBranchMerged(inserted.id, params.commitSha);
+}
+
+/**
+ * Latest merge_commit_sha for a task's merged local branch (joined via
+ * sessions.task_id, since local_branches has no task_id column of its own).
+ * Null when the task has no merged branch.
+ */
+export function getMergeCommitFromLocalBranches(taskId: string): string | null {
+  const row = db
+    .prepare<{ task_id: string }>(
+      `
+    SELECT lb.merge_commit_sha AS merge_commit_sha
+    FROM local_branches lb
+    JOIN sessions s ON s.session_id = lb.session_id
+    WHERE s.task_id = @task_id
+      AND lb.status = 'merged'
+      AND lb.merge_commit_sha IS NOT NULL
+    ORDER BY lb.updated_at DESC
+    LIMIT 1
+  `,
+    )
+    .get({ task_id: normalizeTaskId(taskId) }) as
+    | { merge_commit_sha: string }
+    | undefined;
+  return row?.merge_commit_sha ?? null;
+}
+
+/**
+ * The gate/seed backfill tools' min_deployed_commit source: local_branches
+ * first, falling back to the task's merged GitHub PR when local_branches has
+ * no covering row (e.g. sessions that predate local_branches tracking). That
+ * fallback needs a live lookup: pull_requests only ever persists head_sha,
+ * the pre-merge feature-branch tip, never the actual commit landed on the
+ * base branch (GitHub's squash/merge/rebase all produce a distinct commit) —
+ * substituting head_sha would silently break the deploy-ancestry check. The
+ * PR's true merge commit is fetched from GitHub, which retains it
+ * indefinitely regardless of how long ago the PR merged.
+ */
+export async function getMergeCommitForTask(
+  taskId: string,
+): Promise<string | null> {
+  const normalized = normalizeTaskId(taskId);
+  const fromLocalBranches = getMergeCommitFromLocalBranches(normalized);
+  if (fromLocalBranches) return fromLocalBranches;
+
+  const pr = db
+    .prepare<{ task_id: string }>(
+      `
+    SELECT pr_number, repo
+    FROM pull_requests
+    WHERE task_id = @task_id
+      AND state = 'merged'
+    ORDER BY pr_number DESC
+    LIMIT 1
+  `,
+    )
+    .get({ task_id: normalized }) as
+    | { pr_number: number; repo: string }
+    | undefined;
+  if (!pr) return null;
+
+  const { GitHubClient } = await import('../github/GitHubClient');
+  try {
+    return await new GitHubClient().getMergeCommitSha(pr.pr_number, pr.repo);
+  } catch (err) {
+    logger.warn(
+      `[getMergeCommitForTask] GitHub merge-commit lookup failed for PR #${pr.pr_number} in ${pr.repo}:`,
+      (err as Error).message,
+    );
+    return null;
+  }
 }
 
 // ─── pr_review_comments_routed ────────────────────────────────────────────────
@@ -2566,6 +2724,31 @@ export function getActiveDeviceCount(): number {
     .prepare(`SELECT COUNT(*) as count FROM devices WHERE revoked = 0`)
     .get() as { count: number };
   return row.count;
+}
+
+// ─── project_deployed_sha ──────────────────────────────────────────────────────
+
+/**
+ * Records the SHA a project reported as deployed — reported in by the deploy
+ * flow (skill→orchestrator direction), one row per project, latest write wins.
+ */
+export function recordProjectDeployedSha(projectId: string, sha: string): void {
+  db.prepare(
+    `INSERT INTO project_deployed_sha (project_id, sha, recorded_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(project_id) DO UPDATE SET sha = excluded.sha, recorded_at = excluded.recorded_at`,
+  ).run(projectId, sha, new Date().toISOString());
+}
+
+export function getProjectDeployedShaRow(
+  projectId: string,
+): { sha: string; recordedAt: string } | null {
+  const row = db
+    .prepare(
+      `SELECT sha, recorded_at as recordedAt FROM project_deployed_sha WHERE project_id = ?`,
+    )
+    .get(projectId) as { sha: string; recordedAt: string } | undefined;
+  return row ?? null;
 }
 
 // ─── orchestrator_autofix_shas ────────────────────────────────────────────────
@@ -2940,6 +3123,25 @@ export function getTestResult(
     .get({ pr_number: prNumber, repo, sha }) as TestResultRow | undefined;
 }
 
+/**
+ * Invalidate the permanent per-(pr,repo,sha) F2 test result row so a
+ * verified-flaky disposition can trigger a same-SHA re-run. Callers must
+ * audit this via recordEvent — deletion alone is silent.
+ */
+export function deleteTestResult(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    sha: string;
+  }>(
+    `DELETE FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+  ).run({ pr_number: prNumber, repo, sha });
+}
+
 // ─── orchestrator_analyze_results ───────────────────────────────────────────
 
 export interface AnalyzeResultRow {
@@ -3225,6 +3427,714 @@ export function deleteTaskRepoAssignment(taskId: string): void {
   db.prepare(`DELETE FROM task_repo_assignments WHERE task_id = ?`).run(taskId);
 }
 
+// ─── ops_journal ─────────────────────────────────────────────────────────────
+// Statements are cached lazily (prepared on first use, not at module load) so
+// importing this module doesn't fail on a not-yet-migrated db handle.
+
+let _stmtGetOpsJournalEntry: Database.Statement | null = null;
+let _stmtListOpsJournalEntries: Database.Statement | null = null;
+let _stmtUpsertOpsJournalEntry: Database.Statement | null = null;
+let _stmtDeleteOpsJournalEntry: Database.Statement | null = null;
+
+export function getOpsJournalEntry(taskId: string): OpsJournalRow | undefined {
+  _stmtGetOpsJournalEntry ??= db.prepare<{ task_id: string }>(
+    `SELECT * FROM ops_journal WHERE task_id = @task_id`,
+  );
+  return _stmtGetOpsJournalEntry.get({ task_id: taskId }) as
+    | OpsJournalRow
+    | undefined;
+}
+
+export function listOpsJournalEntries(): OpsJournalRow[] {
+  _stmtListOpsJournalEntries ??= db.prepare(`SELECT * FROM ops_journal`);
+  return _stmtListOpsJournalEntries.all() as OpsJournalRow[];
+}
+
+export function upsertOpsJournalEntry(row: OpsJournalRow): void {
+  _stmtUpsertOpsJournalEntry ??= db.prepare<OpsJournalRow>(`
+    INSERT INTO ops_journal
+      (task_id, project, milestone, state, disposition, worked_in, evidence,
+       finding_or_proposal, falsification, filed_followons, needs_from_operator,
+       resolution, updated_at)
+    VALUES
+      (@task_id, @project, @milestone, @state, @disposition, @worked_in, @evidence,
+       @finding_or_proposal, @falsification, @filed_followons, @needs_from_operator,
+       @resolution, @updated_at)
+    ON CONFLICT(task_id) DO UPDATE SET
+      project = @project,
+      milestone = @milestone,
+      state = @state,
+      disposition = @disposition,
+      worked_in = @worked_in,
+      evidence = @evidence,
+      finding_or_proposal = @finding_or_proposal,
+      falsification = @falsification,
+      filed_followons = @filed_followons,
+      needs_from_operator = @needs_from_operator,
+      resolution = @resolution,
+      updated_at = @updated_at
+  `);
+  _stmtUpsertOpsJournalEntry.run(row);
+}
+
+export function deleteOpsJournalEntry(taskId: string): void {
+  _stmtDeleteOpsJournalEntry ??= db.prepare<{ task_id: string }>(
+    `DELETE FROM ops_journal WHERE task_id = @task_id`,
+  );
+  _stmtDeleteOpsJournalEntry.run({ task_id: taskId });
+}
+
+// ─── gate_item ────────────────────────────────────────────────────────────
+// Statements are cached lazily (prepared on first use, not at module load) so
+// importing this module doesn't fail on a not-yet-migrated db handle.
+
+let _stmtGetGateItem: Database.Statement | null = null;
+let _stmtListGateItemsByMilestone: Database.Statement | null = null;
+let _stmtInsertGateItem: Database.Statement | null = null;
+let _stmtUpdateGateItem: Database.Statement | null = null;
+let _stmtListGateItemSources: Database.Statement | null = null;
+let _stmtInsertGateItemSource: Database.Statement | null = null;
+let _stmtListGateItemEvents: Database.Statement | null = null;
+let _stmtInsertGateItemEvent: Database.Statement | null = null;
+
+export function getGateItem(id: string): GateItemRow | undefined {
+  _stmtGetGateItem ??= db.prepare<{ id: string }>(
+    `SELECT * FROM gate_item WHERE id = @id`,
+  );
+  return _stmtGetGateItem.get({ id }) as GateItemRow | undefined;
+}
+
+export function listGateItemsByMilestone(
+  project: string,
+  milestone: string,
+): GateItemRow[] {
+  _stmtListGateItemsByMilestone ??= db.prepare<{
+    project: string;
+    milestone: string;
+  }>(
+    `SELECT * FROM gate_item WHERE project = @project AND milestone = @milestone`,
+  );
+  return _stmtListGateItemsByMilestone.all({
+    project,
+    milestone,
+  }) as GateItemRow[];
+}
+
+export function insertGateItem(row: GateItemRow): void {
+  _stmtInsertGateItem ??= db.prepare<GateItemRow>(`
+    INSERT INTO gate_item
+      (id, project, milestone, text, classification, min_deployed_commit,
+       state, current_disposition, updated_at)
+    VALUES
+      (@id, @project, @milestone, @text, @classification, @min_deployed_commit,
+       @state, @current_disposition, @updated_at)
+  `);
+  _stmtInsertGateItem.run(row);
+}
+
+export function updateGateItem(row: GateItemRow): void {
+  _stmtUpdateGateItem ??= db.prepare<GateItemRow>(`
+    UPDATE gate_item SET
+      project = @project,
+      milestone = @milestone,
+      text = @text,
+      classification = @classification,
+      min_deployed_commit = @min_deployed_commit,
+      state = @state,
+      current_disposition = @current_disposition,
+      updated_at = @updated_at
+    WHERE id = @id
+  `);
+  _stmtUpdateGateItem.run(row);
+}
+
+export function listGateItemSources(gateItemId: string): GateItemSourceRow[] {
+  _stmtListGateItemSources ??= db.prepare<{ gate_item_id: string }>(
+    `SELECT * FROM gate_item_source WHERE gate_item_id = @gate_item_id ORDER BY id ASC`,
+  );
+  return _stmtListGateItemSources.all({
+    gate_item_id: gateItemId,
+  }) as GateItemSourceRow[];
+}
+
+export function insertGateItemSource(row: NewGateItemSourceRow): void {
+  _stmtInsertGateItemSource ??= db.prepare<NewGateItemSourceRow>(`
+    INSERT INTO gate_item_source
+      (gate_item_id, source_task_id, source_task_title, merge_commit, added_at)
+    VALUES
+      (@gate_item_id, @source_task_id, @source_task_title, @merge_commit, @added_at)
+  `);
+  _stmtInsertGateItemSource.run({
+    ...row,
+    source_task_id: normalizeTaskId(row.source_task_id),
+  });
+}
+
+let _stmtUpdateGateItemSourceMergeCommit: Database.Statement | null = null;
+
+export function updateGateItemSourceMergeCommit(
+  gateItemId: string,
+  sourceTaskId: string,
+  mergeCommit: string,
+): void {
+  _stmtUpdateGateItemSourceMergeCommit ??= db.prepare<{
+    gate_item_id: string;
+    source_task_id: string;
+    merge_commit: string;
+  }>(`
+    UPDATE gate_item_source SET merge_commit = @merge_commit
+    WHERE gate_item_id = @gate_item_id AND source_task_id = @source_task_id
+  `);
+  _stmtUpdateGateItemSourceMergeCommit.run({
+    gate_item_id: gateItemId,
+    source_task_id: normalizeTaskId(sourceTaskId),
+    merge_commit: mergeCommit,
+  });
+}
+
+/**
+ * Every gate_item id sourced (via gate_item_source) from a task, across every
+ * project — the merge-completion consumer's fan-out from `notion_task_id` to
+ * the gate_item rows it needs to fill/recompute.
+ */
+export function listGateItemIdsBySourceTask(sourceTaskId: string): string[] {
+  return (
+    db
+      .prepare<{
+        source_task_id: string;
+      }>(
+        `SELECT DISTINCT gate_item_id AS id FROM gate_item_source WHERE source_task_id = @source_task_id`,
+      )
+      .all({ source_task_id: normalizeTaskId(sourceTaskId) }) as {
+      id: string;
+    }[]
+  ).map((row) => row.id);
+}
+
+/**
+ * Every distinct source_task_id still missing gate_item_source.merge_commit —
+ * the reconciler catch-up net's candidate set. Callers cross-check each
+ * against local_branches (getMergeCommitForTask) to find the ones that are
+ * actually merged already; a merge_completed event dropped mid-emit (e.g. a
+ * restart) otherwise leaves the fill permanently missing.
+ */
+export function listUnfilledGateItemSourceTaskIds(): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT DISTINCT source_task_id AS id FROM gate_item_source WHERE merge_commit IS NULL`,
+      )
+      .all() as { id: string }[]
+  ).map((row) => row.id);
+}
+
+export function listGateItemEvents(gateItemId: string): GateItemEventRow[] {
+  _stmtListGateItemEvents ??= db.prepare<{ gate_item_id: string }>(
+    `SELECT * FROM gate_item_event WHERE gate_item_id = @gate_item_id ORDER BY id ASC`,
+  );
+  return _stmtListGateItemEvents.all({
+    gate_item_id: gateItemId,
+  }) as GateItemEventRow[];
+}
+
+export function insertGateItemEvent(row: NewGateItemEventRow): void {
+  _stmtInsertGateItemEvent ??= db.prepare<NewGateItemEventRow>(`
+    INSERT INTO gate_item_event
+      (gate_item_id, disposition, evidence, filed_followon, deploy_sha, operator, at)
+    VALUES
+      (@gate_item_id, @disposition, @evidence, @filed_followon, @deploy_sha, @operator, @at)
+  `);
+  _stmtInsertGateItemEvent.run(row);
+}
+
+let _stmtListGateItemsByMilestoneAllProjects: Database.Statement | null = null;
+let _stmtListAllGateItems: Database.Statement | null = null;
+let _stmtUpdateGateItemMinDeployedCommit: Database.Statement | null = null;
+
+/** All gate items for a milestone, regardless of project (mirrors ops_journal's milestone-only lookup). */
+export function listGateItemsByMilestoneAllProjects(
+  milestone: string,
+): GateItemRow[] {
+  _stmtListGateItemsByMilestoneAllProjects ??= db.prepare<{
+    milestone: string;
+  }>(`SELECT * FROM gate_item WHERE milestone = @milestone`);
+  return _stmtListGateItemsByMilestoneAllProjects.all({
+    milestone,
+  }) as GateItemRow[];
+}
+
+/** Every gate item across all projects/milestones — the reconciler's working set. */
+export function listAllGateItems(): GateItemRow[] {
+  _stmtListAllGateItems ??= db.prepare(`SELECT * FROM gate_item`);
+  return _stmtListAllGateItems.all() as GateItemRow[];
+}
+
+export function updateGateItemMinDeployedCommit(
+  id: string,
+  minDeployedCommit: string,
+  updatedAt: string,
+): void {
+  _stmtUpdateGateItemMinDeployedCommit ??= db.prepare<{
+    id: string;
+    min_deployed_commit: string;
+    updated_at: string;
+  }>(
+    `UPDATE gate_item SET min_deployed_commit = @min_deployed_commit, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtUpdateGateItemMinDeployedCommit.run({
+    id,
+    min_deployed_commit: minDeployedCommit,
+    updated_at: updatedAt,
+  });
+}
+
+let _stmtRehomeGateItemsBySourceTask: Database.Statement | null = null;
+
+/**
+ * Re-homes every gate_item sourced (via gate_item_source) from a moved task
+ * by UPDATE-ing its milestone — the gate accretion carry for a cross-milestone
+ * move. min_deployed_commit is untouched: it's commit-based and project-scoped,
+ * not milestone-scoped, so a move never invalidates it. Returns the ids
+ * touched, for the audit payload.
+ */
+export function rehomeGateItemsBySourceTask(
+  project: string,
+  sourceTaskId: string,
+  milestone: string,
+  updatedAt: string,
+): string[] {
+  const ids = (
+    db
+      .prepare<{ project: string; source_task_id: string }>(
+        `SELECT DISTINCT gi.id AS id
+         FROM gate_item gi
+         JOIN gate_item_source gis ON gis.gate_item_id = gi.id
+         WHERE gi.project = @project AND gis.source_task_id = @source_task_id`,
+      )
+      .all({
+        project,
+        source_task_id: normalizeTaskId(sourceTaskId),
+      }) as { id: string }[]
+  ).map((row) => row.id);
+  if (ids.length === 0) return ids;
+
+  _stmtRehomeGateItemsBySourceTask ??= db.prepare<{
+    id: string;
+    milestone: string;
+    updated_at: string;
+  }>(
+    `UPDATE gate_item SET milestone = @milestone, updated_at = @updated_at WHERE id = @id`,
+  );
+  for (const id of ids) {
+    _stmtRehomeGateItemsBySourceTask.run({
+      id,
+      milestone,
+      updated_at: updatedAt,
+    });
+  }
+  return ids;
+}
+
+/** All gate items for a project, regardless of milestone — the readiness rollup's per-project lookup. */
+export function listGateItemsByProject(project: string): GateItemRow[] {
+  const stmt = db.prepare<{ project: string }>(
+    `SELECT * FROM gate_item WHERE project = @project`,
+  );
+  return stmt.all({ project }) as GateItemRow[];
+}
+
+export interface GateItemFilter {
+  project?: string;
+  milestone?: string;
+  state?: string;
+  classification?: GateItemClassification;
+  runnable?: boolean;
+}
+
+function buildGateItemWhereClause(filter: GateItemFilter): {
+  clause: string;
+  params: Record<string, string>;
+} {
+  const conditions: string[] = [];
+  const params: Record<string, string> = {};
+  if (filter.project) {
+    conditions.push('project = @project');
+    params.project = filter.project;
+  }
+  if (filter.milestone) {
+    conditions.push('milestone = @milestone');
+    params.milestone = filter.milestone;
+  }
+  if (filter.classification) {
+    conditions.push('classification = @classification');
+    params.classification = filter.classification;
+  }
+  if (filter.state) {
+    conditions.push('state = @state');
+    params.state = filter.state;
+  }
+  if (filter.runnable !== undefined) {
+    conditions.push(
+      filter.runnable ? "state = 'runnable'" : "state != 'runnable'",
+    );
+  }
+  return {
+    clause: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
+    params,
+  };
+}
+
+/** Paginated, filtered read of gate_item — never an unbounded load; caller supplies limit/offset. */
+export function listGateItemsFiltered(
+  filter: GateItemFilter,
+  limit: number,
+  offset: number,
+): GateItemRow[] {
+  const { clause, params } = buildGateItemWhereClause(filter);
+  const stmt = db.prepare(
+    `SELECT * FROM gate_item ${clause} ORDER BY updated_at DESC, id ASC LIMIT @limit OFFSET @offset`,
+  );
+  return stmt.all({ ...params, limit, offset }) as GateItemRow[];
+}
+
+/** Total count matching the same filter as listGateItemsFiltered — powers the `total` in a paginated response. */
+export function countGateItemsFiltered(filter: GateItemFilter): number {
+  const { clause, params } = buildGateItemWhereClause(filter);
+  const stmt = db.prepare(`SELECT COUNT(*) AS count FROM gate_item ${clause}`);
+  const row = stmt.get(params) as { count: number };
+  return row.count;
+}
+
+// ─── gate_accretion ───────────────────────────────────────────────────────
+
+let _stmtGetGateAccretion: Database.Statement | null = null;
+let _stmtUpsertGateAccretion: Database.Statement | null = null;
+
+export function getGateAccretion(
+  sourceTaskId: string,
+): GateAccretionRow | undefined {
+  _stmtGetGateAccretion ??= db.prepare<{ source_task_id: string }>(
+    `SELECT * FROM gate_accretion WHERE source_task_id = @source_task_id`,
+  );
+  return _stmtGetGateAccretion.get({
+    source_task_id: normalizeTaskId(sourceTaskId),
+  }) as GateAccretionRow | undefined;
+}
+
+export function upsertGateAccretion(row: GateAccretionRow): void {
+  _stmtUpsertGateAccretion ??= db.prepare<GateAccretionRow>(`
+    INSERT INTO gate_accretion (source_task_id, project, milestone, decision, accreted_at)
+    VALUES (@source_task_id, @project, @milestone, @decision, @accreted_at)
+    ON CONFLICT(source_task_id) DO UPDATE SET
+      project = excluded.project,
+      milestone = excluded.milestone,
+      decision = excluded.decision,
+      accreted_at = excluded.accreted_at
+  `);
+  _stmtUpsertGateAccretion.run({
+    ...row,
+    source_task_id: normalizeTaskId(row.source_task_id),
+  });
+}
+
+// ─── seed_item ────────────────────────────────────────────────────────────
+
+let _stmtGetSeedItem: Database.Statement | null = null;
+let _stmtListSeedItemsByMilestone: Database.Statement | null = null;
+let _stmtListSeedItemsByMilestoneAllProjects: Database.Statement | null = null;
+let _stmtListAllSeedItems: Database.Statement | null = null;
+let _stmtListSeedItemsByProject: Database.Statement | null = null;
+let _stmtInsertSeedItem: Database.Statement | null = null;
+let _stmtUpdateSeedItem: Database.Statement | null = null;
+let _stmtUpdateSeedItemMinDeployedCommit: Database.Statement | null = null;
+let _stmtListSeedItemSources: Database.Statement | null = null;
+let _stmtInsertSeedItemSource: Database.Statement | null = null;
+let _stmtUpdateSeedItemSourceMergeCommit: Database.Statement | null = null;
+let _stmtListSeedItemEvents: Database.Statement | null = null;
+let _stmtInsertSeedItemEvent: Database.Statement | null = null;
+
+export function getSeedItem(id: string): SeedItemRow | undefined {
+  _stmtGetSeedItem ??= db.prepare<{ id: string }>(
+    `SELECT * FROM seed_item WHERE id = @id`,
+  );
+  return _stmtGetSeedItem.get({ id }) as SeedItemRow | undefined;
+}
+
+export function listSeedItemsByMilestone(
+  project: string,
+  milestone: string,
+): SeedItemRow[] {
+  _stmtListSeedItemsByMilestone ??= db.prepare<{
+    project: string;
+    milestone: string;
+  }>(
+    `SELECT * FROM seed_item WHERE project = @project AND milestone = @milestone`,
+  );
+  return _stmtListSeedItemsByMilestone.all({
+    project,
+    milestone,
+  }) as SeedItemRow[];
+}
+
+/** All seed items for a milestone, regardless of project — the readiness/applyability API's lookup. */
+export function listSeedItemsByMilestoneAllProjects(
+  milestone: string,
+): SeedItemRow[] {
+  _stmtListSeedItemsByMilestoneAllProjects ??= db.prepare<{
+    milestone: string;
+  }>(`SELECT * FROM seed_item WHERE milestone = @milestone`);
+  return _stmtListSeedItemsByMilestoneAllProjects.all({
+    milestone,
+  }) as SeedItemRow[];
+}
+
+/** Every seed item across all projects/milestones — the readiness rollup's working set. */
+export function listAllSeedItems(): SeedItemRow[] {
+  _stmtListAllSeedItems ??= db.prepare(`SELECT * FROM seed_item`);
+  return _stmtListAllSeedItems.all() as SeedItemRow[];
+}
+
+/** All seed items for a project, regardless of milestone — the readiness rollup's per-project lookup. */
+export function listSeedItemsByProject(project: string): SeedItemRow[] {
+  _stmtListSeedItemsByProject ??= db.prepare<{ project: string }>(
+    `SELECT * FROM seed_item WHERE project = @project`,
+  );
+  return _stmtListSeedItemsByProject.all({ project }) as SeedItemRow[];
+}
+
+export interface SeedItemFilter {
+  project?: string;
+  milestone?: string;
+  state?: string;
+}
+
+function buildSeedItemWhereClause(filter: SeedItemFilter): {
+  clause: string;
+  params: Record<string, string>;
+} {
+  const conditions: string[] = [];
+  const params: Record<string, string> = {};
+  if (filter.project) {
+    conditions.push('project = @project');
+    params.project = filter.project;
+  }
+  if (filter.milestone) {
+    conditions.push('milestone = @milestone');
+    params.milestone = filter.milestone;
+  }
+  if (filter.state) {
+    conditions.push('state = @state');
+    params.state = filter.state;
+  }
+  return {
+    clause: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
+    params,
+  };
+}
+
+/** Paginated, filtered read of seed_item — never an unbounded load; caller supplies limit/offset. */
+export function listSeedItemsFiltered(
+  filter: SeedItemFilter,
+  limit: number,
+  offset: number,
+): SeedItemRow[] {
+  const { clause, params } = buildSeedItemWhereClause(filter);
+  const stmt = db.prepare(
+    `SELECT * FROM seed_item ${clause} ORDER BY updated_at DESC, id ASC LIMIT @limit OFFSET @offset`,
+  );
+  return stmt.all({ ...params, limit, offset }) as SeedItemRow[];
+}
+
+/** Total count matching the same filter as listSeedItemsFiltered — powers the `total` in a paginated response. */
+export function countSeedItemsFiltered(filter: SeedItemFilter): number {
+  const { clause, params } = buildSeedItemWhereClause(filter);
+  const stmt = db.prepare(`SELECT COUNT(*) AS count FROM seed_item ${clause}`);
+  const row = stmt.get(params) as { count: number };
+  return row.count;
+}
+
+export function insertSeedItem(row: SeedItemRow): void {
+  _stmtInsertSeedItem ??= db.prepare<SeedItemRow>(`
+    INSERT INTO seed_item
+      (id, project, milestone, spec, min_deployed_commit, state, updated_at)
+    VALUES
+      (@id, @project, @milestone, @spec, @min_deployed_commit, @state, @updated_at)
+  `);
+  _stmtInsertSeedItem.run(row);
+}
+
+export function updateSeedItem(row: SeedItemRow): void {
+  _stmtUpdateSeedItem ??= db.prepare<SeedItemRow>(`
+    UPDATE seed_item SET
+      project = @project,
+      milestone = @milestone,
+      spec = @spec,
+      min_deployed_commit = @min_deployed_commit,
+      state = @state,
+      updated_at = @updated_at
+    WHERE id = @id
+  `);
+  _stmtUpdateSeedItem.run(row);
+}
+
+export function updateSeedItemMinDeployedCommit(
+  id: string,
+  minDeployedCommit: string,
+  updatedAt: string,
+): void {
+  _stmtUpdateSeedItemMinDeployedCommit ??= db.prepare<{
+    id: string;
+    min_deployed_commit: string;
+    updated_at: string;
+  }>(
+    `UPDATE seed_item SET min_deployed_commit = @min_deployed_commit, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtUpdateSeedItemMinDeployedCommit.run({
+    id,
+    min_deployed_commit: minDeployedCommit,
+    updated_at: updatedAt,
+  });
+}
+
+let _stmtRehomeSeedItemsBySourceTask: Database.Statement | null = null;
+
+/**
+ * Re-homes every seed_item sourced (via seed_item_source) from a moved task
+ * by UPDATE-ing its milestone — the seed accretion carry for a cross-milestone
+ * move. min_deployed_commit is untouched: it's commit-based and project-scoped,
+ * not milestone-scoped, so a move never invalidates it. Returns the ids
+ * touched, for the audit payload.
+ */
+export function rehomeSeedItemsBySourceTask(
+  project: string,
+  sourceTaskId: string,
+  milestone: string,
+  updatedAt: string,
+): string[] {
+  const ids = (
+    db
+      .prepare<{ project: string; source_task_id: string }>(
+        `SELECT DISTINCT si.id AS id
+         FROM seed_item si
+         JOIN seed_item_source sis ON sis.seed_item_id = si.id
+         WHERE si.project = @project AND sis.source_task_id = @source_task_id`,
+      )
+      .all({ project, source_task_id: normalizeTaskId(sourceTaskId) }) as {
+      id: string;
+    }[]
+  ).map((row) => row.id);
+  if (ids.length === 0) return ids;
+
+  _stmtRehomeSeedItemsBySourceTask ??= db.prepare<{
+    id: string;
+    milestone: string;
+    updated_at: string;
+  }>(
+    `UPDATE seed_item SET milestone = @milestone, updated_at = @updated_at WHERE id = @id`,
+  );
+  for (const id of ids) {
+    _stmtRehomeSeedItemsBySourceTask.run({
+      id,
+      milestone,
+      updated_at: updatedAt,
+    });
+  }
+  return ids;
+}
+
+export function listSeedItemSources(seedItemId: string): SeedItemSourceRow[] {
+  _stmtListSeedItemSources ??= db.prepare<{ seed_item_id: string }>(
+    `SELECT * FROM seed_item_source WHERE seed_item_id = @seed_item_id ORDER BY id ASC`,
+  );
+  return _stmtListSeedItemSources.all({
+    seed_item_id: seedItemId,
+  }) as SeedItemSourceRow[];
+}
+
+export function insertSeedItemSource(row: NewSeedItemSourceRow): void {
+  _stmtInsertSeedItemSource ??= db.prepare<NewSeedItemSourceRow>(`
+    INSERT INTO seed_item_source
+      (seed_item_id, source_task_id, source_task_title, merge_commit, added_at)
+    VALUES
+      (@seed_item_id, @source_task_id, @source_task_title, @merge_commit, @added_at)
+  `);
+  _stmtInsertSeedItemSource.run({
+    ...row,
+    source_task_id: normalizeTaskId(row.source_task_id),
+  });
+}
+
+export function updateSeedItemSourceMergeCommit(
+  seedItemId: string,
+  sourceTaskId: string,
+  mergeCommit: string,
+): void {
+  _stmtUpdateSeedItemSourceMergeCommit ??= db.prepare<{
+    seed_item_id: string;
+    source_task_id: string;
+    merge_commit: string;
+  }>(`
+    UPDATE seed_item_source SET merge_commit = @merge_commit
+    WHERE seed_item_id = @seed_item_id AND source_task_id = @source_task_id
+  `);
+  _stmtUpdateSeedItemSourceMergeCommit.run({
+    seed_item_id: seedItemId,
+    source_task_id: sourceTaskId,
+    merge_commit: mergeCommit,
+  });
+}
+
+export function listSeedItemEvents(seedItemId: string): SeedItemEventRow[] {
+  _stmtListSeedItemEvents ??= db.prepare<{ seed_item_id: string }>(
+    `SELECT * FROM seed_item_event WHERE seed_item_id = @seed_item_id ORDER BY id ASC`,
+  );
+  return _stmtListSeedItemEvents.all({
+    seed_item_id: seedItemId,
+  }) as SeedItemEventRow[];
+}
+
+export function insertSeedItemEvent(row: NewSeedItemEventRow): void {
+  _stmtInsertSeedItemEvent ??= db.prepare<NewSeedItemEventRow>(`
+    INSERT INTO seed_item_event
+      (seed_item_id, outcome, evidence, filed_followon, operator, at)
+    VALUES
+      (@seed_item_id, @outcome, @evidence, @filed_followon, @operator, @at)
+  `);
+  _stmtInsertSeedItemEvent.run(row);
+}
+
+// ─── seed_accretion ─────────────────────────────────────────────────────────
+
+let _stmtGetSeedAccretion: Database.Statement | null = null;
+let _stmtUpsertSeedAccretion: Database.Statement | null = null;
+
+export function getSeedAccretion(
+  sourceTaskId: string,
+): SeedAccretionRow | undefined {
+  _stmtGetSeedAccretion ??= db.prepare<{ source_task_id: string }>(
+    `SELECT * FROM seed_accretion WHERE source_task_id = @source_task_id`,
+  );
+  return _stmtGetSeedAccretion.get({
+    source_task_id: normalizeTaskId(sourceTaskId),
+  }) as SeedAccretionRow | undefined;
+}
+
+export function upsertSeedAccretion(row: SeedAccretionRow): void {
+  _stmtUpsertSeedAccretion ??= db.prepare<SeedAccretionRow>(`
+    INSERT INTO seed_accretion (source_task_id, project, milestone, decision, accreted_at)
+    VALUES (@source_task_id, @project, @milestone, @decision, @accreted_at)
+    ON CONFLICT(source_task_id) DO UPDATE SET
+      project = excluded.project,
+      milestone = excluded.milestone,
+      decision = excluded.decision,
+      accreted_at = excluded.accreted_at
+  `);
+  _stmtUpsertSeedAccretion.run({
+    ...row,
+    source_task_id: normalizeTaskId(row.source_task_id),
+  });
+}
+
 // ─── session_feedback_inbox ─────────────────────────────────────────────────
 
 export function enqueueFeedbackItem(
@@ -3266,4 +4176,13 @@ export function listSessionsWithUndeliveredInboxItems(): string[] {
     )
     .all() as { session_id: string }[];
   return rows.map((r) => r.session_id);
+}
+
+export function countUndeliveredInboxItems(sessionId: string): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS count FROM session_feedback_inbox WHERE session_id = ? AND delivered_at IS NULL`,
+    )
+    .get(sessionId) as { count: number };
+  return row.count;
 }

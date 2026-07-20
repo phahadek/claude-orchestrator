@@ -4,6 +4,7 @@ import {
   getCacheAge,
   getTaskCache,
   updateTaskCacheStatus,
+  deleteTaskCacheRow,
 } from '../db/queries';
 import { NotionTask, NotionApiError, ResolvedTask } from './types';
 import { DependencyResolver } from './DependencyResolver';
@@ -249,10 +250,10 @@ function richTextToString(items: NotionRichText[]): string {
   return items.map((t) => t.plain_text ?? t.text?.content ?? '').join('');
 }
 
-function blockToLine(block: NotionBlock): string {
+export function blockToLine(block: NotionBlock): string {
   const type = block.type as string;
   const inner = block[type] as
-    | { rich_text?: NotionRichText[]; language?: string }
+    | { rich_text?: NotionRichText[]; language?: string; checked?: boolean }
     | undefined;
   if (!inner) return '';
   const text = inner.rich_text ? richTextToString(inner.rich_text) : '';
@@ -263,6 +264,10 @@ function blockToLine(block: NotionBlock): string {
       return `## ${text}`;
     case 'heading_3':
       return `### ${text}`;
+    case 'heading_4':
+      return `#### ${text}`;
+    case 'to_do':
+      return `- ${text}`;
     case 'code':
       return `\`\`\`${inner.language ?? ''}\n${text}\n\`\`\``;
     case 'bulleted_list_item':
@@ -414,17 +419,18 @@ export class NotionClient {
   }
 
   /**
-   * Fetch all tasks from a Notion database board.
-   * Results are cached per board with a 5-minute TTL.
-   * Returns ResolvedTask[] with dependency annotations.
+   * Fetch all raw tasks from a Notion database board, unresolved (no
+   * dependency annotations). Results are cached per board with a 60-second
+   * TTL. Used directly by callers (e.g. the ops loader) that need to combine
+   * rows from multiple boards before resolving dependencies.
    */
-  async fetchReadyTasks(
+  async fetchBoardTasks(
     boardId: string,
     skipCache?: boolean,
-  ): Promise<ResolvedTask[]> {
+  ): Promise<NotionTask[]> {
     if (!skipCache && isBoardCacheFresh(boardId)) {
       const cached = readBoardCache(boardId);
-      if (cached) return resolver.resolve(cached);
+      if (cached) return cached;
     }
 
     // Fetch all pages from the board (paginate through all results)
@@ -456,7 +462,52 @@ export class NotionClient {
     } while (startCursor);
 
     writeBoardCache(boardId, tasks);
+    return tasks;
+  }
+
+  /**
+   * Fetch all tasks from a Notion database board.
+   * Results are cached per board with a 5-minute TTL.
+   * Returns ResolvedTask[] with dependency annotations.
+   */
+  async fetchReadyTasks(
+    boardId: string,
+    skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
+    const tasks = await this.fetchBoardTasks(boardId, skipCache);
     return resolver.resolve(tasks);
+  }
+
+  /**
+   * Fetch a generic Notion page's title + body as Markdown (not a task page —
+   * no section parsing). Used to load fixed context pages (e.g. a project's
+   * master context page) via the same Notion query path as task pages.
+   */
+  async fetchPageMarkdown(
+    pageId: string,
+  ): Promise<{ title: string; markdown: string }> {
+    const externalId = toExternalId(pageId);
+    const page = await notionRequest<NotionPage>('GET', `/pages/${externalId}`);
+    const titleProp = Object.values(
+      page.properties as Record<string, unknown>,
+    ).find((p) => (p as { type?: string })?.type === 'title') as
+      | { title: NotionRichTextItem[] }
+      | undefined;
+    const title = titleProp
+      ? titleProp.title.map((t) => t.text.content).join('')
+      : '';
+
+    const lines: string[] = [];
+    let startCursor: string | undefined;
+    do {
+      const path = `/blocks/${externalId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
+      const resp = await notionRequest<NotionBlocksResponse>('GET', path);
+      for (const block of resp.results) lines.push(blockToLine(block));
+      startCursor =
+        resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
+    } while (startCursor);
+
+    return { title, markdown: lines.join('\n') };
   }
 
   /** Update the Status select property on a Notion task page. */
@@ -469,6 +520,95 @@ export class NotionClient {
     });
     // Use the canonical prefixed taskId for the cache so the key matches
     updateTaskCacheStatus(taskId, status);
+  }
+
+  /**
+   * Create a new task page under the given database, always at the initial
+   * Backlog status regardless of any status implied by `fields`.
+   */
+  async createTask(
+    databaseId: string,
+    fields: {
+      title: string;
+      type?: string;
+      priority?: string;
+      dependsOn?: string[]; // prefixed task IDs, e.g. 'notion:abc123'
+    },
+  ): Promise<NotionTask> {
+    const properties: Record<string, unknown> = {
+      'Task Name': { title: [{ text: { content: fields.title } }] },
+      Status: { select: { name: '🔲 Backlog' } },
+    };
+    if (fields.type) {
+      properties.Type = { select: { name: fields.type } };
+    }
+    if (fields.priority) {
+      properties.Priority = { select: { name: fields.priority } };
+    }
+    if (fields.dependsOn?.length) {
+      const value = fields.dependsOn.map((dep) => toExternalId(dep)).join('|');
+      properties['Depends On'] = { rich_text: [{ text: { content: value } }] };
+    }
+    const page = await notionRequest<NotionPage>('POST', '/pages', {
+      parent: { database_id: databaseId },
+      properties,
+    });
+    return mapPageToTask(page);
+  }
+
+  /**
+   * Overwrite the Depends On rich_text property with the given task IDs,
+   * encoded pipe-delimited (mirrors parseDependsOn's canonical format).
+   */
+  async setDependsOn(taskId: string, dependsOn: string[]): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const value = dependsOn.map((dep) => toExternalId(dep)).join('|');
+    await notionRequest('PATCH', `/pages/${externalId}`, {
+      properties: {
+        'Depends On': {
+          rich_text: value ? [{ text: { content: value } }] : [],
+        },
+      },
+    });
+  }
+
+  /** Overwrite the Type select property on a Notion task page. */
+  async setType(taskId: string, type: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    await notionRequest('PATCH', `/pages/${externalId}`, {
+      properties: {
+        Type: { select: { name: type } },
+      },
+    });
+  }
+
+  /**
+   * Overwrite cosmetic properties (Priority select / Task Name title). Only
+   * the properties present in `patch` are sent.
+   */
+  async setProperties(
+    taskId: string,
+    patch: { priority?: string; title?: string },
+  ): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const properties: Record<string, unknown> = {};
+    if (patch.priority !== undefined) {
+      properties.Priority = { select: { name: patch.priority } };
+    }
+    if (patch.title !== undefined) {
+      properties['Task Name'] = { title: [{ text: { content: patch.title } }] };
+    }
+    if (Object.keys(properties).length === 0) return;
+    await notionRequest('PATCH', `/pages/${externalId}`, { properties });
+  }
+
+  /**
+   * Archive a Notion task page. Notion has no delete for pages via the API —
+   * archiving is the store-level equivalent.
+   */
+  async archive(taskId: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    await notionRequest('PATCH', `/pages/${externalId}`, { archived: true });
   }
 
   /**
@@ -630,6 +770,45 @@ export class NotionClient {
       });
     }
   }
+
+  /**
+   * Overwrite the full page body: archives every existing top-level block,
+   * then appends `blocks` (chunked to Notion's 100-block-per-request limit).
+   * Invalidates the cached task page so the next fetchTaskPage() re-fetches.
+   */
+  async updateBody(
+    taskId: string,
+    blocks: NotionBlockPayload[],
+  ): Promise<void> {
+    const externalId = toExternalId(taskId);
+
+    let startCursor: string | undefined;
+    do {
+      const path = `/blocks/${externalId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
+      const resp = await notionRequest<NotionBlocksResponse>('GET', path);
+      for (const block of resp.results) {
+        await notionRequest('DELETE', `/blocks/${block.id as string}`);
+      }
+      startCursor =
+        resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
+    } while (startCursor);
+
+    for (let i = 0; i < blocks.length; i += 100) {
+      const chunk = blocks.slice(i, i + 100);
+      await notionRequest('PATCH', `/blocks/${externalId}/children`, {
+        children: chunk,
+      });
+    }
+
+    deleteTaskCacheRow(taskPageCacheKey(taskId));
+  }
+}
+
+/** Shape accepted by updateBody — mirrors the bodyRender.ts RenderedBlock output. */
+export interface NotionBlockPayload {
+  object: 'block';
+  type: string;
+  [key: string]: unknown;
 }
 
 /** Probe-validate an arbitrary Notion integration token by calling /v1/users/me. */

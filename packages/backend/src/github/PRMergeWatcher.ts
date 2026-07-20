@@ -1,5 +1,10 @@
+import { EventEmitter } from 'events';
 import type { GitHubClient } from './GitHubClient';
-import type { MergeabilityCategory, FailingCheck } from './types';
+import type {
+  MergeabilityCategory,
+  FailingCheck,
+  VerifiedFlakyDispositionPayload,
+} from './types';
 import { GitHubRateLimitError } from './types';
 import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -46,9 +51,24 @@ import {
   clearTerminalPRFlags,
   setHeadBranch,
   clearSessionInitiatedPRClose,
+  incrementFlakeRecoveryAttempts,
+  resetFlakeRecoveryAttempts,
+  recordMergeCommitForSession,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
+
+/**
+ * Emitted by PRMergeWatcher.handleMerged once a merge commit has been
+ * resolved and persisted — the orchestrator-internal "task X merged (commit
+ * Y)" signal. Consumer-agnostic: subscribe via `.on('merge_completed', ...)`.
+ * Delivery is fire-and-forget; a missed event must be caught up by the
+ * consumer reconciling against local_branches/pull_requests state.
+ */
+export interface MergeCompletedPayload {
+  notion_task_id: string;
+  merge_commit: string;
+}
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const PUSH_REVIEW_TIMEOUT_MS = 240_000;
@@ -91,7 +111,7 @@ function isSessionTerminal(status: string | null | undefined): boolean {
   return status != null && TERMINAL_SESSION_STATUSES.has(status);
 }
 
-export class PRMergeWatcher {
+export class PRMergeWatcher extends EventEmitter {
   /**
    * True until the first poll after boot completes. On that first poll, PRs
    * that GitHub reports as already merged are state-transitioned in SQLite
@@ -116,7 +136,16 @@ export class PRMergeWatcher {
      */
     private taskBackendOverride: TaskBackend | undefined,
     private broadcast: (msg: ServerMessage) => void,
-  ) {}
+  ) {
+    super();
+    this.sessions.on(
+      'verified_flaky_disposition',
+      (payload: unknown) =>
+        void this.handleVerifiedFlakyDisposition(
+          payload as VerifiedFlakyDispositionPayload,
+        ),
+    );
+  }
 
   setAutoMerger(autoMerger: AutoMerger): void {
     this.autoMerger = autoMerger;
@@ -718,6 +747,122 @@ export class PRMergeWatcher {
   }
 
   /**
+   * Actuate a session's verified-flaky disposition: re-run the same gate on the
+   * same commit (no new push) and, on pass, clear the ci_failing pause and
+   * re-drive the merge loop — including for a PR that hasn't been approved yet,
+   * which the approval-gated poll path (checkMergeability) never reaches.
+   * Bounded by flake_recovery_max_retries; exhaustion leaves the PR paused with
+   * a flake-recovery-exhausted detail instead of retrying forever.
+   */
+  async handleVerifiedFlakyDisposition(
+    payload: VerifiedFlakyDispositionPayload,
+  ): Promise<void> {
+    const pr = getPRByNumber(payload.prNumber, payload.repo);
+    if (!pr) return;
+
+    // Stale disposition — a new push landed since the session diagnosed the
+    // failure. The gate for the new SHA hasn't even run yet; nothing to re-run.
+    if (payload.headSha && pr.head_sha !== payload.headSha) {
+      logger.info(
+        `[PRMergeWatcher] verified-flaky disposition for PR #${pr.pr_number} is stale (sha mismatch) — ignoring`,
+      );
+      return;
+    }
+
+    const pauseStruct = parsePauseReason(pr.pause_reason);
+    if (pauseStruct?.reason !== 'ci_failing') return;
+
+    const maxRetries = typedGetSetting('flake_recovery_max_retries');
+    if (pr.flake_recovery_attempts >= maxRetries) {
+      setPauseReason(
+        pr.pr_number,
+        pr.repo,
+        'ci_failing',
+        'flake-recovery-exhausted',
+      );
+      logger.warn(
+        `[PRMergeWatcher] PR #${pr.pr_number}: flake recovery exhausted (${pr.flake_recovery_attempts}/${maxRetries}) — staying paused`,
+      );
+      return;
+    }
+    incrementFlakeRecoveryAttempts(pr.pr_number, pr.repo);
+
+    recordEvent({
+      event_type: 'flake_recovery_attempted',
+      actor_type: 'system',
+      task_id: pr.task_id ?? null,
+      payload: {
+        pr_number: pr.pr_number,
+        repo: pr.repo,
+        sha: pr.head_sha,
+        gate: payload.disposition.gate,
+        reason: payload.disposition.reason,
+        attempt: pr.flake_recovery_attempts + 1,
+      },
+    });
+
+    if (!pr.head_sha) return;
+    const project = getProjectByGithubRepo(pr.repo);
+    let passed: boolean;
+
+    if (payload.disposition.gate === 'f2') {
+      if (!project || !pr.session_id || !this.reviewOrchestrator) return;
+      const session = getSession(pr.session_id);
+      const worktreePath = session?.worktree_path ?? '';
+      if (!worktreePath) return;
+      const result = await this.reviewOrchestrator.rerunFlakyTests(
+        pr.pr_number,
+        pr.repo,
+        pr.head_sha,
+        worktreePath,
+        project,
+      );
+      if (!result) return;
+      passed = result.passed;
+    } else {
+      try {
+        await this.github.rerunFailedJobs(pr.head_sha, pr.repo);
+      } catch (err) {
+        logger.warn(
+          `[PRMergeWatcher] rerunFailedJobs failed for PR #${pr.pr_number}:`,
+          (err as Error).message,
+        );
+        return;
+      }
+      const ciCheckNames = project
+        ? loadOrchestratorConfig(project.projectDir).ci_check_name
+        : [];
+      const category = await this.github.categorizeMergeability(
+        pr.pr_number,
+        pr.repo,
+        ciCheckNames,
+      );
+      passed = category.category !== 'ci_failed';
+    }
+
+    if (passed) {
+      resetFlakeRecoveryAttempts(pr.pr_number, pr.repo);
+      setPauseReason(pr.pr_number, pr.repo, null);
+      this.broadcast({
+        type: 'pr_pause_cleared',
+        prNumber: pr.pr_number,
+        repo: pr.repo,
+      });
+      logger.info(
+        `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run passed — pause cleared, re-driving merge loop`,
+      );
+      // checkMergeabilityNow bypasses the approved-verdict gate that
+      // checkMergeability enforces, so a not-yet-approved PR is re-driven too.
+      await this.checkMergeabilityNow(pr.pr_number, pr.repo);
+      this.autoMerger?.attempt(pr.pr_number, pr.repo);
+    } else {
+      logger.info(
+        `[PRMergeWatcher] PR #${pr.pr_number}: verified-flaky re-run still failing (attempt ${pr.flake_recovery_attempts + 1}/${maxRetries})`,
+      );
+    }
+  }
+
+  /**
    * Handle a push event for the given PR — either triggered by a coding session's
    * push_detected WS event (via the thin server.ts wrapper) or by PRMergeWatcher
    * detecting an out-of-band head_sha change during polling.
@@ -1169,6 +1314,8 @@ export class PRMergeWatcher {
     clearTerminalPRFlags(pr.pr_number, pr.repo, 'merged');
     deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
 
+    const mergeCommit = await this.completeMerge(pr, sha);
+
     // Delete the origin branch for feature/* branches.
     if (pr.head_branch?.startsWith('feature/')) {
       await this.github
@@ -1245,9 +1392,63 @@ export class PRMergeWatcher {
         type: 'pr_merged',
         prNumber: pr.pr_number,
         repo: pr.repo,
-        sha: sha ?? '',
+        sha: mergeCommit ?? sha ?? '',
       });
     }
+  }
+
+  /**
+   * Single merge-completion convergence point: resolves the merge commit
+   * (from the caller-supplied sha where present, else fetched from GitHub for
+   * the poll/ingest paths that only know the PR merged), persists it to
+   * local_branches.merge_commit_sha uniformly across every merge path, and
+   * emits merge_completed for internal consumers (e.g. the gate's
+   * min_deployed_commit fill). Emission is fire-and-forget and synchronous —
+   * a missed event is expected to be caught up by the consumer's own
+   * reconciliation against persisted state.
+   */
+  private async completeMerge(
+    pr: PullRequestRow,
+    sha: string | null,
+  ): Promise<string | null> {
+    let mergeCommit = sha;
+    if (!mergeCommit) {
+      try {
+        mergeCommit = await this.github.getMergeCommitSha(
+          pr.pr_number,
+          pr.repo,
+        );
+      } catch (err) {
+        logger.warn(
+          `[PRMergeWatcher] getMergeCommitSha failed for PR #${pr.pr_number}:`,
+          (err as Error).message,
+        );
+        mergeCommit = null;
+      }
+    }
+
+    if (pr.session_id) {
+      const project = getProjectByGithubRepo(pr.repo);
+      if (project) {
+        recordMergeCommitForSession({
+          sessionId: pr.session_id,
+          projectId: project.id,
+          branchName: pr.head_branch ?? '',
+          baseBranch: pr.base_branch ?? 'dev',
+          commitSha: mergeCommit,
+        });
+      }
+    }
+
+    if (pr.task_id && mergeCommit) {
+      const payload: MergeCompletedPayload = {
+        notion_task_id: pr.task_id,
+        merge_commit: mergeCommit,
+      };
+      this.emit('merge_completed', payload);
+    }
+
+    return mergeCommit;
   }
 }
 

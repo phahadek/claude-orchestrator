@@ -108,13 +108,13 @@ vi.mock('../config.js', () => ({
 import { createPrsRouter, setPRBroadcast } from '../routes/prs.js';
 import * as queries from '../db/queries.js';
 import * as auditLog from '../audit/AuditLog.js';
-import * as tasksRoute from '../routes/tasks.js';
 import type { PullRequest } from '../github/types.js';
 import { GitHubApiError } from '../github/types.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
 import type { PRReviewService } from '../github/PRReviewService.js';
 import type { SessionManager } from '../session/SessionManager.js';
 import type { NotionClient } from '../notion/NotionClient.js';
+import type { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import type { PullRequestRow } from '../db/types.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -241,17 +241,30 @@ function makeMockNotionClient(): NotionClient {
   } as unknown as NotionClient;
 }
 
+function makeMockMergeWatcher(): PRMergeWatcher {
+  return {
+    handleMerged: vi.fn().mockResolvedValue(undefined),
+  } as unknown as PRMergeWatcher;
+}
+
 function buildApp(
   github = makeMockGitHub(),
   prReviewService = makeMockPRReviewService(),
   sessionManager = makeMockSessionManager(),
   notionClient = makeMockNotionClient(),
+  mergeWatcher: PRMergeWatcher | undefined = undefined,
 ) {
   const app = express();
   app.use(express.json());
   app.use(
     '/api',
-    createPrsRouter(github, prReviewService, sessionManager, notionClient),
+    createPrsRouter(
+      github,
+      prReviewService,
+      sessionManager,
+      notionClient,
+      mergeWatcher,
+    ),
   );
   return app;
 }
@@ -742,116 +755,48 @@ describe('POST /api/prs/:prNumber/merge', () => {
     );
   });
 
-  it('returns merge result and updates state on success', async () => {
+  it('returns merge result on success (no mergeWatcher configured)', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
     const res = await supertest(buildApp())
       .post('/api/prs/owner/repo/42/merge')
       .send({ commitTitle: 'feat: add something (#42)' });
     expect(res.status).toBe(200);
     expect(res.body.merged).toBe(true);
+    // Falls back to a minimal state update when no mergeWatcher is wired up.
     expect(vi.mocked(queries.updatePRState)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'merged',
+    );
+    expect(vi.mocked(queries.clearTerminalPRFlags)).toHaveBeenCalledWith(
       42,
       'owner/repo',
       'merged',
     );
   });
 
-  it('calls clearTerminalPRFlags on successful manual merge', async () => {
+  it('delegates post-merge handling to mergeWatcher.handleMerged(pr, sha) on success', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const res = await supertest(buildApp())
-      .post('/api/prs/owner/repo/42/merge')
-      .send({});
-    expect(res.status).toBe(200);
-    expect(vi.mocked(queries.clearTerminalPRFlags)).toHaveBeenCalledWith(
-      42,
-      'owner/repo',
-    );
-  });
-
-  it('ends coding session and review session gracefully on merge', async () => {
-    const prWithSessions: PullRequestRow = {
-      ...mockPRRow,
-      session_id: 'coding-session-id',
-      review_session_id: 'review-session-id',
-    };
-    vi.mocked(queries.getPRByNumber).mockReturnValue(prWithSessions);
-    const sessionManager = makeMockSessionManager();
+    const mergeWatcher = makeMockMergeWatcher();
     const res = await supertest(
-      buildApp(makeMockGitHub(), makeMockPRReviewService(), sessionManager),
+      buildApp(
+        makeMockGitHub(),
+        makeMockPRReviewService(),
+        makeMockSessionManager(),
+        makeMockNotionClient(),
+        mergeWatcher,
+      ),
     )
       .post('/api/prs/owner/repo/42/merge')
       .send({});
     expect(res.status).toBe(200);
-    expect(vi.mocked(sessionManager.endSession)).toHaveBeenCalledWith(
-      'coding-session-id',
+    expect(vi.mocked(mergeWatcher.handleMerged)).toHaveBeenCalledWith(
+      mockPRRow,
+      'abc123',
     );
-    expect(vi.mocked(sessionManager.endSession)).toHaveBeenCalledWith(
-      'review-session-id',
-    );
-  });
-
-  it('calls markSessionDone for coding session with call_site manual_merge_rest', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const res = await supertest(buildApp())
-      .post('/api/prs/owner/repo/42/merge')
-      .send({});
-    expect(res.status).toBe(200);
-    expect(vi.mocked(queries.markSessionDone)).toHaveBeenCalledWith(
-      'session-xyz',
-      expect.any(Number),
-      mockPRRow.pr_url,
-      'manual_merge_rest',
-    );
-  });
-
-  it('calls markSessionDone for review session with call_site manual_merge_rest', async () => {
-    const prWithReview: PullRequestRow = {
-      ...mockPRRow,
-      review_session_id: 'review-session-id',
-    };
-    vi.mocked(queries.getPRByNumber).mockReturnValue(prWithReview);
-    const res = await supertest(buildApp())
-      .post('/api/prs/owner/repo/42/merge')
-      .send({});
-    expect(res.status).toBe(200);
-    expect(vi.mocked(queries.markSessionDone)).toHaveBeenCalledWith(
-      'review-session-id',
-      expect.any(Number),
-      prWithReview.pr_url,
-      'manual_merge_rest',
-    );
-  });
-
-  it('calls markForBranchDeletion for feature-branch PRs', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow); // head_branch: 'feature/add-something'
-    const sessionManager = makeMockSessionManager();
-    const res = await supertest(
-      buildApp(makeMockGitHub(), makeMockPRReviewService(), sessionManager),
-    )
-      .post('/api/prs/owner/repo/42/merge')
-      .send({});
-    expect(res.status).toBe(200);
-    expect(
-      vi.mocked(sessionManager.markForBranchDeletion),
-    ).toHaveBeenCalledWith('session-xyz');
-  });
-
-  it('does NOT call markForBranchDeletion for non-feature branches', async () => {
-    const nonFeaturePR: PullRequestRow = {
-      ...mockPRRow,
-      head_branch: 'fix/some-bug',
-    };
-    vi.mocked(queries.getPRByNumber).mockReturnValue(nonFeaturePR);
-    const sessionManager = makeMockSessionManager();
-    const res = await supertest(
-      buildApp(makeMockGitHub(), makeMockPRReviewService(), sessionManager),
-    )
-      .post('/api/prs/owner/repo/42/merge')
-      .send({});
-    expect(res.status).toBe(200);
-    expect(
-      vi.mocked(sessionManager.markForBranchDeletion),
-    ).not.toHaveBeenCalled();
+    // The manual route no longer duplicates handleMerged's post-merge steps.
+    expect(vi.mocked(queries.updatePRState)).not.toHaveBeenCalled();
+    expect(vi.mocked(queries.clearTerminalPRFlags)).not.toHaveBeenCalled();
   });
 
   it('emits pr_merged audit event with correct payload on merge', async () => {
@@ -893,116 +838,10 @@ describe('POST /api/prs/:prNumber/merge', () => {
     );
   });
 
-  it('calls NotionClient.updateStatus with Done on merge', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const notionClient = makeMockNotionClient();
-    const res = await supertest(
-      buildApp(
-        makeMockGitHub(),
-        makeMockPRReviewService(),
-        makeMockSessionManager(),
-        notionClient,
-      ),
-    )
-      .post('/api/prs/owner/repo/42/merge')
-      .send({});
-    expect(res.status).toBe(200);
-    expect(vi.mocked(notionClient.updateStatus)).toHaveBeenCalledWith(
-      'notion:notion-task-abc',
-      '✅ Done',
-      { source: 'orchestrator' },
-    );
-  });
-
-  it('calls emitTaskUpdated after successful Notion update on merge', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const notionClient = makeMockNotionClient();
-    const res = await supertest(
-      buildApp(
-        makeMockGitHub(),
-        makeMockPRReviewService(),
-        makeMockSessionManager(),
-        notionClient,
-      ),
-    )
-      .post('/api/prs/owner/repo/42/merge')
-      .send({});
-    expect(res.status).toBe(200);
-    expect(vi.mocked(tasksRoute.emitTaskUpdated)).toHaveBeenCalledWith(
-      'notion:notion-task-abc',
-    );
-  });
-
-  it('broadcasts task_status_changed after successful Notion update on merge', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const broadcastedMessages: object[] = [];
-    setPRBroadcast((msg) => broadcastedMessages.push(msg));
-
-    await supertest(buildApp()).post('/api/prs/owner/repo/42/merge').send({});
-
-    expect(broadcastedMessages).toContainEqual({
-      type: 'task_status_changed',
-      notionTaskId: 'notion:notion-task-abc',
-      newStatus: '✅ Done',
-    });
-
-    setPRBroadcast(() => {});
-  });
-
-  it('does NOT call emitTaskUpdated when PR has no task_id', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask);
-    const res = await supertest(buildApp())
-      .post('/api/prs/owner/repo/43/merge')
-      .send({});
-    expect(res.status).toBe(200);
-    expect(vi.mocked(tasksRoute.emitTaskUpdated)).not.toHaveBeenCalled();
-  });
-
-  it('broadcasts task_status_changed and calls emitTaskUpdated before res.json() resolves', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-
-    const callOrder: string[] = [];
-
-    const notionClient = makeMockNotionClient();
-    vi.mocked(notionClient.updateStatus).mockImplementation(async () => {
-      callOrder.push('updateStatus');
-    });
-
-    setPRBroadcast((msg) => {
-      callOrder.push(`broadcast:${(msg as { type: string }).type}`);
-    });
-
-    vi.mocked(tasksRoute.emitTaskUpdated).mockImplementation(() => {
-      callOrder.push('emitTaskUpdated');
-    });
-
-    const res = await supertest(
-      buildApp(
-        makeMockGitHub(),
-        makeMockPRReviewService(),
-        makeMockSessionManager(),
-        notionClient,
-      ),
-    )
-      .post('/api/prs/owner/repo/42/merge')
-      .send({});
-
-    // push after supertest resolves — by this point res.json() has already fired
-    callOrder.push('response');
-
-    expect(res.status).toBe(200);
-
-    const taskStatusIdx = callOrder.indexOf('broadcast:task_status_changed');
-    const emitIdx = callOrder.indexOf('emitTaskUpdated');
-    const responseIdx = callOrder.indexOf('response');
-
-    expect(taskStatusIdx).toBeGreaterThanOrEqual(0);
-    expect(emitIdx).toBeGreaterThanOrEqual(0);
-    expect(taskStatusIdx).toBeLessThan(responseIdx);
-    expect(emitIdx).toBeLessThan(responseIdx);
-
-    setPRBroadcast(() => {});
-  });
+  // Task-status update (Notion updateStatus, emitTaskUpdated, task_status_changed
+  // broadcast) is now performed inside PRMergeWatcher.handleMerged — see the
+  // "delegates post-merge handling" test above and handleMerged's own coverage
+  // (e.g. clearTerminalPRFlags.test.ts, pruneBranches.test.ts).
 });
 
 // ── POST /api/prs/:prNumber/merge — draft → ready flip ───────────────────────

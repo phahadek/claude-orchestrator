@@ -6,6 +6,10 @@ vi.mock('../../src/db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../../src/orchestration/memoryAdmission.js', () => ({
+  hasMemoryHeadroom: vi.fn().mockReturnValue(true),
+}));
+
 import { AutoLauncher } from '../../src/orchestration/AutoLauncher';
 import type { ProjectConfig } from '../../src/config';
 import type { ResolvedTask } from '../../src/notion/types';

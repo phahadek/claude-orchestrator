@@ -13,7 +13,13 @@ import type { BootReconciliationState } from '../hooks/useBootReconciliation';
 import type { PlanUsage } from '@claude-orchestrator/backend/src/ws/types';
 import styles from './Header.module.css';
 
-export type TopView = 'tasks' | 'sessions' | 'prs' | 'analytics' | 'settings';
+export type TopView =
+  | 'tasks'
+  | 'sessions'
+  | 'prs'
+  | 'analytics'
+  | 'gate'
+  | 'settings';
 
 interface AutoLaunchTogglePatch {
   autoLaunchEnabled: boolean;
@@ -121,6 +127,7 @@ export function Header({
         type="button"
         className={`${styles.navLink}${activeView === 'tasks' ? ` ${styles.navLinkActive}` : ''}`}
         onClick={() => onViewChange('tasks')}
+        title="Tasks"
       >
         Tasks
       </button>
@@ -128,6 +135,7 @@ export function Header({
         type="button"
         className={`${styles.navLink}${activeView === 'sessions' ? ` ${styles.navLinkActive}` : ''}`}
         onClick={() => onViewChange('sessions')}
+        title="Sessions"
       >
         Sessions
       </button>
@@ -148,61 +156,67 @@ export function Header({
       </button>
       <button
         type="button"
-        className={`${styles.navLink}${activeView === 'analytics' ? ` ${styles.navLinkActive}` : ''}`}
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'analytics' ? ` ${styles.navLinkActive}` : ''}`}
         onClick={() => onViewChange('analytics')}
+        title="Analytics"
+        aria-label="Analytics"
       >
-        Analytics
+        📊
       </button>
       <button
         type="button"
-        className={`${styles.navLink}${activeView === 'settings' ? ` ${styles.navLinkActive}` : ''}`}
-        onClick={() => onViewChange('settings')}
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'gate' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('gate')}
+        title="Gate Readiness"
+        aria-label="Gate Readiness"
       >
-        Settings
+        🚦
+      </button>
+      <button
+        type="button"
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'settings' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('settings')}
+        title="Settings"
+        aria-label="Settings"
+      >
+        ⚙️
       </button>
     </nav>
   );
 
   const autoLaunchContent = showAutoLaunchToggle ? (
-    <>
-      <button
-        type="button"
-        className={`${styles.autoLaunchPill}${isOnThisMilestone ? ` ${styles.autoLaunchPillOn}` : ''}`}
-        onClick={handleAutoLaunchClick}
-        disabled={!activeBoardId || !onAutoLaunchToggle}
-        title={autoLaunchTooltip}
-        aria-pressed={isOnThisMilestone}
-        aria-label={
-          isOnThisMilestone
-            ? 'Auto-launch ON for this milestone'
-            : otherMilestoneName
-              ? `Auto-launch active on ${otherMilestoneName}`
-              : 'Auto-launch OFF'
-        }
-      >
-        <span aria-hidden="true">🤖</span>
-        <span className={styles.autoLaunchLabel}>Auto-launch</span>
-        <span className={styles.autoLaunchState}>
-          {isOnThisMilestone ? 'ON' : 'OFF'}
+    <button
+      type="button"
+      className={`${styles.autoLaunchPill}${isOnThisMilestone ? ` ${styles.autoLaunchPillOn}` : ''}`}
+      onClick={handleAutoLaunchClick}
+      disabled={!activeBoardId || !onAutoLaunchToggle}
+      title={`${autoLaunchTooltip}${
+        autoLaunchCap != null && autoLaunchRunningCount != null
+          ? ` — ${autoLaunchRunningCount} running, ${autoLaunchQueuedCount ?? 0} queued, cap ${autoLaunchCap}. Auto-launch checks every ${Math.round((autoLaunchPollIntervalMs ?? 60000) / 1000)}s.`
+          : ''
+      }`}
+      aria-pressed={isOnThisMilestone}
+      aria-label={
+        isOnThisMilestone
+          ? 'Auto-launch ON for this milestone'
+          : otherMilestoneName
+            ? `Auto-launch active on ${otherMilestoneName}`
+            : 'Auto-launch OFF'
+      }
+      data-testid="auto-launch-counter"
+    >
+      <span aria-hidden="true">🤖</span>
+      {autoLaunchCap != null && autoLaunchRunningCount != null && (
+        <span className={styles.autoLaunchCounterText}>
+          {autoLaunchRunningCount}/{autoLaunchCap}
         </span>
-      </button>
-      {isOnThisMilestone &&
-        autoLaunchCap != null &&
-        autoLaunchRunningCount != null && (
-          <span
-            className={styles.autoLaunchCounter}
-            title={`${autoLaunchRunningCount} running, ${autoLaunchQueuedCount ?? 0} queued, cap ${autoLaunchCap}. Auto-launch checks every ${Math.round((autoLaunchPollIntervalMs ?? 60000) / 1000)}s.`}
-            data-testid="auto-launch-counter"
-          >
-            🤖 {autoLaunchRunningCount}/{autoLaunchCap}
-            {(autoLaunchQueuedCount ?? 0) > 0 && (
-              <span className={styles.autoLaunchQueued}>
-                +{autoLaunchQueuedCount} queued
-              </span>
-            )}
-          </span>
-        )}
-    </>
+      )}
+      {(autoLaunchQueuedCount ?? 0) > 0 && (
+        <span className={styles.autoLaunchQueued}>
+          {autoLaunchQueuedCount}⏳
+        </span>
+      )}
+    </button>
   ) : null;
 
   const tokenContent =
@@ -296,13 +310,11 @@ export function Header({
           <MilestoneProgress tasks={tasks} />
         </>
       )}
-      {tokenContent && (
-        <>
-          <div className={styles.divider} />
-          {tokenContent}
-        </>
-      )}
-      <PlanUsageBars usage={planUsage} />
+      {tokenContent && <div className={styles.divider} />}
+      <div className={styles.tokenStack}>
+        {tokenContent}
+        <PlanUsageBars usage={planUsage} />
+      </div>
       {bootReconciliation && bootReconciliation.phase !== 'idle' && (
         <>
           <div className={styles.divider} />

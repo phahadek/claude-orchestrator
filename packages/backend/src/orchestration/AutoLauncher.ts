@@ -23,6 +23,7 @@ import {
 import { recordEvent } from '../audit/AuditLog';
 import { runWithConcurrency } from '../utils/concurrency';
 import { getProjectRepos } from '../projects/ProjectService';
+import { hasMemoryHeadroom } from './memoryAdmission';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -458,7 +459,14 @@ export class AutoLauncher {
     const cap = Math.max(0, runtimeSettings.auto_launch_concurrency);
     if (cap === 0) return false;
     const liveCodeSessions = this.countLiveCodeSessions();
-    return liveCodeSessions < cap;
+    if (liveCodeSessions >= cap) return false;
+    if (!hasMemoryHeadroom()) {
+      logger.info(
+        '[AutoLauncher] deferring dispatch — projected free host memory below configured budget',
+      );
+      return false;
+    }
+    return true;
   }
 
   /** Count live (in-memory) standard sessions via SessionManager's public API. */

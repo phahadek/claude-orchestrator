@@ -49,7 +49,32 @@ type EventType =
   | 'repo_git_config_repaired'
   | 'task_recovered'
   | 'process_fault'
-  | 'process_boot';
+  | 'process_boot'
+  | 'ops_journal_state_changed'
+  | 'ops_journal_entry_seeded'
+  | 'ops_journal_entry_dropped'
+  | 'gate_item_created'
+  | 'gate_item_event_appended'
+  | 'gate_item_state_changed'
+  | 'gate_item_reclassified'
+  | 'gate_item_source_added'
+  | 'gate_item_rehomed'
+  | 'seed_item_created'
+  | 'seed_item_event_appended'
+  | 'seed_item_state_changed'
+  | 'seed_item_source_added'
+  | 'seed_item_rehomed'
+  | 'task_created'
+  | 'task_deps_updated'
+  | 'task_body_updated'
+  | 'task_type_updated'
+  | 'task_properties_updated'
+  | 'task_archived'
+  | 'task_moved'
+  | 'readiness_override'
+  | 'flake_recovery_attempted'
+  | 'flake_recovery_f2_invalidated'
+  | 'flake_recovery_f2_rerun';
 
 type ActorType = 'ai' | 'human' | 'system';
 

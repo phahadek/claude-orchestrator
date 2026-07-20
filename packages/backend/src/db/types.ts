@@ -342,6 +342,9 @@ export interface PullRequestRow {
   /** Unix ms timestamp stamped once requestReviewers has been called for this
    *  PR (corporate-mode reviewer auto-assignment); null means not yet fired. */
   reviewer_requested_at: number | null;
+  /** Count of verified-flaky same-SHA gate re-runs attempted for the current
+   *  ci_failing pause; resets to 0 when the pause clears or head_sha advances. */
+  flake_recovery_attempts: number;
 }
 
 // ─── task_repo_assignments ──────────────────────────────────────────────────
@@ -353,6 +356,144 @@ export interface TaskRepoAssignmentRow {
   assigned_by: string;
   assigned_at: number;
 }
+
+// ─── ops_journal ──────────────────────────────────────────────────────────
+
+export type OpsJournalState =
+  | 'pending'
+  | 'candidate'
+  | 'staged-proposal'
+  | 'applied-pending-confirm'
+  | 'blocked'
+  | 'incident-frozen'
+  | 'resolved';
+
+/** JSON-TEXT columns carry the full on-disk worked-field set verbatim (unparsed). */
+export interface OpsJournalRow {
+  task_id: string;
+  project: string;
+  milestone: string;
+  state: OpsJournalState;
+  disposition: string | null;
+  worked_in: string | null;
+  evidence: string | null;
+  finding_or_proposal: string | null;
+  falsification: string | null;
+  filed_followons: string | null;
+  needs_from_operator: string | null;
+  resolution: string | null;
+  updated_at: string;
+}
+
+// ─── gate_item ────────────────────────────────────────────────────────────
+
+export type GateItemClassification =
+  | 'Read-Only'
+  | 'Prod-Mutating'
+  | 'Opportunistic'
+  | 'needs-triage';
+
+export interface GateItemRow {
+  id: string;
+  project: string;
+  milestone: string;
+  text: string;
+  classification: GateItemClassification;
+  min_deployed_commit: string | null;
+  state: string;
+  current_disposition: string | null;
+  updated_at: string;
+}
+
+export interface GateItemSourceRow {
+  id: number;
+  gate_item_id: string;
+  source_task_id: string;
+  source_task_title: string;
+  merge_commit: string | null;
+  added_at: string;
+}
+
+export type NewGateItemSourceRow = Omit<GateItemSourceRow, 'id'>;
+
+export interface GateItemEventRow {
+  id: number;
+  gate_item_id: string;
+  disposition: string;
+  evidence: string | null;
+  filed_followon: string | null;
+  deploy_sha: string | null;
+  operator: string | null;
+  at: string;
+}
+
+// ─── gate_accretion ───────────────────────────────────────────────────────
+
+/** Per-source-task marker recording whether the gate_contribution promotion check is satisfied. */
+export type GateAccretionDecision = 'items' | 'none' | 'n/a';
+
+export interface GateAccretionRow {
+  source_task_id: string;
+  project: string;
+  milestone: string;
+  decision: GateAccretionDecision;
+  accreted_at: string;
+}
+
+export type NewGateItemEventRow = Omit<GateItemEventRow, 'id'>;
+
+// ─── seed_item ────────────────────────────────────────────────────────────
+
+/** Single-field lifecycle: pending -> applied -> confirmed | blocked. */
+export type SeedItemState = 'pending' | 'applied' | 'confirmed' | 'blocked';
+
+export interface SeedItemRow {
+  id: string;
+  project: string;
+  milestone: string;
+  spec: string;
+  min_deployed_commit: string | null;
+  state: SeedItemState;
+  updated_at: string;
+}
+
+// ─── seed_accretion ───────────────────────────────────────────────────────
+
+/** Per-source-task marker recording whether the seed_contribution promotion check is satisfied. */
+export type SeedAccretionDecision = 'seeds' | 'none' | 'n/a';
+
+export interface SeedAccretionRow {
+  source_task_id: string;
+  project: string;
+  milestone: string;
+  decision: SeedAccretionDecision;
+  accreted_at: string;
+}
+
+export interface SeedItemSourceRow {
+  id: number;
+  seed_item_id: string;
+  source_task_id: string;
+  source_task_title: string;
+  merge_commit: string | null;
+  added_at: string;
+}
+
+export type NewSeedItemSourceRow = Omit<SeedItemSourceRow, 'id'>;
+
+export type SeedItemEventOutcome = 'applied' | 'confirmed' | 'blocked';
+
+export interface SeedItemEventRow {
+  id: number;
+  seed_item_id: string;
+  outcome: SeedItemEventOutcome;
+  evidence: string | null;
+  filed_followon: string | null;
+  operator: string | null;
+  at: string;
+}
+
+export type NewSeedItemEventRow = Omit<SeedItemEventRow, 'id'>;
 
 // ─── session_feedback_inbox ─────────────────────────────────────────────────
 

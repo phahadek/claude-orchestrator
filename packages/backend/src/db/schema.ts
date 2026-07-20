@@ -208,6 +208,74 @@ export function runMigrations(target: Database.Database): void {
       assigned_at  INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS ops_journal (
+      task_id              TEXT    PRIMARY KEY,
+      project              TEXT    NOT NULL,
+      milestone            TEXT    NOT NULL,
+      state                TEXT    NOT NULL,
+      disposition          TEXT,
+      worked_in            TEXT,
+      evidence             TEXT,
+      finding_or_proposal  TEXT,
+      falsification        TEXT,
+      filed_followons      TEXT,
+      needs_from_operator  TEXT,
+      resolution           TEXT,
+      updated_at           TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ops_journal_project_milestone ON ops_journal(project, milestone);
+
+    CREATE TABLE IF NOT EXISTS gate_item (
+      id                     TEXT    PRIMARY KEY,
+      project                TEXT    NOT NULL,
+      milestone              TEXT    NOT NULL,
+      text                   TEXT    NOT NULL,
+      classification         TEXT    NOT NULL,
+      min_deployed_commit    TEXT,
+      state                  TEXT    NOT NULL,
+      current_disposition    TEXT,
+      updated_at             TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_gate_item_project_milestone ON gate_item(project, milestone);
+
+    CREATE TABLE IF NOT EXISTS gate_item_source (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      gate_item_id      TEXT    NOT NULL,
+      source_task_id    TEXT    NOT NULL,
+      source_task_title TEXT    NOT NULL,
+      merge_commit      TEXT,
+      added_at          TEXT    NOT NULL,
+      FOREIGN KEY (gate_item_id) REFERENCES gate_item(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_gate_item_source_gate_item_id ON gate_item_source(gate_item_id);
+
+    CREATE TABLE IF NOT EXISTS gate_item_event (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      gate_item_id   TEXT    NOT NULL,
+      disposition    TEXT    NOT NULL,
+      evidence       TEXT,
+      filed_followon TEXT,
+      deploy_sha     TEXT,
+      operator       TEXT,
+      at             TEXT    NOT NULL,
+      FOREIGN KEY (gate_item_id) REFERENCES gate_item(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_gate_item_event_gate_item_id ON gate_item_event(gate_item_id);
+
+    CREATE TABLE IF NOT EXISTS project_deployed_sha (
+      project_id  TEXT    PRIMARY KEY,
+      sha         TEXT    NOT NULL,
+      recorded_at TEXT    NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS gate_accretion (
+      source_task_id TEXT    PRIMARY KEY,
+      project         TEXT    NOT NULL,
+      milestone       TEXT    NOT NULL,
+      decision        TEXT    NOT NULL,
+      accreted_at     TEXT    NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS pending_review_sync (
       pr_number  INTEGER NOT NULL,
       repo       TEXT    NOT NULL,
@@ -888,6 +956,57 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN flake_recovery_attempts INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS seed_item (
+      id                     TEXT    PRIMARY KEY,
+      project                TEXT    NOT NULL,
+      milestone              TEXT    NOT NULL,
+      spec                   TEXT    NOT NULL,
+      min_deployed_commit    TEXT,
+      state                  TEXT    NOT NULL,
+      updated_at             TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_seed_item_project_milestone ON seed_item(project, milestone);
+
+    CREATE TABLE IF NOT EXISTS seed_item_source (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      seed_item_id      TEXT    NOT NULL,
+      source_task_id    TEXT    NOT NULL,
+      source_task_title TEXT    NOT NULL,
+      merge_commit      TEXT,
+      added_at          TEXT    NOT NULL,
+      FOREIGN KEY (seed_item_id) REFERENCES seed_item(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_seed_item_source_seed_item_id ON seed_item_source(seed_item_id);
+
+    CREATE TABLE IF NOT EXISTS seed_item_event (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      seed_item_id   TEXT    NOT NULL,
+      outcome        TEXT    NOT NULL,
+      evidence       TEXT,
+      filed_followon TEXT,
+      operator       TEXT,
+      at             TEXT    NOT NULL,
+      FOREIGN KEY (seed_item_id) REFERENCES seed_item(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_seed_item_event_seed_item_id ON seed_item_event(seed_item_id);
+
+    CREATE TABLE IF NOT EXISTS seed_accretion (
+      source_task_id TEXT    PRIMARY KEY,
+      project         TEXT    NOT NULL,
+      milestone       TEXT    NOT NULL,
+      decision        TEXT    NOT NULL,
+      accreted_at     TEXT    NOT NULL
+    );
+  `);
 
   // ── Git-Bash project_dir backfill (win32-only, idempotent) ──────────────────
   // Converts any /c/... or /D/... style project_dir stored by Git-Bash
@@ -904,5 +1023,105 @@ export function runMigrations(target: Database.Database): void {
           OR (substr(project_dir, 2, 1) BETWEEN 'A' AND 'Z')
         )
     `);
+  }
+
+  // ── gate_item_source.source_task_id: raw Notion id → prefixed 'notion:<id>' ──
+  // Accretion/backfill historically stored the raw Notion id while
+  // merge_completed's payload.notion_task_id (from pull_requests.task_id) is
+  // always the prefixed canonical form, so the consumer's WHERE source_task_id
+  // = ? join never matched and min_deployed_commit was never filled. Idempotent:
+  // guarded by NOT LIKE '%:%', re-running is a no-op.
+  target.exec(`
+    UPDATE gate_item_source
+    SET source_task_id = 'notion:' || source_task_id
+    WHERE source_task_id NOT LIKE '%:%';
+  `);
+
+  // ── milestone key: full Notion title → short M<n> canonical token ──────────
+  // resolveMilestoneForProject used to return a milestone's full display name
+  // (e.g. "M11 — Orchestrator-Owned Planning") instead of the short form every
+  // other write/read/loader/row keys on. Rows minted as accretion stopgaps
+  // while that bug stood are re-keyed here to the short token every other
+  // store already used. Idempotent: a milestone value already in short form
+  // (or with no leading M<n> token) is left untouched.
+  const shortMilestoneToken = (name: string): string | null => {
+    const match = /^([Mm]\d+[A-Za-z]?)(?=[\s—:-]|$)/.exec(name);
+    return match ? match[1] : null;
+  };
+  for (const table of [
+    'gate_item',
+    'seed_item',
+    'gate_accretion',
+    'seed_accretion',
+  ]) {
+    const rows = target
+      .prepare(`SELECT DISTINCT milestone FROM ${table}`)
+      .all() as { milestone: string }[];
+    for (const { milestone } of rows) {
+      const short = shortMilestoneToken(milestone);
+      if (short && short !== milestone) {
+        target
+          .prepare(`UPDATE ${table} SET milestone = ? WHERE milestone = ?`)
+          .run(short, milestone);
+      }
+    }
+  }
+
+  // ── seed_item_source.source_task_id: raw Notion id → prefixed 'notion:<id>' ──
+  // Mirrors the gate_item_source migration above so seed accretion keys on
+  // the same store-wide 'notion:<id>' convention as gate accretion.
+  target.exec(`
+    UPDATE seed_item_source
+    SET source_task_id = 'notion:' || source_task_id
+    WHERE source_task_id NOT LIKE '%:%';
+  `);
+
+  // ── gate_accretion / seed_accretion source_task_id: raw → prefixed ─────────
+  // The promotion-gate marker lookup (groomGate.ts) and the accretion writers
+  // (accreteGateContribution / stageSeedContribution) must agree on one
+  // taskId form. source_task_id is the PRIMARY KEY here, so a raw-keyed row
+  // is merged into any pre-existing prefixed row for the same underlying
+  // task (keeping whichever marker is newer) rather than blindly UPDATEd,
+  // to avoid a PK collision.
+  for (const table of ['gate_accretion', 'seed_accretion']) {
+    const rawRows = target
+      .prepare(`SELECT * FROM ${table} WHERE source_task_id NOT LIKE '%:%'`)
+      .all() as {
+      source_task_id: string;
+      project: string;
+      milestone: string;
+      decision: string;
+      accreted_at: string;
+    }[];
+    for (const row of rawRows) {
+      const normalized = `notion:${row.source_task_id}`;
+      const existing = target
+        .prepare(`SELECT * FROM ${table} WHERE source_task_id = ?`)
+        .get(normalized) as { accreted_at: string } | undefined;
+      if (existing) {
+        if (row.accreted_at > existing.accreted_at) {
+          target
+            .prepare(
+              `UPDATE ${table} SET project = ?, milestone = ?, decision = ?, accreted_at = ? WHERE source_task_id = ?`,
+            )
+            .run(
+              row.project,
+              row.milestone,
+              row.decision,
+              row.accreted_at,
+              normalized,
+            );
+        }
+        target
+          .prepare(`DELETE FROM ${table} WHERE source_task_id = ?`)
+          .run(row.source_task_id);
+      } else {
+        target
+          .prepare(
+            `UPDATE ${table} SET source_task_id = ? WHERE source_task_id = ?`,
+          )
+          .run(normalized, row.source_task_id);
+      }
+    }
   }
 }

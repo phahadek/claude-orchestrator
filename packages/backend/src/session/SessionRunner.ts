@@ -39,6 +39,13 @@ export interface SessionRunnerOptions {
    * Per-spawn (not session-global) so a later escalation spawn can re-enable it.
    */
   disableAutoCompact?: boolean;
+  /**
+   * Extra environment variables to inject into the spawned session process
+   * (CLI mode only). Used to deliver the session's per-session stage
+   * credential and the backend's loopback port so the sanctioned CLI client
+   * can submit staged task-write intents. Ignored by non-CLI runners.
+   */
+  extraEnv?: Record<string, string>;
 }
 
 /**

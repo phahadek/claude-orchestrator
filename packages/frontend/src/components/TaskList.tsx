@@ -6,9 +6,12 @@ import { TaskCard } from './TaskCard';
 import { CompactTaskCard } from './CompactTaskCard';
 import { BacklogCodeSection } from './BacklogCodeSection';
 import { NonCodeTypeSection } from './NonCodeTypeSection';
+import { StagedIntentPanel } from './StagedIntentPanel';
+import type { StagedIntent } from '../api/stagedIntents';
+import { opsJournalApi } from '../api/opsJournal';
 import { useDispatch } from '../hooks/useDispatch';
 import { projectsApi } from '../api/projects';
-import { priorityRank, sortByPriority } from '../utils/taskSort';
+import { sortByPriority } from '../utils/taskSort';
 import styles from './TaskList.module.css';
 
 interface Props {
@@ -55,6 +58,18 @@ const GROUP_LABELS: Record<DisplayStatus, string> = {
   deferred: '⏭️ Deferred',
 };
 
+// Task types eligible for the Ops(N) checkbox — 🧪 Testing here means observational
+// Testing, which opsLoad.ts folds into the ops worklist alongside 🔧 Operational and
+// 🔎 Investigation; authoring-Testing tasks are 💻 Code and are dropped server-side by
+// /ops/launch's worklist.executable filter (the frontend can't see Mode to exclude them).
+const OPS_TASK_TYPES = ['🔧 Operational', '🔎 Investigation', '🧪 Testing'];
+
+/** An ops intent with no task IDs has nothing to stage/apply — not actionable. */
+function opsIntentHasTasks(intent: StagedIntent): boolean {
+  const payload = intent.payload as { taskIds?: unknown } | null | undefined;
+  return Array.isArray(payload?.taskIds) && payload.taskIds.length > 0;
+}
+
 /** Group tasks by wave number, returning a map of wave → sorted tasks. */
 function groupByWave(tasks: TaskView[]): Map<number, TaskView[]> {
   const map = new Map<number, TaskView[]>();
@@ -63,10 +78,8 @@ function groupByWave(tasks: TaskView[]): Map<number, TaskView[]> {
     if (!map.has(wave)) map.set(wave, []);
     map.get(wave)!.push(task);
   }
-  for (const [, waveTasks] of map) {
-    waveTasks.sort(
-      (a, b) => priorityRank(a.priority) - priorityRank(b.priority),
-    );
+  for (const [wave, waveTasks] of map) {
+    map.set(wave, sortByPriority(waveTasks));
   }
   return map;
 }
@@ -260,6 +273,34 @@ export function TaskList({
   const [collapsed, setCollapsed] = useState<Set<string>>(
     new Set(['done', 'backlog']),
   );
+  const [groomCheckedIds, setGroomCheckedIds] = useState<Set<string>>(
+    new Set(),
+  );
+  // No-op launch placeholder — real groom-session staging lands with the launch mechanism.
+  const [groomStubIntent, setGroomStubIntent] = useState<StagedIntent | null>(
+    null,
+  );
+  // Ops(N): launches one individual, dependency-ordered session per selected
+  // task (mirrors the manual-UI launch path), then renders the ops_journal
+  // rows for the launched set. Apply/reject of the resulting staged intents
+  // is a separate, later surface.
+  const [opsIntent, setOpsIntent] = useState<StagedIntent | null>(null);
+  const [opsLoading, setOpsLoading] = useState(false);
+  const [opsError, setOpsError] = useState<string | null>(null);
+  const [opsCheckedIds, setOpsCheckedIds] = useState<Set<string>>(new Set());
+  // Cross-milestone move: the shared staged-intent display renders whichever
+  // task.move intent was most recently staged from a TaskCard on this board.
+  const [moveIntent, setMoveIntent] = useState<StagedIntent | null>(null);
+
+  // Reset the shared staged-intent display when the active milestone/project
+  // changes so a stale intent from the previous board never carries over.
+  useEffect(() => {
+    setGroomStubIntent(null);
+    setOpsIntent(null);
+    setOpsError(null);
+    setOpsCheckedIds(new Set());
+    setMoveIntent(null);
+  }, [activeProjectId, boardId]);
 
   const toggleGroup = useCallback((status: string) => {
     setCollapsed((prev) => {
@@ -447,6 +488,120 @@ export function TaskList({
   const backlogCodeTasks = codeNotDone.filter(
     (t) => t.displayStatus === 'backlog',
   );
+  const backlogNonCodeTasks = nonCodeNotDone.filter(
+    (t) => t.displayStatus === 'backlog',
+  );
+  const groomableTasks = [...backlogCodeTasks, ...backlogNonCodeTasks];
+  const groomSelectedCount = groomableTasks.filter((t) =>
+    groomCheckedIds.has(t.taskId),
+  ).length;
+
+  function toggleGroomCheck(taskId: string, checked: boolean) {
+    setGroomCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(taskId);
+      else next.delete(taskId);
+      return next;
+    });
+  }
+
+  function handleGroomSelectAll() {
+    setGroomCheckedIds(new Set(groomableTasks.map((t) => t.taskId)));
+  }
+
+  // No-op launch: stub a StagedIntent client-side so the right panel can preview the
+  // future groom-session surface. No groom-load call, no command-layer write.
+  function handleGroomLaunch() {
+    const selectedIds = groomableTasks
+      .filter((t) => groomCheckedIds.has(t.taskId))
+      .map((t) => t.taskId);
+    if (selectedIds.length === 0) return;
+    setGroomStubIntent({
+      id: 'groom-stub',
+      kind: 'groom',
+      payload: {
+        placeholder: true,
+        taskIds: selectedIds,
+        message: 'Grooming session staging is not yet wired up.',
+      },
+      projectId: activeProjectId ?? '',
+      createdAt: 0,
+    });
+  }
+
+  // Ops(N) checkbox eligibility: every not-Done 🔧/🔎/observational-🧪 task on the board.
+  // Type-based only — the frontend can't see Mode, so an authoring-Testing task also
+  // renders a checkbox here; /ops/launch drops it server-side and handleOpsLaunch
+  // surfaces the gap via the launched[] reconciliation below.
+  function isOpsEligible(t: TaskView): boolean {
+    return OPS_TASK_TYPES.includes(t.taskType) && t.displayStatus !== 'done';
+  }
+  const opsEligibleTasks = tasks.filter(isOpsEligible);
+  const opsSelectedCount = opsEligibleTasks.filter((t) =>
+    opsCheckedIds.has(t.taskId),
+  ).length;
+
+  function toggleOpsCheck(taskId: string, checked: boolean) {
+    setOpsCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(taskId);
+      else next.delete(taskId);
+      return next;
+    });
+  }
+
+  function handleOpsSelectAll() {
+    setOpsCheckedIds(new Set(opsEligibleTasks.map((t) => t.taskId)));
+  }
+
+  function handleOpsClearSelection() {
+    setOpsCheckedIds(new Set());
+  }
+
+  // Launches one individual, dependency-ordered session per checked, ops-eligible
+  // task via the backend ops launcher, then reads back the ops_journal rows to
+  // render in the shared StagedIntentPanel. Launched sessions themselves render
+  // on the right panel like any other session.
+  async function handleOpsLaunch() {
+    const selectedIds = opsEligibleTasks
+      .filter((t) => opsCheckedIds.has(t.taskId))
+      .map((t) => t.taskId);
+    if (!boardId || selectedIds.length === 0) return;
+    setOpsLoading(true);
+    setOpsError(null);
+    try {
+      const result = await opsJournalApi.launch(boardId, selectedIds);
+      const launchedIds = new Set(result.launched);
+      const entries = await opsJournalApi.listForMilestone(boardId);
+      const rows = entries.filter((e) => launchedIds.has(e.taskId));
+      // An ops intent with no launched task IDs has nothing to stage/apply —
+      // don't render it as an actionable panel.
+      setOpsIntent(
+        result.launched.length > 0
+          ? {
+              id: 'ops-stub',
+              kind: 'ops',
+              payload: { taskIds: result.launched, rows },
+              projectId: activeProjectId ?? '',
+              createdAt: 0,
+            }
+          : null,
+      );
+      const notLaunched = selectedIds.filter((id) => !launchedIds.has(id));
+      setOpsError(
+        notLaunched.length > 0
+          ? `${notLaunched.length} selected task${notLaunched.length === 1 ? '' : 's'} did not launch (not ops-executable): ${notLaunched.join(', ')}`
+          : null,
+      );
+      setOpsCheckedIds(new Set());
+    } catch (err) {
+      setOpsError(
+        err instanceof Error ? err.message : 'Failed to launch ops sessions',
+      );
+    } finally {
+      setOpsLoading(false);
+    }
+  }
 
   // Build per-status lookup for the remaining code groups (needs_attention, ready_to_merge,
   // in_progress, in_review, blocked, deferred) — ready/backlog/done have their own sections.
@@ -496,6 +651,8 @@ export function TaskList({
                       onClick={() => onSelectTask(task.taskId)}
                       send={send}
                       project={project}
+                      boardId={boardId}
+                      onMoveStaged={setMoveIntent}
                     />
                   ))}
                 </div>
@@ -523,6 +680,12 @@ export function TaskList({
           isExpanded={!collapsed.has('backlog')}
           onToggleCollapse={() => toggleGroup('backlog')}
           onSelectTask={onSelectTask}
+          groomCheckedIds={groomCheckedIds}
+          onGroomCheckChange={toggleGroomCheck}
+          groomableCount={groomableTasks.length}
+          groomSelectedCount={groomSelectedCount}
+          onGroomSelectAll={handleGroomSelectAll}
+          onGroomLaunch={handleGroomLaunch}
         />
 
         {/* 📋 Non-code, by type */}
@@ -534,10 +697,84 @@ export function TaskList({
             <div className={styles.sectionHeading}>
               <span className={styles.groupLabel}>📋 Non-code</span>
               <span className={styles.groupCount}>{nonCodeNotDone.length}</span>
+              {opsEligibleTasks.length > 0 && (
+                <div className={styles.launchControls}>
+                  <button
+                    className={styles.selectAllBtn}
+                    onClick={handleOpsSelectAll}
+                    disabled={opsLoading}
+                    data-testid="ops-select-all-btn"
+                  >
+                    Select All
+                  </button>
+                  <button
+                    className={styles.selectAllBtn}
+                    onClick={handleOpsClearSelection}
+                    disabled={opsLoading || opsSelectedCount === 0}
+                    data-testid="ops-clear-btn"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    className={styles.opsBtn}
+                    onClick={() => void handleOpsLaunch()}
+                    disabled={opsLoading || !boardId || opsSelectedCount === 0}
+                    data-testid="ops-btn"
+                  >
+                    {opsLoading ? 'Loading…' : `Ops (${opsSelectedCount})`}
+                  </button>
+                </div>
+              )}
             </div>
+            {opsError && (
+              <div className={styles.error} data-testid="ops-error">
+                {opsError}
+              </div>
+            )}
             <NonCodeTypeSection
               tasks={nonCodeNotDone}
               onSelectTask={onSelectTask}
+              groomCheckedIds={groomCheckedIds}
+              onGroomCheckChange={toggleGroomCheck}
+              opsCheckedIds={opsCheckedIds}
+              onOpsCheckChange={toggleOpsCheck}
+              isOpsEligible={isOpsEligible}
+            />
+          </div>
+        )}
+
+        {groomStubIntent && (
+          <div
+            className={styles.groomPlaceholderPanel}
+            data-testid="groom-placeholder-panel"
+          >
+            <StagedIntentPanel
+              intent={groomStubIntent}
+              onApplied={() => setGroomStubIntent(null)}
+              onRejected={() => setGroomStubIntent(null)}
+              onDismiss={() => setGroomStubIntent(null)}
+            />
+          </div>
+        )}
+
+        {opsIntent && opsIntentHasTasks(opsIntent) && (
+          <div className={styles.opsPlaceholderPanel} data-testid="ops-panel">
+            <StagedIntentPanel
+              intent={opsIntent}
+              onApplied={() => setOpsIntent(null)}
+              onRejected={() => setOpsIntent(null)}
+              onDismiss={() => setOpsIntent(null)}
+            />
+          </div>
+        )}
+
+        {moveIntent && (
+          <div className={styles.opsPlaceholderPanel} data-testid="move-panel">
+            <StagedIntentPanel
+              intent={moveIntent}
+              onApplied={() => setMoveIntent(null)}
+              onRejected={() => setMoveIntent(null)}
+              onDismiss={() => setMoveIntent(null)}
             />
           </div>
         )}

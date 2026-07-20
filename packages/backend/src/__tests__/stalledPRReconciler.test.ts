@@ -24,6 +24,8 @@ vi.mock('../db/queries.js', () => ({
   deleteAnalyzeResult: vi.fn(),
   setHeadSha: vi.fn(),
   clearTerminalPRFlags: vi.fn(),
+  countUndeliveredInboxItems: vi.fn(() => 0),
+  updateMergeState: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -32,6 +34,10 @@ vi.mock('../audit/AuditLog.js', () => ({
 
 vi.mock('../config.js', () => ({
   getProjectByGithubRepo: vi.fn(() => null),
+}));
+
+vi.mock('../config/settings.js', () => ({
+  typedGetSetting: vi.fn(() => 5),
 }));
 
 import {
@@ -43,8 +49,11 @@ import {
   deleteAnalyzeResult,
   setHeadSha,
   clearTerminalPRFlags,
+  countUndeliveredInboxItems,
+  updateMergeState,
 } from '../db/queries.js';
 import { recordEvent } from '../audit/AuditLog.js';
+import { typedGetSetting } from '../config/settings.js';
 import { StalledPRReconciler } from '../orchestration/StalledPRReconciler.js';
 import type { ServerMessage } from '../ws/types.js';
 
@@ -99,12 +108,14 @@ function makeReviewOrchestrator(inFlight = false) {
 function makeSessionManager() {
   return {
     relaunchFixerForPR: vi.fn().mockResolvedValue('session-1'),
+    redeliverUndeliveredFeedback: vi.fn().mockResolvedValue(true),
   };
 }
 
 function makeGitHubClient(headSha: string | null) {
   return {
     getPRState: vi.fn().mockResolvedValue({ state: 'open', headSha }),
+    categorizeMergeability: vi.fn(),
   };
 }
 
@@ -702,5 +713,152 @@ describe('StalledPRReconciler', () => {
 
     expect(ro.enqueueReview).not.toHaveBeenCalled();
     expect(deleteAnalyzeResult).not.toHaveBeenCalled();
+  });
+
+  it('refreshes a stale merge_state via GitHubClient for an approved+unmergeable PR, then re-drives via fixer relaunch', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+      head_sha: 'sha1',
+      mergeable: 0,
+      merge_state: 'unknown',
+      session_id: 'session-1',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getSession).mockImplementation((sessionId: string) => {
+      if (sessionId === 'session-1') return { status: 'error' } as any;
+      return null as any;
+    });
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    const gh = makeGitHubClient(null);
+    vi.mocked(gh.categorizeMergeability).mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+    } as any);
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+    reconciler.setGitHubClient(gh as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(gh.categorizeMergeability).toHaveBeenCalledWith(42, 'org/repo');
+    expect(updateMergeState).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      0,
+      'dirty',
+      null,
+    );
+    expect(sm.relaunchFixerForPR).toHaveBeenCalledWith(
+      expect.objectContaining({ pr_number: 42, repo: 'org/repo' }),
+      expect.stringContaining('Rebase'),
+    );
+  });
+
+  it('escalates an approved+unmergeable PR to stalled_reconcile_cap after DEFAULT_RETRY_CAP attempts on the same head_sha', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+      head_sha: 'sha1',
+      mergeable: 0,
+      merge_state: 'unknown',
+      session_id: 'session-1',
+      stalled_pr_retry_count: 2, // at DEFAULT_RETRY_CAP
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getSession).mockImplementation((sessionId: string) => {
+      if (sessionId === 'session-1') return { status: 'idle' } as any;
+      return null as any;
+    });
+
+    const { fn: broadcast, messages } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    const gh = makeGitHubClient(null);
+    vi.mocked(gh.categorizeMergeability).mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'blocked',
+      rawMergeableState: 'blocked',
+      failingChecks: [],
+    } as any);
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+    reconciler.setGitHubClient(gh as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(
+      messages.find((m) => m.type === 'pr_stalled_escalated'),
+    ).toMatchObject({
+      type: 'pr_stalled_escalated',
+      prNumber: 42,
+      repo: 'org/repo',
+      kind: 'conflict_dead_session',
+    });
+    expect(sm.relaunchFixerForPR).not.toHaveBeenCalled();
+  });
+
+  it('redelivers undelivered review feedback to an idle implementing session', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_iteration: 0,
+      session_id: 'session-1',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getSession).mockImplementation((sessionId: string) => {
+      if (sessionId === 'session-1') return { status: 'idle' } as any;
+      return null as any;
+    });
+    vi.mocked(countUndeliveredInboxItems).mockReturnValue(1);
+    vi.mocked(typedGetSetting).mockReturnValue(3);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(sm.redeliverUndeliveredFeedback).toHaveBeenCalledWith('session-1');
+    expect(incrementStalledPRRetryCount).toHaveBeenCalledWith(42, 'org/repo');
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+  });
+
+  it('does not re-drive undelivered_review_feedback once review_iteration is at max_review_iterations', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_iteration: 3,
+      session_id: 'session-1',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getSession).mockImplementation((sessionId: string) => {
+      if (sessionId === 'session-1') return { status: 'idle' } as any;
+      return null as any;
+    });
+    vi.mocked(countUndeliveredInboxItems).mockReturnValue(1);
+    vi.mocked(typedGetSetting).mockReturnValue(3); // review_iteration (3) >= cap (3)
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const sm = makeSessionManager();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+    reconciler.setSessionManager(sm as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(sm.redeliverUndeliveredFeedback).not.toHaveBeenCalled();
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
   });
 });

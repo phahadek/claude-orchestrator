@@ -11,6 +11,7 @@ export interface BuildSessionContextParams {
   worktreePath: string;
   verify?: string[];
   bashRules?: string[];
+  sessionRules?: string[];
   taskBackend?: 'notion' | 'local' | 'github';
   /** Pre-fetched task spec markdown. Passed through to orchestrator CLAUDE.md. */
   taskContent?: string;
@@ -67,6 +68,7 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     worktreePath,
     verify,
     bashRules,
+    sessionRules,
     taskBackend,
     taskContent,
     gitMode,
@@ -98,6 +100,7 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     worktreePath,
     verify,
     bashRules,
+    sessionRules,
     taskBackend,
     taskContent,
     projectContextContent,

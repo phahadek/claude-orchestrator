@@ -23,6 +23,7 @@ import {
 import { loadOrchestratorConfig } from './orchestrator-config';
 import { WorktreeSetupError } from './WorktreeSetupError';
 import { CliSessionRunner } from './CliSessionRunner';
+import { revokeStageCredential } from '../auth/SessionStageAuth';
 import { ApiSessionRunner } from './ApiSessionRunner';
 import type { ISessionRunner } from './SessionRunner';
 import {
@@ -264,6 +265,13 @@ export interface StartOptions {
    * Used for branch deletion and other GitHub API calls in completeStart.
    */
   repo?: string;
+  /**
+   * Backend-injected ops context for an Ops(N)-launched session (loadOpsContext
+   * output + the task's ops_journal entry, rendered as markdown). Appended to
+   * the pre-fetched task content, same as file snippets — the session never
+   * runs the vendored /ops skill to assemble this itself.
+   */
+  opsContext?: string;
 }
 
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
@@ -838,6 +846,7 @@ export class SessionManager extends EventEmitter {
       milestoneId = null,
       taskId: precomputedTaskId,
       repo: resolvedRepo,
+      opsContext,
     } = options;
 
     const project = getProjectById(projectId)!;
@@ -1133,9 +1142,23 @@ export class SessionManager extends EventEmitter {
       }
     }
 
+    if (opsContext) {
+      taskContent = taskContent
+        ? `${taskContent}\n\n${opsContext}`
+        : opsContext;
+      logger.info(
+        `[SessionManager] appended ops context for ${sessionId.slice(0, 8)}`,
+      );
+    }
+
     let sessionContextContent: string | undefined;
     if (sessionType === 'review') {
-      sessionContextContent = buildReviewClaudeMd(taskName ?? taskUrl);
+      sessionContextContent = buildReviewClaudeMd(
+        taskName ?? taskUrl,
+        orchConfig.review_rules.length > 0
+          ? orchConfig.review_rules
+          : undefined,
+      );
     } else {
       try {
         sessionContextContent = buildSessionContext({
@@ -1149,6 +1172,10 @@ export class SessionManager extends EventEmitter {
           bashRules:
             orchConfig.bash_rules.length > 0
               ? orchConfig.bash_rules
+              : undefined,
+          sessionRules:
+            orchConfig.session_rules.length > 0
+              ? orchConfig.session_rules
               : undefined,
           taskBackend:
             project.taskSource === 'yaml'
@@ -1382,6 +1409,10 @@ export class SessionManager extends EventEmitter {
     session.on('dispositions_parsed', (payload: unknown) =>
       this.emit('dispositions_parsed', payload),
     );
+    // Forward verified_flaky_disposition so PRMergeWatcher can actuate a same-SHA re-run
+    session.on('verified_flaky_disposition', (payload: unknown) =>
+      this.emit('verified_flaky_disposition', payload),
+    );
 
     // Fire-and-forget — run() blocks until the subprocess exits, then clean up
     session
@@ -1493,6 +1524,10 @@ export class SessionManager extends EventEmitter {
         verify: orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
         bashRules:
           orchConfig.bash_rules.length > 0 ? orchConfig.bash_rules : undefined,
+        sessionRules:
+          orchConfig.session_rules.length > 0
+            ? orchConfig.session_rules
+            : undefined,
         taskBackend:
           project.taskSource === 'yaml'
             ? 'local'
@@ -1895,6 +1930,7 @@ export class SessionManager extends EventEmitter {
     projectDir: string,
   ): void {
     this.sessions.delete(sessionId);
+    revokeStageCredential(sessionId);
 
     // Chokepoint guard: never tear down an idle session's worktree.
     // The worktree IS the session state for idle sessions — uncommitted WIP must
@@ -2274,12 +2310,16 @@ export class SessionManager extends EventEmitter {
 
   /**
    * Enqueue a feedback item to a session's inbox instead of writing to stdin
-   * directly. A live session picks it up at its next turn boundary via
-   * AgentSession.deliverInboxItems() — no further action is taken here. An
-   * idle/exited session is delivered immediately via a clean respawn
-   * (sendOrResume), never a raw stdin write into a possibly mid-teardown
-   * process. Terminal sessions (done/error/killed) are left undelivered —
-   * marked delivered without resending, matching reconcileInboxAtBoot.
+   * directly. A live session that is mid-turn picks the item up at its next
+   * turn boundary via AgentSession.deliverInboxItems() — no further action is
+   * taken here, so an in-flight turn is never interleaved with feedback. A
+   * live session that is idle (registered in `this.sessions` but with no turn
+   * in flight) would otherwise never reach another boundary, so it is woken
+   * immediately via the same delivery path used for idle/exited sessions
+   * (sendOrResume — a direct send() for a live session, a clean respawn
+   * otherwise), never a raw stdin write into a possibly mid-teardown process.
+   * Terminal sessions (done/error/killed) are left undelivered — marked
+   * delivered without resending, matching reconcileInboxAtBoot.
    */
   async enqueueFeedback(
     sessionId: string,
@@ -2288,9 +2328,26 @@ export class SessionManager extends EventEmitter {
   ): Promise<void> {
     enqueueFeedbackItem(sessionId, source, payload);
 
-    // Live session — the next turn boundary (deliverInboxItems) will deliver it.
-    if (this.sessions.has(sessionId)) return;
+    // Live, mid-turn session — the next turn boundary (deliverInboxItems) will deliver it.
+    const liveSession = this.sessions.get(sessionId);
+    if (liveSession && liveSession.hasActiveTurn()) return;
 
+    await this.deliverUndeliveredInboxItems(sessionId, 'enqueueFeedback');
+  }
+
+  /**
+   * Deliver all currently-undelivered inbox items for a session right now.
+   * Shared by enqueueFeedback (live-but-idle / respawn case) and
+   * reconcileInboxAtBoot so the two never diverge:
+   *  - terminal sessions (done/error/killed): mark delivered without resending.
+   *  - otherwise: coalesce undelivered items into one message and deliver via
+   *    sendOrResume (direct send() for a live session, a clean --resume
+   *    respawn otherwise), then mark delivered only after a successful send.
+   */
+  private async deliverUndeliveredInboxItems(
+    sessionId: string,
+    logContext: string,
+  ): Promise<void> {
     const row = getSession(sessionId);
     if (
       !row ||
@@ -2317,7 +2374,7 @@ export class SessionManager extends EventEmitter {
       await this.sendOrResume(sessionId, combined);
     } catch (err) {
       logger.warn(
-        `[SessionManager] enqueueFeedback: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
+        `[SessionManager] ${logContext}: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
       );
       return;
     }
@@ -2863,37 +2920,31 @@ export class SessionManager extends EventEmitter {
     );
 
     await Promise.allSettled(
-      sessionIds.map(async (sessionId) => {
-        const row = getSession(sessionId);
-        if (!row) return;
-        if (
-          row.status === 'done' ||
-          row.status === 'error' ||
-          row.status === 'killed'
-        ) {
-          // Terminal sessions: mark items delivered without resending
-          const items = listUndeliveredInboxItems(sessionId);
-          if (items.length > 0) markInboxItemsDelivered(items.map((i) => i.id));
-          return;
-        }
-
-        const items = listUndeliveredInboxItems(sessionId);
-        if (items.length === 0) return;
-
-        const combined = items
-          .map((item) => `[${item.source}]\n${item.payload}`)
-          .join('\n\n');
-
-        try {
-          await this.sendOrResume(sessionId, combined);
-        } catch (err) {
-          logger.warn(
-            `[SessionManager] inbox boot reconciliation: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
-          );
-          return;
-        }
-        markInboxItemsDelivered(items.map((i) => i.id));
-      }),
+      sessionIds.map((sessionId) =>
+        this.deliverUndeliveredInboxItems(
+          sessionId,
+          'inbox boot reconciliation',
+        ),
+      ),
     );
+  }
+
+  /**
+   * Redeliver whatever is sitting undelivered in a session's feedback inbox.
+   * Thin public wrapper around deliverUndeliveredInboxItems for callers (e.g.
+   * StalledPRReconciler re-driving a needs_changes PR whose feedback never
+   * reached an idle implementing session) that need to know whether delivery
+   * actually happened.
+   *
+   * Returns true when items were found and (re)sent to the session.
+   */
+  async redeliverUndeliveredFeedback(sessionId: string): Promise<boolean> {
+    const before = listUndeliveredInboxItems(sessionId).length;
+    if (before === 0) return false;
+    await this.deliverUndeliveredInboxItems(
+      sessionId,
+      'redeliverUndeliveredFeedback',
+    );
+    return listUndeliveredInboxItems(sessionId).length < before;
   }
 }

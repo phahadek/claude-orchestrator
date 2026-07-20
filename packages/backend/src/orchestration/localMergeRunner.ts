@@ -25,46 +25,36 @@ async function gitExec(
 }
 
 /**
- * Squash-merges featureBranch into baseBranch in the given worktree, then
- * deletes the feature branch. The squash commit uses the taskName as the
- * commit message and the claude-orchestrator bot identity.
+ * Squash-merges featureBranch into baseBranch, then deletes the feature
+ * branch. The squash commit uses the taskName as the commit message and the
+ * claude-orchestrator bot identity.
+ *
+ * Checkout-free: computes the merged tree via `git merge-tree --write-tree`,
+ * builds the squash commit via `git commit-tree`, and atomically advances
+ * baseBranch via `git update-ref`. Nothing is ever checked out, so this is
+ * safe to call from a worktree whose baseBranch is checked out elsewhere
+ * (e.g. the project's primary working tree).
  *
  * Returns { merged: true, commitSha } on success.
- * Returns { merged: false, conflict: true } if conflicts are detected;
- * the worktree is restored to the feature branch with no in-progress merge.
+ * Returns { merged: false, conflict: true } if merging would conflict.
  */
 export async function squashMergeLocal(
   args: SquashMergeLocalArgs,
 ): Promise<SquashMergeLocalResult> {
   const { worktreePath, baseBranch, featureBranch, taskName } = args;
 
-  await gitExec(['checkout', baseBranch], worktreePath);
+  const baseSha = (
+    await gitExec(['rev-parse', baseBranch], worktreePath)
+  ).stdout.trim();
 
-  let mergeHadConflict = false;
+  let treeSha: string;
   try {
-    await gitExec(['merge', '--squash', featureBranch], worktreePath);
+    const { stdout } = await gitExec(
+      ['merge-tree', '--write-tree', baseBranch, featureBranch],
+      worktreePath,
+    );
+    treeSha = stdout.trim().split('\n')[0];
   } catch {
-    mergeHadConflict = true;
-  }
-
-  if (!mergeHadConflict) {
-    // Check for conflict markers left by git merge --squash in a partially-conflicted state
-    try {
-      const { stdout } = await gitExec(['diff', '--check'], worktreePath);
-      if (stdout.trim().length > 0) {
-        mergeHadConflict = true;
-      }
-    } catch {
-      mergeHadConflict = true;
-    }
-  }
-
-  if (mergeHadConflict) {
-    // Abort merge and restore to feature branch
-    await gitExec(['merge', '--abort'], worktreePath).catch(() => {});
-    // Clean up any staged files from a partial squash
-    await gitExec(['reset', '--merge'], worktreePath).catch(() => {});
-    await gitExec(['checkout', featureBranch], worktreePath);
     return { merged: false, conflict: true };
   }
 
@@ -78,14 +68,30 @@ export async function squashMergeLocal(
 
   let commitSha: string;
   try {
-    await gitExec(['commit', '-m', taskName], worktreePath, botEnv);
-    const { stdout } = await gitExec(['rev-parse', 'HEAD'], worktreePath);
+    const { stdout } = await gitExec(
+      ['commit-tree', treeSha, '-p', baseSha, '-m', taskName],
+      worktreePath,
+      botEnv,
+    );
     commitSha = stdout.trim();
   } catch {
-    // Commit failed — restore feature branch
-    await gitExec(['reset', '--merge'], worktreePath).catch(() => {});
-    await gitExec(['checkout', featureBranch], worktreePath);
     return { merged: false, conflict: false };
+  }
+
+  await gitExec(
+    ['update-ref', `refs/heads/${baseBranch}`, commitSha, baseSha],
+    worktreePath,
+  );
+
+  // worktreePath's own checked-out branch is typically featureBranch itself
+  // (the session's worktree). Git refuses to delete a branch that's checked
+  // out in the worktree running the command, so detach that worktree's own
+  // HEAD first — this never touches the base branch or any other worktree.
+  const currentBranch = (
+    await gitExec(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath)
+  ).stdout.trim();
+  if (currentBranch === featureBranch) {
+    await gitExec(['checkout', '--detach', 'HEAD'], worktreePath);
   }
 
   await gitExec(['branch', '-D', featureBranch], worktreePath);

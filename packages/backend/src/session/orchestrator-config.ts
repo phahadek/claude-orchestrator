@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { logger } from '../logger';
+import { ALLOWED_TOOLS } from '../config';
 
 export interface OrchestratorConfig {
   /**
@@ -21,6 +22,10 @@ export interface OrchestratorConfig {
   allowed_tools: string[];
   /** Bash rules (Rule 5+). Each item is the full rule text. */
   bash_rules: string[];
+  /** Per-project coding-session guidance, rendered as a "## Project Rules" section (distinct from bash_rules) in the coding-session CLAUDE.md. */
+  session_rules: string[];
+  /** Per-project review-session enforcement criteria, rendered into the review-session prompt. */
+  review_rules: string[];
   /** Path to a script run after worktree creation, relative to the project root. */
   bootstrap_script: string;
   /** Env var names that must be set after bootstrap. Launch aborts if any are missing. */
@@ -65,6 +70,8 @@ const DEFAULTS: OrchestratorConfig = {
   ci_check_name: [],
   allowed_tools: [],
   bash_rules: [],
+  session_rules: [],
+  review_rules: [],
   bootstrap_script: '',
   required_env: [],
   required_files: [],
@@ -109,6 +116,12 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
       bash_rules: Array.isArray(parsed.bash_rules)
         ? parsed.bash_rules
         : DEFAULTS.bash_rules,
+      session_rules: Array.isArray(parsed.session_rules)
+        ? parsed.session_rules
+        : DEFAULTS.session_rules,
+      review_rules: Array.isArray(parsed.review_rules)
+        ? parsed.review_rules
+        : DEFAULTS.review_rules,
       bootstrap_script:
         typeof parsed.bootstrap_script === 'string'
           ? parsed.bootstrap_script
@@ -176,4 +189,16 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
     );
     return { ...DEFAULTS };
   }
+}
+
+/**
+ * The full allowlist a spawned session is granted: the base ALLOWED_TOOLS plus
+ * the per-project extras from .claude-orchestrator.yml. This is the exact array
+ * passed as `allowedTools` at spawn (see AgentSession) — extracted so tests can
+ * assert on the merged result rather than just the base const.
+ */
+export function getSessionAllowedTools(
+  orchConfig: Pick<OrchestratorConfig, 'allowed_tools'>,
+): string[] {
+  return [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
 }

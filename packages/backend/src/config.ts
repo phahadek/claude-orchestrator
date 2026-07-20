@@ -118,7 +118,6 @@ export const ALLOWED_TOOLS = [
   'Bash(grep:*)',
   'Bash(sort:*)',
   'Bash(pwd:*)',
-  'mcp__claude_ai_Notion__*',
   // GitHub MCP — explicit allowlist; create_pull_request and merge_pull_request are
   // backend-owned and must not be available to session agents.
   'mcp__github__add_issue_comment',
@@ -231,6 +230,34 @@ export interface RuntimeSettings {
   auto_launch_concurrency: number;
   /** AutoLauncher poll interval in milliseconds. */
   auto_launch_poll_interval_ms: number;
+  /**
+   * Memory admission floor: AutoLauncher defers dispatch when projected free
+   * host memory (current free minus per_session_reserve_mb) would drop below
+   * this many MB. Default 4096 (4GB) leaves headroom for the OS and other
+   * processes beyond the orchestrator's own sessions.
+   */
+  min_host_free_memory_mb: number;
+  /**
+   * Estimated memory (MB) a single dispatched session consumes, used to
+   * project free memory before admitting the next launch. Default 3072 (3GB)
+   * is derived from the 2026-07-16 incident on this box (~31GB total RAM):
+   * 14 concurrent sessions exhausted swap, 5 was safe, the knee was ~8 —
+   * consistent with each session costing roughly 3GB under a memory-heavy
+   * verify phase.
+   */
+  per_session_reserve_mb: number;
+  /**
+   * Memory reserved for the production fleet: the session cgroup's
+   * memory.max is derived as os.totalmem() minus this many MB.
+   */
+  session_cgroup_prod_reserve_mb: number;
+  /**
+   * Fraction (0-1) of memory.max used to derive the session cgroup's
+   * memory.high soft ceiling.
+   */
+  session_cgroup_memory_high_fraction: number;
+  /** When true (default), the session cgroup sets memory.swap.max=0 to deny swap. */
+  session_cgroup_deny_swap: boolean;
   /** Stuck-session timer: seconds before emitting a notify toast. */
   session_notify_threshold_seconds: number;
   /** Stuck-session timer: seconds before injecting a pause message. */
@@ -262,6 +289,10 @@ export interface RuntimeSettings {
   large_task_effort: string;
   /** TaskCacheRefresher: how often (ms) to refresh per-project board caches in background. */
   task_cache_refresh_interval_ms: number;
+  /** GateReconciler: built but not activated by default (no-coexistence rule) — off until an operator opts in. */
+  gate_verification_enabled: boolean;
+  /** GateReconciler: interval in milliseconds between reconcile ticks. */
+  gate_verification_interval_ms: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -281,6 +312,15 @@ export const runtimeSettings: RuntimeSettings = {
   auto_launch_poll_interval_ms: Number(
     process.env.AUTO_LAUNCH_POLL_INTERVAL_MS ?? 60_000,
   ),
+  min_host_free_memory_mb: Number(process.env.MIN_HOST_FREE_MEMORY_MB ?? 4096),
+  per_session_reserve_mb: Number(process.env.PER_SESSION_RESERVE_MB ?? 3072),
+  session_cgroup_prod_reserve_mb: Number(
+    process.env.SESSION_CGROUP_PROD_RESERVE_MB ?? 4096,
+  ),
+  session_cgroup_memory_high_fraction: Number(
+    process.env.SESSION_CGROUP_MEMORY_HIGH_FRACTION ?? 0.9,
+  ),
+  session_cgroup_deny_swap: process.env.SESSION_CGROUP_DENY_SWAP !== 'false',
   session_notify_threshold_seconds: Number(
     process.env.SESSION_NOTIFY_THRESHOLD_SECONDS ?? 3600,
   ),
@@ -311,5 +351,9 @@ export const runtimeSettings: RuntimeSettings = {
   large_task_effort: '',
   task_cache_refresh_interval_ms: Number(
     process.env.TASK_CACHE_REFRESH_INTERVAL_MS ?? 60_000,
+  ),
+  gate_verification_enabled: process.env.GATE_VERIFICATION_ENABLED === 'true',
+  gate_verification_interval_ms: Number(
+    process.env.GATE_VERIFICATION_INTERVAL_MS ?? 60_000,
   ),
 };

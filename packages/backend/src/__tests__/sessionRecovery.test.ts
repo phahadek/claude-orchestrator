@@ -7,7 +7,8 @@ vi.mock('../db/queries', () => ({
   getPRByNumber: vi.fn(() => null),
   getProjectRowById: vi.fn(() => null),
   getSession: vi.fn(() => null),
-  insertLocalBranch: vi.fn(),
+  insertLocalBranch: vi.fn(() => ({ id: 1 })),
+  getLocalBranchBySession: vi.fn(() => undefined),
   insertSessionAudit: vi.fn(),
   getPRByNotionTaskId: vi.fn(() => null),
   getEventsBySession: vi.fn(() => []),
@@ -53,7 +54,10 @@ import type { RecoverSessionOpts } from '../session/sessionRecovery';
 import {
   upsertPullRequest,
   getPRByNumber,
+  getProjectRowById,
   insertSessionAudit,
+  insertLocalBranch,
+  getLocalBranchBySession,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { emitTaskUpdated } from '../routes/tasks';
@@ -329,5 +333,109 @@ describe('recoverSession', () => {
       'main',
       'feature/my-task',
     );
+  });
+
+  describe('local-only branch submission', () => {
+    it('inserts a local_branches row and broadcasts on a committed feature branch with no PR', async () => {
+      vi.mocked(getProjectRowById).mockReturnValue({
+        git_mode: 'local-only',
+        base_branch: 'dev',
+      } as ReturnType<typeof getProjectRowById>);
+      vi.mocked(hasNonEmptyDiff).mockResolvedValueOnce(true);
+      const broadcast = vi.fn();
+      const taskBackend = makeTaskBackend();
+
+      await recoverSession(
+        'sess-local-1',
+        baseOpts({ broadcast, taskBackend, projectId: 'proj-local' }),
+      );
+
+      expect(insertLocalBranch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          project_id: 'proj-local',
+          session_id: 'sess-local-1',
+          branch_name: 'feature/my-task',
+          base_branch: 'dev',
+          status: 'open',
+        }),
+      );
+      expect(broadcast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'local_branch_submitted',
+          projectId: 'proj-local',
+          sessionId: 'sess-local-1',
+          branchName: 'feature/my-task',
+        }),
+      );
+    });
+
+    it('submits for periodic scope too (no longer gated on scope !== periodic)', async () => {
+      vi.mocked(getProjectRowById).mockReturnValue({
+        git_mode: 'local-only',
+        base_branch: 'dev',
+      } as ReturnType<typeof getProjectRowById>);
+      vi.mocked(hasNonEmptyDiff).mockResolvedValueOnce(true);
+      const broadcast = vi.fn();
+
+      await recoverSession(
+        'sess-local-periodic',
+        baseOpts({ broadcast, scope: 'periodic', projectId: 'proj-local' }),
+      );
+
+      expect(insertLocalBranch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          session_id: 'sess-local-periodic',
+          branch_name: 'feature/my-task',
+        }),
+      );
+    });
+
+    it('is idempotent: skips insertion when a local_branches row already exists for the session', async () => {
+      vi.mocked(getProjectRowById).mockReturnValue({
+        git_mode: 'local-only',
+        base_branch: 'dev',
+      } as ReturnType<typeof getProjectRowById>);
+      vi.mocked(hasNonEmptyDiff).mockResolvedValueOnce(true);
+      vi.mocked(getLocalBranchBySession).mockReturnValueOnce({
+        id: 1,
+      } as ReturnType<typeof getLocalBranchBySession>);
+
+      await recoverSession(
+        'sess-local-dup',
+        baseOpts({ projectId: 'proj-local' }),
+      );
+
+      expect(insertLocalBranch).not.toHaveBeenCalled();
+    });
+
+    it('does not insert a local_branches row for github-mode projects (regression)', async () => {
+      vi.mocked(getProjectRowById).mockReturnValue({
+        git_mode: 'github',
+        base_branch: 'dev',
+      } as ReturnType<typeof getProjectRowById>);
+      vi.mocked(hasNonEmptyDiff).mockResolvedValueOnce(true);
+
+      await recoverSession(
+        'sess-github-1',
+        baseOpts({ projectId: 'proj-github' }),
+      );
+
+      expect(insertLocalBranch).not.toHaveBeenCalled();
+    });
+
+    it('does not insert when there is no diff against base', async () => {
+      vi.mocked(getProjectRowById).mockReturnValue({
+        git_mode: 'local-only',
+        base_branch: 'dev',
+      } as ReturnType<typeof getProjectRowById>);
+      vi.mocked(hasNonEmptyDiff).mockResolvedValueOnce(false);
+
+      await recoverSession(
+        'sess-local-nodiff',
+        baseOpts({ projectId: 'proj-local' }),
+      );
+
+      expect(insertLocalBranch).not.toHaveBeenCalled();
+    });
   });
 });
