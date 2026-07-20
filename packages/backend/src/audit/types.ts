@@ -74,7 +74,10 @@ type EventType =
   | 'readiness_override'
   | 'flake_recovery_attempted'
   | 'flake_recovery_f2_invalidated'
-  | 'flake_recovery_f2_rerun';
+  | 'flake_recovery_f2_rerun'
+  | 'arch_unit_created'
+  | 'arch_unit_updated'
+  | 'arch_unit_superseded';
 
 type ActorType = 'ai' | 'human' | 'system';
 

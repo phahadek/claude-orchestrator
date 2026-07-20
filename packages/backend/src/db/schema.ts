@@ -1200,4 +1200,39 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // ── arch_unit: architecture-information store ───────────────────────────
+  // A single titled architecture statement (kind/topic/regions/status envelope
+  // + markdown body). Mirrors the gate_item/seed_item shape: envelope as typed
+  // columns, prose as a markdown body column, plus an append-only event log.
+  // supersede-not-delete: a superseded unit is retained with status='superseded',
+  // not removed.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS arch_unit (
+      id            TEXT    PRIMARY KEY,
+      title         TEXT    NOT NULL,
+      kind          TEXT    NOT NULL,
+      topic         TEXT    NOT NULL,
+      regions       TEXT    NOT NULL DEFAULT '[]',
+      status        TEXT    NOT NULL DEFAULT 'active',
+      body          TEXT    NOT NULL,
+      supersedes    TEXT,
+      superseded_by TEXT,
+      created_at    TEXT    NOT NULL,
+      updated_at    TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_arch_unit_topic ON arch_unit(topic);
+    CREATE INDEX IF NOT EXISTS idx_arch_unit_kind ON arch_unit(kind);
+    CREATE INDEX IF NOT EXISTS idx_arch_unit_status ON arch_unit(status);
+
+    CREATE TABLE IF NOT EXISTS arch_unit_event (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      arch_unit_id TEXT    NOT NULL,
+      event_type   TEXT    NOT NULL,
+      payload      TEXT,
+      at           TEXT    NOT NULL,
+      FOREIGN KEY (arch_unit_id) REFERENCES arch_unit(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_arch_unit_event_arch_unit_id ON arch_unit_event(arch_unit_id);
+  `);
 }

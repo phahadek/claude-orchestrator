@@ -52,6 +52,11 @@ import type {
   SeedItemEventRow,
   NewSeedItemEventRow,
   SeedAccretionRow,
+  ArchUnitRow,
+  NewArchUnitRow,
+  ArchUnitEventRow,
+  NewArchUnitEventRow,
+  ArchUnitQuery,
   CompletenessDispositionRow,
   NewCompletenessDispositionRow,
   StagedIntentRow,
@@ -4629,4 +4634,104 @@ export function incrementRouteBackCount(
     escalated,
     updated_at: updatedAt,
   };
+}
+
+// ─── arch_unit ────────────────────────────────────────────────────────────
+// Statements are cached lazily (prepared on first use, not at module load) so
+// importing this module doesn't fail on a not-yet-migrated db handle.
+
+let _stmtGetArchUnit: Database.Statement | null = null;
+let _stmtInsertArchUnit: Database.Statement | null = null;
+let _stmtUpdateArchUnit: Database.Statement | null = null;
+let _stmtListArchUnitEvents: Database.Statement | null = null;
+let _stmtInsertArchUnitEvent: Database.Statement | null = null;
+
+export function getArchUnit(id: string): ArchUnitRow | undefined {
+  _stmtGetArchUnit ??= db.prepare<{ id: string }>(
+    `SELECT * FROM arch_unit WHERE id = @id`,
+  );
+  return _stmtGetArchUnit.get({ id }) as ArchUnitRow | undefined;
+}
+
+export function insertArchUnit(row: NewArchUnitRow): void {
+  _stmtInsertArchUnit ??= db.prepare<ArchUnitRow>(`
+    INSERT INTO arch_unit
+      (id, title, kind, topic, regions, status, body, supersedes, superseded_by, created_at, updated_at)
+    VALUES
+      (@id, @title, @kind, @topic, @regions, @status, @body, @supersedes, @superseded_by, @created_at, @updated_at)
+  `);
+  _stmtInsertArchUnit.run({
+    ...row,
+    superseded_by: row.superseded_by ?? null,
+  });
+}
+
+export function updateArchUnit(row: ArchUnitRow): void {
+  _stmtUpdateArchUnit ??= db.prepare<ArchUnitRow>(`
+    UPDATE arch_unit SET
+      title = @title,
+      kind = @kind,
+      topic = @topic,
+      regions = @regions,
+      status = @status,
+      body = @body,
+      supersedes = @supersedes,
+      superseded_by = @superseded_by,
+      updated_at = @updated_at
+    WHERE id = @id
+  `);
+  _stmtUpdateArchUnit.run(row);
+}
+
+export function listArchUnitEvents(archUnitId: string): ArchUnitEventRow[] {
+  _stmtListArchUnitEvents ??= db.prepare<{ arch_unit_id: string }>(
+    `SELECT * FROM arch_unit_event WHERE arch_unit_id = @arch_unit_id ORDER BY id ASC`,
+  );
+  return _stmtListArchUnitEvents.all({
+    arch_unit_id: archUnitId,
+  }) as ArchUnitEventRow[];
+}
+
+export function insertArchUnitEvent(row: NewArchUnitEventRow): void {
+  _stmtInsertArchUnitEvent ??= db.prepare<NewArchUnitEventRow>(`
+    INSERT INTO arch_unit_event
+      (arch_unit_id, event_type, payload, at)
+    VALUES
+      (@arch_unit_id, @event_type, @payload, @at)
+  `);
+  _stmtInsertArchUnitEvent.run(row);
+}
+
+/**
+ * Query the arch_unit table by topic/kind/region/status. Active-set by
+ * default (superseded excluded) unless includeSuperseded is set or status
+ * explicitly requests 'superseded'.
+ */
+export function queryArchUnits(query: ArchUnitQuery = {}): ArchUnitRow[] {
+  const clauses: string[] = [];
+  const params: Record<string, string> = {};
+
+  if (query.topic) {
+    clauses.push('topic = @topic');
+    params.topic = query.topic;
+  }
+  if (query.kind) {
+    clauses.push('kind = @kind');
+    params.kind = query.kind;
+  }
+  if (query.region) {
+    clauses.push('regions LIKE @region');
+    params.region = `%${query.region}%`;
+  }
+  if (query.status) {
+    clauses.push('status = @status');
+    params.status = query.status;
+  } else if (!query.includeSuperseded) {
+    clauses.push(`status != 'superseded'`);
+  }
+
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+  return db
+    .prepare(`SELECT * FROM arch_unit ${where} ORDER BY updated_at DESC`)
+    .all(params) as ArchUnitRow[];
 }
