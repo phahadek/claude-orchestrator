@@ -35,6 +35,7 @@ import {
   appendGateItemEvent,
   approveGateItem,
   reopenGateItem,
+  reclassifyGateItem,
   type DeployAncestrySource,
 } from '../gateService.js';
 
@@ -221,6 +222,35 @@ describe('reconcileGateRunnability', () => {
     expect(result.reopened).toEqual([]);
     expect(getGateItem(item.id)?.state).toBe('pass');
   });
+
+  it('auto-reopens a failed item (fail -> open -> runnable) only once its min_deployed_commit has genuinely advanced past fail-time and is covered', () => {
+    const item = makeItem();
+    setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
+    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      evidence: { minDeployedCommitAtFail: 'sha1' },
+      filedFollowon: 'notion:followup-1',
+    });
+    expect(getGateItem(item.id)?.state).toBe('fail');
+
+    // Still on the same commit — already covered before it failed, so this
+    // must NOT auto-reopen (nothing has actually changed since the fail).
+    const notYet = reconcileGateRunnability('sha1', {
+      ancestrySource: orderedAncestry,
+    });
+    expect(notYet.reopened).toEqual([]);
+    expect(getGateItem(item.id)?.state).toBe('fail');
+
+    // The follow-up fix source merges and pushes min_deployed_commit forward...
+    setMinDeployedCommit(item.id, 'sha2', new Date(2).toISOString());
+    // ...and once sha2 deploys, the item auto-reopens straight through to runnable.
+    const advanced = reconcileGateRunnability('sha2', {
+      ancestrySource: orderedAncestry,
+    });
+    expect(advanced.reopened).toEqual([item.id]);
+    expect(getGateItem(item.id)?.state).toBe('runnable');
+  });
 });
 
 describe('nextRunnableGateItems', () => {
@@ -256,6 +286,42 @@ describe('nextRunnableGateItems', () => {
     const batch = nextRunnableGateItems('M12');
     const tiers = new Set(batch.map((it) => it.classification));
     expect(tiers.size).toBe(1);
+  });
+
+  it('skips a runnable item whose latest event is needs-setup', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
+    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    appendGateItemEvent(item.id, {
+      disposition: 'needs-setup',
+      evidence: { reason: 'budget exceeded' },
+    });
+    expect(getGateItem(item.id)?.state).toBe('runnable');
+
+    const batch = nextRunnableGateItems('M12', { classification: 'Read-Only' });
+    expect(batch.map((it) => it.id)).not.toContain(item.id);
+  });
+
+  it('pulls a previously needs-setup item again once a reclassify supersedes it as the latest event', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
+    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    appendGateItemEvent(item.id, {
+      disposition: 'needs-setup',
+      evidence: { reason: 'budget exceeded' },
+    });
+    expect(
+      nextRunnableGateItems('M12', { classification: 'Read-Only' }).map(
+        (it) => it.id,
+      ),
+    ).not.toContain(item.id);
+
+    reclassifyGateItem(item.id, 'Read-Only', 'pedro');
+    expect(
+      nextRunnableGateItems('M12', { classification: 'Read-Only' }).map(
+        (it) => it.id,
+      ),
+    ).toContain(item.id);
   });
 });
 

@@ -58,7 +58,12 @@ export function createLocalGitAncestrySource(
  * "attempted, not yet resolved" case that previously tempted an invented
  * value. `discarded` is the sanctioned void disposition: terminal and
  * non-blocking, for mis-accreted/erroneous items — distinct from `deferred`,
- * which means punted-to-next-milestone, not void.
+ * which means punted-to-next-milestone, not void. `needs-setup` is the
+ * verifier's bounded best-effort abstain (see GateVerificationResult in
+ * gateReconciler.ts): it records a verification attempt without resolving
+ * it, the same non-terminal shape as `noted` — the item stays runnable, but
+ * nextRunnableGateItems skips it until a later event (reclassify/reopen/a
+ * new fail) supersedes it as the item's latest.
  */
 const GATE_DISPOSITIONS = [
   'pass',
@@ -66,12 +71,16 @@ const GATE_DISPOSITIONS = [
   'deferred',
   'discarded',
   'noted',
+  'needs-setup',
 ] as const;
 
 type GateDisposition = (typeof GATE_DISPOSITIONS)[number];
 
-/** The disposition that records an event without advancing state. */
-const NON_TERMINAL_DISPOSITION: GateDisposition = 'noted';
+/** Dispositions that record an event without advancing state. */
+const NON_TERMINAL_DISPOSITIONS = new Set<GateDisposition>([
+  'noted',
+  'needs-setup',
+]);
 
 function isValidGateDisposition(value: string): value is GateDisposition {
   return (GATE_DISPOSITIONS as readonly string[]).includes(value);
@@ -154,10 +163,38 @@ export interface ReconcileOptions {
 }
 
 /**
+ * The min_deployed_commit value in effect when the item's most recent `fail`
+ * was recorded — stashed in that event's evidence by the reconciler
+ * (processItem) at fail time. Distinguishes "already covered before it
+ * failed" from "a follow-up source has since merged and pushed
+ * min_deployed_commit forward" — the auto-reopen trigger below must only
+ * fire on the latter.
+ */
+function minDeployedCommitAtLastFail(item: GateItem): string | null {
+  const lastFail = [...item.events]
+    .reverse()
+    .find((e) => e.disposition === 'fail');
+  if (!lastFail) return null;
+  const evidence = lastFail.evidence;
+  if (evidence && typeof evidence === 'object' && !Array.isArray(evidence)) {
+    const v = (evidence as Record<string, unknown>).minDeployedCommitAtFail;
+    if (typeof v === 'string') return v;
+  }
+  return null;
+}
+
+/**
  * Recomputes runnability against `deploySha` (injected — see DeployAncestrySource
  * above for the swappable half). An item becomes runnable once deploySha
  * contains its min_deployed_commit. A pass is terminal for runnability — a
  * redeploy only unblocks previously-blocked items, it never re-opens a pass.
+ *
+ * A `fail` item is auto-reopened (fail -> open -> runnable, in the same
+ * tick) once its min_deployed_commit has genuinely advanced past what it was
+ * at fail-time AND the new commit is covered by `deploySha` — i.e. its
+ * follow-up fix source has merged and the fix has since deployed. This is
+ * distinct from the operator-gated reopenGateItem: no operator involved,
+ * gated purely on a fix actually landing.
  */
 export function reconcileGateRunnability(
   deploySha: string,
@@ -182,13 +219,31 @@ export function reconcileGateRunnability(
       continue;
     }
 
-    if (item.state === 'open' && covered) {
+    let state = item.state;
+
+    if (state === 'fail') {
+      const failedAtCommit = minDeployedCommitAtLastFail(item);
+      const advanced = (item.minDeployedCommit ?? null) !== failedAtCommit;
+      if (advanced && covered) {
+        gateStore.appendEvent(item.id, {
+          disposition: 'reopened',
+          operator: 'gate-reconciler',
+          evidence: { reason: 'follow-up fix source deployed' },
+          at: now,
+        });
+        gateStore.advanceState(item.id, 'open', 'reopened', now);
+        reopened.push(item.id);
+        state = 'open';
+      }
+    }
+
+    if (state === 'open' && covered) {
       gateStore.advanceState(item.id, 'runnable', item.currentDisposition, now);
       markedRunnable.push(item.id);
       continue;
     }
 
-    if (item.state === 'runnable' && !covered) {
+    if (state === 'runnable' && !covered) {
       gateStore.advanceState(item.id, 'open', item.currentDisposition, now);
     }
   }
@@ -214,6 +269,16 @@ export interface NextRunnableGateItemsOptions {
   limit?: number;
 }
 
+/**
+ * True once an item's latest event carries the `needs-setup` abstain — the
+ * dispatcher skips it until a later event (reclassify/reopen/a new fail)
+ * supersedes it as the item's latest, per GateVerificationResult's
+ * needs-setup contract.
+ */
+function isAwaitingSetup(item: GateItem): boolean {
+  return item.events.at(-1)?.disposition === 'needs-setup';
+}
+
 /** Pulls one tier's worth of runnable items at a time — never the full runnable set. */
 export function nextRunnableGateItems(
   milestone: string,
@@ -222,7 +287,8 @@ export function nextRunnableGateItems(
   const limit = options.limit ?? DEFAULT_BATCH_LIMIT;
   const runnable = gateStore
     .listByMilestoneAllProjects(milestone)
-    .filter((item) => item.state === 'runnable');
+    .filter((item) => item.state === 'runnable')
+    .filter((item) => !isAwaitingSetup(item));
 
   const tier =
     options.classification ??
@@ -408,7 +474,7 @@ export function appendGateItemEvent(
 
   const advances =
     event.disposition !== undefined &&
-    event.disposition !== NON_TERMINAL_DISPOSITION;
+    !NON_TERMINAL_DISPOSITIONS.has(event.disposition as GateDisposition);
   if (advances) {
     const nextState = nextStateForDisposition(
       event.disposition as GateDisposition,
@@ -538,6 +604,26 @@ export function reclassifyGateItem(
 function isNotStartedStatus(notionStatus: string): boolean {
   if (!notionStatus) return true;
   return notionStatus.includes('Backlog') || notionStatus.includes('Ready');
+}
+
+/**
+ * True when a filed follow-up fix task's cached status has reached Done —
+ * the reconciler's fail-dedup gate (one open follow-up per item): a fresh
+ * failure while the prior follow-up is still open skips refiling and just
+ * logs against the existing one; a fresh failure once it's Done refiles.
+ * Reads the local task cache (same source as backfillGateTask's status
+ * check) rather than a live fetch — a cache miss/stale read defaults to
+ * not-Done, the conservative (skip-refile) side.
+ */
+export function isFollowupTaskDone(taskId: string): boolean {
+  const cacheRow = getTaskCache(taskId);
+  if (!cacheRow) return false;
+  try {
+    const parsed = JSON.parse(cacheRow.raw_json) as { status?: string };
+    return (parsed.status ?? '').includes('Done');
+  } catch {
+    return false;
+  }
 }
 
 export interface BackfillGateTaskInput {

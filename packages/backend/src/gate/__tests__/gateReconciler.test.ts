@@ -23,6 +23,7 @@ const deployServiceMock = vi.hoisted(() => ({
 vi.mock('../../deploy/deployService.js', () => deployServiceMock);
 
 import { db } from '../../db/db.js';
+import { upsertTaskCache } from '../../db/queries.js';
 import {
   insertItem,
   setMinDeployedCommit,
@@ -43,6 +44,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM gate_item_source').run();
   db.prepare('DELETE FROM gate_item').run();
   db.prepare('DELETE FROM audit_log').run();
+  db.prepare('DELETE FROM task_cache').run();
   deployServiceMock.getProjectDeployedSha.mockReset().mockReturnValue(null);
 });
 
@@ -109,6 +111,10 @@ describe('runGateReconcilerTick', () => {
     ]);
     expect(getItem(item.id)?.state).toBe('pass');
     expect(result.readiness['M12'].status).toBe('green');
+    expect(getItem(item.id)?.events.at(-1)).toMatchObject({
+      disposition: 'pass',
+      operator: 'gate-verifier',
+    });
   });
 
   it('holds a Prod-Mutating item for operator consent until approveGateItem', async () => {
@@ -126,10 +132,10 @@ describe('runGateReconcilerTick', () => {
     expect(approved.state).toBe('pass');
   });
 
-  it('never auto-runs Opportunistic or needs-triage items', async () => {
-    const opportunistic = makeRunnableItem({
-      text: 'opportunistic',
-      classification: 'Opportunistic',
+  it('never auto-runs needs-triage items', async () => {
+    const untriaged = makeRunnableItem({
+      text: 'untriaged',
+      classification: 'needs-triage',
     });
     const verifier: GateItemVerifier = {
       verify: vi.fn(async () => ({ disposition: 'pass' })),
@@ -139,7 +145,22 @@ describe('runGateReconcilerTick', () => {
       verifier,
     });
     expect(verifier.verify).not.toHaveBeenCalled();
-    expect(getItem(opportunistic.id)?.state).toBe('runnable');
+    expect(getItem(untriaged.id)?.state).toBe('runnable');
+  });
+
+  it('auto-runs and auto-disposes an Opportunistic item on pass', async () => {
+    const item = makeRunnableItem({
+      text: 'opportunistic',
+      classification: 'Opportunistic',
+    });
+    const verifier: GateItemVerifier = {
+      verify: async () => ({ disposition: 'pass' }),
+    };
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(getItem(item.id)?.state).toBe('pass');
   });
 
   it('files a follow-up fix task on failure, attaches it as a new source, and re-opens the item', async () => {
@@ -177,6 +198,150 @@ describe('runGateReconcilerTick', () => {
       disposition: 'fail',
       filedFollowon: 'notion:followup-1',
     });
+  });
+
+  it('needs-setup leaves the item runnable and the dispatcher skips it on the next pull', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({
+        disposition: 'needs-setup',
+        evidence: { reason: 'budget exceeded' },
+      })),
+    };
+
+    const first = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(first.processed).toEqual([
+      { itemId: item.id, classification: 'Read-Only', disposition: 'needs-setup' },
+    ]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+
+    const second = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).toHaveBeenCalledTimes(1);
+    expect(second.processed).toEqual([]);
+  });
+
+  it('fail dedup: skips refiling while a prior filed follow-up is not yet Done', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verifier: GateItemVerifier = {
+      verify: async () => ({ disposition: 'fail', evidence: { log: 'boom' } }),
+    };
+    let callCount = 0;
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => {
+        callCount += 1;
+        return {
+          taskId: `notion:followup-${callCount}`,
+          taskTitle: `Fix gate item: attempt ${callCount}`,
+        };
+      }),
+    };
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+      followupFiler,
+    });
+    expect(followupFiler.fileFollowupFixTask).toHaveBeenCalledTimes(1);
+
+    // Re-verify while notion:followup-1 is still open (no task_cache row = not Done).
+    advanceState(
+      item.id,
+      'runnable',
+      getItem(item.id)!.currentDisposition,
+      new Date(2).toISOString(),
+    );
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+      followupFiler,
+    });
+
+    expect(followupFiler.fileFollowupFixTask).toHaveBeenCalledTimes(1);
+    const updated = getItem(item.id)!;
+    expect(updated.sources).toHaveLength(2);
+    expect(updated.events.at(-1)).toMatchObject({
+      disposition: 'fail',
+      filedFollowon: 'notion:followup-1',
+    });
+  });
+
+  it('fail dedup: refiles once the prior follow-up reaches Done and the item still fails', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verifier: GateItemVerifier = {
+      verify: async () => ({ disposition: 'fail', evidence: { log: 'boom' } }),
+    };
+    let callCount = 0;
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => {
+        callCount += 1;
+        return {
+          taskId: `notion:followup-${callCount}`,
+          taskTitle: `Fix gate item: attempt ${callCount}`,
+        };
+      }),
+    };
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+      followupFiler,
+    });
+    expect(followupFiler.fileFollowupFixTask).toHaveBeenCalledTimes(1);
+
+    upsertTaskCache('notion:followup-1', JSON.stringify({ status: '✅ Done' }));
+    advanceState(
+      item.id,
+      'runnable',
+      getItem(item.id)!.currentDisposition,
+      new Date(2).toISOString(),
+    );
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+      followupFiler,
+    });
+
+    expect(followupFiler.fileFollowupFixTask).toHaveBeenCalledTimes(2);
+    const updated = getItem(item.id)!;
+    expect(updated.sources).toHaveLength(3);
+    expect(updated.events.at(-1)).toMatchObject({
+      disposition: 'fail',
+      filedFollowon: 'notion:followup-2',
+    });
+  });
+
+  it('per-item in-flight guard prevents a duplicate dispatch of a live verify', async () => {
+    makeRunnableItem({ classification: 'Read-Only' });
+    let concurrentCalls = 0;
+    let maxConcurrent = 0;
+    const verifier: GateItemVerifier = {
+      verify: async () => {
+        concurrentCalls += 1;
+        maxConcurrent = Math.max(maxConcurrent, concurrentCalls);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        concurrentCalls -= 1;
+        return { disposition: 'pass' };
+      },
+    };
+
+    await Promise.all([
+      runGateReconcilerTick({
+        deployAdvanceTrigger: fixedTrigger('sha1'),
+        verifier,
+      }),
+      runGateReconcilerTick({
+        deployAdvanceTrigger: fixedTrigger('sha1'),
+        verifier,
+      }),
+    ]);
+
+    expect(maxConcurrent).toBe(1);
   });
 
   it('does not advance runnability when the deploy-advance trigger reports no advance', async () => {
