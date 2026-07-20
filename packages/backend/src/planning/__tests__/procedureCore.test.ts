@@ -77,7 +77,9 @@ describe('procedureCore', () => {
   it('renders every principle for a skill with the placeholder resolved', () => {
     for (const principle of CORE_PRINCIPLES) {
       for (const skill of principle.appliesTo) {
-        const rendered = principlesFor(skill).find((p) => p.id === principle.id);
+        const rendered = principlesFor(skill).find(
+          (p) => p.id === principle.id,
+        );
         expect(rendered).toBeDefined();
       }
     }

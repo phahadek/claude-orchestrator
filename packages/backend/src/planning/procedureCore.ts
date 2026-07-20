@@ -72,7 +72,8 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   },
   {
     id: 'cache-state-files-edit-tool',
-    title: 'Cache/state files are edited with the Edit/Write tool, never a shell script',
+    title:
+      'Cache/state files are edited with the Edit/Write tool, never a shell script',
     appliesTo: ['groom', 'design'],
     text:
       'Loader-seeded on-disk JSON (grooming-state.json / code-map.json for /groom, ' +
