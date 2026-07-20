@@ -271,7 +271,9 @@ function isConstraintsDispositioned(entry: GroomingGateEntry): {
       continue;
     }
     if (d.disposition === 'n/a' && !d.why?.trim()) {
-      reasons.push(`binding constraint "${id}" is dispositioned n/a without a reason.`);
+      reasons.push(
+        `binding constraint "${id}" is dispositioned n/a without a reason.`,
+      );
     }
     if (d.disposition === 'conflict_route') {
       const routed = dependsOnTasks.find((t) => t.id === d.routedTaskId);
@@ -347,7 +349,9 @@ export function checkGroomingPromotionGate(
     );
   }
 
-  reasons.push(...isFilesPathsResolved(resolvedType, entry.filesPathsEntries).reasons);
+  reasons.push(
+    ...isFilesPathsResolved(resolvedType, entry.filesPathsEntries).reasons,
+  );
   reasons.push(...isDependsOnDesignClear(entry.dependsOnTasks).reasons);
   reasons.push(...isConstraintsDispositioned(entry).reasons);
 

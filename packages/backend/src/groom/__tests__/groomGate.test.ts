@@ -133,7 +133,11 @@ describe('checkGroomingPromotionGate', () => {
         type_check: { decision: 'none' },
         type: '💻 Code',
         filesPathsEntries: [
-          { raw: 'packages/backend/src/checkout.ts *(new)*', isNew: true, existsInRepo: false },
+          {
+            raw: 'packages/backend/src/checkout.ts *(new)*',
+            isNew: true,
+            existsInRepo: false,
+          },
         ],
       },
       'notion:has-items',
@@ -224,7 +228,11 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
         type_check: { decision: 'none' },
         type: '💻 Code',
         filesPathsEntries: [
-          { raw: 'packages/backend/src/checkout.ts *(new)*', isNew: true, existsInRepo: false },
+          {
+            raw: 'packages/backend/src/checkout.ts *(new)*',
+            isNew: true,
+            existsInRepo: false,
+          },
         ],
       },
       'notion:has-seeds',
@@ -279,7 +287,11 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
         type_check: { decision: 'none' },
         type: '💻 Code',
         filesPathsEntries: [
-          { raw: 'packages/backend/src/checkout.ts *(new)*', isNew: true, existsInRepo: false },
+          {
+            raw: 'packages/backend/src/checkout.ts *(new)*',
+            isNew: true,
+            existsInRepo: false,
+          },
         ],
       },
       'notion:na-seed',
@@ -314,7 +326,11 @@ describe('checkGroomingPromotionGate — via the accretion write-surface', () =>
       type_check: { decision: 'none' },
       type: '💻 Code',
       filesPathsEntries: [
-        { raw: 'packages/backend/src/checkout.ts *(new)*', isNew: true, existsInRepo: false },
+        {
+          raw: 'packages/backend/src/checkout.ts *(new)*',
+          isNew: true,
+          existsInRepo: false,
+        },
       ],
     };
 
@@ -397,15 +413,16 @@ describe('checkGroomingPromotionGate — FM1 bindingConstraints', () => {
         ...BASE,
         regions: { packages: ['packages/backend/src/gate'], files: [] },
         constraintsDispositioned: {
-          'gate-accretion-durable': { disposition: 'conflict_route', routedTaskId: '' },
+          'gate-accretion-durable': {
+            disposition: 'conflict_route',
+            routedTaskId: '',
+          },
         },
       },
       'notion:fm1-unrouted',
     );
     expect(result.allowed).toBe(false);
-    expect(
-      result.reasons.some((r) => r.includes('conflict→route')),
-    ).toBe(true);
+    expect(result.reasons.some((r) => r.includes('conflict→route'))).toBe(true);
   });
 
   it('allows a conflict→route disposition once routed to a recorded 📐 Design Depends On task', () => {
@@ -466,7 +483,11 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
       {
         ...BASE,
         filesPathsEntries: [
-          { raw: 'packages/backend/src/checkout.ts and/or its tests', isNew: false, existsInRepo: true },
+          {
+            raw: 'packages/backend/src/checkout.ts and/or its tests',
+            isNew: false,
+            existsInRepo: true,
+          },
         ],
       },
       'notion:fm2-task',
@@ -480,15 +501,19 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
       {
         ...BASE,
         filesPathsEntries: [
-          { raw: 'packages/backend/src/nonexistent.ts', isNew: false, existsInRepo: false },
+          {
+            raw: 'packages/backend/src/nonexistent.ts',
+            isNew: false,
+            existsInRepo: false,
+          },
         ],
       },
       'notion:fm2-task',
     );
     expect(result.allowed).toBe(false);
-    expect(
-      result.reasons.some((r) => r.includes('does not resolve')),
-    ).toBe(true);
+    expect(result.reasons.some((r) => r.includes('does not resolve'))).toBe(
+      true,
+    );
   });
 
   it('allows a Code task whose Files/paths entries are all existing or *(new)*', () => {
@@ -496,8 +521,16 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
       {
         ...BASE,
         filesPathsEntries: [
-          { raw: 'packages/backend/src/checkout.ts', isNew: false, existsInRepo: true },
-          { raw: 'packages/backend/src/checkoutRetry.ts *(new)*', isNew: true, existsInRepo: false },
+          {
+            raw: 'packages/backend/src/checkout.ts',
+            isNew: false,
+            existsInRepo: true,
+          },
+          {
+            raw: 'packages/backend/src/checkoutRetry.ts *(new)*',
+            isNew: true,
+            existsInRepo: false,
+          },
         ],
       },
       'notion:fm2-task',
@@ -556,9 +589,7 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
     const result = checkGroomingPromotionGate(
       {
         ...BASE,
-        dependsOnTasks: [
-          { id: 'dep-1', type: '📐 Design', status: '✅ Done' },
-        ],
+        dependsOnTasks: [{ id: 'dep-1', type: '📐 Design', status: '✅ Done' }],
       },
       'notion:fm3-cleared',
     );

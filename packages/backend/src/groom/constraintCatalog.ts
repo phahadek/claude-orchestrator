@@ -26,10 +26,14 @@ export interface ConstraintCatalogEntry {
 export const CONSTRAINT_CATALOG: readonly ConstraintCatalogEntry[] = [
   {
     id: 'authority-vs-drift',
-    title: 'Session credentials never substitute for the command-layer authority chain',
+    title:
+      'Session credentials never substitute for the command-layer authority chain',
     page: 'Technical Architecture',
     section: 'Authority-vs-drift',
-    appliesTo: ['packages/backend/src/routes/**', 'packages/backend/src/tasks/**'],
+    appliesTo: [
+      'packages/backend/src/routes/**',
+      'packages/backend/src/tasks/**',
+    ],
     summary:
       'Every write must resolve through the staged-intent surface — a session credential is not itself write authority.',
   },
@@ -47,7 +51,10 @@ export const CONSTRAINT_CATALOG: readonly ConstraintCatalogEntry[] = [
     title: 'Split follows detect → confirm → route',
     page: 'Technical Architecture',
     section: 'Split',
-    appliesTo: ['packages/backend/src/split/**', 'packages/backend/src/groom/**'],
+    appliesTo: [
+      'packages/backend/src/split/**',
+      'packages/backend/src/groom/**',
+    ],
     summary:
       'A flagged size/type mismatch is never auto-split — a human/groomer must confirm and route it.',
   },
@@ -75,7 +82,8 @@ export const CONSTRAINT_CATALOG: readonly ConstraintCatalogEntry[] = [
     page: 'Technical Architecture',
     section: 'Gate & Seed Accretion',
     appliesTo: ['packages/backend/src/seed/**'],
-    summary: 'seed_accretion mirrors gate_accretion — durable, keyed by source task.',
+    summary:
+      'seed_accretion mirrors gate_accretion — durable, keyed by source task.',
   },
   {
     id: 'dependency-candidates-not-autowired',
@@ -100,7 +108,8 @@ export const CONSTRAINT_CATALOG: readonly ConstraintCatalogEntry[] = [
     page: 'Technical Architecture',
     section: 'Operational Load',
     appliesTo: ['packages/backend/src/ops/**'],
-    summary: 'ops-load never mutates state; writes go through the staged-intent surface.',
+    summary:
+      'ops-load never mutates state; writes go through the staged-intent surface.',
   },
   {
     id: 'deploy-gates-on-min-commit',
@@ -113,7 +122,8 @@ export const CONSTRAINT_CATALOG: readonly ConstraintCatalogEntry[] = [
   },
   {
     id: 'design-signoff-required',
-    title: 'Design tasks require explicit signoff before downstream work starts',
+    title:
+      'Design tasks require explicit signoff before downstream work starts',
     page: 'Technical Architecture',
     section: 'Design Signoff',
     appliesTo: ['packages/backend/src/design/**'],
@@ -125,8 +135,12 @@ export const CONSTRAINT_CATALOG: readonly ConstraintCatalogEntry[] = [
     title: 'Session credentials are scoped, not ambient',
     page: 'Technical Architecture',
     section: 'Session Stage Auth',
-    appliesTo: ['packages/backend/src/auth/**', 'packages/backend/src/session/**'],
-    summary: 'Each staged intent gets a narrowly-scoped credential, never a broad ambient one.',
+    appliesTo: [
+      'packages/backend/src/auth/**',
+      'packages/backend/src/session/**',
+    ],
+    summary:
+      'Each staged intent gets a narrowly-scoped credential, never a broad ambient one.',
   },
   {
     id: 'permissions-least-privilege',
@@ -142,7 +156,8 @@ export const CONSTRAINT_CATALOG: readonly ConstraintCatalogEntry[] = [
     page: 'Master Context',
     section: 'Security Review Gate',
     appliesTo: ['packages/backend/src/security/**'],
-    summary: 'A new externally-reachable surface is not Ready until security-reviewed.',
+    summary:
+      'A new externally-reachable surface is not Ready until security-reviewed.',
   },
   {
     id: 'audit-log-append-only',
@@ -158,7 +173,8 @@ export const CONSTRAINT_CATALOG: readonly ConstraintCatalogEntry[] = [
     page: 'Technical Architecture',
     section: 'WS Broadcast',
     appliesTo: ['packages/backend/src/ws/**'],
-    summary: 'Clients must reconcile against a REST fetch — the socket stream alone is not authoritative.',
+    summary:
+      'Clients must reconcile against a REST fetch — the socket stream alone is not authoritative.',
   },
   {
     id: 'milestone-resolver-single-source',
@@ -166,7 +182,8 @@ export const CONSTRAINT_CATALOG: readonly ConstraintCatalogEntry[] = [
     page: 'Technical Architecture',
     section: 'Milestone Resolver',
     appliesTo: ['packages/backend/src/projects/**'],
-    summary: 'resolveMilestoneForProject is the only place milestone/project mapping is computed.',
+    summary:
+      'resolveMilestoneForProject is the only place milestone/project mapping is computed.',
   },
   {
     id: 'db-migrations-forward-only',
@@ -182,7 +199,8 @@ export const CONSTRAINT_CATALOG: readonly ConstraintCatalogEntry[] = [
     page: 'Master Context',
     section: 'Self-Update Safety',
     appliesTo: ['packages/backend/src/updater/**'],
-    summary: 'Self-update swaps happen only at a safe checkpoint, never inside an in-flight request.',
+    summary:
+      'Self-update swaps happen only at a safe checkpoint, never inside an in-flight request.',
   },
   {
     id: 'pr-no-self-merge',
@@ -190,7 +208,8 @@ export const CONSTRAINT_CATALOG: readonly ConstraintCatalogEntry[] = [
     page: 'Master Context',
     section: 'PR Lifecycle',
     appliesTo: ['packages/backend/src/github/**'],
-    summary: 'Merge authority stays with the dashboard/reviewer, never the authoring session.',
+    summary:
+      'Merge authority stays with the dashboard/reviewer, never the authoring session.',
   },
   {
     id: 'grooming-guards-server-derived',
@@ -233,7 +252,11 @@ export function bindingConstraintIdsForRegions(regions: RegionsLike): string[] {
   const paths = [...(regions.packages ?? []), ...(regions.files ?? [])];
   const ids = new Set<string>();
   for (const entry of CONSTRAINT_CATALOG) {
-    if (entry.appliesTo.some((glob) => paths.some((p) => matchesRegionGlob(glob, p)))) {
+    if (
+      entry.appliesTo.some((glob) =>
+        paths.some((p) => matchesRegionGlob(glob, p)),
+      )
+    ) {
       ids.add(entry.id);
     }
   }
@@ -267,6 +290,10 @@ export function resolvesCatalogEntry(
 }
 
 /** The keep-honest surface: catalog entries whose page/section fails to resolve against `pages`. */
-export function unresolvedCatalogEntries(pages: ArchPageLike[]): ConstraintCatalogEntry[] {
-  return CONSTRAINT_CATALOG.filter((entry) => !resolvesCatalogEntry(entry, pages));
+export function unresolvedCatalogEntries(
+  pages: ArchPageLike[],
+): ConstraintCatalogEntry[] {
+  return CONSTRAINT_CATALOG.filter(
+    (entry) => !resolvesCatalogEntry(entry, pages),
+  );
 }

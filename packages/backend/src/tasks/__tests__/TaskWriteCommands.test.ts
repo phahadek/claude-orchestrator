@@ -476,7 +476,11 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
         size_check: { decision: 'no_split' },
         type_check: { decision: 'none' },
         filesPathsEntries: [
-          { raw: 'packages/backend/src/abc.ts *(new)*', isNew: true, existsInRepo: false },
+          {
+            raw: 'packages/backend/src/abc.ts *(new)*',
+            isNew: true,
+            existsInRepo: false,
+          },
         ],
       },
     });
@@ -489,7 +493,11 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
           size_check: { decision: 'no_split' },
           type_check: { decision: 'none' },
           filesPathsEntries: [
-            { raw: 'packages/backend/src/abc.ts *(new)*', isNew: true, existsInRepo: false },
+            {
+              raw: 'packages/backend/src/abc.ts *(new)*',
+              isNew: true,
+              existsInRepo: false,
+            },
           ],
         },
       }),

@@ -81,7 +81,10 @@ describe('CONSTRAINT_CATALOG', () => {
 describe('matchesRegionGlob', () => {
   it('matches a subtree glob against the package dir itself and files under it', () => {
     expect(
-      matchesRegionGlob('packages/backend/src/gate/**', 'packages/backend/src/gate'),
+      matchesRegionGlob(
+        'packages/backend/src/gate/**',
+        'packages/backend/src/gate',
+      ),
     ).toBe(true);
     expect(
       matchesRegionGlob(
@@ -93,7 +96,10 @@ describe('matchesRegionGlob', () => {
 
   it('does not match a sibling directory that merely shares a prefix', () => {
     expect(
-      matchesRegionGlob('packages/backend/src/gate/**', 'packages/backend/src/gateway'),
+      matchesRegionGlob(
+        'packages/backend/src/gate/**',
+        'packages/backend/src/gateway',
+      ),
     ).toBe(false);
   });
 
@@ -126,7 +132,10 @@ describe('bindingConstraintIdsForRegions', () => {
 
   it('returns an empty array for regions touching no catalog entry', () => {
     expect(
-      bindingConstraintIdsForRegions({ packages: ['packages/backend/src/nonexistent'], files: [] }),
+      bindingConstraintIdsForRegions({
+        packages: ['packages/backend/src/nonexistent'],
+        files: [],
+      }),
     ).toEqual([]);
   });
 });
