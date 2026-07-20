@@ -146,7 +146,12 @@ export async function squashMergeLocal(
   );
 
   try {
-    await reconcilePrimaryCheckout(worktreePath, baseBranch, baseSha, commitSha);
+    await reconcilePrimaryCheckout(
+      worktreePath,
+      baseBranch,
+      baseSha,
+      commitSha,
+    );
   } catch (err) {
     // Non-fatal: the merge itself already succeeded (ref advanced). Leave
     // the primary checkout as-is rather than risk clobbering local changes;

@@ -208,10 +208,7 @@ describe('squashMergeLocal — worktree model (base checked out in primary tree)
     expect(status).toBe('');
 
     // The merged file is actually present on disk, not just in the commit.
-    const content = fs.readFileSync(
-      path.join(primaryDir, 'new.txt'),
-      'utf-8',
-    );
+    const content = fs.readFileSync(path.join(primaryDir, 'new.txt'), 'utf-8');
     expect(content).toBe('feature content\n');
   });
 });
