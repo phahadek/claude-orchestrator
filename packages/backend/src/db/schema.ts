@@ -1320,7 +1320,9 @@ export function runMigrations(target: Database.Database): void {
           .get(name) as { sql: string } | undefined
       )?.sql ?? '';
 
-    if (getTableSql('gate_item_event').includes('disposition    TEXT    NOT NULL')) {
+    if (
+      getTableSql('gate_item_event').includes('disposition    TEXT    NOT NULL')
+    ) {
       target.exec(`
         BEGIN TRANSACTION;
         DROP TABLE IF EXISTS gate_item_event__new;

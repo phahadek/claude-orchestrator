@@ -178,8 +178,13 @@ export function createGateStateRouter(): Router {
       deploySha?: unknown;
       operator?: unknown;
     };
-    if (body.disposition !== undefined && typeof body.disposition !== 'string') {
-      res.status(400).json({ error: 'disposition must be a string when present' });
+    if (
+      body.disposition !== undefined &&
+      typeof body.disposition !== 'string'
+    ) {
+      res
+        .status(400)
+        .json({ error: 'disposition must be a string when present' });
       return;
     }
     const disposition = body.disposition as string | undefined;

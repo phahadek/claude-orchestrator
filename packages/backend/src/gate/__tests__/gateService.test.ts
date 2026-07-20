@@ -19,7 +19,11 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { insertItem, setMinDeployedCommit, advanceState } from '../gateStore.js';
+import {
+  insertItem,
+  setMinDeployedCommit,
+  advanceState,
+} from '../gateStore.js';
 import {
   getGateReadiness,
   reconcileGateRunnability,
@@ -90,7 +94,12 @@ describe('getGateReadiness', () => {
     // Simulate a row seeded (e.g. before this enforcement shipped) with an
     // invented state — the store layer itself doesn't validate; only the
     // service-level appendGateItemEvent does.
-    advanceState(item.id, 'blocked-unexercised-by-value', undefined, new Date(1).toISOString());
+    advanceState(
+      item.id,
+      'blocked-unexercised-by-value',
+      undefined,
+      new Date(1).toISOString(),
+    );
 
     const readiness = getGateReadiness('M12');
     expect(readiness.status).toBe('blocked');
@@ -258,9 +267,9 @@ describe('appendGateItemEvent', () => {
       evidence: 'checkout threw a 500',
     });
     expect(updated.state).toBe('fail');
-    expect(getGateReadiness(item.milestone).blocking.map((b) => b.id)).toContain(
-      item.id,
-    );
+    expect(
+      getGateReadiness(item.milestone).blocking.map((b) => b.id),
+    ).toContain(item.id);
   });
 
   it('rejects a disposition outside the closed vocabulary and does not mutate state', () => {

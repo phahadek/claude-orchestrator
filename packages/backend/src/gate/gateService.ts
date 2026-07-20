@@ -392,9 +392,7 @@ export function appendGateItemEvent(
     );
   }
   if (event.disposition === 'discarded' && !event.evidence) {
-    throw new Error(
-      `gate_item_event: 'discarded' requires an evidence/reason`,
-    );
+    throw new Error(`gate_item_event: 'discarded' requires an evidence/reason`);
   }
   const now = new Date().toISOString();
   gateStore.appendEvent(gateItemId, { ...event, at: now });
