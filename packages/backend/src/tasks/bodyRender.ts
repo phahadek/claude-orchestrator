@@ -346,7 +346,12 @@ function contextBlockToMarkdown(block: BlockModel): string {
  * stored body.
  */
 export function renderTaskBodyMarkdown(sections: TaskBodySections): string {
-  const lines: string[] = ['## Summary', sections.summary, '', '## Dependencies'];
+  const lines: string[] = [
+    '## Summary',
+    sections.summary,
+    '',
+    '## Dependencies',
+  ];
   if (sections.dependencies.length === 0) {
     lines.push('None — Wave N.');
   } else {

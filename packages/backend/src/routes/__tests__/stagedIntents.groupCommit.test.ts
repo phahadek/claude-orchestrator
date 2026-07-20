@@ -99,7 +99,11 @@ async function stageGroup(
       },
     },
   });
-  return { dependsOn: dependsOn.body, updateBody: updateBody?.body, setStatus: setStatus.body };
+  return {
+    dependsOn: dependsOn.body,
+    updateBody: updateBody?.body,
+    setStatus: setStatus.body,
+  };
 }
 
 describe('POST /api/staged-intents/:id/approve', () => {
@@ -127,7 +131,9 @@ describe('POST /api/staged-intents/:id/approve', () => {
   it('eagerly evaluates the composed proposed body — a sibling updateBody in the group is reflected, not the stale stored body', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean stored body.'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Summary\nClean stored body.'),
       updateStatus: vi.fn(),
       setDependsOn: vi.fn(),
     });
@@ -253,7 +259,9 @@ describe('POST /api/staged-intents/group/:groupId/commit', () => {
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
       updateStatus,
-      setDependsOn: vi.fn().mockRejectedValue(new Error('backend write failed')),
+      setDependsOn: vi
+        .fn()
+        .mockRejectedValue(new Error('backend write failed')),
     });
     const app = makeApp();
     const agent = supertest(app);

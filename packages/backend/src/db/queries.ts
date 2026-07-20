@@ -4392,7 +4392,9 @@ export function transitionStagedIntent(
   );
   const updatedAt = opts?.updatedAt ?? Date.now();
   const annotation =
-    opts && 'annotation' in opts ? (opts.annotation ?? null) : current.annotation;
+    opts && 'annotation' in opts
+      ? (opts.annotation ?? null)
+      : current.annotation;
   _stmtUpdateStagedIntentState.run({
     id,
     state: toState,
