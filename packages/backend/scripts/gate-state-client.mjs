@@ -141,7 +141,14 @@ export function approveGateItem({ host, port, token, gateItemId, operator }) {
   });
 }
 
-export function reopenGateItem({ host, port, token, gateItemId, reason, operator }) {
+export function reopenGateItem({
+  host,
+  port,
+  token,
+  gateItemId,
+  reason,
+  operator,
+}) {
   const payload = {};
   if (reason !== undefined) payload.reason = reason;
   if (operator !== undefined) payload.operator = operator;

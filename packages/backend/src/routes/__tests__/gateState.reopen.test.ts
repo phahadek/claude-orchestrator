@@ -72,7 +72,9 @@ describe('POST /api/gate/items/:id/reopen', () => {
     const updated = { id: 'gi-1', state: 'open' };
     gateServiceMock.reopenGateItem.mockReturnValue(updated);
 
-    const res = await request(makeApp()).post('/api/gate/items/gi-1/reopen').send({});
+    const res = await request(makeApp())
+      .post('/api/gate/items/gi-1/reopen')
+      .send({});
 
     expect(gateServiceMock.reopenGateItem).toHaveBeenCalledWith(
       'gi-1',
@@ -84,7 +86,9 @@ describe('POST /api/gate/items/:id/reopen', () => {
 
   it('400s when the service rejects an already-open/runnable reopen', async () => {
     gateServiceMock.reopenGateItem.mockImplementation(() => {
-      throw new Error('gate_item gi-1: already open — reopen only applies to a resolved/terminal item');
+      throw new Error(
+        'gate_item gi-1: already open — reopen only applies to a resolved/terminal item',
+      );
     });
 
     const res = await request(makeApp())
