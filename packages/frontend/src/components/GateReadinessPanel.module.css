@@ -216,6 +216,66 @@
   cursor: default;
 }
 
+.deploySection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border, #313244);
+  border-radius: 8px;
+  background: var(--bg-secondary, #1e1e2e);
+}
+
+.deployRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.deployShaInput {
+  background: var(--bg-primary, #11111b);
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  color: var(--text-primary, #cdd6f4);
+  padding: 4px 8px;
+  font-family: monospace;
+  font-size: 0.8125rem;
+  min-width: 220px;
+}
+
+.deployButton {
+  background: var(--accent, #89b4fa);
+  border: none;
+  border-radius: 6px;
+  color: var(--bg-primary, #11111b);
+  padding: 6px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.deployButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.deployRunStatus {
+  font-size: 0.8125rem;
+  color: var(--text-muted, #a6adc8);
+}
+
+.deployEventList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.75rem;
+  color: var(--text-muted, #a6adc8);
+  font-family: monospace;
+}
+
 @media (max-width: 768px) {
   .rollupHeaderTop {
     flex-direction: column;

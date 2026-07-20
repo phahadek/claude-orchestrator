@@ -13,9 +13,26 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const deployServiceMock = vi.hoisted(() => ({
   reportProjectDeploy: vi.fn(),
+  getActiveDeployRun: vi.fn(),
+  listDeployRunEvents: vi.fn(),
+  DeployRunConflictError: class DeployRunConflictError extends Error {},
 }));
 
 vi.mock('../../deploy/deployService.js', () => deployServiceMock);
+
+const deployOrchestratorMock = vi.hoisted(() => ({
+  startDeploy: vi.fn(),
+}));
+
+vi.mock('../../deploy/DeployOrchestrator.js', () => ({
+  DeployOrchestrator: vi.fn().mockImplementation(() => deployOrchestratorMock),
+}));
+
+const queriesMock = vi.hoisted(() => ({
+  getProjectRowById: vi.fn(),
+}));
+
+vi.mock('../../db/queries.js', () => queriesMock);
 
 import { createDeployRouter, setDeployScheduler } from '../deploy.js';
 
@@ -75,5 +92,118 @@ describe('POST /api/deploy/report-in', () => {
 
     expect(res.status).toBe(202);
     expect(deployServiceMock.reportProjectDeploy).toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/deploy/launch', () => {
+  it('starts a deploy_run behind the confirm-gate and returns it', async () => {
+    queriesMock.getProjectRowById.mockReturnValue({
+      id: 'claude-orchestrator',
+      project_dir: '/repo/claude-orchestrator',
+    });
+    const run = {
+      run_id: 'run-1',
+      project: 'claude-orchestrator',
+      target_sha: 'abc123',
+      current_step: null,
+      status: 'running',
+      started_at: '2026-07-20T00:00:00.000Z',
+      completed_at: null,
+    };
+    deployOrchestratorMock.startDeploy.mockResolvedValue(run);
+
+    const res = await request(makeApp())
+      .post('/api/deploy/launch')
+      .send({ projectId: 'claude-orchestrator', targetSha: 'abc123' });
+
+    expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith('abc123');
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ run });
+  });
+
+  it('400s when projectId or targetSha is missing', async () => {
+    const res = await request(makeApp())
+      .post('/api/deploy/launch')
+      .send({ projectId: 'claude-orchestrator' });
+
+    expect(res.status).toBe(400);
+    expect(deployOrchestratorMock.startDeploy).not.toHaveBeenCalled();
+  });
+
+  it('404s an unknown project', async () => {
+    queriesMock.getProjectRowById.mockReturnValue(undefined);
+
+    const res = await request(makeApp())
+      .post('/api/deploy/launch')
+      .send({ projectId: 'unknown', targetSha: 'abc123' });
+
+    expect(res.status).toBe(404);
+  });
+
+  it('409s when the project already has an active run', async () => {
+    queriesMock.getProjectRowById.mockReturnValue({
+      id: 'claude-orchestrator',
+      project_dir: '/repo/claude-orchestrator',
+    });
+    deployOrchestratorMock.startDeploy.mockRejectedValue(
+      new deployServiceMock.DeployRunConflictError('already running'),
+    );
+
+    const res = await request(makeApp())
+      .post('/api/deploy/launch')
+      .send({ projectId: 'claude-orchestrator', targetSha: 'abc123' });
+
+    expect(res.status).toBe(409);
+  });
+});
+
+describe('GET /api/deploy/status', () => {
+  it('returns the active run and its events for a project', async () => {
+    const run = {
+      run_id: 'run-1',
+      project: 'claude-orchestrator',
+      target_sha: 'abc123',
+      current_step: 'confirm',
+      status: 'running',
+      started_at: '2026-07-20T00:00:00.000Z',
+      completed_at: null,
+    };
+    const events = [
+      {
+        id: 1,
+        run_id: 'run-1',
+        step: 'confirm',
+        event_type: 'step_started',
+        disposition: null,
+        detail: null,
+        at: '2026-07-20T00:00:01.000Z',
+      },
+    ];
+    deployServiceMock.getActiveDeployRun.mockReturnValue(run);
+    deployServiceMock.listDeployRunEvents.mockReturnValue(events);
+
+    const res = await request(makeApp()).get(
+      '/api/deploy/status?projectId=claude-orchestrator',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ run, events });
+  });
+
+  it('returns a null run and empty events when the project has none active', async () => {
+    deployServiceMock.getActiveDeployRun.mockReturnValue(undefined);
+
+    const res = await request(makeApp()).get(
+      '/api/deploy/status?projectId=claude-orchestrator',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ run: null, events: [] });
+  });
+
+  it('400s when projectId is missing', async () => {
+    const res = await request(makeApp()).get('/api/deploy/status');
+
+    expect(res.status).toBe(400);
   });
 });
