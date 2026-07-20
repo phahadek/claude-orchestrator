@@ -18,8 +18,6 @@
  *   start, same as a standard session.
  */
 
-export type SessionType = 'standard' | 'review' | 'groom' | 'design';
-
 /** True for session types that plan (groom/design): stage-only, read-only, no worktree, no PR. */
 export function isPlanningSession(sessionType: string): boolean {
   return sessionType === 'groom' || sessionType === 'design';
