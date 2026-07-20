@@ -28,7 +28,110 @@ const CLASSIFICATION_OPTIONS: GateItemClassification[] = [
   'Prod-Mutating',
 ];
 
-const SEED_STATE_OPTIONS = ['pending', 'applied', 'confirmed', 'blocked'];
+const GATE_STATE_ORDER = [
+  'open',
+  'runnable',
+  'pass',
+  'fail',
+  'deferred',
+  'pending-approval',
+];
+const GATE_DONE_STATES = ['pass', 'deferred'];
+
+const SEED_STATE_ORDER = ['pending', 'applied', 'confirmed', 'blocked'];
+const SEED_DONE_STATES = ['confirmed'];
+
+interface RollupHeaderProps {
+  testId: string;
+  title: string;
+  status: 'green' | 'blocked' | null;
+  loading: boolean;
+  error: string | null;
+  counts: Record<string, number>;
+  stateOrder: string[];
+  doneStates: string[];
+  activeState: string;
+  onSelectState: (state: string) => void;
+}
+
+function RollupHeader({
+  testId,
+  title,
+  status,
+  loading,
+  error,
+  counts,
+  stateOrder,
+  doneStates,
+  activeState,
+  onSelectState,
+}: RollupHeaderProps) {
+  const total = stateOrder.reduce((sum, s) => sum + (counts[s] ?? 0), 0);
+  const doneCount = doneStates.reduce((sum, s) => sum + (counts[s] ?? 0), 0);
+  const notDoneStates = stateOrder.filter((s) => !doneStates.includes(s));
+
+  return (
+    <div className={styles.rollupHeader} data-testid={testId}>
+      <div className={styles.rollupHeaderTop}>
+        <h3 className={styles.rollupTitle}>{title}</h3>
+        {status && (
+          <div
+            className={`${styles.statusBadge} ${
+              status === 'green' ? styles.statusGreen : styles.statusBlocked
+            }`}
+          >
+            {status === 'green' ? '✅ Green — ready' : '🚫 Blocked'}
+          </div>
+        )}
+      </div>
+
+      {loading && <p className={styles.muted}>Loading readiness…</p>}
+      {error && <p className={styles.error}>{error}</p>}
+
+      {!loading && !error && total === 0 && (
+        <p className={styles.muted}>No items tracked yet.</p>
+      )}
+
+      {!loading && !error && total > 0 && (
+        <>
+          <div className={styles.progressBar}>
+            <div
+              className={`${styles.progressSegment} ${styles.progressDone}`}
+              style={{ width: `${(doneCount / total) * 100}%` }}
+              title={`${doneCount} done`}
+            />
+            {notDoneStates.map((s) =>
+              counts[s] ? (
+                <div
+                  key={s}
+                  className={`${styles.progressSegment} ${styles.progressPending}`}
+                  style={{ width: `${((counts[s] ?? 0) / total) * 100}%` }}
+                  title={`${counts[s]} ${s}`}
+                />
+              ) : null,
+            )}
+          </div>
+
+          <div className={styles.chipRow}>
+            {stateOrder.map((s) => (
+              <button
+                key={s}
+                type="button"
+                className={`${styles.chip} ${
+                  activeState === s ? styles.chipActive : ''
+                } ${doneStates.includes(s) ? styles.chipDone : ''}`}
+                onClick={() => onSelectState(s)}
+                data-testid={`${testId}-chip-${s}`}
+              >
+                {s} ({counts[s] ?? 0})
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function GateReadinessPanel({ activeProjectId }: Props) {
   const [milestones, setMilestones] = useState<MilestoneReadiness[]>([]);
@@ -45,7 +148,7 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
 
   const [stateFilter, setStateFilter] = useState('');
   const [classificationFilter, setClassificationFilter] = useState('');
-  const [runnableFilter, setRunnableFilter] = useState('');
+  const [runnableFilter, setRunnableFilter] = useState('true');
   const [page, setPage] = useState(1);
 
   const [items, setItems] = useState<GateItem[]>([]);
@@ -124,7 +227,7 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
     };
   }, [activeProjectId]);
 
-  // Load readiness (green/blocked + blocking set) for the selected milestone.
+  // Load readiness (green/blocked + per-state counts) for the selected milestone.
   useEffect(() => {
     if (!selectedMilestone) {
       setReadiness(null);
@@ -152,7 +255,7 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
     };
   }, [selectedMilestone]);
 
-  // Load config-seed readiness (green/blocked + blocking set) for the selected milestone.
+  // Load config-seed readiness (green/blocked + per-state counts) for the selected milestone.
   useEffect(() => {
     if (!selectedMilestone) {
       setSeedReadiness(null);
@@ -191,6 +294,7 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
   }, [selectedMilestone, seedStateFilter]);
 
   // Load the filtered/paginated item list — never a full unbounded load.
+  // Defaults to the run worklist: runnable items, not-done first.
   useEffect(() => {
     if (!selectedMilestone) {
       setItems([]);
@@ -208,6 +312,7 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
         classification:
           (classificationFilter as GateItemClassification) || undefined,
         runnable: runnableFilter === '' ? undefined : runnableFilter === 'true',
+        order: stateFilter === '' ? 'not-done-first' : undefined,
         page,
         limit: PAGE_SIZE,
       })
@@ -237,6 +342,7 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
   ]);
 
   // Load the filtered/paginated seed item list — never a full unbounded load.
+  // Defaults to the run worklist: unconfirmed items first.
   useEffect(() => {
     if (!selectedMilestone) {
       setSeedItems([]);
@@ -251,6 +357,7 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
         project: activeProjectId ?? undefined,
         milestone: selectedMilestone,
         state: seedStateFilter || undefined,
+        order: seedStateFilter === '' ? 'not-done-first' : undefined,
         page: seedPage,
         limit: PAGE_SIZE,
       })
@@ -290,6 +397,15 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
     },
     [expandedId],
   );
+
+  const selectGateChip = useCallback((state: string) => {
+    setStateFilter(state);
+    setRunnableFilter('');
+  }, []);
+
+  const selectSeedChip = useCallback((state: string) => {
+    setSeedStateFilter(state);
+  }, []);
 
   const totalPages = Math.max(1, Math.ceil(itemsTotal / PAGE_SIZE));
   const seedTotalPages = Math.max(1, Math.ceil(seedItemsTotal / PAGE_SIZE));
@@ -349,88 +465,20 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
       )}
 
       {selectedMilestone && (
-        <div className={styles.readinessRow}>
-          <div
-            className={styles.readinessCard}
-            data-testid="gate-readiness-status"
-          >
-            <h3 className={styles.readinessCardTitle}>Gate</h3>
-            {readinessLoading && (
-              <p className={styles.muted}>Loading readiness…</p>
-            )}
-            {readinessError && <p className={styles.error}>{readinessError}</p>}
-            {readiness && (
-              <>
-                <div
-                  className={`${styles.statusBadge} ${
-                    readiness.status === 'green'
-                      ? styles.statusGreen
-                      : styles.statusBlocked
-                  }`}
-                >
-                  {readiness.status === 'green'
-                    ? '✅ Green — ready'
-                    : '🚫 Blocked'}
-                </div>
-                {readiness.status === 'blocked' && (
-                  <ul className={styles.blockingList}>
-                    {readiness.blocking.map((b) => (
-                      <li key={b.id} className={styles.blockingItem}>
-                        <span className={styles.blockingState}>{b.state}</span>
-                        <span className={styles.blockingText}>{b.text}</span>
-                        <span className={styles.blockingClassification}>
-                          {b.classification}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </>
-            )}
-          </div>
-
-          <div
-            className={styles.readinessCard}
-            data-testid="seed-readiness-status"
-          >
-            <h3 className={styles.readinessCardTitle}>Config-Seed</h3>
-            {seedReadinessLoading && (
-              <p className={styles.muted}>Loading readiness…</p>
-            )}
-            {seedReadinessError && (
-              <p className={styles.error}>{seedReadinessError}</p>
-            )}
-            {seedReadiness && (
-              <>
-                <div
-                  className={`${styles.statusBadge} ${
-                    seedReadiness.status === 'green'
-                      ? styles.statusGreen
-                      : styles.statusBlocked
-                  }`}
-                >
-                  {seedReadiness.status === 'green'
-                    ? '✅ Green — ready'
-                    : '🚫 Blocked'}
-                </div>
-                {seedReadiness.status === 'blocked' && (
-                  <ul className={styles.blockingList}>
-                    {seedReadiness.blocking.map((b) => (
-                      <li key={b.id} className={styles.blockingItem}>
-                        <span className={styles.blockingState}>{b.state}</span>
-                        <span className={styles.blockingText}>{b.spec}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {selectedMilestone && (
         <>
+          <RollupHeader
+            testId="gate-readiness-status"
+            title="Gate"
+            status={readiness?.status ?? null}
+            loading={readinessLoading}
+            error={readinessError}
+            counts={readiness?.counts ?? {}}
+            stateOrder={GATE_STATE_ORDER}
+            doneStates={GATE_DONE_STATES}
+            activeState={stateFilter}
+            onSelectState={selectGateChip}
+          />
+
           <div className={styles.filters}>
             <label className={styles.filterField}>
               State
@@ -595,7 +643,19 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
 
       {selectedMilestone && (
         <>
-          <h3 className={styles.readinessCardTitle}>Config-Seed Items</h3>
+          <RollupHeader
+            testId="seed-readiness-status"
+            title="Config-Seed"
+            status={seedReadiness?.status ?? null}
+            loading={seedReadinessLoading}
+            error={seedReadinessError}
+            counts={seedReadiness?.counts ?? {}}
+            stateOrder={SEED_STATE_ORDER}
+            doneStates={SEED_DONE_STATES}
+            activeState={seedStateFilter}
+            onSelectState={selectSeedChip}
+          />
+
           <div className={styles.filters}>
             <label className={styles.filterField}>
               State
@@ -604,7 +664,7 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
                 onChange={(e) => setSeedStateFilter(e.target.value)}
               >
                 <option value="">All</option>
-                {SEED_STATE_OPTIONS.map((s) => (
+                {SEED_STATE_ORDER.map((s) => (
                   <option key={s} value={s}>
                     {s}
                   </option>
