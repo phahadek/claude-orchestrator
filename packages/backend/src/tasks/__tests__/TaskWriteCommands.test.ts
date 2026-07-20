@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockGetTaskCache = vi.fn();
 const mockGetMergeCommitForTask = vi.fn();
+const mockDeleteTaskCacheRow = vi.fn();
 const mockRecordEvent = vi.fn();
 const mockInsertItem = vi.fn();
 const mockRecordAccretionMarker = vi.fn();
@@ -14,6 +15,7 @@ vi.mock('../../db/queries', () => ({
   getTaskCache: (...args: unknown[]) => mockGetTaskCache(...args),
   getMergeCommitForTask: (...args: unknown[]) =>
     mockGetMergeCommitForTask(...args),
+  deleteTaskCacheRow: (...args: unknown[]) => mockDeleteTaskCacheRow(...args),
 }));
 
 vi.mock('../../audit/AuditLog', () => ({
@@ -62,6 +64,7 @@ function makeBackend(overrides: Partial<TaskBackend> = {}): TaskBackend {
     setType: vi.fn().mockResolvedValue(undefined),
     setProperties: vi.fn().mockResolvedValue(undefined),
     archive: vi.fn().mockResolvedValue(undefined),
+    updateBody: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -74,6 +77,7 @@ beforeEach(() => {
   mockGetTaskCache.mockReset();
   mockGetMergeCommitForTask.mockReset();
   mockGetMergeCommitForTask.mockReturnValue(null);
+  mockDeleteTaskCacheRow.mockReset();
   mockRecordEvent.mockReset();
   mockInsertItem.mockReset();
   mockRecordAccretionMarker.mockReset();
@@ -586,6 +590,84 @@ describe('TaskWriteCommands.archive', () => {
 
     await expect(commands.archive('notion:abc')).rejects.toThrow(
       /not supported/i,
+    );
+  });
+});
+
+describe('TaskWriteCommands.moveTask', () => {
+  function makeMoveParams(): Parameters<
+    BackendTaskWriteCommands['moveTask']
+  >[0] {
+    return {
+      taskId: 'notion:abc',
+      content: {
+        title: 'Some task',
+        sections: {
+          summary: 'Summary',
+          dependencies: [],
+          context: [],
+          automatedCriteria: [],
+          manualCriteria: [],
+        },
+        status: 'In Progress',
+      },
+      sourceMilestone: { id: 'ms-source', displayOrder: 1 },
+      targetMilestone: {
+        id: 'ms-target',
+        displayOrder: 2,
+        databaseId: 'db-target',
+      },
+      originalDisposition: 'archive',
+    };
+  }
+
+  function makeMoveBackend(overrides: Partial<TaskBackend> = {}) {
+    return makeBackend({
+      fetchReadyTasks: vi
+        .fn()
+        .mockResolvedValue([{ task: { id: 'notion:abc', dependsOn: [] } }]),
+      appendImplementationNote: vi.fn().mockResolvedValue(undefined),
+      ...overrides,
+    });
+  }
+
+  it('rolls back the created target page when updateBody throws, and leaves the source undisposed', async () => {
+    const backend = makeMoveBackend({
+      updateBody: vi.fn().mockRejectedValue(new Error('Notion 400')),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(commands.moveTask(makeMoveParams())).rejects.toThrow(
+      /Notion 400/,
+    );
+
+    expect(backend.createTask).toHaveBeenCalledTimes(1);
+    expect(backend.archive).toHaveBeenCalledWith('notion:new-id', undefined);
+    expect(backend.archive).not.toHaveBeenCalledWith('notion:abc', undefined);
+  });
+
+  it('performs a successful move: one target page with body + status restored, original disposed', async () => {
+    const backend = makeMoveBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    const result = await commands.moveTask(makeMoveParams());
+
+    expect(result.newTaskId).toBe('notion:new-id');
+    expect(backend.createTask).toHaveBeenCalledTimes(1);
+    expect(backend.updateBody).toHaveBeenCalledWith(
+      'notion:new-id',
+      expect.objectContaining({ summary: 'Summary' }),
+      undefined,
+    );
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:new-id',
+      STATUS_DISPLAY['In Progress'],
+      undefined,
+    );
+    expect(backend.archive).toHaveBeenCalledWith('notion:abc', undefined);
+    expect(backend.archive).not.toHaveBeenCalledWith(
+      'notion:new-id',
+      undefined,
     );
   });
 });
