@@ -373,6 +373,53 @@ export function approveGateItem(
   return updated;
 }
 
+/**
+ * States a reopen may be applied from: any resolved/terminal state, including
+ * the fail-trap left by a fail dispositioned outside the reconciler's
+ * processItem path. `open`/`runnable`/`pending-approval` are already on a
+ * sanctioned path back to resolution, so reopening them is a no-op we reject.
+ */
+const REOPEN_BLOCKED_STATES = new Set(['open', 'runnable', 'pending-approval']);
+
+/**
+ * Operator-attributed reopen: pulls a pass/deferred/fail-trapped item back to
+ * `open` for re-verification. Moves to `open`, not `runnable` — the scheduled
+ * reconcileGateRunnability re-marks it runnable once deploy coverage catches
+ * up, and a later pass still routes a Prod-Mutating item through
+ * pending-approval, so this cannot bypass re-approval.
+ */
+export function reopenGateItem(
+  gateItemId: string,
+  operator?: string,
+  reason?: string,
+): GateItem {
+  const item = gateStore.getItem(gateItemId);
+  if (!item) {
+    throw new Error(`gate_item: no item ${gateItemId}`);
+  }
+  if (REOPEN_BLOCKED_STATES.has(item.state)) {
+    throw new Error(
+      `gate_item ${gateItemId}: already ${item.state} — reopen only applies to a resolved/terminal item`,
+    );
+  }
+  const now = new Date().toISOString();
+  gateStore.appendEvent(gateItemId, {
+    disposition: 'reopened',
+    operator,
+    evidence: reason === undefined ? undefined : { reason },
+    at: now,
+  });
+  gateStore.advanceState(gateItemId, 'open', 'reopened', now);
+
+  const updated = gateStore.getItem(gateItemId);
+  if (!updated) {
+    throw new Error(
+      `gate_item: failed to read back item ${gateItemId} after reopen`,
+    );
+  }
+  return updated;
+}
+
 const RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Read-Only',
   'Prod-Mutating',

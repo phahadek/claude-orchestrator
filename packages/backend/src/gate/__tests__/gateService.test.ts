@@ -30,6 +30,7 @@ import {
   listMilestoneReadiness,
   appendGateItemEvent,
   approveGateItem,
+  reopenGateItem,
   type DeployAncestrySource,
 } from '../gateService.js';
 
@@ -253,6 +254,75 @@ describe('approveGateItem', () => {
   it('rejects approval when not pending-approval', () => {
     const item = makeItem({ classification: 'Prod-Mutating' });
     expect(() => approveGateItem(item.id)).toThrow();
+  });
+});
+
+describe('reopenGateItem', () => {
+  it('returns a pass item to open, appends a reopened event, and re-surfaces after reconcile', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    appendGateItemEvent(item.id, { disposition: 'pass' });
+    expect(getGateItem(item.id)?.state).toBe('pass');
+
+    const reopened = reopenGateItem(item.id, 'pedro', 'dispositioned in error');
+    expect(reopened.state).toBe('open');
+    const detail = getGateItemDetail(item.id);
+    expect(detail!.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          disposition: 'reopened',
+          operator: 'pedro',
+        }),
+      ]),
+    );
+
+    setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
+    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    expect(getGateItem(item.id)?.state).toBe('runnable');
+    expect(
+      nextRunnableGateItems('M12', { classification: 'Read-Only' }).map(
+        (it) => it.id,
+      ),
+    ).toContain(item.id);
+  });
+
+  it('returns a deferred item to open and re-surfaces after reconcile', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    appendGateItemEvent(item.id, { disposition: 'deferred' });
+    expect(getGateItem(item.id)?.state).toBe('deferred');
+
+    const reopened = reopenGateItem(item.id);
+    expect(reopened.state).toBe('open');
+
+    setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
+    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    expect(getGateItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('routes a reopened Prod-Mutating item through pending-approval again on a later pass', () => {
+    const item = makeItem({ classification: 'Prod-Mutating' });
+    appendGateItemEvent(item.id, { disposition: 'pass' });
+    approveGateItem(item.id, 'pedro');
+    expect(getGateItem(item.id)?.state).toBe('pass');
+
+    reopenGateItem(item.id, 'pedro', 're-verify after redeploy');
+    expect(getGateItem(item.id)?.state).toBe('open');
+
+    const updated = appendGateItemEvent(item.id, { disposition: 'pass' });
+    expect(updated.state).toBe('pending-approval');
+  });
+
+  it('rejects reopening an already open item', () => {
+    const item = makeItem();
+    expect(() => reopenGateItem(item.id)).toThrow();
+  });
+
+  it('rejects reopening an already runnable item', () => {
+    const item = makeItem();
+    setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
+    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    expect(getGateItem(item.id)?.state).toBe('runnable');
+
+    expect(() => reopenGateItem(item.id)).toThrow();
   });
 });
 

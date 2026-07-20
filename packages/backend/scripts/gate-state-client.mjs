@@ -17,6 +17,7 @@
 //   node gate-state-client.mjs item <gateItemId>
 //   node gate-state-client.mjs event <gateItemId> <json-payload>
 //   node gate-state-client.mjs approve <gateItemId> [operator]
+//   node gate-state-client.mjs reopen <gateItemId> [reason] [operator]
 //   node gate-state-client.mjs reclassify <gateItemId> <classification> [operator]
 //   node gate-state-client.mjs accrete <json-payload>
 //
@@ -140,6 +141,20 @@ export function approveGateItem({ host, port, token, gateItemId, operator }) {
   });
 }
 
+export function reopenGateItem({ host, port, token, gateItemId, reason, operator }) {
+  const payload = {};
+  if (reason !== undefined) payload.reason = reason;
+  if (operator !== undefined) payload.operator = operator;
+  return requestGateState({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/gate/items/${encodeURIComponent(gateItemId)}/reopen`,
+    payload,
+  });
+}
+
 export function reclassifyGateItem({
   host,
   port,
@@ -192,6 +207,7 @@ const USAGE =
   '  node gate-state-client.mjs item <gateItemId>\n' +
   '  node gate-state-client.mjs event <gateItemId> <json-payload>\n' +
   '  node gate-state-client.mjs approve <gateItemId> [operator]\n' +
+  '  node gate-state-client.mjs reopen <gateItemId> [reason] [operator]\n' +
   '  node gate-state-client.mjs reclassify <gateItemId> <classification> [operator]\n' +
   '  node gate-state-client.mjs accrete <json-payload>';
 
@@ -263,6 +279,17 @@ async function main() {
         port,
         token,
         gateItemId,
+        operator,
+      });
+    } else if (command === 'reopen') {
+      const [gateItemId, reason, operator] = rest;
+      if (!gateItemId) return fail(USAGE);
+      result = await reopenGateItem({
+        host,
+        port,
+        token,
+        gateItemId,
+        reason,
         operator,
       });
     } else if (command === 'reclassify') {
