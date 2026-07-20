@@ -10,6 +10,12 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { loadDeployPlaybook } from '../loadPlaybook';
+import type {
+  StepDescriptor,
+  StepKind,
+  FailureDiagnosis,
+  CompanionDecl,
+} from '../playbookSchema';
 
 describe('loadDeployPlaybook', () => {
   let tmpDir: string;
@@ -68,37 +74,43 @@ companions:
     const result = loadDeployPlaybook(tmpDir);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.playbook.steps).toHaveLength(2);
-    expect(result.playbook.steps[0]).toMatchObject({
+
+    const shellKind: StepKind = 'shell';
+    const expectedFirstStep: Pick<StepDescriptor, 'id' | 'kind' | 'is_prod_mutating'> = {
       id: 'pull',
-      kind: 'shell',
+      kind: shellKind,
       is_prod_mutating: false,
-    });
-    expect(result.playbook.steps[1]).toMatchObject({
+    };
+    const expectedSecondStep: Pick<
+      StepDescriptor,
+      'id' | 'kind' | 'run_as' | 'is_prod_mutating' | 'changed_paths' | 'rollback_ref'
+    > = {
       id: 'restart',
       kind: 'confirm-gate',
       run_as: 'deploy',
       is_prod_mutating: true,
       changed_paths: ['packages/backend/**'],
       rollback_ref: 'pull',
-    });
+    };
+    const expectedDiagnosis: FailureDiagnosis = {
+      symptom: '502 after restart',
+      cause: 'service not yet up',
+      action: 'poll health endpoint',
+    };
+    const expectedCompanion: CompanionDecl = {
+      name: 'sidecar',
+      host: 'sidecar-host',
+      trigger_paths: ['packages/sidecar/**'],
+      redeploy_instruction: 'ssh sidecar-host and run deploy.sh',
+      hazards: ['never restart sidecar during market hours'],
+    };
+
+    expect(result.playbook.steps).toHaveLength(2);
+    expect(result.playbook.steps[0]).toMatchObject(expectedFirstStep);
+    expect(result.playbook.steps[1]).toMatchObject(expectedSecondStep);
     expect(result.playbook.hazards).toEqual(['never run npm as root']);
-    expect(result.playbook.failure_diagnoses).toEqual([
-      {
-        symptom: '502 after restart',
-        cause: 'service not yet up',
-        action: 'poll health endpoint',
-      },
-    ]);
-    expect(result.playbook.companions).toEqual([
-      {
-        name: 'sidecar',
-        host: 'sidecar-host',
-        trigger_paths: ['packages/sidecar/**'],
-        redeploy_instruction: 'ssh sidecar-host and run deploy.sh',
-        hazards: ['never restart sidecar during market hours'],
-      },
-    ]);
+    expect(result.playbook.failure_diagnoses).toEqual([expectedDiagnosis]);
+    expect(result.playbook.companions).toEqual([expectedCompanion]);
   });
 
   it('reports invalid instead of falling back to a guessed playbook', () => {
