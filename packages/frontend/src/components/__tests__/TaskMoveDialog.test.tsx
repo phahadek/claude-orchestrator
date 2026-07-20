@@ -86,13 +86,45 @@ describe('TaskMoveDialog', () => {
       <TaskMoveDialog
         task={makeTask()}
         projectId="p1"
-        currentBoardId="db-11"
+        currentBoardId="m11"
         onClose={vi.fn()}
         onStaged={vi.fn()}
       />,
     );
 
     await selectTarget('m12');
+
+    const stageButton = await screen.findByRole('button', {
+      name: /stage move/i,
+    });
+    await waitFor(() =>
+      expect(stageButton.hasAttribute('disabled')).toBe(false),
+    );
+  });
+
+  it('resolves currentMilestone from the milestone row id and enables Stage Move for a Defer disposition', async () => {
+    vi.mocked(taskMoveApi.preview).mockResolvedValue({
+      ok: true,
+      isLaterMove: false,
+      cascadeSet: [],
+      droppedEdges: [],
+    });
+
+    render(
+      <TaskMoveDialog
+        task={makeTask()}
+        projectId="p1"
+        currentBoardId="m11"
+        onClose={vi.fn()}
+        onStaged={vi.fn()}
+      />,
+    );
+
+    await selectTarget('m12');
+
+    const deferRadio = await screen.findByRole('radio', { name: /defer/i });
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(deferRadio);
 
     const stageButton = await screen.findByRole('button', {
       name: /stage move/i,
@@ -114,7 +146,7 @@ describe('TaskMoveDialog', () => {
       <TaskMoveDialog
         task={makeTask()}
         projectId="p1"
-        currentBoardId="db-11"
+        currentBoardId="m11"
         onClose={vi.fn()}
         onStaged={vi.fn()}
       />,
@@ -143,7 +175,7 @@ describe('TaskMoveDialog', () => {
       <TaskMoveDialog
         task={makeTask()}
         projectId="p1"
-        currentBoardId="db-11"
+        currentBoardId="m11"
         onClose={vi.fn()}
         onStaged={vi.fn()}
       />,
@@ -176,7 +208,7 @@ describe('TaskMoveDialog', () => {
       <TaskMoveDialog
         task={makeTask()}
         projectId="p1"
-        currentBoardId="db-11"
+        currentBoardId="m11"
         onClose={vi.fn()}
         onStaged={vi.fn()}
       />,
