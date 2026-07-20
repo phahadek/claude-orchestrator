@@ -4413,10 +4413,10 @@ export function insertStagedIntent(row: StagedIntentRow): void {
   _stmtInsertStagedIntent ??= db.prepare<StagedIntentRow>(`
     INSERT INTO staged_intent
       (id, kind, payload, payload_hash, task_id, project_id, session_id,
-       group_id, state, supersedes, annotation, decision_proposal, created_at, updated_at)
+       group_id, state, supersedes, annotation, decision_proposal, advisory, created_at, updated_at)
     VALUES
       (@id, @kind, @payload, @payload_hash, @task_id, @project_id, @session_id,
-       @group_id, @state, @supersedes, @annotation, @decision_proposal, @created_at, @updated_at)
+       @group_id, @state, @supersedes, @annotation, @decision_proposal, @advisory, @created_at, @updated_at)
   `);
   _stmtInsertStagedIntent.run(row);
 }
@@ -4575,6 +4575,31 @@ export function setStagedIntentAnnotation(
   _stmtSetStagedIntentAnnotation.run({
     id,
     annotation,
+    updated_at: Date.now(),
+  });
+}
+
+let _stmtSetStagedIntentAdvisory: Database.Statement | null = null;
+
+/**
+ * Sets the Tier-3 semantic readiness advisory without moving the intent off
+ * its current state or touching `annotation` — the two channels are
+ * independent (advisory-only, never gates a transition).
+ */
+export function setStagedIntentAdvisory(
+  id: string,
+  advisory: string | null,
+): void {
+  _stmtSetStagedIntentAdvisory ??= db.prepare<{
+    id: string;
+    advisory: string | null;
+    updated_at: number;
+  }>(
+    `UPDATE staged_intent SET advisory = @advisory, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtSetStagedIntentAdvisory.run({
+    id,
+    advisory,
     updated_at: Date.now(),
   });
 }

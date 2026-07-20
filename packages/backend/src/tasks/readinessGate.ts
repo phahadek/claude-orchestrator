@@ -51,7 +51,7 @@ export function composeProposedBody(
  * in-repo backend constant — NOT read from the config tree. Runtime-tunable
  * phrase lists are Future Scope.
  */
-const DEFERRAL_PHRASES: readonly string[] = [
+export const DEFERRAL_PHRASES: readonly string[] = [
   'decide at implementation time',
   'decide during implementation',
   'decided by the implementer',

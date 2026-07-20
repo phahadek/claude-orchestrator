@@ -1180,6 +1180,7 @@ export function runMigrations(target: Database.Database): void {
       supersedes   TEXT,
       annotation   TEXT,
       decision_proposal TEXT,
+      advisory     TEXT,
       created_at   INTEGER NOT NULL,
       updated_at   INTEGER NOT NULL
     );
@@ -1197,6 +1198,12 @@ export function runMigrations(target: Database.Database): void {
 
   try {
     target.exec(`ALTER TABLE staged_intent ADD COLUMN decision_proposal TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN advisory TEXT`);
   } catch {
     /* already exists */
   }

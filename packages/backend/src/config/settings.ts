@@ -44,6 +44,7 @@ const SettingsSchema = z.object({
   review_session_model: z.string(),
   large_task_model: z.string(),
   planning_session_model: z.string(),
+  tier3_classifier_model: z.string(),
 
   // Enum settings — only accepted values are valid
   session_mode: z.enum(['cli', 'api']),
@@ -99,6 +100,7 @@ export const SETTING_DEFAULTS: Settings = {
   review_session_model: '',
   large_task_model: '',
   planning_session_model: '',
+  tier3_classifier_model: 'claude-haiku-4-5-20251001',
   session_mode: 'cli',
   release_channel: 'stable',
   corporate_mode: 'personal',

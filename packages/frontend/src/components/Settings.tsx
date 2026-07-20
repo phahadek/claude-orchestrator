@@ -31,6 +31,13 @@ const LARGE_TASK_MODEL_OPTIONS = [
   { label: 'claude-sonnet-4-6[1m]', value: 'claude-sonnet-4-6[1m]' },
 ];
 
+const TIER3_CLASSIFIER_MODEL_OPTIONS = [
+  { label: '(CLI default)', value: '' },
+  { label: 'claude-haiku-4-5-20251001', value: 'claude-haiku-4-5-20251001' },
+  { label: 'claude-haiku-4-5', value: 'claude-haiku-4-5' },
+  { label: 'claude-sonnet-4-6', value: 'claude-sonnet-4-6' },
+];
+
 const EFFORT_OPTIONS = [
   { label: 'Default', value: '' },
   { label: 'low', value: 'low' },
@@ -405,6 +412,32 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                     }
                   >
                     {EFFORT_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label}>
+                    Tier-3 classifier model
+                    <span className={styles.hint}>
+                      {' '}
+                      (semantic readiness advisory — paraphrased-deferral
+                      detection)
+                    </span>
+                  </label>
+                  <select
+                    className={styles.select}
+                    value={settings?.tier3_classifier_model ?? ''}
+                    onChange={(e) =>
+                      void handleChange(
+                        'tier3_classifier_model',
+                        e.target.value,
+                      )
+                    }
+                  >
+                    {TIER3_CLASSIFIER_MODEL_OPTIONS.map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>

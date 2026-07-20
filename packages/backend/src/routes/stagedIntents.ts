@@ -114,6 +114,21 @@ export interface StagedIntent {
    * applied, distinct from `annotation` (a blocked-apply diagnostic).
    */
   decisionProposal?: string | null;
+  /**
+   * Tier-3 semantic readiness advisory (paraphrased-deferral classifier) —
+   * a caution signal distinct from `annotation`'s deterministic hard-block
+   * channel. The surface reads annotation -> hard-block, advisory -> caution;
+   * the two never coexist (Tier-3 only runs when the deterministic tiers
+   * are not already blocking).
+   */
+  advisory?: {
+    tier: 'semantic';
+    status: 'pending' | 'clean' | 'flagged' | 'errored';
+    confidence: number;
+    findings: { detail: string; location?: string; quote?: string }[];
+    model: string;
+    checkedAt: number;
+  } | null;
 }
 
 function rowToApi(row: StagedIntentRow): StagedIntent {
@@ -131,6 +146,9 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
       : null,
     groupId: row.group_id,
     decisionProposal: row.decision_proposal,
+    advisory: row.advisory
+      ? (JSON.parse(row.advisory) as StagedIntent['advisory'])
+      : null,
   };
 }
 
@@ -259,6 +277,7 @@ export function stageIntent(
         supersedes: null,
         annotation: null,
         decision_proposal: decisionProposal ?? null,
+        advisory: null,
         created_at: now,
         updated_at: now,
       };
@@ -279,6 +298,7 @@ export function stageIntent(
     supersedes: null,
     annotation: null,
     decision_proposal: decisionProposal ?? null,
+    advisory: null,
     created_at: now,
     updated_at: now,
   };
