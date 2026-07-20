@@ -54,7 +54,12 @@ export const opsJournalApi = {
     return apiRequest<OpsLaunchResult>('/api/planning/launch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workflow, projectId, milestone: milestoneId, taskIds }),
+      body: JSON.stringify({
+        workflow,
+        projectId,
+        milestone: milestoneId,
+        taskIds,
+      }),
     });
   },
 };

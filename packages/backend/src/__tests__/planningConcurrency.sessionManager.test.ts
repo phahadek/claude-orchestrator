@@ -164,8 +164,9 @@ function seedLiveSession(
   id: string,
   sessionType: string,
 ): void {
-  (sm as unknown as { sessions: Map<string, { sessionType: string }> })
-    .sessions.set(id, { sessionType });
+  (
+    sm as unknown as { sessions: Map<string, { sessionType: string }> }
+  ).sessions.set(id, { sessionType });
 }
 
 beforeEach(() => {

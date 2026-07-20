@@ -76,8 +76,7 @@ export function createPlanningLaunchRouter(
 
     if (!workflow || !milestoneId || !taskIds || taskIds.length === 0) {
       res.status(400).json({
-        error:
-          'workflow, milestone, and a non-empty taskIds[] are required',
+        error: 'workflow, milestone, and a non-empty taskIds[] are required',
       });
       return;
     }

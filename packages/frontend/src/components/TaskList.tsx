@@ -549,7 +549,9 @@ export function TaskList({
       setGroomCheckedIds(new Set());
     } catch (err) {
       setGroomError(
-        err instanceof Error ? err.message : 'Failed to launch grooming sessions',
+        err instanceof Error
+          ? err.message
+          : 'Failed to launch grooming sessions',
       );
     } finally {
       setGroomLoading(false);

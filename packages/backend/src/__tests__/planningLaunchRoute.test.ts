@@ -90,12 +90,14 @@ describe('POST /api/planning/launch', () => {
       .mockResolvedValue({ launched: ['task-a', 'task-b'], deferred: [] });
     const launcher = { launchSelected } as unknown as OpsSessionLauncher;
 
-    const res = await request(makeApp(launcher)).post('/api/planning/launch').send({
-      workflow: 'groom',
-      projectId: 'p1',
-      milestone: 'm1',
-      taskIds: ['notion:task-a', 'notion:task-b'],
-    });
+    const res = await request(makeApp(launcher))
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'groom',
+        projectId: 'p1',
+        milestone: 'm1',
+        taskIds: ['notion:task-a', 'notion:task-b'],
+      });
 
     expect(res.status).toBe(202);
     expect(launchSelected).toHaveBeenCalledTimes(1);
@@ -115,12 +117,14 @@ describe('POST /api/planning/launch', () => {
       .mockResolvedValue({ launched: ['task-a'], deferred: [] });
     const launcher = { launchSelected } as unknown as OpsSessionLauncher;
 
-    const res = await request(makeApp(launcher)).post('/api/planning/launch').send({
-      workflow: 'design',
-      projectId: 'p1',
-      milestone: 'm1',
-      taskIds: ['notion:task-a'],
-    });
+    const res = await request(makeApp(launcher))
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'design',
+        projectId: 'p1',
+        milestone: 'm1',
+        taskIds: ['notion:task-a'],
+      });
 
     expect(res.status).toBe(202);
     const call = launchSelected.mock.calls[0][0];
@@ -133,12 +137,14 @@ describe('POST /api/planning/launch', () => {
       .mockResolvedValue({ launched: ['bare-uuid-1'], deferred: [] });
     const launcher = { launchSelected } as unknown as OpsSessionLauncher;
 
-    const res = await request(makeApp(launcher)).post('/api/planning/launch').send({
-      workflow: 'ops',
-      projectId: 'p1',
-      milestone: 'm1',
-      taskIds: ['notion:bare-uuid-1'],
-    });
+    const res = await request(makeApp(launcher))
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'ops',
+        projectId: 'p1',
+        milestone: 'm1',
+        taskIds: ['notion:bare-uuid-1'],
+      });
 
     expect(res.status).toBe(202);
     expect(mockLoadOpsContext).toHaveBeenCalledWith('m1');
@@ -153,12 +159,14 @@ describe('POST /api/planning/launch', () => {
       launchSelected: vi.fn(),
     } as unknown as OpsSessionLauncher;
 
-    const res = await request(makeApp(launcher)).post('/api/planning/launch').send({
-      workflow: 'nonsense',
-      projectId: 'p1',
-      milestone: 'm1',
-      taskIds: ['notion:task-a'],
-    });
+    const res = await request(makeApp(launcher))
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'nonsense',
+        projectId: 'p1',
+        milestone: 'm1',
+        taskIds: ['notion:task-a'],
+      });
 
     expect(res.status).toBe(400);
   });
