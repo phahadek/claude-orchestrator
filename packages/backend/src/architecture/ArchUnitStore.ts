@@ -35,6 +35,8 @@ export interface ArchUnit {
   body: string;
   supersedes?: string;
   supersededBy?: string;
+  /** Optimistic-concurrency counter, bumped on every update/supersede mutation. */
+  version: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -68,6 +70,7 @@ function toArchUnit(row: {
   body: string;
   supersedes: string | null;
   superseded_by: string | null;
+  version: number;
   created_at: string;
   updated_at: string;
 }): ArchUnit {
@@ -81,6 +84,7 @@ function toArchUnit(row: {
     body: row.body,
     supersedes: row.supersedes ?? undefined,
     supersededBy: row.superseded_by ?? undefined,
+    version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -123,6 +127,7 @@ export function createUnit(input: NewArchUnitInput): ArchUnit {
     status: input.status ?? 'active',
     body: input.body,
     supersedes: null,
+    version: 1,
     created_at: input.at,
     updated_at: input.at,
   });
@@ -171,6 +176,7 @@ export function updateUnit(
     regions: fields.regions ? JSON.stringify(fields.regions) : row.regions,
     status: fields.status ?? row.status,
     body: fields.body ?? row.body,
+    version: row.version + 1,
     updated_at: at,
   };
   updateArchUnit(next);
@@ -216,6 +222,7 @@ export function supersedeUnit(
     status: replacement.status ?? 'active',
     body: replacement.body,
     supersedes: id,
+    version: 1,
     created_at: at,
     updated_at: at,
   });
@@ -229,6 +236,7 @@ export function supersedeUnit(
     ...row,
     status: 'superseded',
     superseded_by: newId,
+    version: row.version + 1,
     updated_at: at,
   });
   insertArchUnitEvent({
