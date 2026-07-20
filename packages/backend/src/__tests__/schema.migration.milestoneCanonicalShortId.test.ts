@@ -22,7 +22,12 @@ function makeDb() {
 
 function insertRawMilestone(
   db: InstanceType<typeof Database>,
-  row: { id: string; project_id: string; name: string; source_id: string | null },
+  row: {
+    id: string;
+    project_id: string;
+    name: string;
+    source_id: string | null;
+  },
 ) {
   db.prepare(
     `INSERT INTO milestones (id, project_id, name, source_id, display_order, created_at, updated_at)
