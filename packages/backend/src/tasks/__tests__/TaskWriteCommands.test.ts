@@ -625,9 +625,7 @@ describe('TaskWriteCommands.moveTask', () => {
     return makeBackend({
       fetchReadyTasks: vi
         .fn()
-        .mockResolvedValue([
-          { task: { id: 'notion:abc', dependsOn: [] } },
-        ]),
+        .mockResolvedValue([{ task: { id: 'notion:abc', dependsOn: [] } }]),
       appendImplementationNote: vi.fn().mockResolvedValue(undefined),
       ...overrides,
     });
@@ -645,10 +643,7 @@ describe('TaskWriteCommands.moveTask', () => {
 
     expect(backend.createTask).toHaveBeenCalledTimes(1);
     expect(backend.archive).toHaveBeenCalledWith('notion:new-id', undefined);
-    expect(backend.archive).not.toHaveBeenCalledWith(
-      'notion:abc',
-      undefined,
-    );
+    expect(backend.archive).not.toHaveBeenCalledWith('notion:abc', undefined);
   });
 
   it('performs a successful move: one target page with body + status restored, original disposed', async () => {
