@@ -53,3 +53,49 @@ describe('checkReadiness — Tier 2 (lexical)', () => {
     expect(violations.some((v) => v.tier === 'lexical')).toBe(false);
   });
 });
+
+describe('checkReadiness — Tier 2 (grooming-instruction residue)', () => {
+  it('flags "confirm ... at grooming" residue', () => {
+    const body = 'Files affected: confirm the exact module at grooming.';
+    const violations = checkReadiness(body);
+    expect(
+      violations.some(
+        (v) => v.tier === 'lexical' && v.detail.includes('residue'),
+      ),
+    ).toBe(true);
+  });
+
+  it('flags "pin at grooming" residue', () => {
+    const body = 'Version to pin at grooming once the API is stable.';
+    const violations = checkReadiness(body);
+    expect(
+      violations.some(
+        (v) => v.tier === 'lexical' && v.detail.includes('residue'),
+      ),
+    ).toBe(true);
+  });
+
+  it('flags "decide during grooming" residue', () => {
+    const body = 'We will decide the retry count during grooming.';
+    const violations = checkReadiness(body);
+    expect(
+      violations.some(
+        (v) => v.tier === 'lexical' && v.detail.includes('residue'),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not flag a body legitimately containing and/or', () => {
+    const body =
+      'The handler accepts a string and/or a Buffer as input, whichever the caller supplies.';
+    const violations = checkReadiness(body);
+    expect(violations).toEqual([]);
+  });
+
+  it('does not flag "confirm" or "at grooming" mentioned separately, without both on one line', () => {
+    const body =
+      'Confirm the deploy succeeded.\n\nThis was decided at grooming already, not deferred.';
+    const violations = checkReadiness(body);
+    expect(violations.some((v) => v.detail.includes('residue'))).toBe(false);
+  });
+});

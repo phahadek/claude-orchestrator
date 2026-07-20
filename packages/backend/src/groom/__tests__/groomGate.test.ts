@@ -132,6 +132,13 @@ describe('checkGroomingPromotionGate', () => {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
         type: '💻 Code',
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/checkout.ts *(new)*',
+            isNew: true,
+            existsInRepo: false,
+          },
+        ],
       },
       'notion:has-items',
     );
@@ -220,6 +227,13 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
         type: '💻 Code',
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/checkout.ts *(new)*',
+            isNew: true,
+            existsInRepo: false,
+          },
+        ],
       },
       'notion:has-seeds',
     );
@@ -272,6 +286,13 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
         type: '💻 Code',
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/checkout.ts *(new)*',
+            isNew: true,
+            existsInRepo: false,
+          },
+        ],
       },
       'notion:na-seed',
     );
@@ -304,6 +325,13 @@ describe('checkGroomingPromotionGate — via the accretion write-surface', () =>
       size_check: { decision: 'n/a' },
       type_check: { decision: 'none' },
       type: '💻 Code',
+      filesPathsEntries: [
+        {
+          raw: 'packages/backend/src/checkout.ts *(new)*',
+          isNew: true,
+          existsInRepo: false,
+        },
+      ],
     };
 
     expect(checkGroomingPromotionGate(entry, sourceTask.id).allowed).toBe(
@@ -325,5 +353,259 @@ describe('checkGroomingPromotionGate — via the accretion write-surface', () =>
     const result = checkGroomingPromotionGate(entry, sourceTask.id);
     expect(result.allowed).toBe(true);
     expect(result.reasons).toEqual([]);
+  });
+});
+
+describe('checkGroomingPromotionGate — FM1 bindingConstraints', () => {
+  // A 📐 Design task is exempt from gate/seed accretion, isolating the
+  // binding-constraint check from the other artifacts.
+  const BASE = {
+    size_check: { decision: 'n/a' },
+    type_check: { decision: 'n/a' },
+    type: '📐 Design',
+  };
+
+  it('blocks promotion when a region-derived binding constraint has no recorded disposition', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        regions: { packages: ['packages/backend/src/gate'], files: [] },
+      },
+      'notion:fm1-undispositioned',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some((r) => r.includes('gate-accretion-durable')),
+    ).toBe(true);
+  });
+
+  it('allows promotion once every region-derived binding constraint is dispositioned', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        regions: { packages: ['packages/backend/src/gate'], files: [] },
+        constraintsDispositioned: {
+          'gate-accretion-durable': { disposition: 'complies' },
+        },
+      },
+      'notion:fm1-dispositioned',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('blocks promotion when a disposition is n/a without a reason', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        regions: { packages: ['packages/backend/src/gate'], files: [] },
+        constraintsDispositioned: {
+          'gate-accretion-durable': { disposition: 'n/a', why: '' },
+        },
+      },
+      'notion:fm1-na-no-reason',
+    );
+    expect(result.allowed).toBe(false);
+  });
+
+  it('blocks an unrouted conflict→route disposition', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        regions: { packages: ['packages/backend/src/gate'], files: [] },
+        constraintsDispositioned: {
+          'gate-accretion-durable': {
+            disposition: 'conflict_route',
+            routedTaskId: '',
+          },
+        },
+      },
+      'notion:fm1-unrouted',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('conflict→route'))).toBe(true);
+  });
+
+  it('allows a conflict→route disposition once routed to a recorded 📐 Design Depends On task', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        regions: { packages: ['packages/backend/src/gate'], files: [] },
+        constraintsDispositioned: {
+          'gate-accretion-durable': {
+            disposition: 'conflict_route',
+            routedTaskId: 'design-task-1',
+          },
+        },
+        dependsOnTasks: [
+          { id: 'design-task-1', type: '📐 Design', status: '✅ Done' },
+        ],
+      },
+      'notion:fm1-routed',
+    );
+    expect(result.allowed).toBe(true);
+  });
+});
+
+describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)', () => {
+  const BASE = {
+    size_check: { decision: 'n/a' },
+    type_check: { decision: 'none' },
+    type: '💻 Code',
+  };
+
+  beforeEach(() => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:fm2-task',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:fm2-task',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+  });
+
+  it('blocks a Code task with no Files/paths entries', () => {
+    const result = checkGroomingPromotionGate(
+      { ...BASE, filesPathsEntries: [] },
+      'notion:fm2-task',
+    );
+    expect(result.allowed).toBe(false);
+  });
+
+  it('blocks a Code task whose Files/paths entry contains a hedge token', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/checkout.ts and/or its tests',
+            isNew: false,
+            existsInRepo: true,
+          },
+        ],
+      },
+      'notion:fm2-task',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('hedge token'))).toBe(true);
+  });
+
+  it('blocks a Code task whose Files/paths entry does not resolve and is not marked *(new)*', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/nonexistent.ts',
+            isNew: false,
+            existsInRepo: false,
+          },
+        ],
+      },
+      'notion:fm2-task',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('does not resolve'))).toBe(
+      true,
+    );
+  });
+
+  it('allows a Code task whose Files/paths entries are all existing or *(new)*', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/checkout.ts',
+            isNew: false,
+            existsInRepo: true,
+          },
+          {
+            raw: 'packages/backend/src/checkoutRetry.ts *(new)*',
+            isNew: true,
+            existsInRepo: false,
+          },
+        ],
+      },
+      'notion:fm2-task',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('does not apply the Files/paths check to non-Code types', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'n/a' },
+        type: '📐 Design',
+      },
+      'notion:fm2-non-code',
+    );
+    expect(result.allowed).toBe(true);
+  });
+});
+
+describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness', () => {
+  const BASE = {
+    size_check: { decision: 'n/a' },
+    type_check: { decision: 'n/a' },
+    type: '📐 Design',
+  };
+
+  it('blocks promotion when Depends On carries a non-Done 📐 Design task', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        dependsOnTasks: [
+          { id: 'dep-1', type: '📐 Design', status: '🔲 Backlog' },
+        ],
+      },
+      'notion:fm3-blocked',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('dep-1'))).toBe(true);
+  });
+
+  it('blocks promotion when Depends On carries a non-Done 📋 Planning task', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        dependsOnTasks: [
+          { id: 'dep-2', type: '📋 Planning', status: '🗂️ Ready' },
+        ],
+      },
+      'notion:fm3-blocked-planning',
+    );
+    expect(result.allowed).toBe(false);
+  });
+
+  it('allows promotion once the Design Depends On task is ✅ Done', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        dependsOnTasks: [{ id: 'dep-1', type: '📐 Design', status: '✅ Done' }],
+      },
+      'notion:fm3-cleared',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('does not block on a non-Design/Planning Depends On task regardless of status', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        dependsOnTasks: [
+          { id: 'dep-3', type: '💻 Code', status: '🔲 Backlog' },
+        ],
+      },
+      'notion:fm3-unaffected',
+    );
+    expect(result.allowed).toBe(true);
   });
 });

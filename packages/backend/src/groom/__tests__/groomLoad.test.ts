@@ -10,6 +10,7 @@ import {
   NotionTaskLike,
 } from '../groomLoad';
 import { toExternalId } from '../../tasks/taskId';
+import { bindingConstraintIdsForRegions } from '../constraintCatalog';
 
 function git(args: string[], cwd: string) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -313,6 +314,99 @@ describe('loadGroomContext', () => {
     ).resolves.toBeDefined();
     expect(seenIds).toContain(`notion:${CODE_ROW.id}`);
     expect(seenIds).toContain('notion:ctx-page-1');
+  });
+
+  it('derives bindingConstraints per task from CONSTRAINT_CATALOG against its resolved regions', async () => {
+    ({ repoDir } = setupRepo());
+    const result = await loadGroomContext('M-test', {
+      repoRoot: repoDir,
+      manifest: MANIFEST,
+      notionClient: fakeNotion(),
+    });
+
+    const codeTask = result.targetTasks.find((t) => t.id === CODE_ROW.id)!;
+    expect(codeTask.bindingConstraints).toEqual(
+      bindingConstraintIdsForRegions(codeTask.regions),
+    );
+    expect(codeTask.bindingConstraints).toContain('notion-single-writer');
+  });
+
+  it('parses Files/paths entries per task, git-validating each against tracked files', async () => {
+    ({ repoDir } = setupRepo());
+    const result = await loadGroomContext('M-test', {
+      repoRoot: repoDir,
+      manifest: MANIFEST,
+      notionClient: fakeNotion(),
+    });
+
+    const codeTask = result.targetTasks.find((t) => t.id === CODE_ROW.id)!;
+    expect(codeTask.filesPathsEntries).toEqual([
+      {
+        raw: '`packages/backend/src/notion/NotionClient.ts`',
+        isNew: false,
+        existsInRepo: true,
+      },
+    ]);
+  });
+
+  it('marks a Files/paths entry unresolved when it names a file not tracked in the repo', async () => {
+    ({ repoDir } = setupRepo());
+    const notion = fakeNotion();
+    const original = notion.fetchTaskPage.bind(notion);
+    notion.fetchTaskPage = async (taskId: string) => {
+      if (toExternalId(taskId) === CODE_ROW.id) {
+        return {
+          name: CODE_ROW.title,
+          filesSection: '- `packages/backend/src/notion/Nonexistent.ts`',
+          rawMarkdown:
+            '## Files / paths affected\n- `packages/backend/src/notion/Nonexistent.ts`',
+        };
+      }
+      return original(taskId);
+    };
+    const result = await loadGroomContext('M-test', {
+      repoRoot: repoDir,
+      manifest: MANIFEST,
+      notionClient: notion,
+    });
+
+    const codeTask = result.targetTasks.find((t) => t.id === CODE_ROW.id)!;
+    expect(codeTask.filesPathsEntries).toEqual([
+      {
+        raw: '`packages/backend/src/notion/Nonexistent.ts`',
+        isNew: false,
+        existsInRepo: false,
+      },
+    ]);
+  });
+
+  it('resolves dependsOnTasks against the board + neighbour boards, including Done status', async () => {
+    ({ repoDir } = setupRepo());
+    const notion = fakeNotion();
+    const original = notion.fetchReadyTasks.bind(notion);
+    notion.fetchReadyTasks = async (boardId: string) => {
+      if (boardId === 'fake-board') {
+        return [
+          {
+            task: { ...CODE_ROW, dependsOn: [DONE_ROW.id, 'unknown-dep-id'] },
+          },
+          { task: TOOL_ROW },
+          { task: DONE_ROW },
+        ];
+      }
+      return original(boardId);
+    };
+    const result = await loadGroomContext('M-test', {
+      repoRoot: repoDir,
+      manifest: MANIFEST,
+      notionClient: notion,
+    });
+
+    const codeTask = result.targetTasks.find((t) => t.id === CODE_ROW.id)!;
+    expect(codeTask.dependsOnTasks).toEqual([
+      { id: DONE_ROW.id, type: DONE_ROW.type, status: DONE_ROW.status },
+      { id: 'unknown-dep-id', type: undefined, status: undefined },
+    ]);
   });
 
   it('throws for an unregistered milestone', async () => {
