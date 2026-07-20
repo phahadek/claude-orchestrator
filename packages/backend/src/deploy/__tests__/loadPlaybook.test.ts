@@ -76,14 +76,22 @@ companions:
     if (!result.ok) return;
 
     const shellKind: StepKind = 'shell';
-    const expectedFirstStep: Pick<StepDescriptor, 'id' | 'kind' | 'is_prod_mutating'> = {
+    const expectedFirstStep: Pick<
+      StepDescriptor,
+      'id' | 'kind' | 'is_prod_mutating'
+    > = {
       id: 'pull',
       kind: shellKind,
       is_prod_mutating: false,
     };
     const expectedSecondStep: Pick<
       StepDescriptor,
-      'id' | 'kind' | 'run_as' | 'is_prod_mutating' | 'changed_paths' | 'rollback_ref'
+      | 'id'
+      | 'kind'
+      | 'run_as'
+      | 'is_prod_mutating'
+      | 'changed_paths'
+      | 'rollback_ref'
     > = {
       id: 'restart',
       kind: 'confirm-gate',
