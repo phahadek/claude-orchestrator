@@ -229,4 +229,60 @@ describe('getSessionAllowedTools', () => {
     expect(groom).not.toEqual(design);
     expect(design.some((t) => t.startsWith('Bash(git '))).toBe(true);
   });
+
+  describe('granted-capability composition', () => {
+    it('an empty granted set equals the base profile', () => {
+      const withEmpty = getSessionAllowedTools(
+        'standard',
+        { allowed_tools: [] },
+        [],
+      );
+      const withoutArg = getSessionAllowedTools('standard', {
+        allowed_tools: [],
+      });
+      expect(withEmpty).toEqual(withoutArg);
+    });
+
+    it('composes base ∪ granted for a standard session', () => {
+      const merged = getSessionAllowedTools(
+        'standard',
+        { allowed_tools: [] },
+        ['Bash(psql:*)'],
+      );
+      expect(merged).toContain('Bash(git:*)');
+      expect(merged).toContain('Bash(psql:*)');
+    });
+
+    it('composes base ∪ granted for a planning session, still excluding project extras', () => {
+      const merged = getSessionAllowedTools(
+        'groom',
+        { allowed_tools: ['Bash(rm:*)'] },
+        ['Bash(psql:*)'],
+      );
+      expect(merged).toContain('Bash(psql:*)');
+      expect(merged).not.toContain('Bash(rm:*)');
+    });
+
+    it('dedupes a grant that overlaps the base profile', () => {
+      const merged = getSessionAllowedTools(
+        'standard',
+        { allowed_tools: [] },
+        ['Bash(git:*)'],
+      );
+      expect(merged.filter((t) => t === 'Bash(git:*)')).toHaveLength(1);
+    });
+
+    it.each([
+      'Bash(node ~/.claude/scripts/stage-task-intent.mjs apply:*)',
+      'Bash(node ~/.claude/scripts/resolve-task.mjs:*)',
+      'mark-task-done',
+    ])('never merges a resolved/apply/done-scoped grant (%s)', (capability) => {
+      const merged = getSessionAllowedTools(
+        'standard',
+        { allowed_tools: [] },
+        [capability],
+      );
+      expect(merged).not.toContain(capability);
+    });
+  });
 });

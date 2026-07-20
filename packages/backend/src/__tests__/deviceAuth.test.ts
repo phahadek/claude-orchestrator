@@ -34,6 +34,7 @@ describe('schema.ts — devices table migration', () => {
 // ── DeviceAuth middleware tests ─────────────────────────────────────────────
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   getDeviceByToken: vi.fn(),
   updateDeviceLastSeen: vi.fn(),
   getActiveDeviceCount: vi.fn(),

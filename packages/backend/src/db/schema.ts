@@ -1306,6 +1306,18 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // ── sessions.granted_capabilities: durable per-session capability grants ──
+  // Operator-approved grants (a Bash command prefix or named MCP write verb)
+  // sticky for the session's life, discarded at session end. Rehydrated on
+  // boot so a restart mid-session doesn't lose them. JSON array of strings.
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN granted_capabilities TEXT NOT NULL DEFAULT '[]'`,
+    );
+  } catch {
+    /* already exists */
+  }
+
   // gate_item_event.disposition: NOT NULL -> nullable. A dispositionless
   // event is a pure log entry (evidence appended, state left unchanged) —
   // see appendGateItemEvent's optional-disposition handling in gateService.ts.

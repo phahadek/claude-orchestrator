@@ -196,6 +196,18 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
 }
 
 /**
+ * Capability strings a grant can never widen the allowlist with, regardless
+ * of what an operator approved. Resolved/Done/task-intent-apply stay
+ * device-authed — a session-scoped grant is not a substitute for that auth
+ * boundary. Matched against the raw granted-capability string.
+ */
+const GRANT_DENYLIST_PATTERNS = [/task-intent/i, /apply/i, /resolve/i, /done/i];
+
+function isGrantable(capability: string): boolean {
+  return !GRANT_DENYLIST_PATTERNS.some((re) => re.test(capability));
+}
+
+/**
  * The full allowlist a spawned session is granted. For code/review sessions
  * this is the base ALLOWED_TOOLS plus the per-project extras from
  * .claude-orchestrator.yml. Planning sessions (groom/design) get a dedicated,
@@ -203,12 +215,24 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
  * in, since those may include mutating commands. This is the exact array
  * passed as `allowedTools` at spawn (see AgentSession) — extracted so tests can
  * assert on the merged result rather than just the base const.
+ *
+ * `granted` is the session's durable, operator-approved capability set (see
+ * getGrantedCapabilities/addGrantedCapability in db/queries.ts) — composed
+ * into every (re)spawn's allowlist as base ∪ granted, deduplicated. A grant
+ * matching GRANT_DENYLIST_PATTERNS is dropped rather than merged in: the
+ * mechanism widens tool access, never the resolved/apply/Done boundary.
  */
 export function getSessionAllowedTools(
   sessionType: string,
   orchConfig: Pick<OrchestratorConfig, 'allowed_tools'>,
+  granted: string[] = [],
 ): string[] {
-  if (sessionType === 'groom') return [...GROOM_ALLOWED_TOOLS];
-  if (sessionType === 'design') return [...DESIGN_ALLOWED_TOOLS];
-  return [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
+  const grantable = granted.filter(isGrantable);
+  const base =
+    sessionType === 'groom'
+      ? [...GROOM_ALLOWED_TOOLS]
+      : sessionType === 'design'
+        ? [...DESIGN_ALLOWED_TOOLS]
+        : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
+  return [...new Set([...base, ...grantable])];
 }

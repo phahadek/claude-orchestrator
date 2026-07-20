@@ -39,6 +39,7 @@ describe('runMigrations() — note/tags columns', () => {
 // ── AC: PATCH /api/sessions/:id/tags + note endpoints ──────────────────────
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   getSession: vi.fn(),
   getActiveSessions: vi.fn(() => []),
   getArchivedSessions: vi.fn(() => []),

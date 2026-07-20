@@ -24,6 +24,7 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   getSession: vi.fn(),
   getPRBySessionId: vi.fn(),
 }));

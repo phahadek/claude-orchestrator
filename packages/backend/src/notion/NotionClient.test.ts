@@ -8,6 +8,7 @@ vi.mock('../config', () => ({
   config: { notionApiKey: 'test', notionDatabaseId: 'test', port: 3000 },
 }));
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   upsertTaskCache: vi.fn(),
   getCacheAge: vi.fn(() => Infinity),
   getTaskCache: vi.fn(() => null),

@@ -46,6 +46,7 @@ export interface Session {
   pause_reason: string | null;
   last_error_detail: string | null;
   events_pruned_at: number | null;
+  granted_capabilities: string; // JSON array of operator-approved capability strings, sticky for the session's life
 }
 
 export type NewSession = Omit<
@@ -69,6 +70,7 @@ export type NewSession = Omit<
   | 'pause_reason'
   | 'last_error_detail'
   | 'events_pruned_at'
+  | 'granted_capabilities'
 > & {
   ended_at?: number | null;
   pr_url?: string | null;
@@ -86,6 +88,7 @@ export type NewSession = Omit<
   task_name?: string | null;
   metadata?: string | null;
   review_result?: string | null;
+  granted_capabilities?: string;
 };
 
 // ─── session_events ────────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import type { Session } from '../db/types';
 import type { ServerMessage } from '../ws/types';
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   getActiveSessions: vi.fn(),
   getEventsBySession: vi.fn(() => []),
   getDenialsBySession: vi.fn(() => []),

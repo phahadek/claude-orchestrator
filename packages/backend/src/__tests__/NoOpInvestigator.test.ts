@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import { makeEventRow } from '../../test/helpers/eventFixtures';
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   getEventsBySession: vi.fn(() => []),
   getTaskNoOpAttempts: vi.fn(() => undefined),
   bumpTaskNoOpAttempts: vi.fn(),

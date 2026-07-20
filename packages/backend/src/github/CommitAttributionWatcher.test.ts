@@ -6,6 +6,7 @@ vi.mock('../audit/AuditLog', () => ({
 }));
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   setPauseReason: vi.fn(),
 }));
 

@@ -32,6 +32,7 @@ import {
   markSessionInitiatedPRClose,
   setTaskPauseReason,
   hasStagedIntentForSession,
+  getGrantedCapabilities,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -617,9 +618,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             (this._escalationModel
               ? runtimeSettings.large_task_effort
               : effortSetting) || undefined,
-          allowedTools: getSessionAllowedTools(this.sessionType, {
-            allowed_tools: this.extraAllowedTools,
-          }),
+          allowedTools: getSessionAllowedTools(
+            this.sessionType,
+            { allowed_tools: this.extraAllowedTools },
+            getGrantedCapabilities(this.sessionId),
+          ),
           systemPrompt: this.systemPromptContent,
           mcpConfigPath: this.mcpConfigPath,
           systemPromptFilePath: this.systemPromptFilePath,

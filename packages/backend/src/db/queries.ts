@@ -630,6 +630,44 @@ export function getSessionTags(sessionId: string): string[] {
   }
 }
 
+/**
+ * Read the durable per-session granted-capabilities set — operator-approved
+ * grants (a Bash command prefix or named MCP write verb) sticky for the
+ * session's life. Rehydrated on boot so a restart mid-session doesn't lose
+ * them.
+ */
+export function getGrantedCapabilities(sessionId: string): string[] {
+  const row = db
+    .prepare('SELECT granted_capabilities FROM sessions WHERE session_id = ?')
+    .get(sessionId) as { granted_capabilities: string | null } | undefined;
+  if (!row?.granted_capabilities) return [];
+  try {
+    const parsed = JSON.parse(row.granted_capabilities);
+    return Array.isArray(parsed) ? (parsed as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Add a capability to the session's durable granted set (idempotent — a
+ * capability already granted is not duplicated). Scoped to this one session;
+ * discarded at session end (the row persists but is no longer read).
+ */
+export function addGrantedCapability(
+  sessionId: string,
+  capability: string,
+): string[] {
+  const existing = getGrantedCapabilities(sessionId);
+  const next = existing.includes(capability)
+    ? existing
+    : [...existing, capability];
+  db.prepare(
+    'UPDATE sessions SET granted_capabilities = ? WHERE session_id = ?',
+  ).run(JSON.stringify(next), sessionId);
+  return next;
+}
+
 export function setDerivedTitle(sessionId: string, title: string): void {
   setSessionMetadata(sessionId, { derivedTitle: title });
 }

@@ -64,6 +64,7 @@ vi.mock('../tasks/TaskBackend', () => ({
 }));
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   insertSession: vi.fn(),
   updateSessionStatus: vi.fn(),
   getSession: vi.fn(),

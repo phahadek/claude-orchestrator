@@ -5,6 +5,7 @@ import * as os from 'os';
 import yaml from 'js-yaml';
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   upsertTaskCache: vi.fn(),
 }));
 
