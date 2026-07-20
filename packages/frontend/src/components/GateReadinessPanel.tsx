@@ -520,7 +520,10 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
       )}
 
       {activeProjectId && (
-        <div className={styles.deploySection} data-testid="deploy-launch-section">
+        <div
+          className={styles.deploySection}
+          data-testid="deploy-launch-section"
+        >
           <div className={styles.deployRow}>
             <input
               className={styles.deployShaInput}
