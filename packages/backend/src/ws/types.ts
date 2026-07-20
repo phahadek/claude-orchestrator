@@ -3,6 +3,7 @@ import type { DisplayStatus } from '../tasks/TaskStatusEngine';
 import type { PauseReason } from '../db/types';
 import type { EventKind } from '../session/eventKind';
 import type { RecoveryDescriptor } from '../db/pauseReason';
+import type { StagedIntent } from '../routes/stagedIntents';
 
 // ── Server → Client ──────────────────────────────────────────────
 export interface PermissionDenial {
@@ -262,6 +263,17 @@ export type ServerMessage =
     }
   | { type: 'task_status_changed'; notionTaskId: string; newStatus: string }
   | { type: 'task_updated'; task: TaskView }
+  | {
+      /**
+       * Streams staged-intent lifecycle changes (create/approve/reject/
+       * commit/supersede) for the SessionPanel decision panel — mirrors the
+       * REST-truth + WS-notification pattern of task_updated: the frontend
+       * treats `intent` as a live snapshot, never a delta, and REST
+       * (stagedIntentsApi) stays the source of truth for apply/reject.
+       */
+      type: 'staged_intent_changed';
+      intent: StagedIntent;
+    }
   | {
       type: 'auto_launch';
       projectId: string;

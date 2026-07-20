@@ -27,6 +27,7 @@ import {
   listStagedIntentsByProject,
   listAllActiveStagedIntents,
   listStagedIntentsByGroup,
+  listStagedIntentsBySession,
   findActiveStagedIntentForTask,
   transitionStagedIntent,
   supersedeStagedIntent,
@@ -50,6 +51,28 @@ import {
 } from '../architecture/ArchWriteCommands';
 import type { ArchUnitUpdateFields } from '../architecture/ArchUnitStore';
 import type { ArchUnitKind, ArchUnitStatus } from '../db/types';
+import type { ServerMessage } from '../ws/types';
+
+// ── Broadcast infrastructure ─────────────────────────────────────────────────
+// Mirrors tasks.ts's task_updated wiring: REST stays the fetch/apply source of
+// truth, WS only notifies clients (e.g. SessionPanel's decision panel) that a
+// refetch-worthy change happened, carrying a live snapshot of the intent.
+let stagedIntentBroadcastFn: ((msg: ServerMessage) => void) | null = null;
+
+export function setStagedIntentBroadcast(
+  fn: (msg: ServerMessage) => void,
+): void {
+  stagedIntentBroadcastFn = fn;
+}
+
+function broadcastIntentChange(intent: StagedIntent): void {
+  stagedIntentBroadcastFn?.({ type: 'staged_intent_changed', intent });
+}
+
+function broadcastIntentById(id: string): void {
+  const row = getStagedIntentRow(id);
+  if (row) broadcastIntentChange(rowToApi(row));
+}
 
 /**
  * The durable replacement for groom-gate.mjs's self-reported hard_block_deps
@@ -350,7 +373,9 @@ export function stageIntent(
         created_at: now,
         updated_at: now,
       };
-      return rowToApi(supersedeStagedIntent(existing.id, newRow));
+      const superseded = rowToApi(supersedeStagedIntent(existing.id, newRow));
+      broadcastIntentChange(superseded);
+      return superseded;
     }
   }
 
@@ -372,7 +397,9 @@ export function stageIntent(
     updated_at: now,
   };
   insertStagedIntent(row);
-  return rowToApi(row);
+  const staged = rowToApi(row);
+  broadcastIntentChange(staged);
+  return staged;
 }
 
 /**
@@ -584,12 +611,20 @@ export function createStagedIntentsRouter(
   const router = Router();
 
   // ── GET /api/staged-intents ─────────────────────────────────────────────
+  // ?sessionId=<id> is the SessionPanel decision-panel lens: correlates
+  // proposals back to the session that produced them, active states only.
   router.get('/staged-intents', (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : null;
-    const rows = projectId
-      ? listStagedIntentsByProject(projectId)
-      : listAllActiveStagedIntents();
+    const sessionId =
+      typeof req.query.sessionId === 'string' ? req.query.sessionId : null;
+    const rows = sessionId
+      ? listStagedIntentsBySession(sessionId).filter((r) =>
+          ACTIVE_STATES.includes(r.state),
+        )
+      : projectId
+        ? listStagedIntentsByProject(projectId)
+        : listAllActiveStagedIntents();
     res.json({ intents: rows.map(rowToApi) });
   });
 
@@ -671,6 +706,7 @@ export function createStagedIntentsRouter(
         const committed = transitionStagedIntent(intent.id, 'committed', {
           annotation: null,
         });
+        broadcastIntentChange(rowToApi(committed));
         await planningOrchestrator?.handleDisposition({
           intent: committed,
           disposition: 'approve',
@@ -682,6 +718,7 @@ export function createStagedIntentsRouter(
             intent.id,
             JSON.stringify({ blocked: true, violations: err.violations }),
           );
+          broadcastIntentById(intent.id);
           res.status(409).json({
             error: err.message,
             violations: err.violations,
@@ -693,6 +730,7 @@ export function createStagedIntentsRouter(
             intent.id,
             JSON.stringify({ blocked: true, reasons: err.reasons }),
           );
+          broadcastIntentById(intent.id);
           res.status(409).json({
             error: err.message,
             reasons: err.reasons,
@@ -762,7 +800,9 @@ export function createStagedIntentsRouter(
       const updated = transitionStagedIntent(intent.id, 'approved', {
         annotation: annotation ? JSON.stringify(annotation) : null,
       });
-      res.json(rowToApi(updated));
+      const updatedIntent = rowToApi(updated);
+      broadcastIntentChange(updatedIntent);
+      res.json(updatedIntent);
     },
   );
 
@@ -832,6 +872,7 @@ export function createStagedIntentsRouter(
           const committedRow = transitionStagedIntent(intent.id, 'committed', {
             annotation: null,
           });
+          broadcastIntentChange(rowToApi(committedRow));
           await planningOrchestrator?.handleDisposition({
             intent: committedRow,
             disposition: 'approve',
@@ -847,6 +888,7 @@ export function createStagedIntentsRouter(
               intent.id,
               JSON.stringify({ blocked: true, violations: err.violations }),
             );
+            broadcastIntentById(intent.id);
             res.status(409).json({
               error: err.message,
               violations: err.violations,
@@ -861,6 +903,7 @@ export function createStagedIntentsRouter(
               intent.id,
               JSON.stringify({ blocked: true, reasons: err.reasons }),
             );
+            broadcastIntentById(intent.id);
             res.status(409).json({
               error: err.message,
               reasons: err.reasons,
@@ -938,6 +981,7 @@ export function createStagedIntentsRouter(
           : null;
 
       const rejected = transitionStagedIntent(row.id, 'rejected');
+      broadcastIntentChange(rowToApi(rejected));
       await planningOrchestrator?.handleDisposition({
         intent: rejected,
         disposition: feedback ? 'pushback' : 'reject',

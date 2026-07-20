@@ -74,7 +74,10 @@ import setupRouter, { createSetupModeGuard } from './routes/setup';
 import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
 import { createDeployRouter, setDeployScheduler } from './routes/deploy';
 import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
-import { createStagedIntentsRouter } from './routes/stagedIntents';
+import {
+  createStagedIntentsRouter,
+  setStagedIntentBroadcast,
+} from './routes/stagedIntents';
 import { createTaskIntentsRouter } from './routes/taskIntents';
 import { createOpsJournalRouter } from './routes/opsJournal';
 import { createGateStateRouter } from './routes/gateState';
@@ -258,6 +261,8 @@ setPRBroadcast(broadcast);
 setTaskBroadcast(broadcast);
 // Wire broadcast into enrollment (for enrollment_request events)
 setEnrollmentBroadcast(broadcast);
+// Wire broadcast into the staged-intents route (for staged_intent_changed WS messages)
+setStagedIntentBroadcast(broadcast);
 
 // Scheduler: constructed once, broadcast wired in, exposed to diagnostics route
 const scheduler = new Scheduler();
