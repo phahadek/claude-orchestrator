@@ -2,7 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { logger } from '../logger';
-import { ALLOWED_TOOLS, GROOM_ALLOWED_TOOLS, DESIGN_ALLOWED_TOOLS } from '../config';
+import {
+  ALLOWED_TOOLS,
+  GROOM_ALLOWED_TOOLS,
+  DESIGN_ALLOWED_TOOLS,
+} from '../config';
 
 export interface OrchestratorConfig {
   /**

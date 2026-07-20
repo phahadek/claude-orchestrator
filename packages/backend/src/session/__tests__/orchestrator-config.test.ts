@@ -213,9 +213,7 @@ describe('getSessionAllowedTools', () => {
       }
       expect(tools.some((t) => t.startsWith('mcp__github__'))).toBe(false);
       expect(
-        tools.some((t) =>
-          t.startsWith('mcp__claude_ai_Notion__notion-create'),
-        ),
+        tools.some((t) => t.startsWith('mcp__claude_ai_Notion__notion-create')),
       ).toBe(false);
       expect(
         tools.some((t) => t.startsWith('mcp__claude_ai_Notion__notion-update')),
