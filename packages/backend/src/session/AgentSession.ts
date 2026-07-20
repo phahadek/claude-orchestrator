@@ -516,12 +516,16 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // resumeIdForSpawn: undefined on first run, set to this.sessionId on each retry.
     let resumeIdForSpawn: string | undefined = this.resumeSessionId;
 
-    const modelSetting = isCodeSession(this.sessionType)
-      ? runtimeSettings.code_session_model
-      : runtimeSettings.review_session_model;
-    const effortSetting = isCodeSession(this.sessionType)
-      ? runtimeSettings.code_session_effort
-      : runtimeSettings.review_session_effort;
+    const modelSetting = isPlanningSession(this.sessionType)
+      ? runtimeSettings.planning_session_model
+      : isCodeSession(this.sessionType)
+        ? runtimeSettings.code_session_model
+        : runtimeSettings.review_session_model;
+    const effortSetting = isPlanningSession(this.sessionType)
+      ? runtimeSettings.planning_session_effort
+      : isCodeSession(this.sessionType)
+        ? runtimeSettings.code_session_effort
+        : runtimeSettings.review_session_effort;
 
     // Per-iteration overrides set by tryEscalateForOverflow() (T3b).
     // Instance fields _escalationModel and _escalationDisableAutoCompact hold these
@@ -607,7 +611,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             (this._escalationModel
               ? runtimeSettings.large_task_effort
               : effortSetting) || undefined,
-          allowedTools: getSessionAllowedTools({
+          allowedTools: getSessionAllowedTools(this.sessionType, {
             allowed_tools: this.extraAllowedTools,
           }),
           systemPrompt: this.systemPromptContent,

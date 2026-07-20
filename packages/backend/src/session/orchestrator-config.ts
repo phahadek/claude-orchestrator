@@ -2,7 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { logger } from '../logger';
-import { ALLOWED_TOOLS } from '../config';
+import {
+  ALLOWED_TOOLS,
+  GROOM_ALLOWED_TOOLS,
+  DESIGN_ALLOWED_TOOLS,
+} from '../config';
 
 export interface OrchestratorConfig {
   /**
@@ -192,13 +196,19 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
 }
 
 /**
- * The full allowlist a spawned session is granted: the base ALLOWED_TOOLS plus
- * the per-project extras from .claude-orchestrator.yml. This is the exact array
+ * The full allowlist a spawned session is granted. For code/review sessions
+ * this is the base ALLOWED_TOOLS plus the per-project extras from
+ * .claude-orchestrator.yml. Planning sessions (groom/design) get a dedicated,
+ * stage-only/read-only tool set instead — per-project extras are never merged
+ * in, since those may include mutating commands. This is the exact array
  * passed as `allowedTools` at spawn (see AgentSession) — extracted so tests can
  * assert on the merged result rather than just the base const.
  */
 export function getSessionAllowedTools(
+  sessionType: string,
   orchConfig: Pick<OrchestratorConfig, 'allowed_tools'>,
 ): string[] {
+  if (sessionType === 'groom') return [...GROOM_ALLOWED_TOOLS];
+  if (sessionType === 'design') return [...DESIGN_ALLOWED_TOOLS];
   return [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
 }

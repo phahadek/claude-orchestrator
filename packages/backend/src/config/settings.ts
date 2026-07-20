@@ -43,6 +43,7 @@ const SettingsSchema = z.object({
   code_session_model: z.string(),
   review_session_model: z.string(),
   large_task_model: z.string(),
+  planning_session_model: z.string(),
 
   // Enum settings — only accepted values are valid
   session_mode: z.enum(['cli', 'api']),
@@ -51,6 +52,14 @@ const SettingsSchema = z.object({
   code_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
   review_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
   large_task_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
+  planning_session_effort: z.enum([
+    '',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+  ]),
 
   // JSON-serialised string arrays
   ai_reviewer_usernames: z.array(z.string()),
@@ -89,12 +98,14 @@ export const SETTING_DEFAULTS: Settings = {
   code_session_model: '',
   review_session_model: '',
   large_task_model: '',
+  planning_session_model: '',
   session_mode: 'cli',
   release_channel: 'stable',
   corporate_mode: 'personal',
   code_session_effort: '',
   review_session_effort: '',
   large_task_effort: '',
+  planning_session_effort: '',
   ai_reviewer_usernames: [],
   bot_comment_deny_list: [],
   bot_comment_allow_list: [],
