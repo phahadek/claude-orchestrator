@@ -30,7 +30,9 @@ beforeEach(() => {
   db.prepare('DELETE FROM deploy_run').run();
 });
 
-function step(overrides: Partial<StepDescriptor> & Pick<StepDescriptor, 'id' | 'kind'>): StepDescriptor {
+function step(
+  overrides: Partial<StepDescriptor> & Pick<StepDescriptor, 'id' | 'kind'>,
+): StepDescriptor {
   return {
     command_or_prompt: `run ${overrides.id}`,
     is_prod_mutating: false,
@@ -38,7 +40,10 @@ function step(overrides: Partial<StepDescriptor> & Pick<StepDescriptor, 'id' | '
   };
 }
 
-function playbookWith(steps: StepDescriptor[], companions: DeployPlaybook['companions'] = []): DeployPlaybook {
+function playbookWith(
+  steps: StepDescriptor[],
+  companions: DeployPlaybook['companions'] = [],
+): DeployPlaybook {
   return { steps, hazards: [], failure_diagnoses: [], companions };
 }
 
@@ -55,7 +60,9 @@ function makeDeps(
   const loadResult: LoadPlaybookResult = { ok: true, playbook };
   return {
     loadPlaybook: () => loadResult,
-    runShell: vi.fn(async (): Promise<ShellResult> => ({ ok: true, output: '' })),
+    runShell: vi.fn(
+      async (): Promise<ShellResult> => ({ ok: true, output: '' }),
+    ),
     spawnAgenticStep: vi.fn(),
     waitForConfirmGate: vi.fn(async () => true),
     getDiffPaths: vi.fn(async () => []),
@@ -110,8 +117,16 @@ describe('DeployOrchestrator: step execution order and kinds', () => {
 describe('DeployOrchestrator: changed_paths skip', () => {
   it('skips a step whose changed_paths do not match the diff', async () => {
     const playbook = playbookWith([
-      step({ id: 'frontend-build', kind: 'shell', changed_paths: ['packages/frontend/**'] }),
-      step({ id: 'backend-build', kind: 'shell', changed_paths: ['packages/backend/**'] }),
+      step({
+        id: 'frontend-build',
+        kind: 'shell',
+        changed_paths: ['packages/frontend/**'],
+      }),
+      step({
+        id: 'backend-build',
+        kind: 'shell',
+        changed_paths: ['packages/backend/**'],
+      }),
     ]);
     const shellCommands: string[] = [];
     const deps = makeDeps(playbook, {
@@ -155,7 +170,10 @@ describe('DeployOrchestrator: agentic step gating', () => {
     await flush();
     expect(shellCommands).toEqual([]); // finalize hasn't run yet — gated
     expect(deps.spawnAgenticStep).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: run.run_id, step: expect.objectContaining({ id: 'investigate' }) }),
+      expect.objectContaining({
+        runId: run.run_id,
+        step: expect.objectContaining({ id: 'investigate' }),
+      }),
     );
 
     orchestrator.reportAgenticVerdict(run.run_id, 'investigate', 'approved');
@@ -164,9 +182,11 @@ describe('DeployOrchestrator: agentic step gating', () => {
     expect(shellCommands).toEqual(['run finalize']);
     expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
     const events = listDeployRunEvents(run.run_id);
-    expect(events.find((e) => e.step === 'investigate' && e.event_type === 'agentic_verdict')?.disposition).toBe(
-      'approved',
-    );
+    expect(
+      events.find(
+        (e) => e.step === 'investigate' && e.event_type === 'agentic_verdict',
+      )?.disposition,
+    ).toBe('approved');
   });
 
   it('halts when the agentic verdict is rejected', async () => {
@@ -200,7 +220,8 @@ describe('DeployOrchestrator: step failure halts + rollback', () => {
       sink: { onNeedsAttention },
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         shellCommands.push(command);
-        if (command === 'run deploy') return { ok: false, output: 'deploy exploded' };
+        if (command === 'run deploy')
+          return { ok: false, output: 'deploy exploded' };
         return { ok: true, output: '' };
       }),
     });
@@ -211,7 +232,11 @@ describe('DeployOrchestrator: step failure halts + rollback', () => {
     expect(shellCommands).toEqual(['run deploy', 'run rollback']);
     expect(getDeployRun(run.run_id)?.status).toBe('failed');
     expect(onNeedsAttention).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: run.run_id, stepId: 'deploy', reason: 'deploy exploded' }),
+      expect.objectContaining({
+        runId: run.run_id,
+        stepId: 'deploy',
+        reason: 'deploy exploded',
+      }),
     );
     const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
     expect(events).toContain('step_failed');
@@ -229,7 +254,8 @@ describe('DeployOrchestrator: resume after a restart', () => {
 
     // Simulate a restart mid-run: a prior run recorded current_step = 'second'
     // but never got the chance to append a completion event.
-    const { startDeployRun, advanceDeployRun } = await import('../deployService');
+    const { startDeployRun, advanceDeployRun } =
+      await import('../deployService');
     const priorRun = startDeployRun({
       project: 'proj',
       targetSha: 'sha-target',
@@ -289,7 +315,9 @@ describe('DeployOrchestrator: companion-diff flags', () => {
 
     expect(onCompanionFlags).toHaveBeenCalledTimes(1);
     const info = onCompanionFlags.mock.calls[0][0];
-    expect(info.companions.map((c: { name: string }) => c.name)).toEqual(['worker']);
+    expect(info.companions.map((c: { name: string }) => c.name)).toEqual([
+      'worker',
+    ]);
   });
 });
 

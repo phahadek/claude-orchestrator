@@ -2,7 +2,11 @@ import { spawn } from 'child_process';
 import { logger } from '../logger';
 import { loadDeployPlaybook, LoadPlaybookResult } from './loadPlaybook';
 import { matchesPathDiff } from './pathDiffPredicate';
-import type { DeployPlaybook, StepDescriptor, CompanionDecl } from './playbookSchema';
+import type {
+  DeployPlaybook,
+  StepDescriptor,
+  CompanionDecl,
+} from './playbookSchema';
 import {
   startDeployRun,
   getActiveDeployRun,
@@ -170,7 +174,8 @@ export class DeployOrchestrator {
     this.loadPlaybook = deps.loadPlaybook ?? loadDeployPlaybook;
     this.runShell =
       deps.runShell ??
-      ((command, opts) => spawnShell(command, { cwd: opts.cwd, runAs: opts.runAs }));
+      ((command, opts) =>
+        spawnShell(command, { cwd: opts.cwd, runAs: opts.runAs }));
     this.getDiffPaths =
       deps.getDiffPaths ??
       ((input) =>
@@ -285,7 +290,10 @@ export class DeployOrchestrator {
     for (let i = startIndex; i < playbook.steps.length; i++) {
       const step = playbook.steps[i];
 
-      if (step.changed_paths && !matchesPathDiff(step.changed_paths, diffPaths)) {
+      if (
+        step.changed_paths &&
+        !matchesPathDiff(step.changed_paths, diffPaths)
+      ) {
         appendDeployRunEvent({
           runId,
           step: step.id,
@@ -417,7 +425,10 @@ export class DeployOrchestrator {
         const verdict = await verdictPromise;
         return {
           ok: verdict === 'approved',
-          detail: verdict === 'approved' ? undefined : 'agentic step verdict: rejected',
+          detail:
+            verdict === 'approved'
+              ? undefined
+              : 'agentic step verdict: rejected',
         };
       }
 
