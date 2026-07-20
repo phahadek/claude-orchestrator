@@ -1006,6 +1006,16 @@ export function runMigrations(target: Database.Database): void {
       decision        TEXT    NOT NULL,
       accreted_at     TEXT    NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS completeness_disposition (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_task_id  TEXT    NOT NULL,
+      project         TEXT,
+      milestone       TEXT,
+      questions       TEXT    NOT NULL,
+      run_at          TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_completeness_disposition_source ON completeness_disposition(source_task_id);
   `);
 
   // ── Git-Bash project_dir backfill (win32-only, idempotent) ──────────────────
