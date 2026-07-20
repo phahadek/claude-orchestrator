@@ -255,3 +255,47 @@ describe('WAF-safe command-line rendering', () => {
     });
   });
 });
+
+describe("rich_text chunking for Notion's 2000-char-per-item cap", () => {
+  it('splits a >2000-char paragraph into multiple rich_text items, each <=2000 chars', () => {
+    const longText = 'a'.repeat(2004);
+    const blocks = renderTaskBody(
+      baseSections({
+        context: [{ type: 'paragraph', text: longText }],
+      }),
+    );
+    const contextParagraph = blocks.find(
+      (b) =>
+        b.type === 'paragraph' &&
+        JSON.stringify(b.paragraph).includes('a'.repeat(50)),
+    );
+    expect(contextParagraph).toBeDefined();
+    const richTextItems = (contextParagraph as any).paragraph.rich_text;
+    expect(richTextItems.length).toBeGreaterThan(1);
+    for (const item of richTextItems) {
+      expect(item.text.content.length).toBeLessThanOrEqual(2000);
+    }
+    expect(richTextItems.map((item: any) => item.text.content).join('')).toBe(
+      longText,
+    );
+  });
+
+  it('splits a >2000-char code block into multiple rich_text items, each <=2000 chars', () => {
+    const longText = 'x'.repeat(4500);
+    const blocks = renderTaskBody(
+      baseSections({
+        context: [{ type: 'code', text: longText, language: 'typescript' }],
+      }),
+    );
+    const codeBlock = blocks.find((b) => b.type === 'code');
+    expect(codeBlock).toBeDefined();
+    const richTextItems = (codeBlock as any).code.rich_text;
+    expect(richTextItems.length).toBe(3);
+    for (const item of richTextItems) {
+      expect(item.text.content.length).toBeLessThanOrEqual(2000);
+    }
+    expect(richTextItems.map((item: any) => item.text.content).join('')).toBe(
+      longText,
+    );
+  });
+});
