@@ -35,13 +35,13 @@ import { recordEvent } from '../audit/AuditLog';
 import { placeSessionPid } from '../session/sessionCgroup';
 import { logger } from '../logger';
 
-export interface AdvisoryFinding {
+interface AdvisoryFinding {
   detail: string;
   location?: string;
   quote?: string;
 }
 
-export interface Advisory {
+interface Advisory {
   tier: 'semantic';
   status: 'pending' | 'clean' | 'flagged' | 'errored';
   confidence: number;
@@ -68,7 +68,7 @@ const IMPLEMENTER_BEARING_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /** Gates whether a `flagged` verdict is significant enough to surface/route-back. Runtime tuning is Future Scope. */
-export const FLAG_CONFIDENCE_THRESHOLD = 0.7;
+const FLAG_CONFIDENCE_THRESHOLD = 0.7;
 
 /** Fast timeout — a headless one-shot classify call must never hang a Ready-flip batch. */
 const CLASSIFY_TIMEOUT_MS = 20_000;
@@ -111,9 +111,16 @@ function parseClassifyOutput(stdout: string): ClassifyResult {
     confidence?: unknown;
     findings?: unknown;
   };
-  const status = verdict.status === 'flagged' ? 'flagged' : 'clean';
   const confidence =
     typeof verdict.confidence === 'number' ? verdict.confidence : 0;
+  // Defense-in-depth: only ever surface 'flagged' when the model's own
+  // confidence clears the threshold, regardless of what status string it
+  // returned — a below-threshold "flagged" is not significant enough to
+  // drive a route-back and is reported as clean.
+  const status =
+    verdict.status === 'flagged' && confidence >= FLAG_CONFIDENCE_THRESHOLD
+      ? 'flagged'
+      : 'clean';
   const findings = Array.isArray(verdict.findings)
     ? (verdict.findings as unknown[])
         .filter(
@@ -135,7 +142,7 @@ function parseClassifyOutput(stdout: string): ClassifyResult {
  * exit, timeout, or unparseable output resolves to status:'errored' rather
  * than throwing — a classify failure must never block or auto-route-back.
  */
-export async function classifyDeferral(body: string): Promise<Advisory> {
+async function classifyDeferral(body: string): Promise<Advisory> {
   const model = runtimeSettings.tier3_classifier_model;
   const checkedAt = Date.now();
   return new Promise<Advisory>((resolve) => {
