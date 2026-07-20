@@ -1,5 +1,7 @@
 import { execFile } from 'child_process';
+import path from 'path';
 import { promisify } from 'util';
+import { logger } from '../logger';
 
 const execFileAsync = promisify(execFile);
 
@@ -22,6 +24,66 @@ async function gitExec(
   env?: NodeJS.ProcessEnv,
 ): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync('git', args, { cwd, env });
+}
+
+/**
+ * Finds the worktree (other than worktreePath) that has baseBranch checked
+ * out — i.e. the project's primary checkout. Returns undefined if no such
+ * worktree exists (e.g. baseBranch isn't checked out anywhere).
+ */
+async function findPrimaryCheckout(
+  worktreePath: string,
+  baseBranch: string,
+): Promise<string | undefined> {
+  const { stdout } = await gitExec(
+    ['worktree', 'list', '--porcelain'],
+    worktreePath,
+  );
+
+  const targetRef = `refs/heads/${baseBranch}`;
+  let currentPath: string | undefined;
+  for (const line of stdout.split('\n')) {
+    if (line.startsWith('worktree ')) {
+      currentPath = line.slice('worktree '.length).trim();
+    } else if (line.startsWith('branch ') && currentPath) {
+      const branch = line.slice('branch '.length).trim();
+      if (branch === targetRef) {
+        return currentPath;
+      }
+      currentPath = undefined;
+    } else if (line === '') {
+      currentPath = undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Reconciles the primary checkout's working tree/index with the newly
+ * advanced base branch tip. squashMergeLocal never checks anything out
+ * (it moves refs/heads/<base> directly), so any other worktree that has
+ * baseBranch checked out is left pointing at the old tree on disk even
+ * though its HEAD ref now resolves to the new commit. `git read-tree -u -m`
+ * performs a fast-forward-style working tree update: it only touches paths
+ * that actually changed between oldSha and newSha, and aborts without
+ * modifying anything if the primary checkout has conflicting local edits —
+ * so it never clobbers unrelated in-progress work there.
+ */
+async function reconcilePrimaryCheckout(
+  worktreePath: string,
+  baseBranch: string,
+  oldSha: string,
+  newSha: string,
+): Promise<void> {
+  const primaryPath = await findPrimaryCheckout(worktreePath, baseBranch);
+  if (
+    !primaryPath ||
+    path.resolve(primaryPath) === path.resolve(worktreePath)
+  ) {
+    return;
+  }
+
+  await gitExec(['read-tree', '-u', '-m', oldSha, newSha], primaryPath);
 }
 
 /**
@@ -82,6 +144,17 @@ export async function squashMergeLocal(
     ['update-ref', `refs/heads/${baseBranch}`, commitSha, baseSha],
     worktreePath,
   );
+
+  try {
+    await reconcilePrimaryCheckout(worktreePath, baseBranch, baseSha, commitSha);
+  } catch (err) {
+    // Non-fatal: the merge itself already succeeded (ref advanced). Leave
+    // the primary checkout as-is rather than risk clobbering local changes;
+    // this can happen if the primary checkout has conflicting local edits.
+    logger.warn(
+      `[squashMergeLocal] failed to reconcile primary checkout for ${baseBranch}: ${(err as Error).message}`,
+    );
+  }
 
   // worktreePath's own checked-out branch is typically featureBranch itself
   // (the session's worktree). Git refuses to delete a branch that's checked
