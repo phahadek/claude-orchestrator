@@ -82,7 +82,14 @@ describe('POST /api/staged-intents/:id/apply — setDependsOn group-completeness
     });
     const statusIntent = await stage(app, {
       kind: 'task.setStatus',
-      payload: { taskId: 't-2', status: 'Ready' },
+      payload: {
+        taskId: 't-2',
+        status: 'Ready',
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+        },
+      },
       projectId: 'proj-1',
       groupId: 'group-2',
     });
@@ -109,7 +116,14 @@ describe('POST /api/staged-intents/:id/apply — setDependsOn group-completeness
 
     const statusIntent = await stage(app, {
       kind: 'task.setStatus',
-      payload: { taskId: 't-3', status: 'Ready' },
+      payload: {
+        taskId: 't-3',
+        status: 'Ready',
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+        },
+      },
       projectId: 'proj-1',
       groupId: 'group-3',
     });

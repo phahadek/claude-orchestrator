@@ -44,6 +44,41 @@ beforeEach(() => {
   mockRecordEvent.mockReset();
 });
 
+/**
+ * A Ready-transition apply also runs through the DependsOnCompleteness
+ * invariant (stagedIntents.ts) and the grooming promotion gate
+ * (TaskWriteCommands.setStatus) before it ever reaches the readiness gate
+ * under test here — stage a satisfying task.setDependsOn sibling in the
+ * same group plus a fully-dispositioned groomingGate so those two clear and
+ * only the readiness gate is exercised.
+ */
+async function stageReadyStatus(
+  agent: ReturnType<typeof supertest>,
+  projectId: string,
+  taskId: string,
+  groupId: string,
+) {
+  await agent.post('/api/staged-intents').send({
+    kind: 'task.setDependsOn',
+    projectId,
+    groupId,
+    payload: { taskId, dependsOn: [] },
+  });
+  return agent.post('/api/staged-intents').send({
+    kind: 'task.setStatus',
+    projectId,
+    groupId,
+    payload: {
+      taskId,
+      status: 'Ready',
+      groomingGate: {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+      },
+    },
+  });
+}
+
 describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
   it('blocks a Ready transition with an unresolved Open Questions section, and keeps the intent staged with an annotation', async () => {
     mockGetTaskBackend.mockReturnValue({
@@ -56,11 +91,12 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
     const app = makeApp();
     const agent = supertest(app);
 
-    const staged = await agent.post('/api/staged-intents').send({
-      kind: 'task.setStatus',
-      projectId: 'proj-blocked',
-      payload: { taskId: 'notion:abc', status: 'Ready' },
-    });
+    const staged = await stageReadyStatus(
+      agent,
+      'proj-blocked',
+      'notion:abc',
+      'group-blocked',
+    );
     expect(staged.status).toBe(201);
 
     const applied = await agent
@@ -74,8 +110,10 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
     const list = await agent
       .get('/api/staged-intents')
       .query({ projectId: 'proj-blocked' });
-    expect(list.body.intents).toHaveLength(1);
-    expect(list.body.intents[0].annotation).toEqual({
+    const statusIntent = list.body.intents.find(
+      (i: { kind: string }) => i.kind === 'task.setStatus',
+    );
+    expect(statusIntent.annotation).toEqual({
       blocked: true,
       violations: expect.arrayContaining([
         expect.objectContaining({ tier: 'structural' }),
@@ -95,11 +133,12 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
     const app = makeApp();
     const agent = supertest(app);
 
-    const staged = await agent.post('/api/staged-intents').send({
-      kind: 'task.setStatus',
-      projectId: 'proj-2',
-      payload: { taskId: 'notion:abc', status: 'Ready' },
-    });
+    const staged = await stageReadyStatus(
+      agent,
+      'proj-2',
+      'notion:abc',
+      'group-2',
+    );
 
     const applied = await agent
       .post(`/api/staged-intents/${staged.body.id}/apply`)
@@ -125,7 +164,11 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
     const list = await agent
       .get('/api/staged-intents')
       .query({ projectId: 'proj-2' });
-    expect(list.body.intents).toHaveLength(0);
+    expect(
+      list.body.intents.some(
+        (i: { kind: string }) => i.kind === 'task.setStatus',
+      ),
+    ).toBe(false);
   });
 
   it('requires a reason when override is true', async () => {
@@ -159,11 +202,12 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
     const app = makeApp();
     const agent = supertest(app);
 
-    const staged = await agent.post('/api/staged-intents').send({
-      kind: 'task.setStatus',
-      projectId: 'proj-clean',
-      payload: { taskId: 'notion:abc', status: 'Ready' },
-    });
+    const staged = await stageReadyStatus(
+      agent,
+      'proj-clean',
+      'notion:abc',
+      'group-clean',
+    );
 
     const applied = await agent
       .post(`/api/staged-intents/${staged.body.id}/apply`)
@@ -188,9 +232,16 @@ describe('POST /api/staged-intents/:id/apply — grooming promotion gate', () =>
     const app = makeApp();
     const agent = supertest(app);
 
+    await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-groom-blocked',
+      groupId: 'group-groom-blocked',
+      payload: { taskId: 'notion:abc', dependsOn: [] },
+    });
     const staged = await agent.post('/api/staged-intents').send({
       kind: 'task.setStatus',
       projectId: 'proj-groom-blocked',
+      groupId: 'group-groom-blocked',
       payload: {
         taskId: 'notion:abc',
         status: 'Ready',
@@ -209,7 +260,10 @@ describe('POST /api/staged-intents/:id/apply — grooming promotion gate', () =>
     const list = await agent
       .get('/api/staged-intents')
       .query({ projectId: 'proj-groom-blocked' });
-    expect(list.body.intents[0].annotation).toEqual({
+    const statusIntent = list.body.intents.find(
+      (i: { kind: string }) => i.kind === 'task.setStatus',
+    );
+    expect(statusIntent.annotation).toEqual({
       blocked: true,
       reasons: expect.arrayContaining([expect.stringMatching(/size_check/)]),
     });
@@ -225,9 +279,16 @@ describe('POST /api/staged-intents/:id/apply — grooming promotion gate', () =>
     const app = makeApp();
     const agent = supertest(app);
 
+    await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-groom-clean',
+      groupId: 'group-groom-clean',
+      payload: { taskId: 'notion:abc', dependsOn: [] },
+    });
     const staged = await agent.post('/api/staged-intents').send({
       kind: 'task.setStatus',
       projectId: 'proj-groom-clean',
+      groupId: 'group-groom-clean',
       payload: {
         taskId: 'notion:abc',
         status: 'Ready',
