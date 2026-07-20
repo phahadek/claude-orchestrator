@@ -29,6 +29,14 @@
 //     '{"project":"p1","taskId":"notion:t1","title":"Add retry","milestone":"M12",
 //       "classification":"Read-Only","items":[{"text":"Click through checkout once"}]}'
 //
+// `disposition` on an `event` payload is optional (omit it for a pure log
+// entry — evidence recorded, state left unchanged) and, when present, must
+// be one of the server's closed vocabulary: pass, fail, deferred, discarded,
+// noted. Anything else is rejected with 400. `noted` is non-terminal —
+// records the event without resolving. `discarded` is terminal and
+// non-blocking (void/created-in-error, distinct from `deferred`'s
+// punted-to-next-milestone) and requires `evidence`.
+//
 // Env:
 //   ORCHESTRATOR_BACKEND_HOST backend loopback host (default 127.0.0.1)
 //   ORCHESTRATOR_BACKEND_PORT backend loopback port (default 3000; shared

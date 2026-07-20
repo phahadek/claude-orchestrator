@@ -424,7 +424,7 @@ export type NewGateItemSourceRow = Omit<GateItemSourceRow, 'id'>;
 export interface GateItemEventRow {
   id: number;
   gate_item_id: string;
-  disposition: string;
+  disposition: string | null;
   evidence: string | null;
   filed_followon: string | null;
   deploy_sha: string | null;

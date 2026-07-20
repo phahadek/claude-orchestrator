@@ -47,8 +47,53 @@ export function createLocalGitAncestrySource(
   };
 }
 
+/**
+ * The closed disposition vocabulary an event may carry. Anything outside this
+ * set is rejected at the API boundary (POST /gate/items/:id/event) rather
+ * than written straight into state — an invented or typo'd disposition used
+ * to become a bespoke state that never resolves and blocks the milestone
+ * rollup forever (see f64029ac). `noted` is the sanctioned non-terminal
+ * disposition: it records an event but leaves state unchanged, for the
+ * "attempted, not yet resolved" case that previously tempted an invented
+ * value. `discarded` is the sanctioned void disposition: terminal and
+ * non-blocking, for mis-accreted/erroneous items — distinct from `deferred`,
+ * which means punted-to-next-milestone, not void.
+ */
+const GATE_DISPOSITIONS = [
+  'pass',
+  'fail',
+  'deferred',
+  'discarded',
+  'noted',
+] as const;
+
+type GateDisposition = (typeof GATE_DISPOSITIONS)[number];
+
+/** The disposition that records an event without advancing state. */
+const NON_TERMINAL_DISPOSITION: GateDisposition = 'noted';
+
+function isValidGateDisposition(value: string): value is GateDisposition {
+  return (GATE_DISPOSITIONS as readonly string[]).includes(value);
+}
+
+/** The closed state-machine vocabulary. Anything else is a bespoke state. */
+const GATE_STATES = new Set([
+  'open',
+  'runnable',
+  'pass',
+  'fail',
+  'deferred',
+  'pending-approval',
+  'discarded',
+]);
+
+/** True for a state outside the closed vocabulary — an invented/typo'd value that slipped in before this was enforced. */
+function isBespokeGateState(state: string): boolean {
+  return !GATE_STATES.has(state);
+}
+
 /** Terminal states: the item no longer blocks milestone completion. */
-const RESOLVED_STATES = new Set(['pass', 'deferred']);
+const RESOLVED_STATES = new Set(['pass', 'deferred', 'discarded']);
 
 interface GateBlockingItem {
   id: string;
@@ -57,14 +102,18 @@ interface GateBlockingItem {
   text: string;
   classification: GateItemClassification;
   state: string;
+  /** Flagged loudly rather than auto-rewritten — steer it to `discarded` (or its intended disposition) by hand. */
+  bespoke?: boolean;
 }
 
 export interface GateReadiness {
   status: 'green' | 'blocked';
   blocking: GateBlockingItem[];
+  /** Subset of `blocking` sitting in a state outside the closed vocabulary — needs human re-disposition, not indefinite blocking. */
+  bespokeStates: GateBlockingItem[];
 }
 
-/** Headline output: green once every item in the milestone is pass/deferred. */
+/** Headline output: green once every item in the milestone is pass/deferred/discarded. */
 export function getGateReadiness(milestone: string): GateReadiness {
   const items = gateStore.listByMilestoneAllProjects(milestone);
   const blocking = items
@@ -76,8 +125,13 @@ export function getGateReadiness(milestone: string): GateReadiness {
       text: item.text,
       classification: item.classification,
       state: item.state,
+      bespoke: isBespokeGateState(item.state),
     }));
-  return { status: blocking.length === 0 ? 'green' : 'blocked', blocking };
+  return {
+    status: blocking.length === 0 ? 'green' : 'blocked',
+    blocking,
+    bespokeStates: blocking.filter((item) => item.bespoke),
+  };
 }
 
 export interface ReconcileGateRunnabilityResult {
@@ -293,7 +347,8 @@ export function listMilestoneReadiness(
 }
 
 export interface AppendGateItemEventInput {
-  disposition: string;
+  /** Omit for a pure log entry — appends with evidence, does not advance state. */
+  disposition?: string;
   evidence?: unknown;
   filedFollowon?: string;
   deploySha?: string;
@@ -302,7 +357,7 @@ export interface AppendGateItemEventInput {
 
 /** Prod-Mutating passes stop short of resolving — they wait for approveGateItem. */
 function nextStateForDisposition(
-  disposition: string,
+  disposition: GateDisposition,
   classification: GateItemClassification,
 ): string {
   if (disposition === 'pass' && classification === 'Prod-Mutating') {
@@ -311,7 +366,13 @@ function nextStateForDisposition(
   return disposition;
 }
 
-/** Appends an event and advances the item's denormalized (state, current_disposition). */
+/**
+ * Appends an event and, when disposition is present and terminal, advances
+ * the item's denormalized (state, current_disposition). A dispositionless
+ * event, or one carrying the non-terminal `noted` disposition, is a pure log
+ * entry — evidence is recorded but state is left unchanged. `discarded`
+ * requires an evidence/reason, since it permanently voids the item.
+ */
 export function appendGateItemEvent(
   gateItemId: string,
   event: AppendGateItemEventInput,
@@ -320,13 +381,30 @@ export function appendGateItemEvent(
   if (!item) {
     throw new Error(`gate_item: no item ${gateItemId}`);
   }
+  if (
+    event.disposition !== undefined &&
+    !isValidGateDisposition(event.disposition)
+  ) {
+    throw new Error(
+      `gate_item_event: invalid disposition '${event.disposition}' — must be one of ${GATE_DISPOSITIONS.join(', ')}, or omitted for a log-only event`,
+    );
+  }
+  if (event.disposition === 'discarded' && !event.evidence) {
+    throw new Error(`gate_item_event: 'discarded' requires an evidence/reason`);
+  }
   const now = new Date().toISOString();
   gateStore.appendEvent(gateItemId, { ...event, at: now });
-  const nextState = nextStateForDisposition(
-    event.disposition,
-    item.classification,
-  );
-  gateStore.advanceState(gateItemId, nextState, event.disposition, now);
+
+  const advances =
+    event.disposition !== undefined &&
+    event.disposition !== NON_TERMINAL_DISPOSITION;
+  if (advances) {
+    const nextState = nextStateForDisposition(
+      event.disposition as GateDisposition,
+      item.classification,
+    );
+    gateStore.advanceState(gateItemId, nextState, event.disposition, now);
+  }
 
   const updated = gateStore.getItem(gateItemId);
   if (!updated) {
