@@ -202,7 +202,7 @@ describe('sendInitialStateBurst — boot snapshot', () => {
   it('emits boot snapshot messages to the send callback when tracker has in-progress state', async () => {
     vi.resetModules();
     vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
+      getGrantedCapabilities: vi.fn(() => []),
       getActiveSessions: vi.fn().mockReturnValue([]),
       getEventsBySession: vi.fn().mockReturnValue([]),
       getDenialsBySession: vi.fn().mockReturnValue([]),
