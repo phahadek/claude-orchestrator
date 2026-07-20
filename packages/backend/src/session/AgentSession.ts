@@ -187,6 +187,71 @@ export function parseVerifiedFlakyDisposition(
   return { gate, reason };
 }
 
+export interface GateVerifyDisposition {
+  gateItemId: string;
+  disposition: 'pass' | 'fail' | 'needs-setup';
+  evidence?: unknown;
+}
+
+export interface GateVerifyDispositionPayload {
+  sessionId: string;
+  disposition: GateVerifyDisposition;
+}
+
+/**
+ * Extract and validate a gate-verify disposition block from session
+ * assistant text — the read-only investigation session's self-reported
+ * finding for the single gate item it was dispatched to verify. The backend
+ * (never the session) turns this into the authoritative gate_item_event
+ * write; the session has no gate-write authority. Exported for testing.
+ */
+export function parseGateVerifyDisposition(
+  text: string,
+): GateVerifyDisposition | null {
+  const idx = text.indexOf('"gate_verify"');
+  if (idx === -1) return null;
+  const openBrace = text.lastIndexOf('{', idx);
+  if (openBrace === -1) return null;
+  let depth = 0;
+  let closeBrace = -1;
+  for (let i = openBrace; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}') {
+      depth--;
+      if (depth === 0) {
+        closeBrace = i;
+        break;
+      }
+    }
+  }
+  if (closeBrace === -1) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(openBrace, closeBrace + 1));
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const block = (parsed as Record<string, unknown>).gate_verify;
+  if (typeof block !== 'object' || block === null) return null;
+  const b = block as Record<string, unknown>;
+  if (
+    b.disposition !== 'pass' &&
+    b.disposition !== 'fail' &&
+    b.disposition !== 'needs-setup'
+  ) {
+    return null;
+  }
+  if (typeof b.gate_item_id !== 'string' || b.gate_item_id.length === 0) {
+    return null;
+  }
+  return {
+    gateItemId: b.gate_item_id,
+    disposition: b.disposition,
+    evidence: b.evidence,
+  };
+}
+
 /** Maximum number of rebase nudges sent to a session before escalating to needs_attention. */
 export const MAX_REBASE_NUDGES = 3;
 
@@ -395,6 +460,8 @@ export class AgentSession extends EventEmitter {
   /** Verified-flaky disposition parsed from the current turn's assistant text; cleared after result event. */
   private pendingVerifiedFlakyDisposition: VerifiedFlakyDisposition | null =
     null;
+  private readonly processedGateVerifyMessageIds = new Set<string>();
+  private pendingGateVerifyDisposition: GateVerifyDisposition | null = null;
   /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
   private readonly warnedEscapeToolUseIds = new Set<string>();
   /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
@@ -1222,6 +1289,22 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         this.emit('verified_flaky_disposition', payload);
       }
 
+      // Surface a gate-verify disposition the session emitted this turn — a
+      // read-only investigation session with no PR of its own, so unlike the
+      // two blocks above this fires unconditionally (not gated on `pr`).
+      if (
+        event.is_error !== true &&
+        this.pendingGateVerifyDisposition !== null
+      ) {
+        const disposition = this.pendingGateVerifyDisposition;
+        this.pendingGateVerifyDisposition = null;
+        const payload: GateVerifyDispositionPayload = {
+          sessionId: this.sessionId,
+          disposition,
+        };
+        this.emit('gate_verify_disposition', payload);
+      }
+
       // Deliver any undelivered inbox items at the turn boundary.
       if (event.is_error !== true) {
         void this.deliverInboxItems();
@@ -1310,7 +1393,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         if (
           !this.processedPRBodyMessageIds.has(messageId) ||
           !this.processedDispositionMessageIds.has(messageId) ||
-          !this.processedVerifiedFlakyMessageIds.has(messageId)
+          !this.processedVerifiedFlakyMessageIds.has(messageId) ||
+          !this.processedGateVerifyMessageIds.has(messageId)
         ) {
           const accumulatedText = mergedContent
             .filter((b) => b.type === 'text' && typeof b.text === 'string')
@@ -1337,6 +1421,13 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             if (disposition !== null) {
               this.processedVerifiedFlakyMessageIds.add(messageId);
               this.pendingVerifiedFlakyDisposition = disposition;
+            }
+          }
+          if (!this.processedGateVerifyMessageIds.has(messageId)) {
+            const gateVerify = parseGateVerifyDisposition(accumulatedText);
+            if (gateVerify !== null) {
+              this.processedGateVerifyMessageIds.add(messageId);
+              this.pendingGateVerifyDisposition = gateVerify;
             }
           }
         }

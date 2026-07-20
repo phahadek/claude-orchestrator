@@ -66,8 +66,12 @@ import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiv
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
 import { Scheduler } from './orchestration/Scheduler';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
-import { register as registerGateReconciler } from './gate/gateReconciler';
+import {
+  register as registerGateReconciler,
+  configureGateVerification,
+} from './gate/gateReconciler';
 import { registerGateMergeConsumer } from './gate/gateMergeConsumer';
+import { SessionGateItemVerifier } from './gate/gateItemVerifier';
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
@@ -431,12 +435,21 @@ sessionEventsPruner.register(scheduler);
 stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 registerWorktreeReconciler(scheduler);
-// Gate-verification reconciler: built but not activated (no-coexistence rule) —
-// gated off by runtimeSettings.gate_verification_enabled until an operator
-// opts in. /api/deploy/report-in triggers this job immediately on report
-// (event-driven, nothing polled) but the same enabled flag still applies —
-// a report while disabled is a no-op tick.
+// Gate-verification reconciler: runnability/readiness reconcile on every
+// tick; auto-run verification stays inert here (no verifier passed to
+// register()) — M12 excludes reconciler auto-launch, that's the deferred
+// M13+ phase. The verifier + followupFiler + concurrency config are wired
+// via configureGateVerification instead, for the sibling manual-dispatch
+// surface (an operator-triggered /gate verify) to read back and invoke
+// directly on selected items.
 registerGateReconciler(scheduler);
+configureGateVerification({
+  verifier: new SessionGateItemVerifier(sessionManager),
+  concurrency: {
+    maxDispatchAttempts: 3,
+    maxFixAttempts: 3,
+  },
+});
 
 void runBootSequence({
   jsonlReader,

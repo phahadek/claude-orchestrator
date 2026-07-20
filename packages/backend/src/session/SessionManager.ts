@@ -1547,6 +1547,11 @@ export class SessionManager extends EventEmitter {
     session.on('verified_flaky_disposition', (payload: unknown) =>
       this.emit('verified_flaky_disposition', payload),
     );
+    // Forward gate_verify_disposition so the GateItemVerifier awaiting this
+    // dispatched session's terminal report can resolve.
+    session.on('gate_verify_disposition', (payload: unknown) =>
+      this.emit('gate_verify_disposition', payload),
+    );
 
     // Fire-and-forget — run() blocks until the subprocess exits, then clean up
     session
