@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getUnit, getUnitEvents, queryUnits } from '../architecture/ArchUnitStore';
+import {
+  getUnit,
+  getUnitEvents,
+  queryUnits,
+} from '../architecture/ArchUnitStore';
 import type { ArchUnitKind, ArchUnitStatus } from '../db/types';
 
 /**
