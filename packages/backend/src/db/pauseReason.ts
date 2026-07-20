@@ -41,7 +41,9 @@ export type CanonicalPauseReason =
   | 'autofix_git_infra_failure'
   | 'workflow_scope_denied'
   | 'resume_failed'
-  | 'review_rules_escalation';
+  | 'review_rules_escalation'
+  | 'planning_crashed'
+  | 'planning_first_turn_empty';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -197,6 +199,16 @@ export const PAUSE_REASON_REGISTRY: Record<
   },
   review_rules_escalation: {
     source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  planning_crashed: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  planning_first_turn_empty: {
+    source: 'session',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },

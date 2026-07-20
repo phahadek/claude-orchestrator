@@ -102,6 +102,10 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Session could not be resumed at boot (missing worktree, or the resumed process failed immediately) — review and redispatch when ready.',
   review_rules_escalation:
     'Reviewer escalated per project-specific review rules — see the review summary for details and resolve manually.',
+  planning_crashed:
+    'Planning session crashed repeatedly — review the session and redispatch planning when ready.',
+  planning_first_turn_empty:
+    'Planning session finished its first turn without staging anything — review the transcript and redispatch or close.',
 };
 
 function verdictLabel(verdict: string): string {

@@ -580,7 +580,14 @@ export class SessionManager extends EventEmitter {
     });
 
     // 7. Update Notion task status for standard sessions
-    if (!row || row.session_type !== 'standard' || !row.task_id) return;
+    if (!row || !row.task_id) return;
+
+    if (isPlanningSession(row.session_type)) {
+      this.handlePlanningSessionCrash(row, reason, detail);
+      return;
+    }
+
+    if (row.session_type !== 'standard') return;
 
     const notionTaskId = row.task_id;
     const projectId = row.project_id ?? '';
@@ -642,6 +649,76 @@ export class SessionManager extends EventEmitter {
           `[SessionManager] markSessionErrored updateStatus failed: ${e}`,
         ),
       );
+  }
+
+  /**
+   * Planning-session (groom/design) crash handling, called from
+   * markSessionErrored. Reuses the same task_crash_counts budget as the
+   * standard-session path but maps it onto the planning lifecycle instead
+   * of Ready/Blocked:
+   * - Revert the mechanical In Progress move back to 🔲 Backlog (design
+   *   only — a groom target never left Backlog, so there's nothing to
+   *   revert for it).
+   * - Crash #1 (transient): stays reverted to Backlog with no
+   *   needs_attention flag — retry-eligible.
+   * - Crash #2+ (repeated): surface needs_attention via setTaskPauseReason,
+   *   the planning analog of the standard-session's Blocked circuit breaker.
+   * UNCOUNTED_REASONS (user_kill/pr_closed/launch_failed) never count
+   * against the budget and never trigger a revert.
+   */
+  private handlePlanningSessionCrash(
+    row: Session,
+    reason: string,
+    detail?: string,
+  ): void {
+    const taskId = row.task_id;
+    if (!taskId || UNCOUNTED_REASONS.has(reason)) return;
+
+    const projectId = row.project_id ?? '';
+
+    if (movesTargetInProgress(row.session_type)) {
+      getTaskBackend(projectId)
+        .updateStatus(taskId, '🔲 Backlog', {
+          source: 'orchestrator',
+          sessionId: row.session_id,
+        })
+        .then(() => {
+          this.emit('message', {
+            type: 'task_status_changed',
+            notionTaskId: taskId,
+            newStatus: '🔲 Backlog',
+          } satisfies ServerMessage);
+          emitTaskUpdated(taskId);
+        })
+        .catch((e) =>
+          logger.error(
+            `[SessionManager] failed to revert planning target to Backlog: ${e}`,
+          ),
+        );
+    }
+
+    const crashCount = incrementTaskCrashCount(taskId);
+    if (crashCount < 2) return;
+
+    setTaskPauseReason(taskId, 'planning_crashed', detail ?? reason);
+    recordEvent({
+      event_type: 'auto_launch_paused',
+      actor_type: 'system',
+      actor_id: row.session_id,
+      project_id: projectId || null,
+      task_id: taskId,
+      payload: {
+        reason: 'planning_crashed',
+        sessionId: row.session_id,
+        crashCount,
+      },
+    });
+    this.emit('message', {
+      type: 'auto_launch_paused',
+      taskId,
+      reason: 'planning_crashed',
+      detail: detail ?? reason,
+    } satisfies ServerMessage);
   }
 
   async start(
