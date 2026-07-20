@@ -117,9 +117,7 @@ export function DecisionPanel({ sessionId }: Props) {
                 disabled={!allApproved || groupInFlight === groupId}
                 onClick={() => void handleCommitGroup(groupId)}
               >
-                {groupInFlight === groupId
-                  ? 'Committing…'
-                  : 'Commit group'}
+                {groupInFlight === groupId ? 'Committing…' : 'Commit group'}
               </button>
             </div>
             {groupError && groupInFlight === null && (

@@ -88,9 +88,7 @@ export function diffTaskBody(
 
   return names.map((name) => {
     const oldLines = (stored.get(name) ?? []).filter((l) => l.trim() !== '');
-    const newLines = (proposed.get(name) ?? []).filter(
-      (l) => l.trim() !== '',
-    );
+    const newLines = (proposed.get(name) ?? []).filter((l) => l.trim() !== '');
     const lines = diffLines(oldLines, newLines);
     const changed = lines.some((l) => l.kind !== 'unchanged');
     return { name, changed, lines };
