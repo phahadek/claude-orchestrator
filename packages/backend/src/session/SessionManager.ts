@@ -65,6 +65,11 @@ import {
   enqueueFeedbackItem,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
+import {
+  countsAgainstConcurrency,
+  isPlanningSession,
+  movesTargetInProgress,
+} from './sessionPredicates';
 import { eventKind } from './eventKind';
 import type { Session } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -243,7 +248,7 @@ function buildProactiveEscalationNudge(pendingText: string): string {
 
 export interface StartOptions {
   taskType?: string;
-  sessionType?: 'standard' | 'review';
+  sessionType?: 'standard' | 'review' | 'groom' | 'design';
   customPrompt?: string;
   projectId?: string;
   taskName?: string;
@@ -395,7 +400,7 @@ export class SessionManager extends EventEmitter {
   private sessions = new Map<string, AgentSession>();
   private pendingStarts = new Map<
     string,
-    { sessionType: 'standard' | 'review' }
+    { sessionType: 'standard' | 'review' | 'groom' | 'design' }
   >();
   /** Concurrency guard: prevents double-spawning when two concurrent sendOrResume calls race. */
   private resumesInFlight = new Map<string, Promise<string | null>>();
@@ -654,15 +659,15 @@ export class SessionManager extends EventEmitter {
       taskId: precomputedTaskId,
     } = options ?? {};
 
-    if (sessionType !== 'review' && taskKind === undefined) {
+    if (countsAgainstConcurrency(sessionType) && taskKind === undefined) {
       throw new Error(
         `sessionManager.start() requires taskKind for standard sessions`,
       );
     }
 
-    if (sessionType !== 'review') {
-      const codeSessionCount = [...this.sessions.values()].filter(
-        (s) => s.sessionType !== 'review',
+    if (countsAgainstConcurrency(sessionType)) {
+      const codeSessionCount = [...this.sessions.values()].filter((s) =>
+        countsAgainstConcurrency(s.sessionType),
       ).length;
       if (codeSessionCount >= config.maxConcurrentCodeSessions) {
         throw new Error(
@@ -696,7 +701,7 @@ export class SessionManager extends EventEmitter {
 
     // Dedup: if a live or DB-active session already exists for this task, return early.
     // This lifts the AutoLauncher guard into SessionManager so every caller benefits.
-    if (sessionType !== 'review') {
+    if (countsAgainstConcurrency(sessionType)) {
       const earlyTaskId =
         precomputedTaskId ??
         deriveTaskId(project.taskSource ?? 'notion', taskUrl);
@@ -851,12 +856,12 @@ export class SessionManager extends EventEmitter {
 
     const project = getProjectById(projectId)!;
     const projectDir = normalizePath(project.projectDir);
-    const worktreePath = path.join(
-      projectDir,
-      '.claude',
-      'worktrees',
-      sessionId,
-    );
+    const isPlanning = isPlanningSession(sessionType);
+    // Planning sessions (groom/design) are stage-only/read-only: no worktree,
+    // no feature branch, no bootstrap — cwd is the project's own checkout.
+    const worktreePath = isPlanning
+      ? projectDir
+      : path.join(projectDir, '.claude', 'worktrees', sessionId);
     const isLocalOnly = project.gitMode === 'local-only';
     const { startingPoint, milestoneSlug } = resolveStartingPoint(
       project,
@@ -866,6 +871,7 @@ export class SessionManager extends EventEmitter {
       precomputedTaskId ??
       deriveTaskId(project.taskSource ?? 'notion', taskUrl);
 
+    if (!isPlanning) {
     if (!isLocalOnly) {
       if (milestoneSlug) {
         try {
@@ -1058,10 +1064,11 @@ export class SessionManager extends EventEmitter {
           ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
           : ''),
     );
+    }
 
     const orchConfig = loadOrchestratorConfig(projectDir);
 
-    if (orchConfig.bootstrap_script) {
+    if (!isPlanning && orchConfig.bootstrap_script) {
       try {
         await exec(`bash "${orchConfig.bootstrap_script}" "${worktreePath}"`, {
           cwd: projectDir,
@@ -1081,9 +1088,11 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    const missingEnv = orchConfig.required_env.filter(
-      (varName) => !(varName in process.env),
-    );
+    const missingEnv = isPlanning
+      ? []
+      : orchConfig.required_env.filter(
+          (varName) => !(varName in process.env),
+        );
     if (missingEnv.length > 0) {
       const detail = `bootstrap gate: missing required env var(s): ${missingEnv.join(', ')}`;
       logger.error(
@@ -1092,9 +1101,11 @@ export class SessionManager extends EventEmitter {
       throw new Error(detail);
     }
 
-    const missingFiles = orchConfig.required_files.filter(
-      (filePath) => !fs.existsSync(path.join(worktreePath, filePath)),
-    );
+    const missingFiles = isPlanning
+      ? []
+      : orchConfig.required_files.filter(
+          (filePath) => !fs.existsSync(path.join(worktreePath, filePath)),
+        );
     if (missingFiles.length > 0) {
       const detail = `bootstrap gate: missing required file(s): ${missingFiles.join(', ')}`;
       logger.error(
@@ -1112,7 +1123,7 @@ export class SessionManager extends EventEmitter {
           : new CliSessionRunner(sessionId);
 
     let taskContent: string | undefined;
-    if (sessionType !== 'review' && sessionTaskId) {
+    if (countsAgainstConcurrency(sessionType) && sessionTaskId) {
       try {
         taskContent =
           await getTaskBackend(projectId).fetchTaskPage(sessionTaskId);
@@ -1237,7 +1248,7 @@ export class SessionManager extends EventEmitter {
     this.wireSession(sessionId, session, projectDir, worktreePath);
 
     // Update task status to In Progress (fire-and-forget; failures logged, not thrown).
-    if (sessionType === 'standard') {
+    if (movesTargetInProgress(sessionType)) {
       getTaskBackend(projectId)
         .updateStatus(sessionTaskId, '🔄 In Progress', {
           source: 'orchestrator',
@@ -1314,7 +1325,9 @@ export class SessionManager extends EventEmitter {
 
     const projectDir = normalizePath(project.projectDir);
     const worktreePath = row.worktree_path;
-    if (!worktreePath) return;
+    // Planning sessions (groom/design) run directly in the project checkout —
+    // never remove it as if it were a disposable worktree.
+    if (!worktreePath || worktreePath === projectDir) return;
 
     if (fs.existsSync(worktreePath)) {
       try {

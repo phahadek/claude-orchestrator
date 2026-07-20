@@ -52,6 +52,7 @@ import { detectInFlightEscape } from './SessionAuditor';
 import type { ISessionRunner } from './SessionRunner';
 import { CliSessionRunner } from './CliSessionRunner';
 import { recoverSession } from './sessionRecovery';
+import { isCodeSession, isPlanningSession, opensPr } from './sessionPredicates';
 import {
   VALID_EVENT_TYPES,
   SILENT_SKIP_TYPES,
@@ -515,14 +516,12 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // resumeIdForSpawn: undefined on first run, set to this.sessionId on each retry.
     let resumeIdForSpawn: string | undefined = this.resumeSessionId;
 
-    const modelSetting =
-      this.sessionType === 'review'
-        ? runtimeSettings.review_session_model
-        : runtimeSettings.code_session_model;
-    const effortSetting =
-      this.sessionType === 'review'
-        ? runtimeSettings.review_session_effort
-        : runtimeSettings.code_session_effort;
+    const modelSetting = isCodeSession(this.sessionType)
+      ? runtimeSettings.code_session_model
+      : runtimeSettings.review_session_model;
+    const effortSetting = isCodeSession(this.sessionType)
+      ? runtimeSettings.code_session_effort
+      : runtimeSettings.review_session_effort;
 
     // Per-iteration overrides set by tryEscalateForOverflow() (T3b).
     // Instance fields _escalationModel and _escalationDisableAutoCompact hold these
@@ -1892,7 +1891,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     if (this.taskId) resetTaskCrashCount(this.taskId);
 
     let upsertSucceeded = true;
-    if (this.sessionType === 'standard') {
+    if (opensPr(this.sessionType)) {
       this.taskBackend()
         .attachPR(this.taskId, prUrl)
         .catch((e) => logger.error(`[AgentSession] attachPR failed: ${e}`));
@@ -2373,6 +2372,30 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       payload: { session_id: this.sessionId },
     });
     const endedAt = Date.now();
+
+    // Planning sessions (groom/design) never scrape for a PR URL and never
+    // enter the PR/recovery chain — they park into idle awaiting disposition
+    // (human/dashboard action on the session's findings), not a merge.
+    if (isPlanningSession(this.sessionType)) {
+      markSessionIdle(this.sessionId, endedAt, null);
+      if (this.taskId) resetTaskCrashCount(this.taskId);
+      recordEvent({
+        event_type: 'handle_clean_exit_session_marked_idle',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId ?? null,
+        task_id: this.taskId || null,
+        payload: { session_id: this.sessionId, pr_url: null },
+      });
+      this.broadcast({
+        type: 'session_ended',
+        sessionId: this.sessionId,
+        status: 'idle',
+        ...(this.taskId && { taskId: this.taskId }),
+      });
+      return;
+    }
+
     let prUrl: string | undefined;
 
     // Await any in-flight PR creation from the <pr-body> marker so that the PR

@@ -1,0 +1,151 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('../../db/queries', () => ({
+  upsertSessionEvent: vi.fn().mockReturnValue(1),
+  updateSessionStatus: vi.fn(),
+  markSessionDone: vi.fn(),
+  markSessionIdle: vi.fn(),
+  getEventsBySession: vi.fn().mockReturnValue([]),
+  insertPermissionDenial: vi.fn(),
+  upsertPullRequest: vi.fn(),
+  incrementTokens: vi.fn(),
+  incrementCompactionCount: vi.fn(),
+  setContextOccupancy: vi.fn(),
+  setSessionModel: vi.fn(),
+  setSessionMetadata: vi.fn(),
+  getPRBySessionId: vi.fn().mockReturnValue(null),
+  setHeadSha: vi.fn(),
+  setPauseReason: vi.fn(),
+  setSessionPauseReason: vi.fn(),
+  insertPauseInterval: vi.fn(),
+  getSessionTags: vi.fn().mockReturnValue([]),
+  setSessionTags: vi.fn(),
+  resetTaskCrashCount: vi.fn(),
+  getSession: vi.fn().mockReturnValue(null),
+}));
+
+vi.mock('../../config', () => ({
+  ALLOWED_TOOLS: [],
+  GITHUB_REPO: 'owner/repo',
+  BASH_MAX_OUTPUT_LENGTH: 30000,
+  BASH_DEFAULT_TIMEOUT_MS: 300000,
+  runtimeSettings: { corporate_mode_enabled: false },
+}));
+
+vi.mock('../../tasks/TaskBackend', () => ({
+  getTaskBackend: vi.fn().mockReturnValue({
+    attachPR: vi.fn().mockResolvedValue(undefined),
+    getTask: vi.fn().mockResolvedValue(null),
+  }),
+}));
+
+vi.mock('../../audit/AuditLog', () => ({
+  recordEvent: vi.fn(),
+  countPushFailureEvents: vi.fn().mockReturnValue(0),
+}));
+
+vi.mock('../filePollutionCheck', () => ({
+  runFilePollutionCheck: vi.fn().mockResolvedValue({ revertCommitSha: null }),
+}));
+
+vi.mock('../../github/PRBodyValidator', () => ({
+  validatePRBody: vi.fn().mockReturnValue({ valid: true, missingSections: [] }),
+  buildValidationComment: vi.fn().mockReturnValue(''),
+}));
+
+vi.mock('../../github/CommitAttributionWatcher', () => ({
+  checkCommitAttribution: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../sessionRecovery', () => ({
+  recoverSession: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../CliSessionRunner', () => ({
+  CliSessionRunner: vi.fn().mockImplementation(() => ({
+    run: vi.fn().mockReturnValue(new Promise(() => {})),
+    sendMessage: vi.fn(),
+    endSession: vi.fn(),
+    kill: vi.fn().mockResolvedValue(undefined),
+    hasSpawnError: false,
+  })),
+}));
+
+import { AgentSession } from '../AgentSession';
+import { markSessionIdle, getEventsBySession } from '../../db/queries';
+import { recoverSession } from '../sessionRecovery';
+
+function makeSession(sessionType: 'standard' | 'groom' | 'design') {
+  const taskBackend = {
+    attachPR: vi.fn().mockResolvedValue(undefined),
+    getTask: vi.fn().mockResolvedValue(null),
+  };
+  return new AgentSession(
+    'test-session-id',
+    'https://notion.so/task',
+    'https://notion.so/project',
+    taskBackend as never,
+    '/tmp/project-checkout',
+    'task-123',
+    undefined,
+    undefined,
+    sessionType,
+  );
+}
+
+describe('AgentSession.handleCleanExit — planning session gating', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('groom session parks into idle without scraping for a PR or calling recoverSession', async () => {
+    const session = makeSession('groom');
+    const messages: unknown[] = [];
+    session.on('message', (m) => messages.push(m));
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(markSessionIdle).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      null,
+    );
+    expect(getEventsBySession).not.toHaveBeenCalled();
+    expect(recoverSession).not.toHaveBeenCalled();
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: 'session_ended',
+        sessionId: 'test-session-id',
+        status: 'idle',
+      }),
+    );
+  });
+
+  it('design session parks into idle without scraping for a PR or calling recoverSession', async () => {
+    const session = makeSession('design');
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(markSessionIdle).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      null,
+    );
+    expect(recoverSession).not.toHaveBeenCalled();
+  });
+
+  it('standard session still runs the PR-scrape/recoverSession chain', async () => {
+    const session = makeSession('standard');
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(getEventsBySession).toHaveBeenCalled();
+    expect(recoverSession).toHaveBeenCalled();
+  });
+});
