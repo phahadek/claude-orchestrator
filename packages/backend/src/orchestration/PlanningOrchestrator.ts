@@ -9,7 +9,7 @@ import { isPlanningSession } from '../session/sessionPredicates';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage } from '../ws/types';
 
-export type PlanningDisposition = 'approve' | 'pushback' | 'reject';
+type PlanningDisposition = 'approve' | 'pushback' | 'reject';
 
 export interface PlanningDispositionPayload {
   intent: StagedIntentRow;
