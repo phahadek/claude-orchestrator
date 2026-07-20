@@ -167,7 +167,7 @@ const DONE_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
 
 // ─── Manifest resolution ────────────────────────────────────────────────────
 
-function resolveConfigDir(repoRoot: string): string | null {
+export function resolveConfigDir(repoRoot: string): string | null {
   const explicit = process.env.ORCHESTRATOR_CONFIG_DIR;
   if (explicit) return resolve(explicit);
   for (const c of [
@@ -179,7 +179,10 @@ function resolveConfigDir(repoRoot: string): string | null {
   return null;
 }
 
-function loadManifest(repoRoot: string, projectKey?: string): GroomManifest {
+export function loadManifest(
+  repoRoot: string,
+  projectKey?: string,
+): GroomManifest {
   const configDir = resolveConfigDir(repoRoot);
   if (!configDir) {
     throw new Error(

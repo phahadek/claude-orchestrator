@@ -10,6 +10,7 @@ type EventType =
   | 'attribution_missing'
   | 'session_launch_refused_zdr'
   | 'data_residency_flag_toggled'
+  | 'arch_store_adopted_toggled'
   | 'file_pollution_reverted'
   | 'file_pollution_checked'
   | 'file_pollution_re_injected_blocked'

@@ -177,6 +177,8 @@ export interface ProjectRow {
   task_source_config: string | null;
   data_residency_confirmed: number; // 0 | 1 (SQLite boolean)
   base_branch: string;
+  /** 0 = read the project's Notion architecture pages; 1 = read the arch_unit store. */
+  arch_store_adopted: number; // 0 | 1 (SQLite boolean)
   created_at: number;
   updated_at: number;
 }
@@ -194,6 +196,7 @@ export type NewProjectRow = Omit<
   | 'non_milestone_source_config'
   | 'task_source_config'
   | 'base_branch'
+  | 'arch_store_adopted'
 > & {
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
@@ -204,6 +207,7 @@ export type NewProjectRow = Omit<
   non_milestone_source_config?: string | null;
   task_source_config?: string | null;
   base_branch?: string;
+  arch_store_adopted?: number;
   created_at?: number;
   updated_at?: number;
 };

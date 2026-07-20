@@ -1294,4 +1294,15 @@ export function runMigrations(target: Database.Database): void {
     ON milestones(project_id, canonical_short_id COLLATE NOCASE)
     WHERE canonical_short_id IS NOT NULL;
   `);
+
+  // ── projects.arch_store_adopted: per-project dual-read flag ─────────────
+  // A whole project flips to reading the arch_unit store at once — no
+  // per-page split-brain. Default 0 (Notion fallback) until migrated.
+  try {
+    target.exec(
+      `ALTER TABLE projects ADD COLUMN arch_store_adopted INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
 }
