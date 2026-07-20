@@ -47,7 +47,11 @@ describe('session.requestCapability decision-surface kind', () => {
 
     const intent = stageIntent(
       'session.requestCapability',
-      { capability: 'Bash(psql:*)', plan: 'inspect prod row counts', evidence: 'task asks for a row-count audit' },
+      {
+        capability: 'Bash(psql:*)',
+        plan: 'inspect prod row counts',
+        evidence: 'task asks for a row-count audit',
+      },
       'proj-1',
       null,
       'sess-1',
@@ -105,7 +109,11 @@ describe('session.requestCapability decision-surface kind', () => {
 
     const intent = stageIntent(
       'session.requestCapability',
-      { capability: 'Bash(rm:*)', plan: 'clean up temp files', evidence: 'disk full' },
+      {
+        capability: 'Bash(rm:*)',
+        plan: 'clean up temp files',
+        evidence: 'disk full',
+      },
       'proj-1',
       null,
       'sess-3',
@@ -129,7 +137,11 @@ describe('session.requestCapability decision-surface kind', () => {
 
     const intent = stageIntent(
       'session.requestCapability',
-      { capability: 'Bash(curl:*)', plan: 'ping an API', evidence: 'debugging' },
+      {
+        capability: 'Bash(curl:*)',
+        plan: 'ping an API',
+        evidence: 'debugging',
+      },
       'proj-1',
       null,
       'sess-4',
