@@ -162,6 +162,15 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
   const [detail, setDetail] = useState<GateItemDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [verifyingIds, setVerifyingIds] = useState<Set<string>>(new Set());
+  const [verifyBaseline, setVerifyBaseline] = useState<
+    Record<string, string | undefined>
+  >({});
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+
   const [seedMilestones, setSeedMilestones] = useState<
     SeedMilestoneReadiness[]
   >([]);
@@ -453,6 +462,97 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
     [expandedId],
   );
 
+  const toggleItemSelected = useCallback((id: string) => {
+    setSelectedItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // The manual verify-item/verify-batch dispatch — the Verify(N) launcher
+  // for the GateItemVerifier, analogous to the Groom(N)/Ops(N) launchers.
+  const dispatchVerify = useCallback(
+    (ids: string[]) => {
+      if (ids.length === 0) return;
+      setVerifyError(null);
+      setVerifyBaseline((prev) => {
+        const next = { ...prev };
+        for (const id of ids) {
+          next[id] = items.find((i) => i.id === id)?.currentDisposition;
+        }
+        return next;
+      });
+      gateApi
+        .dispatchVerification(ids)
+        .then((result) => {
+          setVerifyingIds((prev) => {
+            const next = new Set(prev);
+            result.dispatched.forEach((id) => next.add(id));
+            return next;
+          });
+          if (result.skipped.length > 0) {
+            setVerifyError(
+              `Skipped: ${result.skipped
+                .map((s) => `${s.itemId} (${s.reason})`)
+                .join(', ')}`,
+            );
+          }
+          setSelectedItemIds(new Set());
+        })
+        .catch((err) => {
+          setVerifyError(err instanceof Error ? err.message : String(err));
+        });
+    },
+    [items],
+  );
+
+  // Polls each in-flight verification's item detail until its disposition
+  // moves away from the dispatch-time baseline, reflecting the resulting
+  // disposition back into the table without a full-page refresh.
+  useEffect(() => {
+    if (verifyingIds.size === 0) return;
+    const ids = Array.from(verifyingIds);
+    const interval = setInterval(() => {
+      Promise.all(
+        ids.map((id) =>
+          gateApi
+            .getGateItemDetail(id)
+            .then((detail) => ({ id, detail }))
+            .catch(() => null),
+        ),
+      ).then((results) => {
+        const settled: string[] = [];
+        setItems((prevItems) =>
+          prevItems.map((item) => {
+            const found = results.find((r) => r && r.id === item.id);
+            if (!found) return item;
+            const newDisposition = found.detail.item.currentDisposition;
+            if (newDisposition !== verifyBaseline[item.id]) {
+              settled.push(item.id);
+              return {
+                ...item,
+                currentDisposition: newDisposition,
+                state: found.detail.item.state,
+                updatedAt: found.detail.item.updatedAt,
+              };
+            }
+            return item;
+          }),
+        );
+        if (settled.length > 0) {
+          setVerifyingIds((prev) => {
+            const next = new Set(prev);
+            settled.forEach((id) => next.delete(id));
+            return next;
+          });
+        }
+      });
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [verifyingIds, verifyBaseline]);
+
   const selectGateChip = useCallback((state: string) => {
     setStateFilter(state);
     setRunnableFilter('');
@@ -635,42 +735,82 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
 
           {itemsLoading && <p className={styles.muted}>Loading items…</p>}
           {itemsError && <p className={styles.error}>{itemsError}</p>}
+          {verifyError && <p className={styles.error}>{verifyError}</p>}
 
           {!itemsLoading && !itemsError && (
             <>
+              <div className={styles.filters}>
+                <button
+                  type="button"
+                  onClick={() => dispatchVerify(Array.from(selectedItemIds))}
+                  disabled={selectedItemIds.size === 0}
+                  data-testid="gate-verify-selected-button"
+                >
+                  Verify ({selectedItemIds.size})
+                </button>
+              </div>
               <table
                 className={styles.itemsTable}
                 data-testid="gate-items-table"
               >
                 <thead>
                   <tr>
+                    <th></th>
                     <th>Item</th>
                     <th>Classification</th>
                     <th>State</th>
                     <th>Latest disposition</th>
                     <th>Updated</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((item) => (
                     <Fragment key={item.id}>
-                      <tr
-                        key={item.id}
-                        className={styles.itemRow}
-                        onClick={() => toggleExpanded(item.id)}
-                      >
-                        <td>{item.text}</td>
-                        <td>{item.classification}</td>
-                        <td>{item.state}</td>
-                        <td>{item.currentDisposition ?? '—'}</td>
-                        <td>{new Date(item.updatedAt).toLocaleString()}</td>
+                      <tr key={item.id} className={styles.itemRow}>
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedItemIds.has(item.id)}
+                            onChange={() => toggleItemSelected(item.id)}
+                            aria-label={`Select ${item.text}`}
+                            data-testid={`gate-item-select-${item.id}`}
+                          />
+                        </td>
+                        <td onClick={() => toggleExpanded(item.id)}>
+                          {item.text}
+                        </td>
+                        <td onClick={() => toggleExpanded(item.id)}>
+                          {item.classification}
+                        </td>
+                        <td onClick={() => toggleExpanded(item.id)}>
+                          {item.state}
+                        </td>
+                        <td onClick={() => toggleExpanded(item.id)}>
+                          {item.currentDisposition ?? '—'}
+                        </td>
+                        <td onClick={() => toggleExpanded(item.id)}>
+                          {new Date(item.updatedAt).toLocaleString()}
+                        </td>
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            onClick={() => dispatchVerify([item.id])}
+                            disabled={verifyingIds.has(item.id)}
+                            data-testid={`gate-verify-item-${item.id}`}
+                          >
+                            {verifyingIds.has(item.id)
+                              ? 'Verifying…'
+                              : 'Verify'}
+                          </button>
+                        </td>
                       </tr>
                       {expandedId === item.id && (
                         <tr
                           key={`${item.id}-detail`}
                           className={styles.detailRow}
                         >
-                          <td colSpan={5}>
+                          <td colSpan={7}>
                             {detailLoading && (
                               <p className={styles.muted}>Loading detail…</p>
                             )}
@@ -720,7 +860,7 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
                   ))}
                   {items.length === 0 && (
                     <tr>
-                      <td colSpan={5} className={styles.muted}>
+                      <td colSpan={7} className={styles.muted}>
                         No gate items match these filters.
                       </td>
                     </tr>

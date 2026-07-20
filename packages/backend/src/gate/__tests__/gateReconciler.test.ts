@@ -36,6 +36,7 @@ import {
   register,
   configureGateVerification,
   getGateVerificationOptions,
+  dispatchGateItemVerification,
   type DeployAdvanceTrigger,
   type GateItemVerifier,
   type FollowupFixTaskFiler,
@@ -111,6 +112,75 @@ describe('configureGateVerification / getGateVerificationOptions', () => {
     expect(stored?.verifier).toBe(verifier);
     expect(stored?.followupFiler).toBe(followupFiler);
     expect(stored?.concurrency).toEqual(concurrency);
+  });
+});
+
+describe('dispatchGateItemVerification', () => {
+  it('dispatches a verify for a runnable item and records the resulting disposition', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    configureGateVerification({
+      verifier: { verify },
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+    });
+
+    const result = dispatchGateItemVerification([item.id]);
+    expect(result.dispatched).toEqual([item.id]);
+    expect(result.skipped).toEqual([]);
+
+    await vi.waitFor(() => {
+      expect(getItem(item.id)?.state).toBe('pass');
+    });
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(getItem(item.id)?.events.at(-1)).toMatchObject({
+      disposition: 'pass',
+      operator: 'gate-verifier',
+    });
+  });
+
+  it('skips unknown item ids', () => {
+    configureGateVerification({
+      verifier: { verify: vi.fn() },
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+    });
+    const result = dispatchGateItemVerification(['no-such-item']);
+    expect(result.dispatched).toEqual([]);
+    expect(result.skipped).toEqual([
+      { itemId: 'no-such-item', reason: 'not found' },
+    ]);
+  });
+
+  it('skips an item already mid-verify rather than double-dispatching', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    let resolveVerify: (() => void) | undefined;
+    const verify = vi.fn(
+      () =>
+        new Promise<{ disposition: 'pass' }>((resolve) => {
+          resolveVerify = () => resolve({ disposition: 'pass' });
+        }),
+    );
+    configureGateVerification({
+      verifier: { verify },
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+    });
+
+    const first = dispatchGateItemVerification([item.id]);
+    expect(first.dispatched).toEqual([item.id]);
+
+    await vi.waitFor(() => {
+      expect(verify).toHaveBeenCalledTimes(1);
+    });
+
+    const second = dispatchGateItemVerification([item.id]);
+    expect(second.dispatched).toEqual([]);
+    expect(second.skipped).toEqual([
+      { itemId: item.id, reason: 'already in flight' },
+    ]);
+
+    resolveVerify?.();
+    await vi.waitFor(() => {
+      expect(getItem(item.id)?.state).toBe('pass');
+    });
   });
 });
 
