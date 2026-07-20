@@ -5,6 +5,8 @@ import type {
 } from '@claude-orchestrator/backend/src/ws/types';
 import type { ResolvedTask } from '@claude-orchestrator/backend/src/notion/types';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
+import type { StagedIntent } from '../api/stagedIntents';
+import { publishStagedIntentChange } from './stagedIntentBus';
 
 const DISMISSED_DENIALS_KEY = 'permission_denials_dismissed';
 
@@ -136,6 +138,8 @@ export function useSessionStore() {
     IncompleteReview[]
   >([]);
   const [lastTaskUpdate, setLastTaskUpdate] = useState<TaskView | null>(null);
+  const [lastStagedIntentChange, setLastStagedIntentChange] =
+    useState<StagedIntent | null>(null);
   const [taskListRefreshTrigger, setTaskListRefreshTrigger] = useState(0);
   const [lastPrMergedEvent, setLastPrMergedEvent] = useState<{
     prNumber: number;
@@ -424,6 +428,10 @@ export function useSessionStore() {
     }
     if (msg.type === 'task_updated') {
       setLastTaskUpdate(msg.task);
+    }
+    if (msg.type === 'staged_intent_changed') {
+      setLastStagedIntentChange(msg.intent);
+      publishStagedIntentChange(msg.intent);
     }
     if (msg.type === 'pr_merged') {
       setLastPrMergedEvent({
@@ -723,6 +731,7 @@ export function useSessionStore() {
     incompleteReviews,
     dismissIncompleteReviews,
     lastTaskUpdate,
+    lastStagedIntentChange,
     taskListRefreshTrigger,
     lastAutofixEvent,
     lastReviewStartedEvent,

@@ -8,6 +8,7 @@ import { EventTranscript } from './EventTranscript';
 import { DiffViewer } from './DiffViewer';
 import { SessionControls } from './SessionControls';
 import { Composer } from './Composer';
+import { DecisionPanel } from './DecisionPanel';
 import styles from './SessionDetail.module.css';
 
 interface Props {
@@ -51,96 +52,99 @@ export function SessionPanel({
     session.status === 'paused';
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.header}>
-        {showTaskName && (
-          <span className={styles.taskName}>
-            {taskNameFromNotionUrl(session.taskName)}
-          </span>
-        )}
-        <SessionControls
-          embedded
-          session={session}
-          send={send}
-          sessionMode={sessionMode}
-          project={project}
-          setSessionArchived={setSessionArchived}
-          setSessionFavorited={setSessionFavorited}
-          onDeleted={onDeleted}
-          onResume={onResume}
-          onClose={onClose}
-        />
-      </div>
+    <div className={styles.layout}>
+      <div className={styles.panel}>
+        <div className={styles.header}>
+          {showTaskName && (
+            <span className={styles.taskName}>
+              {taskNameFromNotionUrl(session.taskName)}
+            </span>
+          )}
+          <SessionControls
+            embedded
+            session={session}
+            send={send}
+            sessionMode={sessionMode}
+            project={project}
+            setSessionArchived={setSessionArchived}
+            setSessionFavorited={setSessionFavorited}
+            onDeleted={onDeleted}
+            onResume={onResume}
+            onClose={onClose}
+          />
+        </div>
 
-      {session.sessionType === 'review' ? (
-        <>
-          <ReviewDetailView session={session} />
+        {session.sessionType === 'review' ? (
+          <>
+            <ReviewDetailView session={session} />
 
-          <div className={styles.reviewTranscriptOuter}>
-            <div className={styles.transcriptOverlay}>
-              <button
-                className={styles.copyButton}
-                onClick={() => setShowReviewTranscript((v) => !v)}
-                aria-expanded={showReviewTranscript}
-              >
-                {showReviewTranscript
-                  ? '▼ Hide transcript'
-                  : '▶ Show session transcript'}
-              </button>
+            <div className={styles.reviewTranscriptOuter}>
+              <div className={styles.transcriptOverlay}>
+                <button
+                  className={styles.copyButton}
+                  onClick={() => setShowReviewTranscript((v) => !v)}
+                  aria-expanded={showReviewTranscript}
+                >
+                  {showReviewTranscript
+                    ? '▼ Hide transcript'
+                    : '▶ Show session transcript'}
+                </button>
+              </div>
+              {showReviewTranscript && (
+                <EventTranscript events={session.events} />
+              )}
             </div>
-            {showReviewTranscript && (
-              <EventTranscript events={session.events} />
+          </>
+        ) : (
+          <>
+            {session.prUrl != null && (
+              <div className={styles.tabBar}>
+                <button
+                  className={`${styles.tabButton} ${activeTab === 'transcript' ? styles['tabButton--active'] : ''}`}
+                  onClick={() => setActiveTab('transcript')}
+                >
+                  Transcript
+                </button>
+                <button
+                  className={`${styles.tabButton} ${activeTab === 'diff' ? styles['tabButton--active'] : ''}`}
+                  onClick={() => setActiveTab('diff')}
+                >
+                  Diff
+                </button>
+              </div>
             )}
-          </div>
-        </>
-      ) : (
-        <>
-          {session.prUrl != null && (
-            <div className={styles.tabBar}>
-              <button
-                className={`${styles.tabButton} ${activeTab === 'transcript' ? styles['tabButton--active'] : ''}`}
-                onClick={() => setActiveTab('transcript')}
-              >
-                Transcript
-              </button>
-              <button
-                className={`${styles.tabButton} ${activeTab === 'diff' ? styles['tabButton--active'] : ''}`}
-                onClick={() => setActiveTab('diff')}
-              >
-                Diff
-              </button>
-            </div>
-          )}
 
-          {activeTab === 'transcript' && (
-            <EventTranscript
-              events={session.events}
-              permissionDenials={session.permissionDenials}
-            />
-          )}
+            {activeTab === 'transcript' && (
+              <EventTranscript
+                events={session.events}
+                permissionDenials={session.permissionDenials}
+              />
+            )}
 
-          {activeTab === 'diff' &&
-            session.prUrl != null &&
-            (() => {
-              const match = /\/pull\/(\d+)/.exec(session.prUrl);
-              const prNumber = match ? parseInt(match[1], 10) : null;
-              return prNumber != null ? (
-                <DiffViewer
-                  prNumber={prNumber}
-                  projectId={session.project_id}
-                />
-              ) : (
-                <div className={styles.diffError}>
-                  Could not parse PR number from URL.
-                </div>
-              );
-            })()}
+            {activeTab === 'diff' &&
+              session.prUrl != null &&
+              (() => {
+                const match = /\/pull\/(\d+)/.exec(session.prUrl);
+                const prNumber = match ? parseInt(match[1], 10) : null;
+                return prNumber != null ? (
+                  <DiffViewer
+                    prNumber={prNumber}
+                    projectId={session.project_id}
+                  />
+                ) : (
+                  <div className={styles.diffError}>
+                    Could not parse PR number from URL.
+                  </div>
+                );
+              })()}
 
-          {activeTab === 'transcript' && isActive && (
-            <Composer sessionId={session.sessionId} send={send} />
-          )}
-        </>
-      )}
+            {activeTab === 'transcript' && isActive && (
+              <Composer sessionId={session.sessionId} send={send} />
+            )}
+          </>
+        )}
+      </div>
+      <DecisionPanel sessionId={session.sessionId} />
     </div>
   );
 }
