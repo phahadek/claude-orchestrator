@@ -30,10 +30,18 @@ function makeApp(launcher: OpsSessionLauncher) {
 
 const worklistBundle = {
   contextPages: [],
-  boards: { target: { milestone: 'm1', board: 'b1', counts: {} }, neighbours: [] },
+  boards: {
+    target: { milestone: 'm1', board: 'b1', counts: {} },
+    neighbours: [],
+  },
   worklist: {
     executable: [
-      { id: 'bare-uuid-1', title: 'Task 1', status: '🗂️ Ready', url: 'https://notion.so/1' },
+      {
+        id: 'bare-uuid-1',
+        title: 'Task 1',
+        status: '🗂️ Ready',
+        url: 'https://notion.so/1',
+      },
     ],
     dep_blocked: [],
     needs_grooming: [],
@@ -49,13 +57,18 @@ beforeEach(() => {
   mockGetMilestoneById.mockReset();
   mockGetProjectRowById.mockReset();
   mockGetMilestoneById.mockReturnValue({ id: 'm1', project_id: 'p1' });
-  mockGetProjectRowById.mockReturnValue({ id: 'p1', context_url: 'https://notion.so/ctx' });
+  mockGetProjectRowById.mockReturnValue({
+    id: 'p1',
+    context_url: 'https://notion.so/ctx',
+  });
   mockLoadOpsContext.mockResolvedValue(worklistBundle);
 });
 
 describe('POST /api/ops/launch', () => {
   it('matches notion:-prefixed selection ids against bare worklist ids', async () => {
-    const launchSelected = vi.fn().mockResolvedValue({ launched: ['bare-uuid-1'], skipped: [] });
+    const launchSelected = vi
+      .fn()
+      .mockResolvedValue({ launched: ['bare-uuid-1'], skipped: [] });
     const launcher = { launchSelected } as unknown as OpsSessionLauncher;
 
     const res = await request(makeApp(launcher))
