@@ -182,7 +182,9 @@ export async function classifyDeferral(body: string): Promise<Advisory> {
       stdout += chunk.toString('utf8');
     });
     proc.on('error', (err: Error) => {
-      logger.warn(`[deferralClassifier] classify subprocess error: ${err.message}`);
+      logger.warn(
+        `[deferralClassifier] classify subprocess error: ${err.message}`,
+      );
       settle({
         tier: 'semantic',
         status: 'errored',

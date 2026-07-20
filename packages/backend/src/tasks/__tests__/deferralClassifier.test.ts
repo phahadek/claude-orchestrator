@@ -285,9 +285,7 @@ describe('classifyReadyProposal — deterministic-tier gating', () => {
     mockGetTaskBackend.mockReturnValue({
       fetchTaskPage: vi
         .fn()
-        .mockResolvedValue(
-          'This detail will be decided by the implementer.',
-        ),
+        .mockResolvedValue('This detail will be decided by the implementer.'),
     });
     mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
     mockGetTaskCache.mockReturnValue({
