@@ -33,7 +33,6 @@
  */
 
 import {
-  CORE_PRINCIPLES,
   SKILL_LABELS,
   principlesFor,
   renderPrinciple,
@@ -367,7 +366,3 @@ export function assemblePlanningProcedure(
   ];
   return sections.join('\n\n---\n\n');
 }
-
-// Re-exported so consumers/tests can enumerate the procedure core this module
-// composes without importing procedureCore.ts directly.
-export { CORE_PRINCIPLES };
