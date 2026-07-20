@@ -27,12 +27,12 @@ import { ProjectService } from '../projects/ProjectService';
 import { loadManifest, resolveConfigDir } from '../groom/groomLoad';
 import { NotionClient } from '../notion/NotionClient';
 
-export interface SelectiveInjectionRegions {
+interface SelectiveInjectionRegions {
   packages?: string[];
   files?: string[];
 }
 
-export interface ArchitecturePageDoc {
+interface ArchitecturePageDoc {
   id: string;
   title: string;
   markdown: string;
@@ -49,12 +49,6 @@ export interface SelectiveInjectionInput {
 export type SelectiveInjectionResult =
   | { source: 'store'; units: ArchUnit[] }
   | { source: 'notion'; pages: ArchitecturePageDoc[] };
-
-export interface NotionArchitectureClient {
-  fetchPageMarkdown(
-    pageId: string,
-  ): Promise<{ title: string; markdown: string }>;
-}
 
 export interface SelectiveInjectionDeps {
   /** Defaults to reading Project.archStoreAdopted. */
