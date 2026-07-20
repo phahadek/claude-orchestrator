@@ -83,6 +83,35 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       '(`echo >`, `cat >`, a `cd … && …` chain) — that is what causes the constant ' +
       'permission friction, not a workaround for it.',
   },
+  {
+    id: 'atomic-single-action-request',
+    title: 'Atomic single-action requests',
+    appliesTo: ['ops'],
+    text:
+      'Every command a dispatched {skillLabel} session requests is exactly one action per ' +
+      'invocation — never a chained or bundled sequence (`&&`, `;`, a multi-step script). ' +
+      'This is load-bearing for grant safety: a human approving a capability grant is ' +
+      'approving *that one command*, not whatever it might trigger next.',
+  },
+  {
+    id: 'dispatch-eligibility-boundary',
+    title: 'Dispatch-eligibility boundary',
+    appliesTo: ['ops'],
+    text:
+      'Diagnosis and reversible/resumable writes are what suit a dispatched (non-interactive) ' +
+      '{skillLabel} session. Irreversible/non-resumable writes and live-incident recovery lean ' +
+      'interactive — hand those to an operator-present run instead of dispatching them.',
+  },
+  {
+    id: 'granted-writes-idempotent-resumable',
+    title: 'Granted writes are idempotent and resumable',
+    appliesTo: ['ops'],
+    text:
+      'A capability grant issued to a dispatched {skillLabel} session must be safe to redrive: ' +
+      'a retried/resumed turn re-runs the same write without duplicating its effect. A ' +
+      'dispatched {skillLabel} session never reaches resolved / ✅ Done / task-apply itself — ' +
+      'that transition is device-auth/operator-only.',
+  },
 ] as const;
 
 /** Resolve `{skillLabel}` against the given skill and return the finished prose. */

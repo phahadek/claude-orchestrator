@@ -24,6 +24,7 @@ import { loadOrchestratorConfig } from './orchestrator-config';
 import { WorktreeSetupError } from './WorktreeSetupError';
 import { CliSessionRunner } from './CliSessionRunner';
 import { revokeStageCredential } from '../auth/SessionStageAuth';
+import { revokeOpsJournalCredential } from '../auth/OpsJournalAuth';
 import { ApiSessionRunner } from './ApiSessionRunner';
 import type { ISessionRunner } from './SessionRunner';
 import {
@@ -2064,6 +2065,7 @@ export class SessionManager extends EventEmitter {
   ): void {
     this.sessions.delete(sessionId);
     revokeStageCredential(sessionId);
+    revokeOpsJournalCredential(sessionId);
 
     // Chokepoint guard: never tear down an idle session's worktree.
     // The worktree IS the session state for idle sessions — uncommitted WIP must

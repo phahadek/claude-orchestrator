@@ -28,6 +28,28 @@ describe('StagedIntentPanel', () => {
     expect(screen.getByRole('button', { name: /reject/i })).toBeTruthy();
   });
 
+  it('renders ops_journal (journal.setState) as a decision-surface kind with a task/state headline', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'journal.setState',
+          payload: {
+            taskId: 'notion:abc',
+            state: 'staged-proposal',
+            fields: { disposition: 'pass' },
+          },
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByTestId('staged-intent-ops-journal-payload'),
+    ).toBeTruthy();
+    expect(screen.getByText(/notion:abc/)).toBeTruthy();
+    expect(screen.getByText(/staged-proposal/)).toBeTruthy();
+    expect(screen.getByText(/Disposition: pass/)).toBeTruthy();
+  });
+
   it('Apply calls the general command-layer route, not a bespoke endpoint', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
