@@ -613,6 +613,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       } catch (rollbackErr) {
         throw new Error(
           `[TaskWriteCommands] moveTask failed building target ${newTaskId} (${String(err)}), and rollback (archive) also failed: ${String(rollbackErr)}`,
+          { cause: rollbackErr },
         );
       }
       throw err;
