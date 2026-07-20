@@ -343,6 +343,32 @@ function CapabilityRequestHeadline({ intent }: { intent: StagedIntent }) {
   );
 }
 
+interface JournalSetStatePayload {
+  taskId: string;
+  state: string;
+  fields?: { disposition?: string; resolution?: unknown };
+}
+
+/** The ops_journal disposition kind — a dispatched ops session's staging
+ *  transition, or an operator's device-authed resolve. */
+function JournalSetStateHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as JournalSetStatePayload;
+  return (
+    <div
+      className={styles.text}
+      data-testid="staged-intent-ops-journal-payload"
+    >
+      <p>
+        ops_journal: set <strong>{payload.taskId}</strong> to{' '}
+        <strong>{payload.state}</strong>
+      </p>
+      {payload.fields?.disposition && (
+        <p>Disposition: {payload.fields.disposition}</p>
+      )}
+    </div>
+  );
+}
+
 function renderHeadline(intent: StagedIntent): ReactNode {
   switch (intent.kind) {
     case 'task.updateBody':
@@ -363,6 +389,8 @@ function renderHeadline(intent: StagedIntent): ReactNode {
         : renderFallback(intent.payload);
     case 'session.requestCapability':
       return <CapabilityRequestHeadline intent={intent} />;
+    case 'journal.setState':
+      return <JournalSetStateHeadline intent={intent} />;
     default:
       return renderFallback(intent.payload);
   }

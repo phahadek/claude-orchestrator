@@ -5,6 +5,7 @@ import path from 'path';
 import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { mintStageCredential } from '../auth/SessionStageAuth';
+import { mintOpsJournalCredential } from '../auth/OpsJournalAuth';
 import {
   upsertSessionEvent,
   updateSessionStatus,
@@ -614,6 +615,12 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       }
 
       const stageToken = mintStageCredential(this.sessionId);
+      // Only a dispatched `ops` session drives ops_journal directly — the
+      // interactive device-authed /ops path never runs as this sessionType.
+      const opsJournalToken =
+        this.sessionType === 'ops'
+          ? mintOpsJournalCredential(this.sessionId)
+          : undefined;
       const exitCode = await this.runner.run(
         resumeIdForSpawn ? undefined : initialPrompt,
         resumeIdForSpawn,
@@ -645,6 +652,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             // ~/.claude/scripts/stage-task-intent.mjs client (curl/wget are
             // off the auto-dispatch allowlist; node is) — re-vendored via
             // scripts/sync-guidelines-load.mjs (the /sync-guidelines skill).
+            ...(opsJournalToken && {
+              ORCHESTRATOR_OPS_JOURNAL_TOKEN: opsJournalToken,
+            }),
           },
         },
         (event) => {

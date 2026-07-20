@@ -29,3 +29,15 @@ Canonical source: `packages/backend/src/planning/procedureCore.ts` (`CORE_PRINCI
 
 - **Grooming**: Loader-seeded on-disk JSON (grooming-state.json / code-map.json for /groom, design-state.json / code-map.json for /design) is mutated with the Edit tool (a unique-string change) or Read + Write (a structural change). Never write a throwaway script and run it (`node _foo.cjs` then `rm`), and never shell out (`echo >`, `cat >`, a `cd … && …` chain) — that is what causes the constant permission friction, not a workaround for it.
 - **Design Execution**: Loader-seeded on-disk JSON (grooming-state.json / code-map.json for /groom, design-state.json / code-map.json for /design) is mutated with the Edit tool (a unique-string change) or Read + Write (a structural change). Never write a throwaway script and run it (`node _foo.cjs` then `rm`), and never shell out (`echo >`, `cat >`, a `cd … && …` chain) — that is what causes the constant permission friction, not a workaround for it.
+
+## Atomic single-action requests
+
+- **ops**: Every command a dispatched ops session requests is exactly one action per invocation — never a chained or bundled sequence (`&&`, `;`, a multi-step script). This is load-bearing for grant safety: a human approving a capability grant is approving *that one command*, not whatever it might trigger next.
+
+## Dispatch-eligibility boundary
+
+- **ops**: Diagnosis and reversible/resumable writes are what suit a dispatched (non-interactive) ops session. Irreversible/non-resumable writes and live-incident recovery lean interactive — hand those to an operator-present run instead of dispatching them.
+
+## Granted writes are idempotent and resumable
+
+- **ops**: A capability grant issued to a dispatched ops session must be safe to redrive: a retried/resumed turn re-runs the same write without duplicating its effect. A dispatched ops session never reaches resolved / ✅ Done / task-apply itself — that transition is device-auth/operator-only.

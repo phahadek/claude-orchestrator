@@ -159,6 +159,12 @@ app.use('/api/enrollment', createPublicEnrollmentRouter());
 // requireDeviceAuth deliberately — it must stay reachable only via
 // requireSessionStageAuth, never fall back to the device-auth surface.
 app.use('/api', createTaskIntentsRouter());
+// Ops-journal state-transition writes accept a dispatched ops session's own
+// scoped journal-write credential in addition to a device token (see
+// requireOpsJournalWriteAuth) — mounted ahead of requireDeviceAuth so that
+// credential is reachable; each route inside applies its own auth
+// (requireDeviceAuth for GET, requireOpsJournalWriteAuth for the write).
+app.use('/api', createOpsJournalRouter());
 // Setup endpoints are public — wizard UI uses them before credentials exist
 app.use('/api', setupRouter);
 // Gate all other /api routes when setup has not been completed
@@ -227,7 +233,6 @@ app.use(
   '/api',
   createStagedIntentsRouter(planningOrchestrator, sessionManager),
 );
-app.use('/api', createOpsJournalRouter());
 app.use('/api', createGateStateRouter());
 app.use('/api', createDeployRouter());
 app.use('/api', createSeedStateRouter());
