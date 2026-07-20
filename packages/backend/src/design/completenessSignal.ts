@@ -20,14 +20,14 @@ import {
   type WorklistTask,
 } from '../groom/codeWorklist';
 
-export interface LockedDecision {
+interface LockedDecision {
   /** The open question this decision resolves. */
   question: string;
   /** The locked decision text. */
   decision: string;
 }
 
-export interface FollowOnCodeTask {
+interface FollowOnCodeTask {
   id: string;
   title: string;
   filesSection: string;
@@ -46,9 +46,9 @@ export interface TraceCoverageInput {
   worklistOptions: CodeWorklistOptions;
 }
 
-export type TraceCoverageOutputKind = 'region' | 'acceptance_criterion';
+type TraceCoverageOutputKind = 'region' | 'acceptance_criterion';
 
-export interface TraceCoverageFlag {
+interface TraceCoverageFlag {
   kind: TraceCoverageOutputKind;
   /** Follow-on task id for a 'region' flag, or the criterion's index for 'acceptance_criterion'. */
   sourceId: string;
