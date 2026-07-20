@@ -6,6 +6,7 @@ import {
   ALLOWED_TOOLS,
   GROOM_ALLOWED_TOOLS,
   DESIGN_ALLOWED_TOOLS,
+  OPS_ALLOWED_TOOLS,
 } from '../config';
 
 export interface OrchestratorConfig {
@@ -212,9 +213,13 @@ function isGrantable(capability: string): boolean {
  * this is the base ALLOWED_TOOLS plus the per-project extras from
  * .claude-orchestrator.yml. Planning sessions (groom/design) get a dedicated,
  * stage-only/read-only tool set instead — per-project extras are never merged
- * in, since those may include mutating commands. This is the exact array
- * passed as `allowedTools` at spawn (see AgentSession) — extracted so tests can
- * assert on the merged result rather than just the base const.
+ * in, since those may include mutating commands. ops sessions get a similar
+ * stage-only/read-only base, but DO merge in the per-project extras from
+ * .claude-orchestrator.yml — that's where a project's audited live-data read
+ * surface (analyst MCP read verbs, read-only DB role, alarm/operational read
+ * endpoints) is declared, and none of it is prod-mutating. This is the exact
+ * array passed as `allowedTools` at spawn (see AgentSession) — extracted so
+ * tests can assert on the merged result rather than just the base const.
  *
  * `granted` is the session's durable, operator-approved capability set (see
  * getGrantedCapabilities/addGrantedCapability in db/queries.ts) — composed
@@ -233,6 +238,8 @@ export function getSessionAllowedTools(
       ? [...GROOM_ALLOWED_TOOLS]
       : sessionType === 'design'
         ? [...DESIGN_ALLOWED_TOOLS]
-        : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
+        : sessionType === 'ops'
+          ? [...OPS_ALLOWED_TOOLS, ...orchConfig.allowed_tools]
+          : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
   return [...new Set([...base, ...grantable])];
 }

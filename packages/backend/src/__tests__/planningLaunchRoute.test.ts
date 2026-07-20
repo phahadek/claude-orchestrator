@@ -73,9 +73,9 @@ describe('resolveSessionType', () => {
     expect(resolveSessionType('design')).toBe('design');
   });
 
-  it('resolves ops and investigation to standard until the ops sibling type exists', () => {
-    expect(resolveSessionType('ops')).toBe('standard');
-    expect(resolveSessionType('investigation')).toBe('standard');
+  it('resolves ops and investigation to sessionType=ops', () => {
+    expect(resolveSessionType('ops')).toBe('ops');
+    expect(resolveSessionType('investigation')).toBe('ops');
   });
 
   it('returns null for an unrecognized workflow', () => {
@@ -149,7 +149,7 @@ describe('POST /api/planning/launch', () => {
     expect(res.status).toBe(202);
     expect(mockLoadOpsContext).toHaveBeenCalledWith('m1');
     const call = launchSelected.mock.calls[0][0];
-    expect(call.sessionType).toBe('standard');
+    expect(call.sessionType).toBe('ops');
     expect(call.tasks).toHaveLength(1);
     expect(call.tasks[0].id).toBe('bare-uuid-1');
   });

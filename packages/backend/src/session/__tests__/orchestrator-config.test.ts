@@ -230,6 +230,30 @@ describe('getSessionAllowedTools', () => {
     expect(design.some((t) => t.startsWith('Bash(git '))).toBe(true);
   });
 
+  it('ops tool set excludes Write/Edit, git-mutation, PR/github MCP, and Notion-write MCP', () => {
+    const tools = getSessionAllowedTools('ops', { allowed_tools: [] });
+    for (const forbidden of FORBIDDEN_FOR_PLANNING) {
+      expect(tools).not.toContain(forbidden);
+    }
+    expect(tools.some((t) => t.startsWith('mcp__github__'))).toBe(false);
+  });
+
+  it('ops merges the per-project allowed_tools extras (its audited live-data read surface), unlike groom/design', () => {
+    const tools = getSessionAllowedTools('ops', {
+      allowed_tools: ['mcp__analyst__query_alarm_rules'],
+    });
+    expect(tools).toContain('mcp__analyst__query_alarm_rules');
+  });
+
+  it('ops base profile is read + stage + safe live-data surface, distinct from groom/design/standard', () => {
+    const ops = getSessionAllowedTools('ops', { allowed_tools: [] });
+    const groom = getSessionAllowedTools('groom', { allowed_tools: [] });
+    const standard = getSessionAllowedTools('standard', { allowed_tools: [] });
+    expect(ops).not.toEqual(standard);
+    expect(ops.some((t) => t.startsWith('Bash(git '))).toBe(true);
+    expect(ops).toEqual(expect.arrayContaining(groom));
+  });
+
   describe('granted-capability composition', () => {
     it('an empty granted set equals the base profile', () => {
       const withEmpty = getSessionAllowedTools(

@@ -249,7 +249,7 @@ function buildProactiveEscalationNudge(pendingText: string): string {
 
 export interface StartOptions {
   taskType?: string;
-  sessionType?: 'standard' | 'review' | 'groom' | 'design';
+  sessionType?: 'standard' | 'review' | 'groom' | 'design' | 'ops';
   customPrompt?: string;
   projectId?: string;
   taskName?: string;
@@ -411,7 +411,7 @@ export class SessionManager extends EventEmitter {
   private sessions = new Map<string, AgentSession>();
   private pendingStarts = new Map<
     string,
-    { sessionType: 'standard' | 'review' | 'groom' | 'design' }
+    { sessionType: 'standard' | 'review' | 'groom' | 'design' | 'ops' }
   >();
   /** Concurrency guard: prevents double-spawning when two concurrent sendOrResume calls race. */
   private resumesInFlight = new Map<string, Promise<string | null>>();
@@ -753,11 +753,10 @@ export class SessionManager extends EventEmitter {
       );
     }
 
-    // Planning session types (groom/design, and ops/investigation once that
-    // sibling type exists) share one concurrency pool distinct from the code
-    // session cap — they all compete for the same operator review attention
-    // through one decision surface, so a per-type cap would be the wrong
-    // shape here.
+    // Planning session types (groom/design/ops) share one concurrency pool
+    // distinct from the code session cap — they all compete for the same
+    // operator review attention through one decision surface, so a per-type
+    // cap would be the wrong shape here.
     if (isPlanningSession(sessionType)) {
       const planningSessionCount = [...this.sessions.values()].filter((s) =>
         isPlanningSession(s.sessionType),
@@ -964,8 +963,10 @@ export class SessionManager extends EventEmitter {
     const project = getProjectById(projectId)!;
     const projectDir = normalizePath(project.projectDir);
     const isPlanning = isPlanningSession(sessionType);
-    // Planning sessions (groom/design) are stage-only/read-only: no worktree,
-    // no feature branch, no bootstrap — cwd is the project's own checkout.
+    // Planning sessions (groom/design/ops) are stage-only/read-only: no
+    // worktree, no feature branch, no bootstrap — cwd is the project's own
+    // checkout (a read-only view in practice, since the base tool profile
+    // has no write/mutate tools).
     const worktreePath = isPlanning
       ? projectDir
       : path.join(projectDir, '.claude', 'worktrees', sessionId);
@@ -2233,14 +2234,28 @@ export class SessionManager extends EventEmitter {
     return this.sessions.has(sessionId);
   }
 
-  /** Count live standard (non-review) sessions. Used by AutoLauncher for concurrency. */
+  /**
+   * Count live code sessions (standard/review-adjacent, excludes review and
+   * planning types groom/design/ops). Used by AutoLauncher for concurrency —
+   * planning sessions compete for the separate shared planning-session pool
+   * instead, see start().
+   */
   getLiveCodeSessionCount(): number {
     let n = 0;
     for (const s of this.sessions.values()) {
-      if (s.sessionType !== 'review') n++;
+      if (
+        countsAgainstConcurrency(s.sessionType) &&
+        !isPlanningSession(s.sessionType)
+      )
+        n++;
     }
     for (const [id, p] of this.pendingStarts) {
-      if (p.sessionType !== 'review' && !this.sessions.has(id)) n++;
+      if (
+        countsAgainstConcurrency(p.sessionType) &&
+        !isPlanningSession(p.sessionType) &&
+        !this.sessions.has(id)
+      )
+        n++;
     }
     return n;
   }

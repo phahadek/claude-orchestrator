@@ -16,11 +16,18 @@
  * - design: investigative planning session — stage-only/read-only, no
  *   worktree, no PR; target task is mechanically moved to In Progress on
  *   start, same as a standard session.
+ * - ops: operational/investigation session — base profile is read + stage +
+ *   the safe live-data/audited-read surface, no worktree, no PR; write
+ *   capability into prod-mutating tools is earned per-session via
+ *   grant-on-re-dispatch, never granted in the base profile. Shares the
+ *   planning concurrency pool with groom/design rather than a dedicated cap.
  */
 
-/** True for session types that plan (groom/design): stage-only, read-only, no worktree, no PR. */
+/** True for session types that plan (groom/design/ops): stage-only base profile, no worktree, no PR. */
 export function isPlanningSession(sessionType: string): boolean {
-  return sessionType === 'groom' || sessionType === 'design';
+  return (
+    sessionType === 'groom' || sessionType === 'design' || sessionType === 'ops'
+  );
 }
 
 /** True only for sessions that write code and open their own PR. */
