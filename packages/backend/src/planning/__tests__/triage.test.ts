@@ -22,9 +22,9 @@ describe('isInteractiveTaskType / INTERACTIVE_TASK_TYPES', () => {
 
 describe('hasOpenQuestionsHeading', () => {
   it('is true for a live "## Open Questions" heading', () => {
-    expect(hasOpenQuestionsHeading('## Open Questions\n- a real question')).toBe(
-      true,
-    );
+    expect(
+      hasOpenQuestionsHeading('## Open Questions\n- a real question'),
+    ).toBe(true);
   });
 
   it('is false when the body has no such heading at all', () => {

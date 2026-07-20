@@ -111,10 +111,7 @@ export function applyTriageFloor(input: TriageFloorInput): TriageFloorResult {
       reasons: ['task body has no "## Open Questions" heading'],
     };
   }
-  if (
-    input.hasRoutedConstraintConflict &&
-    input.proposedVerdict === 'clean'
-  ) {
+  if (input.hasRoutedConstraintConflict && input.proposedVerdict === 'clean') {
     return {
       verdict: 'needs-attention',
       reasons: [

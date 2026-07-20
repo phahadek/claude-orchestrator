@@ -428,7 +428,7 @@ describe('checkGroomingPromotionGate — FM1 bindingConstraints', () => {
     expect(result.reasons.some((r) => r.includes('conflict→route'))).toBe(true);
   });
 
-  it('routes a conflict→route disposition through FM1, but approve-by-standard\'s triage floor still forces this interactive task out of clean', () => {
+  it("routes a conflict→route disposition through FM1, but approve-by-standard's triage floor still forces this interactive task out of clean", () => {
     const result = checkGroomingPromotionGate(
       {
         ...BASE,
@@ -454,9 +454,7 @@ describe('checkGroomingPromotionGate — FM1 bindingConstraints', () => {
     // interactive task's triage verdict out of 'clean' (planning/triage.ts),
     // so it does not promote on the routing alone.
     expect(result.allowed).toBe(false);
-    expect(result.reasons.some((r) => r.includes('triage verdict'))).toBe(
-      true,
-    );
+    expect(result.reasons.some((r) => r.includes('triage verdict'))).toBe(true);
   });
 });
 
@@ -571,7 +569,10 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
     size_check: { decision: 'n/a' },
     type_check: { decision: 'n/a' },
     type: '📐 Design',
-    triage: { proposedVerdict: 'clean' as const, hasOpenQuestionsHeading: true },
+    triage: {
+      proposedVerdict: 'clean' as const,
+      hasOpenQuestionsHeading: true,
+    },
   };
 
   it('blocks promotion when Depends On carries a non-Done 📐 Design task', () => {
