@@ -30,7 +30,9 @@ describe('GET /api/design-context', () => {
   });
 
   it('returns 400 when task is missing', async () => {
-    const res = await request(makeApp()).get('/api/design-context?milestone=m1');
+    const res = await request(makeApp()).get(
+      '/api/design-context?milestone=m1',
+    );
     expect(res.status).toBe(400);
   });
 

@@ -154,7 +154,11 @@ beforeEach(() => {
 
     const blocksMatch = u.match(/\/blocks\/([^/]+)\/children/);
     if (blocksMatch && method === 'GET') {
-      return jsonResponse({ results: taskBlocks, has_more: false, next_cursor: null });
+      return jsonResponse({
+        results: taskBlocks,
+        has_more: false,
+        next_cursor: null,
+      });
     }
 
     throw new Error(`unmocked fetch ${method} ${u}`);
@@ -179,10 +183,7 @@ describe('loadDesignContext', () => {
     });
 
     expect(result.openQuestions).toEqual({
-      items: [
-        'Should we use approach A or B?',
-        'What is the retry policy?',
-      ],
+      items: ['Should we use approach A or B?', 'What is the retry policy?'],
       source: 'explicit_heading',
     });
 

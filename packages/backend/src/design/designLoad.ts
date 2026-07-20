@@ -231,7 +231,8 @@ export async function loadDesignContext(
   // We need the target task's board to locate it among the board rows (for
   // status/type/url) — resolved via the caller-supplied milestone's board.
   const milestone = getMilestoneById(milestoneId);
-  if (!milestone) throw new Error(`design-load: unknown milestone ${milestoneId}`);
+  if (!milestone)
+    throw new Error(`design-load: unknown milestone ${milestoneId}`);
   if (opts.project && opts.project !== milestone.project_id) {
     throw new Error(
       `design-load: milestone ${milestoneId} belongs to project ${milestone.project_id}, not ${opts.project}`,
@@ -261,7 +262,8 @@ export async function loadDesignContext(
   const contextPages = manifest.context_pages ?? [];
   for (const p of pagesAffected) {
     const unit = resolveArchUnit(p.title, contextPages);
-    if (unit) archUnits.push({ id: unit.id, title: unit.title ?? p.title, raw: p.raw });
+    if (unit)
+      archUnits.push({ id: unit.id, title: unit.title ?? p.title, raw: p.raw });
     else unresolvedPageRefs.push(p);
   }
 

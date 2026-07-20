@@ -37,7 +37,8 @@ export function createDesignContextRouter(): Router {
       res.json(result);
     } catch (err) {
       res.status(500).json({
-        error: err instanceof Error ? err.message : 'design-context load failed',
+        error:
+          err instanceof Error ? err.message : 'design-context load failed',
       });
     }
   });
