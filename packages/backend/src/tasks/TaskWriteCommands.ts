@@ -54,6 +54,24 @@ function getCachedStatus(taskId: string): TaskStatus | null {
 }
 
 /**
+ * Reads the last-known display-format Type (e.g. '💻 Code') for a task from
+ * the task cache. This is the authoritative source checkGroomingPromotionGate
+ * uses to decide whether gate/seed accretion is required — a caller-supplied
+ * groomingGate.type is not trustworthy on its own, since omitting it would
+ * otherwise fail the accretion check open.
+ */
+function getCachedType(taskId: string): string | null {
+  const row = getTaskCache(taskId);
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.raw_json) as { type?: string };
+    return parsed.type ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Canonical Type vocabulary (task-writing.md: "each task is exactly one
  * Type"). Type decides what a Ready task triggers — 💻 Code auto-dispatches;
  * 📐 Design / 🔧 Operational / 🔎 Investigation are interactive — and each
@@ -314,6 +332,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       const gateResult = checkGroomingPromotionGate(
         options?.groomingGate ?? {},
         taskId,
+        getCachedType(taskId) ?? undefined,
       );
       if (!gateResult.allowed) {
         throw new GroomingGateError(gateResult.reasons);
