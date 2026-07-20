@@ -4,7 +4,11 @@ import { join } from 'path';
 import {
   CORE_PRINCIPLES,
   ORDERED_STEPS,
+  READINESS_BAR,
+  SIZE_TYPE_CHECK,
+  SKILL_LABELS,
   renderHardRulesMarkdown,
+  renderPrinciple,
   principlesFor,
   stepsFor,
   type SkillId,
@@ -91,5 +95,22 @@ describe('procedureCore', () => {
     for (const step of ORDERED_STEPS) {
       expect(step.summary.length).toBeGreaterThan(0);
     }
+  });
+
+  it('renderPrinciple resolves the {skillLabel} placeholder per skill', () => {
+    const humanIsGate = CORE_PRINCIPLES.find((p) => p.id === 'human-is-gate')!;
+    for (const skill of humanIsGate.appliesTo) {
+      const rendered = renderPrinciple(humanIsGate, skill);
+      expect(rendered).toContain(SKILL_LABELS[skill]);
+      expect(rendered).not.toContain('{skillLabel}');
+    }
+  });
+
+  it('exposes the readiness bar and size/type check pointers to their real implementations', () => {
+    expect(READINESS_BAR.implementedBy).toBe(
+      'packages/backend/src/tasks/readinessGate.ts',
+    );
+    expect(SIZE_TYPE_CHECK.locSplitThreshold).toBe(500);
+    expect(SIZE_TYPE_CHECK.implementedBy.length).toBeGreaterThan(0);
   });
 });
