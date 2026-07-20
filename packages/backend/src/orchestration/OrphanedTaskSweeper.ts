@@ -10,6 +10,7 @@ import type { ServerMessage } from '../ws/types';
 import {
   getLatestCodeSessionByNotionTaskId,
   hasActiveSessionForTask,
+  hasNonTerminalPlanningSessionForTask,
   getPRBySessionId,
   getLocalBranchBySession,
   setSessionPauseReason,
@@ -172,6 +173,13 @@ export class OrphanedTaskSweeper {
 
     // Skip if any non-terminal session exists for this task.
     if (hasActiveSessionForTask(taskId)) return;
+
+    // Planning sessions (groom/design) are legitimately idle awaiting operator
+    // disposition (no abandonment timeout — see Q1-B) — never treat one as an
+    // orphan. getLatestCodeSessionByNotionTaskId/hasActiveSessionForTask above
+    // only ever see 'standard' sessions, so an idle planning session would
+    // otherwise fall through to the revert/nudge paths below unnoticed.
+    if (hasNonTerminalPlanningSessionForTask(taskId)) return;
 
     // Orphan confirmed: Notion shows In Progress, no live session.
     const lastSeenAt =

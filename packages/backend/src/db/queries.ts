@@ -451,6 +451,28 @@ export function getTerminalSessionsForTask(taskId: string): Session[] {
     .all({ task_id: norm }) as Session[];
 }
 
+/**
+ * True if this task has a non-terminal planning (groom/design) session —
+ * including one parked idle awaiting operator disposition. Per the no-timeout
+ * decision for planning sessions, an idle groom/design session is never an
+ * orphan: OrphanedTaskSweeper must skip revert/nudge for such a task.
+ */
+export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
+  const norm = taskId.replace(/-/g, '');
+  const row = db
+    .prepare<{ task_id: string }>(
+      `
+    SELECT 1 FROM sessions
+    WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
+      AND status NOT IN ('done', 'error', 'killed', 'superseded')
+      AND session_type IN ('groom', 'design')
+    LIMIT 1
+  `,
+    )
+    .get({ task_id: norm });
+  return !!row;
+}
+
 export function hasActiveSessionForTask(taskId: string): boolean {
   const norm = taskId.replace(/-/g, '');
   const row = db
@@ -4380,6 +4402,7 @@ let _stmtListStagedIntentsByProject: Database.Statement | null = null;
 let _stmtListStagedIntentsByGroup: Database.Statement | null = null;
 let _stmtFindActiveStagedIntentForTask: Database.Statement | null = null;
 let _stmtUpdateStagedIntentState: Database.Statement | null = null;
+let _stmtHasStagedIntentForSession: Database.Statement | null = null;
 
 export function insertStagedIntent(row: StagedIntentRow): void {
   _stmtInsertStagedIntent ??= db.prepare<StagedIntentRow>(`
@@ -4398,6 +4421,22 @@ export function getStagedIntent(id: string): StagedIntentRow | undefined {
     `SELECT * FROM staged_intent WHERE id = @id`,
   );
   return _stmtGetStagedIntent.get({ id }) as StagedIntentRow | undefined;
+}
+
+/**
+ * True if this session ever staged at least one intent (any lifecycle state —
+ * even a since-rejected one still proves the session produced *something*
+ * that passed validation). Used to distinguish a planning session's
+ * first-turn-empty (surfaces needs_attention) from a later-turn-empty
+ * (natural completion).
+ */
+export function hasStagedIntentForSession(sessionId: string): boolean {
+  _stmtHasStagedIntentForSession ??= db.prepare<{ session_id: string }>(
+    `SELECT 1 FROM staged_intent WHERE session_id = @session_id LIMIT 1`,
+  );
+  return (
+    _stmtHasStagedIntentForSession.get({ session_id: sessionId }) !== undefined
+  );
 }
 
 /** Active (non-terminal-tombstone) intents for a project — superseded rows are always hidden. */

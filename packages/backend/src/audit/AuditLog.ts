@@ -73,6 +73,25 @@ export function countPushFailureEvents(sessionId: string): number {
   }).length;
 }
 
+/**
+ * Returns the number of audit_log rows of the given event type recorded for
+ * the given session (matched on actor_id). Used to distinguish a planning
+ * session's first turn from a later one (e.g. counting prior
+ * handle_clean_exit_session_marked_idle events).
+ */
+export function countEventsBySessionAndType(
+  sessionId: string,
+  eventType: string,
+): number {
+  const row = db
+    .prepare<[string, string], { cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM audit_log
+       WHERE event_type = ? AND actor_id = ?`,
+    )
+    .get(eventType, sessionId);
+  return row?.cnt ?? 0;
+}
+
 /** Returns the most recent audit_log row of the given event type, or undefined. */
 export function getLatestEventByType(eventType: string): AuditRow | undefined {
   return db

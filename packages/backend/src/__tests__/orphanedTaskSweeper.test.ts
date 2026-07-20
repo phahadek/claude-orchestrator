@@ -28,6 +28,7 @@ vi.mock('node:fs', () => ({
 vi.mock('../db/queries.js', () => ({
   getLatestCodeSessionByNotionTaskId: vi.fn(),
   hasActiveSessionForTask: vi.fn(),
+  hasNonTerminalPlanningSessionForTask: vi.fn(() => false),
   getPRBySessionId: vi.fn(() => null),
   getLocalBranchBySession: vi.fn(() => undefined),
   setSessionPauseReason: vi.fn(),
@@ -54,6 +55,7 @@ import fs from 'node:fs';
 import {
   getLatestCodeSessionByNotionTaskId,
   hasActiveSessionForTask,
+  hasNonTerminalPlanningSessionForTask,
   getPRBySessionId,
   getLocalBranchBySession,
   setSessionPauseReason,
@@ -136,6 +138,7 @@ describe('OrphanedTaskSweeper', () => {
     ]);
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
     vi.mocked(getPRBySessionId).mockReturnValue(null);
     vi.mocked(getLocalBranchBySession).mockReturnValue(undefined);
     vi.mocked(setSessionPauseReason).mockClear();
@@ -958,6 +961,33 @@ describe('OrphanedTaskSweeper', () => {
 
     expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
     expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  it('skips a task whose only session is a parked (idle) planning session', async () => {
+    // getLatestCodeSessionByNotionTaskId/hasActiveSessionForTask only ever see
+    // 'standard' sessions, so they report nothing for a task whose only
+    // session is a groom/design one — hasNonTerminalPlanningSessionForTask is
+    // the dedicated exclusion for that case.
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '💻 Code'),
+    ]);
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(true);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'task_orphan_reverted' }),
     );
   });

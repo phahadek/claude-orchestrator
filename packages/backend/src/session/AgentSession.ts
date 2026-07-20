@@ -30,6 +30,8 @@ import {
   markInboxItemsDelivered,
   getSession,
   markSessionInitiatedPRClose,
+  setTaskPauseReason,
+  hasStagedIntentForSession,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -45,7 +47,11 @@ import {
   getSessionAllowedTools,
 } from './orchestrator-config';
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
-import { recordEvent, countPushFailureEvents } from '../audit/AuditLog';
+import {
+  recordEvent,
+  countPushFailureEvents,
+  countEventsBySessionAndType,
+} from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import type { ISessionManager } from './SessionAuditor';
 import { detectInFlightEscape } from './SessionAuditor';
@@ -2377,6 +2383,42 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // enter the PR/recovery chain — they park into idle awaiting disposition
     // (human/dashboard action on the session's findings), not a merge.
     if (isPlanningSession(this.sessionType)) {
+      // First-turn-empty / garbage: a first turn that stages nothing (or only
+      // validation-rejected intents, which never make it into staged_intent)
+      // surfaces as needs_attention — distinct from a later turn staging
+      // nothing, which is the natural-completion signal.
+      const isFirstTurn =
+        countEventsBySessionAndType(
+          this.sessionId,
+          'handle_clean_exit_session_marked_idle',
+        ) === 0;
+      if (
+        isFirstTurn &&
+        this.taskId &&
+        !hasStagedIntentForSession(this.sessionId)
+      ) {
+        const detail =
+          'First planning turn completed without staging any task-write intents.';
+        setTaskPauseReason(this.taskId, 'planning_first_turn_empty', detail);
+        recordEvent({
+          event_type: 'auto_launch_paused',
+          actor_type: 'system',
+          actor_id: this.sessionId,
+          project_id: this.projectId ?? null,
+          task_id: this.taskId,
+          payload: {
+            reason: 'planning_first_turn_empty',
+            sessionId: this.sessionId,
+          },
+        });
+        this.broadcast({
+          type: 'auto_launch_paused',
+          taskId: this.taskId,
+          reason: 'planning_first_turn_empty',
+          detail,
+        });
+      }
+
       markSessionIdle(this.sessionId, endedAt, null);
       if (this.taskId) resetTaskCrashCount(this.taskId);
       recordEvent({
