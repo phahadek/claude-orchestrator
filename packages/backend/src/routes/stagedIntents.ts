@@ -30,6 +30,15 @@ import {
   supersedeStagedIntent,
   setStagedIntentAnnotation,
 } from '../db/queries';
+import type {
+  GateContributionSourceTask,
+  GateContributionItemInput,
+  GateContributionDecision,
+  SeedContributionSourceTask,
+  SeedContributionItemInput,
+  SeedContributionDecision,
+} from '../tasks/TaskWriteCommands';
+import { setEntryState, type OpsState } from '../ops/opsJournal';
 
 /**
  * The durable replacement for groom-gate.mjs's self-reported hard_block_deps
@@ -97,6 +106,12 @@ export interface StagedIntent {
    * display can present/apply them as a group rather than unrelated rows.
    */
   groupId?: string | null;
+  /**
+   * The human-facing rationale/summary the decision surface renders beside
+   * the payload — the producer's proposal for why this intent should be
+   * applied, distinct from `annotation` (a blocked-apply diagnostic).
+   */
+  decisionProposal?: string | null;
 }
 
 function rowToApi(row: StagedIntentRow): StagedIntent {
@@ -113,12 +128,22 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
       ? (JSON.parse(row.annotation) as StagedIntent['annotation'])
       : null,
     groupId: row.group_id,
+    decisionProposal: row.decision_proposal,
   };
 }
 
-/** Kinds carry their target task at `payload.taskId`, except task.create — a new task has no pre-existing id, so it never participates in dedup. */
+/**
+ * Kinds carry their target task at `payload.taskId`, except task.create — a
+ * new task has no pre-existing id, so it never participates in dedup — and
+ * gate.accrete/seed.stage, whose source task lives at `payload.sourceTask.id`.
+ */
 function extractTaskId(kind: string, payload: unknown): string | null {
   if (kind === 'task.create') return null;
+  if (kind === 'gate.accrete' || kind === 'seed.stage') {
+    const sourceTaskId = (payload as { sourceTask?: { id?: unknown } } | null)
+      ?.sourceTask?.id;
+    return typeof sourceTaskId === 'string' ? sourceTaskId : null;
+  }
   const taskId = (payload as { taskId?: unknown } | null)?.taskId;
   return typeof taskId === 'string' ? taskId : null;
 }
@@ -156,6 +181,21 @@ interface MoveTaskPayload {
   targetMilestone: MoveTaskTargetMilestone;
   originalDisposition: 'archive' | 'defer';
 }
+interface GateAccretePayload {
+  sourceTask: GateContributionSourceTask;
+  items: GateContributionItemInput[];
+  classification: GateContributionDecision;
+}
+interface SeedStagePayload {
+  sourceTask: SeedContributionSourceTask;
+  seeds: SeedContributionItemInput[];
+  decision: SeedContributionDecision;
+}
+interface JournalSetStatePayload {
+  taskId: string;
+  state: OpsState;
+  fields?: Parameters<typeof setEntryState>[2];
+}
 
 /** Intent kinds accepted by POST /staged-intents. */
 export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
@@ -167,6 +207,9 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'task.setType',
   'task.archive',
   'task.move',
+  'gate.accrete',
+  'seed.stage',
+  'journal.setState',
 ]);
 
 /**
@@ -189,6 +232,7 @@ export function stageIntent(
   projectId: string,
   groupId?: string | null,
   sessionId?: string | null,
+  decisionProposal?: string | null,
 ): StagedIntent {
   const taskId = extractTaskId(kind, payload);
   const payloadHash = hashIntentPayload(payload);
@@ -212,6 +256,7 @@ export function stageIntent(
         state: 'staged',
         supersedes: null,
         annotation: null,
+        decision_proposal: decisionProposal ?? null,
         created_at: now,
         updated_at: now,
       };
@@ -231,6 +276,7 @@ export function stageIntent(
     state: 'staged',
     supersedes: null,
     annotation: null,
+    decision_proposal: decisionProposal ?? null,
     created_at: now,
     updated_at: now,
   };
@@ -249,6 +295,9 @@ const HUMAN_APPLY_ONLY_KINDS: ReadonlySet<string> = new Set([
   'task.setType',
   'task.archive',
   'task.move',
+  'gate.accrete',
+  'seed.stage',
+  'journal.setState',
 ]);
 
 type ApplyActorType = 'human' | 'session';
@@ -342,6 +391,27 @@ async function applyIntent(
       );
       return result;
     }
+    case 'gate.accrete': {
+      const payload = intent.payload as GateAccretePayload;
+      return commands.accreteGateContribution(
+        payload.sourceTask,
+        payload.items,
+        payload.classification,
+      );
+    }
+    case 'seed.stage': {
+      const payload = intent.payload as SeedStagePayload;
+      return commands.stageSeedContribution(
+        payload.sourceTask,
+        payload.seeds,
+        payload.decision,
+      );
+    }
+    case 'journal.setState': {
+      const payload = intent.payload as JournalSetStatePayload;
+      setEntryState(payload.taskId, payload.state, payload.fields);
+      return { ok: true };
+    }
     default:
       throw new Error(`[stagedIntents] unknown intent kind "${intent.kind}"`);
   }
@@ -375,11 +445,14 @@ export function createStagedIntentsRouter(): Router {
       payload?: unknown;
       projectId?: unknown;
       groupId?: unknown;
+      decisionProposal?: unknown;
     };
     const kind = typeof body.kind === 'string' ? body.kind : null;
     const projectId =
       typeof body.projectId === 'string' ? body.projectId : null;
     const groupId = typeof body.groupId === 'string' ? body.groupId : null;
+    const decisionProposal =
+      typeof body.decisionProposal === 'string' ? body.decisionProposal : null;
 
     if (!kind) {
       res.status(400).json({ error: 'kind is required' });
@@ -394,7 +467,14 @@ export function createStagedIntentsRouter(): Router {
       return;
     }
 
-    const intent = stageIntent(kind, body.payload, projectId, groupId);
+    const intent = stageIntent(
+      kind,
+      body.payload,
+      projectId,
+      groupId,
+      null,
+      decisionProposal,
+    );
     res.status(201).json(intent);
   });
 
