@@ -630,9 +630,14 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       try {
         await this.backend.archive(newTaskId, options);
       } catch (rollbackErr) {
-        throw new Error(
+        const rollbackFailure = new Error(
           `[TaskWriteCommands] moveTask failed building target ${newTaskId} (${String(err)}), and rollback (archive) also failed: ${String(rollbackErr)}`,
         );
+        // ES2022 Error(message, {cause}) isn't typed under the frontend's
+        // ES2020 tsconfig lib, which path-aliases into this file — assign
+        // `cause` as a plain property instead so it still works there.
+        (rollbackFailure as Error & { cause?: unknown }).cause = rollbackErr;
+        throw rollbackFailure;
       }
       throw err;
     }
