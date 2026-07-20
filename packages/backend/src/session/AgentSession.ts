@@ -523,16 +523,22 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // resumeIdForSpawn: undefined on first run, set to this.sessionId on each retry.
     let resumeIdForSpawn: string | undefined = this.resumeSessionId;
 
-    const modelSetting = isPlanningSession(this.sessionType)
-      ? runtimeSettings.planning_session_model
-      : isCodeSession(this.sessionType)
-        ? runtimeSettings.code_session_model
-        : runtimeSettings.review_session_model;
-    const effortSetting = isPlanningSession(this.sessionType)
-      ? runtimeSettings.planning_session_effort
-      : isCodeSession(this.sessionType)
-        ? runtimeSettings.code_session_effort
-        : runtimeSettings.review_session_effort;
+    const modelSetting =
+      this.sessionType === 'ops'
+        ? runtimeSettings.ops_session_model
+        : isPlanningSession(this.sessionType)
+          ? runtimeSettings.planning_session_model
+          : isCodeSession(this.sessionType)
+            ? runtimeSettings.code_session_model
+            : runtimeSettings.review_session_model;
+    const effortSetting =
+      this.sessionType === 'ops'
+        ? runtimeSettings.ops_session_effort
+        : isPlanningSession(this.sessionType)
+          ? runtimeSettings.planning_session_effort
+          : isCodeSession(this.sessionType)
+            ? runtimeSettings.code_session_effort
+            : runtimeSettings.review_session_effort;
 
     // Per-iteration overrides set by tryEscalateForOverflow() (T3b).
     // Instance fields _escalationModel and _escalationDisableAutoCompact hold these

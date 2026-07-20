@@ -208,6 +208,27 @@ export const DESIGN_ALLOWED_TOOLS = [
   'Bash(git branch --list:*)',
 ];
 
+/**
+ * ops session base tool set: read + stage + the safe live-data/audited-read
+ * surface — same read-only git inspection as design, plus the per-project
+ * audited MCP/read-endpoint tools merged in separately from
+ * .claude-orchestrator.yml (see getSessionAllowedTools). No prod-mutating
+ * tool is ever in this base; write capability is earned per-session via
+ * grant-on-re-dispatch, not by widening this constant.
+ */
+export const OPS_ALLOWED_TOOLS = [
+  ...PLANNING_READONLY_BASH_TOOLS,
+  ...NOTION_READ_MCP_TOOLS,
+  'Bash(git log:*)',
+  'Bash(git diff:*)',
+  'Bash(git show:*)',
+  'Bash(git status:*)',
+  'Bash(git blame:*)',
+  'Bash(git ls-files:*)',
+  'Bash(git rev-parse:*)',
+  'Bash(git branch --list:*)',
+];
+
 function hydrateProject(p: {
   id: string;
   name: string;
@@ -354,10 +375,14 @@ export interface RuntimeSettings {
   planning_session_model: string;
   /** Reasoning effort for planning sessions passed via --effort; empty string = model default. */
   planning_session_effort: string;
+  /** Model used for ops sessions; empty string = model default. */
+  ops_session_model: string;
+  /** Reasoning effort for ops sessions passed via --effort; empty string = model default. */
+  ops_session_effort: string;
   /**
-   * Shared concurrency cap across all planning session types (groom/design,
-   * and ops/investigation once that sibling session type exists). One pool,
-   * not per-type caps — they compete for the same operator review attention.
+   * Shared concurrency cap across all planning session types (groom/design/ops).
+   * One pool, not per-type caps — they compete for the same operator review
+   * attention.
    */
   max_concurrent_planning_sessions: number;
   /** TaskCacheRefresher: how often (ms) to refresh per-project board caches in background. */
@@ -384,6 +409,8 @@ export const runtimeSettings: RuntimeSettings = {
   review_session_effort: '',
   planning_session_model: '',
   planning_session_effort: '',
+  ops_session_model: '',
+  ops_session_effort: '',
   max_concurrent_planning_sessions: Number(
     process.env.MAX_CONCURRENT_PLANNING_SESSIONS ?? 5,
   ),

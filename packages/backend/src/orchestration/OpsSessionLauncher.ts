@@ -11,12 +11,10 @@ import { buildOpsSessionContext } from '../ops/opsSessionContext';
 const POLL_INTERVAL_MS = 15_000;
 
 /**
- * Session types dispatched by this launcher. 'standard' is the dispatch
- * target for the ops/investigation workflow until a dedicated 'ops' sibling
- * session type exists — see planningLaunch.ts's workflow -> sessionType
- * resolution.
+ * Session types dispatched by this launcher — see planningLaunch.ts's
+ * workflow -> sessionType resolution.
  */
-export type PlanningSessionType = 'groom' | 'design' | 'standard';
+export type PlanningSessionType = 'groom' | 'design' | 'ops' | 'standard';
 
 /**
  * Minimal per-task shape this launcher needs to dispatch a session.

@@ -457,10 +457,10 @@ export function getTerminalSessionsForTask(taskId: string): Session[] {
 }
 
 /**
- * True if this task has a non-terminal planning (groom/design) session —
+ * True if this task has a non-terminal planning (groom/design/ops) session —
  * including one parked idle awaiting operator disposition. Per the no-timeout
- * decision for planning sessions, an idle groom/design session is never an
- * orphan: OrphanedTaskSweeper must skip revert/nudge for such a task.
+ * decision for planning sessions, an idle groom/design/ops session is never
+ * an orphan: OrphanedTaskSweeper must skip revert/nudge for such a task.
  */
 export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
   const norm = taskId.replace(/-/g, '');
@@ -470,7 +470,7 @@ export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
     SELECT 1 FROM sessions
     WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
       AND status NOT IN ('done', 'error', 'killed', 'superseded')
-      AND session_type IN ('groom', 'design')
+      AND session_type IN ('groom', 'design', 'ops')
     LIMIT 1
   `,
     )

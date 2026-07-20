@@ -230,4 +230,38 @@ describe('SessionManager.start() — shared planning concurrency cap', () => {
     });
     expect(typeof id).toBe('string');
   });
+
+  it('ops shares the planning pool with groom/design — rejects once cap=2 is full of design sessions', async () => {
+    const sm = new SessionManager();
+    seedLiveSession(sm, 'live-design-1', 'design');
+    seedLiveSession(sm, 'live-design-2', 'design');
+
+    await expect(
+      sm.start(TASK_URL, CTX_URL, {
+        sessionType: 'ops',
+        projectId: PROJECT_ID,
+        taskKind: 'milestone',
+      }),
+    ).rejects.toThrow(/Max concurrent planning sessions/);
+  });
+
+  it('live ops sessions do not count toward maxConcurrentCodeSessions and do not block a standard session', async () => {
+    const sm = new SessionManager();
+    seedLiveSession(sm, 'live-ops-1', 'ops');
+
+    const id = await sm.start(TASK_URL, CTX_URL, {
+      sessionType: 'standard',
+      projectId: PROJECT_ID,
+      taskKind: 'milestone',
+    });
+    expect(typeof id).toBe('string');
+  });
+
+  it('getLiveCodeSessionCount excludes ops sessions', () => {
+    const sm = new SessionManager();
+    seedLiveSession(sm, 'live-ops-1', 'ops');
+    seedLiveSession(sm, 'live-standard-1', 'standard');
+
+    expect(sm.getLiveCodeSessionCount()).toBe(1);
+  });
 });

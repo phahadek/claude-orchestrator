@@ -24,9 +24,8 @@ function bareId(id: string): string {
 
 /**
  * Resolves a launch `workflow` to the SessionManager sessionType it
- * dispatches. ops/investigation resolve to 'standard' until a dedicated
- * 'ops' sibling session type exists — see OpsSessionLauncher.PlanningSessionType.
- * Returns null for an unrecognized workflow.
+ * dispatches — see OpsSessionLauncher.PlanningSessionType. Returns null for
+ * an unrecognized workflow.
  */
 export function resolveSessionType(
   workflow: string,
@@ -38,7 +37,7 @@ export function resolveSessionType(
       return 'design';
     case 'ops':
     case 'investigation':
-      return 'standard';
+      return 'ops';
     default:
       return null;
   }
@@ -107,7 +106,7 @@ export function createPlanningLaunchRouter(
     }
 
     try {
-      if (sessionType === 'standard') {
+      if (sessionType === 'ops') {
         // ops / investigation workflow: reuse the ops loader's classification
         // and Depends-On dependency ordering, unchanged from /api/ops/launch.
         const opsContext = await loadOpsContext(milestoneId);
