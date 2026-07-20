@@ -253,7 +253,7 @@ export function runMigrations(target: Database.Database): void {
     CREATE TABLE IF NOT EXISTS gate_item_event (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       gate_item_id   TEXT    NOT NULL,
-      disposition    TEXT    NOT NULL,
+      disposition    TEXT,
       evidence       TEXT,
       filed_followon TEXT,
       deploy_sha     TEXT,
@@ -1304,5 +1304,45 @@ export function runMigrations(target: Database.Database): void {
     );
   } catch {
     /* already exists */
+  }
+
+  // gate_item_event.disposition: NOT NULL -> nullable. A dispositionless
+  // event is a pure log entry (evidence appended, state left unchanged) —
+  // see appendGateItemEvent's optional-disposition handling in gateService.ts.
+  // SQLite can't ALTER a column's NOT NULL away, so recreate the table.
+  {
+    const getTableSql = (name: string): string =>
+      (
+        target
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+          )
+          .get(name) as { sql: string } | undefined
+      )?.sql ?? '';
+
+    if (getTableSql('gate_item_event').includes('disposition    TEXT    NOT NULL')) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS gate_item_event__new;
+        CREATE TABLE gate_item_event__new (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          gate_item_id   TEXT    NOT NULL,
+          disposition    TEXT,
+          evidence       TEXT,
+          filed_followon TEXT,
+          deploy_sha     TEXT,
+          operator       TEXT,
+          at             TEXT    NOT NULL,
+          FOREIGN KEY (gate_item_id) REFERENCES gate_item(id) ON DELETE CASCADE
+        );
+        INSERT INTO gate_item_event__new (id, gate_item_id, disposition, evidence, filed_followon, deploy_sha, operator, at)
+          SELECT id, gate_item_id, disposition, evidence, filed_followon, deploy_sha, operator, at
+          FROM gate_item_event;
+        DROP TABLE gate_item_event;
+        ALTER TABLE gate_item_event__new RENAME TO gate_item_event;
+        CREATE INDEX idx_gate_item_event_gate_item_id ON gate_item_event(gate_item_id);
+        COMMIT;
+      `);
+    }
   }
 }

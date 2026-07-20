@@ -19,7 +19,7 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { insertItem, setMinDeployedCommit } from '../gateStore.js';
+import { insertItem, setMinDeployedCommit, advanceState } from '../gateStore.js';
 import {
   getGateReadiness,
   reconcileGateRunnability,
@@ -83,6 +83,23 @@ describe('getGateReadiness', () => {
   it('ignores items from other milestones', () => {
     makeItem({ milestone: 'M13' });
     expect(getGateReadiness('M12').status).toBe('green');
+  });
+
+  it('flags a pre-existing bespoke state instead of blocking silently forever', () => {
+    const item = makeItem({ text: 'mis-keyed item' });
+    // Simulate a row seeded (e.g. before this enforcement shipped) with an
+    // invented state — the store layer itself doesn't validate; only the
+    // service-level appendGateItemEvent does.
+    advanceState(item.id, 'blocked-unexercised-by-value', undefined, new Date(1).toISOString());
+
+    const readiness = getGateReadiness('M12');
+    expect(readiness.status).toBe('blocked');
+    expect(readiness.bespokeStates).toHaveLength(1);
+    expect(readiness.bespokeStates[0]).toMatchObject({
+      id: item.id,
+      state: 'blocked-unexercised-by-value',
+      bespoke: true,
+    });
   });
 });
 
@@ -232,6 +249,70 @@ describe('appendGateItemEvent', () => {
     const item = makeItem({ classification: 'Prod-Mutating' });
     const updated = appendGateItemEvent(item.id, { disposition: 'pass' });
     expect(updated.state).toBe('pending-approval');
+  });
+
+  it('records a fail as a finding that does not resolve', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    const updated = appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      evidence: 'checkout threw a 500',
+    });
+    expect(updated.state).toBe('fail');
+    expect(getGateReadiness(item.milestone).blocking.map((b) => b.id)).toContain(
+      item.id,
+    );
+  });
+
+  it('rejects a disposition outside the closed vocabulary and does not mutate state', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    expect(() =>
+      appendGateItemEvent(item.id, {
+        disposition: 'blocked-unexercised-by-value',
+      }),
+    ).toThrow(/invalid disposition/);
+    const unchanged = getGateItem(item.id);
+    expect(unchanged?.state).toBe('open');
+    expect(unchanged?.events).toHaveLength(0);
+  });
+
+  it('appends a dispositionless event as a pure log entry and leaves state unchanged', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    const updated = appendGateItemEvent(item.id, {
+      evidence: 'attempted checkout, still investigating',
+    });
+    expect(updated.state).toBe('open');
+    expect(updated.events).toHaveLength(1);
+    expect(updated.events[0].disposition).toBeUndefined();
+  });
+
+  it('records the non-terminal `noted` disposition without advancing state', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    const updated = appendGateItemEvent(item.id, {
+      disposition: 'noted',
+      evidence: 'partial progress, not yet resolved',
+    });
+    expect(updated.state).toBe('open');
+    expect(updated.currentDisposition).toBeUndefined();
+    expect(updated.events).toHaveLength(1);
+    expect(updated.events[0].disposition).toBe('noted');
+  });
+
+  it('resolves `discarded` as terminal and non-blocking, distinct from deferred', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    const updated = appendGateItemEvent(item.id, {
+      disposition: 'discarded',
+      evidence: 'mis-accreted under a non-existent task id',
+    });
+    expect(updated.state).toBe('discarded');
+    expect(getGateReadiness(item.milestone).status).toBe('green');
+  });
+
+  it('rejects `discarded` without an evidence/reason', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    expect(() =>
+      appendGateItemEvent(item.id, { disposition: 'discarded' }),
+    ).toThrow(/requires an evidence/);
+    expect(getGateItem(item.id)?.state).toBe('open');
   });
 });
 

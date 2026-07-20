@@ -37,7 +37,8 @@ export interface GateItemSource {
 }
 
 export interface GateItemEvent {
-  disposition: string;
+  /** Absent for a pure log entry — evidence recorded without advancing state. */
+  disposition?: string;
   evidence?: unknown;
   filedFollowon?: string;
   deploySha?: string;
@@ -93,7 +94,7 @@ export function getItem(id: string): GateItem | undefined {
       addedAt: s.added_at,
     })),
     events: listGateItemEvents(row.id).map((e) => ({
-      disposition: e.disposition,
+      disposition: e.disposition ?? undefined,
       evidence: parseJson(e.evidence),
       filedFollowon: e.filed_followon ?? undefined,
       deploySha: e.deploy_sha ?? undefined,
@@ -225,7 +226,7 @@ export function appendEvent(gateItemId: string, event: GateItemEvent): void {
   }
   insertGateItemEvent({
     gate_item_id: gateItemId,
-    disposition: event.disposition,
+    disposition: event.disposition ?? null,
     evidence: stringifyJson(event.evidence),
     filed_followon: event.filedFollowon ?? null,
     deploy_sha: event.deploySha ?? null,
