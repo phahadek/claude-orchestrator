@@ -262,7 +262,7 @@ interface JournalSetStatePayload {
  * session_id (set by the staging auth context), never a payload field — a
  * session cannot request a grant onto another session.
  */
-export interface CapabilityRequestPayload {
+interface CapabilityRequestPayload {
   capability: string;
   plan: string;
   evidence: string;
