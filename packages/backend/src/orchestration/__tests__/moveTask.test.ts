@@ -151,6 +151,27 @@ describe('planMove', () => {
     ).toThrow(MoveTaskError);
   });
 
+  it('tolerates a dangling Depends On on an unrelated task in the source milestone', () => {
+    const graph: MoveGraphTask[] = [
+      { id: 'notion:a', dependsOn: [] },
+      { id: 'notion:dep1', dependsOn: ['notion:a'] },
+      // Unrelated to the move: a stale dangling dep on a task with no
+      // relationship to the moved task or its cascade set.
+      { id: 'notion:unrelated', dependsOn: ['notion:ghost'] },
+    ];
+
+    const plan = planMove({
+      taskId: 'notion:a',
+      sourceMilestoneTasks: graph,
+      isLaterMove: true,
+    });
+
+    expect(plan.cascadeSet).toEqual(['notion:dep1']);
+    expect(plan.droppedEdges).toEqual(
+      expect.arrayContaining([{ from: 'notion:dep1', to: 'notion:a' }]),
+    );
+  });
+
   it('throws when the moved task is not in the source milestone task set', () => {
     expect(() =>
       planMove({

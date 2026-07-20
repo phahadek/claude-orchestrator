@@ -69,14 +69,22 @@ function stripHyphens(id: string): string {
 }
 
 /**
- * Validate the source milestone graph before planning a move: every declared
- * Depends On must resolve within the graph, and the graph must be acyclic.
- * Both are "malformed / unresolvable dependency trees" and refuse the move.
+ * Validate only the part of the source milestone graph that the move
+ * actually touches: the moved task itself (its own dependency subtree, used
+ * for cascade / refusal analysis) plus the tasks whose Depends On edges are
+ * inspected or rewritten by planMove (the cascade set for a later move, the
+ * direct dependents for an earlier move).
+ *
+ * Dangling Depends On entries on tasks OUTSIDE that relevant set are
+ * pre-existing data issues unrelated to this move and must not block it —
+ * only edges belonging to relevant tasks are required to resolve, and only
+ * cycles reachable from relevant tasks abort the move.
  */
-function validateGraph(tasks: MoveGraphTask[]): void {
+function validateGraph(tasks: MoveGraphTask[], relevantIds: Set<string>): void {
   const byId = new Map(tasks.map((t) => [stripHyphens(t.id), t]));
 
   for (const task of tasks) {
+    if (!relevantIds.has(stripHyphens(task.id))) continue;
     for (const dep of task.dependsOn) {
       if (!byId.has(stripHyphens(dep))) {
         throw new MoveTaskError(
@@ -106,7 +114,10 @@ function validateGraph(tasks: MoveGraphTask[]): void {
     visited.add(norm);
   }
 
-  for (const task of tasks) visit(task.id, []);
+  for (const norm of relevantIds) {
+    const task = byId.get(norm);
+    if (task) visit(task.id, []);
+  }
 }
 
 /**
@@ -167,21 +178,24 @@ export function planMove(input: MovePlanInput): MovePlan {
     );
   }
 
-  validateGraph(sourceMilestoneTasks);
-
   const normTaskId = stripHyphens(taskId);
 
   if (isLaterMove) {
-    const droppedEdges: DroppedEdge[] = moved.dependsOn.map((dep) => ({
-      from: taskId,
-      to: dep,
-    }));
-
     const cascadeSet = transitiveInboundDependents(
       taskId,
       sourceMilestoneTasks,
     );
     const cascadeIds = new Set(cascadeSet);
+
+    validateGraph(
+      sourceMilestoneTasks,
+      new Set([normTaskId, ...cascadeSet.map(stripHyphens)]),
+    );
+
+    const droppedEdges: DroppedEdge[] = moved.dependsOn.map((dep) => ({
+      from: taskId,
+      to: dep,
+    }));
 
     const dependentRewrites: { taskId: string; dependsOn: string[] }[] = [];
     for (const task of sourceMilestoneTasks) {
@@ -214,6 +228,12 @@ export function planMove(input: MovePlanInput): MovePlan {
       task.id !== taskId &&
       task.dependsOn.some((dep) => stripHyphens(dep) === normTaskId),
   );
+
+  validateGraph(
+    sourceMilestoneTasks,
+    new Set([normTaskId, ...directDependents.map((t) => stripHyphens(t.id))]),
+  );
+
   const dependentRewrites = directDependents.map((task) => ({
     taskId: task.id,
     dependsOn: task.dependsOn.filter((dep) => stripHyphens(dep) !== normTaskId),
