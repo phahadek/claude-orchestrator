@@ -435,7 +435,8 @@ export function createGateStateRouter(): Router {
       res.status(202).json(result);
     } catch (err) {
       res.status(400).json({
-        error: err instanceof Error ? err.message : 'gate verify dispatch failed',
+        error:
+          err instanceof Error ? err.message : 'gate verify dispatch failed',
       });
     }
   });

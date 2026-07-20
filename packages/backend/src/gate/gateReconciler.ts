@@ -487,7 +487,8 @@ export function dispatchGateItemVerification(
   }
   const verifier = configured.verifier;
   const followupFiler = configured.followupFiler ?? defaultFollowupFiler;
-  const trigger = configured.deployAdvanceTrigger ?? defaultDeployAdvanceTrigger;
+  const trigger =
+    configured.deployAdvanceTrigger ?? defaultDeployAdvanceTrigger;
   const concurrency = configured.concurrency;
 
   const dispatched: string[] = [];

@@ -69,17 +69,21 @@ describe('POST /api/gate/verify-launch', () => {
       .post('/api/gate/verify-launch')
       .send({ itemIds: ['gi-1', 'gi-2', 'gi-3'] });
 
-    expect(gateReconcilerMock.dispatchGateItemVerification).toHaveBeenCalledWith(
-      ['gi-1', 'gi-2', 'gi-3'],
-    );
+    expect(
+      gateReconcilerMock.dispatchGateItemVerification,
+    ).toHaveBeenCalledWith(['gi-1', 'gi-2', 'gi-3']);
     expect(res.status).toBe(202);
     expect(res.body).toEqual(result);
   });
 
   it('400s on a missing itemIds[]', async () => {
-    const res = await request(makeApp()).post('/api/gate/verify-launch').send({});
+    const res = await request(makeApp())
+      .post('/api/gate/verify-launch')
+      .send({});
     expect(res.status).toBe(400);
-    expect(gateReconcilerMock.dispatchGateItemVerification).not.toHaveBeenCalled();
+    expect(
+      gateReconcilerMock.dispatchGateItemVerification,
+    ).not.toHaveBeenCalled();
   });
 
   it('400s on an empty itemIds[]', async () => {
