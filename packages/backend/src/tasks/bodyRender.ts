@@ -319,3 +319,70 @@ export function renderTaskBody(sections: TaskBodySections): RenderedBlock[] {
 
   return blocks;
 }
+
+function contextBlockToMarkdown(block: BlockModel): string {
+  switch (block.type) {
+    case 'paragraph':
+      return block.text;
+    case 'heading_3':
+      return `### ${block.text}`;
+    case 'bulleted_list_item':
+      return `- ${block.text}`;
+    case 'numbered_list_item':
+      return `1. ${block.text}`;
+    case 'quote':
+      return `> ${block.text}`;
+    case 'code':
+      return '```\n' + block.text + '\n```';
+  }
+}
+
+/**
+ * Renders the section model into plain markdown text — the same heading/list
+ * grammar readinessGate.ts's checkReadiness scans (`## Open Questions`
+ * headings, `-`/`1.` list items). Used to compose a proposed body from a
+ * staged task.updateBody before it has actually landed on the page, so the
+ * eager readiness gate can evaluate the proposed state rather than the stale
+ * stored body.
+ */
+export function renderTaskBodyMarkdown(sections: TaskBodySections): string {
+  const lines: string[] = [
+    '## Summary',
+    sections.summary,
+    '',
+    '## Dependencies',
+  ];
+  if (sections.dependencies.length === 0) {
+    lines.push('None — Wave N.');
+  } else {
+    lines.push(...sections.dependencies.map((d) => `- ${d}`));
+  }
+
+  lines.push('', '## Context');
+  lines.push(...sections.context.map(contextBlockToMarkdown));
+
+  lines.push('', '## Acceptance criteria', '### 🤖 Automated tests');
+  lines.push(...sections.automatedCriteria.map((c) => `- ${c}`));
+  lines.push('### 👁️ Manual verification');
+  if (sections.manualCriteria.length === 0) {
+    lines.push('Covered by the Manual Verification Gate task.');
+  } else {
+    lines.push(...sections.manualCriteria.map((c) => `- ${c}`));
+  }
+
+  if (sections.filesAffected?.length) {
+    lines.push('', '## Files / paths affected');
+    lines.push(...sections.filesAffected.map((f) => `- ${f}`));
+  }
+  if (sections.notionPagesAffected?.length) {
+    lines.push('', '## Notion pages affected');
+    lines.push(...sections.notionPagesAffected.map((p) => `- ${p}`));
+  }
+
+  lines.push(
+    '',
+    '## Implementation notes',
+    '> To be filled in during/after task completion.',
+  );
+  return lines.join('\n');
+}

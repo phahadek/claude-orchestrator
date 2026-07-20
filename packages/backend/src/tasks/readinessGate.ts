@@ -22,10 +22,27 @@
  * check), too broad for this general prose scan.
  */
 
+import { renderTaskBodyMarkdown, type TaskBodySections } from './bodyRender';
+
 export interface ReadinessViolation {
   tier: 'structural' | 'lexical';
   detail: string;
   location: string;
+}
+
+/**
+ * Composes the body the eager gate should evaluate: when a live
+ * task.updateBody exists for this task in the same intent group,
+ * checkReadiness must see that *proposed* body — updateBody replaces the
+ * whole body, so it fully supersedes the stored one — rather than the stale
+ * stored body the page still carries until the group actually commits.
+ */
+export function composeProposedBody(
+  storedBody: string,
+  proposedSections: TaskBodySections | null | undefined,
+): string {
+  if (!proposedSections) return storedBody;
+  return renderTaskBodyMarkdown(proposedSections);
 }
 
 /**
