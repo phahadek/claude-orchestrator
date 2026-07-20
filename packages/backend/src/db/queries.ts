@@ -43,6 +43,9 @@ import type {
   NewGateItemEventRow,
   GateAccretionRow,
   GateItemClassification,
+  DeployRunRow,
+  DeployRunEventRow,
+  NewDeployRunEventRow,
   SeedItemRow,
   SeedItemSourceRow,
   NewSeedItemSourceRow,
@@ -2755,6 +2758,95 @@ export function getProjectDeployedShaRow(
     )
     .get(projectId) as { sha: string; recordedAt: string } | undefined;
   return row ?? null;
+}
+
+// ─── deploy_run ───────────────────────────────────────────────────────────
+// Statements are cached lazily (prepared on first use, not at module load) so
+// importing this module doesn't fail on a not-yet-migrated db handle.
+
+let _stmtGetDeployRun: Database.Statement | null = null;
+let _stmtGetActiveDeployRunForProject: Database.Statement | null = null;
+let _stmtInsertDeployRun: Database.Statement | null = null;
+let _stmtUpdateDeployRunStep: Database.Statement | null = null;
+let _stmtUpdateDeployRunStatus: Database.Statement | null = null;
+let _stmtListDeployRunEvents: Database.Statement | null = null;
+let _stmtInsertDeployRunEvent: Database.Statement | null = null;
+
+export function getDeployRun(runId: string): DeployRunRow | undefined {
+  _stmtGetDeployRun ??= db.prepare<{ run_id: string }>(
+    `SELECT * FROM deploy_run WHERE run_id = @run_id`,
+  );
+  return _stmtGetDeployRun.get({ run_id: runId }) as DeployRunRow | undefined;
+}
+
+/** The project's in-flight run, if any — relies on the at-most-one-active-run-per-project index. */
+export function getActiveDeployRunForProject(
+  project: string,
+): DeployRunRow | undefined {
+  _stmtGetActiveDeployRunForProject ??= db.prepare<{ project: string }>(
+    `SELECT * FROM deploy_run WHERE project = @project AND status = 'running'`,
+  );
+  return _stmtGetActiveDeployRunForProject.get({ project }) as
+    | DeployRunRow
+    | undefined;
+}
+
+/**
+ * Inserts a new deploy_run row. Throws (SQLITE_CONSTRAINT_UNIQUE) if the
+ * project already has a run with status = 'running' — enforced by
+ * idx_deploy_run_active_per_project rather than a read-then-write check.
+ */
+export function insertDeployRun(row: DeployRunRow): void {
+  _stmtInsertDeployRun ??= db.prepare<DeployRunRow>(`
+    INSERT INTO deploy_run
+      (run_id, project, target_sha, current_step, status, started_at, completed_at)
+    VALUES
+      (@run_id, @project, @target_sha, @current_step, @status, @started_at, @completed_at)
+  `);
+  _stmtInsertDeployRun.run(row);
+}
+
+export function updateDeployRunStep(runId: string, step: string): void {
+  _stmtUpdateDeployRunStep ??= db.prepare<{ run_id: string; step: string }>(
+    `UPDATE deploy_run SET current_step = @step WHERE run_id = @run_id`,
+  );
+  _stmtUpdateDeployRunStep.run({ run_id: runId, step });
+}
+
+export function updateDeployRunStatus(
+  runId: string,
+  status: string,
+  completedAt: string | null,
+): void {
+  _stmtUpdateDeployRunStatus ??= db.prepare<{
+    run_id: string;
+    status: string;
+    completed_at: string | null;
+  }>(
+    `UPDATE deploy_run SET status = @status, completed_at = @completed_at WHERE run_id = @run_id`,
+  );
+  _stmtUpdateDeployRunStatus.run({
+    run_id: runId,
+    status,
+    completed_at: completedAt,
+  });
+}
+
+export function listDeployRunEvents(runId: string): DeployRunEventRow[] {
+  _stmtListDeployRunEvents ??= db.prepare<{ run_id: string }>(
+    `SELECT * FROM deploy_run_event WHERE run_id = @run_id ORDER BY id ASC`,
+  );
+  return _stmtListDeployRunEvents.all({ run_id: runId }) as DeployRunEventRow[];
+}
+
+export function insertDeployRunEvent(row: NewDeployRunEventRow): void {
+  _stmtInsertDeployRunEvent ??= db.prepare<NewDeployRunEventRow>(`
+    INSERT INTO deploy_run_event
+      (run_id, step, event_type, disposition, detail, at)
+    VALUES
+      (@run_id, @step, @event_type, @disposition, @detail, @at)
+  `);
+  _stmtInsertDeployRunEvent.run(row);
 }
 
 // ─── orchestrator_autofix_shas ────────────────────────────────────────────────
