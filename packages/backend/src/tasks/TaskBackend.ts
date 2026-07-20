@@ -49,6 +49,18 @@ export interface UpdateStatusOptions {
    * the command-layer successor to the retired groom-gate.mjs PreToolUse hook.
    */
   groomingGate?: GroomingGateEntry;
+  /**
+   * Approve-by-standard marker for a 📐 Design task promoted on a
+   * consolidated milestone triage verdict rather than a per-item human
+   * decision (planning/triage.ts). When set and no explicit
+   * `readinessOverride` is given, TaskWriteCommands.setStatus derives the
+   * readiness_override reason from the standard template
+   * (standardTriageCleanDesignOverrideReason in readinessGate.ts) instead of
+   * requiring the caller to author one. Only honored for a task whose
+   * authoritative type resolves to 📐 Design — auto-dispatched types
+   * (💻 Code) stay per-task-gated and ignore this field.
+   */
+  triageCleanDesign?: { milestoneLabel: string };
 }
 
 /** Provenance options shared by the write-side port methods (create / deps). */

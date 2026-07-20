@@ -294,6 +294,72 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       }),
     );
   });
+
+  it('applies the standard triage-clean-Design readiness_override reason when triageCleanDesign is set and no explicit override is given', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '📐 Design'),
+    );
+    const backend = makeBackend({
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Open Questions\n- Which retry policy should we use?\n',
+        ),
+    });
+    const commands = new BackendTaskWriteCommands(backend, 'proj-1');
+
+    await commands.setStatus('notion:abc', 'Ready', {
+      sessionId: 'sess-1',
+      triageCleanDesign: { milestoneLabel: 'M12' },
+      groomingGate: {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'n/a' },
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+      },
+    });
+
+    const expectedReason =
+      'Design task — open questions are the /design worklist, resolved at execution; ' +
+      'triaged clean in the M12 consolidated Design triage';
+
+    expect(backend.updateStatus).toHaveBeenCalled();
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'readiness_override',
+        payload: expect.objectContaining({ reason: expectedReason }),
+      }),
+    );
+  });
+
+  it('does not honor triageCleanDesign for a non-Design cached type — auto-dispatched types stay per-task-gated', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '🔎 Investigation'),
+    );
+    const backend = makeBackend({
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Open Questions\n- Which retry policy should we use?\n',
+        ),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    let caught: unknown;
+    try {
+      await commands.setStatus('notion:abc', 'Ready', {
+        triageCleanDesign: { milestoneLabel: 'M12' },
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'n/a' },
+        },
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(ReadinessGateError);
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
 });
 
 describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
@@ -384,6 +450,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
         type: '📐 Design',
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
     });
 
@@ -395,6 +462,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
           size_check: { decision: 'n/a' },
           type_check: { decision: 'n/a' },
           type: '📐 Design',
+          triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
         },
       }),
     );
@@ -519,6 +587,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
     });
 

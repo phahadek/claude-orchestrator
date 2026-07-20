@@ -185,6 +185,24 @@ export function checkReadiness(
   ];
 }
 
+/**
+ * Standard readiness_override reason for a 📐 Design task promoted
+ * approve-by-standard (planning/triage.ts) — triaged 'clean' in a
+ * consolidated milestone Design triage rather than decided per-item. This is
+ * the one human decision approve-by-standard removes for interactive types;
+ * every other per-task server-enforced record (checkGroomingPromotionGate)
+ * still applies unchanged. `milestoneLabel` is the milestone id the triage
+ * ran under (e.g. "M12").
+ */
+export function standardTriageCleanDesignOverrideReason(
+  milestoneLabel: string,
+): string {
+  return (
+    'Design task — open questions are the /design worklist, resolved at execution; ' +
+    `triaged clean in the ${milestoneLabel} consolidated Design triage`
+  );
+}
+
 /** Thrown by the command layer when a Ready transition is blocked. */
 export class ReadinessGateError extends Error {
   constructor(public readonly violations: ReadinessViolation[]) {
