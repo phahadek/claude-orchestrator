@@ -1,5 +1,9 @@
 import { logger } from '../logger';
-import { getSession, listStagedIntentsBySession, markSessionDone } from '../db/queries';
+import {
+  getSession,
+  listStagedIntentsBySession,
+  markSessionDone,
+} from '../db/queries';
 import type { StagedIntentRow } from '../db/types';
 import { isPlanningSession } from '../session/sessionPredicates';
 import type { SessionManager } from '../session/SessionManager';
@@ -64,7 +68,8 @@ export class PlanningOrchestrator {
     const priorCount = this.stagedCountAtResume.get(sessionId) ?? 0;
     const stagedNothingNew = all.length <= priorCount;
     const terminal = !stillPending && stagedNothingNew;
-    if (terminal) this.markTerminal(sessionId, 'planning_no_pending_dispositions');
+    if (terminal)
+      this.markTerminal(sessionId, 'planning_no_pending_dispositions');
     return terminal;
   }
 

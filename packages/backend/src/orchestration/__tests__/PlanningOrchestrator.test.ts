@@ -11,7 +11,11 @@ vi.mock('../../db/queries', () => ({
   markSessionDone: vi.fn(),
 }));
 
-import { getSession, listStagedIntentsBySession, markSessionDone } from '../../db/queries';
+import {
+  getSession,
+  listStagedIntentsBySession,
+  markSessionDone,
+} from '../../db/queries';
 import { PlanningOrchestrator } from '../PlanningOrchestrator';
 import type { StagedIntentRow } from '../../db/types';
 
@@ -22,7 +26,13 @@ function makeSessionManager() {
   });
 }
 
-function makeSessionRow(overrides: Partial<{ session_id: string; session_type: string; status: string }> = {}) {
+function makeSessionRow(
+  overrides: Partial<{
+    session_id: string;
+    session_type: string;
+    status: string;
+  }> = {},
+) {
   return {
     session_id: 'planning-session-1',
     session_type: 'design',
@@ -64,7 +74,10 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
     const orch = new PlanningOrchestrator(sm as any);
 
-    const intent = makeIntent({ session_id: 'planning-session-1', state: 'committed' });
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'committed',
+    });
     await orch.handleDisposition({ intent, disposition: 'approve' });
 
     expect(sm.enqueueFeedback).toHaveBeenCalledWith(
@@ -79,7 +92,10 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
     const orch = new PlanningOrchestrator(sm as any);
 
-    const intent = makeIntent({ session_id: 'planning-session-1', state: 'rejected' });
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'rejected',
+    });
     await orch.handleDisposition({
       intent,
       disposition: 'pushback',
@@ -98,7 +114,10 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
     const orch = new PlanningOrchestrator(sm as any);
 
-    const intent = makeIntent({ session_id: 'planning-session-1', state: 'rejected' });
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'rejected',
+    });
     await orch.handleDisposition({ intent, disposition: 'reject' });
 
     expect(sm.enqueueFeedback).toHaveBeenCalledWith(
