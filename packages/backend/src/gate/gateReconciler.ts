@@ -206,6 +206,18 @@ function failEvidence(item: GateItem, verifierEvidence: unknown): unknown {
  * returns null when guarded (duplicate dispatch) or when a crash hasn't yet
  * hit the escalation threshold (no event recorded this attempt).
  */
+/**
+ * Synchronous reserve-or-refuse against the in-flight guard — must complete
+ * with no intervening `await`, so two dispatchers racing for the same item
+ * (a tick and a manual dispatch, or two manual dispatches) can never both
+ * win it. Callers that win are responsible for releasing it.
+ */
+function tryReserveInFlight(itemId: string): boolean {
+  if (inFlightVerifications.has(itemId)) return false;
+  inFlightVerifications.add(itemId);
+  return true;
+}
+
 async function processItem(
   item: GateItem,
   verifier: GateItemVerifier,
@@ -213,14 +225,30 @@ async function processItem(
   deploySha: string | null,
   concurrency: GateVerificationConcurrencyConfig = {},
 ): Promise<ProcessedGateItem | null> {
-  if (inFlightVerifications.has(item.id)) {
+  if (!tryReserveInFlight(item.id)) {
     return null;
   }
+  return runReservedVerification(
+    item,
+    verifier,
+    followupFiler,
+    deploySha,
+    concurrency,
+  );
+}
+
+/** The verify-dispatch-and-route body, assuming the in-flight slot is already reserved (by processItem or dispatchGateItemVerification). Always releases it. */
+async function runReservedVerification(
+  item: GateItem,
+  verifier: GateItemVerifier,
+  followupFiler: FollowupFixTaskFiler,
+  deploySha: string | null,
+  concurrency: GateVerificationConcurrencyConfig = {},
+): Promise<ProcessedGateItem | null> {
   const maxDispatchAttempts =
     concurrency.maxDispatchAttempts ?? DEFAULT_MAX_DISPATCH_ATTEMPTS;
   const maxFixAttempts = concurrency.maxFixAttempts ?? DEFAULT_MAX_FIX_ATTEMPTS;
 
-  inFlightVerifications.add(item.id);
   let result: GateVerificationResult;
   try {
     result = await verifier.verify(item);
@@ -431,6 +459,69 @@ export function configureGateVerification(
 /** The manual-dispatch surface's accessor for the wired verification config. */
 export function getGateVerificationOptions(): GateReconcilerOptions | null {
   return configuredVerificationOptions;
+}
+
+export interface GateManualDispatchResult {
+  /** Item ids a verification session was just started for. */
+  dispatched: string[];
+  /** Item ids not dispatched this call, with why. */
+  skipped: { itemId: string; reason: string }[];
+}
+
+/**
+ * The manual-dispatch surface's entry point (M12): operator-triggered
+ * verify-item/verify-batch. Starts each item's verification via the wired
+ * verifier (configureGateVerification) and returns immediately — a single
+ * verify can run for the verifier's full budget (SessionGateItemVerifier
+ * defaults to 20 minutes), so this never awaits completion. The dashboard
+ * reflects the resulting disposition by re-polling the item afterward (its
+ * event log gets the same appendGateItemEvent write processItem always
+ * makes, indistinguishable from the reconciler's own tiered auto-run).
+ */
+export function dispatchGateItemVerification(
+  itemIds: string[],
+): GateManualDispatchResult {
+  const configured = configuredVerificationOptions;
+  if (!configured?.verifier) {
+    throw new Error('no gate verifier configured');
+  }
+  const verifier = configured.verifier;
+  const followupFiler = configured.followupFiler ?? defaultFollowupFiler;
+  const trigger =
+    configured.deployAdvanceTrigger ?? defaultDeployAdvanceTrigger;
+  const concurrency = configured.concurrency;
+
+  const dispatched: string[] = [];
+  const skipped: { itemId: string; reason: string }[] = [];
+
+  for (const itemId of itemIds) {
+    const item = gateStore.getItem(itemId);
+    if (!item) {
+      skipped.push({ itemId, reason: 'not found' });
+      continue;
+    }
+    if (!tryReserveInFlight(itemId)) {
+      skipped.push({ itemId, reason: 'already in flight' });
+      continue;
+    }
+    dispatched.push(itemId);
+    void (async () => {
+      const deploySha = await trigger.latestDeploySha(item.project);
+      await runReservedVerification(
+        item,
+        verifier,
+        followupFiler,
+        deploySha,
+        concurrency,
+      );
+    })().catch((err) => {
+      logger.error(
+        `[GateReconciler] manual dispatch failed for gate item ${itemId}: ${err instanceof Error ? err.message : err}`,
+      );
+    });
+  }
+
+  return { dispatched, skipped };
 }
 
 /** Registers the reconciler with the Scheduler. Runnability/readiness always run; auto-run verification stays inert (no verifier passed) until M13+. */

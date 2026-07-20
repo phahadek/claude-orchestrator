@@ -82,6 +82,11 @@ export interface ListGateItemsResult {
   page: number;
 }
 
+export interface GateVerifyDispatchResult {
+  dispatched: string[];
+  skipped: { itemId: string; reason: string }[];
+}
+
 function buildQuery(params: object): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -117,5 +122,14 @@ export const gateApi = {
     return apiRequest<GateItemDetail>(
       `/api/gate/items/${encodeURIComponent(id)}/detail`,
     );
+  },
+
+  /** The manual verify-item/verify-batch dispatch (the Verify(N) launcher). */
+  dispatchVerification(itemIds: string[]): Promise<GateVerifyDispatchResult> {
+    return apiRequest<GateVerifyDispatchResult>('/api/gate/verify-launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ itemIds }),
+    });
   },
 };

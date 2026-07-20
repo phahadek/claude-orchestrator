@@ -14,6 +14,7 @@ import {
   reclassifyGateItem,
   backfillGateTask,
 } from '../gate/gateService';
+import { dispatchGateItemVerification } from '../gate/gateReconciler';
 import type { GateItemClassification } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { BackendTaskWriteCommands } from '../tasks/TaskWriteCommands';
@@ -412,6 +413,33 @@ export function createGateStateRouter(): Router {
       }
     },
   );
+
+  // POST /api/gate/verify-launch  { itemIds }
+  // The Manual Verification Gate's operator dispatch surface (M12) —
+  // analog of the Groom(N)/Ops(N) launch routes, but for the
+  // GateItemVerifier: starts a verify for each selected item/batch and
+  // returns immediately (a verify can run for the verifier's full budget).
+  router.post('/gate/verify-launch', (req: Request, res: Response) => {
+    const body = req.body as { itemIds?: unknown };
+    const itemIds =
+      Array.isArray(body.itemIds) &&
+      body.itemIds.every((id) => typeof id === 'string')
+        ? (body.itemIds as string[])
+        : null;
+    if (!itemIds || itemIds.length === 0) {
+      res.status(400).json({ error: 'a non-empty itemIds[] is required' });
+      return;
+    }
+    try {
+      const result = dispatchGateItemVerification(itemIds);
+      res.status(202).json(result);
+    } catch (err) {
+      res.status(400).json({
+        error:
+          err instanceof Error ? err.message : 'gate verify dispatch failed',
+      });
+    }
+  });
 
   return router;
 }
