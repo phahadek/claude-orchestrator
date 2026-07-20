@@ -63,7 +63,7 @@ export function TaskMoveDialog({
   }, [projectId]);
 
   const currentMilestone = useMemo(
-    () => milestones.find((m) => m.sourceId === currentBoardId) ?? null,
+    () => milestones.find((m) => m.id === currentBoardId) ?? null,
     [milestones, currentBoardId],
   );
 
