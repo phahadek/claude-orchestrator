@@ -140,9 +140,8 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
 function extractTaskId(kind: string, payload: unknown): string | null {
   if (kind === 'task.create') return null;
   if (kind === 'gate.accrete' || kind === 'seed.stage') {
-    const sourceTaskId = (
-      payload as { sourceTask?: { id?: unknown } } | null
-    )?.sourceTask?.id;
+    const sourceTaskId = (payload as { sourceTask?: { id?: unknown } } | null)
+      ?.sourceTask?.id;
     return typeof sourceTaskId === 'string' ? sourceTaskId : null;
   }
   const taskId = (payload as { taskId?: unknown } | null)?.taskId;

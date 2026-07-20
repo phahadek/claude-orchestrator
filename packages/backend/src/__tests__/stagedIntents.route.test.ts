@@ -568,7 +568,10 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
     expect(applied.status).toBe(200);
     expect(applied.body.result.itemIds).toHaveLength(1);
     expect(applied.body.result.marker).toEqual(
-      expect.objectContaining({ sourceTaskId: 'notion:abc', decision: 'items' }),
+      expect.objectContaining({
+        sourceTaskId: 'notion:abc',
+        decision: 'items',
+      }),
     );
   });
 
@@ -599,7 +602,10 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
     expect(applied.status).toBe(200);
     expect(applied.body.result.itemIds).toHaveLength(1);
     expect(applied.body.result.marker).toEqual(
-      expect.objectContaining({ sourceTaskId: 'notion:def', decision: 'seeds' }),
+      expect.objectContaining({
+        sourceTaskId: 'notion:def',
+        decision: 'seeds',
+      }),
     );
   });
 
@@ -697,7 +703,8 @@ describe('POST /api/staged-intents — decision-proposal annotation', () => {
       kind: 'journal.setState',
       projectId: 'proj-proposal',
       payload: { taskId: 'notion:stu', state: 'candidate' },
-      decisionProposal: 'Config drift observed; promote to candidate for review.',
+      decisionProposal:
+        'Config drift observed; promote to candidate for review.',
     });
     expect(staged.status).toBe(201);
     expect(staged.body.decisionProposal).toBe(
