@@ -87,7 +87,12 @@ describe('staged_intent lifecycle transitions', () => {
   it('treats committed as immutable — no outgoing transition is legal', () => {
     insertStagedIntent(makeRow());
     transitionStagedIntent('intent-1', 'committed');
-    for (const to of ['staged', 'approved', 'rejected', 'superseded'] as const) {
+    for (const to of [
+      'staged',
+      'approved',
+      'rejected',
+      'superseded',
+    ] as const) {
       expect(() => transitionStagedIntent('intent-1', to)).toThrow(
         IllegalStagedIntentTransitionError,
       );
@@ -126,7 +131,9 @@ describe('supersede', () => {
   });
 
   it('is per-intent — superseding one intent leaves a sibling in the same group untouched', () => {
-    insertStagedIntent(makeRow({ id: 'sibling', task_id: 't-2', kind: 'task.setDependsOn' }));
+    insertStagedIntent(
+      makeRow({ id: 'sibling', task_id: 't-2', kind: 'task.setDependsOn' }),
+    );
     transitionStagedIntent('sibling', 'approved');
 
     insertStagedIntent(makeRow());
@@ -134,7 +141,10 @@ describe('supersede', () => {
 
     supersedeStagedIntent(
       'intent-1',
-      makeRow({ id: 'intent-1-v2', payload: JSON.stringify({ taskId: 't-1', status: 'Done' }) }),
+      makeRow({
+        id: 'intent-1-v2',
+        payload: JSON.stringify({ taskId: 't-1', status: 'Done' }),
+      }),
     );
 
     expect(getStagedIntent('sibling')!.state).toBe('approved');

@@ -8,9 +8,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('../../db/db.js', async () => {
-  const { setupTestDb } = await import(
-    '../../../test/helpers/setupTestDb.js'
-  );
+  const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
 });
 
@@ -68,16 +66,8 @@ describe('stageIntent — content-idempotent dedup', () => {
   });
 
   it('task.create never dedups — every stage is a fresh intent', () => {
-    const first = stageIntent(
-      'task.create',
-      { title: 'New task' },
-      'proj-1',
-    );
-    const second = stageIntent(
-      'task.create',
-      { title: 'New task' },
-      'proj-1',
-    );
+    const first = stageIntent('task.create', { title: 'New task' }, 'proj-1');
+    const second = stageIntent('task.create', { title: 'New task' }, 'proj-1');
 
     expect(second.id).not.toBe(first.id);
   });

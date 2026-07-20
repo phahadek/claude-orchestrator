@@ -4264,7 +4264,10 @@ export function hashIntentPayload(payload: unknown): string {
 // staged -> committed is legal directly (not only via approved): apply today
 // is a single human-gated action with no separate approve step yet (that's
 // the M12 decision-surface task) — apply implicitly approves-then-commits.
-const STAGED_INTENT_TRANSITIONS: Record<StagedIntentState, StagedIntentState[]> = {
+const STAGED_INTENT_TRANSITIONS: Record<
+  StagedIntentState,
+  StagedIntentState[]
+> = {
   staged: ['approved', 'committed', 'rejected', 'superseded'],
   approved: ['staged', 'committed', 'rejected', 'superseded'],
   committed: [],
@@ -4274,9 +4277,7 @@ const STAGED_INTENT_TRANSITIONS: Record<StagedIntentState, StagedIntentState[]> 
 
 export class IllegalStagedIntentTransitionError extends Error {
   constructor(id: string, from: StagedIntentState, to: StagedIntentState) {
-    super(
-      `[staged_intent] illegal transition for "${id}": ${from} -> ${to}`,
-    );
+    super(`[staged_intent] illegal transition for "${id}": ${from} -> ${to}`);
     this.name = 'IllegalStagedIntentTransitionError';
   }
 }
@@ -4450,7 +4451,11 @@ export function setStagedIntentAnnotation(
   }>(
     `UPDATE staged_intent SET annotation = @annotation, updated_at = @updated_at WHERE id = @id`,
   );
-  _stmtSetStagedIntentAnnotation.run({ id, annotation, updated_at: Date.now() });
+  _stmtSetStagedIntentAnnotation.run({
+    id,
+    annotation,
+    updated_at: Date.now(),
+  });
 }
 
 let _stmtGetStagedIntentGroup: Database.Statement | null = null;
