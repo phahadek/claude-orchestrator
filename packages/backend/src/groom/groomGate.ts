@@ -24,6 +24,13 @@
  * misreport a disposition's shape, but it can't misreport which constraints
  * apply (CONSTRAINT_CATALOG × regions is computed here) or launder a hedge
  * token out of a Files/paths entry (the hedge scan re-runs here too).
+ *
+ * For interactive (📐 Design / 📋 Planning) types, one further gate applies:
+ * approve-by-standard promotion (planning/triage.ts) — a recorded triage
+ * verdict that floors to 'clean', re-derived server-side from the same
+ * `dependsOnTasks` / `constraintsDispositioned` facts above rather than
+ * trusted as a caller-asserted final verdict. Auto-dispatched types
+ * (💻 Code) are unaffected and keep the unchanged per-task human gate.
  */
 
 import { getAccretionMarker as getGateAccretionMarker } from '../gate/gateStore';
@@ -32,6 +39,12 @@ import {
   bindingConstraintIdsForRegions,
   type RegionsLike,
 } from './constraintCatalog';
+import {
+  applyTriageFloor,
+  isInteractiveTaskType,
+  INTERACTIVE_TASK_TYPES,
+  type TriageVerdict,
+} from '../planning/triage';
 
 const SIZE_CHECK_DECISIONS = new Set([
   'no_split',
@@ -52,9 +65,11 @@ const DONE_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
 /**
  * Types whose non-Done presence in Depends On blocks promotion (FM3 signal
  * a): their outcome may still reshape the task and invalidate the grooming
- * already recorded against it.
+ * already recorded against it. Same set as approve-by-standard's
+ * INTERACTIVE_TASK_TYPES (planning/triage.ts) — both signals key off
+ * "not auto-dispatched".
  */
-const DESIGN_GATE_TYPES = new Set(['📐 Design', '📋 Planning']);
+const DESIGN_GATE_TYPES = INTERACTIVE_TASK_TYPES;
 
 /** and/or is a Files/paths-section hedge token only — see readinessGate.ts's Tier-2 class for the general-prose scan, which deliberately excludes it. */
 const FILES_PATHS_HEDGE_TOKENS = ['and/or', 'confirm', 'tbd', 'exact file'];
@@ -111,6 +126,20 @@ export interface GroomingGateEntry {
   filesPathsEntries?: FilesPathsEntry[];
   /** This task's declared Depends On, resolved to type/status — drives FM3's Design/Planning liveness + cite-or-route signals. */
   dependsOnTasks?: DependsOnTaskRef[];
+  /**
+   * Approve-by-standard triage input for an interactive (📐 Design /
+   * 📋 Planning) task — see planning/triage.ts. Required for those types
+   * before promotion; ignored for auto-dispatched types (💻 Code stays
+   * per-task-gated). `proposedVerdict` is the groomer's judgment-primary
+   * call; `hasOpenQuestionsHeading` is a structural fact groomLoad.ts
+   * computes from the task body. The deterministic floor is re-applied here
+   * from server-derived facts (hard-block Depends On, routed constraint
+   * conflicts) rather than trusting a caller-asserted final verdict.
+   */
+  triage?: {
+    proposedVerdict: TriageVerdict;
+    hasOpenQuestionsHeading: boolean;
+  };
 }
 
 export interface GroomingGateResult {
@@ -299,6 +328,58 @@ function isConstraintsDispositioned(entry: GroomingGateEntry): {
 }
 
 /**
+ * Approve-by-standard promotion path for interactive (📐 Design /
+ * 📋 Planning) types — the per-task server-enforced records above stay
+ * required and type-agnostic; this is the one additional gate that stands in
+ * for the per-item human decision those types no longer carry. An
+ * interactive-type task promotes only once its triage input floors to
+ * 'clean'. 💻 Code (and any other non-interactive type) fails open — this
+ * check does not apply to it, so auto-dispatched promotion is unaffected.
+ */
+function isInteractiveTriageClean(
+  type: string | undefined,
+  entry: GroomingGateEntry,
+): { ok: boolean; reasons: string[] } {
+  if (!isInteractiveTaskType(type)) return { ok: true, reasons: [] };
+  if (!entry.triage) {
+    return {
+      ok: false,
+      reasons: [
+        `interactive task type "${type}" requires a recorded triage verdict before promotion — see planning/triage.ts.`,
+      ],
+    };
+  }
+  const dependsOnTasks = entry.dependsOnTasks ?? [];
+  const hardBlockDepNotDone = dependsOnTasks.some(
+    (dep) =>
+      dep.type &&
+      DESIGN_GATE_TYPES.has(dep.type) &&
+      !(dep.status && DONE_STATUSES.has(dep.status)),
+  );
+  const hasRoutedConstraintConflict = Object.values(
+    entry.constraintsDispositioned ?? {},
+  ).some((d) => d.disposition === 'conflict_route');
+
+  const floored = applyTriageFloor({
+    proposedVerdict: entry.triage.proposedVerdict,
+    hardBlockDepNotDone,
+    hasOpenQuestionsHeading: entry.triage.hasOpenQuestionsHeading,
+    hasRoutedConstraintConflict,
+  });
+
+  if (floored.verdict !== 'clean') {
+    return {
+      ok: false,
+      reasons: [
+        `triage verdict is "${floored.verdict}" (${floored.reasons.join('; ') || 'not proposed as clean'}) — ` +
+          `an interactive (${type}) task promotes without a per-item sign-off only once triaged clean.`,
+      ],
+    };
+  }
+  return { ok: true, reasons: [] };
+}
+
+/**
  * Checks the size_check / type_check / gate_contribution / seed_contribution
  * artifacts of a grooming-state entry ahead of a Ready promotion.
  *
@@ -354,6 +435,7 @@ export function checkGroomingPromotionGate(
   );
   reasons.push(...isDependsOnDesignClear(entry.dependsOnTasks).reasons);
   reasons.push(...isConstraintsDispositioned(entry).reasons);
+  reasons.push(...isInteractiveTriageClean(resolvedType, entry).reasons);
 
   return { allowed: reasons.length === 0, reasons };
 }

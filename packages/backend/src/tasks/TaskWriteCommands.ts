@@ -10,7 +10,11 @@ import {
   deleteTaskCacheRow,
   getMergeCommitForTask,
 } from '../db/queries';
-import { checkReadiness, ReadinessGateError } from './readinessGate';
+import {
+  checkReadiness,
+  ReadinessGateError,
+  standardTriageCleanDesignOverrideReason,
+} from './readinessGate';
 import {
   checkGroomingPromotionGate,
   GroomingGateError,
@@ -69,6 +73,29 @@ function getCachedType(taskId: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolves the readinessOverride to honor for a Ready-transition readiness-
+ * gate violation: an explicit caller-supplied override, or — for a 📐 Design
+ * task promoted approve-by-standard (`options.triageCleanDesign`) — the
+ * standard template reason. `triageCleanDesign` is only honored when the
+ * task's authoritative (cached) type resolves to 📐 Design, so it is inert
+ * for auto-dispatched types (💻 Code stays per-task-gated, unaffected).
+ */
+function resolveReadinessOverride(
+  taskId: string,
+  options?: TaskWriteOptions,
+): { reason: string } | undefined {
+  if (options?.readinessOverride) return options.readinessOverride;
+  if (options?.triageCleanDesign && getCachedType(taskId) === '📐 Design') {
+    return {
+      reason: standardTriageCleanDesignOverrideReason(
+        options.triageCleanDesign.milestoneLabel,
+      ),
+    };
+  }
+  return undefined;
 }
 
 /**
@@ -342,17 +369,18 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       const body = (await this.backend.fetchTaskPage(taskId)) ?? '';
       const violations = checkReadiness(body);
       if (violations.length > 0) {
-        if (!options?.readinessOverride) {
+        const readinessOverride = resolveReadinessOverride(taskId, options);
+        if (!readinessOverride) {
           throw new ReadinessGateError(violations);
         }
         recordEvent({
           event_type: 'readiness_override',
           actor_type: 'human',
-          actor_id: options.sessionId ?? null,
+          actor_id: options?.sessionId ?? null,
           project_id: this.projectId ?? null,
           task_id: taskId,
           payload: {
-            reason: options.readinessOverride.reason,
+            reason: readinessOverride.reason,
             tiers: violations.map((v) => v.tier),
             violations,
           },
@@ -720,17 +748,18 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       const body = (await this.backend.fetchTaskPage(taskId)) ?? '';
       const violations = checkReadiness(body);
       if (violations.length > 0) {
-        if (!options?.readinessOverride) {
+        const readinessOverride = resolveReadinessOverride(taskId, options);
+        if (!readinessOverride) {
           throw new ReadinessGateError(violations);
         }
         recordEvent({
           event_type: 'readiness_override',
           actor_type: 'human',
-          actor_id: options.sessionId ?? null,
+          actor_id: options?.sessionId ?? null,
           project_id: this.projectId ?? null,
           task_id: taskId,
           payload: {
-            reason: options.readinessOverride.reason,
+            reason: readinessOverride.reason,
             tiers: violations.map((v) => v.tier),
             violations,
           },

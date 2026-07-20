@@ -177,6 +177,7 @@ describe('checkGroomingPromotionGate', () => {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
         type: '📐 Design',
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
       'notion:design-task',
     );
@@ -305,6 +306,7 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
         type: '📐 Design',
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
       'notion:design-task-2',
     );
@@ -387,6 +389,7 @@ describe('checkGroomingPromotionGate — FM1 bindingConstraints', () => {
         constraintsDispositioned: {
           'gate-accretion-durable': { disposition: 'complies' },
         },
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
       'notion:fm1-dispositioned',
     );
@@ -425,7 +428,7 @@ describe('checkGroomingPromotionGate — FM1 bindingConstraints', () => {
     expect(result.reasons.some((r) => r.includes('conflict→route'))).toBe(true);
   });
 
-  it('allows a conflict→route disposition once routed to a recorded 📐 Design Depends On task', () => {
+  it('routes a conflict→route disposition through FM1, but approve-by-standard\'s triage floor still forces this interactive task out of clean', () => {
     const result = checkGroomingPromotionGate(
       {
         ...BASE,
@@ -439,10 +442,21 @@ describe('checkGroomingPromotionGate — FM1 bindingConstraints', () => {
         dependsOnTasks: [
           { id: 'design-task-1', type: '📐 Design', status: '✅ Done' },
         ],
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
       'notion:fm1-routed',
     );
-    expect(result.allowed).toBe(true);
+    // FM1's per-constraint disposition check accepts the routing on its own...
+    expect(result.reasons.some((r) => r.includes('conflict→route'))).toBe(
+      false,
+    );
+    // ...but a routed constraint-conflict still force-downgrades this
+    // interactive task's triage verdict out of 'clean' (planning/triage.ts),
+    // so it does not promote on the routing alone.
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('triage verdict'))).toBe(
+      true,
+    );
   });
 });
 
@@ -544,6 +558,7 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
         size_check: { decision: 'n/a' },
         type_check: { decision: 'n/a' },
         type: '📐 Design',
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
       },
       'notion:fm2-non-code',
     );
@@ -556,6 +571,7 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
     size_check: { decision: 'n/a' },
     type_check: { decision: 'n/a' },
     type: '📐 Design',
+    triage: { proposedVerdict: 'clean' as const, hasOpenQuestionsHeading: true },
   };
 
   it('blocks promotion when Depends On carries a non-Done 📐 Design task', () => {
