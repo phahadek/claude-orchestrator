@@ -31,6 +31,9 @@ export interface OpsLaunchResult {
   deferred: string[];
 }
 
+/** Workflow the Groom(N) / Ops(N) launcher buttons dispatch — resolved to a sessionType server-side. */
+export type PlanningWorkflow = 'groom' | 'design' | 'ops' | 'investigation';
+
 export const opsJournalApi = {
   listForMilestone(milestone: string): Promise<OpsJournalEntry[]> {
     return apiRequest<{ entries: OpsJournalEntry[] }>(
@@ -38,12 +41,25 @@ export const opsJournalApi = {
     ).then((res) => res.entries);
   },
 
-  /** Ops(N) button: launches one individual, dependency-ordered session per selected task. */
-  launch(milestoneId: string, taskIds: string[]): Promise<OpsLaunchResult> {
-    return apiRequest<OpsLaunchResult>('/api/ops/launch', {
+  /**
+   * Groom(N) / Ops(N) buttons: launches one individual, dependency-ordered
+   * planning session per selected task via the unified planning-launch route.
+   */
+  launch(
+    workflow: PlanningWorkflow,
+    projectId: string,
+    milestoneId: string,
+    taskIds: string[],
+  ): Promise<OpsLaunchResult> {
+    return apiRequest<OpsLaunchResult>('/api/planning/launch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ milestoneId, taskIds }),
+      body: JSON.stringify({
+        workflow,
+        projectId,
+        milestone: milestoneId,
+        taskIds,
+      }),
     });
   },
 };

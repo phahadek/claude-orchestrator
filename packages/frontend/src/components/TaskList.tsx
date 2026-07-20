@@ -276,10 +276,11 @@ export function TaskList({
   const [groomCheckedIds, setGroomCheckedIds] = useState<Set<string>>(
     new Set(),
   );
-  // No-op launch placeholder — real groom-session staging lands with the launch mechanism.
   const [groomStubIntent, setGroomStubIntent] = useState<StagedIntent | null>(
     null,
   );
+  const [groomLoading, setGroomLoading] = useState(false);
+  const [groomError, setGroomError] = useState<string | null>(null);
   // Ops(N): launches one individual, dependency-ordered session per selected
   // task (mirrors the manual-UI launch path), then renders the ops_journal
   // rows for the launched set. Apply/reject of the resulting staged intents
@@ -296,6 +297,7 @@ export function TaskList({
   // changes so a stale intent from the previous board never carries over.
   useEffect(() => {
     setGroomStubIntent(null);
+    setGroomError(null);
     setOpsIntent(null);
     setOpsError(null);
     setOpsCheckedIds(new Set());
@@ -509,24 +511,51 @@ export function TaskList({
     setGroomCheckedIds(new Set(groomableTasks.map((t) => t.taskId)));
   }
 
-  // No-op launch: stub a StagedIntent client-side so the right panel can preview the
-  // future groom-session surface. No groom-load call, no command-layer write.
-  function handleGroomLaunch() {
+  // Launches one individual grooming session per selected Backlog task via the
+  // unified planning-launch route, mirroring handleOpsLaunch.
+  async function handleGroomLaunch() {
     const selectedIds = groomableTasks
       .filter((t) => groomCheckedIds.has(t.taskId))
       .map((t) => t.taskId);
-    if (selectedIds.length === 0) return;
-    setGroomStubIntent({
-      id: 'groom-stub',
-      kind: 'groom',
-      payload: {
-        placeholder: true,
-        taskIds: selectedIds,
-        message: 'Grooming session staging is not yet wired up.',
-      },
-      projectId: activeProjectId ?? '',
-      createdAt: 0,
-    });
+    if (!activeProjectId || !boardId || selectedIds.length === 0) return;
+    setGroomLoading(true);
+    setGroomError(null);
+    try {
+      const result = await opsJournalApi.launch(
+        'groom',
+        activeProjectId,
+        boardId,
+        selectedIds,
+      );
+      setGroomStubIntent(
+        result.launched.length > 0
+          ? {
+              id: 'groom-launch',
+              kind: 'groom',
+              payload: { taskIds: result.launched },
+              projectId: activeProjectId,
+              createdAt: 0,
+            }
+          : null,
+      );
+      const notLaunched = selectedIds.filter(
+        (id) => !result.launched.includes(id),
+      );
+      setGroomError(
+        notLaunched.length > 0
+          ? `${notLaunched.length} selected task${notLaunched.length === 1 ? '' : 's'} did not launch: ${notLaunched.join(', ')}`
+          : null,
+      );
+      setGroomCheckedIds(new Set());
+    } catch (err) {
+      setGroomError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to launch grooming sessions',
+      );
+    } finally {
+      setGroomLoading(false);
+    }
   }
 
   // Ops(N) checkbox eligibility: every not-Done 🔧/🔎/observational-🧪 task on the board.
@@ -566,11 +595,16 @@ export function TaskList({
     const selectedIds = opsEligibleTasks
       .filter((t) => opsCheckedIds.has(t.taskId))
       .map((t) => t.taskId);
-    if (!boardId || selectedIds.length === 0) return;
+    if (!activeProjectId || !boardId || selectedIds.length === 0) return;
     setOpsLoading(true);
     setOpsError(null);
     try {
-      const result = await opsJournalApi.launch(boardId, selectedIds);
+      const result = await opsJournalApi.launch(
+        'ops',
+        activeProjectId,
+        boardId,
+        selectedIds,
+      );
       const launchedIds = new Set(result.launched);
       const entries = await opsJournalApi.listForMilestone(boardId);
       const rows = entries.filter((e) => launchedIds.has(e.taskId));
@@ -685,8 +719,14 @@ export function TaskList({
           groomableCount={groomableTasks.length}
           groomSelectedCount={groomSelectedCount}
           onGroomSelectAll={handleGroomSelectAll}
-          onGroomLaunch={handleGroomLaunch}
+          onGroomLaunch={() => void handleGroomLaunch()}
+          groomLoading={groomLoading}
         />
+        {groomError && (
+          <div className={styles.error} data-testid="groom-error">
+            {groomError}
+          </div>
+        )}
 
         {/* 📋 Non-code, by type */}
         {nonCodeNotDone.length > 0 && (
