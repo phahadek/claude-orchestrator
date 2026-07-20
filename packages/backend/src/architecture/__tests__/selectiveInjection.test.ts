@@ -118,7 +118,7 @@ describe('selectUnitsFromStore against the real arch_unit store', () => {
   });
 
   it('excludes superseded and deferred units via the default active-only query', () => {
-    const invariant = createUnit({
+    createUnit({
       title: 'Always-on invariant',
       kind: 'invariant',
       topic: 'general',
