@@ -110,24 +110,46 @@ export function isShellCommandLine(line: string): boolean {
   return false;
 }
 
+/** Notion caps each rich_text text.content at 2000 chars. */
+const NOTION_RICH_TEXT_LIMIT = 2000;
+
+/** Splits text into <=2000-char chunks, emitting one rich_text item per chunk. */
+function chunkedRichText(
+  text: string,
+  annotations?: NotionRichTextAnnotations,
+): NotionRichTextItem[] {
+  if (text.length === 0) {
+    const item: NotionRichTextItem = { type: 'text', text: { content: '' } };
+    if (annotations) item.annotations = annotations;
+    return [item];
+  }
+  const items: NotionRichTextItem[] = [];
+  for (let i = 0; i < text.length; i += NOTION_RICH_TEXT_LIMIT) {
+    const item: NotionRichTextItem = {
+      type: 'text',
+      text: { content: text.slice(i, i + NOTION_RICH_TEXT_LIMIT) },
+    };
+    if (annotations) item.annotations = annotations;
+    items.push(item);
+  }
+  return items;
+}
+
 /**
  * Renders text as rich_text, backticking it (inline code annotation) when it
  * looks like an executable command line — WAF-safe, and still legible as a
- * reference to the command rather than a literal command block.
+ * reference to the command rather than a literal command block. Chunks
+ * content exceeding Notion's 2000-char-per-item cap into multiple items.
  */
 function richText(text: string): NotionRichTextItem[] {
   if (isShellCommandLine(text)) {
-    return [
-      { type: 'text', text: { content: text }, annotations: { code: true } },
-    ];
+    return chunkedRichText(text, { code: true });
   }
-  return [{ type: 'text', text: { content: text } }];
+  return chunkedRichText(text);
 }
 
 function italicRichText(text: string): NotionRichTextItem[] {
-  return [
-    { type: 'text', text: { content: text }, annotations: { italic: true } },
-  ];
+  return chunkedRichText(text, { italic: true });
 }
 
 // ─── Block builders ─────────────────────────────────────────────────────────
@@ -195,7 +217,7 @@ function codeBlock(text: string, language = 'plain text'): RenderedBlock {
   return {
     object: 'block',
     type: 'code',
-    code: { rich_text: [{ type: 'text', text: { content: text } }], language },
+    code: { rich_text: chunkedRichText(text), language },
   };
 }
 
@@ -210,12 +232,8 @@ function renderCode(text: string, language?: string): RenderedBlock {
   const lines = text.split('\n');
   if (lines.some(isShellCommandLine)) {
     const richTextItems: NotionRichTextItem[] = lines.flatMap((line, i) => {
-      const item: NotionRichTextItem = {
-        type: 'text',
-        text: { content: i === lines.length - 1 ? line : `${line}\n` },
-        annotations: { code: true },
-      };
-      return [item];
+      const content = i === lines.length - 1 ? line : `${line}\n`;
+      return chunkedRichText(content, { code: true });
     });
     return paragraph(text, richTextItems);
   }
