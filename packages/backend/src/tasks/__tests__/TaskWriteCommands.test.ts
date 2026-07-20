@@ -104,12 +104,22 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
     const backend = makeBackend();
     const commands = new BackendTaskWriteCommands(backend);
 
-    await commands.setStatus('notion:abc', 'Ready');
+    await commands.setStatus('notion:abc', 'Ready', {
+      groomingGate: {
+        size_check: { decision: 'no_split' },
+        type_check: { decision: 'none' },
+      },
+    });
 
     expect(backend.updateStatus).toHaveBeenCalledWith(
       'notion:abc',
       '🗂️ Ready',
-      undefined,
+      expect.objectContaining({
+        groomingGate: {
+          size_check: { decision: 'no_split' },
+          type_check: { decision: 'none' },
+        },
+      }),
     );
   });
 
@@ -150,6 +160,10 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
     await commands.setStatus('notion:abc', 'Ready', {
       source: 'human',
       sessionId: 'sess-1',
+      groomingGate: {
+        size_check: { decision: 'no_split' },
+        type_check: { decision: 'none' },
+      },
     });
 
     expect(backend.updateStatus).toHaveBeenCalledWith(
@@ -158,6 +172,10 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
       {
         source: 'human',
         sessionId: 'sess-1',
+        groomingGate: {
+          size_check: { decision: 'no_split' },
+          type_check: { decision: 'none' },
+        },
       },
     );
   });
@@ -179,7 +197,12 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
 
     let caught: unknown;
     try {
-      await commands.setStatus('notion:abc', 'Ready');
+      await commands.setStatus('notion:abc', 'Ready', {
+        groomingGate: {
+          size_check: { decision: 'no_split' },
+          type_check: { decision: 'none' },
+        },
+      });
     } catch (err) {
       caught = err;
     }
@@ -200,12 +223,22 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
     });
     const commands = new BackendTaskWriteCommands(backend);
 
-    await commands.setStatus('notion:abc', 'Ready');
+    await commands.setStatus('notion:abc', 'Ready', {
+      groomingGate: {
+        size_check: { decision: 'no_split' },
+        type_check: { decision: 'none' },
+      },
+    });
 
     expect(backend.updateStatus).toHaveBeenCalledWith(
       'notion:abc',
       '🗂️ Ready',
-      undefined,
+      expect.objectContaining({
+        groomingGate: {
+          size_check: { decision: 'no_split' },
+          type_check: { decision: 'none' },
+        },
+      }),
     );
   });
 
@@ -226,6 +259,10 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       source: 'human',
       sessionId: 'sess-1',
       readinessOverride: { reason: 'human reviewed and approved' },
+      groomingGate: {
+        size_check: { decision: 'no_split' },
+        type_check: { decision: 'none' },
+      },
     });
 
     expect(backend.updateStatus).toHaveBeenCalledWith(
@@ -305,7 +342,7 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
     );
   });
 
-  it('does not run the grooming gate when no groomingGate entry is supplied', async () => {
+  it('blocks a Ready transition when no groomingGate entry is supplied at all', async () => {
     mockGetTaskCache.mockReturnValue(
       cacheRowWithStatus(STATUS_DISPLAY.Backlog),
     );
@@ -314,12 +351,44 @@ describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
     });
     const commands = new BackendTaskWriteCommands(backend);
 
-    await commands.setStatus('notion:abc', 'Ready');
+    let caught: unknown;
+    try {
+      await commands.setStatus('notion:abc', 'Ready');
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(GroomingGateError);
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('allows a Ready transition for a non-Code task carrying n/a size/type dispositions (fail-open)', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:abc', 'Ready', {
+      groomingGate: {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'n/a' },
+        type: '📐 Design',
+      },
+    });
 
     expect(backend.updateStatus).toHaveBeenCalledWith(
       'notion:abc',
       '🗂️ Ready',
-      undefined,
+      expect.objectContaining({
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'n/a' },
+          type: '📐 Design',
+        },
+      }),
     );
   });
 });
@@ -816,7 +885,12 @@ describe('TaskWriteCommands + NotionTaskBackend — raw Notion UUID taskId (regr
     const commands = new BackendTaskWriteCommands(backend);
 
     await expect(
-      commands.setStatus(rawTaskId, 'Ready'),
+      commands.setStatus(rawTaskId, 'Ready', {
+        groomingGate: {
+          size_check: { decision: 'no_split' },
+          type_check: { decision: 'none' },
+        },
+      }),
     ).resolves.toBeUndefined();
 
     expect(client.fetchTaskPage).toHaveBeenCalledWith(`notion:${rawTaskId}`);

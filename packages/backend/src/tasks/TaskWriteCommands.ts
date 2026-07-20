@@ -310,9 +310,9 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
         `[TaskWriteCommands] invalid status transition for ${taskId}: ${current} -> ${status}`,
       );
     }
-    if (status === 'Ready' && options?.groomingGate) {
+    if (status === 'Ready') {
       const gateResult = checkGroomingPromotionGate(
-        options.groomingGate,
+        options?.groomingGate ?? {},
         taskId,
       );
       if (!gateResult.allowed) {
