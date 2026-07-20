@@ -32,6 +32,7 @@ import { UpdateBanner } from './components/UpdateBanner';
 import { RateLimitBanner } from './components/RateLimitBanner';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { GateReadinessPanel } from './components/GateReadinessPanel';
+import { ArchitecturePanel } from './components/ArchitecturePanel';
 import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
 import { SessionFilterBar } from './components/SessionFilterBar';
@@ -1564,6 +1565,14 @@ export default function App() {
           <ErrorBoundary name="GateReadinessView">
             <div className={styles.analyticsView}>
               <GateReadinessPanel activeProjectId={activeProjectId} />
+            </div>
+          </ErrorBoundary>
+        )}
+
+        {topView === 'architecture' && (
+          <ErrorBoundary name="ArchitectureView">
+            <div className={styles.analyticsView}>
+              <ArchitecturePanel />
             </div>
           </ErrorBoundary>
         )}
