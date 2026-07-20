@@ -15,7 +15,6 @@ import {
   appendDeployRunEvent,
   reportProjectDeploy,
   getProjectDeployedSha,
-  DeployRunConflictError,
 } from './deployService';
 import type { DeployRunRow } from '../db/types';
 
@@ -34,14 +33,14 @@ export type ShellRunner = (
 
 /** Spawns the validation/investigation session for an `agentic` step. Fire-and-forget — the
  * engine gates the next step on `reportAgenticVerdict` being called back for this run/step. */
-export type AgenticStepSpawner = (input: {
+type AgenticStepSpawner = (input: {
   runId: string;
   project: string;
   step: StepDescriptor;
 }) => void;
 
 /** Pauses for operator disposition on a `confirm-gate` step; resolves to whether it was approved. */
-export type ConfirmGateWaiter = (input: {
+type ConfirmGateWaiter = (input: {
   runId: string;
   project: string;
   step: StepDescriptor;
@@ -55,20 +54,20 @@ export type DiffProvider = (input: {
   toSha: string;
 }) => Promise<string[]>;
 
-export interface NeedsAttentionInfo {
+interface NeedsAttentionInfo {
   runId: string;
   project: string;
   stepId: string;
   reason: string;
 }
 
-export interface CompanionFlagInfo {
+interface CompanionFlagInfo {
   runId: string;
   project: string;
   companions: CompanionDecl[];
 }
 
-export interface DeployOrchestratorSink {
+interface DeployOrchestratorSink {
   /** A step failed and rollback (if any) has run — the operator must intervene. */
   onNeedsAttention?(info: NeedsAttentionInfo): void;
   /** Advisory: a companion's trigger_paths matched the deployed→target diff. */
@@ -472,5 +471,3 @@ export class DeployOrchestrator {
     return { ok: false, detail: lastOutput };
   }
 }
-
-export { DeployRunConflictError };
