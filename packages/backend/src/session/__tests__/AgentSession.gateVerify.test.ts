@@ -169,9 +169,7 @@ describe('parseGateVerifyDisposition()', () => {
   });
 
   it('returns null for malformed JSON', () => {
-    expect(
-      parseGateVerifyDisposition('{"gate_verify": [broken'),
-    ).toBeNull();
+    expect(parseGateVerifyDisposition('{"gate_verify": [broken')).toBeNull();
   });
 
   it('returns null when disposition is not pass/fail/needs-setup', () => {
@@ -226,7 +224,11 @@ describe('AgentSession — gate_verify_disposition emission', () => {
     expect(emitted).toHaveLength(1);
     const payload = emitted[0] as {
       sessionId: string;
-      disposition: { gateItemId: string; disposition: string; evidence?: unknown };
+      disposition: {
+        gateItemId: string;
+        disposition: string;
+        evidence?: unknown;
+      };
     };
     expect(payload.sessionId).toBe('test-session-id');
     expect(payload.disposition).toEqual({

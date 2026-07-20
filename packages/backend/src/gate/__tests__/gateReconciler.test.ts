@@ -214,7 +214,11 @@ describe('runGateReconcilerTick', () => {
       verifier,
     });
     expect(first.processed).toEqual([
-      { itemId: item.id, classification: 'Read-Only', disposition: 'needs-setup' },
+      {
+        itemId: item.id,
+        classification: 'Read-Only',
+        disposition: 'needs-setup',
+      },
     ]);
     expect(getItem(item.id)?.state).toBe('runnable');
 

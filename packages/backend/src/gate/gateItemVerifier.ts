@@ -2,11 +2,12 @@ import { logger } from '../logger';
 import { getProjectById } from '../config';
 import { getSession } from '../db/queries';
 import type { SessionManager } from '../session/SessionManager';
-import type {
-  GateVerifyDispositionPayload,
-} from '../session/AgentSession';
+import type { GateVerifyDispositionPayload } from '../session/AgentSession';
 import type { GateItem } from './gateStore';
-import type { GateItemVerifier, GateVerificationResult } from './gateReconciler';
+import type {
+  GateItemVerifier,
+  GateVerificationResult,
+} from './gateReconciler';
 
 const TERMINAL_SESSION_STATUSES = new Set(['done', 'error', 'killed']);
 
@@ -162,7 +163,10 @@ export class SessionGateItemVerifier implements GateItemVerifier {
           );
           finish({
             disposition: 'needs-setup',
-            evidence: { reason: 'no gate_verify report on conclusion', sessionId },
+            evidence: {
+              reason: 'no gate_verify report on conclusion',
+              sessionId,
+            },
           });
         }
       }, this.pollIntervalMs);

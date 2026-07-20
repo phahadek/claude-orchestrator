@@ -260,7 +260,8 @@ async function processItem(
       });
     } else if (result.disposition === 'fail') {
       const priorFollowon = latestFailFollowon(item);
-      const dedup = priorFollowon !== undefined && !isFollowupTaskDone(priorFollowon);
+      const dedup =
+        priorFollowon !== undefined && !isFollowupTaskDone(priorFollowon);
       const fixAttempts = countFixAttempts(item);
 
       if (dedup) {
@@ -421,7 +422,9 @@ let configuredVerificationOptions: GateReconcilerOptions | null = null;
  * caller that reads this back (via getGateVerificationOptions) to invoke
  * verification on operator-selected items.
  */
-export function configureGateVerification(options: GateReconcilerOptions): void {
+export function configureGateVerification(
+  options: GateReconcilerOptions,
+): void {
   configuredVerificationOptions = options;
 }
 
