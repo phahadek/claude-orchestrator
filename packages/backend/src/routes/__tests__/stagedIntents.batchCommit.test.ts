@@ -102,7 +102,9 @@ describe('POST /api/staged-intents/batch/commit', () => {
     const updateStatus = vi.fn();
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Open Questions\n- Still open?\n'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Open Questions\n- Still open?\n'),
       updateStatus,
       setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
@@ -140,7 +142,9 @@ describe('POST /api/staged-intents/batch/commit', () => {
     const updateStatus = vi.fn();
     mockGetTaskBackend.mockImplementation((projectId: string) => ({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Open Questions\n- Still open?\n'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Open Questions\n- Still open?\n'),
       updateStatus,
       setDependsOn:
         projectId === 'proj-fail'
@@ -171,7 +175,9 @@ describe('POST /api/staged-intents/batch/commit', () => {
     const updateStatus = vi.fn();
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      fetchTaskPage: vi.fn().mockResolvedValue('## Open Questions\n- Still open?\n'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Open Questions\n- Still open?\n'),
       updateStatus,
       setDependsOn: vi.fn().mockResolvedValue(undefined),
     });

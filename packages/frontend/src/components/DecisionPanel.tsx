@@ -105,7 +105,9 @@ export function DecisionPanel({ sessionId }: Props) {
 
   const handleTriageBatchCommitted = (committedGroupIds: string[]) => {
     const committed = new Set(committedGroupIds);
-    setIntents((prev) => prev.filter((i) => !i.groupId || !committed.has(i.groupId)));
+    setIntents((prev) =>
+      prev.filter((i) => !i.groupId || !committed.has(i.groupId)),
+    );
   };
 
   const handleCommitGroup = async (groupId: string) => {

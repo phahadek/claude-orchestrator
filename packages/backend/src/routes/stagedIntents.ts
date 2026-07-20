@@ -736,13 +736,23 @@ async function commitGroupIntents(
       if (err instanceof HumanApplyOnlyError) {
         return {
           status: 403,
-          body: { error: err.message, committed, failedId: intent.id, remaining },
+          body: {
+            error: err.message,
+            committed,
+            failedId: intent.id,
+            remaining,
+          },
         };
       }
       if (err instanceof DependsOnCompletenessError) {
         return {
           status: 409,
-          body: { error: err.message, committed, failedId: intent.id, remaining },
+          body: {
+            error: err.message,
+            committed,
+            failedId: intent.id,
+            remaining,
+          },
         };
       }
       if (
@@ -755,7 +765,12 @@ async function commitGroupIntents(
         );
         return {
           status: 409,
-          body: { error: err.message, committed, failedId: intent.id, remaining },
+          body: {
+            error: err.message,
+            committed,
+            failedId: intent.id,
+            remaining,
+          },
         };
       }
       return {
