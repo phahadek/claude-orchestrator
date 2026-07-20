@@ -3,6 +3,7 @@ import type { StagedIntent } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { subscribeStagedIntentChange } from '../hooks/stagedIntentBus';
 import { StagedIntentPanel } from './StagedIntentPanel';
+import { TriageBatchPanel, triageVerdict } from './TriageBatchPanel';
 import styles from './DecisionPanel.module.css';
 
 interface Props {
@@ -86,6 +87,27 @@ export function DecisionPanel({ sessionId }: Props) {
     }
   }
 
+  // approve-by-standard (planning/triage.ts): a group whose Ready-flip
+  // carries a recorded triage verdict of 'clean' renders as a
+  // default-approved, veto-able batch row instead of the standard
+  // approve-then-commit group UI — 'blocked' / 'needs-attention' rows (and
+  // any non-triage group, e.g. a split) fall through to that standard UI
+  // unchanged, which is itself the per-item veto surface for those rows.
+  const cleanTriageGroups: [string, StagedIntent[]][] = [];
+  const otherGroups: [string, StagedIntent[]][] = [];
+  for (const entry of groups.entries()) {
+    if (triageVerdict(entry[1]) === 'clean') {
+      cleanTriageGroups.push(entry);
+    } else {
+      otherGroups.push(entry);
+    }
+  }
+
+  const handleTriageBatchCommitted = (committedGroupIds: string[]) => {
+    const committed = new Set(committedGroupIds);
+    setIntents((prev) => prev.filter((i) => !i.groupId || !committed.has(i.groupId)));
+  };
+
   const handleCommitGroup = async (groupId: string) => {
     setGroupInFlight(groupId);
     setGroupError(null);
@@ -105,7 +127,12 @@ export function DecisionPanel({ sessionId }: Props) {
     <div className={styles.panel} data-testid="decision-panel">
       <div className={styles.heading}>Proposals ({intents.length})</div>
 
-      {[...groups.entries()].map(([groupId, groupIntents]) => {
+      <TriageBatchPanel
+        groups={cleanTriageGroups}
+        onCommitted={handleTriageBatchCommitted}
+      />
+
+      {otherGroups.map(([groupId, groupIntents]) => {
         const allApproved = groupIntents.every((i) => i.state === 'approved');
         return (
           <div key={groupId} className={styles.group}>

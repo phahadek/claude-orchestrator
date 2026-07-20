@@ -436,6 +436,7 @@ async function applyIntent(
   intent: StagedIntent,
   override?: { reason: string },
   actorType: ApplyActorType = 'human',
+  triageMilestoneLabel?: string,
 ): Promise<unknown> {
   if (HUMAN_APPLY_ONLY_KINDS.has(intent.kind) && actorType !== 'human') {
     throw new HumanApplyOnlyError(intent.kind);
@@ -459,10 +460,20 @@ async function applyIntent(
       ) {
         throw new DependsOnCompletenessError(payload.taskId);
       }
+      // approve-by-standard (planning/triage.ts): a task.setStatus intent
+      // carrying a recorded triage verdict is eligible for the standard
+      // readiness_override reason instead of an operator-authored one — see
+      // resolveReadinessOverride in TaskWriteCommands.ts, which only honors
+      // this when no explicit `override` is also supplied.
+      const triageCleanDesign =
+        payload.groomingGate?.triage && triageMilestoneLabel
+          ? { milestoneLabel: triageMilestoneLabel }
+          : undefined;
       await commands.setStatus(payload.taskId, payload.status, {
         source: 'human',
         readinessOverride: override,
         groomingGate: payload.groomingGate,
+        triageCleanDesign,
       });
       return { ok: true };
     }
@@ -603,6 +614,163 @@ async function computeProposedBody(
   if (!updateBodyRow) return stored;
   const payload = JSON.parse(updateBodyRow.payload) as UpdateBodyPayload;
   return composeProposedBody(stored, payload.sections);
+}
+
+interface GroupCommitOptions {
+  override: boolean;
+  reason: string;
+  actorType: ApplyActorType;
+  /**
+   * Skip the "every live intent already approved" precondition. Used by the
+   * approve-by-standard batch commit path — a clean interactive-type row has
+   * no per-item human approval step to satisfy, by design.
+   */
+  autoApprove?: boolean;
+  /** Threaded to applyIntent's task.setStatus case — see approve-by-standard. */
+  triageMilestoneLabel?: string;
+}
+
+interface GroupCommitResult {
+  status: number;
+  body: Record<string, unknown>;
+}
+
+/**
+ * Atomic, dependency-ordered commit of one task's intent group: applies
+ * every live intent all-or-nothing, non-arming kinds first and
+ * task.setStatus -> Ready last. Shared by the single-group commit route and
+ * the approve-by-standard batch commit route (one call per group, each
+ * group's outcome independent of its siblings) so both surfaces apply,
+ * annotate, and audit through the exact same path.
+ */
+async function commitGroupIntents(
+  groupId: string,
+  opts: GroupCommitOptions,
+  planningOrchestrator?: PlanningOrchestrator,
+): Promise<GroupCommitResult> {
+  const live = listStagedIntentsByGroup(groupId).filter((r) =>
+    ACTIVE_STATES.includes(r.state),
+  );
+  if (live.length === 0) {
+    return {
+      status: 404,
+      body: { error: `no live staged intents found for group "${groupId}"` },
+    };
+  }
+  if (!opts.autoApprove) {
+    const notApproved = live.filter((r) => r.state !== 'approved');
+    if (notApproved.length > 0) {
+      return {
+        status: 409,
+        body: {
+          error: `group "${groupId}" has ${notApproved.length} intent(s) not yet approved`,
+          pendingIds: notApproved.map((r) => r.id),
+        },
+      };
+    }
+  }
+
+  const ordered = [
+    ...live.filter((r) => !isArmingReadyIntent(r)),
+    ...live.filter((r) => isArmingReadyIntent(r)),
+  ];
+
+  const committed: string[] = [];
+  for (const row of ordered) {
+    const intent = rowToApi(row);
+    try {
+      await applyIntent(
+        intent,
+        opts.override ? { reason: opts.reason } : undefined,
+        opts.actorType,
+        opts.triageMilestoneLabel,
+      );
+      const committedRow = transitionStagedIntent(intent.id, 'committed', {
+        annotation: null,
+      });
+      broadcastIntentChange(rowToApi(committedRow));
+      await planningOrchestrator?.handleDisposition({
+        intent: committedRow,
+        disposition: 'approve',
+      });
+      committed.push(intent.id);
+    } catch (err) {
+      const remaining = ordered
+        .map((r) => r.id)
+        .filter((id) => id !== intent.id && !committed.includes(id));
+
+      if (err instanceof ReadinessGateError) {
+        setStagedIntentAnnotation(
+          intent.id,
+          JSON.stringify({ blocked: true, violations: err.violations }),
+        );
+        broadcastIntentById(intent.id);
+        return {
+          status: 409,
+          body: {
+            error: err.message,
+            violations: err.violations,
+            committed,
+            failedId: intent.id,
+            remaining,
+          },
+        };
+      }
+      if (err instanceof GroomingGateError) {
+        setStagedIntentAnnotation(
+          intent.id,
+          JSON.stringify({ blocked: true, reasons: err.reasons }),
+        );
+        broadcastIntentById(intent.id);
+        return {
+          status: 409,
+          body: {
+            error: err.message,
+            reasons: err.reasons,
+            committed,
+            failedId: intent.id,
+            remaining,
+          },
+        };
+      }
+      if (err instanceof HumanApplyOnlyError) {
+        return {
+          status: 403,
+          body: { error: err.message, committed, failedId: intent.id, remaining },
+        };
+      }
+      if (err instanceof DependsOnCompletenessError) {
+        return {
+          status: 409,
+          body: { error: err.message, committed, failedId: intent.id, remaining },
+        };
+      }
+      if (
+        err instanceof StaleArchUnitVersionError ||
+        err instanceof ArchUnitAlreadySupersededError
+      ) {
+        setStagedIntentAnnotation(
+          intent.id,
+          JSON.stringify({ blocked: true, reasons: [err.message] }),
+        );
+        return {
+          status: 409,
+          body: { error: err.message, committed, failedId: intent.id, remaining },
+        };
+      }
+      return {
+        status: 500,
+        body: {
+          error: err instanceof Error ? err.message : 'Failed to commit group',
+          committed,
+          failedId: intent.id,
+          remaining,
+        },
+      };
+    }
+  }
+
+  return { status: 200, body: { ok: true, committed } };
 }
 
 export function createStagedIntentsRouter(
@@ -837,128 +1005,90 @@ export function createStagedIntentsRouter(
       const actorType: ApplyActorType =
         body?.actorType === 'session' ? 'session' : 'human';
 
-      const live = listStagedIntentsByGroup(groupId).filter((r) =>
-        ACTIVE_STATES.includes(r.state),
+      const result = await commitGroupIntents(
+        groupId,
+        { override, reason, actorType },
+        planningOrchestrator,
       );
-      if (live.length === 0) {
-        res.status(404).json({
-          error: `no live staged intents found for group "${groupId}"`,
-        });
-        return;
-      }
-      const notApproved = live.filter((r) => r.state !== 'approved');
-      if (notApproved.length > 0) {
-        res.status(409).json({
-          error: `group "${groupId}" has ${notApproved.length} intent(s) not yet approved`,
-          pendingIds: notApproved.map((r) => r.id),
-        });
-        return;
-      }
+      res.status(result.status).json(result.body);
+    },
+  );
 
-      const ordered = [
-        ...live.filter((r) => !isArmingReadyIntent(r)),
-        ...live.filter((r) => isArmingReadyIntent(r)),
-      ];
+  // ── POST /api/staged-intents/batch/commit ─────────────────────────────────
+  // The approve-by-standard decision surface (planning/triage.ts): commits a
+  // default-approved clean set spanning MULTIPLE task groups from one
+  // triaged interactive-type batch, on a single operator disposition. Each
+  // named group is a whole task's group (setDependsOn/updateBody/setStatus),
+  // so every Ready-flip still applies individually via commitGroupIntents'
+  // ordinary per-group path — its own per-task readiness_override + audit
+  // event, its own re-derived server-side gate (arch 383: the per-task
+  // records and audited applies are never skipped or stood in for by a
+  // batched apply). `autoApprove` skips the "every live intent already
+  // approved" precondition — approve-by-standard is precisely the removal
+  // of that per-item human approval step for a clean interactive-type row.
+  // A group whose apply fails its gate is recorded as an exception and the
+  // loop continues — one failing task never aborts the rest of the batch.
+  // A vetoed row is simply never included in `groupIds` by the caller.
+  router.post(
+    '/staged-intents/batch/commit',
+    async (req: Request, res: Response) => {
+      const body = req.body as {
+        groupIds?: unknown;
+        milestoneLabel?: unknown;
+        actorType?: unknown;
+      };
+      const groupIds = Array.isArray(body?.groupIds)
+        ? body.groupIds.filter((id): id is string => typeof id === 'string')
+        : [];
+      if (groupIds.length === 0) {
+        res.status(400).json({ error: 'groupIds must be a non-empty array' });
+        return;
+      }
+      const milestoneLabel =
+        typeof body?.milestoneLabel === 'string'
+          ? body.milestoneLabel
+          : undefined;
+      const actorType: ApplyActorType =
+        body?.actorType === 'session' ? 'session' : 'human';
 
       const committed: string[] = [];
-      for (const row of ordered) {
-        const intent = rowToApi(row);
-        try {
-          await applyIntent(
-            intent,
-            override ? { reason } : undefined,
-            actorType,
-          );
-          const committedRow = transitionStagedIntent(intent.id, 'committed', {
-            annotation: null,
-          });
-          broadcastIntentChange(rowToApi(committedRow));
-          await planningOrchestrator?.handleDisposition({
-            intent: committedRow,
-            disposition: 'approve',
-          });
-          committed.push(intent.id);
-        } catch (err) {
-          const remaining = ordered
-            .map((r) => r.id)
-            .filter((id) => id !== intent.id && !committed.includes(id));
+      const exceptions: Array<{
+        groupId: string;
+        status: number;
+        error: string;
+        committedIntentIds: string[];
+      }> = [];
 
-          if (err instanceof ReadinessGateError) {
-            setStagedIntentAnnotation(
-              intent.id,
-              JSON.stringify({ blocked: true, violations: err.violations }),
-            );
-            broadcastIntentById(intent.id);
-            res.status(409).json({
-              error: err.message,
-              violations: err.violations,
-              committed,
-              failedId: intent.id,
-              remaining,
-            });
-            return;
-          }
-          if (err instanceof GroomingGateError) {
-            setStagedIntentAnnotation(
-              intent.id,
-              JSON.stringify({ blocked: true, reasons: err.reasons }),
-            );
-            broadcastIntentById(intent.id);
-            res.status(409).json({
-              error: err.message,
-              reasons: err.reasons,
-              committed,
-              failedId: intent.id,
-              remaining,
-            });
-            return;
-          }
-          if (err instanceof HumanApplyOnlyError) {
-            res.status(403).json({
-              error: err.message,
-              committed,
-              failedId: intent.id,
-              remaining,
-            });
-            return;
-          }
-          if (err instanceof DependsOnCompletenessError) {
-            res.status(409).json({
-              error: err.message,
-              committed,
-              failedId: intent.id,
-              remaining,
-            });
-            return;
-          }
-          if (
-            err instanceof StaleArchUnitVersionError ||
-            err instanceof ArchUnitAlreadySupersededError
-          ) {
-            setStagedIntentAnnotation(
-              intent.id,
-              JSON.stringify({ blocked: true, reasons: [err.message] }),
-            );
-            res.status(409).json({
-              error: err.message,
-              committed,
-              failedId: intent.id,
-              remaining,
-            });
-            return;
-          }
-          res.status(500).json({
+      for (const groupId of groupIds) {
+        const result = await commitGroupIntents(
+          groupId,
+          {
+            override: false,
+            reason: '',
+            actorType,
+            autoApprove: true,
+            triageMilestoneLabel: milestoneLabel,
+          },
+          planningOrchestrator,
+        );
+        if (result.status === 200) {
+          committed.push(groupId);
+        } else {
+          exceptions.push({
+            groupId,
+            status: result.status,
             error:
-              err instanceof Error ? err.message : 'Failed to commit group',
-            committed,
-            failedId: intent.id,
-            remaining,
+              typeof result.body.error === 'string'
+                ? result.body.error
+                : 'commit failed',
+            committedIntentIds: Array.isArray(result.body.committed)
+              ? (result.body.committed as string[])
+              : [],
           });
-          return;
         }
       }
 
-      res.json({ ok: true, committed });
+      res.json({ ok: true, committed, exceptions });
     },
   );
 
