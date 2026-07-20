@@ -3,7 +3,8 @@ import type { StagedIntent } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { subscribeStagedIntentChange } from '../hooks/stagedIntentBus';
 import { StagedIntentPanel } from './StagedIntentPanel';
-import { TriageBatchPanel, triageVerdict } from './TriageBatchPanel';
+import { TriageBatchPanel } from './TriageBatchPanel';
+import { triageVerdict } from './triageVerdict';
 import styles from './DecisionPanel.module.css';
 
 interface Props {
