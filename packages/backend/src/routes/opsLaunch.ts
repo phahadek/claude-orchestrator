@@ -3,6 +3,20 @@ import type { Request, Response } from 'express';
 import { loadOpsContext } from '../ops/opsLoad';
 import { getMilestoneById, getProjectRowById } from '../db/queries';
 import type { OpsSessionLauncher } from '../orchestration/OpsSessionLauncher';
+import { toExternalId } from '../tasks/taskId';
+
+/**
+ * Worklist entry ids from loadOpsContext are bare Notion UUIDs, but the
+ * frontend selects tasks by their `source:externalId` task ref (e.g.
+ * `notion:<uuid>`). Strip a valid prefix so both forms compare equal.
+ */
+function bareId(id: string): string {
+  try {
+    return toExternalId(id);
+  } catch {
+    return id;
+  }
+}
 
 /**
  * Ops(N)-button trigger: launches one individual session per selected
@@ -45,9 +59,9 @@ export function createOpsLaunchRouter(launcher: OpsSessionLauncher): Router {
 
     try {
       const opsContext = await loadOpsContext(milestoneId);
-      const selectedIds = new Set(taskIds);
+      const selectedIds = new Set(taskIds.map(bareId));
       const tasks = opsContext.worklist.executable.filter((t) =>
-        selectedIds.has(t.id),
+        selectedIds.has(bareId(t.id)),
       );
       const result = await launcher.launchSelected({
         projectId: milestone.project_id,
