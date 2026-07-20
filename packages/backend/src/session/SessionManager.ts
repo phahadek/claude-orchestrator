@@ -277,6 +277,16 @@ export interface StartOptions {
    * runs the vendored /ops skill to assemble this itself.
    */
   opsContext?: string;
+  /**
+   * Pre-assembled injected planning-procedure content (`planning/
+   * procedureAssembler.ts`'s `assemblePlanningProcedure` output) for a groom/
+   * design session dispatched via /api/planning/launch. When present for a
+   * planning session, this content is delivered as the appended-prompt file
+   * verbatim — buildOrchestratorClaudeMd/buildSessionContext are skipped
+   * entirely, since the assembler already carries the session-lifecycle and
+   * transport rules those builders would otherwise inject.
+   */
+  injectedProcedureContent?: string;
 }
 
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
@@ -929,6 +939,7 @@ export class SessionManager extends EventEmitter {
       taskId: precomputedTaskId,
       repo: resolvedRepo,
       opsContext,
+      injectedProcedureContent,
     } = options;
 
     const project = getProjectById(projectId)!;
@@ -1246,7 +1257,13 @@ export class SessionManager extends EventEmitter {
     }
 
     let sessionContextContent: string | undefined;
-    if (sessionType === 'review') {
+    if (isPlanning && injectedProcedureContent) {
+      // Planning sessions dispatched with an assembled procedure (see
+      // planning/procedureAssembler.ts) skip buildOrchestratorClaudeMd
+      // entirely — the assembler's skeleton already carries the
+      // session-lifecycle/transport rules that builder would inject.
+      sessionContextContent = injectedProcedureContent;
+    } else if (sessionType === 'review') {
       sessionContextContent = buildReviewClaudeMd(
         taskName ?? taskUrl,
         orchConfig.review_rules.length > 0
