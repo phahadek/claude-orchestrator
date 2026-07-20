@@ -272,7 +272,10 @@ export type ServerMessage =
   | {
       type: 'auto_launch_paused';
       taskId: string;
-      reason: 'launch_failed' | 'planning_crashed' | 'planning_first_turn_empty';
+      reason:
+        | 'launch_failed'
+        | 'planning_crashed'
+        | 'planning_first_turn_empty';
       detail: string;
     }
   | { type: 'session_launch_failed'; taskId: string; sessionId: string }
