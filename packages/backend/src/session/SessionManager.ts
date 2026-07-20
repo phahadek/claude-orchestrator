@@ -63,6 +63,7 @@ import {
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
   enqueueFeedbackItem,
+  addGrantedCapability,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import {
@@ -2287,6 +2288,21 @@ export class SessionManager extends EventEmitter {
       await session.kill();
       // cleanup (sessions.delete + worktree removal) is driven by run().then()
     }
+  }
+
+  /**
+   * Durably grant a capability (a Bash command prefix or named MCP write
+   * verb — never a category) to a session. Sticky for the session's life,
+   * discarded at session end. Takes effect at the next (re)spawn: AgentSession
+   * reads the granted set fresh from the DB on every spawn/resume, so this
+   * does not require the session to be running in-memory right now, and a
+   * server restart before the next spawn does not lose the grant.
+   *
+   * This is the mechanism only — approving a capability-request and calling
+   * this method is the sibling decision-surface task's responsibility.
+   */
+  grantCapability(sessionId: string, capability: string): string[] {
+    return addGrantedCapability(sessionId, capability);
   }
 
   /**

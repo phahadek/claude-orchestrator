@@ -38,6 +38,7 @@ describe('Enrollment.ts — source checks', () => {
 // ── Enrollment logic unit tests ──────────────────────────────────────────────
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   insertDevice: vi.fn(),
   getDeviceById: vi.fn(),
   listDevices: vi.fn(() => []),

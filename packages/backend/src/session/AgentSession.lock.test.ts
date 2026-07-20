@@ -26,6 +26,7 @@ vi.mock('../config', () => ({
   normalizePath: (p: string) => p,
 }));
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   upsertSessionEvent: vi.fn(() => 1),
   updateSessionStatus: vi.fn(),
   markSessionDone: vi.fn(),

@@ -38,6 +38,7 @@ vi.mock('child_process', () => ({
 const mockIncrementCompactionCount = vi.fn();
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   upsertSessionEvent: vi.fn(() => 1),
   insertPermissionEvent: vi.fn(),
   updateSessionStatus: vi.fn(),

@@ -117,6 +117,7 @@ vi.mock('child_process', () => ({
 }));
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   upsertSessionEvent: vi.fn(() => 1),
   updateSessionStatus: vi.fn(),
   markSessionDone: vi.fn(),

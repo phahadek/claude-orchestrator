@@ -66,6 +66,7 @@ vi.mock('../config', () => ({
 }));
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   insertSession: vi.fn(),
   updateSessionStatus: vi.fn(),
   getPRByNotionTaskId: vi.fn().mockReturnValue(null),

@@ -3,6 +3,7 @@ import express from 'express';
 import supertest from 'supertest';
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   getRecentPermissionDenials: vi.fn(),
   clearPermissionDenials: vi.fn(),
 }));

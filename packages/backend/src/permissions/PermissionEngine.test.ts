@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock the DB layer so the engine is tested in full isolation (no SQLite, no FK)
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   getRules: vi.fn(() => []),
   insertPermissionEvent: vi.fn(),
 }));

@@ -3,6 +3,7 @@ import express from 'express';
 import supertest from 'supertest';
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   getSession: vi.fn(),
   getActiveSessions: vi.fn(() => []),
   getArchivedSessions: vi.fn(() => []),
