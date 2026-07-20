@@ -7,6 +7,7 @@ import {
   fetchGateItem,
   appendGateItemEvent,
   approveGateItem,
+  reopenGateItem,
   reclassifyGateItem,
 } from '../../scripts/gate-state-client.mjs';
 
@@ -161,6 +162,31 @@ describe('gate-state-client.mjs', () => {
 
     expect(receivedPath).toBe('/api/gate/items/gi-2/approve');
     expect(JSON.parse(receivedBody)).toEqual({ operator: 'pedro' });
+  });
+
+  it('reopens a resolved gate item with a reason and operator', async () => {
+    let receivedPath = '';
+    let receivedBody = '';
+    const port = await startFixtureServer(async (req, res) => {
+      receivedPath = req.url ?? '';
+      receivedBody = await readBody(req);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ id: 'gi-4', state: 'open' }));
+    });
+
+    await reopenGateItem({
+      port,
+      token: 't',
+      gateItemId: 'gi-4',
+      reason: 'dispositioned in error',
+      operator: 'pedro',
+    });
+
+    expect(receivedPath).toBe('/api/gate/items/gi-4/reopen');
+    expect(JSON.parse(receivedBody)).toEqual({
+      reason: 'dispositioned in error',
+      operator: 'pedro',
+    });
   });
 
   it('reclassifies a needs-triage gate item', async () => {
