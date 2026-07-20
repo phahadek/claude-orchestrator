@@ -59,7 +59,7 @@ export function createLocalGitAncestrySource(
  * non-blocking, for mis-accreted/erroneous items — distinct from `deferred`,
  * which means punted-to-next-milestone, not void.
  */
-export const GATE_DISPOSITIONS = [
+const GATE_DISPOSITIONS = [
   'pass',
   'fail',
   'deferred',
@@ -67,14 +67,12 @@ export const GATE_DISPOSITIONS = [
   'noted',
 ] as const;
 
-export type GateDisposition = (typeof GATE_DISPOSITIONS)[number];
+type GateDisposition = (typeof GATE_DISPOSITIONS)[number];
 
 /** The disposition that records an event without advancing state. */
 const NON_TERMINAL_DISPOSITION: GateDisposition = 'noted';
 
-export function isValidGateDisposition(
-  value: string,
-): value is GateDisposition {
+function isValidGateDisposition(value: string): value is GateDisposition {
   return (GATE_DISPOSITIONS as readonly string[]).includes(value);
 }
 
@@ -90,7 +88,7 @@ const GATE_STATES = new Set([
 ]);
 
 /** True for a state outside the closed vocabulary — an invented/typo'd value that slipped in before this was enforced. */
-export function isBespokeGateState(state: string): boolean {
+function isBespokeGateState(state: string): boolean {
   return !GATE_STATES.has(state);
 }
 
