@@ -1707,7 +1707,9 @@ describe('TaskList', () => {
       );
 
       fireEvent.click(
-        screen.getByRole('button', { name: /move task t1 to another milestone/i }),
+        screen.getByRole('button', {
+          name: /move task t1 to another milestone/i,
+        }),
       );
 
       const select = await screen.findByRole('combobox');
