@@ -106,6 +106,13 @@ function prBodyTaskSectionHeader(backend: TaskBackend): string {
  * Section 10 — the separator and "# Project Instructions" heading — is appended by
  * the caller along with the project's own CLAUDE.md content.
  *
+ * Code-dispatch sessions only. A planning session (groom/design/ops) never
+ * receives this content — its appended-prompt file is instead assembled by
+ * `planning/procedureAssembler.ts`'s `assemblePlanningProcedure`, which
+ * carries its own session-lifecycle/transport rules suited to the
+ * stage-then-human-apply execution mode. See `SessionManager.completeStart`'s
+ * `injectedProcedureContent` branch.
+ *
  * Section inventory:
  *  1. Header with override warning
  *  2. Task assignment (task name, task URL, project context URL)
