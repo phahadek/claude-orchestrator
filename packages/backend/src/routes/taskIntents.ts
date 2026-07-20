@@ -10,9 +10,11 @@ import { getSession } from '../db/queries';
  * allowlist), so orchestrator-launched sessions submit staged task-write
  * intents here via the sanctioned node CLI client, authenticated by their
  * per-session scoped stage credential. This route only ever stages an
- * intent (an in-memory bookkeeping write) — it never applies one; apply is
- * a human/device-auth-only surface reached through POST
- * /staged-intents/:id/apply, which this credential cannot authenticate to.
+ * intent (a durable bookkeeping write, recording this session as its
+ * originating session_id for panel correlation + pushback routing) — it
+ * never applies one; apply is a human/device-auth-only surface reached
+ * through POST /staged-intents/:id/apply, which this credential cannot
+ * authenticate to.
  */
 export function createTaskIntentsRouter(): Router {
   const router = Router();
@@ -53,6 +55,7 @@ export function createTaskIntentsRouter(): Router {
         body.payload,
         session.project_id,
         groupId,
+        sessionId,
       );
       res.status(201).json(intent);
     },

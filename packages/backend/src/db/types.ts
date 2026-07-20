@@ -493,6 +493,42 @@ export interface SeedItemEventRow {
   at: string;
 }
 
+// ─── staged_intent ────────────────────────────────────────────────────────
+
+/** Per-intent lifecycle: staged -> approved -> committed | rejected | superseded. */
+export type StagedIntentState =
+  | 'staged'
+  | 'approved'
+  | 'committed'
+  | 'rejected'
+  | 'superseded';
+
+export interface StagedIntentRow {
+  id: string;
+  kind: string;
+  payload: string;
+  payload_hash: string;
+  task_id: string | null;
+  project_id: string;
+  session_id: string | null;
+  group_id: string | null;
+  state: StagedIntentState;
+  supersedes: string | null;
+  annotation: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+// ─── staged_intent_group ──────────────────────────────────────────────────
+
+/** Per-group counter of automatic Tier-3 route-backs; caps at N (default 3), then escalates. */
+export interface StagedIntentGroupRow {
+  group_id: string;
+  route_back_count: number;
+  escalated: number;
+  updated_at: number;
+}
+
 export type NewSeedItemEventRow = Omit<SeedItemEventRow, 'id'>;
 
 // ─── completeness_disposition ───────────────────────────────────────────────

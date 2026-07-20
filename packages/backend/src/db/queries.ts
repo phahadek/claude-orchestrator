@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { createHash } from 'crypto';
 import { db } from './db';
 import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
@@ -50,6 +51,9 @@ import type {
   SeedAccretionRow,
   CompletenessDispositionRow,
   NewCompletenessDispositionRow,
+  StagedIntentRow,
+  StagedIntentState,
+  StagedIntentGroupRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -4230,4 +4234,264 @@ export function listCompletenessDispositions(
   return _stmtListCompletenessDispositions.all({
     source_task_id: normalizeTaskId(sourceTaskId),
   }) as CompletenessDispositionRow[];
+}
+
+// ─── staged_intent ────────────────────────────────────────────────────────
+// The durable per-intent lifecycle store: staged -> approved -> committed |
+// rejected | superseded. Content-idempotent dedup keys on (project_id, kind,
+// task_id, payload_hash) — see findActiveStagedIntentForTask / stageOrDedup
+// callers in routes/stagedIntents.ts.
+
+/** Canonical (key-sorted) JSON stringify so structurally-equal payloads hash equal regardless of key order. */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      sorted[key] = canonicalize((value as Record<string, unknown>)[key]);
+    }
+    return sorted;
+  }
+  return value;
+}
+
+export function hashIntentPayload(payload: unknown): string {
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalize(payload ?? null)))
+    .digest('hex');
+}
+
+// staged -> committed is legal directly (not only via approved): apply today
+// is a single human-gated action with no separate approve step yet (that's
+// the M12 decision-surface task) — apply implicitly approves-then-commits.
+const STAGED_INTENT_TRANSITIONS: Record<
+  StagedIntentState,
+  StagedIntentState[]
+> = {
+  staged: ['approved', 'committed', 'rejected', 'superseded'],
+  approved: ['staged', 'committed', 'rejected', 'superseded'],
+  committed: [],
+  rejected: [],
+  superseded: [],
+};
+
+export class IllegalStagedIntentTransitionError extends Error {
+  constructor(id: string, from: StagedIntentState, to: StagedIntentState) {
+    super(`[staged_intent] illegal transition for "${id}": ${from} -> ${to}`);
+    this.name = 'IllegalStagedIntentTransitionError';
+  }
+}
+
+let _stmtInsertStagedIntent: Database.Statement | null = null;
+let _stmtGetStagedIntent: Database.Statement | null = null;
+let _stmtListStagedIntentsByProject: Database.Statement | null = null;
+let _stmtListStagedIntentsByGroup: Database.Statement | null = null;
+let _stmtFindActiveStagedIntentForTask: Database.Statement | null = null;
+let _stmtUpdateStagedIntentState: Database.Statement | null = null;
+
+export function insertStagedIntent(row: StagedIntentRow): void {
+  _stmtInsertStagedIntent ??= db.prepare<StagedIntentRow>(`
+    INSERT INTO staged_intent
+      (id, kind, payload, payload_hash, task_id, project_id, session_id,
+       group_id, state, supersedes, annotation, created_at, updated_at)
+    VALUES
+      (@id, @kind, @payload, @payload_hash, @task_id, @project_id, @session_id,
+       @group_id, @state, @supersedes, @annotation, @created_at, @updated_at)
+  `);
+  _stmtInsertStagedIntent.run(row);
+}
+
+export function getStagedIntent(id: string): StagedIntentRow | undefined {
+  _stmtGetStagedIntent ??= db.prepare<{ id: string }>(
+    `SELECT * FROM staged_intent WHERE id = @id`,
+  );
+  return _stmtGetStagedIntent.get({ id }) as StagedIntentRow | undefined;
+}
+
+/** Active (non-terminal-tombstone) intents for a project — superseded rows are always hidden. */
+export function listStagedIntentsByProject(
+  projectId: string,
+): StagedIntentRow[] {
+  _stmtListStagedIntentsByProject ??= db.prepare<{ project_id: string }>(
+    `SELECT * FROM staged_intent
+     WHERE project_id = @project_id AND state IN ('staged', 'approved')
+     ORDER BY created_at ASC`,
+  );
+  return _stmtListStagedIntentsByProject.all({
+    project_id: projectId,
+  }) as StagedIntentRow[];
+}
+
+export function listAllActiveStagedIntents(): StagedIntentRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM staged_intent WHERE state IN ('staged', 'approved') ORDER BY created_at ASC`,
+    )
+    .all() as StagedIntentRow[];
+}
+
+/** All intents (any state, including tombstones) for a group — used by group-scoped invariant checks. */
+export function listStagedIntentsByGroup(groupId: string): StagedIntentRow[] {
+  _stmtListStagedIntentsByGroup ??= db.prepare<{ group_id: string }>(
+    `SELECT * FROM staged_intent WHERE group_id = @group_id ORDER BY created_at ASC`,
+  );
+  return _stmtListStagedIntentsByGroup.all({
+    group_id: groupId,
+  }) as StagedIntentRow[];
+}
+
+/** The standing staged/approved intent (if any) for this project+kind+task — the dedup slot. */
+export function findActiveStagedIntentForTask(
+  projectId: string,
+  kind: string,
+  taskId: string,
+): StagedIntentRow | undefined {
+  _stmtFindActiveStagedIntentForTask ??= db.prepare<{
+    project_id: string;
+    kind: string;
+    task_id: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE project_id = @project_id AND kind = @kind AND task_id = @task_id
+       AND state IN ('staged', 'approved')
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  );
+  return _stmtFindActiveStagedIntentForTask.get({
+    project_id: projectId,
+    kind,
+    task_id: taskId,
+  }) as StagedIntentRow | undefined;
+}
+
+/**
+ * Enforces the per-intent lifecycle state machine. `committed` is a terminal,
+ * immutable state — no outgoing transition is legal. Throws
+ * IllegalStagedIntentTransitionError on any other disallowed edge.
+ */
+export function transitionStagedIntent(
+  id: string,
+  toState: StagedIntentState,
+  opts?: { annotation?: string | null; updatedAt?: number },
+): StagedIntentRow {
+  const current = getStagedIntent(id);
+  if (!current) {
+    throw new Error(`[staged_intent] "${id}" not found`);
+  }
+  const allowed = STAGED_INTENT_TRANSITIONS[current.state] ?? [];
+  if (!allowed.includes(toState)) {
+    throw new IllegalStagedIntentTransitionError(id, current.state, toState);
+  }
+  _stmtUpdateStagedIntentState ??= db.prepare<{
+    id: string;
+    state: StagedIntentState;
+    annotation: string | null;
+    updated_at: number;
+  }>(
+    `UPDATE staged_intent SET state = @state, annotation = @annotation, updated_at = @updated_at WHERE id = @id`,
+  );
+  const updatedAt = opts?.updatedAt ?? Date.now();
+  _stmtUpdateStagedIntentState.run({
+    id,
+    state: toState,
+    annotation: opts?.annotation ?? current.annotation,
+    updated_at: updatedAt,
+  });
+  return { ...current, state: toState, updated_at: updatedAt };
+}
+
+/**
+ * Supersedes `oldId` (tombstones it, retained for audit, hidden from the
+ * active surface) and inserts `newRow` pointing back at it via `supersedes`.
+ * Per-intent: only this one row transitions, a sibling's approval in the
+ * same group is untouched.
+ */
+export function supersedeStagedIntent(
+  oldId: string,
+  newRow: StagedIntentRow,
+): StagedIntentRow {
+  const tx = db.transaction(() => {
+    transitionStagedIntent(oldId, 'superseded');
+    insertStagedIntent({ ...newRow, supersedes: oldId });
+  });
+  tx();
+  return getStagedIntent(newRow.id) as StagedIntentRow;
+}
+
+let _stmtSetStagedIntentAnnotation: Database.Statement | null = null;
+
+/** Sets the blocked-apply annotation without moving the intent off its current state. */
+export function setStagedIntentAnnotation(
+  id: string,
+  annotation: string | null,
+): void {
+  _stmtSetStagedIntentAnnotation ??= db.prepare<{
+    id: string;
+    annotation: string | null;
+    updated_at: number;
+  }>(
+    `UPDATE staged_intent SET annotation = @annotation, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtSetStagedIntentAnnotation.run({
+    id,
+    annotation,
+    updated_at: Date.now(),
+  });
+}
+
+let _stmtGetStagedIntentGroup: Database.Statement | null = null;
+let _stmtUpsertStagedIntentGroup: Database.Statement | null = null;
+
+export function getStagedIntentGroup(
+  groupId: string,
+): StagedIntentGroupRow | undefined {
+  _stmtGetStagedIntentGroup ??= db.prepare<{ group_id: string }>(
+    `SELECT * FROM staged_intent_group WHERE group_id = @group_id`,
+  );
+  return _stmtGetStagedIntentGroup.get({
+    group_id: groupId,
+  }) as StagedIntentGroupRow | undefined;
+}
+
+const DEFAULT_ROUTE_BACK_CAP = 3;
+
+/**
+ * Increments a group's automatic Tier-3 route-back counter. Once the count
+ * reaches `cap` (default 3, mirroring max_review_iterations), the group is
+ * marked escalated and further automatic route-backs should stop — callers
+ * check `.escalated` and surface the group to the operator instead.
+ */
+export function incrementRouteBackCount(
+  groupId: string,
+  cap = DEFAULT_ROUTE_BACK_CAP,
+): StagedIntentGroupRow {
+  const existing = getStagedIntentGroup(groupId);
+  const nextCount = (existing?.route_back_count ?? 0) + 1;
+  const escalated = nextCount >= cap ? 1 : (existing?.escalated ?? 0);
+  const updatedAt = Date.now();
+  _stmtUpsertStagedIntentGroup ??= db.prepare<{
+    group_id: string;
+    route_back_count: number;
+    escalated: number;
+    updated_at: number;
+  }>(`
+    INSERT INTO staged_intent_group (group_id, route_back_count, escalated, updated_at)
+    VALUES (@group_id, @route_back_count, @escalated, @updated_at)
+    ON CONFLICT(group_id) DO UPDATE SET
+      route_back_count = excluded.route_back_count,
+      escalated = excluded.escalated,
+      updated_at = excluded.updated_at
+  `);
+  _stmtUpsertStagedIntentGroup.run({
+    group_id: groupId,
+    route_back_count: nextCount,
+    escalated,
+    updated_at: updatedAt,
+  });
+  return {
+    group_id: groupId,
+    route_back_count: nextCount,
+    escalated,
+    updated_at: updatedAt,
+  };
 }
