@@ -4293,10 +4293,10 @@ export function insertStagedIntent(row: StagedIntentRow): void {
   _stmtInsertStagedIntent ??= db.prepare<StagedIntentRow>(`
     INSERT INTO staged_intent
       (id, kind, payload, payload_hash, task_id, project_id, session_id,
-       group_id, state, supersedes, annotation, created_at, updated_at)
+       group_id, state, supersedes, annotation, decision_proposal, created_at, updated_at)
     VALUES
       (@id, @kind, @payload, @payload_hash, @task_id, @project_id, @session_id,
-       @group_id, @state, @supersedes, @annotation, @created_at, @updated_at)
+       @group_id, @state, @supersedes, @annotation, @decision_proposal, @created_at, @updated_at)
   `);
   _stmtInsertStagedIntent.run(row);
 }

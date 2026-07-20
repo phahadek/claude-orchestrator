@@ -334,6 +334,9 @@ describe('POST /api/staged-intents — kind validation', () => {
       'task.setType',
       'task.archive',
       'task.move',
+      'gate.accrete',
+      'seed.stage',
+      'journal.setState',
     ]) {
       const res = await agent.post('/api/staged-intents').send({
         kind,
@@ -534,5 +537,181 @@ describe('POST /api/staged-intents/:id/apply — task.setType', () => {
       .send({ actorType: 'session' });
     expect(applied.status).toBe(403);
     expect(setType).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / journal.setState', () => {
+  it('applies gate.accrete by dispatching through accreteGateContribution', async () => {
+    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'gate.accrete',
+      projectId: 'proj-gate',
+      payload: {
+        sourceTask: {
+          id: 'notion:abc',
+          title: 'Some Task',
+          project: 'proj-gate',
+          milestone: 'M1',
+        },
+        items: [{ text: 'Launch-and-observe the new endpoint' }],
+        classification: 'Read-Only',
+      },
+    });
+    expect(staged.status).toBe(201);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(200);
+    expect(applied.body.result.itemIds).toHaveLength(1);
+    expect(applied.body.result.marker).toEqual(
+      expect.objectContaining({ sourceTaskId: 'notion:abc', decision: 'items' }),
+    );
+  });
+
+  it('applies seed.stage by dispatching through stageSeedContribution', async () => {
+    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'seed.stage',
+      projectId: 'proj-seed',
+      payload: {
+        sourceTask: {
+          id: 'notion:def',
+          title: 'Some Config Task',
+          project: 'proj-seed',
+          milestone: 'M1',
+        },
+        seeds: [{ spec: 'Add feature flag FOO' }],
+        decision: 'seeds',
+      },
+    });
+    expect(staged.status).toBe(201);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(200);
+    expect(applied.body.result.itemIds).toHaveLength(1);
+    expect(applied.body.result.marker).toEqual(
+      expect.objectContaining({ sourceTaskId: 'notion:def', decision: 'seeds' }),
+    );
+  });
+
+  it('applies journal.setState by dispatching through the validated setEntryState', async () => {
+    const { upsertOpsJournalEntry } = await import('../db/queries');
+    upsertOpsJournalEntry({
+      task_id: 'notion:ghi',
+      project: 'proj-journal',
+      milestone: 'M1',
+      state: 'pending',
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date().toISOString(),
+    });
+
+    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'journal.setState',
+      projectId: 'proj-journal',
+      payload: { taskId: 'notion:ghi', state: 'candidate' },
+    });
+    expect(staged.status).toBe(201);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(200);
+
+    const { getOpsJournalEntry } = await import('../db/queries');
+    expect(getOpsJournalEntry('notion:ghi')?.state).toBe('candidate');
+  });
+
+  it('rejects applying gate.accrete, seed.stage, and journal.setState with a session credential (human-apply-only)', async () => {
+    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    for (const [kind, payload] of [
+      [
+        'gate.accrete',
+        {
+          sourceTask: {
+            id: 'notion:jkl',
+            title: 'T',
+            project: 'proj-session-2',
+            milestone: 'M1',
+          },
+          items: [],
+          classification: 'n/a',
+        },
+      ],
+      [
+        'seed.stage',
+        {
+          sourceTask: {
+            id: 'notion:mno',
+            title: 'T',
+            project: 'proj-session-2',
+            milestone: 'M1',
+          },
+          seeds: [],
+          decision: 'n/a',
+        },
+      ],
+      ['journal.setState', { taskId: 'notion:pqr', state: 'candidate' }],
+    ] as const) {
+      const staged = await agent.post('/api/staged-intents').send({
+        kind,
+        projectId: 'proj-session-2',
+        payload,
+      });
+      const applied = await agent
+        .post(`/api/staged-intents/${staged.body.id}/apply`)
+        .send({ actorType: 'session' });
+      expect(applied.status).toBe(403);
+    }
+  });
+});
+
+describe('POST /api/staged-intents — decision-proposal annotation', () => {
+  it('round-trips the decisionProposal field through staging and listing', async () => {
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'journal.setState',
+      projectId: 'proj-proposal',
+      payload: { taskId: 'notion:stu', state: 'candidate' },
+      decisionProposal: 'Config drift observed; promote to candidate for review.',
+    });
+    expect(staged.status).toBe(201);
+    expect(staged.body.decisionProposal).toBe(
+      'Config drift observed; promote to candidate for review.',
+    );
+
+    const list = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-proposal' });
+    const found = list.body.intents.find(
+      (i: { id: string }) => i.id === staged.body.id,
+    );
+    expect(found.decisionProposal).toBe(
+      'Config drift observed; promote to candidate for review.',
+    );
   });
 });

@@ -515,6 +515,8 @@ export interface StagedIntentRow {
   state: StagedIntentState;
   supersedes: string | null;
   annotation: string | null;
+  /** Human-facing rationale/summary the decision surface renders beside the payload. */
+  decision_proposal: string | null;
   created_at: number;
   updated_at: number;
 }

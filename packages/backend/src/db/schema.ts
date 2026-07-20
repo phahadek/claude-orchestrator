@@ -1153,6 +1153,7 @@ export function runMigrations(target: Database.Database): void {
       state        TEXT    NOT NULL DEFAULT 'staged',
       supersedes   TEXT,
       annotation   TEXT,
+      decision_proposal TEXT,
       created_at   INTEGER NOT NULL,
       updated_at   INTEGER NOT NULL
     );
@@ -1167,4 +1168,10 @@ export function runMigrations(target: Database.Database): void {
       updated_at       INTEGER NOT NULL
     );
   `);
+
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN decision_proposal TEXT`);
+  } catch {
+    /* already exists */
+  }
 }

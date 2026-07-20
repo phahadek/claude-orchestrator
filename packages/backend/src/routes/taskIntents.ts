@@ -37,9 +37,14 @@ export function createTaskIntentsRouter(): Router {
         kind?: unknown;
         payload?: unknown;
         groupId?: unknown;
+        decisionProposal?: unknown;
       };
       const kind = typeof body.kind === 'string' ? body.kind : null;
       const groupId = typeof body.groupId === 'string' ? body.groupId : null;
+      const decisionProposal =
+        typeof body.decisionProposal === 'string'
+          ? body.decisionProposal
+          : null;
 
       if (!kind) {
         res.status(400).json({ error: 'kind is required' });
@@ -56,6 +61,7 @@ export function createTaskIntentsRouter(): Router {
         session.project_id,
         groupId,
         sessionId,
+        decisionProposal,
       );
       res.status(201).json(intent);
     },
