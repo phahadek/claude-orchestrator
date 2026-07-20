@@ -582,11 +582,9 @@ export function createStagedIntentsRouter(): Router {
         ACTIVE_STATES.includes(r.state),
       );
       if (live.length === 0) {
-        res
-          .status(404)
-          .json({
-            error: `no live staged intents found for group "${groupId}"`,
-          });
+        res.status(404).json({
+          error: `no live staged intents found for group "${groupId}"`,
+        });
         return;
       }
       const notApproved = live.filter((r) => r.state !== 'approved');
