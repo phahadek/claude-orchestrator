@@ -246,6 +246,12 @@ session summary:
 
 ## Rules (hard)
 
+See `../_shared/reference/hard-rules.md` for the planning-procedure core this
+skill shares with `/groom` and `/ops` (deterministic load, the human as the
+gate, no silent writes, `git -C` not `cd`, and cache/state files via the
+Edit/Write tool) — canonical source
+`packages/backend/src/planning/procedureCore.ts`. Design-specific rules:
+
 - **Source of truth**: Notion for architectural rules, decisions, and task
   definitions. For _implemented_ detail (DDL, signatures, analyzer specs), the code
   under `source_root` wins; on intent/rationale, Notion wins.
@@ -256,29 +262,19 @@ session summary:
   Design task instead.
 - **Never** widen the scope of an in-flight Design task. A surprise during
   execution = file a sibling Design task at 🔲 Backlog (and let `/groom` handle it).
-- **No silent architecture-page or Design-task-body writes.** Every arch-page
-  edit and every Design-task status flip is confirmed in chat first. Follow-on
-  Code/Tooling tasks are the exception — they are created without per-body
-  sign-off (Backlog status only; the human reviews at groom time or edits in
-  Notion directly).
-- **Cache/state files are edited with the Edit/Write tool, never a shell script.**
-  `design-state.json` / `code-map.json` are loader-seeded JSON on disk — Edit them (or
-  Read + Write the whole file). Never `node _q6lock.cjs && rm …` or any `cd … && …`
-  route; that is what causes the constant permission prompts.
-- **Inspect the repo with `git -C <repo> …`, never `cd <repo> && git …`.** Design runs
-  from the projects-root cwd; the `cd … && git` form prompts every time (Claude Code flags
-  any directory-change-before-git as a hook-execution risk, regardless of allowlist).
-  `git -C <repo> show/log/diff …` is allowlisted and silent. Use path flags for other repo
-  tools too (`npm --prefix`, `uv --project`), not `cd`.
+- **No silent architecture-page or Design-task-body writes** (shared rule).
+  Follow-on Code/Tooling tasks are the exception — they are created without
+  per-body sign-off (Backlog status only; the human reviews at groom time or
+  edits in Notion directly).
 - **No batch-locking.** One open question per message; one sign-off per question.
 - **Investigate before deciding.** Code reads / API calls / arch-page reads come
   before presenting a question. "Decide at implementation time" is a _defer_, not
   a _resolve_ — it becomes an explicit Open Question in the follow-on Code task.
-- **The human is the gate for open-question locks and arch-page writes.** Even a
-  recommendation that looks obvious waits for explicit sign-off on the question.
-  After every question is locked, the skill marks the Design task ✅ Done
-  itself — its "doneness" is the spec + page edits + filed follow-ons, all of
-  which have completed within the session.
+- **The human is the gate** (shared rule) for open-question locks and arch-page
+  writes. Even a recommendation that looks obvious waits for explicit sign-off on
+  the question. After every question is locked, the skill marks the Design task
+  ✅ Done itself — its "doneness" is the spec + page edits + filed follow-ons, all
+  of which have completed within the session.
 - **Follow-on Code tasks always start at 🔲 Backlog.** The `check-task-status.mjs`
   hook blocks creation at any other status — trying to short-cut is the smell.
 
