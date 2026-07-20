@@ -22,6 +22,14 @@ are **not** auto-dispatched. Its whole value is a verification discipline that r
 trust premises, statuses, or convenient shortcuts, and that **treats an unattended pass as
 staging, never as conclusions.** Follow it even when a task "looks like a one-liner."
 
+This skill shares its planning-procedure core with `/groom` and `/design` — see
+`../_shared/reference/hard-rules.md` (canonical source
+`packages/backend/src/planning/procedureCore.ts`) for the rules this skill
+also follows: **deterministic load, not hand-fetch** (Flow step 2 below), **the
+human/operator is the gate** (see § Status handling), and **no silent writes**
+(verdicts land on the journal, never the task page, until the operator
+confirms).
+
 > Scope: this skill runs 🔧 Operational + 🔎 Investigation, **plus observational / E2E 🧪 Testing
 > folded in as an Investigation variant** (run the system live → a **disposition**: `pass` /
 > `blocked-pending-fix` / `pass-with-caveat` — there is no "fail").

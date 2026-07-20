@@ -340,6 +340,12 @@ off, confirm the milestone board is fully groomed.
 
 ## Rules (hard)
 
+See `../_shared/reference/hard-rules.md` for the planning-procedure core this
+skill shares with `/design` and `/ops` (deterministic load, the human as the
+gate, no silent writes, `git -C` not `cd`, and cache/state files via the
+Edit/Write tool) — canonical source
+`packages/backend/src/planning/procedureCore.ts`. Grooming-specific rules:
+
 - **Source of truth**: Notion for architectural rules, decisions, and task
   definitions. For _implemented_ detail (DDL, signatures, analyzer specs), the code
   under `source_root` wins; on intent/rationale, Notion wins.
@@ -352,20 +358,11 @@ off, confirm the milestone board is fully groomed.
   exception**. The **🚦 Gate** is the lone non-ordinary task: an accumulator that, by its
   type's definition, accretes manual-verification items while sitting at Ready —
   appending to it is its lifecycle, not a modify-a-Ready-task exception.
-- **No silent writes.** Every change is staged through `staged-intents-client.mjs` and
-  confirmed in chat before moving on — never a direct `notion-update-page` call.
-- **Cache/state files are edited with the Edit/Write tool, never a shell script.**
-  `grooming-state.json` / `code-map.json` are loader-seeded JSON on disk — Edit them
-  (or Read + Write the whole file). Never `node _foo.cjs && rm …` or any `cd … && …`
-  shell route; that is what causes the constant permission prompts.
-- **Inspect the repo with `git -C <repo> …`, never `cd <repo> && git …`.** Grooming runs
-  from the projects-root cwd, so the repo is a subdirectory — but the `cd … && git` form
-  prompts every time (Claude Code flags any directory-change-before-git as a hook-execution
-  risk, regardless of allowlist). `git -C <repo> show/log/diff …` is allowlisted and silent.
-  Use path flags for other repo tools too (`npm --prefix`, `uv --project`), not `cd`.
+- **No silent writes** (shared rule, groom-specific mechanics): every change is
+  staged through `staged-intents-client.mjs` — never a direct `notion-update-page` call.
 - **Investigate before resolving.** Reading the code comes before deciding what's
   resolved. "Decide at implementation time" is a _defer_, not a _resolve_.
-- **The human is the promotion gate.** Even a Ready-clean task waits for sign-off.
+- **The human is the promotion gate** (shared rule). Even a Ready-clean task waits for sign-off.
 - **Code / Tooling tasks default to < 500 LoC estimated.** The size check is
   **load-bearing**, not advisory — every Code/Tooling task carries an explicit
   _Size:_ line in its presentation header, and `size_check` is a required field
