@@ -1589,4 +1589,150 @@ describe('TaskList', () => {
       expect(screen.queryByTestId('merge-ready-btn')).toBeNull();
     });
   });
+
+  describe('task.move apply triggers a list refresh', () => {
+    const project = {
+      id: 'proj-1',
+      name: 'Proj',
+      projectDir: '/tmp/proj',
+      contextUrl: '',
+      boardId: 'ms-1',
+      taskSource: 'notion' as const,
+      gitMode: 'github' as const,
+      autoLaunchEnabled: false,
+      autoLaunchMilestoneId: null,
+      autoMergeEnabled: false,
+      dataResidencyConfirmed: true,
+      baseBranch: 'dev',
+    };
+
+    function mockMoveEndpoints() {
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string, init?: RequestInit) => {
+          if (url.includes('/milestones')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => [
+                {
+                  id: 'ms-1',
+                  projectId: 'proj-1',
+                  name: 'M1',
+                  sourceId: 'db-1',
+                  displayOrder: 1,
+                  createdAt: 0,
+                  updatedAt: 0,
+                },
+                {
+                  id: 'ms-2',
+                  projectId: 'proj-1',
+                  name: 'M2',
+                  sourceId: 'db-2',
+                  displayOrder: 2,
+                  createdAt: 0,
+                  updatedAt: 0,
+                },
+              ],
+            });
+          }
+          if (url.includes('/page?')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ markdown: '' }),
+            });
+          }
+          if (url.includes('/api/tasks/move-preview')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                ok: true,
+                isLaterMove: false,
+                cascadeSet: [],
+                droppedEdges: [],
+              }),
+            });
+          }
+          if (
+            url.includes('/api/staged-intents') &&
+            !url.includes('/apply') &&
+            init?.method === 'POST'
+          ) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                id: 'intent-1',
+                kind: 'task.move',
+                payload: {
+                  taskName: 'Task t1',
+                  sourceMilestoneName: 'M1',
+                  targetMilestoneName: 'M2',
+                },
+                projectId: 'proj-1',
+                createdAt: 0,
+              }),
+            });
+          }
+          if (url.includes('/api/staged-intents/intent-1/apply')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ ok: true, result: {} }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({}),
+          });
+        },
+      );
+    }
+
+    it('calls onForceRefetch once the staged move intent is applied', async () => {
+      mockMoveEndpoints();
+      const onForceRefetch = vi.fn().mockResolvedValue(undefined);
+
+      renderList(
+        [
+          makeTask({
+            taskId: 't1',
+            taskName: 'Task t1',
+            displayStatus: 'in_progress',
+          }),
+        ],
+        { boardId: 'ms-1', project, onForceRefetch },
+      );
+
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: /move task t1 to another milestone/i,
+        }),
+      );
+
+      const select = await screen.findByRole('combobox');
+      fireEvent.change(select, { target: { value: 'ms-2' } });
+
+      const stageButton = await screen.findByRole('button', {
+        name: /stage move/i,
+      });
+      await waitFor(() =>
+        expect(stageButton.hasAttribute('disabled')).toBe(false),
+      );
+      fireEvent.click(stageButton);
+
+      const applyButton = await screen.findByRole('button', {
+        name: /apply/i,
+      });
+      expect(onForceRefetch).not.toHaveBeenCalled();
+
+      fireEvent.click(applyButton);
+
+      await waitFor(() => expect(onForceRefetch).toHaveBeenCalledTimes(1));
+      // The staged-intent panel is dismissed once applied.
+      expect(screen.queryByTestId('move-panel')).toBeNull();
+    });
+  });
 });

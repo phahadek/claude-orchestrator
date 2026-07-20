@@ -772,7 +772,14 @@ export function TaskList({
           <div className={styles.opsPlaceholderPanel} data-testid="move-panel">
             <StagedIntentPanel
               intent={moveIntent}
-              onApplied={() => setMoveIntent(null)}
+              onApplied={() => {
+                setMoveIntent(null);
+                // A move touches two milestones' task_cache rows server-side;
+                // the WS task_cache_updated broadcast alone won't repaint this
+                // view unless it happens to be one of the affected boards, so
+                // force the same re-fetch path the Sync button uses.
+                void onForceRefetch?.();
+              }}
               onRejected={() => setMoveIntent(null)}
               onDismiss={() => setMoveIntent(null)}
             />
