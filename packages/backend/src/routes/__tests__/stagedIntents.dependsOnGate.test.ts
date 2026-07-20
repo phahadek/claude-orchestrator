@@ -76,13 +76,13 @@ describe('POST /api/staged-intents/:id/apply — setDependsOn group-completeness
     const app = buildApp();
     await stage(app, {
       kind: 'task.setDependsOn',
-      payload: { taskId: 't-1', dependsOn: [] },
+      payload: { taskId: 't-2', dependsOn: [] },
       projectId: 'proj-1',
       groupId: 'group-2',
     });
     const statusIntent = await stage(app, {
       kind: 'task.setStatus',
-      payload: { taskId: 't-1', status: 'Ready' },
+      payload: { taskId: 't-2', status: 'Ready' },
       projectId: 'proj-1',
       groupId: 'group-2',
     });
@@ -98,7 +98,7 @@ describe('POST /api/staged-intents/:id/apply — setDependsOn group-completeness
     const app = buildApp();
     const dependsOnIntent = await stage(app, {
       kind: 'task.setDependsOn',
-      payload: { taskId: 't-1', dependsOn: ['t-0'] },
+      payload: { taskId: 't-3', dependsOn: ['t-0'] },
       projectId: 'proj-1',
       groupId: 'group-3',
     });
@@ -109,7 +109,7 @@ describe('POST /api/staged-intents/:id/apply — setDependsOn group-completeness
 
     const statusIntent = await stage(app, {
       kind: 'task.setStatus',
-      payload: { taskId: 't-1', status: 'Ready' },
+      payload: { taskId: 't-3', status: 'Ready' },
       projectId: 'proj-1',
       groupId: 'group-3',
     });

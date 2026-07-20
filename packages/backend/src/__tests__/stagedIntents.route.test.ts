@@ -22,9 +22,13 @@ vi.mock('../audit/AuditLog', () => ({
   recordEvent: mockRecordEvent,
 }));
 
-vi.mock('../db/queries', () => ({
-  getTaskCache: vi.fn().mockReturnValue(null),
-}));
+vi.mock('../db/queries', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../db/queries')>();
+  return {
+    ...actual,
+    getTaskCache: vi.fn().mockReturnValue(null),
+  };
+});
 
 import { createStagedIntentsRouter } from '../routes/stagedIntents';
 

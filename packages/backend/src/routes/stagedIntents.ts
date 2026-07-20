@@ -17,14 +17,28 @@ import {
   type ReadinessViolation,
 } from '../tasks/readinessGate';
 import { GroomingGateError, type GroomingGateEntry } from '../groom/groomGate';
+import type { StagedIntentRow, StagedIntentState } from '../db/types';
+import {
+  hashIntentPayload,
+  insertStagedIntent,
+  getStagedIntent as getStagedIntentRow,
+  listStagedIntentsByProject,
+  listAllActiveStagedIntents,
+  listStagedIntentsByGroup,
+  findActiveStagedIntentForTask,
+  transitionStagedIntent,
+  supersedeStagedIntent,
+  setStagedIntentAnnotation,
+  IllegalStagedIntentTransitionError,
+} from '../db/queries';
 
 /**
  * The durable replacement for groom-gate.mjs's self-reported hard_block_deps
  * array field: a task.setStatus->Ready apply is only allowed when its intent
  * group also carries a task.setDependsOn for the same task, forcing an
  * explicit dep-classification decision (an empty array is a valid "no deps").
- * Tracked per groupId+taskId so an applied sibling from an earlier apply in
- * the same group still satisfies the invariant for a later apply.
+ * Checked against the durable store, so a sibling committed in an earlier
+ * apply in the same group still satisfies the invariant for a later apply.
  */
 class DependsOnCompletenessError extends Error {
   constructor(taskId: string) {
@@ -37,22 +51,15 @@ class DependsOnCompletenessError extends Error {
   }
 }
 
-const appliedSetDependsOn = new Set<string>();
-
-function dependsOnGroupKey(groupId: string, taskId: string): string {
-  return `${groupId}::${taskId}`;
-}
-
 function hasGroupDependsOn(groupId: string, taskId: string): boolean {
-  if (appliedSetDependsOn.has(dependsOnGroupKey(groupId, taskId))) return true;
-  for (const other of store.values()) {
-    if (other.kind !== 'task.setDependsOn' || other.groupId !== groupId) {
-      continue;
+  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
+  return listStagedIntentsByGroup(groupId).some((row) => {
+    if (row.kind !== 'task.setDependsOn' || !ACTIVE.includes(row.state)) {
+      return false;
     }
-    const payload = other.payload as SetDependsOnPayload;
-    if (payload.taskId === taskId) return true;
-  }
-  return false;
+    const payload = JSON.parse(row.payload) as SetDependsOnPayload;
+    return payload.taskId === taskId;
+  });
 }
 
 /**
@@ -60,6 +67,10 @@ function hasGroupDependsOn(groupId: string, taskId: string): boolean {
  * Ops(N), and future callers) stage generic { kind, payload } intents through,
  * and a human applies or rejects. Apply always dispatches through
  * TaskWriteCommands — never a bespoke per-producer write.
+ *
+ * Backed by the durable staged_intent table (db/schema.ts, db/queries.ts):
+ * per-intent lifecycle staged -> approved -> committed | rejected |
+ * superseded, content-idempotent dedup, and per-intent supersede tombstones.
  */
 export interface StagedIntent {
   id: string;
@@ -67,6 +78,12 @@ export interface StagedIntent {
   payload: unknown;
   projectId: string;
   createdAt: number;
+  /** The originating session, for panel correlation + pushback routing. Null for human-staged intents. */
+  sessionId?: string | null;
+  /** Current lifecycle state. */
+  state: StagedIntentState;
+  /** Pointer to the intent this one replaces, if any. */
+  supersedes?: string | null;
   /**
    * Set when the last apply attempt was hard-blocked by the readiness gate
    * (violations) or the grooming promotion gate (reasons).
@@ -83,7 +100,29 @@ export interface StagedIntent {
   groupId?: string | null;
 }
 
-const store = new Map<string, StagedIntent>();
+function rowToApi(row: StagedIntentRow): StagedIntent {
+  return {
+    id: row.id,
+    kind: row.kind,
+    payload: JSON.parse(row.payload) as unknown,
+    projectId: row.project_id,
+    createdAt: row.created_at,
+    sessionId: row.session_id,
+    state: row.state,
+    supersedes: row.supersedes,
+    annotation: row.annotation
+      ? (JSON.parse(row.annotation) as StagedIntent['annotation'])
+      : null,
+    groupId: row.group_id,
+  };
+}
+
+/** Kinds carry their target task at `payload.taskId`, except task.create — a new task has no pre-existing id, so it never participates in dedup. */
+function extractTaskId(kind: string, payload: unknown): string | null {
+  if (kind === 'task.create') return null;
+  const taskId = (payload as { taskId?: unknown } | null)?.taskId;
+  return typeof taskId === 'string' ? taskId : null;
+}
 
 type CreateTaskPayload = NewTaskFields;
 interface SetStatusPayload {
@@ -132,28 +171,72 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Stage a task-write intent into the shared in-memory store — the single
- * chokepoint both the human-facing POST /staged-intents route and the
- * loopback session stage endpoint (POST /api/task-intents) write through.
- * Never touches the task backend; staging is purely in-memory bookkeeping
- * until a human applies (or rejects) the intent.
+ * Stage a task-write intent into the durable store — the single chokepoint
+ * both the human-facing POST /staged-intents route and the loopback session
+ * stage endpoint (POST /api/task-intents) write through. Never touches the
+ * task backend; staging is purely bookkeeping until a human applies (or
+ * rejects) the intent.
+ *
+ * Content-idempotent banked approval: for kinds that carry a taskId (every
+ * kind except task.create), a re-emission that exactly matches the standing
+ * staged/approved intent for the same (projectId, kind, taskId) is a no-op —
+ * the existing row (and its approval, if any) is returned untouched. A
+ * re-emission that differs supersedes the standing intent (tombstoning it)
+ * and re-enters `staged`, requiring fresh approval.
  */
 export function stageIntent(
   kind: string,
   payload: unknown,
   projectId: string,
   groupId?: string | null,
+  sessionId?: string | null,
 ): StagedIntent {
-  const intent: StagedIntent = {
+  const taskId = extractTaskId(kind, payload);
+  const payloadHash = hashIntentPayload(payload);
+  const now = Date.now();
+
+  if (taskId) {
+    const existing = findActiveStagedIntentForTask(projectId, kind, taskId);
+    if (existing) {
+      if (existing.payload_hash === payloadHash) {
+        return rowToApi(existing);
+      }
+      const newRow: StagedIntentRow = {
+        id: randomUUID(),
+        kind,
+        payload: JSON.stringify(payload ?? null),
+        payload_hash: payloadHash,
+        task_id: taskId,
+        project_id: projectId,
+        session_id: sessionId ?? null,
+        group_id: groupId ?? null,
+        state: 'staged',
+        supersedes: null,
+        annotation: null,
+        created_at: now,
+        updated_at: now,
+      };
+      return rowToApi(supersedeStagedIntent(existing.id, newRow));
+    }
+  }
+
+  const row: StagedIntentRow = {
     id: randomUUID(),
     kind,
-    payload: payload ?? null,
-    projectId,
-    createdAt: Date.now(),
-    groupId: groupId ?? null,
+    payload: JSON.stringify(payload ?? null),
+    payload_hash: payloadHash,
+    task_id: taskId,
+    project_id: projectId,
+    session_id: sessionId ?? null,
+    group_id: groupId ?? null,
+    state: 'staged',
+    supersedes: null,
+    annotation: null,
+    created_at: now,
+    updated_at: now,
   };
-  store.set(intent.id, intent);
-  return intent;
+  insertStagedIntent(row);
+  return rowToApi(row);
 }
 
 /**
@@ -218,11 +301,6 @@ async function applyIntent(
       await commands.setDependsOn(payload.taskId, payload.dependsOn, {
         source: 'human',
       });
-      if (intent.groupId) {
-        appliedSetDependsOn.add(
-          dependsOnGroupKey(intent.groupId, payload.taskId),
-        );
-      }
       return { ok: true };
     }
     case 'task.updateBody': {
@@ -270,6 +348,14 @@ async function applyIntent(
   }
 }
 
+/** Active surface = staged | approved. Terminal states (committed/rejected) and the superseded tombstone are hidden, matching the old delete-on-resolve Map semantics. */
+const ACTIVE_STATES: StagedIntentState[] = ['staged', 'approved'];
+
+function getActiveStagedIntent(id: string): StagedIntentRow | undefined {
+  const row = getStagedIntentRow(id);
+  return row && ACTIVE_STATES.includes(row.state) ? row : undefined;
+}
+
 export function createStagedIntentsRouter(): Router {
   const router = Router();
 
@@ -277,10 +363,10 @@ export function createStagedIntentsRouter(): Router {
   router.get('/staged-intents', (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : null;
-    const intents = Array.from(store.values()).filter(
-      (intent) => !projectId || intent.projectId === projectId,
-    );
-    res.json({ intents });
+    const rows = projectId
+      ? listStagedIntentsByProject(projectId)
+      : listAllActiveStagedIntents();
+    res.json({ intents: rows.map(rowToApi) });
   });
 
   // ── POST /api/staged-intents ─────────────────────────────────────────────
@@ -319,11 +405,12 @@ export function createStagedIntentsRouter(): Router {
   router.post(
     '/staged-intents/:id/apply',
     async (req: Request, res: Response) => {
-      const intent = store.get(String(req.params.id));
-      if (!intent) {
+      const row = getActiveStagedIntent(String(req.params.id));
+      if (!row) {
         res.status(404).json({ error: 'staged intent not found' });
         return;
       }
+      const intent = rowToApi(row);
 
       const body = req.body as {
         override?: unknown;
@@ -347,12 +434,14 @@ export function createStagedIntentsRouter(): Router {
           override ? { reason } : undefined,
           actorType,
         );
-        intent.annotation = null;
-        store.delete(intent.id);
+        transitionStagedIntent(intent.id, 'committed', { annotation: null });
         res.json({ ok: true, result });
       } catch (err) {
         if (err instanceof ReadinessGateError) {
-          intent.annotation = { blocked: true, violations: err.violations };
+          setStagedIntentAnnotation(
+            intent.id,
+            JSON.stringify({ blocked: true, violations: err.violations }),
+          );
           res.status(409).json({
             error: err.message,
             violations: err.violations,
@@ -360,7 +449,10 @@ export function createStagedIntentsRouter(): Router {
           return;
         }
         if (err instanceof GroomingGateError) {
-          intent.annotation = { blocked: true, reasons: err.reasons };
+          setStagedIntentAnnotation(
+            intent.id,
+            JSON.stringify({ blocked: true, reasons: err.reasons }),
+          );
           res.status(409).json({
             error: err.message,
             reasons: err.reasons,
@@ -384,12 +476,12 @@ export function createStagedIntentsRouter(): Router {
 
   // ── POST /api/staged-intents/:id/reject ──────────────────────────────────
   router.post('/staged-intents/:id/reject', (req: Request, res: Response) => {
-    const intent = store.get(String(req.params.id));
-    if (!intent) {
+    const row = getActiveStagedIntent(String(req.params.id));
+    if (!row) {
       res.status(404).json({ error: 'staged intent not found' });
       return;
     }
-    store.delete(intent.id);
+    transitionStagedIntent(row.id, 'rejected');
     res.json({ ok: true });
   });
 
