@@ -57,9 +57,8 @@ describe('GateReadinessPanel deploy launch control', () => {
       expect(deployApiMock.launch).toHaveBeenCalledWith('proj-1', 'abc123');
     });
 
-    expect(await screen.findByTestId('deploy-run-status')).toHaveTextContent(
-      'running',
-    );
+    const status = await screen.findByTestId('deploy-run-status');
+    expect(status.textContent).toContain('running');
   });
 
   it('renders run progress from the store on load', async () => {
@@ -88,11 +87,9 @@ describe('GateReadinessPanel deploy launch control', () => {
 
     render(<GateReadinessPanel activeProjectId="proj-1" />);
 
-    expect(await screen.findByTestId('deploy-run-status')).toHaveTextContent(
-      'succeeded',
-    );
-    expect(await screen.findByTestId('deploy-run-events')).toHaveTextContent(
-      'deploy: step_succeeded',
-    );
+    const status = await screen.findByTestId('deploy-run-status');
+    expect(status.textContent).toContain('succeeded');
+    const events = await screen.findByTestId('deploy-run-events');
+    expect(events.textContent).toContain('deploy: step_succeeded');
   });
 });
