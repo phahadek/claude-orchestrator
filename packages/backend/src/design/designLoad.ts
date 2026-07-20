@@ -33,7 +33,7 @@ interface DesignManifestContextPage {
   title?: string;
 }
 
-export interface DesignManifest {
+interface DesignManifest {
   context_pages?: DesignManifestContextPage[];
 }
 
@@ -115,7 +115,7 @@ function topLevelBullets(text: string): string[] {
   return out.filter(Boolean);
 }
 
-export interface OpenQuestions {
+interface OpenQuestions {
   items: string[];
   source: 'explicit_heading' | 'decide_block' | 'none';
 }
@@ -153,7 +153,7 @@ function extractOpenQuestions(md: string): OpenQuestions {
   return { items: [], source: 'none' };
 }
 
-export interface PageRef {
+interface PageRef {
   title: string;
   raw: string;
 }
@@ -186,7 +186,7 @@ function resolveArchUnit(
 
 // ─── result shapes ──────────────────────────────────────────────────────────
 
-export interface DesignTaskRef {
+interface DesignTaskRef {
   id: string;
   title: string;
   status: string;
@@ -194,7 +194,7 @@ export interface DesignTaskRef {
   url: string;
 }
 
-export interface ArchUnit {
+interface ArchUnit {
   id: string;
   title: string;
   raw: string;
