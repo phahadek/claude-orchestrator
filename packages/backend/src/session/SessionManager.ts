@@ -752,9 +752,27 @@ export class SessionManager extends EventEmitter {
       );
     }
 
-    if (countsAgainstConcurrency(sessionType)) {
-      const codeSessionCount = [...this.sessions.values()].filter((s) =>
-        countsAgainstConcurrency(s.sessionType),
+    // Planning session types (groom/design, and ops/investigation once that
+    // sibling type exists) share one concurrency pool distinct from the code
+    // session cap — they all compete for the same operator review attention
+    // through one decision surface, so a per-type cap would be the wrong
+    // shape here.
+    if (isPlanningSession(sessionType)) {
+      const planningSessionCount = [...this.sessions.values()].filter((s) =>
+        isPlanningSession(s.sessionType),
+      ).length;
+      if (
+        planningSessionCount >= runtimeSettings.max_concurrent_planning_sessions
+      ) {
+        throw new Error(
+          `Max concurrent planning sessions (${runtimeSettings.max_concurrent_planning_sessions}) reached`,
+        );
+      }
+    } else if (countsAgainstConcurrency(sessionType)) {
+      const codeSessionCount = [...this.sessions.values()].filter(
+        (s) =>
+          countsAgainstConcurrency(s.sessionType) &&
+          !isPlanningSession(s.sessionType),
       ).length;
       if (codeSessionCount >= config.maxConcurrentCodeSessions) {
         throw new Error(

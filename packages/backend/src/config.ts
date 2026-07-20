@@ -354,6 +354,12 @@ export interface RuntimeSettings {
   planning_session_model: string;
   /** Reasoning effort for planning sessions passed via --effort; empty string = model default. */
   planning_session_effort: string;
+  /**
+   * Shared concurrency cap across all planning session types (groom/design,
+   * and ops/investigation once that sibling session type exists). One pool,
+   * not per-type caps — they compete for the same operator review attention.
+   */
+  max_concurrent_planning_sessions: number;
   /** TaskCacheRefresher: how often (ms) to refresh per-project board caches in background. */
   task_cache_refresh_interval_ms: number;
   /** GateReconciler: built but not activated by default (no-coexistence rule) — off until an operator opts in. */
@@ -378,6 +384,9 @@ export const runtimeSettings: RuntimeSettings = {
   review_session_effort: '',
   planning_session_model: '',
   planning_session_effort: '',
+  max_concurrent_planning_sessions: Number(
+    process.env.MAX_CONCURRENT_PLANNING_SESSIONS ?? 5,
+  ),
   session_mode: process.env.SESSION_MODE === 'api' ? 'api' : 'cli',
   auto_launch_concurrency: Number(process.env.AUTO_LAUNCH_CONCURRENCY ?? 1),
   auto_launch_poll_interval_ms: Number(

@@ -86,6 +86,7 @@ import { createGroomContextRouter } from './routes/groomContext';
 import { createMergeCandidatesRouter } from './routes/mergeCandidates';
 import { createOpsContextRouter } from './routes/opsContext';
 import { createOpsLaunchRouter } from './routes/opsLaunch';
+import { createPlanningLaunchRouter } from './routes/planningLaunch';
 import { OpsSessionLauncher } from './orchestration/OpsSessionLauncher';
 import { runBootSequence, getActiveBootTracker } from './bootSequence';
 import { logger } from './logger';
@@ -231,6 +232,7 @@ app.use('/api', createMergeCandidatesRouter());
 app.use('/api', createOpsContextRouter());
 const opsSessionLauncher = new OpsSessionLauncher(sessionManager);
 app.use('/api', createOpsLaunchRouter(opsSessionLauncher));
+app.use('/api', createPlanningLaunchRouter(opsSessionLauncher));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')),
