@@ -65,8 +65,6 @@ export interface MilestoneReadiness {
   blockingCount: number;
 }
 
-export type GateItemListOrder = 'not-done-first';
-
 export interface ListGateItemsParams {
   project?: string;
   milestone?: string;
@@ -75,7 +73,7 @@ export interface ListGateItemsParams {
   runnable?: boolean;
   page?: number;
   limit?: number;
-  order?: GateItemListOrder;
+  order?: 'not-done-first';
 }
 
 export interface ListGateItemsResult {

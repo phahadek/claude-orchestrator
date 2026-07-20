@@ -51,15 +51,13 @@ export interface SeedMilestoneReadiness {
   blockingCount: number;
 }
 
-export type SeedItemListOrder = 'not-done-first';
-
 export interface ListSeedItemsParams {
   project?: string;
   milestone?: string;
   state?: string;
   page?: number;
   limit?: number;
-  order?: SeedItemListOrder;
+  order?: 'not-done-first';
 }
 
 export interface ListSeedItemsResult {
