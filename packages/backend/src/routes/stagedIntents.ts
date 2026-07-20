@@ -43,6 +43,7 @@ import type {
 } from '../tasks/TaskWriteCommands';
 import { setEntryState, type OpsState } from '../ops/opsJournal';
 import type { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
+import type { SessionManager } from '../session/SessionManager';
 import {
   BackendArchWriteCommands,
   StaleArchUnitVersionError,
@@ -52,6 +53,7 @@ import {
 import type { ArchUnitUpdateFields } from '../architecture/ArchUnitStore';
 import type { ArchUnitKind, ArchUnitStatus } from '../db/types';
 import type { ServerMessage } from '../ws/types';
+import { logger } from '../logger';
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
 // Mirrors tasks.ts's task_updated wiring: REST stays the fetch/apply source of
@@ -252,6 +254,19 @@ interface JournalSetStatePayload {
   state: OpsState;
   fields?: Parameters<typeof setEntryState>[2];
 }
+/**
+ * How a dispatched session expresses a write-capability request: the exact
+ * tool/command it wants (a Bash command prefix or a named MCP write verb —
+ * never a category), the plan it intends to use it for, and the evidence
+ * behind the request. The target session is always this intent's own
+ * session_id (set by the staging auth context), never a payload field — a
+ * session cannot request a grant onto another session.
+ */
+interface CapabilityRequestPayload {
+  capability: string;
+  plan: string;
+  evidence: string;
+}
 
 /** The kind/topic/regions/status envelope shared by all three arch.* kinds. */
 interface ArchUnitMetadataPayload {
@@ -322,6 +337,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'arch.createUnit',
   'arch.updateUnit',
   'arch.supersedeUnit',
+  'session.requestCapability',
 ]);
 
 /**
@@ -577,6 +593,47 @@ async function applyIntent(
   }
 }
 
+/**
+ * Approval -> grant -> re-dispatch for a session.requestCapability intent:
+ * durably grants exactly the requested capability (never broader, never a
+ * resolved/apply scope) to the requesting session and resumes it via the
+ * existing feedback-inbox -> re-turn wiring, the approval noted in the
+ * resume input. No-ops (grants nothing) if the intent has no originating
+ * session or no sessionManager was wired in.
+ */
+async function resumeCapabilityRequester(
+  sessionManager: SessionManager | undefined,
+  intent: StagedIntent,
+  outcome: 'approved' | 'rejected' | 'pushback',
+  feedback?: string | null,
+): Promise<void> {
+  if (!sessionManager || !intent.sessionId) return;
+  const payload = intent.payload as CapabilityRequestPayload;
+
+  if (outcome === 'approved') {
+    sessionManager.grantCapability(intent.sessionId, payload.capability);
+  }
+
+  const message =
+    outcome === 'approved'
+      ? `Capability request approved: "${payload.capability}" has been granted for this session.`
+      : outcome === 'pushback'
+        ? `Capability request "${payload.capability}" was sent back for revision.${feedback ? ` Feedback: ${feedback}` : ''}`
+        : `Capability request "${payload.capability}" was rejected.${feedback ? ` Reason: ${feedback}` : ''}`;
+
+  try {
+    await sessionManager.enqueueFeedback(
+      intent.sessionId,
+      'operator-disposition',
+      message,
+    );
+  } catch (err) {
+    logger.error(
+      `[stagedIntents] resume failed for session ${intent.sessionId.slice(0, 8)} after capability-request ${outcome}: ${err}`,
+    );
+  }
+}
+
 /** Active surface = staged | approved. Terminal states (committed/rejected) and the superseded tombstone are hidden, matching the old delete-on-resolve Map semantics. */
 const ACTIVE_STATES: StagedIntentState[] = ['staged', 'approved'];
 
@@ -790,6 +847,7 @@ async function commitGroupIntents(
 
 export function createStagedIntentsRouter(
   planningOrchestrator?: PlanningOrchestrator,
+  sessionManager?: SessionManager,
 ): Router {
   const router = Router();
 
@@ -963,6 +1021,24 @@ export function createStagedIntentsRouter(
       }
       const intent = rowToApi(row);
 
+      // A capability-request has no separate apply step — approval is the
+      // terminal action: it grants exactly the requested capability and
+      // re-dispatches the requesting session in one step.
+      if (intent.kind === 'session.requestCapability') {
+        const committed = transitionStagedIntent(intent.id, 'committed', {
+          annotation: null,
+        });
+        const committedIntent = rowToApi(committed);
+        broadcastIntentChange(committedIntent);
+        await resumeCapabilityRequester(
+          sessionManager,
+          committedIntent,
+          'approved',
+        );
+        res.json(committedIntent);
+        return;
+      }
+
       let annotation: StagedIntent['annotation'] = null;
       if (intent.kind === 'task.setStatus') {
         const payload = intent.payload as SetStatusPayload;
@@ -1126,12 +1202,22 @@ export function createStagedIntentsRouter(
           : null;
 
       const rejected = transitionStagedIntent(row.id, 'rejected');
-      broadcastIntentChange(rowToApi(rejected));
-      await planningOrchestrator?.handleDisposition({
-        intent: rejected,
-        disposition: feedback ? 'pushback' : 'reject',
-        feedback,
-      });
+      const rejectedIntent = rowToApi(rejected);
+      broadcastIntentChange(rejectedIntent);
+      if (rejectedIntent.kind === 'session.requestCapability') {
+        await resumeCapabilityRequester(
+          sessionManager,
+          rejectedIntent,
+          feedback ? 'pushback' : 'rejected',
+          feedback,
+        );
+      } else {
+        await planningOrchestrator?.handleDisposition({
+          intent: rejected,
+          disposition: feedback ? 'pushback' : 'reject',
+          feedback,
+        });
+      }
       res.json({ ok: true });
     },
   );
