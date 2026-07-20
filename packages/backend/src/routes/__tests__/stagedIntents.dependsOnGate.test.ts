@@ -15,9 +15,7 @@ vi.mock('../../tasks/TaskBackend', () => ({
 // cases (and test files, and CI runs) and produce spurious dedup/lock
 // collisions.
 vi.mock('../../db/db', async () => {
-  const { setupTestDb } = await import(
-    '../../../test/helpers/setupTestDb.js'
-  );
+  const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
 });
 
