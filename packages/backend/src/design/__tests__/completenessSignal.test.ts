@@ -85,9 +85,7 @@ describe('computeTraceCoverage', () => {
   it('flags an acceptance criterion that maps to no locked decision', () => {
     const result = computeTraceCoverage({
       designTaskId: 'notion:design1',
-      acceptanceCriteria: [
-        'Invoices export as PDF within 5 seconds.',
-      ],
+      acceptanceCriteria: ['Invoices export as PDF within 5 seconds.'],
       lockedDecisions: [
         {
           question: 'Should login support MFA?',

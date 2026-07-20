@@ -4198,7 +4198,8 @@ let _stmtListCompletenessDispositions: Database.Statement | null = null;
 export function insertCompletenessDisposition(
   row: NewCompletenessDispositionRow,
 ): CompletenessDispositionRow {
-  _stmtInsertCompletenessDisposition ??= db.prepare<NewCompletenessDispositionRow>(`
+  _stmtInsertCompletenessDisposition ??=
+    db.prepare<NewCompletenessDispositionRow>(`
     INSERT INTO completeness_disposition
       (source_task_id, project, milestone, questions, run_at)
     VALUES

@@ -56,7 +56,10 @@ describe('POST /api/design/:taskId/completeness-disposition', () => {
   it('rejects a malformed questions array', async () => {
     const res = await request(app)
       .post('/api/design/notion:design1/completeness-disposition')
-      .send({ questions: [{ question: 'x' }], runAt: '2026-07-20T00:00:00.000Z' });
+      .send({
+        questions: [{ question: 'x' }],
+        runAt: '2026-07-20T00:00:00.000Z',
+      });
 
     expect(res.status).toBe(400);
   });
@@ -68,7 +71,11 @@ describe('GET /api/design/:taskId/completeness-disposition', () => {
       .post('/api/design/notion:design1/completeness-disposition')
       .send({
         questions: [
-          { question: 'Q1?', disposition: 'accepted', reason: 'Filed as follow-on.' },
+          {
+            question: 'Q1?',
+            disposition: 'accepted',
+            reason: 'Filed as follow-on.',
+          },
         ],
         runAt: '2026-07-20T00:00:00.000Z',
       });

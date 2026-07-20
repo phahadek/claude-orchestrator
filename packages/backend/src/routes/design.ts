@@ -67,7 +67,9 @@ export function createDesignRouter(): Router {
       });
       res.status(201).json({
         ...row,
-        questions: JSON.parse(row.questions) as CompletenessDispositionQuestion[],
+        questions: JSON.parse(
+          row.questions,
+        ) as CompletenessDispositionQuestion[],
       });
     },
   );
@@ -79,7 +81,9 @@ export function createDesignRouter(): Router {
       const taskId = String(req.params.taskId);
       const rows = listCompletenessDispositions(taskId).map((row) => ({
         ...row,
-        questions: JSON.parse(row.questions) as CompletenessDispositionQuestion[],
+        questions: JSON.parse(
+          row.questions,
+        ) as CompletenessDispositionQuestion[],
       }));
       res.json({ runs: rows });
     },
