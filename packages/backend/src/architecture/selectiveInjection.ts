@@ -51,7 +51,9 @@ export type SelectiveInjectionResult =
   | { source: 'notion'; pages: ArchitecturePageDoc[] };
 
 export interface NotionArchitectureClient {
-  fetchPageMarkdown(pageId: string): Promise<{ title: string; markdown: string }>;
+  fetchPageMarkdown(
+    pageId: string,
+  ): Promise<{ title: string; markdown: string }>;
 }
 
 export interface SelectiveInjectionDeps {

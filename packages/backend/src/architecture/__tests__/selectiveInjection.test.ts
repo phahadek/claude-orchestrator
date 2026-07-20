@@ -108,7 +108,6 @@ describe('selectUnitsFromStore', () => {
 
     expect(result).toEqual([]);
   });
-
 });
 
 describe('selectUnitsFromStore against the real arch_unit store', () => {
@@ -191,7 +190,9 @@ describe('selectArchitectureContext (dual-read)', () => {
   });
 
   it('resolves a non-migrated project to the Notion fallback', async () => {
-    const pages = [{ id: 'p1', title: 'Technical Architecture', markdown: '# x' }];
+    const pages = [
+      { id: 'p1', title: 'Technical Architecture', markdown: '# x' },
+    ];
     const result = await selectArchitectureContext(
       { projectId: 'proj-2' },
       {
