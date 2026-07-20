@@ -65,6 +65,11 @@ import {
   enqueueFeedbackItem,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
+import {
+  countsAgainstConcurrency,
+  isPlanningSession,
+  movesTargetInProgress,
+} from './sessionPredicates';
 import { eventKind } from './eventKind';
 import type { Session } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -243,7 +248,7 @@ function buildProactiveEscalationNudge(pendingText: string): string {
 
 export interface StartOptions {
   taskType?: string;
-  sessionType?: 'standard' | 'review';
+  sessionType?: 'standard' | 'review' | 'groom' | 'design';
   customPrompt?: string;
   projectId?: string;
   taskName?: string;
@@ -395,7 +400,7 @@ export class SessionManager extends EventEmitter {
   private sessions = new Map<string, AgentSession>();
   private pendingStarts = new Map<
     string,
-    { sessionType: 'standard' | 'review' }
+    { sessionType: 'standard' | 'review' | 'groom' | 'design' }
   >();
   /** Concurrency guard: prevents double-spawning when two concurrent sendOrResume calls race. */
   private resumesInFlight = new Map<string, Promise<string | null>>();
@@ -654,15 +659,15 @@ export class SessionManager extends EventEmitter {
       taskId: precomputedTaskId,
     } = options ?? {};
 
-    if (sessionType !== 'review' && taskKind === undefined) {
+    if (countsAgainstConcurrency(sessionType) && taskKind === undefined) {
       throw new Error(
         `sessionManager.start() requires taskKind for standard sessions`,
       );
     }
 
-    if (sessionType !== 'review') {
-      const codeSessionCount = [...this.sessions.values()].filter(
-        (s) => s.sessionType !== 'review',
+    if (countsAgainstConcurrency(sessionType)) {
+      const codeSessionCount = [...this.sessions.values()].filter((s) =>
+        countsAgainstConcurrency(s.sessionType),
       ).length;
       if (codeSessionCount >= config.maxConcurrentCodeSessions) {
         throw new Error(
@@ -696,7 +701,7 @@ export class SessionManager extends EventEmitter {
 
     // Dedup: if a live or DB-active session already exists for this task, return early.
     // This lifts the AutoLauncher guard into SessionManager so every caller benefits.
-    if (sessionType !== 'review') {
+    if (countsAgainstConcurrency(sessionType)) {
       const earlyTaskId =
         precomputedTaskId ??
         deriveTaskId(project.taskSource ?? 'notion', taskUrl);
@@ -851,12 +856,12 @@ export class SessionManager extends EventEmitter {
 
     const project = getProjectById(projectId)!;
     const projectDir = normalizePath(project.projectDir);
-    const worktreePath = path.join(
-      projectDir,
-      '.claude',
-      'worktrees',
-      sessionId,
-    );
+    const isPlanning = isPlanningSession(sessionType);
+    // Planning sessions (groom/design) are stage-only/read-only: no worktree,
+    // no feature branch, no bootstrap — cwd is the project's own checkout.
+    const worktreePath = isPlanning
+      ? projectDir
+      : path.join(projectDir, '.claude', 'worktrees', sessionId);
     const isLocalOnly = project.gitMode === 'local-only';
     const { startingPoint, milestoneSlug } = resolveStartingPoint(
       project,
@@ -866,202 +871,212 @@ export class SessionManager extends EventEmitter {
       precomputedTaskId ??
       deriveTaskId(project.taskSource ?? 'notion', taskUrl);
 
-    if (!isLocalOnly) {
-      if (milestoneSlug) {
-        try {
-          ensureMilestoneBranch(milestoneSlug, projectDir, project.baseBranch);
-        } catch (err) {
-          logger.warn(
-            `[SessionManager] ensureMilestoneBranch failed (continuing): ${err}`,
-          );
-        }
-      } else {
-        try {
-          await exec(`git fetch origin ${project.baseBranch}`, {
-            cwd: projectDir,
-            timeout: 30_000,
-          });
-        } catch (err) {
-          logger.warn(
-            `[SessionManager] git fetch origin ${project.baseBranch} failed (continuing with local ref): ${err}`,
-          );
+    if (!isPlanning) {
+      if (!isLocalOnly) {
+        if (milestoneSlug) {
+          try {
+            ensureMilestoneBranch(
+              milestoneSlug,
+              projectDir,
+              project.baseBranch,
+            );
+          } catch (err) {
+            logger.warn(
+              `[SessionManager] ensureMilestoneBranch failed (continuing): ${err}`,
+            );
+          }
+        } else {
+          try {
+            await exec(`git fetch origin ${project.baseBranch}`, {
+              cwd: projectDir,
+              timeout: 30_000,
+            });
+          } catch (err) {
+            logger.warn(
+              `[SessionManager] git fetch origin ${project.baseBranch} failed (continuing with local ref): ${err}`,
+            );
+          }
         }
       }
-    }
 
-    const worktreeBase =
-      isLocalOnly || startingPoint !== project.baseBranch
-        ? startingPoint
-        : `origin/${project.baseBranch}`;
+      const worktreeBase =
+        isLocalOnly || startingPoint !== project.baseBranch
+          ? startingPoint
+          : `origin/${project.baseBranch}`;
 
-    const featureBranch = taskName ? deriveBranchSlug(taskName) : null;
-    if (featureBranch) {
-      try {
-        await gitWorktreeAddWithRetry(
-          `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
-          { cwd: projectDir },
-        );
-      } catch (err) {
-        const e = err as { stderr?: string | Buffer; message: string };
-        const stderr = e.stderr ? e.stderr.toString() : '';
-        const isBranchAlreadyExists = /A branch named .* already exists/.test(
-          stderr,
-        );
-        const fullMsg =
-          `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
+      const featureBranch = taskName ? deriveBranchSlug(taskName) : null;
+      if (featureBranch) {
+        try {
+          await gitWorktreeAddWithRetry(
+            `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
+            { cwd: projectDir },
+          );
+        } catch (err) {
+          const e = err as { stderr?: string | Buffer; message: string };
+          const stderr = e.stderr ? e.stderr.toString() : '';
+          const isBranchAlreadyExists = /A branch named .* already exists/.test(
+            stderr,
+          );
+          const fullMsg =
+            `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
 
-        if (isBranchAlreadyExists) {
-          // Identify the branch owner: look for a terminal predecessor session of the same task.
-          const predecessors = getTerminalSessionsForTask(sessionTaskId);
-          const predecessor = predecessors[0] ?? null;
+          if (isBranchAlreadyExists) {
+            // Identify the branch owner: look for a terminal predecessor session of the same task.
+            const predecessors = getTerminalSessionsForTask(sessionTaskId);
+            const predecessor = predecessors[0] ?? null;
 
-          if (predecessor) {
-            // Owned by a terminal predecessor of the same task — abandon and retry fresh.
-            logger.info(
-              `[SessionManager] completeStart: stale branch ${featureBranch} from terminal session ${predecessor.session_id.slice(0, 8)} — abandoning`,
-            );
-
-            // Close the predecessor's open PR with a superseded comment (best-effort).
-            let prNumber: number | null = null;
-            let prRepo: string | null = null;
-            const prRow = getPRBySessionId(predecessor.session_id);
-            if (prRow && prRow.state === 'open' && this.githubClient) {
-              prNumber = prRow.pr_number;
-              prRepo = prRow.repo;
-              try {
-                await this.githubClient.closePRWithComment(
-                  prRow.repo,
-                  prRow.pr_number,
-                  "Superseded — task relaunched; this PR's branch was abandoned per fresh-start policy.",
-                );
-                logger.info(
-                  `[SessionManager] completeStart: closed predecessor PR #${prRow.pr_number} (${prRow.repo})`,
-                );
-              } catch (closeErr) {
-                logger.warn(
-                  `[SessionManager] completeStart: failed to close predecessor PR #${prRow.pr_number}: ${closeErr}`,
-                );
-              }
-            }
-
-            // Prune stale worktree registrations before local branch delete.
-            try {
-              execSync(`git worktree prune`, { cwd: projectDir });
-            } catch {
-              // best-effort
-            }
-
-            // Delete the branch locally (best-effort).
-            try {
-              execSync(`git branch -D "${featureBranch}"`, { cwd: projectDir });
+            if (predecessor) {
+              // Owned by a terminal predecessor of the same task — abandon and retry fresh.
               logger.info(
-                `[SessionManager] completeStart: deleted local branch ${featureBranch}`,
+                `[SessionManager] completeStart: stale branch ${featureBranch} from terminal session ${predecessor.session_id.slice(0, 8)} — abandoning`,
               );
-            } catch (delLocalErr) {
-              logger.warn(
-                `[SessionManager] completeStart: failed to delete local branch ${featureBranch}: ${delLocalErr}`,
-              );
-            }
 
-            // Delete the branch on origin (best-effort).
-            const branchDeletionRepo = resolvedRepo ?? project.githubRepo;
-            if (this.githubClient && branchDeletionRepo) {
+              // Close the predecessor's open PR with a superseded comment (best-effort).
+              let prNumber: number | null = null;
+              let prRepo: string | null = null;
+              const prRow = getPRBySessionId(predecessor.session_id);
+              if (prRow && prRow.state === 'open' && this.githubClient) {
+                prNumber = prRow.pr_number;
+                prRepo = prRow.repo;
+                try {
+                  await this.githubClient.closePRWithComment(
+                    prRow.repo,
+                    prRow.pr_number,
+                    "Superseded — task relaunched; this PR's branch was abandoned per fresh-start policy.",
+                  );
+                  logger.info(
+                    `[SessionManager] completeStart: closed predecessor PR #${prRow.pr_number} (${prRow.repo})`,
+                  );
+                } catch (closeErr) {
+                  logger.warn(
+                    `[SessionManager] completeStart: failed to close predecessor PR #${prRow.pr_number}: ${closeErr}`,
+                  );
+                }
+              }
+
+              // Prune stale worktree registrations before local branch delete.
               try {
-                await this.githubClient.deleteBranch(
-                  branchDeletionRepo,
-                  featureBranch,
-                );
+                execSync(`git worktree prune`, { cwd: projectDir });
+              } catch {
+                // best-effort
+              }
+
+              // Delete the branch locally (best-effort).
+              try {
+                execSync(`git branch -D "${featureBranch}"`, {
+                  cwd: projectDir,
+                });
                 logger.info(
-                  `[SessionManager] completeStart: deleted origin branch ${featureBranch}`,
+                  `[SessionManager] completeStart: deleted local branch ${featureBranch}`,
                 );
-              } catch (delRemoteErr) {
+              } catch (delLocalErr) {
                 logger.warn(
-                  `[SessionManager] completeStart: failed to delete origin branch ${featureBranch}: ${delRemoteErr}`,
+                  `[SessionManager] completeStart: failed to delete local branch ${featureBranch}: ${delLocalErr}`,
                 );
               }
-            }
 
-            // Emit stale_branch_abandoned audit event.
-            recordEvent({
-              event_type: 'stale_branch_abandoned',
-              actor_type: 'system',
-              actor_id: sessionId,
-              project_id: projectId || null,
-              task_id: sessionTaskId || null,
-              payload: {
-                branch: featureBranch,
-                priorSessionId: predecessor.session_id,
-                prNumber,
-                prRepo,
-              },
-            });
+              // Delete the branch on origin (best-effort).
+              const branchDeletionRepo = resolvedRepo ?? project.githubRepo;
+              if (this.githubClient && branchDeletionRepo) {
+                try {
+                  await this.githubClient.deleteBranch(
+                    branchDeletionRepo,
+                    featureBranch,
+                  );
+                  logger.info(
+                    `[SessionManager] completeStart: deleted origin branch ${featureBranch}`,
+                  );
+                } catch (delRemoteErr) {
+                  logger.warn(
+                    `[SessionManager] completeStart: failed to delete origin branch ${featureBranch}: ${delRemoteErr}`,
+                  );
+                }
+              }
 
-            // Single retry — if this also fails, propagate normally (no loop).
-            try {
-              await gitWorktreeAddWithRetry(
-                `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
-                { cwd: projectDir },
-              );
-            } catch (retryErr) {
-              const re = retryErr as {
-                stderr?: string | Buffer;
-                message: string;
-              };
-              const retryStderr = re.stderr ? re.stderr.toString() : '';
-              const retryMsg =
-                `${re.message}${retryStderr ? `\nstderr: ${retryStderr}` : ''}`.trim();
-              logger.error(
-                `[SessionManager] completeStart: retry after stale-branch abandonment also failed for ${sessionId}: ${retryMsg}`,
-              );
-              throw new WorktreeSetupError(retryMsg, {
-                isBranchAlreadyExists: false,
+              // Emit stale_branch_abandoned audit event.
+              recordEvent({
+                event_type: 'stale_branch_abandoned',
+                actor_type: 'system',
+                actor_id: sessionId,
+                project_id: projectId || null,
+                task_id: sessionTaskId || null,
+                payload: {
+                  branch: featureBranch,
+                  priorSessionId: predecessor.session_id,
+                  prNumber,
+                  prRepo,
+                },
               });
+
+              // Single retry — if this also fails, propagate normally (no loop).
+              try {
+                await gitWorktreeAddWithRetry(
+                  `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
+                  { cwd: projectDir },
+                );
+              } catch (retryErr) {
+                const re = retryErr as {
+                  stderr?: string | Buffer;
+                  message: string;
+                };
+                const retryStderr = re.stderr ? re.stderr.toString() : '';
+                const retryMsg =
+                  `${re.message}${retryStderr ? `\nstderr: ${retryStderr}` : ''}`.trim();
+                logger.error(
+                  `[SessionManager] completeStart: retry after stale-branch abandonment also failed for ${sessionId}: ${retryMsg}`,
+                );
+                throw new WorktreeSetupError(retryMsg, {
+                  isBranchAlreadyExists: false,
+                });
+              }
+            } else {
+              // Branch exists but not attributable to a terminal predecessor of this task.
+              // Keep deterministic failure — crash budget backstop handles it.
+              logger.error(
+                `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
+              );
+              throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists });
             }
           } else {
-            // Branch exists but not attributable to a terminal predecessor of this task.
-            // Keep deterministic failure — crash budget backstop handles it.
             logger.error(
               `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
             );
             throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists });
           }
-        } else {
+        }
+      } else {
+        try {
+          await gitWorktreeAddWithRetry(
+            `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
+            { cwd: projectDir },
+          );
+        } catch (err) {
+          const e = err as { stderr?: string | Buffer; message: string };
+          const stderr = e.stderr ? e.stderr.toString() : '';
+          const fullMsg =
+            `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
           logger.error(
             `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
           );
-          throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists });
+          throw new WorktreeSetupError(fullMsg, {
+            isBranchAlreadyExists: false,
+          });
         }
       }
-    } else {
-      try {
-        await gitWorktreeAddWithRetry(
-          `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
-          { cwd: projectDir },
-        );
-      } catch (err) {
-        const e = err as { stderr?: string | Buffer; message: string };
-        const stderr = e.stderr ? e.stderr.toString() : '';
-        const fullMsg =
-          `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
-        logger.error(
-          `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
-        );
-        throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists: false });
-      }
-    }
 
-    const isUnixStylePath =
-      worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
-    logger.info(
-      `[SessionManager] worktree created: path=${worktreePath} startingPoint=${startingPoint}` +
-        (isUnixStylePath
-          ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
-          : ''),
-    );
+      const isUnixStylePath =
+        worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
+      logger.info(
+        `[SessionManager] worktree created: path=${worktreePath} startingPoint=${startingPoint}` +
+          (isUnixStylePath
+            ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
+            : ''),
+      );
+    }
 
     const orchConfig = loadOrchestratorConfig(projectDir);
 
-    if (orchConfig.bootstrap_script) {
+    if (!isPlanning && orchConfig.bootstrap_script) {
       try {
         await exec(`bash "${orchConfig.bootstrap_script}" "${worktreePath}"`, {
           cwd: projectDir,
@@ -1081,9 +1096,9 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    const missingEnv = orchConfig.required_env.filter(
-      (varName) => !(varName in process.env),
-    );
+    const missingEnv = isPlanning
+      ? []
+      : orchConfig.required_env.filter((varName) => !(varName in process.env));
     if (missingEnv.length > 0) {
       const detail = `bootstrap gate: missing required env var(s): ${missingEnv.join(', ')}`;
       logger.error(
@@ -1092,9 +1107,11 @@ export class SessionManager extends EventEmitter {
       throw new Error(detail);
     }
 
-    const missingFiles = orchConfig.required_files.filter(
-      (filePath) => !fs.existsSync(path.join(worktreePath, filePath)),
-    );
+    const missingFiles = isPlanning
+      ? []
+      : orchConfig.required_files.filter(
+          (filePath) => !fs.existsSync(path.join(worktreePath, filePath)),
+        );
     if (missingFiles.length > 0) {
       const detail = `bootstrap gate: missing required file(s): ${missingFiles.join(', ')}`;
       logger.error(
@@ -1112,7 +1129,7 @@ export class SessionManager extends EventEmitter {
           : new CliSessionRunner(sessionId);
 
     let taskContent: string | undefined;
-    if (sessionType !== 'review' && sessionTaskId) {
+    if (countsAgainstConcurrency(sessionType) && sessionTaskId) {
       try {
         taskContent =
           await getTaskBackend(projectId).fetchTaskPage(sessionTaskId);
@@ -1237,7 +1254,7 @@ export class SessionManager extends EventEmitter {
     this.wireSession(sessionId, session, projectDir, worktreePath);
 
     // Update task status to In Progress (fire-and-forget; failures logged, not thrown).
-    if (sessionType === 'standard') {
+    if (movesTargetInProgress(sessionType)) {
       getTaskBackend(projectId)
         .updateStatus(sessionTaskId, '🔄 In Progress', {
           source: 'orchestrator',
@@ -1314,7 +1331,9 @@ export class SessionManager extends EventEmitter {
 
     const projectDir = normalizePath(project.projectDir);
     const worktreePath = row.worktree_path;
-    if (!worktreePath) return;
+    // Planning sessions (groom/design) run directly in the project checkout —
+    // never remove it as if it were a disposable worktree.
+    if (!worktreePath || worktreePath === projectDir) return;
 
     if (fs.existsSync(worktreePath)) {
       try {

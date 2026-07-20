@@ -211,9 +211,9 @@ describe('SessionManager.start() — In Progress status', () => {
     );
   });
 
-  it('In Progress call is gated on sessionType === standard', () => {
-    expect(source).toMatch(/sessionType\s*===\s*'standard'/);
-    const gateIdx = source.indexOf("sessionType === 'standard'");
+  it('In Progress call is gated on movesTargetInProgress(sessionType)', () => {
+    expect(source).toMatch(/movesTargetInProgress\(sessionType\)/);
+    const gateIdx = source.indexOf('movesTargetInProgress(sessionType)');
     const inProgressIdx = source.indexOf(
       "updateStatus(sessionTaskId, '🔄 In Progress'",
     );
@@ -236,10 +236,10 @@ describe('SessionManager.start() — code-only session limit', () => {
   });
 
   it('review session bypasses the cap check entirely', () => {
-    // The limit check must be gated on sessionType !== review
-    expect(source).toMatch(/sessionType\s*!==\s*'review'/);
-    // The cap check block is inside the sessionType !== review guard
-    const guardIdx = source.indexOf("sessionType !== 'review'");
+    // The limit check must be gated on countsAgainstConcurrency(sessionType)
+    expect(source).toMatch(/countsAgainstConcurrency\(sessionType\)/);
+    // The cap check block is inside the countsAgainstConcurrency guard
+    const guardIdx = source.indexOf('countsAgainstConcurrency(sessionType)');
     const capCheckIdx = source.indexOf('maxConcurrentCodeSessions');
     expect(capCheckIdx).toBeGreaterThan(guardIdx);
   });
@@ -1077,18 +1077,18 @@ describe('SessionManager.start() — taskKind required', () => {
 
   it('throws when sessionType is standard and taskKind is undefined', () => {
     expect(source).toMatch(
-      /sessionType\s*!==\s*'review'\s*&&\s*taskKind\s*===\s*undefined/,
+      /countsAgainstConcurrency\(sessionType\)\s*&&\s*taskKind\s*===\s*undefined/,
     );
     expect(source).toMatch(/requires taskKind for standard sessions/);
   });
 
   it('does not throw for review sessions without taskKind (gate is conditional)', () => {
     const gateIdx = source.indexOf(
-      "sessionType !== 'review' && taskKind === undefined",
+      'countsAgainstConcurrency(sessionType) && taskKind === undefined',
     );
     expect(gateIdx).toBeGreaterThan(-1);
     const gateBlock = source.slice(gateIdx, gateIdx + 200);
-    expect(gateBlock).toMatch(/sessionType\s*!==\s*'review'/);
+    expect(gateBlock).toMatch(/countsAgainstConcurrency\(sessionType\)/);
   });
 
   it('does not use the old heuristic taskKind ?? (milestoneId ? milestone : non_milestone)', () => {
@@ -1128,7 +1128,7 @@ describe('SessionManager.start() — in-flight dedup guard', () => {
   it('dedup guard only applies to non-review sessions', () => {
     const dedupIdx = source.indexOf('this.hasLiveSessionForTask(');
     const dedupBlock = source.slice(Math.max(0, dedupIdx - 250), dedupIdx + 50);
-    expect(dedupBlock).toMatch(/sessionType\s*!==\s*'review'/);
+    expect(dedupBlock).toMatch(/countsAgainstConcurrency\(sessionType\)/);
   });
 });
 
@@ -1300,5 +1300,46 @@ describe('SessionManager._doSendOrResume() — terminal status guard', () => {
     );
     expect(guardMatch).not.toBeNull();
     expect(guardMatch![0]).not.toContain('idle');
+  });
+});
+
+// ── AC: planning sessions (groom/design) skip worktree creation ──────────────
+describe('SessionManager.completeStart() — planning sessions skip worktree', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+  const completeStartIdx = source.indexOf('private async completeStart(');
+  const cleanupIdx = source.indexOf(
+    'private async cleanupPartialWorktree(',
+    completeStartIdx,
+  );
+  const block = source.slice(completeStartIdx, cleanupIdx);
+
+  it('derives isPlanning from isPlanningSession(sessionType)', () => {
+    expect(block).toMatch(/isPlanning\s*=\s*isPlanningSession\(sessionType\)/);
+  });
+
+  it('worktreePath falls back to projectDir for planning sessions', () => {
+    expect(block).toMatch(/isPlanning\s*\?\s*projectDir/);
+  });
+
+  it('git worktree add is guarded on !isPlanning', () => {
+    const guardIdx = block.indexOf('if (!isPlanning) {');
+    const worktreeAddIdx = block.indexOf('git worktree add');
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(worktreeAddIdx).toBeGreaterThan(guardIdx);
+  });
+
+  it('bootstrap script is guarded on !isPlanning', () => {
+    expect(block).toMatch(
+      /if\s*\(!isPlanning\s*&&\s*orchConfig\.bootstrap_script\)/,
+    );
+  });
+
+  it('cleanupPartialWorktree never removes the project checkout itself', () => {
+    const fnIdx = source.indexOf('private async cleanupPartialWorktree(');
+    const fnBlock = source.slice(fnIdx, fnIdx + 800);
+    expect(fnBlock).toMatch(/worktreePath === projectDir/);
   });
 });
