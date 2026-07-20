@@ -599,3 +599,62 @@ export interface FeedbackInboxRow {
   enqueued_at: number;
   delivered_at: number | null;
 }
+
+// ─── arch_unit ────────────────────────────────────────────────────────────
+
+/** A single titled architecture statement. */
+export type ArchUnitKind =
+  | 'subsystem'
+  | 'invariant'
+  | 'decision'
+  | 'contract'
+  | 'reference';
+
+export type ArchUnitStatus = 'active' | 'deferred' | 'superseded';
+
+export interface ArchUnitRow {
+  id: string;
+  title: string;
+  kind: ArchUnitKind;
+  topic: string;
+  /** JSON-encoded string[] of code paths/regions (same vocabulary as the grooming code-worklist). */
+  regions: string;
+  status: ArchUnitStatus;
+  body: string;
+  supersedes: string | null;
+  superseded_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type NewArchUnitRow = Omit<
+  ArchUnitRow,
+  'superseded_by' | 'created_at' | 'updated_at'
+> & {
+  superseded_by?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ArchUnitEventType = 'created' | 'updated' | 'superseded';
+
+export interface ArchUnitEventRow {
+  id: number;
+  arch_unit_id: string;
+  event_type: ArchUnitEventType;
+  /** JSON-encoded change payload (e.g. previous/next field diffs); null for simple markers. */
+  payload: string | null;
+  at: string;
+}
+
+export type NewArchUnitEventRow = Omit<ArchUnitEventRow, 'id'>;
+
+export interface ArchUnitQuery {
+  topic?: string;
+  kind?: ArchUnitKind;
+  /** Region substring filter — matches units whose regions array contains a path prefix match. */
+  region?: string;
+  status?: ArchUnitStatus;
+  /** When true, includes superseded units. Default false (active-set query). */
+  includeSuperseded?: boolean;
+}
