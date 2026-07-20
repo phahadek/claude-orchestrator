@@ -1,6 +1,6 @@
 import { apiRequest } from './projects';
 
-export type DeployRunStatus = 'running' | 'succeeded' | 'failed' | 'aborted';
+type DeployRunStatus = 'running' | 'succeeded' | 'failed' | 'aborted';
 
 export interface DeployRun {
   run_id: string;
