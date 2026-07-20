@@ -89,7 +89,7 @@ export interface DependsOnTaskRef {
  *    `routedTaskId` must name a recorded 📐 Design Depends On task (FM3
  *    route-to-/design).
  */
-export type ConstraintDisposition =
+type ConstraintDisposition =
   | { disposition: 'complies'; citedDesignTaskId?: string }
   | { disposition: 'n/a'; why: string }
   | { disposition: 'conflict_route'; routedTaskId: string };
