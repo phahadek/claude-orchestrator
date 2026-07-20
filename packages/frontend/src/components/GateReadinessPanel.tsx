@@ -13,6 +13,8 @@ import type {
   SeedReadiness,
   SeedMilestoneReadiness,
 } from '../api/seed';
+import { deployApi } from '../api/deploy';
+import type { DeployRun, DeployRunEvent } from '../api/deploy';
 import styles from './GateReadinessPanel.module.css';
 
 interface Props {
@@ -179,6 +181,14 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
   const [seedItemsTotal, setSeedItemsTotal] = useState(0);
   const [seedItemsLoading, setSeedItemsLoading] = useState(false);
   const [seedItemsError, setSeedItemsError] = useState<string | null>(null);
+
+  const [deployTargetSha, setDeployTargetSha] = useState('');
+  const [deployLaunching, setDeployLaunching] = useState(false);
+  const [deployLaunchError, setDeployLaunchError] = useState<string | null>(
+    null,
+  );
+  const [deployRun, setDeployRun] = useState<DeployRun | null>(null);
+  const [deployEvents, setDeployEvents] = useState<DeployRunEvent[]>([]);
 
   // Load milestone readiness for the active project.
   useEffect(() => {
@@ -379,6 +389,51 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
     };
   }, [activeProjectId, selectedMilestone, seedStateFilter, seedPage]);
 
+  const refreshDeployStatus = useCallback(() => {
+    if (!activeProjectId) return;
+    deployApi
+      .getStatus(activeProjectId)
+      .then((result) => {
+        setDeployRun(result.run);
+        setDeployEvents(result.events);
+      })
+      .catch(() => {
+        /* transient poll failures don't clear the last-known run state */
+      });
+  }, [activeProjectId]);
+
+  // Load the project's deploy_run progress, polling while a run is active.
+  useEffect(() => {
+    if (!activeProjectId) {
+      setDeployRun(null);
+      setDeployEvents([]);
+      return;
+    }
+    refreshDeployStatus();
+    const interval = setInterval(() => {
+      if (deployRun?.status === 'running') refreshDeployStatus();
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [activeProjectId, deployRun?.status, refreshDeployStatus]);
+
+  const launchDeploy = useCallback(() => {
+    if (!activeProjectId || !deployTargetSha.trim()) return;
+    setDeployLaunching(true);
+    setDeployLaunchError(null);
+    deployApi
+      .launch(activeProjectId, deployTargetSha.trim())
+      .then((result) => {
+        setDeployRun(result.run);
+        setDeployEvents([]);
+      })
+      .catch((err) => {
+        setDeployLaunchError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        setDeployLaunching(false);
+      });
+  }, [activeProjectId, deployTargetSha]);
+
   const toggleExpanded = useCallback(
     (id: string) => {
       if (expandedId === id) {
@@ -462,6 +517,62 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
       {milestonesError && <p className={styles.error}>{milestonesError}</p>}
       {!milestonesLoading && !milestonesError && milestones.length === 0 && (
         <p className={styles.muted}>No gate items tracked yet.</p>
+      )}
+
+      {activeProjectId && (
+        <div
+          className={styles.deploySection}
+          data-testid="deploy-launch-section"
+        >
+          <div className={styles.deployRow}>
+            <input
+              className={styles.deployShaInput}
+              type="text"
+              placeholder="Target SHA"
+              value={deployTargetSha}
+              onChange={(e) => setDeployTargetSha(e.target.value)}
+              aria-label="Deploy target SHA"
+              disabled={deployRun?.status === 'running'}
+            />
+            <button
+              className={styles.deployButton}
+              onClick={launchDeploy}
+              disabled={
+                deployLaunching ||
+                !deployTargetSha.trim() ||
+                deployRun?.status === 'running'
+              }
+              data-testid="deploy-launch-button"
+            >
+              {deployRun?.status === 'running' ? 'Deploying…' : 'Launch Deploy'}
+            </button>
+            {deployRun && (
+              <span
+                className={styles.deployRunStatus}
+                data-testid="deploy-run-status"
+              >
+                Run {deployRun.run_id.slice(0, 8)}: {deployRun.status}
+                {deployRun.current_step ? ` (${deployRun.current_step})` : ''}
+              </span>
+            )}
+          </div>
+          {deployLaunchError && (
+            <p className={styles.error}>{deployLaunchError}</p>
+          )}
+          {deployEvents.length > 0 && (
+            <ul
+              className={styles.deployEventList}
+              data-testid="deploy-run-events"
+            >
+              {deployEvents.map((ev) => (
+                <li key={ev.id}>
+                  {ev.step}: {ev.event_type}
+                  {ev.disposition ? ` (${ev.disposition})` : ''}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
 
       {selectedMilestone && (
