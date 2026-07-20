@@ -29,7 +29,6 @@ import {
   transitionStagedIntent,
   supersedeStagedIntent,
   setStagedIntentAnnotation,
-  IllegalStagedIntentTransitionError,
 } from '../db/queries';
 
 /**

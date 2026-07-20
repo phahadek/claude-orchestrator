@@ -4364,25 +4364,6 @@ export function findActiveStagedIntentForTask(
   }) as StagedIntentRow | undefined;
 }
 
-/** Any intent (any state) for this project+kind+task — used by durable invariant checks like DependsOnCompleteness. */
-export function findAnyStagedIntentForTask(
-  projectId: string,
-  kind: string,
-  taskId: string,
-): StagedIntentRow | undefined {
-  return db
-    .prepare<{ project_id: string; kind: string; task_id: string }>(
-      `SELECT * FROM staged_intent
-       WHERE project_id = @project_id AND kind = @kind AND task_id = @task_id
-         AND state IN ('staged', 'approved', 'committed')
-       ORDER BY created_at DESC
-       LIMIT 1`,
-    )
-    .get({ project_id: projectId, kind, task_id: taskId }) as
-    | StagedIntentRow
-    | undefined;
-}
-
 /**
  * Enforces the per-intent lifecycle state machine. `committed` is a terminal,
  * immutable state — no outgoing transition is legal. Throws
