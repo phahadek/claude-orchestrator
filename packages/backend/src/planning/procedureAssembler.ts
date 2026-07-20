@@ -66,7 +66,13 @@ export const WORKFLOW_LOADERS: Record<PlanningWorkflow, string> = {
 // full milestone-wide result) ───────────────────────────────────────────────
 
 export interface GroomDigestSlice {
-  task: { id: string; title: string; status: string; type: string; url: string };
+  task: {
+    id: string;
+    title: string;
+    status: string;
+    type: string;
+    url: string;
+  };
   sizeCheckSeed: { files: number; loc_method: 'estimated' };
   typeCheck: TypeCheckResult;
   readinessViolations: ReadinessViolation[];
@@ -75,7 +81,13 @@ export interface GroomDigestSlice {
 }
 
 export interface DesignDigestSlice {
-  task: { id: string; title: string; status: string; type: string; url: string };
+  task: {
+    id: string;
+    title: string;
+    status: string;
+    type: string;
+    url: string;
+  };
   markdown: string;
   openQuestions: DesignLoadResult['openQuestions'];
   archUnits: DesignLoadResult['archUnits'];
@@ -104,12 +116,22 @@ export function deriveGroomDigestSlice(
 ): GroomDigestSlice {
   const doc = result.targetTasks.find((t) => normId(t.id) === normId(taskId));
   if (!doc) {
-    throw new Error(`procedureAssembler: task ${taskId} not found in groom target tasks`);
+    throw new Error(
+      `procedureAssembler: task ${taskId} not found in groom target tasks`,
+    );
   }
   const dependencyCandidates =
-    result.dependencyCandidates.find((c) => normId(c.taskId) === normId(taskId)) ?? null;
+    result.dependencyCandidates.find(
+      (c) => normId(c.taskId) === normId(taskId),
+    ) ?? null;
   return {
-    task: { id: doc.id, title: doc.title, status: doc.status, type: doc.type, url: doc.url },
+    task: {
+      id: doc.id,
+      title: doc.title,
+      status: doc.status,
+      type: doc.type,
+      url: doc.url,
+    },
     sizeCheckSeed: doc.sizeCheckSeed,
     typeCheck: doc.typeCheck,
     readinessViolations: doc.readinessViolations,
@@ -119,7 +141,9 @@ export function deriveGroomDigestSlice(
 }
 
 /** `loadDesignContext` already resolves a single target task — just narrow the fields carried forward. */
-export function deriveDesignDigestSlice(result: DesignLoadResult): DesignDigestSlice {
+export function deriveDesignDigestSlice(
+  result: DesignLoadResult,
+): DesignDigestSlice {
   return {
     task: result.task,
     markdown: result.markdown,
@@ -144,7 +168,9 @@ export function deriveOpsDigestSlice(
   ];
   const task = allTasks.find((t) => normId(t.id) === normId(taskId));
   if (!task) {
-    throw new Error(`procedureAssembler: task ${taskId} not found in ops worklist`);
+    throw new Error(
+      `procedureAssembler: task ${taskId} not found in ops worklist`,
+    );
   }
   return { task, journalEntry };
 }
@@ -156,8 +182,18 @@ export function deriveOpsDigestSlice(
  *  that module pulls in Express/DB wiring this composer has no business
  *  depending on). `procedureAssembler.test.ts` asserts this stays a subset. */
 const PLANNING_INTENT_KINDS: Record<PlanningWorkflow, readonly string[]> = {
-  groom: ['task.setStatus', 'task.setProperties', 'task.setDependsOn', 'gate.accrete'],
-  design: ['task.updateBody', 'task.setProperties', 'task.setStatus', 'seed.stage'],
+  groom: [
+    'task.setStatus',
+    'task.setProperties',
+    'task.setDependsOn',
+    'gate.accrete',
+  ],
+  design: [
+    'task.updateBody',
+    'task.setProperties',
+    'task.setStatus',
+    'seed.stage',
+  ],
   ops: ['journal.setState', 'task.setStatus'],
 };
 
@@ -182,7 +218,7 @@ function renderSkeleton(
     '',
     'Do not call the task backend, Notion, or any raw HTTP client directly. Every ' +
       'write is a staged intent submitted through the sanctioned session-side CLI ' +
-      'client (POST /api/task-intents, authenticated by this session\'s scoped stage ' +
+      "client (POST /api/task-intents, authenticated by this session's scoped stage " +
       'credential). That endpoint only ever stages — applying a staged intent is a ' +
       'separate human/device-authenticated action this session cannot reach.',
     '',
@@ -194,7 +230,7 @@ function renderSkeleton(
       'the question it resolves and the recommended answer — so the reviewing human ' +
       'sees the proposal instead of a bare payload diff. Batch multiple independent ' +
       'findings under a shared `groupId` when they were derived together; never ' +
-      'silently apply — staging is the full extent of this session\'s authority.',
+      "silently apply — staging is the full extent of this session's authority.",
   ].join('\n');
 }
 
@@ -208,7 +244,9 @@ function renderProcedureCore(workflow: PlanningWorkflow): string {
   }
   lines.push('### Hard rules', '');
   for (const principle of principlesFor(workflow)) {
-    lines.push(`- **${principle.title}**: ${renderPrinciple(principle, workflow)}`);
+    lines.push(
+      `- **${principle.title}**: ${renderPrinciple(principle, workflow)}`,
+    );
   }
   return lines.join('\n').replace(/\n+$/, '');
 }
@@ -318,7 +356,9 @@ export interface AssemblePlanningProcedureParams {
  * procedure core + per-type digest, in that order. This is the string
  * written to the dispatched session's appended-prompt file.
  */
-export function assemblePlanningProcedure(params: AssemblePlanningProcedureParams): string {
+export function assemblePlanningProcedure(
+  params: AssemblePlanningProcedureParams,
+): string {
   const { taskName, taskUrl, digest } = params;
   const sections = [
     renderSkeleton(digest.workflow, taskName, taskUrl),

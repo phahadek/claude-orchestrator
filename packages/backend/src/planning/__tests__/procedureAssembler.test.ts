@@ -46,7 +46,11 @@ function fixtureGroomLoadResult(): GroomLoadResult {
     codeWorklist: new Map(),
     gitFreshness: {},
     dependencyCandidates: [
-      { taskId: 'task-1', candidateBlockers: [{ id: 'blocker-1' }], declaredDeps: ['dep-1'] },
+      {
+        taskId: 'task-1',
+        candidateBlockers: [{ id: 'blocker-1' }],
+        declaredDeps: ['dep-1'],
+      },
     ],
   } as unknown as GroomLoadResult;
 }
@@ -63,9 +67,14 @@ function fixtureDesignLoadResult(
       url: 'https://notion.so/task-2',
     },
     markdown: '# Design the thing\n\nSome body.',
-    openQuestions: { items: ['Should we do X or Y?'], source: 'explicit_heading' },
+    openQuestions: {
+      items: ['Should we do X or Y?'],
+      source: 'explicit_heading',
+    },
     archUnits: [{ id: 'arch-1', title: 'Arch Unit A', raw: '- Arch Unit A' }],
-    unresolvedPageRefs: [{ title: 'Some Unresolved Page', raw: '- Some Unresolved Page' }],
+    unresolvedPageRefs: [
+      { title: 'Some Unresolved Page', raw: '- Some Unresolved Page' },
+    ],
     codeMapGrounding,
   };
 }
@@ -83,8 +92,13 @@ function fixtureOpsLoadResult(): OpsLoadResult {
     depStatus: 'ready' as const,
   };
   return {
-    contextPages: [{ id: 'ctx-2', title: 'Ops Master Context', markdown: '...' }],
-    boards: { target: { milestone: 'm1', board: 'b1', counts: {} as never }, neighbours: [] },
+    contextPages: [
+      { id: 'ctx-2', title: 'Ops Master Context', markdown: '...' },
+    ],
+    boards: {
+      target: { milestone: 'm1', board: 'b1', counts: {} as never },
+      neighbours: [],
+    },
     worklist: {
       executable: [task],
       dep_blocked: [],
@@ -115,7 +129,9 @@ describe('deriveGroomDigestSlice', () => {
     expect(slice.dependencyCandidates?.taskId).toBe('task-1');
     // never carries the full loader result's milestone-wide fields
     expect(slice as unknown as GroomLoadResult).not.toHaveProperty('board');
-    expect(slice as unknown as GroomLoadResult).not.toHaveProperty('contextPages');
+    expect(slice as unknown as GroomLoadResult).not.toHaveProperty(
+      'contextPages',
+    );
   });
 
   it('matches ids hyphen/case-insensitively', () => {
@@ -124,19 +140,25 @@ describe('deriveGroomDigestSlice', () => {
   });
 
   it('throws when the task is not in targetTasks', () => {
-    expect(() => deriveGroomDigestSlice(fixtureGroomLoadResult(), 'nope')).toThrow();
+    expect(() =>
+      deriveGroomDigestSlice(fixtureGroomLoadResult(), 'nope'),
+    ).toThrow();
   });
 });
 
 describe('deriveDesignDigestSlice', () => {
   it('narrows the loader result and flags cached code-map grounding', () => {
-    const slice = deriveDesignDigestSlice(fixtureDesignLoadResult({ pkgA: {} }));
+    const slice = deriveDesignDigestSlice(
+      fixtureDesignLoadResult({ pkgA: {} }),
+    );
     expect(slice.task.id).toBe('task-2');
     expect(slice.openQuestions.items).toEqual(['Should we do X or Y?']);
     expect(slice.archUnits).toHaveLength(1);
     expect(slice.unresolvedPageRefs).toHaveLength(1);
     expect(slice.hasCodeMapGrounding).toBe(true);
-    expect(slice as unknown as DesignLoadResult).not.toHaveProperty('codeMapGrounding');
+    expect(slice as unknown as DesignLoadResult).not.toHaveProperty(
+      'codeMapGrounding',
+    );
   });
 
   it('reports no grounding when the cache is empty', () => {
@@ -154,23 +176,35 @@ describe('deriveOpsDigestSlice', () => {
       state: 'pending' as never,
       updatedAt: '2026-07-20T00:00:00Z',
     };
-    const slice = deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', journalEntry);
+    const slice = deriveOpsDigestSlice(
+      fixtureOpsLoadResult(),
+      'task-3',
+      journalEntry,
+    );
     expect(slice.task.id).toBe('task-3');
     expect(slice.journalEntry).toEqual(journalEntry);
   });
 
   it('throws when the task is not present in any worklist bucket', () => {
-    expect(() => deriveOpsDigestSlice(fixtureOpsLoadResult(), 'nope', null)).toThrow();
+    expect(() =>
+      deriveOpsDigestSlice(fixtureOpsLoadResult(), 'nope', null),
+    ).toThrow();
   });
 });
 
 // ─── assemblePlanningProcedure ──────────────────────────────────────────────
 
 describe('assemblePlanningProcedure', () => {
-  const cases: { workflow: PlanningDigest['workflow']; digest: PlanningDigest }[] = [
+  const cases: {
+    workflow: PlanningDigest['workflow'];
+    digest: PlanningDigest;
+  }[] = [
     {
       workflow: 'groom',
-      digest: { workflow: 'groom', data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1') },
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
     },
     {
       workflow: 'design',
@@ -222,7 +256,10 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
-      digest: { workflow: 'groom', data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1') },
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
     });
     expect(output).toContain('size_check seed');
     expect(output).toContain('type_check');
@@ -236,7 +273,9 @@ describe('assemblePlanningProcedure', () => {
       taskUrl: 'https://notion.so/x',
       digest: {
         workflow: 'design',
-        data: deriveDesignDigestSlice(fixtureDesignLoadResult({ pkgA: { some: 'big blob' } })),
+        data: deriveDesignDigestSlice(
+          fixtureDesignLoadResult({ pkgA: { some: 'big blob' } }),
+        ),
       },
     });
     expect(output).toContain('GET /api/design-context');
@@ -247,7 +286,10 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
-      digest: { workflow: 'ops', data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null) },
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
+      },
     });
     expect(output).toContain('No prior entry');
     expect(output).not.toContain('Ops Master Context');
@@ -257,7 +299,10 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
-      digest: { workflow: 'design', data: deriveDesignDigestSlice(fixtureDesignLoadResult()) },
+      digest: {
+        workflow: 'design',
+        data: deriveDesignDigestSlice(fixtureDesignLoadResult()),
+      },
     });
     const lifecycleIdx = output.indexOf('## Session Lifecycle');
     const coreIdx = output.indexOf('## Design Execution Procedure');
@@ -275,9 +320,14 @@ describe('planning intent kinds', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
-      digest: { workflow: 'groom', data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1') },
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
     });
-    const match = output.match(/Stage findings as one of: (.+?)\. Every staged intent/);
+    const match = output.match(
+      /Stage findings as one of: (.+?)\. Every staged intent/,
+    );
     expect(match).toBeTruthy();
     const kinds = match![1].split(',').map((k) => k.trim());
     for (const kind of kinds) {
