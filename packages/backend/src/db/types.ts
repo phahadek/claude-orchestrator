@@ -495,6 +495,35 @@ export interface SeedItemEventRow {
 
 export type NewSeedItemEventRow = Omit<SeedItemEventRow, 'id'>;
 
+// ─── completeness_disposition ───────────────────────────────────────────────
+
+/** A single candidate question the /design completeness critic considered and dispositioned. */
+export interface CompletenessDispositionQuestion {
+  question: string;
+  disposition: 'accepted' | 'dismissed';
+  reason: string;
+}
+
+/**
+ * Durable analog of gate_accretion for the /design completeness safeguard —
+ * one row per critic run, recording the source design task, the candidate
+ * questions it considered, and why each was accepted or dismissed. Advisory
+ * audit trail only; never read by a promotion gate.
+ */
+export interface CompletenessDispositionRow {
+  id: number;
+  source_task_id: string;
+  project: string | null;
+  milestone: string | null;
+  questions: string;
+  run_at: string;
+}
+
+export type NewCompletenessDispositionRow = Omit<
+  CompletenessDispositionRow,
+  'id'
+>;
+
 // ─── session_feedback_inbox ─────────────────────────────────────────────────
 
 export interface FeedbackInboxRow {

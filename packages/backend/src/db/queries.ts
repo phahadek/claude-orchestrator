@@ -48,6 +48,8 @@ import type {
   SeedItemEventRow,
   NewSeedItemEventRow,
   SeedAccretionRow,
+  CompletenessDispositionRow,
+  NewCompletenessDispositionRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -4185,4 +4187,47 @@ export function countUndeliveredInboxItems(sessionId: string): number {
     )
     .get(sessionId) as { count: number };
   return row.count;
+}
+
+// ─── completeness_disposition ───────────────────────────────────────────────
+
+let _stmtInsertCompletenessDisposition: Database.Statement | null = null;
+let _stmtListCompletenessDispositions: Database.Statement | null = null;
+
+/** Durable write-through for a /design completeness-critic run — symmetric with the gate/seed accretion markers. */
+export function insertCompletenessDisposition(
+  row: NewCompletenessDispositionRow,
+): CompletenessDispositionRow {
+  _stmtInsertCompletenessDisposition ??=
+    db.prepare<NewCompletenessDispositionRow>(`
+    INSERT INTO completeness_disposition
+      (source_task_id, project, milestone, questions, run_at)
+    VALUES
+      (@source_task_id, @project, @milestone, @questions, @run_at)
+  `);
+  const result = _stmtInsertCompletenessDisposition.run({
+    ...row,
+    source_task_id: normalizeTaskId(row.source_task_id),
+  });
+  return {
+    id: Number(result.lastInsertRowid),
+    ...row,
+    source_task_id: normalizeTaskId(row.source_task_id),
+  };
+}
+
+/** Audit read of every completeness-disposition run recorded for a source design task, newest first. */
+export function listCompletenessDispositions(
+  sourceTaskId: string,
+): CompletenessDispositionRow[] {
+  _stmtListCompletenessDispositions ??= db.prepare<{
+    source_task_id: string;
+  }>(`
+    SELECT * FROM completeness_disposition
+    WHERE source_task_id = @source_task_id
+    ORDER BY run_at DESC, id DESC
+  `);
+  return _stmtListCompletenessDispositions.all({
+    source_task_id: normalizeTaskId(sourceTaskId),
+  }) as CompletenessDispositionRow[];
 }
