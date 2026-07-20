@@ -21,6 +21,7 @@ export interface SettingsValues {
   auto_archive_sweep_interval_minutes: string;
   large_task_model: string;
   large_task_effort: string;
+  tier3_classifier_model: string;
 }
 
 export const MIN_POLL_INTERVAL_MS = 5000;
@@ -33,6 +34,7 @@ const NON_NUMERIC_KEYS = new Set<keyof SettingsValues>([
   'session_mode',
   'large_task_model',
   'large_task_effort',
+  'tier3_classifier_model',
   'auto_review',
   'auto_archive_enabled',
 ]);

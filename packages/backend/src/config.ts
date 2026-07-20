@@ -360,6 +360,8 @@ export interface RuntimeSettings {
   gate_verification_enabled: boolean;
   /** GateReconciler: interval in milliseconds between reconcile ticks. */
   gate_verification_interval_ms: number;
+  /** Model used by the Tier-3 semantic readiness advisory (paraphrased-deferral) classifier. */
+  tier3_classifier_model: string;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -425,4 +427,5 @@ export const runtimeSettings: RuntimeSettings = {
   gate_verification_interval_ms: Number(
     process.env.GATE_VERIFICATION_INTERVAL_MS ?? 60_000,
   ),
+  tier3_classifier_model: 'claude-haiku-4-5-20251001',
 };

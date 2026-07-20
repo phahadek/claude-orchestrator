@@ -544,6 +544,8 @@ export interface StagedIntentRow {
   annotation: string | null;
   /** Human-facing rationale/summary the decision surface renders beside the payload. */
   decision_proposal: string | null;
+  /** Tier-3 semantic readiness advisory — distinct from `annotation`'s deterministic hard-block channel. */
+  advisory: string | null;
   created_at: number;
   updated_at: number;
 }
