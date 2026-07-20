@@ -509,9 +509,7 @@ async function applyIntent(
     }
     case 'arch.createUnit': {
       const payload = intent.payload as ArchCreateUnitPayload;
-      const unit = await archCommands.createUnit(
-        toNewArchUnitFields(payload),
-      );
+      const unit = await archCommands.createUnit(toNewArchUnitFields(payload));
       return { id: unit.id, version: unit.version };
     }
     case 'arch.updateUnit': {

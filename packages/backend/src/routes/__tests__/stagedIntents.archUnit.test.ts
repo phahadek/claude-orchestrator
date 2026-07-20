@@ -136,9 +136,7 @@ describe('arch.updateUnit', () => {
       projectId: 'proj-b',
       payload: { unitId, baseVersion: 1, body: 'edit one' },
     });
-    await agent
-      .post(`/api/staged-intents/${firstEdit.body.id}/apply`)
-      .send({});
+    await agent.post(`/api/staged-intents/${firstEdit.body.id}/apply`).send({});
 
     // A second edit composed against the now-stale version 1.
     const staleEdit = await agent.post('/api/staged-intents').send({
@@ -220,9 +218,7 @@ describe('arch.supersedeUnit', () => {
       'created',
       'superseded',
     ]);
-    expect(getUnitEvents(nextId).map((e) => e.eventType)).toEqual([
-      'created',
-    ]);
+    expect(getUnitEvents(nextId).map((e) => e.eventType)).toEqual(['created']);
   });
 
   it('blocks a subsequent stale edit staged against the now-superseded unit', async () => {
