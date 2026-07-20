@@ -387,7 +387,9 @@ describe('POST /api/staged-intents/:id/apply — task.setType', () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
       setType,
-      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome design doc.\n'),
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Summary\nSome design doc.\n'),
     });
     const app = makeApp();
     const agent = supertest(app);
