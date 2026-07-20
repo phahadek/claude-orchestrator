@@ -434,7 +434,8 @@ function extractBodyLocks(md) {
       signed_off_at = dateMatch[1];
       decision = decision.slice(0, dateMatch.index).trim();
     }
-    if (questionRef && decision) locks.push({ questionRef, decision, signed_off_at });
+    if (questionRef && decision)
+      locks.push({ questionRef, decision, signed_off_at });
   }
 
   const headRe = /^#{1,4}\s+open\s+questions?\s+resolved:?\s*$/i;
@@ -443,11 +444,20 @@ function extractBodyLocks(md) {
     const rows = tableBody.split('\n').filter((l) => /^\s*\|/.test(l));
     if (rows.length >= 2) {
       const cells = (l) =>
-        l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+        l
+          .trim()
+          .replace(/^\|/, '')
+          .replace(/\|$/, '')
+          .split('|')
+          .map((c) => c.trim());
       const header = cells(rows[0]);
       const qIdx = header.findIndex((h) => /question/i.test(h));
-      const decIdx = header.findIndex((h) => /decision|resolution|answer|locked/i.test(h));
-      const dateIdx = header.findIndex((h) => /date|signed|locked.*at/i.test(h));
+      const decIdx = header.findIndex((h) =>
+        /decision|resolution|answer|locked/i.test(h),
+      );
+      const dateIdx = header.findIndex((h) =>
+        /date|signed|locked.*at/i.test(h),
+      );
       const questionCol = qIdx === -1 ? 0 : qIdx;
       const decisionCol = decIdx === -1 ? 1 : decIdx;
       for (const line of rows.slice(1)) {
@@ -471,11 +481,7 @@ function extractBodyLocks(md) {
 /** Normalise text for fuzzy question/lock matching: strip markdown emphasis,
  *  collapse whitespace, lowercase. */
 function normaliseForMatch(text) {
-  return text
-    .replace(/[*_`]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+  return text.replace(/[*_`]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 /** Match a raw body lock's questionRef against an open question's verbatim
@@ -488,7 +494,8 @@ function matchBodyLock(questionText, rawLocks) {
     const ref = normaliseForMatch(lock.questionRef);
     if (!ref) continue;
     if (q.includes(ref) || ref.includes(q)) {
-      if (!best || ref.length > normaliseForMatch(best.questionRef).length) best = lock;
+      if (!best || ref.length > normaliseForMatch(best.questionRef).length)
+        best = lock;
     }
   }
   return best;

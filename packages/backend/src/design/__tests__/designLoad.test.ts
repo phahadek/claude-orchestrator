@@ -217,7 +217,9 @@ describe('design-load.mjs', () => {
     ]);
 
     const worklist = readWorklist(harness);
-    const taskB = worklist.executable.find((t: { id: string }) => t.id === 'task-b');
+    const taskB = worklist.executable.find(
+      (t: { id: string }) => t.id === 'task-b',
+    );
     expect(taskB.inbound_carries).toEqual([
       {
         from_task: 'task-a',
@@ -244,7 +246,9 @@ describe('design-load.mjs', () => {
     expect(state['task-b'].partial_locks_present).toBe(false);
 
     const worklist = readWorklist(harness);
-    const taskB = worklist.executable.find((t: { id: string }) => t.id === 'task-b');
+    const taskB = worklist.executable.find(
+      (t: { id: string }) => t.id === 'task-b',
+    );
     expect(taskB.inbound_carries).toEqual([]);
   });
 });
