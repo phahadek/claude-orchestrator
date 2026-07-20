@@ -593,18 +593,29 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       options,
     );
 
-    await this.backend.updateBody(newTaskId, content.sections, options);
+    try {
+      await this.backend.updateBody(newTaskId, content.sections, options);
 
-    if (content.status !== 'Backlog') {
-      await this.restoreStatus(newTaskId, content.status, options);
-    }
+      if (content.status !== 'Backlog') {
+        await this.restoreStatus(newTaskId, content.status, options);
+      }
 
-    for (const rewrite of plan.dependentRewrites) {
-      await this.backend.setDependsOn(
-        rewrite.taskId,
-        rewrite.dependsOn,
-        options,
-      );
+      for (const rewrite of plan.dependentRewrites) {
+        await this.backend.setDependsOn(
+          rewrite.taskId,
+          rewrite.dependsOn,
+          options,
+        );
+      }
+    } catch (err) {
+      try {
+        await this.backend.archive(newTaskId, options);
+      } catch (rollbackErr) {
+        throw new Error(
+          `[TaskWriteCommands] moveTask failed building target ${newTaskId} (${String(err)}), and rollback (archive) also failed: ${String(rollbackErr)}`,
+        );
+      }
+      throw err;
     }
 
     const rehomedAt = new Date().toISOString();
