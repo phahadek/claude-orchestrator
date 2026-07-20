@@ -11,7 +11,15 @@
  * Tier 2 (lexical): a curated deferral-phrase list, matched case-insensitively
  * against prose only — occurrences inside fenced code blocks, inline code
  * spans, and block-quoted lines are ignored so a task that merely quotes a
- * phrase is not falsely blocked.
+ * phrase is not falsely blocked. Tier 2 also carries a grooming-instruction-
+ * residue class (FM2 — see the M12 design task hardening /groom against
+ * grooming-integrity failure modes): unambiguous leftover grooming
+ * instructions ("confirm ... at grooming", "pin at grooming", "decide during
+ * grooming") that should have been resolved before Ready, not carried into
+ * the artifact. Deliberately narrow regex patterns, not a bare substring list
+ * like `and/or` — that phrase is common in legitimate prose and is instead a
+ * Files/paths-section-only hedge token (see groomGate.ts's resolve-in-artifact
+ * check), too broad for this general prose scan.
  */
 
 export interface ReadinessViolation {
@@ -38,6 +46,18 @@ const DEFERRAL_PHRASES: readonly string[] = [
   'figure out during implementation',
   'leave to the implementer',
   'determine at implementation time',
+];
+
+/**
+ * Grooming-instruction residue — unambiguous, seed set (refinable). Each
+ * pattern requires both the instruction verb and the "at/during grooming"
+ * anchor on the same line so ordinary prose mentioning grooming, or an
+ * unrelated "confirm ..."/"pin ..." sentence, doesn't false-positive.
+ */
+const GROOMING_RESIDUE_PATTERNS: readonly RegExp[] = [
+  /\bconfirm\b[^\n]{0,80}\bat grooming\b/i,
+  /\bpin\b[^\n]{0,80}\bat grooming\b/i,
+  /\bdecide\b[^\n]{0,80}\bduring grooming\b/i,
 ];
 
 function normalizeHeadingText(text: string): string {
@@ -117,12 +137,35 @@ function checkDeferralPhrases(body: string): ReadinessViolation[] {
   return violations;
 }
 
+/** Tier 2 — leftover grooming-instruction residue found in prose. */
+function checkGroomingResidue(body: string): ReadinessViolation[] {
+  const violations: ReadinessViolation[] = [];
+  const lines = stripNonProse(body);
+  lines.forEach((line, idx) => {
+    for (const pattern of GROOMING_RESIDUE_PATTERNS) {
+      const match = line.match(pattern);
+      if (match) {
+        violations.push({
+          tier: 'lexical',
+          detail: `grooming-instruction residue found ("${match[0].trim()}")`,
+          location: `line ${idx + 1}`,
+        });
+      }
+    }
+  });
+  return violations;
+}
+
 /** Run both deterministic tiers against a task page body. */
 export function checkReadiness(
   body: string | null | undefined,
 ): ReadinessViolation[] {
   const text = body ?? '';
-  return [...checkOpenQuestionsSection(text), ...checkDeferralPhrases(text)];
+  return [
+    ...checkOpenQuestionsSection(text),
+    ...checkDeferralPhrases(text),
+    ...checkGroomingResidue(text),
+  ];
 }
 
 /** Thrown by the command layer when a Ready transition is blocked. */

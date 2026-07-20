@@ -33,6 +33,8 @@ import {
   type TaskDependencyCandidates,
 } from '../orchestration/milestoneDependencyGraph';
 import { formatTaskId } from '../tasks/taskId';
+import { bindingConstraintIdsForRegions } from './constraintCatalog';
+import type { FilesPathsEntry, DependsOnTaskRef } from './groomGate';
 
 const execFileAsync = promisify(execFile);
 
@@ -74,6 +76,26 @@ interface TaskDoc extends TaskRow {
   typeCheck: TypeCheckResult;
   /** This task's declared scope, resolved into package/file regions. */
   regions: TaskRegions;
+  /**
+   * FM1 — binding constraints re-derived from `regions` against
+   * CONSTRAINT_CATALOG. groomGate.ts re-derives the same intersection
+   * server-side at promotion time; this is a groomer-facing preview, not the
+   * enforcement point.
+   */
+  bindingConstraints: string[];
+  /**
+   * FM2 — parsed `## Files / paths affected` entries, each git-validated
+   * existing or left for the groomer to mark `*(new)*`. Only meaningful for
+   * 💻 Code tasks; still computed for other types (harmless, unused by the gate).
+   */
+  filesPathsEntries: FilesPathsEntry[];
+  /**
+   * FM3 — this task's declared Depends On, resolved to type/status against
+   * the board + neighbour boards (undefined type/status when the dependency
+   * isn't present on either — the gate then can't apply the Design/Planning
+   * liveness signal to it).
+   */
+  dependsOnTasks: DependsOnTaskRef[];
 }
 
 type FreshnessStatus = 'fresh' | 'stale' | 'missing';
@@ -234,6 +256,54 @@ function rowFromTask(task: NotionTaskLike): TaskRow {
   };
 }
 
+/** Strip hyphens so both dashed and dashless Notion UUIDs match. */
+function stripHyphens(id: string): string {
+  return id.replace(/-/g, '');
+}
+
+const NEW_MARKER = /\(\s*new\s*\)/i;
+
+function cleanPathToken(tok: string): string {
+  return tok
+    .replace(/^[`*_~\s(]+/, '')
+    .replace(/[`*_~\s).,;:]+$/, '')
+    .trim();
+}
+
+/** Best-effort path-shaped token out of a single Files/paths list-item line. */
+function extractPathToken(line: string): string | null {
+  const backtick = line.match(/`([^`]+)`/);
+  if (backtick) return cleanPathToken(backtick[1]);
+  const pathLike = line.match(/([A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+)/);
+  if (pathLike) return cleanPathToken(pathLike[1]);
+  return null;
+}
+
+/**
+ * FM2 — parse a task's `## Files / paths affected` section into one entry
+ * per list item, git-validating each candidate path against `trackedFiles`.
+ * groomGate.ts's resolve-in-artifact check re-derives the hedge-token scan
+ * itself from `raw`; this loader only supplies the git-validated facts a
+ * gate can't compute without repo access.
+ */
+function parseFilesPathsEntries(
+  section: string,
+  trackedFiles: Set<string>,
+): FilesPathsEntry[] {
+  const entries: FilesPathsEntry[] = [];
+  for (const line of section.split('\n')) {
+    const m = line.match(/^\s*[-*]\s+(.+)$/);
+    if (!m) continue;
+    const raw = m[1].trim();
+    if (!raw) continue;
+    const isNew = NEW_MARKER.test(raw);
+    const token = extractPathToken(raw);
+    const existsInRepo = !!token && trackedFiles.has(token);
+    entries.push({ raw, isNew, existsInRepo });
+  }
+  return entries;
+}
+
 // ─── main ───────────────────────────────────────────────────────────────
 
 export async function loadGroomContext(
@@ -271,16 +341,23 @@ export async function loadGroomContext(
     boardResolved.map((r) => [r.task.id, r.task.dependsOn ?? []] as const),
   );
 
+  /** Every row seen across the target + neighbour boards (Done included), for resolving Depends On refs to type/status. */
+  const rowsByNormId = new Map(
+    boardResolved.map((r) => [stripHyphens(r.task.id), r.task] as const),
+  );
+
   const neighbourBoards: TaskRow[] = [];
   for (const n of milestoneCfg.neighbours ?? []) {
     const rows = await notion.fetchReadyTasks(n.board);
     for (const r of rows) {
+      rowsByNormId.set(stripHyphens(r.task.id), r.task);
       if (!DONE_STATUSES.has(r.task.status))
         neighbourBoards.push(rowFromTask(r.task));
     }
   }
 
   const trackedFiles = await listTrackedFiles(repoRoot);
+  const trackedFilesSet = new Set(trackedFiles);
   const worklistOptions = {
     sourceRoot: manifest.source_root ?? '',
     packages: manifest.packages ?? [],
@@ -301,6 +378,12 @@ export async function loadGroomContext(
       },
       worklistOptions,
     );
+    const dependsOnTasks: DependsOnTaskRef[] = (
+      dependsOnById.get(row.id) ?? []
+    ).map((depId) => {
+      const dep = rowsByNormId.get(stripHyphens(depId));
+      return { id: depId, type: dep?.type, status: dep?.status };
+    });
     targetTasks.push({
       ...row,
       filesSection: page.filesSection,
@@ -309,6 +392,12 @@ export async function loadGroomContext(
       sizeCheckSeed: { files: regions.files.length, loc_method: 'estimated' },
       typeCheck: scanTypeCheck(row.type, page.rawMarkdown),
       regions,
+      bindingConstraints: bindingConstraintIdsForRegions(regions),
+      filesPathsEntries: parseFilesPathsEntries(
+        page.filesSection,
+        trackedFilesSet,
+      ),
+      dependsOnTasks,
     });
   }
 
