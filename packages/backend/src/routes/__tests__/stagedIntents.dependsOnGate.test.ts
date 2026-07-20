@@ -10,6 +10,18 @@ vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: mockGetTaskBackend,
 }));
 
+// Isolated in-memory db (test/helpers/setupTestDb.ts) instead of the real
+// file-backed singleton — otherwise staged_intent rows persist across test
+// cases (and test files, and CI runs) and produce spurious dedup/lock
+// collisions.
+vi.mock('../../db/db', async () => {
+  const { setupTestDb } = await import(
+    '../../../test/helpers/setupTestDb.js'
+  );
+  return { db: setupTestDb() };
+});
+
+import { db } from '../../db/db';
 import { createStagedIntentsRouter } from '../stagedIntents';
 
 function buildApp() {
@@ -37,6 +49,8 @@ async function stage(app: ReturnType<typeof buildApp>, body: unknown) {
 beforeEach(() => {
   mockGetTaskBackend.mockReset();
   mockGetTaskBackend.mockReturnValue(makeBackend());
+  db.prepare('DELETE FROM staged_intent').run();
+  db.prepare('DELETE FROM staged_intent_group').run();
 });
 
 describe('POST /api/staged-intents/:id/apply — setDependsOn group-completeness invariant', () => {

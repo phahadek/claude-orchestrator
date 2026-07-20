@@ -22,6 +22,15 @@ vi.mock('../audit/AuditLog', () => ({
   recordEvent: mockRecordEvent,
 }));
 
+// Isolated in-memory db (test/helpers/setupTestDb.ts) instead of the real
+// file-backed singleton — otherwise staged_intent rows persist across test
+// cases (and test files, and CI runs) and produce spurious dedup/lock
+// collisions.
+vi.mock('../db/db', async () => {
+  const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
+});
+
 vi.mock('../db/queries', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../db/queries')>();
   return {
@@ -30,6 +39,7 @@ vi.mock('../db/queries', async (importOriginal) => {
   };
 });
 
+import { db } from '../db/db';
 import { createStagedIntentsRouter } from '../routes/stagedIntents';
 
 function makeApp() {
@@ -42,6 +52,8 @@ function makeApp() {
 beforeEach(() => {
   mockGetTaskBackend.mockReset();
   mockRecordEvent.mockReset();
+  db.prepare('DELETE FROM staged_intent').run();
+  db.prepare('DELETE FROM staged_intent_group').run();
 });
 
 /**
