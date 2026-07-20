@@ -11,7 +11,10 @@ import {
   type MilestonePatch,
 } from '../projects/ProjectService';
 import type { AutoMerger } from '../github/AutoMerger';
-import { getMergeReadyPRs } from '../db/queries';
+import {
+  getMergeReadyPRs,
+  MilestoneCanonicalShortIdCollisionError,
+} from '../db/queries';
 import { NotionClient, normalizeNotionId } from '../notion/NotionClient';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { GitHubClient } from '../github/GitHubClient';
@@ -543,14 +546,23 @@ projectsRouter.post(
       return;
     }
 
-    const milestone = ProjectService.createMilestone({
-      id,
-      projectId,
-      name,
-      sourceId: rawSourceId,
-      displayOrder:
-        typeof body.displayOrder === 'number' ? body.displayOrder : 0,
-    });
+    let milestone;
+    try {
+      milestone = ProjectService.createMilestone({
+        id,
+        projectId,
+        name,
+        sourceId: rawSourceId,
+        displayOrder:
+          typeof body.displayOrder === 'number' ? body.displayOrder : 0,
+      });
+    } catch (err) {
+      if (err instanceof MilestoneCanonicalShortIdCollisionError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
     res.status(201).json(milestone);
   },
 );
@@ -586,10 +598,23 @@ projectsRouter.patch('/milestones/:id', (req: Request, res: Response) => {
   if ('sourceId' in body) {
     patch.source_id = typeof body.sourceId === 'string' ? body.sourceId : null;
   }
+  if ('canonicalShortId' in body) {
+    patch.canonical_short_id =
+      typeof body.canonicalShortId === 'string' ? body.canonicalShortId : null;
+  }
   if (typeof body.displayOrder === 'number')
     patch.display_order = body.displayOrder;
 
-  const updated = ProjectService.updateMilestone(id, patch);
+  let updated;
+  try {
+    updated = ProjectService.updateMilestone(id, patch);
+  } catch (err) {
+    if (err instanceof MilestoneCanonicalShortIdCollisionError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
   if (!updated) {
     res.status(404).json({ error: `Milestone '${id}' not found` });
     return;

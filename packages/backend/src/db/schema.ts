@@ -106,6 +106,7 @@ export function runMigrations(target: Database.Database): void {
       project_id    TEXT    NOT NULL,
       name          TEXT    NOT NULL,
       source_id     TEXT,
+      canonical_short_id TEXT,
       display_order INTEGER NOT NULL DEFAULT 0,
       created_at    INTEGER NOT NULL,
       updated_at    INTEGER NOT NULL,
@@ -1241,5 +1242,47 @@ export function runMigrations(target: Database.Database): void {
       FOREIGN KEY (arch_unit_id) REFERENCES arch_unit(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_arch_unit_event_arch_unit_id ON arch_unit_event(arch_unit_id);
+  `);
+
+  // ── milestones.canonical_short_id: stored canonical short-form key ─────────
+  // Replaces the read-path extractMilestoneToken(name) parse in
+  // milestoneResolver.ts with an explicit stored field, populated once at
+  // registration. Backfill mirrors the registration-time derivation so
+  // resolved keys stay identical to the already-normalized gate_item/seed_item
+  // rows above: yaml-sourced milestones (source_id set by reconcileYamlMilestones)
+  // keep their source_id; everything else falls back to the leading M<n> token,
+  // or the full name if it has none. Idempotent: only NULL rows are touched.
+  try {
+    target.exec(`ALTER TABLE milestones ADD COLUMN canonical_short_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  {
+    const shortMilestoneToken = (name: string): string | null => {
+      const match = /^([Mm]\d+[A-Za-z]?)(?=[\s—:-]|$)/.exec(name);
+      return match ? match[1] : null;
+    };
+    const rows = target
+      .prepare(
+        `SELECT id, name, source_id FROM milestones WHERE canonical_short_id IS NULL`,
+      )
+      .all() as { id: string; name: string; source_id: string | null }[];
+    const update = target.prepare(
+      `UPDATE milestones SET canonical_short_id = ? WHERE id = ?`,
+    );
+    for (const row of rows) {
+      const canonical =
+        row.source_id ?? shortMilestoneToken(row.name) ?? row.name;
+      update.run(canonical, row.id);
+    }
+  }
+
+  // Per-project uniqueness: a canonical_short_id must resolve to exactly one
+  // milestone within a project (case-insensitive, matching resolver lookup),
+  // else findMilestone's first-match semantics would silently pick one.
+  target.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_milestones_project_canonical_short_id
+    ON milestones(project_id, canonical_short_id COLLATE NOCASE)
+    WHERE canonical_short_id IS NOT NULL;
   `);
 }

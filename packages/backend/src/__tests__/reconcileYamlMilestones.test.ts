@@ -107,6 +107,7 @@ describe('reconcileYamlMilestones — creates new rows', () => {
       project_id: 'proj-1',
       name: 'Sprint 1',
       source_id: 'ms-1',
+      canonical_short_id: 'ms-1',
       display_order: 0,
     });
     expect(typeof arg.id).toBe('string');
@@ -142,6 +143,7 @@ describe('reconcileYamlMilestones — updates existing rows by source_id', () =>
 
     expect(updateMilestone).toHaveBeenCalledWith('existing-uuid', {
       name: 'Sprint 1 renamed',
+      canonical_short_id: 'ms-1',
       display_order: 0,
     });
     expect(insertMilestone).not.toHaveBeenCalled();
@@ -160,6 +162,7 @@ describe('reconcileYamlMilestones — adopts orphaned rows by name', () => {
     expect(updateMilestone).toHaveBeenCalledWith('existing-uuid', {
       name: 'Sprint 1',
       source_id: 'ms-new-id',
+      canonical_short_id: 'ms-new-id',
       display_order: 0,
     });
     expect(insertMilestone).not.toHaveBeenCalled();

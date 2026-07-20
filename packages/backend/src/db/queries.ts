@@ -2313,21 +2313,52 @@ export function deleteProject(id: string): boolean {
 
 // ─── milestones ────────────────────────────────────────────────────────────
 
+/**
+ * Thrown when an insert/update would give a project two milestones with the
+ * same canonical_short_id — surfaced from the idx_milestones_project_canonical_short_id
+ * partial unique index (case-insensitive), since resolveMilestoneForProject's
+ * first-match lookup would otherwise silently pick one of the collision.
+ */
+export class MilestoneCanonicalShortIdCollisionError extends Error {
+  constructor(canonicalShortId: string) {
+    super(
+      `canonical_short_id "${canonicalShortId}" is already used by another milestone in this project`,
+    );
+    this.name = 'MilestoneCanonicalShortIdCollisionError';
+  }
+}
+
+function isCanonicalShortIdCollision(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.message.includes('idx_milestones_project_canonical_short_id')
+  );
+}
+
 export function insertMilestone(m: NewMilestoneRow): MilestoneRow {
   const now = Date.now();
-  db.prepare<NewMilestoneRow>(
-    `
+  try {
+    db.prepare<NewMilestoneRow>(
+      `
     INSERT INTO milestones
-      (id, project_id, name, source_id, display_order, created_at, updated_at)
+      (id, project_id, name, source_id, canonical_short_id, display_order, created_at, updated_at)
     VALUES
-      (@id, @project_id, @name, @source_id, @display_order, @created_at, @updated_at)
+      (@id, @project_id, @name, @source_id, @canonical_short_id, @display_order, @created_at, @updated_at)
   `,
-  ).run({
-    ...m,
-    display_order: m.display_order ?? 0,
-    created_at: m.created_at ?? now,
-    updated_at: m.updated_at ?? now,
-  });
+    ).run({
+      ...m,
+      display_order: m.display_order ?? 0,
+      created_at: m.created_at ?? now,
+      updated_at: m.updated_at ?? now,
+    });
+  } catch (err) {
+    if (isCanonicalShortIdCollision(err)) {
+      throw new MilestoneCanonicalShortIdCollisionError(
+        m.canonical_short_id ?? '',
+      );
+    }
+    throw err;
+  }
   return getMilestoneById(m.id)!;
 }
 
@@ -2352,6 +2383,7 @@ export function listMilestonesByProject(projectId: string): MilestoneRow[] {
 export interface MilestonePatch {
   name?: string;
   source_id?: string | null;
+  canonical_short_id?: string | null;
   display_order?: number;
 }
 
@@ -2362,29 +2394,45 @@ export function updateMilestone(
   const existing = getMilestoneById(id);
   if (!existing) return undefined;
   const now = Date.now();
-  db.prepare<{
-    id: string;
-    name: string;
-    source_id: string | null;
-    display_order: number;
-    updated_at: number;
-  }>(
-    `
+  const nextCanonicalShortId =
+    patch.canonical_short_id !== undefined
+      ? patch.canonical_short_id
+      : existing.canonical_short_id;
+  try {
+    db.prepare<{
+      id: string;
+      name: string;
+      source_id: string | null;
+      canonical_short_id: string | null;
+      display_order: number;
+      updated_at: number;
+    }>(
+      `
     UPDATE milestones
     SET name = @name,
         source_id = @source_id,
+        canonical_short_id = @canonical_short_id,
         display_order = @display_order,
         updated_at = @updated_at
     WHERE id = @id
   `,
-  ).run({
-    id,
-    name: patch.name ?? existing.name,
-    source_id:
-      patch.source_id !== undefined ? patch.source_id : existing.source_id,
-    display_order: patch.display_order ?? existing.display_order,
-    updated_at: now,
-  });
+    ).run({
+      id,
+      name: patch.name ?? existing.name,
+      source_id:
+        patch.source_id !== undefined ? patch.source_id : existing.source_id,
+      canonical_short_id: nextCanonicalShortId,
+      display_order: patch.display_order ?? existing.display_order,
+      updated_at: now,
+    });
+  } catch (err) {
+    if (isCanonicalShortIdCollision(err)) {
+      throw new MilestoneCanonicalShortIdCollisionError(
+        nextCanonicalShortId ?? '',
+      );
+    }
+    throw err;
+  }
   return getMilestoneById(id);
 }
 

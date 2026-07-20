@@ -30,15 +30,23 @@ const M11 = {
   projectId: 'p1',
   name: 'M11',
   sourceId: null,
+  canonicalShortId: 'M11',
   displayOrder: 0,
   createdAt: 0,
   updatedAt: 0,
 };
-const M12 = { ...M11, id: 'ms-uuid-12', name: 'M12', displayOrder: 1 };
+const M12 = {
+  ...M11,
+  id: 'ms-uuid-12',
+  name: 'M12',
+  canonicalShortId: 'M12',
+  displayOrder: 1,
+};
 const M13_FULL_TITLE = {
   ...M11,
   id: 'ms-uuid-13',
   name: 'M13 — Orchestrator-Owned Planning',
+  canonicalShortId: 'M13',
   displayOrder: 2,
 };
 

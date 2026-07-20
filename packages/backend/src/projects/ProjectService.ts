@@ -27,12 +27,14 @@ import type { NonMilestoneSourceConfig } from '../tasks/TaskBackend';
 import { recordEvent } from '../audit/AuditLog';
 import { normalizePath } from '../config';
 import { logger } from '../logger';
+import { extractMilestoneToken } from './milestoneToken';
 
 export interface ProjectMilestone {
   id: string;
   projectId: string;
   name: string;
   sourceId: string | null;
+  canonicalShortId: string | null;
   displayOrder: number;
   createdAt: number;
   updatedAt: number;
@@ -80,6 +82,7 @@ export interface CreateMilestoneInput {
   projectId: string;
   name: string;
   sourceId?: string | null;
+  canonicalShortId?: string | null;
   displayOrder?: number;
 }
 
@@ -89,6 +92,7 @@ function rowToMilestone(row: MilestoneRow): ProjectMilestone {
     projectId: row.project_id,
     name: row.name,
     sourceId: row.source_id,
+    canonicalShortId: row.canonical_short_id,
     displayOrder: row.display_order,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -203,11 +207,22 @@ export const ProjectService = {
   },
 
   createMilestone(input: CreateMilestoneInput): ProjectMilestone {
+    let canonicalShortId = input.canonicalShortId ?? null;
+    if (canonicalShortId === null) {
+      canonicalShortId = extractMilestoneToken(input.name) ?? null;
+      if (canonicalShortId === null) {
+        canonicalShortId = input.name;
+        logger.warn(
+          `[ProjectService] createMilestone: "${input.name}" has no leading M<n> token — using full name as canonical_short_id`,
+        );
+      }
+    }
     const row = insertMilestone({
       id: input.id,
       project_id: input.projectId,
       name: input.name,
       source_id: input.sourceId ?? null,
+      canonical_short_id: canonicalShortId,
       display_order: input.displayOrder ?? 0,
     });
     return rowToMilestone(row);
@@ -263,6 +278,7 @@ export const ProjectService = {
       if (bySourceId) {
         updateMilestone(bySourceId.id, {
           name: ym.name,
+          canonical_short_id: ym.id,
           display_order: displayOrder,
         });
         continue;
@@ -275,6 +291,7 @@ export const ProjectService = {
         updateMilestone(byName.id, {
           name: ym.name,
           source_id: ym.id,
+          canonical_short_id: ym.id,
           display_order: displayOrder,
         });
         continue;
@@ -285,6 +302,7 @@ export const ProjectService = {
         project_id: projectId,
         name: ym.name,
         source_id: ym.id,
+        canonical_short_id: ym.id,
         display_order: displayOrder,
       });
     }

@@ -13,27 +13,17 @@ export class UnknownMilestoneError extends Error {
   }
 }
 
-/**
- * Matches the leading M<n> / m<n> / M<n>a token off a milestone's full
- * display name (e.g. "M11 — Orchestrator-Owned Planning" -> "M11"). This is
- * the short form gate_item/seed_item and every loader/manifest/CLI flag key
- * on — the canonical milestone key. Returns undefined for milestones whose
- * name doesn't start with such a token.
- */
-function extractMilestoneToken(name: string): string | undefined {
-  const match = name.match(/^([Mm]\d+[A-Za-z]?)(?=[\s—:-]|$)/);
-  return match?.[1];
+/** The canonical short-form key for a milestone — its stored canonical_short_id, falling back to its full name. */
+function canonicalMilestoneKey(milestone: {
+  name: string;
+  canonicalShortId?: string | null;
+}): string {
+  return milestone.canonicalShortId ?? milestone.name;
 }
 
-/** The canonical short-form key for a milestone — its leading M<n> token, or its full name if it has none. */
-function canonicalMilestoneKey(milestone: { name: string }): string {
-  return extractMilestoneToken(milestone.name) ?? milestone.name;
-}
-
-function findMilestone<M extends { id: string; name: string }>(
-  milestones: M[],
-  milestone: string,
-): M | undefined {
+function findMilestone<
+  M extends { id: string; name: string; canonicalShortId?: string | null },
+>(milestones: M[], milestone: string): M | undefined {
   return milestones.find(
     (m) =>
       m.id === milestone ||
