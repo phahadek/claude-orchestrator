@@ -215,6 +215,7 @@ export interface MilestoneRow {
   project_id: string;
   name: string;
   source_id: string | null;
+  canonical_short_id: string | null;
   display_order: number;
   created_at: number;
   updated_at: number;
