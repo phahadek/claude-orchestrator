@@ -56,6 +56,8 @@ export interface Project {
   taskSourceConfig: string | null;
   dataResidencyConfirmed: boolean;
   baseBranch: string;
+  /** True once this project reads architecture from the arch_unit store instead of Notion. */
+  archStoreAdopted: boolean;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -126,6 +128,7 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
     taskSourceConfig: row.task_source_config ?? null,
     dataResidencyConfirmed: (row.data_residency_confirmed ?? 0) === 1,
     baseBranch: row.base_branch ?? 'dev',
+    archStoreAdopted: (row.arch_store_adopted ?? 0) === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     milestones: milestones.map(rowToMilestone),
@@ -321,6 +324,30 @@ export const ProjectService = {
     if (!row) return undefined;
     recordEvent({
       event_type: 'data_residency_flag_toggled',
+      actor_type: 'human',
+      project_id: projectId,
+      payload: { projectId, previousValue, newValue },
+    });
+    return rowToProject(row, listMilestonesByProject(projectId));
+  },
+
+  /**
+   * Flips the project's dual-read source. A whole project migrates at once —
+   * no per-page split-brain between the arch_unit store and Notion.
+   */
+  setArchStoreAdopted(
+    projectId: string,
+    newValue: boolean,
+  ): Project | undefined {
+    const existing = getProjectRowById(projectId);
+    if (!existing) return undefined;
+    const previousValue = (existing.arch_store_adopted ?? 0) === 1;
+    const row = updateProject(projectId, {
+      arch_store_adopted: newValue ? 1 : 0,
+    });
+    if (!row) return undefined;
+    recordEvent({
+      event_type: 'arch_store_adopted_toggled',
       actor_type: 'human',
       project_id: projectId,
       payload: { projectId, previousValue, newValue },

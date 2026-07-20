@@ -2210,6 +2210,7 @@ export interface ProjectPatch {
   task_source_config?: string | null;
   data_residency_confirmed?: number;
   base_branch?: string;
+  arch_store_adopted?: number;
 }
 
 export function updateProject(
@@ -2235,6 +2236,7 @@ export function updateProject(
     task_source_config: string | null;
     data_residency_confirmed: number;
     base_branch: string;
+    arch_store_adopted: number;
     updated_at: number;
   }>(
     `
@@ -2253,6 +2255,7 @@ export function updateProject(
         task_source_config = @task_source_config,
         data_residency_confirmed = @data_residency_confirmed,
         base_branch = @base_branch,
+        arch_store_adopted = @arch_store_adopted,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -2299,6 +2302,10 @@ export function updateProject(
         ? patch.data_residency_confirmed
         : (existing.data_residency_confirmed ?? 0),
     base_branch: patch.base_branch ?? existing.base_branch ?? 'dev',
+    arch_store_adopted:
+      patch.arch_store_adopted !== undefined
+        ? patch.arch_store_adopted
+        : (existing.arch_store_adopted ?? 0),
     updated_at: now,
   });
   return getProjectRowById(id);
