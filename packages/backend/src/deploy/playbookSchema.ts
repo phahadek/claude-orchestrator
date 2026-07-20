@@ -62,7 +62,12 @@ function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every(isString);
 }
 
-const STEP_KINDS: StepKind[] = ['shell', 'agentic', 'validation', 'confirm-gate'];
+const STEP_KINDS: StepKind[] = [
+  'shell',
+  'agentic',
+  'validation',
+  'confirm-gate',
+];
 
 /** Validates and narrows a raw parsed value to a `StepDescriptor`; returns an error message on failure. */
 function validateStep(raw: unknown, index: number): StepDescriptor | string {
@@ -76,7 +81,10 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
   if (!isString(step.kind) || !STEP_KINDS.includes(step.kind as StepKind)) {
     return `steps[${index}].kind must be one of ${STEP_KINDS.join(', ')}`;
   }
-  if (!isString(step.command_or_prompt) || step.command_or_prompt.length === 0) {
+  if (
+    !isString(step.command_or_prompt) ||
+    step.command_or_prompt.length === 0
+  ) {
     return `steps[${index}].command_or_prompt must be a non-empty string`;
   }
   if (typeof step.is_prod_mutating !== 'boolean') {
@@ -88,7 +96,10 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
   if (step.changed_paths !== undefined && !isStringArray(step.changed_paths)) {
     return `steps[${index}].changed_paths must be an array of strings`;
   }
-  if (step.supports_dry_run !== undefined && typeof step.supports_dry_run !== 'boolean') {
+  if (
+    step.supports_dry_run !== undefined &&
+    typeof step.supports_dry_run !== 'boolean'
+  ) {
     return `steps[${index}].supports_dry_run must be a boolean`;
   }
   if (step.poll_until !== undefined && !isString(step.poll_until)) {
@@ -110,7 +121,10 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
   };
 }
 
-function validateFailureDiagnosis(raw: unknown, index: number): FailureDiagnosis | string {
+function validateFailureDiagnosis(
+  raw: unknown,
+  index: number,
+): FailureDiagnosis | string {
   if (raw === null || typeof raw !== 'object') {
     return `failure_diagnoses[${index}] must be an object`;
   }
@@ -127,7 +141,10 @@ function validateFailureDiagnosis(raw: unknown, index: number): FailureDiagnosis
   return { symptom: diag.symptom, cause: diag.cause, action: diag.action };
 }
 
-function validateCompanion(raw: unknown, index: number): CompanionDecl | string {
+function validateCompanion(
+  raw: unknown,
+  index: number,
+): CompanionDecl | string {
   if (raw === null || typeof raw !== 'object') {
     return `companions[${index}] must be an object`;
   }
@@ -135,10 +152,16 @@ function validateCompanion(raw: unknown, index: number): CompanionDecl | string 
   if (!isString(companion.name) || companion.name.length === 0) {
     return `companions[${index}].name must be a non-empty string`;
   }
-  if (!isStringArray(companion.trigger_paths) || companion.trigger_paths.length === 0) {
+  if (
+    !isStringArray(companion.trigger_paths) ||
+    companion.trigger_paths.length === 0
+  ) {
     return `companions[${index}].trigger_paths must be a non-empty array of strings`;
   }
-  if (!isString(companion.redeploy_instruction) || companion.redeploy_instruction.length === 0) {
+  if (
+    !isString(companion.redeploy_instruction) ||
+    companion.redeploy_instruction.length === 0
+  ) {
     return `companions[${index}].redeploy_instruction must be a non-empty string`;
   }
   if (companion.host !== undefined && !isString(companion.host)) {
@@ -162,7 +185,9 @@ function validateCompanion(raw: unknown, index: number): CompanionDecl | string 
  * failure — the loader reports these rather than falling back to defaults,
  * since an invalid playbook must stop `/deploy`, not run a guessed one.
  */
-export function validatePlaybook(raw: unknown): DeployPlaybook | { errors: string[] } {
+export function validatePlaybook(
+  raw: unknown,
+): DeployPlaybook | { errors: string[] } {
   const errors: string[] = [];
   if (raw === null || typeof raw !== 'object') {
     return { errors: ['playbook must be a YAML object'] };

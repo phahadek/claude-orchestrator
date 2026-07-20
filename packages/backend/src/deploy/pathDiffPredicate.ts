@@ -8,7 +8,10 @@ import { PathGlob } from './playbookSchema';
  * `trigger_paths` (does this companion likely need redeploying?) — same
  * question, same predicate, asked against a different glob list.
  */
-export function matchesPathDiff(globs: PathGlob[], diffPaths: string[]): boolean {
+export function matchesPathDiff(
+  globs: PathGlob[],
+  diffPaths: string[],
+): boolean {
   if (globs.length === 0 || diffPaths.length === 0) {
     return false;
   }
