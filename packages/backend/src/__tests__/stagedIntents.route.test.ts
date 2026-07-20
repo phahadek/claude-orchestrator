@@ -254,6 +254,7 @@ describe('POST /api/staged-intents — kind validation', () => {
     for (const kind of [
       'task.updateBody',
       'task.setProperties',
+      'task.setType',
       'task.archive',
       'task.move',
     ]) {
@@ -377,5 +378,84 @@ describe('POST /api/staged-intents/:id/apply — new kinds', () => {
     expect(archive).not.toHaveBeenCalled();
     expect(updateBody).not.toHaveBeenCalled();
     expect(setProperties).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/staged-intents/:id/apply — task.setType', () => {
+  it('applies a valid Type transition', async () => {
+    const setType = vi.fn().mockResolvedValue(undefined);
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setType,
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Summary\nSome design doc.\n'),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'task.setType',
+      projectId: 'proj-set-type',
+      payload: { taskId: 'notion:abc', type: '📐 Design' },
+    });
+    expect(staged.status).toBe(201);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(200);
+    expect(setType).toHaveBeenCalledWith(
+      'notion:abc',
+      '📐 Design',
+      expect.objectContaining({ source: 'human' }),
+    );
+  });
+
+  it('rejects an invalid Type transition (unknown type) without calling the backend', async () => {
+    const setType = vi.fn().mockResolvedValue(undefined);
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setType,
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome doc.\n'),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'task.setType',
+      projectId: 'proj-set-type-invalid',
+      payload: { taskId: 'notion:abc', type: '🚫 NotAType' },
+    });
+    expect(staged.status).toBe(201);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(500);
+    expect(setType).not.toHaveBeenCalled();
+  });
+
+  it('rejects applying task.setType with a session credential (human-apply-only)', async () => {
+    const setType = vi.fn().mockResolvedValue(undefined);
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setType,
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome doc.\n'),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'task.setType',
+      projectId: 'proj-set-type-session',
+      payload: { taskId: 'notion:abc', type: '📐 Design' },
+    });
+
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({ actorType: 'session' });
+    expect(applied.status).toBe(403);
+    expect(setType).not.toHaveBeenCalled();
   });
 });

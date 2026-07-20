@@ -5,6 +5,7 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   BackendTaskWriteCommands,
   type TaskStatus,
+  type TaskType,
   type MoveTaskContent,
   type MoveTaskMilestoneRef,
   type MoveTaskTargetMilestone,
@@ -103,6 +104,10 @@ interface SetPropertiesPayload {
   taskId: string;
   patch: TaskPropertiesPatch;
 }
+interface SetTypePayload {
+  taskId: string;
+  type: TaskType;
+}
 interface ArchivePayload {
   taskId: string;
 }
@@ -121,6 +126,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'task.setDependsOn',
   'task.updateBody',
   'task.setProperties',
+  'task.setType',
   'task.archive',
   'task.move',
 ]);
@@ -158,6 +164,7 @@ export function stageIntent(
 const HUMAN_APPLY_ONLY_KINDS: ReadonlySet<string> = new Set([
   'task.updateBody',
   'task.setProperties',
+  'task.setType',
   'task.archive',
   'task.move',
 ]);
@@ -228,6 +235,13 @@ async function applyIntent(
     case 'task.setProperties': {
       const payload = intent.payload as SetPropertiesPayload;
       await commands.setProperties(payload.taskId, payload.patch, {
+        source: 'human',
+      });
+      return { ok: true };
+    }
+    case 'task.setType': {
+      const payload = intent.payload as SetTypePayload;
+      await commands.setType(payload.taskId, payload.type, {
         source: 'human',
       });
       return { ok: true };
