@@ -139,6 +139,33 @@ export const stagedIntentsApi = {
     );
   },
 
+  /**
+   * The approve-by-standard decision surface: commits a default-approved
+   * clean set spanning multiple task groups from one triaged interactive-type
+   * batch, on a single operator disposition. Each named group still commits
+   * individually server-side (its own per-task readiness_override + audit
+   * event) — a group whose apply fails its server-side gate is reported back
+   * as an exception rather than aborting the rest.
+   */
+  commitBatch(
+    groupIds: string[],
+    milestoneLabel?: string,
+  ): Promise<{
+    ok: boolean;
+    committed: string[];
+    exceptions: { groupId: string; status: number; error: string }[];
+  }> {
+    return apiRequest<{
+      ok: boolean;
+      committed: string[];
+      exceptions: { groupId: string; status: number; error: string }[];
+    }>('/api/staged-intents/batch/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groupIds, milestoneLabel }),
+    });
+  },
+
   /** A non-empty `feedback` is a pushback (the session revises and re-stages); empty is a plain reject. */
   reject(id: string, feedback?: string): Promise<{ ok: boolean }> {
     return apiRequest<{ ok: boolean }>(
