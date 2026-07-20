@@ -10,7 +10,11 @@ import {
   listDeployRunEvents as listDeployRunEventsRows,
   insertDeployRunEvent,
 } from '../db/queries';
-import type { DeployRunRow, DeployRunEventRow, DeployRunStatus } from '../db/types';
+import type {
+  DeployRunRow,
+  DeployRunEventRow,
+  DeployRunStatus,
+} from '../db/types';
 
 /**
  * The orchestrator owns the live deployed-commit record — reported in by
