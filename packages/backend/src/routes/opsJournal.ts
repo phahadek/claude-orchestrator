@@ -109,8 +109,7 @@ export function createOpsJournalRouter(): Router {
 
       const fields: Record<string, unknown> = {};
       if (body.resolution !== undefined) fields.resolution = body.resolution;
-      if (body.disposition !== undefined)
-        fields.disposition = body.disposition;
+      if (body.disposition !== undefined) fields.disposition = body.disposition;
 
       try {
         setEntryState(taskId, state, fields);

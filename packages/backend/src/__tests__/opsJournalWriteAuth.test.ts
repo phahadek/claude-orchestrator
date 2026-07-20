@@ -64,7 +64,7 @@ function seedEntry(
     resolution: null,
     updated_at: new Date(0).toISOString(),
     ...overrides,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   } as any);
 }
 
@@ -78,7 +78,10 @@ beforeEach(() => {
 
 describe('POST /api/ops-journal/:taskId/state — session-scoped journal credential', () => {
   it('accepts a session credential for a staging transition on its own task', async () => {
-    mockGetSession.mockReturnValue({ session_id: 'ops-session-1', task_id: 'task-1' });
+    mockGetSession.mockReturnValue({
+      session_id: 'ops-session-1',
+      task_id: 'task-1',
+    });
     seedEntry('task-1', 'M12', { state: 'pending' });
     const token = mintOpsJournalCredential('ops-session-1');
 
@@ -92,7 +95,10 @@ describe('POST /api/ops-journal/:taskId/state — session-scoped journal credent
   });
 
   it('rejects a session credential transitioning -> resolved', async () => {
-    mockGetSession.mockReturnValue({ session_id: 'ops-session-1', task_id: 'task-1' });
+    mockGetSession.mockReturnValue({
+      session_id: 'ops-session-1',
+      task_id: 'task-1',
+    });
     seedEntry('task-1', 'M12', { state: 'applied-pending-confirm' });
     const token = mintOpsJournalCredential('ops-session-1');
 
@@ -104,7 +110,10 @@ describe('POST /api/ops-journal/:taskId/state — session-scoped journal credent
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('ops_journal_resolved_requires_device_auth');
 
-    mockGetDeviceByToken.mockReturnValue({ id: 'device-1', token: 'device-tok' });
+    mockGetDeviceByToken.mockReturnValue({
+      id: 'device-1',
+      token: 'device-tok',
+    });
     const stillOpen = await supertest(buildApp())
       .get('/api/ops-journal?milestone=M12')
       .set('Authorization', 'Bearer device-tok');
@@ -112,7 +121,10 @@ describe('POST /api/ops-journal/:taskId/state — session-scoped journal credent
   });
 
   it('accepts a device token transitioning -> resolved (unrestricted, additive)', async () => {
-    mockGetDeviceByToken.mockReturnValue({ id: 'device-1', token: 'device-tok' });
+    mockGetDeviceByToken.mockReturnValue({
+      id: 'device-1',
+      token: 'device-tok',
+    });
     seedEntry('task-1', 'M12', { state: 'applied-pending-confirm' });
 
     const res = await supertest(buildApp())
@@ -125,7 +137,10 @@ describe('POST /api/ops-journal/:taskId/state — session-scoped journal credent
   });
 
   it('rejects a session credential writing to a task other than its own', async () => {
-    mockGetSession.mockReturnValue({ session_id: 'ops-session-1', task_id: 'task-other' });
+    mockGetSession.mockReturnValue({
+      session_id: 'ops-session-1',
+      task_id: 'task-other',
+    });
     seedEntry('task-1', 'M12', { state: 'pending' });
     const token = mintOpsJournalCredential('ops-session-1');
 

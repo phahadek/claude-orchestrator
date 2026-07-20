@@ -354,7 +354,10 @@ interface JournalSetStatePayload {
 function JournalSetStateHeadline({ intent }: { intent: StagedIntent }) {
   const payload = intent.payload as JournalSetStatePayload;
   return (
-    <div className={styles.text} data-testid="staged-intent-ops-journal-payload">
+    <div
+      className={styles.text}
+      data-testid="staged-intent-ops-journal-payload"
+    >
       <p>
         ops_journal: set <strong>{payload.taskId}</strong> to{' '}
         <strong>{payload.state}</strong>
