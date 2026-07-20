@@ -41,6 +41,7 @@ import type {
   SeedContributionDecision,
 } from '../tasks/TaskWriteCommands';
 import { setEntryState, type OpsState } from '../ops/opsJournal';
+import type { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
 
 /**
  * The durable replacement for groom-gate.mjs's self-reported hard_block_deps
@@ -458,7 +459,9 @@ async function computeProposedBody(
   return composeProposedBody(stored, payload.sections);
 }
 
-export function createStagedIntentsRouter(): Router {
+export function createStagedIntentsRouter(
+  planningOrchestrator?: PlanningOrchestrator,
+): Router {
   const router = Router();
 
   // ── GET /api/staged-intents ─────────────────────────────────────────────
@@ -546,7 +549,13 @@ export function createStagedIntentsRouter(): Router {
           override ? { reason } : undefined,
           actorType,
         );
-        transitionStagedIntent(intent.id, 'committed', { annotation: null });
+        const committed = transitionStagedIntent(intent.id, 'committed', {
+          annotation: null,
+        });
+        await planningOrchestrator?.handleDisposition({
+          intent: committed,
+          disposition: 'approve',
+        });
         res.json({ ok: true, result });
       } catch (err) {
         if (err instanceof ReadinessGateError) {
@@ -690,7 +699,13 @@ export function createStagedIntentsRouter(): Router {
             override ? { reason } : undefined,
             actorType,
           );
-          transitionStagedIntent(intent.id, 'committed', { annotation: null });
+          const committedRow = transitionStagedIntent(intent.id, 'committed', {
+            annotation: null,
+          });
+          await planningOrchestrator?.handleDisposition({
+            intent: committedRow,
+            disposition: 'approve',
+          });
           committed.push(intent.id);
         } catch (err) {
           const remaining = ordered
@@ -759,15 +774,32 @@ export function createStagedIntentsRouter(): Router {
   );
 
   // ── POST /api/staged-intents/:id/reject ──────────────────────────────────
-  router.post('/staged-intents/:id/reject', (req: Request, res: Response) => {
-    const row = getActiveStagedIntent(String(req.params.id));
-    if (!row) {
-      res.status(404).json({ error: 'staged intent not found' });
-      return;
-    }
-    transitionStagedIntent(row.id, 'rejected');
-    res.json({ ok: true });
-  });
+  // A non-empty `feedback` is a pushback (the planning session is expected to
+  // revise and re-stage); an empty one is a plain reject. Both dispositions
+  // resume the originating planning session with the outcome, when set.
+  router.post(
+    '/staged-intents/:id/reject',
+    async (req: Request, res: Response) => {
+      const row = getActiveStagedIntent(String(req.params.id));
+      if (!row) {
+        res.status(404).json({ error: 'staged intent not found' });
+        return;
+      }
+      const body = req.body as { feedback?: unknown };
+      const feedback =
+        typeof body?.feedback === 'string' && body.feedback.trim()
+          ? body.feedback.trim()
+          : null;
+
+      const rejected = transitionStagedIntent(row.id, 'rejected');
+      await planningOrchestrator?.handleDisposition({
+        intent: rejected,
+        disposition: feedback ? 'pushback' : 'reject',
+        feedback,
+      });
+      res.json({ ok: true });
+    },
+  );
 
   return router;
 }

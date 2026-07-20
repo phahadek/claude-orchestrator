@@ -591,6 +591,49 @@ describe('resumeOrphanSessions — boot recovery regression', () => {
   });
 });
 
+// ── resumeOrphanSessions — planning (groom/design) session redrive ───────────
+
+describe('resumeOrphanSessions — planning session redrive on restart', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getStuckResultSessionRows).mockReturnValue([]);
+  });
+
+  it('redrives a running planning turn but never touches an idle one', async () => {
+    const runningPlanning = {
+      ...makeDeadRow('running-planning-session'),
+      session_type: 'design',
+      status: 'running',
+    };
+    const idlePlanning = {
+      ...makeDeadRow('idle-planning-session'),
+      session_type: 'groom',
+      status: 'idle',
+    };
+    // Mirrors the real getSessionsByStatus(statuses) filter — resumeOrphanSessions
+    // only ever asks for 'running' rows, so an idle session is structurally
+    // never a candidate for respawn.
+    vi.mocked(getSessionsByStatus).mockImplementation((statuses: string[]) =>
+      [runningPlanning, idlePlanning].filter((r) =>
+        statuses.includes(r.status),
+      ),
+    );
+
+    await sm.resumeOrphanSessions();
+
+    expect(getSessionsByStatus).toHaveBeenCalledWith(['running']);
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
+    expect(vi.mocked(AgentSession).mock.calls[0][0]).toBe(
+      'running-planning-session',
+    );
+  });
+});
+
 // ── resumeOrphanSessions — resume failure flags needs_attention ──────────────
 //
 // Policy: a session resume can't continue must never be silently disposed

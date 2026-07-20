@@ -4476,6 +4476,24 @@ export function listStagedIntentsByGroup(groupId: string): StagedIntentRow[] {
   }) as StagedIntentRow[];
 }
 
+let _stmtListStagedIntentsBySession: Database.Statement | null = null;
+
+/**
+ * All intents (any state, including tombstones) originated by a session —
+ * used by PlanningOrchestrator to correlate operator dispositions back to
+ * the parked planning session and to detect end-of-turn terminal state.
+ */
+export function listStagedIntentsBySession(
+  sessionId: string,
+): StagedIntentRow[] {
+  _stmtListStagedIntentsBySession ??= db.prepare<{ session_id: string }>(
+    `SELECT * FROM staged_intent WHERE session_id = @session_id ORDER BY created_at ASC`,
+  );
+  return _stmtListStagedIntentsBySession.all({
+    session_id: sessionId,
+  }) as StagedIntentRow[];
+}
+
 /** The standing staged/approved intent (if any) for this project+kind+task — the dedup slot. */
 export function findActiveStagedIntentForTask(
   projectId: string,

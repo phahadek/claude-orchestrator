@@ -49,6 +49,7 @@ import { importProjectsFromEnv } from './projects/projectImport';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
+import { PlanningOrchestrator } from './orchestration/PlanningOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AutoMerger } from './github/AutoMerger';
 import { ReviewerCommentsWatcher } from './github/ReviewerCommentsWatcher';
@@ -140,6 +141,7 @@ const reviewOrchestrator = new ReviewOrchestrator(
   githubClient,
 );
 setSettingsReviewOrchestrator(reviewOrchestrator);
+const planningOrchestrator = new PlanningOrchestrator(sessionManager);
 
 const PORT = getOrchestratorConfig().server.port;
 
@@ -216,7 +218,7 @@ app.use('/api', configRouter);
 app.use('/api', updateRouter);
 app.use('/api/diagnostics', createDiagnosticsRouter());
 app.use('/api', createPlanUsageRouter());
-app.use('/api', createStagedIntentsRouter());
+app.use('/api', createStagedIntentsRouter(planningOrchestrator));
 app.use('/api', createOpsJournalRouter());
 app.use('/api', createGateStateRouter());
 app.use('/api', createDeployRouter());
