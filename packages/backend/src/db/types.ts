@@ -626,6 +626,8 @@ export interface ArchUnitRow {
   body: string;
   supersedes: string | null;
   superseded_by: string | null;
+  /** Optimistic-concurrency counter, bumped on every update/supersede mutation. */
+  version: number;
   created_at: string;
   updated_at: string;
 }

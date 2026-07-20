@@ -1226,6 +1226,7 @@ export function runMigrations(target: Database.Database): void {
       body          TEXT    NOT NULL,
       supersedes    TEXT,
       superseded_by TEXT,
+      version       INTEGER NOT NULL DEFAULT 1,
       created_at    TEXT    NOT NULL,
       updated_at    TEXT    NOT NULL
     );
@@ -1243,6 +1244,14 @@ export function runMigrations(target: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_arch_unit_event_arch_unit_id ON arch_unit_event(arch_unit_id);
   `);
+
+  try {
+    target.exec(
+      `ALTER TABLE arch_unit ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
+    );
+  } catch {
+    /* already exists */
+  }
 
   // ── milestones.canonical_short_id: stored canonical short-form key ─────────
   // Replaces the read-path extractMilestoneToken(name) parse in

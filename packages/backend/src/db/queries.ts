@@ -4747,9 +4747,9 @@ export function getArchUnit(id: string): ArchUnitRow | undefined {
 export function insertArchUnit(row: NewArchUnitRow): void {
   _stmtInsertArchUnit ??= db.prepare<ArchUnitRow>(`
     INSERT INTO arch_unit
-      (id, title, kind, topic, regions, status, body, supersedes, superseded_by, created_at, updated_at)
+      (id, title, kind, topic, regions, status, body, supersedes, superseded_by, version, created_at, updated_at)
     VALUES
-      (@id, @title, @kind, @topic, @regions, @status, @body, @supersedes, @superseded_by, @created_at, @updated_at)
+      (@id, @title, @kind, @topic, @regions, @status, @body, @supersedes, @superseded_by, @version, @created_at, @updated_at)
   `);
   _stmtInsertArchUnit.run({
     ...row,
@@ -4768,6 +4768,7 @@ export function updateArchUnit(row: ArchUnitRow): void {
       body = @body,
       supersedes = @supersedes,
       superseded_by = @superseded_by,
+      version = @version,
       updated_at = @updated_at
     WHERE id = @id
   `);

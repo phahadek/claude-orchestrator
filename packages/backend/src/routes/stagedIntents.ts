@@ -42,6 +42,14 @@ import type {
 } from '../tasks/TaskWriteCommands';
 import { setEntryState, type OpsState } from '../ops/opsJournal';
 import type { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
+import {
+  BackendArchWriteCommands,
+  StaleArchUnitVersionError,
+  ArchUnitAlreadySupersededError,
+  type NewArchUnitCommandFields,
+} from '../architecture/ArchWriteCommands';
+import type { ArchUnitUpdateFields } from '../architecture/ArchUnitStore';
+import type { ArchUnitKind, ArchUnitStatus } from '../db/types';
 
 /**
  * The durable replacement for groom-gate.mjs's self-reported hard_block_deps
@@ -159,11 +167,15 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
  * gate.accrete/seed.stage, whose source task lives at `payload.sourceTask.id`.
  */
 function extractTaskId(kind: string, payload: unknown): string | null {
-  if (kind === 'task.create') return null;
+  if (kind === 'task.create' || kind === 'arch.createUnit') return null;
   if (kind === 'gate.accrete' || kind === 'seed.stage') {
     const sourceTaskId = (payload as { sourceTask?: { id?: unknown } } | null)
       ?.sourceTask?.id;
     return typeof sourceTaskId === 'string' ? sourceTaskId : null;
+  }
+  if (kind === 'arch.updateUnit' || kind === 'arch.supersedeUnit') {
+    const unitId = (payload as { unitId?: unknown } | null)?.unitId;
+    return typeof unitId === 'string' ? unitId : null;
   }
   const taskId = (payload as { taskId?: unknown } | null)?.taskId;
   return typeof taskId === 'string' ? taskId : null;
@@ -218,6 +230,59 @@ interface JournalSetStatePayload {
   fields?: Parameters<typeof setEntryState>[2];
 }
 
+/** The kind/topic/regions/status envelope shared by all three arch.* kinds. */
+interface ArchUnitMetadataPayload {
+  kind: ArchUnitKind;
+  topic: string;
+  regions: string[];
+  status?: ArchUnitStatus;
+}
+interface ArchCreateUnitPayload {
+  title: string;
+  metadata: ArchUnitMetadataPayload;
+  body: string;
+}
+interface ArchUpdateUnitPayload {
+  unitId: string;
+  /** The unit's version this edit was composed against — optimistic concurrency. */
+  baseVersion: number;
+  title?: string;
+  metadata?: Partial<ArchUnitMetadataPayload>;
+  body?: string;
+}
+interface ArchSupersedeUnitPayload {
+  unitId: string;
+  /** The unit's version this supersede was composed against — optimistic concurrency. */
+  baseVersion: number;
+  replacement: ArchCreateUnitPayload;
+}
+
+function toNewArchUnitFields(
+  payload: ArchCreateUnitPayload,
+): NewArchUnitCommandFields {
+  return {
+    title: payload.title,
+    kind: payload.metadata.kind,
+    topic: payload.metadata.topic,
+    regions: payload.metadata.regions,
+    status: payload.metadata.status,
+    body: payload.body,
+  };
+}
+
+function toArchUnitUpdateFields(
+  payload: ArchUpdateUnitPayload,
+): ArchUnitUpdateFields {
+  return {
+    title: payload.title,
+    kind: payload.metadata?.kind,
+    topic: payload.metadata?.topic,
+    regions: payload.metadata?.regions,
+    status: payload.metadata?.status,
+    body: payload.body,
+  };
+}
+
 /** Intent kinds accepted by POST /staged-intents. */
 export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'task.create',
@@ -231,6 +296,9 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'gate.accrete',
   'seed.stage',
   'journal.setState',
+  'arch.createUnit',
+  'arch.updateUnit',
+  'arch.supersedeUnit',
 ]);
 
 /**
@@ -321,6 +389,9 @@ const HUMAN_APPLY_ONLY_KINDS: ReadonlySet<string> = new Set([
   'gate.accrete',
   'seed.stage',
   'journal.setState',
+  'arch.createUnit',
+  'arch.updateUnit',
+  'arch.supersedeUnit',
 ]);
 
 type ApplyActorType = 'human' | 'session';
@@ -345,6 +416,7 @@ async function applyIntent(
 
   const backend = getTaskBackend(intent.projectId);
   const commands = new BackendTaskWriteCommands(backend, intent.projectId);
+  const archCommands = new BackendArchWriteCommands();
 
   switch (intent.kind) {
     case 'task.create': {
@@ -434,6 +506,33 @@ async function applyIntent(
       const payload = intent.payload as JournalSetStatePayload;
       setEntryState(payload.taskId, payload.state, payload.fields);
       return { ok: true };
+    }
+    case 'arch.createUnit': {
+      const payload = intent.payload as ArchCreateUnitPayload;
+      const unit = await archCommands.createUnit(toNewArchUnitFields(payload));
+      return { id: unit.id, version: unit.version };
+    }
+    case 'arch.updateUnit': {
+      const payload = intent.payload as ArchUpdateUnitPayload;
+      const unit = await archCommands.updateUnit(
+        payload.unitId,
+        payload.baseVersion,
+        toArchUnitUpdateFields(payload),
+      );
+      return { id: unit.id, version: unit.version };
+    }
+    case 'arch.supersedeUnit': {
+      const payload = intent.payload as ArchSupersedeUnitPayload;
+      const result = await archCommands.supersedeUnit(
+        payload.unitId,
+        payload.baseVersion,
+        toNewArchUnitFields(payload.replacement),
+      );
+      return {
+        previousId: result.previous.id,
+        nextId: result.next.id,
+        nextVersion: result.next.version,
+      };
     }
     default:
       throw new Error(`[stagedIntents] unknown intent kind "${intent.kind}"`);
@@ -608,6 +707,17 @@ export function createStagedIntentsRouter(
           res.status(409).json({ error: err.message });
           return;
         }
+        if (
+          err instanceof StaleArchUnitVersionError ||
+          err instanceof ArchUnitAlreadySupersededError
+        ) {
+          setStagedIntentAnnotation(
+            intent.id,
+            JSON.stringify({ blocked: true, reasons: [err.message] }),
+          );
+          res.status(409).json({ error: err.message });
+          return;
+        }
         res.status(500).json({
           error: err instanceof Error ? err.message : 'Failed to apply intent',
         });
@@ -770,6 +880,22 @@ export function createStagedIntentsRouter(
             return;
           }
           if (err instanceof DependsOnCompletenessError) {
+            res.status(409).json({
+              error: err.message,
+              committed,
+              failedId: intent.id,
+              remaining,
+            });
+            return;
+          }
+          if (
+            err instanceof StaleArchUnitVersionError ||
+            err instanceof ArchUnitAlreadySupersededError
+          ) {
+            setStagedIntentAnnotation(
+              intent.id,
+              JSON.stringify({ blocked: true, reasons: [err.message] }),
+            );
             res.status(409).json({
               error: err.message,
               committed,
