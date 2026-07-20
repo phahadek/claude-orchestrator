@@ -34,9 +34,12 @@ import { approveGateItem, reconcileGateRunnability } from '../gateService.js';
 import {
   runGateReconcilerTick,
   register,
+  configureGateVerification,
+  getGateVerificationOptions,
   type DeployAdvanceTrigger,
   type GateItemVerifier,
   type FollowupFixTaskFiler,
+  type GateVerificationConcurrencyConfig,
 } from '../gateReconciler.js';
 
 beforeEach(() => {
@@ -84,6 +87,30 @@ describe('register', () => {
     const opts = scheduler.register.mock.calls[0][0];
     expect(opts.name).toBe('gate_verification_reconciler');
     await opts.run({ signal: new AbortController().signal });
+  });
+});
+
+describe('configureGateVerification / getGateVerificationOptions', () => {
+  it('returns null before anything has configured verification', () => {
+    expect(getGateVerificationOptions()).toBeNull();
+  });
+
+  it('round-trips the verifier + followupFiler + concurrency config for the manual-dispatch surface to read back', () => {
+    const verifier: GateItemVerifier = { verify: vi.fn() };
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(),
+    };
+    const concurrency: GateVerificationConcurrencyConfig = {
+      maxDispatchAttempts: 5,
+      maxFixAttempts: 2,
+    };
+
+    configureGateVerification({ verifier, followupFiler, concurrency });
+
+    const stored = getGateVerificationOptions();
+    expect(stored?.verifier).toBe(verifier);
+    expect(stored?.followupFiler).toBe(followupFiler);
+    expect(stored?.concurrency).toEqual(concurrency);
   });
 });
 
