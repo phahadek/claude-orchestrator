@@ -7,6 +7,7 @@ import {
 import type { SeedItemEventOutcome } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { getTaskCache } from '../db/queries';
+import type { SeedItemListOrder } from '../db/queries';
 import {
   backfillConfigSeedTask,
   type BackfillConfigSeedResult,
@@ -27,6 +28,8 @@ export interface SeedBlockingItem {
 export interface SeedReadiness {
   status: 'green' | 'blocked';
   blocking: SeedBlockingItem[];
+  /** The milestone's full per-state item totals, independent of any table filter; sums to the milestone's item total. */
+  counts: Record<string, number>;
 }
 
 /**
@@ -45,7 +48,15 @@ export function getSeedReadiness(milestone: string): SeedReadiness {
       spec: item.spec,
       state: item.state,
     }));
-  return { status: blocking.length === 0 ? 'green' : 'blocked', blocking };
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    counts[item.state] = (counts[item.state] ?? 0) + 1;
+  }
+  return {
+    status: blocking.length === 0 ? 'green' : 'blocked',
+    blocking,
+    counts,
+  };
 }
 
 const DEFAULT_APPLYABLE_LIMIT = 1;
@@ -108,6 +119,8 @@ export interface ListSeedItemsOptions {
   state?: string;
   page?: number;
   limit?: number;
+  /** 'not-done-first' surfaces unconfirmed items ahead of confirmed ones — the run-worklist default. */
+  order?: SeedItemListOrder;
 }
 
 export interface ListSeedItemsResult {
@@ -139,6 +152,7 @@ export function listSeedItems(
     },
     limit,
     offset,
+    options.order,
   );
   return { items, total, page };
 }

@@ -4,6 +4,7 @@ import type { GateItem } from './gateStore';
 import type { GateItemClassification } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { getTaskCache } from '../db/queries';
+import type { GateItemListOrder } from '../db/queries';
 import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
 
 /**
@@ -111,6 +112,8 @@ export interface GateReadiness {
   blocking: GateBlockingItem[];
   /** Subset of `blocking` sitting in a state outside the closed vocabulary — needs human re-disposition, not indefinite blocking. */
   bespokeStates: GateBlockingItem[];
+  /** The milestone's full per-state item totals, independent of any table filter; sums to the milestone's item total. */
+  counts: Record<string, number>;
 }
 
 /** Headline output: green once every item in the milestone is pass/deferred/discarded. */
@@ -127,10 +130,15 @@ export function getGateReadiness(milestone: string): GateReadiness {
       state: item.state,
       bespoke: isBespokeGateState(item.state),
     }));
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    counts[item.state] = (counts[item.state] ?? 0) + 1;
+  }
   return {
     status: blocking.length === 0 ? 'green' : 'blocked',
     blocking,
     bespokeStates: blocking.filter((item) => item.bespoke),
+    counts,
   };
 }
 
@@ -248,6 +256,8 @@ export interface ListGateItemsOptions {
   runnable?: boolean;
   page?: number;
   limit?: number;
+  /** 'not-done-first' surfaces unresolved (non pass/deferred) items ahead of resolved ones — the run-worklist default. */
+  order?: GateItemListOrder;
 }
 
 export interface ListGateItemsResult {
@@ -281,6 +291,7 @@ export function listGateItems(
     },
     limit,
     offset,
+    options.order,
   );
   return { items, total, page };
 }

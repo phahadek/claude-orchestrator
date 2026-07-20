@@ -110,6 +110,20 @@ describe('getGateReadiness', () => {
       bespoke: true,
     });
   });
+
+  it('returns per-state counts summing to the milestone item total', () => {
+    const passed = makeItem({ text: 'a' });
+    const deferred = makeItem({ text: 'b' });
+    makeItem({ text: 'c' });
+    appendGateItemEvent(passed.id, { disposition: 'pass' });
+    appendGateItemEvent(deferred.id, { disposition: 'deferred' });
+
+    const readiness = getGateReadiness('M12');
+    expect(readiness.counts).toEqual({ open: 1, pass: 1, deferred: 1 });
+    expect(
+      Object.values(readiness.counts).reduce((sum, n) => sum + n, 0),
+    ).toBe(3);
+  });
 });
 
 describe('reconcileGateRunnability', () => {
@@ -516,6 +530,22 @@ describe('listGateItems', () => {
     const result = listGateItems();
     expect(result.items).toHaveLength(3);
     expect(result.page).toBe(1);
+  });
+
+  it('order: not-done-first sorts unresolved items ahead of pass/deferred ones', () => {
+    const passed = makeItem({ text: 'passed' });
+    const deferred = makeItem({ text: 'deferred' });
+    const open = makeItem({ text: 'open' });
+    appendGateItemEvent(passed.id, { disposition: 'pass' });
+    appendGateItemEvent(deferred.id, { disposition: 'deferred' });
+
+    const result = listGateItems({ order: 'not-done-first' });
+    const doneIds = new Set([passed.id, deferred.id]);
+    const firstDoneIndex = result.items.findIndex((i) => doneIds.has(i.id));
+    const lastNotDoneIndex = result.items
+      .map((i) => i.id)
+      .lastIndexOf(open.id);
+    expect(lastNotDoneIndex).toBeLessThan(firstDoneIndex);
   });
 });
 
