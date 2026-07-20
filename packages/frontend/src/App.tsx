@@ -1186,7 +1186,6 @@ export default function App() {
       else if (view === 'sessions') setTopView('sessions');
       else if (view === 'prs') setTopView('prs');
       else if (view === 'analytics') setTopView('analytics');
-      else if (view === 'architecture') setTopView('architecture');
       else if (view === 'settings') setTopView('settings');
     },
     onFocusSearch: () => {
