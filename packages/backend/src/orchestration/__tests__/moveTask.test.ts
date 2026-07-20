@@ -29,7 +29,10 @@ vi.mock('../../projects/milestoneResolver', () => ({
 }));
 
 import { planMove, MoveTaskError, type MoveGraphTask } from '../moveTask';
-import { BackendTaskWriteCommands } from '../../tasks/TaskWriteCommands';
+import {
+  BackendTaskWriteCommands,
+  setTaskWriteRefreshFn,
+} from '../../tasks/TaskWriteCommands';
 import type { TaskBackend } from '../../tasks/TaskBackend';
 import { ReadinessGateError } from '../../tasks/readinessGate';
 
@@ -402,6 +405,28 @@ describe('BackendTaskWriteCommands.moveTask', () => {
 
     expect(mockDeleteTaskCacheRow).toHaveBeenCalledWith('board:m-source');
     expect(mockDeleteTaskCacheRow).toHaveBeenCalledWith('board:m-target');
+  });
+
+  it('eagerly re-warms the affected project boards instead of waiting for the next TaskCacheRefresher tick', async () => {
+    const mockRefresh = vi.fn().mockResolvedValue(undefined);
+    setTaskWriteRefreshFn(mockRefresh);
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend, 'proj-1');
+
+    await commands.moveTask(baseParams());
+
+    expect(mockRefresh).toHaveBeenCalledWith('proj-1', true);
+  });
+
+  it('skips the eager re-warm when no projectId is configured', async () => {
+    const mockRefresh = vi.fn().mockResolvedValue(undefined);
+    setTaskWriteRefreshFn(mockRefresh);
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.moveTask(baseParams());
+
+    expect(mockRefresh).not.toHaveBeenCalled();
   });
 
   it('carries the gate_item and seed_item accretion re-home, after the Depends On rewrites, using the normalized (unprefixed) source task id and the target milestone display name', async () => {

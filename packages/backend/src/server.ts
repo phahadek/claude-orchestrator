@@ -8,6 +8,7 @@ import { runMigrations } from './db/schema';
 import { db } from './db/db';
 import { SessionManager } from './session/SessionManager';
 import { handleMessage, setWsRouterRefreshFn } from './ws/router';
+import { setTaskWriteRefreshFn } from './tasks/TaskWriteCommands';
 import { sendInitialStateBurst } from './ws/initialStateBurst';
 import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
@@ -362,6 +363,9 @@ setTaskCacheRefresher((projectId, skipCache) =>
   taskCacheRefresher.refreshProjectById(projectId, skipCache),
 );
 setWsRouterRefreshFn((projectId, skipCache) =>
+  taskCacheRefresher.refreshProjectById(projectId, skipCache),
+);
+setTaskWriteRefreshFn((projectId, skipCache) =>
   taskCacheRefresher.refreshProjectById(projectId, skipCache),
 );
 

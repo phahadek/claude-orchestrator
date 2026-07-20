@@ -33,6 +33,7 @@ import {
 } from '../seed/seedStore';
 import type { GateItemClassification } from '../db/types';
 import { recordEvent } from '../audit/AuditLog';
+import { logger } from '../logger';
 import { planMove, type MoveGraphTask } from '../orchestration/moveTask';
 import { normalizeTaskId, toExternalId } from './taskId';
 import { resolveMilestoneForProject } from '../projects/milestoneResolver';
@@ -44,6 +45,20 @@ import {
 } from './statusCanonical';
 
 export { isValidTransition, STATUS_DISPLAY, type TaskStatus };
+
+// ── TaskCacheRefresher hook ───────────────────────────────────────────────────
+// Same seam ws/router.ts uses on a skipCache cache-miss — lets moveTask
+// eagerly re-warm the affected project's boards instead of leaving them
+// cache-empty until the next TaskCacheRefresher interval tick.
+let refreshProjectFn:
+  | ((projectId: string, skipCache?: boolean) => Promise<void>)
+  | null = null;
+
+export function setTaskWriteRefreshFn(
+  fn: (projectId: string, skipCache?: boolean) => Promise<void>,
+): void {
+  refreshProjectFn = fn;
+}
 
 /** Reads the last-known status for a task from the task cache. */
 function getCachedStatus(taskId: string): TaskStatus | null {
@@ -725,6 +740,14 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
 
     deleteTaskCacheRow(`board:${sourceMilestone.id}`);
     deleteTaskCacheRow(`board:${targetMilestone.id}`);
+
+    if (this.projectId && refreshProjectFn) {
+      void refreshProjectFn(this.projectId, true).catch((err: unknown) => {
+        logger.warn(
+          `[TaskWriteCommands] moveTask post-move re-warm failed for project ${this.projectId}: ${String(err)}`,
+        );
+      });
+    }
 
     return {
       newTaskId,
