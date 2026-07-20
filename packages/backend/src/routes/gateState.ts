@@ -125,6 +125,11 @@ export function createGateStateRouter(): Router {
       }
       throw err;
     }
+    const orderRaw = stringParam('order');
+    if (orderRaw !== undefined && orderRaw !== 'not-done-first') {
+      res.status(400).json({ error: `unknown order: ${orderRaw}` });
+      return;
+    }
     res.json(
       listGateItems({
         project,
@@ -137,6 +142,7 @@ export function createGateStateRouter(): Router {
           runnableRaw === undefined ? undefined : runnableRaw === 'true',
         page: numberParam('page'),
         limit: numberParam('limit'),
+        order: orderRaw,
       }),
     );
   });

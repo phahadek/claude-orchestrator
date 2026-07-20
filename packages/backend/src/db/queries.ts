@@ -4002,15 +4002,23 @@ function buildGateItemWhereClause(filter: GateItemFilter): {
   };
 }
 
+/** List-ordering options for listGateItemsFiltered: 'default' is recency; 'not-done-first' surfaces unresolved items first. */
+export type GateItemListOrder = 'default' | 'not-done-first';
+
 /** Paginated, filtered read of gate_item — never an unbounded load; caller supplies limit/offset. */
 export function listGateItemsFiltered(
   filter: GateItemFilter,
   limit: number,
   offset: number,
+  order: GateItemListOrder = 'default',
 ): GateItemRow[] {
   const { clause, params } = buildGateItemWhereClause(filter);
+  const orderClause =
+    order === 'not-done-first'
+      ? `CASE WHEN state IN ('pass', 'deferred', 'discarded') THEN 1 ELSE 0 END ASC, updated_at DESC, id ASC`
+      : `updated_at DESC, id ASC`;
   const stmt = db.prepare(
-    `SELECT * FROM gate_item ${clause} ORDER BY updated_at DESC, id ASC LIMIT @limit OFFSET @offset`,
+    `SELECT * FROM gate_item ${clause} ORDER BY ${orderClause} LIMIT @limit OFFSET @offset`,
   );
   return stmt.all({ ...params, limit, offset }) as GateItemRow[];
 }
@@ -4150,15 +4158,23 @@ function buildSeedItemWhereClause(filter: SeedItemFilter): {
   };
 }
 
+/** List-ordering options for listSeedItemsFiltered: 'default' is recency; 'not-done-first' surfaces unconfirmed items first. */
+export type SeedItemListOrder = 'default' | 'not-done-first';
+
 /** Paginated, filtered read of seed_item — never an unbounded load; caller supplies limit/offset. */
 export function listSeedItemsFiltered(
   filter: SeedItemFilter,
   limit: number,
   offset: number,
+  order: SeedItemListOrder = 'default',
 ): SeedItemRow[] {
   const { clause, params } = buildSeedItemWhereClause(filter);
+  const orderClause =
+    order === 'not-done-first'
+      ? `CASE WHEN state = 'confirmed' THEN 1 ELSE 0 END ASC, updated_at DESC, id ASC`
+      : `updated_at DESC, id ASC`;
   const stmt = db.prepare(
-    `SELECT * FROM seed_item ${clause} ORDER BY updated_at DESC, id ASC LIMIT @limit OFFSET @offset`,
+    `SELECT * FROM seed_item ${clause} ORDER BY ${orderClause} LIMIT @limit OFFSET @offset`,
   );
   return stmt.all({ ...params, limit, offset }) as SeedItemRow[];
 }

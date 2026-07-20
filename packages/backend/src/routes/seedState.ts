@@ -113,6 +113,11 @@ export function createSeedStateRouter(): Router {
       }
       throw err;
     }
+    const orderRaw = stringParam('order');
+    if (orderRaw !== undefined && orderRaw !== 'not-done-first') {
+      res.status(400).json({ error: `unknown order: ${orderRaw}` });
+      return;
+    }
     res.json(
       listSeedItems({
         project,
@@ -120,6 +125,7 @@ export function createSeedStateRouter(): Router {
         state: stringParam('state'),
         page: numberParam('page'),
         limit: numberParam('limit'),
+        order: orderRaw,
       }),
     );
   });

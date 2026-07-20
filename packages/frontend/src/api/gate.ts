@@ -54,6 +54,8 @@ interface GateBlockingItem {
 export interface GateReadiness {
   status: 'green' | 'blocked';
   blocking: GateBlockingItem[];
+  /** The milestone's full per-state item totals, independent of any table filter. */
+  counts: Record<string, number>;
 }
 
 export interface MilestoneReadiness {
@@ -71,6 +73,7 @@ export interface ListGateItemsParams {
   runnable?: boolean;
   page?: number;
   limit?: number;
+  order?: 'not-done-first';
 }
 
 export interface ListGateItemsResult {

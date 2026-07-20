@@ -20,7 +20,7 @@ import {
   getSeedAccretion,
   upsertSeedAccretion,
 } from '../db/queries';
-import type { SeedItemFilter } from '../db/queries';
+import type { SeedItemFilter, SeedItemListOrder } from '../db/queries';
 import type {
   SeedItemState,
   SeedItemEventOutcome,
@@ -151,8 +151,9 @@ export function listFiltered(
   filter: SeedItemFilter,
   limit: number,
   offset: number,
+  order?: SeedItemListOrder,
 ): ListFilteredResult {
-  const items = listSeedItemsFiltered(filter, limit, offset)
+  const items = listSeedItemsFiltered(filter, limit, offset, order)
     .map((row) => getItem(row.id))
     .filter((item): item is SeedItem => item !== undefined);
   const total = countSeedItemsFiltered(filter);

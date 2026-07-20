@@ -22,7 +22,7 @@ import {
   listGateItemIdsBySourceTask,
   listUnfilledGateItemSourceTaskIds,
 } from '../db/queries';
-import type { GateItemFilter } from '../db/queries';
+import type { GateItemFilter, GateItemListOrder } from '../db/queries';
 import type {
   GateItemClassification,
   GateAccretionDecision,
@@ -159,8 +159,9 @@ export function listFiltered(
   filter: GateItemFilter,
   limit: number,
   offset: number,
+  order?: GateItemListOrder,
 ): ListFilteredResult {
-  const items = listGateItemsFiltered(filter, limit, offset)
+  const items = listGateItemsFiltered(filter, limit, offset, order)
     .map((row) => getItem(row.id))
     .filter((item): item is GateItem => item !== undefined);
   const total = countGateItemsFiltered(filter);
