@@ -166,27 +166,69 @@ describe('loadOrchestratorConfig', () => {
 });
 
 describe('getSessionAllowedTools', () => {
-  it('merges base ALLOWED_TOOLS with per-project allowed_tools', () => {
-    const merged = getSessionAllowedTools({
+  it('merges base ALLOWED_TOOLS with per-project allowed_tools for standard sessions', () => {
+    const merged = getSessionAllowedTools('standard', {
       allowed_tools: ['Bash(custom:*)'],
     });
     expect(merged).toContain('Bash(git:*)');
     expect(merged).toContain('Bash(custom:*)');
   });
 
-  it('grants no Notion tool — read or write — to orchestrator-launched sessions', () => {
-    const merged = getSessionAllowedTools({ allowed_tools: [] });
+  it('grants no Notion tool — read or write — to standard orchestrator-launched sessions', () => {
+    const merged = getSessionAllowedTools('standard', { allowed_tools: [] });
     expect(merged.some((t) => t.startsWith('mcp__claude_ai_Notion__'))).toBe(
       false,
     );
   });
 
   it('still excludes Notion tools when a project grants extra allowed_tools', () => {
-    const merged = getSessionAllowedTools({
+    const merged = getSessionAllowedTools('standard', {
       allowed_tools: ['Bash(custom:*)'],
     });
     expect(merged.some((t) => t.startsWith('mcp__claude_ai_Notion__'))).toBe(
       false,
     );
+  });
+
+  const FORBIDDEN_FOR_PLANNING = [
+    'Write',
+    'Edit',
+    'Bash(git:*)',
+    'mcp__github__create_pull_request',
+    'mcp__github__merge_pull_request',
+    'mcp__github__push_files',
+    'mcp__github__create_or_update_file',
+    'mcp__claude_ai_Notion__notion-create-pages',
+    'mcp__claude_ai_Notion__notion-update-page',
+  ];
+
+  it.each(['groom', 'design'] as const)(
+    '%s tool set excludes Write/Edit, git-mutation, PR/github MCP, and Notion-write MCP',
+    (sessionType) => {
+      const tools = getSessionAllowedTools(sessionType, {
+        allowed_tools: ['Bash(rm:*)'],
+      });
+      for (const forbidden of FORBIDDEN_FOR_PLANNING) {
+        expect(tools).not.toContain(forbidden);
+      }
+      expect(tools.some((t) => t.startsWith('mcp__github__'))).toBe(false);
+      expect(
+        tools.some((t) =>
+          t.startsWith('mcp__claude_ai_Notion__notion-create'),
+        ),
+      ).toBe(false);
+      expect(
+        tools.some((t) => t.startsWith('mcp__claude_ai_Notion__notion-update')),
+      ).toBe(false);
+      // per-project extras (which may include mutating commands) are never merged in
+      expect(tools).not.toContain('Bash(rm:*)');
+    },
+  );
+
+  it('groom and design each return a dedicated per-type set, not the base ALLOWED_TOOLS', () => {
+    const groom = getSessionAllowedTools('groom', { allowed_tools: [] });
+    const design = getSessionAllowedTools('design', { allowed_tools: [] });
+    expect(groom).not.toEqual(design);
+    expect(design.some((t) => t.startsWith('Bash(git '))).toBe(true);
   });
 });

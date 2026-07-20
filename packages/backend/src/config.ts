@@ -145,6 +145,69 @@ export const ALLOWED_TOOLS = [
   'mcp__github__update_pull_request_branch',
 ];
 
+// Read-only Bash subset shared by planning sessions (groom/design) — no
+// mutating commands (git commit/push/checkout/etc, rm, write redirects) and
+// no PR/github MCP or Notion-write MCP tools. 'Bash(node:*)' covers the
+// task-write-stage client (~/.claude/scripts/stage-task-intent.mjs).
+const PLANNING_READONLY_BASH_TOOLS = [
+  'Bash(node:*)',
+  'Bash(cd:*)',
+  'Bash(which:*)',
+  'Bash(where:*)',
+  'Bash(ls:*)',
+  'Bash(cat:*)',
+  'Bash(echo:*)',
+  'Bash(head:*)',
+  'Bash(tail:*)',
+  'Bash(wc:*)',
+  'Bash(find:*)',
+  'Bash(grep:*)',
+  'Bash(sort:*)',
+  'Bash(pwd:*)',
+];
+
+// Read-only Notion MCP tools — search/fetch/query/get, never create/update/move.
+const NOTION_READ_MCP_TOOLS = [
+  'mcp__claude_ai_Notion__notion-search',
+  'mcp__claude_ai_Notion__notion-fetch',
+  'mcp__claude_ai_Notion__notion-get-comments',
+  'mcp__claude_ai_Notion__notion-get-teams',
+  'mcp__claude_ai_Notion__notion-get-users',
+  'mcp__claude_ai_Notion__notion-get-async-task',
+  'mcp__claude_ai_Notion__notion-query-data-sources',
+  'mcp__claude_ai_Notion__notion-query-database-view',
+  'mcp__claude_ai_Notion__notion-query-meeting-notes',
+  'mcp__claude_ai_Notion__notion-download-attachment',
+];
+
+/**
+ * groom session tool set: deterministic backlog grooming — stage-only/read-only.
+ * Notion-read MCP + the task-write-stage client + light read-only code tools.
+ * Excludes Write/Edit, git-mutation, PR/github MCP, and Notion-write MCP.
+ */
+export const GROOM_ALLOWED_TOOLS = [
+  ...PLANNING_READONLY_BASH_TOOLS,
+  ...NOTION_READ_MCP_TOOLS,
+];
+
+/**
+ * design session tool set: investigative planning — everything groom has,
+ * plus read-only git inspection for reviewing the existing codebase.
+ * Excludes Write/Edit, git-mutation, PR/github MCP, and Notion-write MCP.
+ */
+export const DESIGN_ALLOWED_TOOLS = [
+  ...PLANNING_READONLY_BASH_TOOLS,
+  ...NOTION_READ_MCP_TOOLS,
+  'Bash(git log:*)',
+  'Bash(git diff:*)',
+  'Bash(git show:*)',
+  'Bash(git status:*)',
+  'Bash(git blame:*)',
+  'Bash(git ls-files:*)',
+  'Bash(git rev-parse:*)',
+  'Bash(git branch --list:*)',
+];
+
 function hydrateProject(p: {
   id: string;
   name: string;
@@ -287,6 +350,10 @@ export interface RuntimeSettings {
   large_task_model: string;
   /** Reasoning effort for large-task/escalation spawns; empty string = model default. */
   large_task_effort: string;
+  /** Model used for groom/design planning sessions; empty string = model default. */
+  planning_session_model: string;
+  /** Reasoning effort for planning sessions passed via --effort; empty string = model default. */
+  planning_session_effort: string;
   /** TaskCacheRefresher: how often (ms) to refresh per-project board caches in background. */
   task_cache_refresh_interval_ms: number;
   /** GateReconciler: built but not activated by default (no-coexistence rule) — off until an operator opts in. */
@@ -307,6 +374,8 @@ export const runtimeSettings: RuntimeSettings = {
   review_session_model: '',
   code_session_effort: '',
   review_session_effort: '',
+  planning_session_model: '',
+  planning_session_effort: '',
   session_mode: process.env.SESSION_MODE === 'api' ? 'api' : 'cli',
   auto_launch_concurrency: Number(process.env.AUTO_LAUNCH_CONCURRENCY ?? 1),
   auto_launch_poll_interval_ms: Number(
