@@ -89,9 +89,9 @@ describe('getSeedReadiness', () => {
 
     const readiness = getSeedReadiness('M12');
     expect(readiness.counts).toEqual({ confirmed: 1, pending: 1 });
-    expect(
-      Object.values(readiness.counts).reduce((sum, n) => sum + n, 0),
-    ).toBe(2);
+    expect(Object.values(readiness.counts).reduce((sum, n) => sum + n, 0)).toBe(
+      2,
+    );
   });
 });
 

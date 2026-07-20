@@ -120,9 +120,9 @@ describe('getGateReadiness', () => {
 
     const readiness = getGateReadiness('M12');
     expect(readiness.counts).toEqual({ open: 1, pass: 1, deferred: 1 });
-    expect(
-      Object.values(readiness.counts).reduce((sum, n) => sum + n, 0),
-    ).toBe(3);
+    expect(Object.values(readiness.counts).reduce((sum, n) => sum + n, 0)).toBe(
+      3,
+    );
   });
 });
 
@@ -542,9 +542,7 @@ describe('listGateItems', () => {
     const result = listGateItems({ order: 'not-done-first' });
     const doneIds = new Set([passed.id, deferred.id]);
     const firstDoneIndex = result.items.findIndex((i) => doneIds.has(i.id));
-    const lastNotDoneIndex = result.items
-      .map((i) => i.id)
-      .lastIndexOf(open.id);
+    const lastNotDoneIndex = result.items.map((i) => i.id).lastIndexOf(open.id);
     expect(lastNotDoneIndex).toBeLessThan(firstDoneIndex);
   });
 });
