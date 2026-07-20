@@ -49,11 +49,15 @@ function buildQuery(params: object): string {
 
 export const architectureApi = {
   listUnits(params: ListArchUnitsParams = {}): Promise<ArchUnit[]> {
-    return apiRequest<ArchUnit[]>(`/api/architecture/units${buildQuery(params)}`);
+    return apiRequest<ArchUnit[]>(
+      `/api/architecture/units${buildQuery(params)}`,
+    );
   },
 
   getUnit(id: string): Promise<ArchUnit> {
-    return apiRequest<ArchUnit>(`/api/architecture/units/${encodeURIComponent(id)}`);
+    return apiRequest<ArchUnit>(
+      `/api/architecture/units/${encodeURIComponent(id)}`,
+    );
   },
 
   getUnitEvents(id: string): Promise<ArchUnitEvent[]> {

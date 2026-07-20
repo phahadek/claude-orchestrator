@@ -2,7 +2,11 @@ import { useState, useEffect, useMemo } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { architectureApi } from '../api/architecture';
-import type { ArchUnit, ArchUnitKind, ArchUnitStatus } from '../api/architecture';
+import type {
+  ArchUnit,
+  ArchUnitKind,
+  ArchUnitStatus,
+} from '../api/architecture';
 import styles from './ArchitecturePanel.module.css';
 
 const KIND_OPTIONS: ArchUnitKind[] = [
@@ -21,7 +25,9 @@ export function ArchitecturePanel() {
   const [error, setError] = useState<string | null>(null);
 
   const [kindFilter, setKindFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState<ArchUnitStatus | ''>('active');
+  const [statusFilter, setStatusFilter] = useState<ArchUnitStatus | ''>(
+    'active',
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -110,7 +116,9 @@ export function ArchitecturePanel() {
       {error && <p className={styles.error}>{error}</p>}
 
       {!loading && !error && units.length === 0 && (
-        <p className={styles.muted}>No architecture units match these filters.</p>
+        <p className={styles.muted}>
+          No architecture units match these filters.
+        </p>
       )}
 
       {!loading && !error && units.length > 0 && (
