@@ -16,12 +16,22 @@ import type {
 } from '../api/seed';
 import { deployApi } from '../api/deploy';
 import type { DeployRun, DeployRunEvent } from '../api/deploy';
+import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
+import type { SessionState } from '../hooks/useSessionStore';
+import { SessionPanel } from './SessionPanel';
 import styles from './GateReadinessPanel.module.css';
 
 interface Props {
   activeProjectId: string | null;
   /** Milestone display name resolved from the top bar's selected board, if any. */
   activeBoardMilestone?: string | null;
+  /** Live session states, used to render a verify session's SessionPanel inline. */
+  sessions?: SessionState[];
+  send?: (msg: ClientMessage) => void;
+  setSessionArchived?: (sessionId: string, archived: boolean) => void;
+  setSessionFavorited?: (sessionId: string, favorited: boolean) => void;
+  project?: ProjectConfig | null;
 }
 
 const PAGE_SIZE = 20;
@@ -153,6 +163,11 @@ function RollupHeader({
 export function GateReadinessPanel({
   activeProjectId,
   activeBoardMilestone = null,
+  sessions = [],
+  send = () => {},
+  setSessionArchived = () => {},
+  setSessionFavorited = () => {},
+  project = null,
 }: Props) {
   const [milestones, setMilestones] = useState<MilestoneReadiness[]>([]);
   const [milestonesLoading, setMilestonesLoading] = useState(false);
@@ -182,6 +197,9 @@ export function GateReadinessPanel({
   const [verifySessions, setVerifySessions] = useState<GateItemVerifySession[]>(
     [],
   );
+  const [expandedVerifySessionIds, setExpandedVerifySessionIds] = useState<
+    Set<string>
+  >(new Set());
 
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(
     new Set(),
@@ -524,6 +542,15 @@ export function GateReadinessPanel({
     window.dispatchEvent(
       new CustomEvent('selectSession', { detail: { sessionId } }),
     );
+  }, []);
+
+  const toggleVerifySessionExpanded = useCallback((itemId: string) => {
+    setExpandedVerifySessionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
   }, []);
 
   const toggleItemSelected = useCallback((id: string) => {
@@ -883,8 +910,54 @@ export function GateReadinessPanel({
                                         data-testid={`gate-item-verify-session-jump-${item.id}`}
                                       >
                                         View session
+                                      </button>{' '}
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          toggleVerifySessionExpanded(item.id)
+                                        }
+                                        aria-expanded={expandedVerifySessionIds.has(
+                                          item.id,
+                                        )}
+                                        data-testid={`gate-item-verify-session-toggle-${item.id}`}
+                                      >
+                                        {expandedVerifySessionIds.has(item.id)
+                                          ? '▼ Hide session'
+                                          : '▶ Show session'}
                                       </button>
                                     </p>
+                                    {expandedVerifySessionIds.has(item.id) && (
+                                      <div
+                                        data-testid={`gate-item-verify-session-body-${item.id}`}
+                                      >
+                                        {(() => {
+                                          const liveSession = sessions.find(
+                                            (s) =>
+                                              s.sessionId ===
+                                              verifySessions[0].sessionId,
+                                          );
+                                          return liveSession ? (
+                                            <SessionPanel
+                                              session={liveSession}
+                                              send={send}
+                                              setSessionArchived={
+                                                setSessionArchived
+                                              }
+                                              setSessionFavorited={
+                                                setSessionFavorited
+                                              }
+                                              project={project}
+                                              showTaskName={false}
+                                            />
+                                          ) : (
+                                            <p className={styles.muted}>
+                                              Transcript not available — session
+                                              not loaded.
+                                            </p>
+                                          );
+                                        })()}
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                                 <div>

@@ -132,6 +132,7 @@ export function TaskDetail({
 }: Props) {
   const isMobile = useIsMobile();
   const [showReviewSection, setShowReviewSection] = useState(true);
+  const [showPlanningSection, setShowPlanningSection] = useState(true);
   const [showSpec, setShowSpec] = useState(!task.codeSession);
   const [mobileOpenSection, setMobileOpenSection] = useState<
     'review' | 'pr' | null
@@ -160,6 +161,7 @@ export function TaskDetail({
   // Reset state when task changes
   useEffect(() => {
     setShowReviewSection(true);
+    setShowPlanningSection(true);
     setMobileOpenSection('review');
     setReviewError(null);
     setFixConflictsInFlight(false);
@@ -184,6 +186,10 @@ export function TaskDetail({
     : null;
   const reviewSession = task.review
     ? (sessions.find((s) => s.sessionId === task.review!.sessionId) ?? null)
+    : null;
+  const planningSession = task.planningSession
+    ? (sessions.find((s) => s.sessionId === task.planningSession!.sessionId) ??
+      null)
     : null;
 
   const effectiveDisplayStatus = optimisticDisplayStatus ?? task.displayStatus;
@@ -520,6 +526,52 @@ export function TaskDetail({
                 <p className={styles.noTranscript}>No spec available.</p>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ── Planning SessionPanel — collapsible ── */}
+        {task.planningSession && (
+          <div className={styles.planningSection}>
+            <div
+              className={styles.planningSectionHeader}
+              onClick={() => setShowPlanningSection((v) => !v)}
+              role="button"
+              aria-expanded={showPlanningSection}
+              data-testid="planning-session-header"
+            >
+              <span className={styles.planningToggleIcon} aria-hidden="true">
+                {showPlanningSection ? '▼' : '▶'}
+              </span>
+              <span className={styles.sectionTitle}>
+                {task.planningSession.sessionType === 'groom'
+                  ? 'Grooming'
+                  : task.planningSession.sessionType === 'design'
+                    ? 'Design'
+                    : 'Ops'}{' '}
+                session
+              </span>
+            </div>
+            {showPlanningSection && (
+              <div
+                className={styles.planningBody}
+                data-testid="planning-session-body"
+              >
+                {planningSession ? (
+                  <SessionPanel
+                    session={planningSession}
+                    send={send}
+                    setSessionArchived={setSessionArchived}
+                    setSessionFavorited={setSessionFavorited}
+                    project={project}
+                    showTaskName={false}
+                  />
+                ) : (
+                  <p className={styles.noTranscript}>
+                    Transcript not available — session not loaded.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
 

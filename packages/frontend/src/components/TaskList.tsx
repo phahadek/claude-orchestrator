@@ -71,10 +71,11 @@ const OPS_TASK_TYPES = ['🔧 Operational', '🔎 Investigation', '🧪 Testing'
 const DESIGN_TASK_TYPES = ['📐 Design', '📋 Planning'];
 
 /**
- * Surfaces the sessions a Groom(N)/Ops(N)/Design(N) launch just started —
- * each launched task is already a live session in the session grid with
- * full controls, so this just links to it rather than staging a fake
- * Apply/Reject intent for something that was never actually staged.
+ * Surfaces the tasks a Groom(N)/Ops(N)/Design(N) batch launch just started.
+ * Each launched task now renders its planning session inline (collapsible)
+ * in TaskDetail, so this banner is just a navigational shortcut back to the
+ * task rather than staging a fake Apply/Reject intent for something that
+ * was never actually staged.
  */
 function LaunchedSessionsBanner({
   label,

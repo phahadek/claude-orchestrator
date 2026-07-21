@@ -146,6 +146,19 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     };
   }
 
+  let planningSession: TaskView['planningSession'] = null;
+  if (row.planning_session_id) {
+    planningSession = {
+      sessionId: row.planning_session_id,
+      status: row.planning_session_status ?? '',
+      sessionType: row.planning_session_type ?? '',
+      startedAt: row.planning_session_started_at ?? 0,
+      endedAt: row.planning_session_ended_at ?? null,
+      inputTokens: row.planning_session_input_tokens ?? 0,
+      outputTokens: row.planning_session_output_tokens ?? 0,
+    };
+  }
+
   let pr: TaskView['pr'] = null;
   if (row.pr_number != null && row.pr_url) {
     pr = {
@@ -225,6 +238,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     blockerNames: [],
     wave: 1,
     codeSession,
+    planningSession,
     pr,
     review,
     totalTokens,

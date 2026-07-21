@@ -2099,6 +2099,14 @@ export interface TaskAggregateRow {
   code_session_compaction_count: number | null;
   code_session_model: string | null;
   code_session_type: string | null;
+  // planning session (session_type IN ('groom', 'design', 'ops'))
+  planning_session_id: string | null;
+  planning_session_status: string | null;
+  planning_session_started_at: number | null;
+  planning_session_ended_at: number | null;
+  planning_session_input_tokens: number | null;
+  planning_session_output_tokens: number | null;
+  planning_session_type: string | null;
   // review session (session_type = 'review')
   review_session_id: string | null;
   review_session_status: string | null;
@@ -2143,6 +2151,15 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
         FROM sessions
         WHERE session_type = 'standard' OR session_type IS NULL
       ),
+      ranked_planning AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY task_id
+            ORDER BY started_at DESC
+          ) AS rn
+        FROM sessions
+        WHERE session_type IN ('groom', 'design', 'ops')
+      ),
       ranked_review AS (
         SELECT *,
           ROW_NUMBER() OVER (
@@ -2179,6 +2196,13 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       cs.compaction_count          AS code_session_compaction_count,
       cs.model                     AS code_session_model,
       cs.session_type              AS code_session_type,
+      ps.session_id           AS planning_session_id,
+      ps.status               AS planning_session_status,
+      ps.started_at           AS planning_session_started_at,
+      ps.ended_at             AS planning_session_ended_at,
+      ps.total_input_tokens   AS planning_session_input_tokens,
+      ps.total_output_tokens  AS planning_session_output_tokens,
+      ps.session_type         AS planning_session_type,
       rs.session_id          AS review_session_id,
       rs.status              AS review_session_status,
       rs.total_input_tokens  AS review_session_input_tokens,
@@ -2204,6 +2228,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       END                    AS session_pr_creation_failed_pause_reason
     FROM task_cache tc
     LEFT JOIN ranked_code cs ON cs.task_id = tc.task_id AND cs.rn = 1
+    LEFT JOIN ranked_planning ps ON ps.task_id = tc.task_id AND ps.rn = 1
     LEFT JOIN ranked_review rs ON rs.task_id = tc.task_id AND rs.rn = 1
     LEFT JOIN ranked_pr pr ON pr.task_id = tc.task_id AND pr.rn = 1
     WHERE tc.task_id IN (${placeholders})

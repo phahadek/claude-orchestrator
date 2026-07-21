@@ -23,6 +23,7 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     blockerNames: [],
     wave: 1,
     codeSession: null,
+    planningSession: null,
     pr: null,
     review: null,
     totalTokens: { input: 0, output: 0 },

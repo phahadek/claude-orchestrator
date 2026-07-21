@@ -110,6 +110,62 @@ describe('GateReadinessPanel — gate item verify session', () => {
     window.removeEventListener('selectSession', listener);
   });
 
+  it('renders the verify session inline as a collapsible SessionPanel', async () => {
+    gateApiMock.listGateItems.mockResolvedValue({
+      items: [ITEM_WITH_SESSION],
+      total: 1,
+      page: 1,
+    });
+    gateApiMock.getGateItemDetail.mockResolvedValue(
+      DETAIL_FOR(ITEM_WITH_SESSION),
+    );
+    gateApiMock.getVerifySessions.mockResolvedValue([
+      {
+        itemId: 'item-with-session',
+        sessionId: 'sess-123',
+        sessionStatus: 'running',
+        startedAt: 100,
+        endedAt: null,
+      },
+    ]);
+
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        sessions={[
+          {
+            sessionId: 'sess-123',
+            taskName: 'Verify item',
+            notionTaskUrl: '',
+            status: 'running',
+            events: [],
+          },
+        ]}
+      />,
+    );
+
+    const row = await screen.findByText('has a verify session');
+    fireEvent.click(row);
+
+    await screen.findByTestId('gate-item-verify-session');
+
+    const toggle = screen.getByTestId(
+      'gate-item-verify-session-toggle-item-with-session',
+    );
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(
+      screen.queryByTestId('gate-item-verify-session-body-item-with-session'),
+    ).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    const body = screen.getByTestId(
+      'gate-item-verify-session-body-item-with-session',
+    );
+    // Rendered as a live SessionPanel (transcript area), not just a jump link.
+    expect(body.textContent).toContain('No events yet.');
+  });
+
   it('renders nothing for an item that has no verify session', async () => {
     gateApiMock.listGateItems.mockResolvedValue({
       items: [ITEM_WITHOUT_SESSION],
