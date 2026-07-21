@@ -456,6 +456,52 @@ export function getTerminalSessionsForTask(taskId: string): Session[] {
     .all({ task_id: norm }) as Session[];
 }
 
+const GATE_ITEM_TASK_PREFIX = 'gate-item:';
+
+export interface GateItemVerifySession {
+  itemId: string;
+  sessionId: string;
+  sessionStatus: string;
+  startedAt: number;
+  endedAt: number | null;
+}
+
+/**
+ * Resolves the gate-item ↔ verify-session linkage: sessions whose task_id
+ * is 'gate-item:<id>' (set by GateItemVerifier on dispatch), for the given
+ * gate item ids. Most recent first, so callers can take the live/latest one.
+ */
+export function getVerifySessionsForGateItems(
+  itemIds: string[],
+): GateItemVerifySession[] {
+  if (itemIds.length === 0) return [];
+  const taskIds = itemIds.map((id) => `${GATE_ITEM_TASK_PREFIX}${id}`);
+  const placeholders = taskIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT session_id, task_id, status, started_at, ended_at
+       FROM sessions
+       WHERE task_id IN (${placeholders})
+       ORDER BY started_at DESC`,
+    )
+    .all(...taskIds) as {
+    session_id: string;
+    task_id: string | null;
+    status: string;
+    started_at: number;
+    ended_at: number | null;
+  }[];
+  return rows
+    .filter((r): r is typeof r & { task_id: string } => r.task_id !== null)
+    .map((r) => ({
+      itemId: r.task_id.slice(GATE_ITEM_TASK_PREFIX.length),
+      sessionId: r.session_id,
+      sessionStatus: r.status,
+      startedAt: r.started_at,
+      endedAt: r.ended_at,
+    }));
+}
+
 /**
  * True if this task has a non-terminal planning (groom/design/ops) session —
  * including one parked idle awaiting operator disposition. Per the no-timeout
