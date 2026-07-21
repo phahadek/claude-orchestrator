@@ -64,6 +64,9 @@ export class CliSessionRunner implements ISessionRunner {
     // never be reachable from one. The built-in Skill tool is NOT denied by
     // --allowed-tools omission (the CLI resolves skills via /skill-name
     // regardless of the allowlist), so it must be explicitly disallowed.
+    // Write/Edit are disallowed here too (not just omitted from the
+    // allowlist) so a denial can never be resolved by an operator granting
+    // the capability on re-dispatch — see GRANT_DENYLIST_PATTERNS.
     const isPlanning = Boolean(sessionType && isPlanningSession(sessionType));
 
     const spawnArgs = [
@@ -91,7 +94,7 @@ export class CliSessionRunner implements ISessionRunner {
         : []),
       '--allowed-tools',
       ...allowedTools,
-      ...(isPlanning ? ['--disallowed-tools', 'Skill'] : []),
+      ...(isPlanning ? ['--disallowed-tools', 'Skill', 'Write', 'Edit'] : []),
     ];
 
     const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR', 'DB_PATH'] as const;
