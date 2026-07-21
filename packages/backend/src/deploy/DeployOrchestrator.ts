@@ -158,9 +158,7 @@ function spawnCapture(
       out += d.toString();
     });
     proc.on('error', () => resolve({ ok: false, stdout: '' }));
-    proc.on('close', (code) =>
-      resolve({ ok: code === 0, stdout: out.trim() }),
-    );
+    proc.on('close', (code) => resolve({ ok: code === 0, stdout: out.trim() }));
   });
 }
 
