@@ -30,6 +30,7 @@ const CLASSIFICATION_OPTIONS: GateItemClassification[] = [
   'Read-Only',
   'Opportunistic',
   'Prod-Mutating',
+  'Human-Observation',
 ];
 
 const GATE_STATE_ORDER = [

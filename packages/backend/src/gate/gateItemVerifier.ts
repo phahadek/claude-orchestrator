@@ -28,6 +28,7 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000;
  * never runs a vendored skill to assemble this itself.
  */
 function buildGateVerifyContext(item: GateItem): string {
+  const isHumanObservation = item.classification === 'Human-Observation';
   return [
     '## Gate Verification Context',
     '',
@@ -56,14 +57,82 @@ function buildGateVerifyContext(item: GateItem): string {
       'conclusively determine pass or fail, report needs-setup — abstain ' +
       'rather than guess.',
     '',
+    'Source is a legitimate input for orienting yourself, but a `pass` ' +
+      'disposition must never rest on source-code reading alone — it must ' +
+      'be grounded in operational/runtime evidence (audit_log entries, ' +
+      'session_events, a merged PR, a deploy record, git history, `gh` ' +
+      'output). If the strongest evidence you found is "the source code ' +
+      'looks like it does X", that is not a pass — report needs-setup and ' +
+      'explain what operational trace is missing. Set `evidence.basis` to ' +
+      '"operational" only when your pass is actually backed by such a ' +
+      'trace; set it to "source" when you only read source code. A `pass` ' +
+      'with `evidence.basis` other than "operational" will be downgraded ' +
+      'to needs-setup regardless of what you report.',
+    '',
+    ...(isHumanObservation
+      ? [
+          'This item is classified **Human-Observation**: it describes ' +
+            'UI/visual/interactive behavior (e.g. a rendered component, a ' +
+            'visual layout, an interactive flow) that only a human observing ' +
+            'the running app can judge. You cannot pass this item — reading ' +
+            'component source to infer what renders is not verification. ' +
+            'Always report `needs-setup`, even if you find strong ' +
+            'operational evidence; attach whatever you found as advisory ' +
+            'evidence for the human who will make the actual pass/fail call ' +
+            'through the /gate flow.',
+          '',
+        ]
+      : []),
     'Report your finding by ending your final message with exactly one block ' +
       'of this shape (a bare JSON object is not enough — it must be the ' +
       '`gate_verify` key):',
     '',
     '```json',
-    `{"gate_verify": {"gate_item_id": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"...": "..."}}}`,
+    `{"gate_verify": {"gate_item_id": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"basis": "operational"|"source", "...": "..."}}}`,
     '```',
   ].join('\n');
+}
+
+/**
+ * True when a `pass` result's evidence claims to be grounded in
+ * operational/runtime observation rather than source-code reading alone.
+ * Exported for testing.
+ */
+export function hasOperationalEvidence(evidence: unknown): boolean {
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
+    return false;
+  }
+  const basis = (evidence as Record<string, unknown>).basis;
+  if (typeof basis === 'string') {
+    return basis.toLowerCase() === 'operational';
+  }
+  if (Array.isArray(basis)) {
+    return basis.some(
+      (b) => typeof b === 'string' && b.toLowerCase() === 'operational',
+    );
+  }
+  return false;
+}
+
+/**
+ * The disposition contract's enforcement half of "no pass on source alone":
+ * a `pass` disposition whose evidence doesn't claim operational grounding is
+ * downgraded to `needs-setup` — the prompt asks nicely, this backstops it
+ * regardless of what the session actually reported. Exported for testing.
+ */
+export function enforcePassEvidenceContract(
+  result: GateVerificationResult,
+): GateVerificationResult {
+  if (result.disposition !== 'pass') return result;
+  if (hasOperationalEvidence(result.evidence)) return result;
+  return {
+    disposition: 'needs-setup',
+    evidence: {
+      reason:
+        'pass disposition lacked operational/runtime evidence — a source-only verdict cannot pass',
+      reportedEvidence: result.evidence,
+    },
+  };
 }
 
 /**
@@ -117,7 +186,8 @@ export class SessionGateItemVerifier implements GateItemVerifier {
       };
     }
 
-    return this.awaitDisposition(sessionId);
+    const result = await this.awaitDisposition(sessionId);
+    return enforcePassEvidenceContract(result);
   }
 
   private awaitDisposition(sessionId: string): Promise<GateVerificationResult> {

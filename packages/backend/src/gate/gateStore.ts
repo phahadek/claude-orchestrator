@@ -275,6 +275,7 @@ const VALID_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Read-Only',
   'Prod-Mutating',
   'Opportunistic',
+  'Human-Observation',
 ]);
 
 /**

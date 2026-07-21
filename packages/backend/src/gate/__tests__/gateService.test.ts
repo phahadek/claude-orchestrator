@@ -401,6 +401,40 @@ describe('appendGateItemEvent', () => {
     expect(updated.state).toBe('pending-approval');
   });
 
+  it('never advances a Human-Observation item on a verifier-originated pass', () => {
+    const item = makeItem({ classification: 'Human-Observation' });
+    const updated = appendGateItemEvent(item.id, {
+      disposition: 'pass',
+      evidence: { basis: 'operational', note: 'looks right from the logs' },
+      operator: 'gate-verifier',
+    });
+    expect(updated.state).toBe('open');
+    expect(updated.currentDisposition).toBeUndefined();
+    expect(updated.events).toHaveLength(1);
+    expect(updated.events[0].disposition).toBe('pass');
+  });
+
+  it('lets a human-originated pass resolve a Human-Observation item normally', () => {
+    const item = makeItem({ classification: 'Human-Observation' });
+    const updated = appendGateItemEvent(item.id, {
+      disposition: 'pass',
+      evidence: 'observed the rendered rollup header in the browser',
+      operator: 'operator@example.com',
+    });
+    expect(updated.state).toBe('pass');
+    expect(updated.currentDisposition).toBe('pass');
+  });
+
+  it('still advances a Human-Observation fail (only pass is blocked)', () => {
+    const item = makeItem({ classification: 'Human-Observation' });
+    const updated = appendGateItemEvent(item.id, {
+      disposition: 'fail',
+      evidence: 'progress bar missing entirely',
+      operator: 'gate-verifier',
+    });
+    expect(updated.state).toBe('fail');
+  });
+
   it('records a fail as a finding that does not resolve', () => {
     const item = makeItem({ classification: 'Read-Only' });
     const updated = appendGateItemEvent(item.id, {
