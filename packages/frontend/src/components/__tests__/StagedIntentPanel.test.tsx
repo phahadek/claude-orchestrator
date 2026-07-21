@@ -34,7 +34,8 @@ describe('StagedIntentPanel', () => {
         intent={makeIntent({
           kind: 'task.setStatus',
           payload: { taskId: 'notion:abc', status: 'Deferred' },
-          decisionProposal: 'Superseded by task notion:xyz — defer instead of grooming.',
+          decisionProposal:
+            'Superseded by task notion:xyz — defer instead of grooming.',
         })}
       />,
     );
@@ -43,7 +44,9 @@ describe('StagedIntentPanel', () => {
     expect(headline.textContent).toMatch(/discard\/defer/i);
     expect(headline.textContent).toContain('notion:abc');
     expect(
-      screen.getByText('Superseded by task notion:xyz — defer instead of grooming.'),
+      screen.getByText(
+        'Superseded by task notion:xyz — defer instead of grooming.',
+      ),
     ).toBeTruthy();
   });
 

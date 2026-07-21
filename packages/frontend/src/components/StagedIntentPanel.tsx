@@ -234,10 +234,7 @@ function SetStatusHeadline({ intent }: { intent: StagedIntent }) {
   }
   if (payload.status === 'Deferred') {
     return (
-      <div
-        className={styles.text}
-        data-testid="staged-intent-discard-defer"
-      >
+      <div className={styles.text} data-testid="staged-intent-discard-defer">
         <p>
           <strong>⏭️ Propose discard/defer</strong> — {payload.taskId}
         </p>
