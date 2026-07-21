@@ -1002,7 +1002,11 @@ describe('TaskList', () => {
               json: async () => ({ launched: [bareUuid], deferred: [] }),
             });
           }
-          return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({}),
+          });
         },
       );
 
