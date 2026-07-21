@@ -34,7 +34,8 @@ function summarizeDecision(entry: OpsJournalEntry): string {
   const finding = entry.findingOrProposal;
   if (typeof finding === 'string' && finding.trim()) return finding.trim();
   if (finding && typeof finding === 'object') {
-    const candidate = (finding as Record<string, unknown>).summary ??
+    const candidate =
+      (finding as Record<string, unknown>).summary ??
       (finding as Record<string, unknown>).proposal;
     if (typeof candidate === 'string' && candidate.trim()) {
       return candidate.trim();

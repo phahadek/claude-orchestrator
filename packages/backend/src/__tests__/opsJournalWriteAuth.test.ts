@@ -30,7 +30,10 @@ vi.mock('../audit/AuditLog', () => ({
 }));
 
 import { db } from '../db/db';
-import { upsertOpsJournalEntry, listStagedIntentsBySession } from '../db/queries';
+import {
+  upsertOpsJournalEntry,
+  listStagedIntentsBySession,
+} from '../db/queries';
 import { createOpsJournalRouter } from '../routes/opsJournal';
 import {
   mintOpsJournalCredential,

@@ -225,12 +225,13 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'Present findings and a recommendation in batches (or one task/question at a ' +
       'time), and stop for explicit human sign-off before proceeding.',
     summaryOverrides: {
-      ops: 'A dispatched ops session has no synchronous chat turn to wait within — ' +
+      ops:
+        'A dispatched ops session has no synchronous chat turn to wait within — ' +
         'end the turn and it parks. So presenting IS staging: once investigation ' +
         'reaches a decision, stage it (a journal.setState to staged-proposal) rather ' +
         'than describing the proposal in chat and asking whether to stage it. Never ' +
         'ask for approval before staging — staging is what puts the decision in ' +
-        "front of the operator; asking first leaves the operator with nothing to " +
+        'front of the operator; asking first leaves the operator with nothing to ' +
         'act on.',
     },
   },
@@ -250,7 +251,8 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'Only after explicit sign-off, stage and apply the write through the ' +
       'sanctioned surface, and confirm the result in chat.',
     summaryOverrides: {
-      ops: 'A dispatched ops session never applies — journal.setState is ' +
+      ops:
+        'A dispatched ops session never applies — journal.setState is ' +
         'human-apply-only. Its part of "sign-off" is already complete once the ' +
         'decision is staged (the prior step): stage the decision, then park. The ' +
         'operator reviews the staged proposal on the decision surface and applies ' +
