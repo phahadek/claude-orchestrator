@@ -10,6 +10,7 @@ import {
   upsertSessionEvent,
   updateSessionStatus,
   markSessionIdle,
+  markSessionDone,
   getEventsBySession,
   insertPermissionDenial,
   upsertPullRequest,
@@ -60,7 +61,12 @@ import { detectInFlightEscape } from './SessionAuditor';
 import type { ISessionRunner } from './SessionRunner';
 import { CliSessionRunner } from './CliSessionRunner';
 import { recoverSession } from './sessionRecovery';
-import { isCodeSession, isPlanningSession, opensPr } from './sessionPredicates';
+import {
+  isCodeSession,
+  isPlanningSession,
+  isGateVerifySession,
+  opensPr,
+} from './sessionPredicates';
 import {
   VALID_EVENT_TYPES,
   SILENT_SKIP_TYPES,
@@ -2531,6 +2537,30 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       payload: { session_id: this.sessionId },
     });
     const endedAt = Date.now();
+
+    // A gate-verify session (task_id `gate-item:<id>`) is one-shot: it exists
+    // to settle a single gate item and has no resume purpose once it has
+    // reported (a re-verify is a fresh session, not a resume of this one).
+    // Conclude it done/archived rather than parking it idle forever.
+    if (isPlanningSession(this.sessionType) && isGateVerifySession(this.taskId)) {
+      markSessionDone(this.sessionId, endedAt, null, 'gate_verify_clean_exit');
+      resetTaskCrashCount(this.taskId);
+      recordEvent({
+        event_type: 'handle_clean_exit_session_marked_done',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId ?? null,
+        task_id: this.taskId || null,
+        payload: { session_id: this.sessionId, pr_url: null },
+      });
+      this.broadcast({
+        type: 'session_ended',
+        sessionId: this.sessionId,
+        status: 'done',
+        ...(this.taskId && { taskId: this.taskId }),
+      });
+      return;
+    }
 
     // Planning sessions (groom/design) never scrape for a PR URL and never
     // enter the PR/recovery chain — they park into idle awaiting disposition

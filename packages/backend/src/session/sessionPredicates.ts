@@ -59,3 +59,15 @@ export function movesTargetInProgress(sessionType: string): boolean {
     sessionType === 'ops'
   );
 }
+
+/**
+ * True for a gate-item verification session — a one-shot 'ops' session
+ * dispatched by SessionGateItemVerifier (task_id `gate-item:<id>`). Unlike
+ * parked groom/design/ops planning sessions, it has no resume purpose once
+ * it has reported its disposition: a re-verify is a fresh session, not a
+ * resume of this one, so it should conclude done/archived rather than park
+ * idle.
+ */
+export function isGateVerifySession(taskId: string | null | undefined): boolean {
+  return typeof taskId === 'string' && taskId.startsWith('gate-item:');
+}

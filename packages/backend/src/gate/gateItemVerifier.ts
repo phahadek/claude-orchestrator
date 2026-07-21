@@ -1,6 +1,6 @@
 import { logger } from '../logger';
 import { getProjectById } from '../config';
-import { getSession } from '../db/queries';
+import { getSession, markSessionDone } from '../db/queries';
 import type { SessionManager } from '../session/SessionManager';
 import type { GateVerifyDispositionPayload } from '../session/AgentSession';
 import type { GateItem } from './gateStore';
@@ -199,6 +199,16 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         clearInterval(pollHandle);
         clearTimeout(budgetHandle);
         this.sessionManager.off('gate_verify_disposition', onDisposition);
+        // The disposition has now been consumed by the reconciler's caller —
+        // this one-shot session has no resume purpose from here on (a
+        // re-verify dispatches a fresh session), so archive it rather than
+        // let it linger. Skip sessions already terminal (error/killed —
+        // AgentSession owns those transitions) or already archived by the
+        // session's own clean-exit path.
+        const row = getSession(sessionId);
+        if (row && row.status !== 'error' && row.status !== 'killed' && row.status !== 'done') {
+          markSessionDone(sessionId, Date.now(), null, 'gate_item_verifier_consumed');
+        }
         resolve(result);
       };
 

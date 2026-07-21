@@ -1,8 +1,22 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { EventEmitter } from 'events';
+
+vi.mock('../../db/queries', () => ({
+  getSession: vi.fn(),
+  markSessionDone: vi.fn(),
+}));
+
+vi.mock('../../config', () => ({
+  getProjectById: vi.fn().mockReturnValue({ contextUrl: 'https://notion.so/project' }),
+}));
+
 import {
   enforcePassEvidenceContract,
   hasOperationalEvidence,
+  SessionGateItemVerifier,
 } from '../gateItemVerifier';
+import { getSession, markSessionDone } from '../../db/queries';
+import type { GateItem } from '../gateStore';
 
 describe('hasOperationalEvidence', () => {
   it('is true for evidence.basis "operational"', () => {
@@ -63,5 +77,75 @@ describe('enforcePassEvidenceContract', () => {
       disposition: 'needs-setup',
     });
     expect(needsSetup.disposition).toBe('needs-setup');
+  });
+});
+
+describe('SessionGateItemVerifier — archives its dispatched session once the disposition is consumed', () => {
+  const item: GateItem = {
+    id: 'item-1',
+    project: 'proj',
+    milestone: 'm1',
+    text: 'some behavior',
+    classification: 'Read-Only',
+    state: 'open',
+    updatedAt: new Date(0).toISOString(),
+    sources: [],
+    events: [],
+  };
+
+  function makeSessionManager() {
+    const emitter = new EventEmitter();
+    return Object.assign(emitter, {
+      start: vi.fn().mockResolvedValue('sess-1'),
+    });
+  }
+
+  beforeEach(() => {
+    vi.mocked(getSession).mockReset();
+    vi.mocked(markSessionDone).mockReset();
+  });
+
+  it('marks the session done once the gate_verify_disposition event fires', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({
+      status: 'running',
+    } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+
+    // Let the session dispatch (`start()`) resolve and the disposition
+    // listener attach before emitting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-1',
+      disposition: {
+        disposition: 'pass',
+        evidence: { basis: 'operational' },
+      },
+    });
+
+    const result = await resultPromise;
+    expect(result.disposition).toBe('pass');
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'sess-1',
+      expect.any(Number),
+      null,
+      'gate_item_verifier_consumed',
+    );
+  });
+
+  it('does not re-archive a session already ended error/killed by AgentSession', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'killed' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never, {
+      pollIntervalMs: 5,
+    });
+    const result = await verifier.verify(item);
+
+    expect(result.disposition).toBe('needs-setup');
+    expect(markSessionDone).not.toHaveBeenCalled();
   });
 });
