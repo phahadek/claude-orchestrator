@@ -49,6 +49,8 @@ const SETTING_KEYS = [
   'large_task_effort',
   'planning_session_model',
   'planning_session_effort',
+  'ops_session_model',
+  'ops_session_effort',
   'tier3_classifier_model',
 ] as const satisfies readonly SettingKey[];
 
@@ -156,6 +158,12 @@ function applyToRuntime(
     case 'planning_session_effort':
       runtimeSettings.planning_session_effort = value as string;
       break;
+    case 'ops_session_model':
+      runtimeSettings.ops_session_model = value as string;
+      break;
+    case 'ops_session_effort':
+      runtimeSettings.ops_session_effort = value as string;
+      break;
     case 'tier3_classifier_model':
       runtimeSettings.tier3_classifier_model = value as string;
       break;
@@ -224,6 +232,8 @@ function runtimeSettingsAsRecord(): Record<RouteSettingKey, string> {
     large_task_effort: runtimeSettings.large_task_effort,
     planning_session_model: runtimeSettings.planning_session_model,
     planning_session_effort: runtimeSettings.planning_session_effort,
+    ops_session_model: runtimeSettings.ops_session_model,
+    ops_session_effort: runtimeSettings.ops_session_effort,
     tier3_classifier_model: runtimeSettings.tier3_classifier_model,
   };
 }

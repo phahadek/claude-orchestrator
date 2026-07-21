@@ -61,6 +61,8 @@ export function createPlanningLaunchRouter(
       projectId?: unknown;
       milestone?: unknown;
       taskIds?: unknown;
+      model?: unknown;
+      effort?: unknown;
     };
     const workflow = typeof body.workflow === 'string' ? body.workflow : null;
     const milestoneId =
@@ -72,6 +74,8 @@ export function createPlanningLaunchRouter(
       body.taskIds.every((t) => typeof t === 'string')
         ? (body.taskIds as string[])
         : null;
+    const model = typeof body.model === 'string' ? body.model : undefined;
+    const effort = typeof body.effort === 'string' ? body.effort : undefined;
 
     if (!workflow || !milestoneId || !taskIds || taskIds.length === 0) {
       res.status(400).json({
@@ -121,6 +125,8 @@ export function createPlanningLaunchRouter(
           sessionType,
           opsContext,
           tasks,
+          model,
+          effort,
         });
         res.status(202).json(result);
         return;
@@ -139,6 +145,8 @@ export function createPlanningLaunchRouter(
         milestoneId,
         sessionType,
         tasks,
+        model,
+        effort,
       });
       res.status(202).json(result);
     } catch (err) {

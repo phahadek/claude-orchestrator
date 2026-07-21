@@ -1,6 +1,7 @@
 import type { TaskView } from '../types/taskView';
 import { CompactTaskCard } from './CompactTaskCard';
 import { sortByPriority } from '../utils/taskSort';
+import { MODEL_OPTIONS, EFFORT_OPTIONS } from './Settings.helpers';
 import styles from './TaskList.module.css';
 
 interface Props {
@@ -17,6 +18,11 @@ interface Props {
   onGroomSelectAll?: () => void;
   onGroomLaunch?: () => void;
   groomLoading?: boolean;
+  /** Per-launch model/effort override for the Groom(N) button — '' falls back to the runtime setting. */
+  launchModel?: string;
+  onLaunchModelChange?: (value: string) => void;
+  launchEffort?: string;
+  onLaunchEffortChange?: (value: string) => void;
 }
 
 /** Compact single-line section for backlog code tasks — sits directly below the Code section. */
@@ -32,6 +38,10 @@ export function BacklogCodeSection({
   onGroomSelectAll,
   onGroomLaunch,
   groomLoading = false,
+  launchModel = '',
+  onLaunchModelChange,
+  launchEffort = '',
+  onLaunchEffortChange,
 }: Props) {
   if (tasks.length === 0) return null;
 
@@ -69,6 +79,36 @@ export function BacklogCodeSection({
             >
               Select All
             </button>
+            {onLaunchModelChange && (
+              <select
+                className={styles.select}
+                value={launchModel}
+                onChange={(e) => onLaunchModelChange(e.target.value)}
+                disabled={groomLoading}
+                data-testid="groom-model-select"
+              >
+                {MODEL_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            )}
+            {onLaunchEffortChange && (
+              <select
+                className={styles.select}
+                value={launchEffort}
+                onChange={(e) => onLaunchEffortChange(e.target.value)}
+                disabled={groomLoading}
+                data-testid="groom-effort-select"
+              >
+                {EFFORT_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               className={styles.groomBtn}
               onClick={onGroomLaunch}

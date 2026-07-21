@@ -535,6 +535,14 @@ export class AgentSession extends EventEmitter {
      * without any file written inside the managed git repo.
      */
     private readonly systemPromptFilePath?: string,
+    /**
+     * Per-launch model/effort override, threaded from StartOptions.model /
+     * StartOptions.effort (e.g. the Ops(N)/Groom(N)/Design(N) launch picker).
+     * Takes precedence over the runtimeSettings.*_session_model/_effort
+     * default when set to a non-empty value.
+     */
+    private readonly launchModel?: string,
+    private readonly launchEffort?: string,
   ) {
     super();
     this.runner = runner ?? new CliSessionRunner(sessionId);
@@ -620,21 +628,23 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     let resumeIdForSpawn: string | undefined = this.resumeSessionId;
 
     const modelSetting =
-      this.sessionType === 'ops'
+      this.launchModel ||
+      (this.sessionType === 'ops'
         ? runtimeSettings.ops_session_model
         : isPlanningSession(this.sessionType)
           ? runtimeSettings.planning_session_model
           : isCodeSession(this.sessionType)
             ? runtimeSettings.code_session_model
-            : runtimeSettings.review_session_model;
+            : runtimeSettings.review_session_model);
     const effortSetting =
-      this.sessionType === 'ops'
+      this.launchEffort ||
+      (this.sessionType === 'ops'
         ? runtimeSettings.ops_session_effort
         : isPlanningSession(this.sessionType)
           ? runtimeSettings.planning_session_effort
           : isCodeSession(this.sessionType)
             ? runtimeSettings.code_session_effort
-            : runtimeSettings.review_session_effort;
+            : runtimeSettings.review_session_effort);
 
     // Per-iteration overrides set by tryEscalateForOverflow() (T3b).
     // Instance fields _escalationModel and _escalationDisableAutoCompact hold these

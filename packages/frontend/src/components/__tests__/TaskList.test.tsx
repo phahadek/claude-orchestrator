@@ -1357,6 +1357,66 @@ describe('TaskList', () => {
       expect(screen.queryByTestId('ops-error')).toBeNull();
     });
 
+    it('renders a model selector and sends the chosen model when launching Ops(N)', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched: ['op1'], deferred: [] }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ entries: [] }),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'op1',
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      const checkbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(checkbox);
+
+      const modelSelect = screen.getByTestId(
+        'ops-model-select',
+      ) as HTMLSelectElement;
+      expect(modelSelect).toBeDefined();
+      fireEvent.change(modelSelect, {
+        target: { value: 'claude-opus-4-6' },
+      });
+
+      fireEvent.click(screen.getByTestId('ops-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('ops-panel')).toBeDefined();
+      });
+
+      const launchCall = (
+        global.fetch as ReturnType<typeof vi.fn>
+      ).mock.calls.find(([url]) =>
+        (url as string).includes('/api/planning/launch'),
+      );
+      expect(launchCall).toBeDefined();
+      const body = JSON.parse((launchCall![1] as RequestInit).body as string);
+      expect(body.model).toBe('claude-opus-4-6');
+    });
+
     it('resets the staged ops panel when switching to a different milestone', async () => {
       mockOpsEndpoints(
         ['op1'],
