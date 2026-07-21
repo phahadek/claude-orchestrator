@@ -981,6 +981,24 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
     ).rejects.toThrow(/at least one item/);
   });
 
+  it('rejects a taskId that does not resolve to a real board task and mints no gate_item', async () => {
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockRejectedValue(new Error('not found')),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.accreteGateContribution(
+        sourceTask,
+        [{ text: 'Verify the webhook fires' }],
+        'Read-Only',
+      ),
+    ).rejects.toThrow(/not found on the board/);
+
+    expect(mockInsertItem).not.toHaveBeenCalled();
+    expect(mockRecordAccretionMarker).not.toHaveBeenCalled();
+  });
+
   it('fills the source merge commit immediately when the source task is already merged', async () => {
     mockGetMergeCommitForTask.mockReturnValue('already-merged-sha');
     mockInsertItem.mockReturnValueOnce({ id: 'gate-item-1' });
@@ -1146,6 +1164,24 @@ describe('TaskWriteCommands.stageSeedContribution', () => {
     await expect(
       commands.stageSeedContribution(sourceTask, [], 'seeds'),
     ).rejects.toThrow(/at least one seed/);
+  });
+
+  it('rejects a taskId that does not resolve to a real board task and mints no seed_item', async () => {
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockRejectedValue(new Error('not found')),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.stageSeedContribution(
+        sourceTask,
+        [{ spec: 'Add webhook_url to config' }],
+        'seeds',
+      ),
+    ).rejects.toThrow(/not found on the board/);
+
+    expect(mockInsertSeedItem).not.toHaveBeenCalled();
+    expect(mockRecordSeedAccretionMarker).not.toHaveBeenCalled();
   });
 });
 
