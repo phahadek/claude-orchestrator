@@ -968,4 +968,43 @@ describe('useSessionStore', () => {
       expect(result.current.sessions[0].status).toBe('running');
     });
   });
+
+  describe('session_status / session_started ordering race', () => {
+    it('applies a live "running" status that arrives before session_started, and session_started does not regress it back to starting', () => {
+      const { result } = renderHook(() => useSessionStore());
+
+      // session_status arrives first — session is not yet in the store.
+      act(() => result.current.dispatch(msg.session_status()));
+      expect(result.current.sessions[0].status).toBe('running');
+
+      // session_started arrives afterwards and should hydrate metadata
+      // without wiping out the already-applied live status.
+      act(() => result.current.dispatch(msg.session_started()));
+
+      const session = result.current.sessions[0];
+      expect(session.status).toBe('running');
+      expect(session.taskName).toBe('Test Task');
+      expect(session.notionTaskUrl).toBe('https://notion.so/task');
+    });
+
+    it('applies status normally when session_started arrives first (no race)', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      act(() => result.current.dispatch(msg.session_status()));
+
+      const session = result.current.sessions[0];
+      expect(session.status).toBe('running');
+      expect(session.taskName).toBe('Test Task');
+    });
+
+    it('does not drop a session_status for a completely unknown session — upserts a stub', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_status()));
+
+      const session = result.current.sessions[0];
+      expect(session).toBeDefined();
+      expect(session.sessionId).toBe(SESSION_ID);
+      expect(session.status).toBe('running');
+    });
+  });
 });
