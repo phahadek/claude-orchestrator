@@ -306,6 +306,77 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     );
   });
 
+  it('names a groom session after the digest-resolved title, not the bare task id', async () => {
+    const { loadGroomContext } = await import('../../groom/groomLoad.js');
+    (loadGroomContext as ReturnType<typeof vi.fn>).mockResolvedValue({
+      targetTasks: [
+        {
+          id: 'task-1',
+          title: 'Fix the flaky retry logic',
+          status: '🔲 Backlog',
+          type: '🔨 Task',
+          url: 'https://www.notion.so/task-1',
+          sizeCheckSeed: { files: 1, loc_method: 'estimated' },
+          typeCheck: { mismatch: false, notes: [] },
+          readinessViolations: [],
+          bindingConstraints: [],
+        },
+      ],
+      dependencyCandidates: [],
+    });
+
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    // Mirrors planningLaunch.ts's groom/design dispatch, which only knows
+    // the bare task id at dispatch time — title is resolved from the
+    // groom digest, not passed in.
+    const task = { id: 'task-1', title: 'task-1', url: '', blockingDepIds: [] };
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'groom',
+      tasks: [task],
+    });
+
+    expect(start).toHaveBeenCalledTimes(1);
+    const [, , options] = start.mock.calls[0];
+    expect(options.taskName).toBe('Fix the flaky retry logic');
+  });
+
+  it('names a design session after the digest-resolved title, not the bare task id', async () => {
+    const { loadDesignContext } = await import('../../design/designLoad.js');
+    (loadDesignContext as ReturnType<typeof vi.fn>).mockResolvedValue({
+      task: {
+        id: 'task-1',
+        title: 'Design the retry backoff strategy',
+        status: '🔲 Backlog',
+        type: '🎨 Design',
+        url: 'https://www.notion.so/task-1',
+      },
+      markdown: '## Task\nSome design body.',
+      openQuestions: { items: [], source: 'none' },
+      archUnits: [],
+      unresolvedPageRefs: [],
+      codeMapGrounding: {},
+    });
+
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = { id: 'task-1', title: 'task-1', url: '', blockingDepIds: [] };
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'design',
+      tasks: [task],
+    });
+
+    expect(start).toHaveBeenCalledTimes(1);
+    const [, , options] = start.mock.calls[0];
+    expect(options.taskName).toBe('Design the retry backoff strategy');
+  });
+
   it('does not pass injectedProcedureContent for a standard (code) dispatch', async () => {
     const launcher = new OpsSessionLauncher(sessionManager as never);
     const task = {

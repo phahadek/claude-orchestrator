@@ -196,7 +196,10 @@ export class OpsSessionLauncher {
    * procedure (`planning/procedureAssembler.ts`) for a groom/design/ops
    * dispatch. Returns undefined (never throws) on any loader failure — the
    * session still launches, falling back to the code-session context build
-   * in that case, but a warning is logged so the gap is visible.
+   * in that case, but a warning is logged so the gap is visible. Also
+   * surfaces the digest's resolved task title (groom/design load real
+   * titles even when the caller only had the bare task id) so the session
+   * can be named after it instead of the id.
    */
   private async buildInjectedProcedure(
     projectId: string,
@@ -205,7 +208,7 @@ export class OpsSessionLauncher {
     opsContext: OpsLoadResult | undefined,
     task: PlanningTaskEntry,
     taskUrl: string,
-  ): Promise<string | undefined> {
+  ): Promise<{ content: string; title?: string } | undefined> {
     try {
       let digest: PlanningDigest;
       if (sessionType === 'groom') {
@@ -235,11 +238,13 @@ export class OpsSessionLauncher {
       } else {
         return undefined;
       }
-      return assemblePlanningProcedure({
-        taskName: task.title || taskUrl,
+      const resolvedTitle = digest.data.task.title;
+      const content = assemblePlanningProcedure({
+        taskName: resolvedTitle || task.title || taskUrl,
         taskUrl,
         digest,
       });
+      return { content, title: resolvedTitle };
     } catch (err) {
       logger.warn(
         `[OpsSessionLauncher] failed to assemble planning procedure for task ${task.id} (${sessionType}): ${err instanceof Error ? err.message : err}`,
@@ -260,7 +265,7 @@ export class OpsSessionLauncher {
   ): Promise<void> {
     const taskUrl =
       task.url || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
-    const injectedProcedureContent = isPlanningSession(sessionType)
+    const injectedProcedure = isPlanningSession(sessionType)
       ? await this.buildInjectedProcedure(
           projectId,
           milestoneId,
@@ -270,13 +275,15 @@ export class OpsSessionLauncher {
           taskUrl,
         )
       : undefined;
+    const injectedProcedureContent = injectedProcedure?.content;
+    const taskName = injectedProcedure?.title || task.title || taskUrl;
     try {
       const sessionId = await this.sessionManager.start(
         taskUrl,
         projectContextUrl,
         {
           projectId,
-          taskName: task.title || taskUrl,
+          taskName,
           milestoneId,
           taskKind: 'milestone',
           taskId: task.id,
