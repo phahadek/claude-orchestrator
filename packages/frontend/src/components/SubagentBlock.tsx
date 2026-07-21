@@ -1,6 +1,10 @@
 import { useState } from 'react';
-import { tryParseJson, extractToolResult } from '../utils/eventParsing';
-import { extractCallInput, type CallPair } from './ToolCallGroup';
+import {
+  tryParseJson,
+  extractToolResult,
+  extractCallInput,
+} from '../utils/eventParsing';
+import type { CallPair } from './ToolCallGroup';
 import styles from './EventTranscript.module.css';
 
 interface Props {
@@ -51,7 +55,7 @@ export function SubagentBlock({ toolName, calls }: Props) {
         }}
         aria-expanded={open}
       >
-        <span className={styles.chevron}>{open ? '▼' : '▶'}</span>
+        <span className={styles.toolChevron}>{open ? '▼' : '▶'}</span>
         <span className={styles.subagentIcon}>🤖</span>
         <span className={styles.subagentLabel}>Subagent: {label}</span>
         {subagentType && description && (
