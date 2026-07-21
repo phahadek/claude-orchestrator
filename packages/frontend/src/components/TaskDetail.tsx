@@ -188,9 +188,8 @@ export function TaskDetail({
     ? (sessions.find((s) => s.sessionId === task.review!.sessionId) ?? null)
     : null;
   const planningSession = task.planningSession
-    ? (sessions.find(
-        (s) => s.sessionId === task.planningSession!.sessionId,
-      ) ?? null)
+    ? (sessions.find((s) => s.sessionId === task.planningSession!.sessionId) ??
+      null)
     : null;
 
   const effectiveDisplayStatus = optimisticDisplayStatus ?? task.displayStatus;
@@ -553,7 +552,10 @@ export function TaskDetail({
               </span>
             </div>
             {showPlanningSection && (
-              <div className={styles.planningBody} data-testid="planning-session-body">
+              <div
+                className={styles.planningBody}
+                data-testid="planning-session-body"
+              >
                 {planningSession ? (
                   <SessionPanel
                     session={planningSession}

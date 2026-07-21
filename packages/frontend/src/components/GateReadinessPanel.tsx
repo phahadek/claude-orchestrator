@@ -910,8 +910,7 @@ export function GateReadinessPanel({
                                         data-testid={`gate-item-verify-session-jump-${item.id}`}
                                       >
                                         View session
-                                      </button>
-                                      {' '}
+                                      </button>{' '}
                                       <button
                                         type="button"
                                         onClick={() =>
@@ -952,8 +951,8 @@ export function GateReadinessPanel({
                                             />
                                           ) : (
                                             <p className={styles.muted}>
-                                              Transcript not available —
-                                              session not loaded.
+                                              Transcript not available — session
+                                              not loaded.
                                             </p>
                                           );
                                         })()}
