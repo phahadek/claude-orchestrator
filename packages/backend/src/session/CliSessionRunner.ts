@@ -59,6 +59,13 @@ export class CliSessionRunner implements ISessionRunner {
     const permissionMode =
       sessionType && isPlanningSession(sessionType) ? 'default' : 'acceptEdits';
 
+    // Dispatched planning sessions run entirely from their injected
+    // procedure — the interactive /groom, /design, and /ops skills must
+    // never be reachable from one. The built-in Skill tool is NOT denied by
+    // --allowed-tools omission (the CLI resolves skills via /skill-name
+    // regardless of the allowlist), so it must be explicitly disallowed.
+    const isPlanning = Boolean(sessionType && isPlanningSession(sessionType));
+
     const spawnArgs = [
       ...(resumeSessionId
         ? ['--resume', resumeSessionId]
@@ -84,6 +91,7 @@ export class CliSessionRunner implements ISessionRunner {
         : []),
       '--allowed-tools',
       ...allowedTools,
+      ...(isPlanning ? ['--disallowed-tools', 'Skill'] : []),
     ];
 
     const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR', 'DB_PATH'] as const;

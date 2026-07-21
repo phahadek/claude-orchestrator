@@ -180,9 +180,12 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     title: 'Deterministic load',
     appliesTo: ['groom', 'design', 'ops'],
     summary:
-      'Load context and the task worklist through the sanctioned loader — never by ' +
-      'hand. Stop and report on a non-zero exit; a partial load must never silently ' +
-      'become a skipped load.',
+      'For an injected/dispatched session, the task context and worklist digest are ' +
+      'already injected into this prompt — there is no loader to run and no ' +
+      'device-authed client this session can authenticate as, so never attempt to ' +
+      'fetch or reverse-engineer context by hand. A missing or empty digest is a ' +
+      'blocked state to report (end the turn and surface it), not a cue to go ' +
+      'looking for context yourself.',
   },
   {
     id: 'investigate',

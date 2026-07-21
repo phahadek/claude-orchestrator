@@ -106,6 +106,14 @@ describe('procedureCore', () => {
     }
   });
 
+  it('the deterministic-load step tells an injected session its context is already injected, with no loader to run', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'deterministic-load')!;
+    expect(step.summary).toContain('already injected');
+    expect(step.summary).not.toMatch(/sanctioned loader/i);
+    expect(step.summary).toMatch(/no device-authed client/i);
+    expect(step.summary).toMatch(/blocked state/i);
+  });
+
   it('exposes the readiness bar and size/type check pointers to their real implementations', () => {
     expect(READINESS_BAR.implementedBy).toBe(
       'packages/backend/src/tasks/readinessGate.ts',
