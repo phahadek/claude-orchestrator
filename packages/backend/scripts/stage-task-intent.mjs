@@ -12,7 +12,7 @@
 // one for a human to review and apply.
 //
 // Usage:
-//   node stage-task-intent.mjs <kind> <json-payload> [groupId]
+//   node stage-task-intent.mjs <kind> <json-payload> [groupId] [decisionProposal]
 //
 // Example:
 //   node stage-task-intent.mjs task.setStatus \
@@ -21,6 +21,11 @@
 // The optional [groupId] correlates multiple intents that form one
 // structural-change unit (e.g. a grooming batch's setDependsOn + setStatus
 // intents for the same task) so they present/apply together.
+//
+// The optional [decisionProposal] is a top-level rationale string for the
+// staged intent (e.g. why this write is being proposed) — it's rendered
+// above the payload in the staged-intent review panel. Pass an empty string
+// to supply a groupId without a decisionProposal.
 //
 // Env:
 //   ORCHESTRATOR_BACKEND_HOST backend loopback host (default 127.0.0.1)
@@ -37,10 +42,10 @@ function fail(message) {
   process.exit(1);
 }
 
-const [kind, payloadJson, groupId] = process.argv.slice(2);
+const [kind, payloadJson, groupId, decisionProposal] = process.argv.slice(2);
 if (!kind || payloadJson === undefined) {
   fail(
-    'usage: node stage-task-intent.mjs <kind> <json-payload> [groupId]\n' +
+    'usage: node stage-task-intent.mjs <kind> <json-payload> [groupId] [decisionProposal]\n' +
       'example: node stage-task-intent.mjs task.setStatus \'{"taskId":"...","status":"In Review"}\'',
   );
 }
@@ -62,9 +67,12 @@ try {
   fail(`invalid JSON payload: ${payloadJson}`);
 }
 
-const body = JSON.stringify(
-  groupId ? { kind, payload, groupId } : { kind, payload },
-);
+const body = JSON.stringify({
+  kind,
+  payload,
+  ...(groupId ? { groupId } : {}),
+  ...(decisionProposal ? { decisionProposal } : {}),
+});
 
 const req = http.request(
   {
