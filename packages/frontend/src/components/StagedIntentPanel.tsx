@@ -346,11 +346,23 @@ function CapabilityRequestHeadline({ intent }: { intent: StagedIntent }) {
 interface JournalSetStatePayload {
   taskId: string;
   state: string;
-  fields?: { disposition?: string; resolution?: unknown };
+  fields?: {
+    disposition?: string;
+    resolution?: unknown;
+    findingOrProposal?: unknown;
+    evidence?: unknown;
+  };
+}
+
+function renderJsonField(value: unknown): ReactNode {
+  if (value == null) return null;
+  if (typeof value === 'string') return value;
+  return <pre className={styles.payload}>{JSON.stringify(value, null, 2)}</pre>;
 }
 
 /** The ops_journal disposition kind — a dispatched ops session's staging
- *  transition, or an operator's device-authed resolve. */
+ *  transition (a parked, unapplied decision awaiting sign-off when state is
+ *  staged-proposal), or an operator's device-authed resolve. */
 function JournalSetStateHeadline({ intent }: { intent: StagedIntent }) {
   const payload = intent.payload as JournalSetStatePayload;
   return (
@@ -364,6 +376,18 @@ function JournalSetStateHeadline({ intent }: { intent: StagedIntent }) {
       </p>
       {payload.fields?.disposition && (
         <p>Disposition: {payload.fields.disposition}</p>
+      )}
+      {payload.fields?.findingOrProposal != null && (
+        <div data-testid="staged-intent-ops-journal-finding">
+          <p>Finding / proposal:</p>
+          {renderJsonField(payload.fields.findingOrProposal)}
+        </div>
+      )}
+      {payload.fields?.resolution != null && (
+        <div data-testid="staged-intent-ops-journal-resolution">
+          <p>Resolution:</p>
+          {renderJsonField(payload.fields.resolution)}
+        </div>
       )}
     </div>
   );

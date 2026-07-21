@@ -6,6 +6,7 @@ import {
   setEntryState,
   isValidOpsTransition,
   type OpsState,
+  type OpsJournalEntry,
 } from '../ops/opsJournal';
 import { requireDeviceAuth } from '../auth/DeviceAuth';
 import {
@@ -13,11 +14,63 @@ import {
   type OpsJournalWriteAuthedRequest,
 } from '../auth/OpsJournalAuth';
 import { getSession } from '../db/queries';
+import { stageIntent } from './stagedIntents';
 
 /** Terminal state — reachable only through the device-authed operator path,
  *  never through a session-scoped journal-write credential. See § Terminal
  *  in the ops_journal decision-surface task. */
 const RESOLVED_STATE: OpsState = 'resolved';
+
+/** The state at which an ops_journal entry becomes an operator-reviewable
+ *  decision — the point this route also mirrors it into a staged_intent so
+ *  it renders on the decision surface (DecisionPanel reads staged_intent,
+ *  not ops_journal). */
+const STAGED_PROPOSAL_STATE: OpsState = 'staged-proposal';
+
+/** Best-effort short human-readable summary of a journal entry's finding for
+ *  the staged intent's `decisionProposal` — the payload itself carries the
+ *  full structured finding, this is just the panel headline. */
+function summarizeDecision(entry: OpsJournalEntry): string {
+  const finding = entry.findingOrProposal;
+  if (typeof finding === 'string' && finding.trim()) return finding.trim();
+  if (finding && typeof finding === 'object') {
+    const candidate = (finding as Record<string, unknown>).summary ??
+      (finding as Record<string, unknown>).proposal;
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return `ops_journal proposal for ${entry.taskId} — awaiting sign-off`;
+}
+
+/**
+ * Stage (or re-stage) the journal.setState decision for this entry so it
+ * shows up on the decision surface. Content-idempotent (stageIntent dedups
+ * by payload hash), so a re-transition into staged-proposal with unchanged
+ * fields is a no-op rather than a duplicate row.
+ */
+function stageJournalDecision(
+  entry: OpsJournalEntry,
+  sessionId: string | null,
+): void {
+  stageIntent(
+    'journal.setState',
+    {
+      taskId: entry.taskId,
+      state: entry.state,
+      fields: {
+        disposition: entry.disposition,
+        findingOrProposal: entry.findingOrProposal,
+        evidence: entry.evidence,
+        resolution: entry.resolution,
+      },
+    },
+    entry.project,
+    null,
+    sessionId,
+    summarizeDecision(entry),
+  );
+}
 
 /**
  * Read/write surface for the Ops(N) staged-intent view: exposes per-task
@@ -76,6 +129,12 @@ export function createOpsJournalRouter(): Router {
         state?: unknown;
         resolution?: unknown;
         disposition?: unknown;
+        findingOrProposal?: unknown;
+        evidence?: unknown;
+        workedIn?: unknown;
+        falsification?: unknown;
+        filedFollowons?: unknown;
+        needsFromOperator?: unknown;
       };
       const state =
         typeof body.state === 'string' ? (body.state as OpsState) : null;
@@ -110,10 +169,32 @@ export function createOpsJournalRouter(): Router {
       const fields: Record<string, unknown> = {};
       if (body.resolution !== undefined) fields.resolution = body.resolution;
       if (body.disposition !== undefined) fields.disposition = body.disposition;
+      if (body.findingOrProposal !== undefined) {
+        fields.findingOrProposal = body.findingOrProposal;
+      }
+      if (body.evidence !== undefined) fields.evidence = body.evidence;
+      if (body.workedIn !== undefined) fields.workedIn = body.workedIn;
+      if (body.falsification !== undefined) {
+        fields.falsification = body.falsification;
+      }
+      if (body.filedFollowons !== undefined) {
+        fields.filedFollowons = body.filedFollowons;
+      }
+      if (body.needsFromOperator !== undefined) {
+        fields.needsFromOperator = body.needsFromOperator;
+      }
 
       try {
         setEntryState(taskId, state, fields);
-        res.json(getEntry(taskId));
+        const updated = getEntry(taskId);
+        // The entry becomes an operator-reviewable decision at
+        // staged-proposal — mirror it into a staged_intent so it actually
+        // renders on the decision surface, regardless of whether the
+        // session also stages a journal.setState intent itself.
+        if (updated && updated.state === STAGED_PROPOSAL_STATE) {
+          stageJournalDecision(updated, opsJournalSession?.sessionId ?? null);
+        }
+        res.json(updated);
       } catch (err) {
         res.status(500).json({
           error:

@@ -249,6 +249,20 @@ describe('assemblePlanningProcedure', () => {
     });
   }
 
+  it('instructs the dispatched ops procedure to stage the decision then park, never ask-before-stage', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
+      },
+    });
+
+    expect(output).toMatch(/stage the decision, then park/i);
+    expect(output).not.toMatch(/stop for explicit human sign-off/i);
+  });
+
   it('excludes the skill-mode "Resolve manifest & mode" step for groom and design (context is already injected)', () => {
     for (const { workflow, digest } of cases) {
       if (workflow === 'ops') continue;

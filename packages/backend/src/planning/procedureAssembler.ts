@@ -37,6 +37,7 @@ import {
   principlesFor,
   renderPrinciple,
   stepsFor,
+  stepSummaryFor,
   type SkillId,
 } from './procedureCore';
 import type { GroomLoadResult } from '../groom/groomLoad';
@@ -229,7 +230,13 @@ function renderSkeleton(
       'the question it resolves and the recommended answer — so the reviewing human ' +
       'sees the proposal instead of a bare payload diff. Batch multiple independent ' +
       'findings under a shared `groupId` when they were derived together; never ' +
-      "silently apply — staging is the full extent of this session's authority.",
+      "silently apply — staging is the full extent of this session's authority." +
+      (workflow === 'ops'
+        ? ' Stage the decision, then park: once investigation reaches a proposal, ' +
+          'stage it — never ask in chat whether to stage before doing so. Staging is ' +
+          'the reviewable action the human then approves; asking first inverts the ' +
+          'flow and leaves the operator with nothing to act on.'
+        : ''),
   ].join('\n');
 }
 
@@ -239,7 +246,7 @@ function renderProcedureCore(workflow: PlanningWorkflow): string {
   const label = SKILL_LABELS[workflow];
   const lines: string[] = [`## ${label} Procedure`, ''];
   for (const step of stepsFor(workflow, { dispatched: true })) {
-    lines.push(`### ${step.title}`, '', step.summary, '');
+    lines.push(`### ${step.title}`, '', stepSummaryFor(step, workflow), '');
   }
   lines.push('### Hard rules', '');
   for (const principle of principlesFor(workflow)) {

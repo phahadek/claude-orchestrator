@@ -30,7 +30,7 @@ vi.mock('../audit/AuditLog', () => ({
 }));
 
 import { db } from '../db/db';
-import { upsertOpsJournalEntry } from '../db/queries';
+import { upsertOpsJournalEntry, listStagedIntentsBySession } from '../db/queries';
 import { createOpsJournalRouter } from '../routes/opsJournal';
 import {
   mintOpsJournalCredential,
@@ -69,6 +69,7 @@ function seedEntry(
 
 beforeEach(() => {
   db.prepare('DELETE FROM ops_journal').run();
+  db.prepare('DELETE FROM staged_intent').run();
   mockGetSession.mockReset();
   mockGetDeviceByToken.mockReset();
   mockGetActiveDeviceCount.mockReturnValue(1);
@@ -150,6 +151,26 @@ describe('POST /api/ops-journal/:taskId/state — session-scoped journal credent
 
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('ops_journal_wrong_task');
+  });
+
+  it('stages a session-attributed journal.setState decision when a dispatched session stages the proposal', async () => {
+    mockGetSession.mockReturnValue({
+      session_id: 'ops-session-1',
+      task_id: 'task-1',
+    });
+    seedEntry('task-1', 'M12', { state: 'candidate' });
+    const token = mintOpsJournalCredential('ops-session-1');
+
+    const res = await supertest(buildApp())
+      .post('/api/ops-journal/task-1/state')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ state: 'staged-proposal' });
+
+    expect(res.status).toBe(200);
+    const staged = listStagedIntentsBySession('ops-session-1');
+    expect(staged).toHaveLength(1);
+    expect(staged[0].kind).toBe('journal.setState');
+    expect(staged[0].session_id).toBe('ops-session-1');
   });
 
   it('rejects an invalid/unknown bearer token and an absent one when no devices are enrolled yet', async () => {
