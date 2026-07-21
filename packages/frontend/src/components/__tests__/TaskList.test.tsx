@@ -1202,7 +1202,7 @@ describe('TaskList', () => {
       expect(opsBtn.textContent).toContain('Ops (3)');
     });
 
-    it('disables selection of a dep-blocked ops task and shows the reason, instead of allowing select-then-silent-drop', () => {
+    it('hides the checkbox for a dep-blocked ops task and shows the reason, instead of allowing select-then-silent-drop', () => {
       renderList(
         [
           makeTask({
@@ -1229,18 +1229,16 @@ describe('TaskList', () => {
       const checkboxes = typeCard.querySelectorAll(
         'input[type="checkbox"]',
       ) as NodeListOf<HTMLInputElement>;
-      expect(checkboxes).toHaveLength(2);
-      const disabledCheckbox = Array.from(checkboxes).find((cb) => cb.disabled);
-      const enabledCheckbox = Array.from(checkboxes).find((cb) => !cb.disabled);
-      expect(disabledCheckbox).toBeDefined();
-      expect(enabledCheckbox).toBeDefined();
+      // Only the eligible task renders a checkbox — the dep-blocked task renders none.
+      expect(checkboxes).toHaveLength(1);
+      expect(checkboxes[0].disabled).toBe(false);
 
       expect(
         within(typeCard).getByTestId('ops-dep-blocked-reason').textContent,
       ).toContain('waiting on Dependency Task');
 
-      // Select All only picks up the non-blocked task — the blocked one can't be
-      // checked at all, so it can't be selected and then silently dropped server-side.
+      // Select All only picks up the non-blocked task — the blocked one has no
+      // checkbox at all, so it can't be selected and then silently dropped server-side.
       fireEvent.click(screen.getByTestId('ops-select-all-btn'));
       const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
       expect(opsBtn.textContent).toContain('Ops (1)');

@@ -164,43 +164,24 @@ describe('CompactTaskCard', () => {
     expect(screen.queryByTestId('blocker-names')).toBeNull();
   });
 
-  it('renders a disabled checkbox with a reason when disabled', () => {
+  it('hides the checkbox and shows the reason for a dep-blocked task', () => {
     render(
       <CompactTaskCard
         task={makeTask({ taskType: '🔧 Operational' })}
-        showCheckbox={true}
+        showCheckbox={false}
         checked={false}
         onCheckChange={vi.fn()}
         onClick={vi.fn()}
-        disabled={true}
-        disabledReason="waiting on Dep Task"
+        blockedReason="waiting on Dep Task"
       />,
     );
-    const checkbox = screen.getByRole('checkbox') as HTMLInputElement;
-    expect(checkbox.disabled).toBe(true);
+    expect(screen.queryByRole('checkbox')).toBeNull();
     expect(screen.getByTestId('ops-dep-blocked-reason').textContent).toContain(
       'waiting on Dep Task',
     );
   });
 
-  it('does not toggle a disabled checkbox on click', () => {
-    const onCheckChange = vi.fn();
-    render(
-      <CompactTaskCard
-        task={makeTask({ taskId: 'task-blocked' })}
-        showCheckbox={true}
-        checked={false}
-        onCheckChange={onCheckChange}
-        onClick={vi.fn()}
-        disabled={true}
-        disabledReason="waiting on Dep Task"
-      />,
-    );
-    fireEvent.click(screen.getByRole('checkbox'));
-    expect(onCheckChange).not.toHaveBeenCalled();
-  });
-
-  it('does not show the disabled-reason section when not disabled', () => {
+  it('does not show the blocked-reason section when not blocked', () => {
     render(
       <CompactTaskCard
         task={makeTask()}

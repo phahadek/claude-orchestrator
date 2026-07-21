@@ -164,7 +164,7 @@ export function NonCodeTypeSection({
                     groomCheckedIds !== undefined &&
                     task.displayStatus === 'backlog';
                   const showCheckbox =
-                    opsEligible || opsBlocked || designEligible || groomable;
+                    opsEligible || designEligible || groomable;
                   const checked = opsEligible
                     ? opsCheckedIds!.has(task.taskId)
                     : designEligible
@@ -184,8 +184,7 @@ export function NonCodeTypeSection({
                       showCheckbox={showCheckbox}
                       checked={checked}
                       onCheckChange={onCheckChange}
-                      disabled={opsBlocked}
-                      disabledReason={
+                      blockedReason={
                         opsBlocked ? task.opsDepBlockedReason : null
                       }
                       onClick={() => onSelectTask(task.taskId)}
