@@ -179,7 +179,11 @@ vi.mock('fs', () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
-import { SessionManager, gitWorktreeAddWithRetry } from '../SessionManager';
+import {
+  SessionManager,
+  gitWorktreeAddWithRetry,
+  isRemovableWorktree,
+} from '../SessionManager';
 import {
   updateSessionStatus,
   updateSessionWorktreePath,
@@ -813,6 +817,121 @@ describe('cleanupWorktree chokepoint guard', () => {
       'https://github.com/org/repo/pull/1',
       PROJECT_DIR,
     );
+    const removeCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
+    expect(removeCalls).toHaveLength(1);
+  });
+});
+
+// ── isRemovableWorktree predicate ────────────────────────────────────────────
+
+describe('isRemovableWorktree', () => {
+  it('returns false when worktreePath === projectDir', () => {
+    expect(isRemovableWorktree(PROJECT_DIR, PROJECT_DIR)).toBe(false);
+  });
+
+  it('returns false for a path outside <projectDir>/.claude/worktrees/', () => {
+    expect(isRemovableWorktree(`${PROJECT_DIR}/other`, PROJECT_DIR)).toBe(
+      false,
+    );
+    expect(isRemovableWorktree('/somewhere/else', PROJECT_DIR)).toBe(false);
+    // Prefix-but-not-nested lookalike (sibling dir starting with the same string)
+    expect(
+      isRemovableWorktree(
+        `${PROJECT_DIR}-evil/.claude/worktrees/x`,
+        PROJECT_DIR,
+      ),
+    ).toBe(false);
+  });
+
+  it('returns true for a real per-session worktree path', () => {
+    expect(
+      isRemovableWorktree(
+        `${PROJECT_DIR}/.claude/worktrees/${SESSION_ID}`,
+        PROJECT_DIR,
+      ),
+    ).toBe(true);
+  });
+});
+
+// ── cleanupWorktree — refuses to tear down the project checkout ─────────────
+
+describe('cleanupWorktree — refuses non-worktree paths', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'done' });
+  });
+
+  it('worktreePath === projectDir: no git worktree remove, no fs.rmSync, and it returns', () => {
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      PROJECT_DIR,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    const removeCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
+    expect(removeCalls).toHaveLength(0);
+    expect(vi.mocked((fsModule as any).default.rmSync)).not.toHaveBeenCalled();
+  });
+
+  it('records a worktree_teardown_refused audit event when the guard fires', () => {
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      PROJECT_DIR,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'worktree_teardown_refused',
+        actor_type: 'system',
+        actor_id: SESSION_ID,
+        payload: expect.objectContaining({
+          worktreePath: PROJECT_DIR,
+          projectDir: PROJECT_DIR,
+        }),
+      }),
+    );
+  });
+
+  it('a path outside <projectDir>/.claude/worktrees/ is refused (no removal)', () => {
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      `${PROJECT_DIR}/some-other-dir`,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    const removeCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
+    expect(removeCalls).toHaveLength(0);
+  });
+
+  it('a real <projectDir>/.claude/worktrees/<id> path proceeds with removal', () => {
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      `${PROJECT_DIR}/.claude/worktrees/${SESSION_ID}`,
+      undefined,
+      PROJECT_DIR,
+    );
+
     const removeCalls = vi
       .mocked(execSync)
       .mock.calls.filter(

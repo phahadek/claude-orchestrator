@@ -36,6 +36,7 @@ type EventType =
   | 'session_marked_done_while_running'
   | 'conflict_nudge_delivery_failed'
   | 'worktree_remove_failed'
+  | 'worktree_teardown_refused'
   | 'stale_branch_abandoned'
   | 'review_side_effect_failed'
   | 'pipeline_stage_entered'
