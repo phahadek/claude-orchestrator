@@ -144,52 +144,91 @@ export function hasOperationalEvidence(evidence: unknown): boolean {
 }
 
 /**
- * Phrases that describe a guaranteed precondition (the source PR merged,
- * the commit deployed) rather than evidence the described behavior actually
- * occurred. These are mechanical/tautological by the time any verifier runs
- * — the runnable-gate already guarantees merged+deployed — so confirming
- * them proves nothing about the behavior.
+ * Tokens that describe a guaranteed precondition (the source PR merged, the
+ * commit deployed, an ancestry check) rather than evidence the described
+ * behavior actually occurred. These are mechanical/tautological by the time
+ * any verifier runs — the runnable-gate already guarantees merged+deployed —
+ * so confirming them proves nothing about the behavior.
  */
-const PRECONDITION_ONLY_PATTERNS: RegExp[] = [
-  /\bmerge-base\b/i,
-  /\bis-ancestor\b/i,
-  /\bpr\s*#?\d+\s+(is\s+|was\s+)?merged\b/i,
-  /\b(already\s+)?merged\s+(into|to)\s+(main|dev|master|production)\b/i,
-  /\bmerged\s+and\s+deployed\b/i,
-  /\bcommit\s+[0-9a-f]{6,40}\s+(is\s+|was\s+)?deployed\b/i,
-  /\bdeployed\s+to\s+production\b/i,
-  /\b(the\s+)?pr\s+(is\s+|was\s+)?merged\b/i,
-];
+const PRECONDITION_TOKENS = new Set([
+  'merge-base',
+  'is-ancestor',
+  'ancestor',
+  'merged',
+  'deployed',
+]);
 
 /**
- * True when a `pass` result's evidence, after stripping guaranteed-
- * precondition/mechanical phrasing (PR merged, commit deployed, ancestry
- * checks), has nothing substantive left — i.e. the evidence amounts to
+ * Filler tokens (evidence-envelope vocabulary, connectives, PR/commit
+ * nouns) that carry no behavioral content on their own and are ignored
+ * when deciding whether anything substantive remains.
+ */
+const FILLER_TOKENS = new Set([
+  'basis',
+  'operational',
+  'source',
+  'reason',
+  'evidence',
+  'sessionid',
+  'note',
+  'confirmed',
+  'confirming',
+  'verified',
+  'checked',
+  'via',
+  'git',
+  'ran',
+  'run',
+  'the',
+  'is',
+  'was',
+  'and',
+  'that',
+  'it',
+  'which',
+  'through',
+  'pr',
+  'commit',
+  'to',
+  'into',
+  'already',
+  'after',
+  'production',
+  'main',
+  'dev',
+  'master',
+]);
+
+const WORD_SPLIT_PATTERN = /[^a-z0-9-]+/;
+
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(WORD_SPLIT_PATTERN)
+    .map((t) => t.replace(/^-+|-+$/g, ''))
+    .filter(Boolean);
+}
+
+/**
+ * True when a `pass` result's evidence, after discarding guaranteed-
+ * precondition tokens (merged, deployed, ancestry checks) and filler
+ * vocabulary, has no substantive tokens left — i.e. the evidence amounts to
  * confirming a precondition the item was already guaranteed to satisfy,
  * never to observing the described behavior itself. Exported for testing.
  */
 export function isPreconditionOnlyEvidence(evidence: unknown): boolean {
   if (!evidence || typeof evidence !== 'object') return false;
-  const text = JSON.stringify(evidence);
-  const matchesPrecondition = PRECONDITION_ONLY_PATTERNS.some((re) =>
-    re.test(text),
+  const tokens = tokenize(JSON.stringify(evidence));
+  const hasPreconditionToken = tokens.some((t) => PRECONDITION_TOKENS.has(t));
+  if (!hasPreconditionToken) return false;
+
+  const remaining = tokens.filter(
+    (t) =>
+      !PRECONDITION_TOKENS.has(t) &&
+      !FILLER_TOKENS.has(t) &&
+      !/^[0-9a-f]+$/.test(t),
   );
-  if (!matchesPrecondition) return false;
-
-  let stripped = text;
-  for (const re of PRECONDITION_ONLY_PATTERNS) {
-    stripped = stripped.replace(new RegExp(re.source, 'gi'), ' ');
-  }
-  stripped = stripped
-    .replace(/["{}[\]:,._-]/g, ' ')
-    .replace(
-      /\b(basis|operational|source|reason|evidence|sessionid|note|confirmed|confirming|verified|checked|via|git|the|is|was|and|that|it|which|through)\b/gi,
-      ' ',
-    )
-    .replace(/\s+/g, '')
-    .trim();
-
-  return stripped.length < 8;
+  return remaining.length === 0;
 }
 
 /**
