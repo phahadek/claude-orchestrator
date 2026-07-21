@@ -555,7 +555,35 @@ export class AgentSession extends EventEmitter {
 
     const initialPrompt =
       this.customPrompt ??
-      `
+      (isPlanningSession(this.sessionType)
+        ? `
+You are a Claude Code session managed by Claude Code Orchestrator, running a
+dispatched planning session.
+
+## Task
+Task page: ${this.taskUrl}
+
+The planning procedure, digest, and all rules are in your system prompt. Run
+the workflow it describes directly.
+
+## Lifecycle
+1. Follow the injected planning procedure end to end for this single task.
+2. Stage every proposed change via the staged-intent transport described in
+   your system prompt — never write code, open a branch, or open a pull
+   request.
+3. When you reach a natural stopping point (every open item presented and
+   either staged or explicitly deferred), end the turn instead of waiting.
+
+## What the dashboard handles (do NOT do these yourself)
+- Applying staged intents — a human reviews and applies them.
+- Task status updates — the backend manages these.
+
+## Rules
+- One task per session. No scope creep.
+- This session has no worktree and no feature branch — never attempt to
+  commit, branch, or open a PR.
+`.trim()
+        : `
 You are a Claude Code session managed by Claude Code Orchestrator.
 
 ## Task
@@ -580,7 +608,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 - One task per session. No scope creep.
 - Never commit to the base branch directly.
 - Never merge your own PR.
-`.trim();
+`.trim());
 
     // Backoff schedule for transient API errors: 5s, 10s, 20s, 40s, 80s (5 attempts).
     const BACKOFF_DELAYS_MS = [5_000, 10_000, 20_000, 40_000, 80_000];
@@ -703,6 +731,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             { allowed_tools: this.extraAllowedTools },
             getGrantedCapabilities(this.sessionId),
           ),
+          sessionType: this.sessionType,
           systemPrompt: this.systemPromptContent,
           mcpConfigPath: this.mcpConfigPath,
           systemPromptFilePath: this.systemPromptFilePath,

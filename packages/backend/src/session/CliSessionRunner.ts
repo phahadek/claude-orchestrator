@@ -12,6 +12,7 @@ import type {
 } from './SessionRunner';
 import { logger } from '../logger';
 import { placeSessionPid } from './sessionCgroup';
+import { isPlanningSession } from './sessionPredicates';
 
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
@@ -48,7 +49,15 @@ export class CliSessionRunner implements ISessionRunner {
       systemPromptFilePath,
       disableAutoCompact,
       extraEnv,
+      sessionType,
     } = options;
+
+    // Planning/ops sessions must never silently auto-accept a tool call
+    // outside their allowlist — a write/capability escalation needs to hit a
+    // real permission denial so it can route through grant-on-re-dispatch.
+    // Code/review sessions keep the existing acceptEdits behavior.
+    const permissionMode =
+      sessionType && isPlanningSession(sessionType) ? 'default' : 'acceptEdits';
 
     const spawnArgs = [
       ...(resumeSessionId
@@ -61,7 +70,7 @@ export class CliSessionRunner implements ISessionRunner {
       'stream-json',
       '--verbose',
       '--permission-mode',
-      'acceptEdits',
+      permissionMode,
       ...(model ? ['--model', model] : []),
       ...(effort ? ['--effort', effort] : []),
       ...(disableAutoCompact

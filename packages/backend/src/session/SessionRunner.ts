@@ -14,6 +14,15 @@ export interface SessionRunnerOptions {
   /** Tool names to auto-approve (Bash(git:*), mcp__github__*, etc.) */
   allowedTools: string[];
   /**
+   * Session type, used by CLI-mode runners to pick a type-aware
+   * `--permission-mode` (see `session/sessionPredicates.ts#isPlanningSession`).
+   * Planning/ops sessions must not run under `acceptEdits` — any tool call
+   * outside their allowlist should hit a real permission denial (feeding the
+   * grant-on-re-dispatch decision surface) rather than being silently
+   * auto-accepted.
+   */
+  sessionType?: string;
+  /**
    * System prompt content to inject (API mode only).
    * In CLI mode the content is delivered via --append-system-prompt-file instead.
    * In API mode this is passed as the `systemPrompt` option to the Agent SDK.

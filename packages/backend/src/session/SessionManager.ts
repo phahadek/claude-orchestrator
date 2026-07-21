@@ -863,7 +863,9 @@ export class SessionManager extends EventEmitter {
     );
 
     // Insert session into SQLite before firing background chain so FK constraints
-    // on session_events are never violated.
+    // on session_events are never violated. Planning sessions (groom/design/ops)
+    // never get a worktree on disk (completeStart uses cwd=projectDir and skips
+    // `git worktree add`) — persist null rather than a path that doesn't exist.
     const startedAt = Date.now();
     insertSession({
       session_id: sessionId,
@@ -875,7 +877,7 @@ export class SessionManager extends EventEmitter {
       started_at: startedAt,
       ended_at: null,
       pr_url: null,
-      worktree_path: worktreePath,
+      worktree_path: isPlanningSession(sessionType) ? null : worktreePath,
       session_type: sessionType,
       task_name: taskName ?? null,
     });
