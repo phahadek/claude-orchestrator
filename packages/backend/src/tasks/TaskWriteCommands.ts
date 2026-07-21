@@ -54,7 +54,7 @@ export { isValidTransition, STATUS_DISPLAY, type TaskStatus };
  * taskId doesn't resolve to a real board task — a mis-keyed id would
  * otherwise mint an orphan gate_item/seed_item under a non-existent task.
  */
-export class TaskNotFoundError extends Error {
+class TaskNotFoundError extends Error {
   constructor(taskId: string) {
     super(`[TaskWriteCommands] task not found on the board: ${taskId}`);
     this.name = 'TaskNotFoundError';
