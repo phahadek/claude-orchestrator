@@ -53,7 +53,7 @@ function buildGateVerifyContext(item: GateItem): string {
       'becomes runnable and launches a verifier once merged and deployed). ' +
       'Spend zero turns re-confirming that: not `git merge-base ' +
       '--is-ancestor`, not "is the PR merged", not "was it deployed". That ' +
-      "check is tautologically true by construction and proves nothing " +
+      'check is tautologically true by construction and proves nothing ' +
       'about whether the described behavior actually works. Go straight to ' +
       'the behavior.',
     '',
