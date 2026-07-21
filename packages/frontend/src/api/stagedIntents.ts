@@ -59,6 +59,32 @@ export interface StagedIntent {
    * Never rendered as a hard block.
    */
   advisory?: StagedIntentAdvisory | null;
+  /** Operator-supplied rationale for a reject disposition (pushback | decline). Null until rejected. */
+  dispositionReason?: string | null;
+  /** The operator's answer to a decision.pickOne question-intent. Null until answered. */
+  answer?: StagedIntentAnswer | null;
+}
+
+/** The two explicit operator-chosen outcomes for a reject disposition. */
+export type StagedIntentRejectOutcome = 'pushback' | 'decline';
+
+/** A single candidate the operator can pick for a decision.pickOne question-intent. */
+export interface DecisionPickOneOption {
+  label: string;
+  description: string;
+}
+
+/** Payload for the decision.pickOne question-intent kind. */
+export interface DecisionPickOnePayload {
+  prompt: string;
+  options: DecisionPickOneOption[];
+  allowFreeForm: boolean;
+}
+
+/** The operator's response to a decision.pickOne question-intent. */
+export interface StagedIntentAnswer {
+  chosenLabel: string;
+  freeForm: string | null;
 }
 
 export interface ApplyOptions {
@@ -166,14 +192,38 @@ export const stagedIntentsApi = {
     });
   },
 
-  /** A non-empty `feedback` is a pushback (the session revises and re-stages); empty is a plain reject. */
-  reject(id: string, feedback?: string): Promise<{ ok: boolean }> {
+  /**
+   * `pushback` re-turns the originating session to revise and re-emit;
+   * `decline` is terminal. Both require a non-empty reason.
+   */
+  reject(
+    id: string,
+    disposition: { outcome: StagedIntentRejectOutcome; reason: string },
+  ): Promise<{ ok: boolean }> {
     return apiRequest<{ ok: boolean }>(
       `/api/staged-intents/${encodeURIComponent(id)}/reject`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ feedback: feedback ?? '' }),
+        body: JSON.stringify(disposition),
+      },
+    );
+  },
+
+  /** Resolves a decision.pickOne question-intent with the operator's choice. */
+  answer(
+    id: string,
+    response: { chosenLabel: string; freeForm?: string },
+  ): Promise<{ ok: boolean; intent: StagedIntent }> {
+    return apiRequest<{ ok: boolean; intent: StagedIntent }>(
+      `/api/staged-intents/${encodeURIComponent(id)}/answer`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chosenLabel: response.chosenLabel,
+          freeForm: response.freeForm ?? '',
+        }),
       },
     );
   },
