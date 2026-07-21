@@ -168,9 +168,9 @@ export function GateReadinessPanel({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<GateItemDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [verifySessions, setVerifySessions] = useState<
-    GateItemVerifySession[]
-  >([]);
+  const [verifySessions, setVerifySessions] = useState<GateItemVerifySession[]>(
+    [],
+  );
 
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(
     new Set(),

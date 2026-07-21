@@ -93,9 +93,7 @@ describe('GateReadinessPanel — gate item verify session', () => {
       );
     });
 
-    const sessionBlock = await screen.findByTestId(
-      'gate-item-verify-session',
-    );
+    const sessionBlock = await screen.findByTestId('gate-item-verify-session');
     expect(sessionBlock.textContent).toContain('running');
 
     const jumpButton = screen.getByTestId(
