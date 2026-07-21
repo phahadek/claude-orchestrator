@@ -231,7 +231,7 @@ describe('CliSessionRunner --permission-mode', () => {
 
 describe('CliSessionRunner --disallowed-tools', () => {
   it.each(['groom', 'design', 'ops'] as const)(
-    'includes --disallowed-tools Skill for a %s (planning) session',
+    'includes --disallowed-tools Skill, Write, Edit for a %s (planning) session',
     async (sessionType) => {
       const runner = new CliSessionRunner(SESSION_ID);
       await runner.run(
@@ -244,6 +244,8 @@ describe('CliSessionRunner --disallowed-tools', () => {
       const idx = capturedSpawnArgs.indexOf('--disallowed-tools');
       expect(idx).not.toBe(-1);
       expect(capturedSpawnArgs[idx + 1]).toBe('Skill');
+      expect(capturedSpawnArgs[idx + 2]).toBe('Write');
+      expect(capturedSpawnArgs[idx + 3]).toBe('Edit');
     },
   );
 

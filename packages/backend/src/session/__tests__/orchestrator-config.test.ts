@@ -5,6 +5,7 @@ import path from 'path';
 import {
   loadOrchestratorConfig,
   getSessionAllowedTools,
+  isGrantable,
 } from '../orchestrator-config';
 
 describe('loadOrchestratorConfig', () => {
@@ -302,5 +303,30 @@ describe('getSessionAllowedTools', () => {
       ]);
       expect(merged).not.toContain(capability);
     });
+
+    it.each(['Write', 'Edit'])(
+      'never merges a %s grant, even for a standard session',
+      (capability) => {
+        const merged = getSessionAllowedTools(
+          'standard',
+          { allowed_tools: [] },
+          [capability],
+        );
+        expect(merged).not.toContain(capability);
+      },
+    );
+  });
+});
+
+describe('isGrantable', () => {
+  it.each(['Write', 'Edit', 'NotebookEdit', 'MultiEdit'])(
+    'returns false for %s (un-grantable)',
+    (capability) => {
+      expect(isGrantable(capability)).toBe(false);
+    },
+  );
+
+  it('returns true for a normal Bash grant', () => {
+    expect(isGrantable('Bash(psql:*)')).toBe(true);
   });
 });

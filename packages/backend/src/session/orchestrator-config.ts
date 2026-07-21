@@ -200,11 +200,22 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
  * Capability strings a grant can never widen the allowlist with, regardless
  * of what an operator approved. Resolved/Done/task-intent-apply stay
  * device-authed — a session-scoped grant is not a substitute for that auth
- * boundary. Matched against the raw granted-capability string.
+ * boundary. Write/Edit stay off ops/planning sessions entirely — file
+ * authorship is a Code task, not something an operator grant can approve.
+ * Matched against the raw granted-capability string.
  */
-const GRANT_DENYLIST_PATTERNS = [/task-intent/i, /apply/i, /resolve/i, /done/i];
+const GRANT_DENYLIST_PATTERNS = [
+  /task-intent/i,
+  /apply/i,
+  /resolve/i,
+  /done/i,
+  /^Write$/i,
+  /^Edit$/i,
+  /^NotebookEdit$/i,
+  /^MultiEdit$/i,
+];
 
-function isGrantable(capability: string): boolean {
+export function isGrantable(capability: string): boolean {
   return !GRANT_DENYLIST_PATTERNS.some((re) => re.test(capability));
 }
 
