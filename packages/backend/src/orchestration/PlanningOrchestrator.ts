@@ -4,18 +4,20 @@ import {
   listStagedIntentsBySession,
   markSessionDone,
 } from '../db/queries';
-import type { StagedIntentRow } from '../db/types';
+import type { StagedIntentRow, StagedIntentAnswer } from '../db/types';
 import { isPlanningSession } from '../session/sessionPredicates';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage } from '../ws/types';
 
-type PlanningDisposition = 'approve' | 'pushback' | 'decline';
+type PlanningDisposition = 'approve' | 'pushback' | 'decline' | 'answer';
 
 export interface PlanningDispositionPayload {
   intent: StagedIntentRow;
   disposition: PlanningDisposition;
   /** Operator-supplied rationale — required for pushback and decline. */
   reason?: string | null;
+  /** The operator's answer to a decision.pickOne question-intent — required for the `answer` disposition. */
+  answer?: StagedIntentAnswer | null;
 }
 
 /**
@@ -101,7 +103,7 @@ export class PlanningOrchestrator {
    * no originating session, or whose session isn't a planning session.
    */
   async handleDisposition(payload: PlanningDispositionPayload): Promise<void> {
-    const { intent, disposition, reason } = payload;
+    const { intent, disposition, reason, answer } = payload;
     const sessionId = intent.session_id;
     if (!sessionId) return;
 
@@ -115,7 +117,12 @@ export class PlanningOrchestrator {
       listStagedIntentsBySession(sessionId).length,
     );
 
-    const message = formatDispositionMessage(intent, disposition, reason);
+    const message = formatDispositionMessage(
+      intent,
+      disposition,
+      reason,
+      answer,
+    );
     try {
       await this.sessionManager.enqueueFeedback(
         sessionId,
@@ -134,6 +141,7 @@ function formatDispositionMessage(
   intent: StagedIntentRow,
   disposition: PlanningDisposition,
   reason?: string | null,
+  answer?: StagedIntentAnswer | null,
 ): string {
   switch (disposition) {
     case 'approve':
@@ -142,5 +150,10 @@ function formatDispositionMessage(
       return `Staged intent ${intent.id} (${intent.kind}) was declined. Reason: ${reason ?? ''}`;
     case 'pushback':
       return `Staged intent ${intent.id} (${intent.kind}) was sent back for revision. Feedback: ${reason ?? ''}`;
+    case 'answer':
+      return (
+        `Decision ${intent.id} (${intent.kind}) was answered: "${answer?.chosenLabel ?? ''}".` +
+        (answer?.freeForm ? ` Additional context: ${answer.freeForm}` : '')
+      );
   }
 }

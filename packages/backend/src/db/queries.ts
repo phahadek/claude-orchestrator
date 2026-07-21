@@ -4653,11 +4653,11 @@ export function insertStagedIntent(row: StagedIntentRow): void {
     INSERT INTO staged_intent
       (id, kind, payload, payload_hash, task_id, project_id, session_id,
        group_id, state, supersedes, annotation, decision_proposal, advisory,
-       disposition_reason, created_at, updated_at)
+       disposition_reason, answer, created_at, updated_at)
     VALUES
       (@id, @kind, @payload, @payload_hash, @task_id, @project_id, @session_id,
        @group_id, @state, @supersedes, @annotation, @decision_proposal, @advisory,
-       @disposition_reason, @created_at, @updated_at)
+       @disposition_reason, @answer, @created_at, @updated_at)
   `);
   _stmtInsertStagedIntent.run(row);
 }
@@ -4785,6 +4785,30 @@ export function findActiveStagedIntentForTask(
   }) as StagedIntentRow | undefined;
 }
 
+let _stmtFindActiveDecisionPickOneForSession: Database.Statement | null = null;
+
+/**
+ * The standing staged/approved decision.pickOne (if any) for this session —
+ * the dedup slot for question-intents, which carry no taskId to dedup on
+ * (see findActiveStagedIntentForTask for the task-scoped counterpart).
+ */
+export function findActiveDecisionPickOneForSession(
+  sessionId: string,
+): StagedIntentRow | undefined {
+  _stmtFindActiveDecisionPickOneForSession ??= db.prepare<{
+    session_id: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE session_id = @session_id AND kind = 'decision.pickOne'
+       AND state IN ('staged', 'approved')
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  );
+  return _stmtFindActiveDecisionPickOneForSession.get({
+    session_id: sessionId,
+  }) as StagedIntentRow | undefined;
+}
+
 /**
  * Enforces the per-intent lifecycle state machine. `committed` is a terminal,
  * immutable state — no outgoing transition is legal. Throws
@@ -4798,6 +4822,8 @@ export function transitionStagedIntent(
     updatedAt?: number;
     /** Operator rationale for a reject disposition — set on the rejected transition, left untouched otherwise. */
     dispositionReason?: string | null;
+    /** JSON-serialized StagedIntentAnswer — set on a decision.pickOne's answered (committed) transition, left untouched otherwise. */
+    answer?: string | null;
   },
 ): StagedIntentRow {
   const current = getStagedIntent(id);
@@ -4813,9 +4839,10 @@ export function transitionStagedIntent(
     state: StagedIntentState;
     annotation: string | null;
     disposition_reason: string | null;
+    answer: string | null;
     updated_at: number;
   }>(
-    `UPDATE staged_intent SET state = @state, annotation = @annotation, disposition_reason = @disposition_reason, updated_at = @updated_at WHERE id = @id`,
+    `UPDATE staged_intent SET state = @state, annotation = @annotation, disposition_reason = @disposition_reason, answer = @answer, updated_at = @updated_at WHERE id = @id`,
   );
   const updatedAt = opts?.updatedAt ?? Date.now();
   const annotation =
@@ -4826,11 +4853,14 @@ export function transitionStagedIntent(
     opts && 'dispositionReason' in opts
       ? (opts.dispositionReason ?? null)
       : current.disposition_reason;
+  const answer =
+    opts && 'answer' in opts ? (opts.answer ?? null) : current.answer;
   _stmtUpdateStagedIntentState.run({
     id,
     state: toState,
     annotation,
     disposition_reason: dispositionReason,
+    answer,
     updated_at: updatedAt,
   });
   return {
@@ -4838,6 +4868,7 @@ export function transitionStagedIntent(
     state: toState,
     annotation,
     disposition_reason: dispositionReason,
+    answer,
     updated_at: updatedAt,
   };
 }
