@@ -49,6 +49,18 @@ import {
 
 export { isValidTransition, STATUS_DISPLAY, type TaskStatus };
 
+/**
+ * Thrown by accreteGateContribution/stageSeedContribution when the source
+ * taskId doesn't resolve to a real board task — a mis-keyed id would
+ * otherwise mint an orphan gate_item/seed_item under a non-existent task.
+ */
+class TaskNotFoundError extends Error {
+  constructor(taskId: string) {
+    super(`[TaskWriteCommands] task not found on the board: ${taskId}`);
+    this.name = 'TaskNotFoundError';
+  }
+}
+
 // ── TaskCacheRefresher hook ───────────────────────────────────────────────────
 // Same seam ws/router.ts uses on a skipCache cache-miss — lets moveTask
 // eagerly re-warm the affected project's boards instead of leaving them
@@ -388,6 +400,19 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     private readonly projectId?: string,
   ) {}
 
+  /**
+   * Live existence check against the board (not the task_cache, which can
+   * be stale or never-populated for a mis-keyed id) — throws
+   * TaskNotFoundError if the taskId doesn't resolve to a real task.
+   */
+  private async assertTaskExists(taskId: string): Promise<void> {
+    try {
+      await this.backend.fetchTaskPage(taskId);
+    } catch {
+      throw new TaskNotFoundError(taskId);
+    }
+  }
+
   async createTask(
     fields: NewTaskFields,
     options?: TaskWriteOptions,
@@ -551,8 +576,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       );
     }
 
-    const accretedAt = new Date().toISOString();
     const sourceTaskId = normalizeTaskId(sourceTask.id);
+    await this.assertTaskExists(sourceTaskId);
+
+    const accretedAt = new Date().toISOString();
     const mergeCommit =
       (await getMergeCommitForTask(sourceTaskId)) ?? undefined;
     const itemIds = items.map(
@@ -609,8 +636,10 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       );
     }
 
-    const accretedAt = new Date().toISOString();
     const sourceTaskId = normalizeTaskId(sourceTask.id);
+    await this.assertTaskExists(sourceTaskId);
+
+    const accretedAt = new Date().toISOString();
     const itemIds = seeds.map(
       (seed) =>
         insertSeedItem({
