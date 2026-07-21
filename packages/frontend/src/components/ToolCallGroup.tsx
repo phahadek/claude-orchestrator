@@ -4,6 +4,7 @@ import {
   extractBashCommand,
   extractToolDetail,
   extractToolResult,
+  extractCallInput,
 } from '../utils/eventParsing';
 import styles from './ToolCallGroup.module.css';
 
@@ -18,32 +19,6 @@ interface Props {
 }
 
 const RESULT_PREVIEW_LINES = 20;
-
-/** Extract the first tool_use block's input from a text/assistant event. */
-function extractCallInput(textEvent: CallPair['textEvent']): unknown {
-  const payload = tryParseJson(textEvent.content);
-  if (typeof payload !== 'object' || payload === null) return null;
-  const p = payload as Record<string, unknown>;
-  const msg = p.message as Record<string, unknown> | undefined;
-  const blocks = msg ? msg.content : p.content;
-  if (!Array.isArray(blocks)) return null;
-  for (const block of blocks) {
-    if (typeof block !== 'object' || block === null) continue;
-    const b = block as Record<string, unknown>;
-    if (b.type === 'tool_use') {
-      let input = b.input;
-      if (typeof input === 'string') {
-        try {
-          input = JSON.parse(input);
-        } catch {
-          /* leave as string */
-        }
-      }
-      return input;
-    }
-  }
-  return null;
-}
 
 /** Produce a short label for a call's input (first string value or JSON snippet). */
 function inputLabel(toolName: string, input: unknown): string {

@@ -274,6 +274,79 @@
   word-break: break-word;
 }
 
+/* ── Subagent (Task/Agent) blocks ───────────────────────────────── */
+.subagentBlock {
+  background: rgba(203, 166, 247, 0.06);
+  border: 1px solid rgba(203, 166, 247, 0.3);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  font-size: 0.85rem;
+  margin: 4px 0;
+}
+
+.subagentHeader {
+  background: rgba(203, 166, 247, 0.1);
+  color: var(--ctp-mauve);
+  font-weight: 600;
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.subagentHeader:hover {
+  background: rgba(203, 166, 247, 0.16);
+}
+
+.subagentIcon {
+  flex-shrink: 0;
+}
+
+.subagentLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagentDetail {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.subagentBody {
+  padding: 8px 10px;
+  border-top: 1px solid rgba(203, 166, 247, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.subagentPrompt {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--ctp-mauve);
+  background: rgba(203, 166, 247, 0.05);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.subagentResult {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
 /* ── Inline permission denials ───────────────────────────────────── */
 .inlineDenials {
   border: 1px solid rgba(243, 139, 168, 0.25);
