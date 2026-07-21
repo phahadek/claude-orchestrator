@@ -197,6 +197,46 @@ const PLANNING_INTENT_KINDS: Record<PlanningWorkflow, readonly string[]> = {
   ops: ['journal.setState', 'task.setStatus'],
 };
 
+/**
+ * Up-front capability inventory for a dispatched ops session — what it can do
+ * out of the box, how it earns more, and what no grant can ever unlock. Stated
+ * before the session does anything, so it stops probing tools by trial-and-
+ * error and hitting denials. Mirrors the real allowlist wiring in
+ * `session/orchestrator-config.ts` (`OPS_ALLOWED_TOOLS`, `getSessionAllowedTools`)
+ * and the grant mechanism in `routes/stagedIntents.ts` (`session.requestCapability`
+ * → `SessionManager.grantCapability`) and `GRANT_DENYLIST_PATTERNS` — kept in
+ * prose here rather than imported, since this composer has no business
+ * depending on the Express/DB wiring those modules pull in.
+ */
+function renderOpsCapabilities(): string[] {
+  return [
+    '## Capabilities',
+    '',
+    'This session starts with a fixed base tool set and nothing more: read-only ' +
+      'Bash (ls, cat, grep, find, git log/diff/show/status/blame/ls-files/rev-parse, ' +
+      'etc.), read-only Notion MCP tools, and this project\'s audited live-data read ' +
+      'surface (analyst/alarm/read-only-DB MCP tools, where configured). No write, no ' +
+      'Write/Edit tool, and no prod-mutating command is granted by default — do not ' +
+      'probe for one.',
+    '',
+    'If the task genuinely needs a write or a prod-mutating command this session ' +
+      'does not have, request it: stage a `session.requestCapability` intent naming ' +
+      'the exact capability (one Bash command prefix or one named MCP write verb — ' +
+      'never a category). An operator reviews it; on approval the capability is ' +
+      'durably granted to this session alone and it is re-dispatched with that tool ' +
+      'available. On rejection or pushback, the session resumes with the operator\'s ' +
+      'feedback instead.',
+    '',
+    'Some things are never grantable this way, no matter what an operator approves: ' +
+      'anything that reaches the resolved / ✅ Done / task-intent-apply transition ' +
+      '(that stays device-auth/operator-only — see "Granted writes are idempotent ' +
+      'and resumable" below), and the Write/Edit tools — authoring or rewriting a ' +
+      'file is always a Code task, not something a capability grant hands to ops ' +
+      '(see "Dispatch-eligibility boundary" below).',
+    '',
+  ];
+}
+
 function renderSkeleton(
   workflow: PlanningWorkflow,
   taskName: string,
@@ -214,6 +254,7 @@ function renderSkeleton(
       'and either staged or explicitly deferred), end the turn instead of waiting — ' +
       'the session parks into idle rather than scraping for a PR.',
     '',
+    ...(workflow === 'ops' ? renderOpsCapabilities() : []),
     '## Transport',
     '',
     'Do not call the task backend, Notion, or any raw HTTP client directly. Every ' +

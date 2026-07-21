@@ -36,7 +36,7 @@ Canonical source: `packages/backend/src/planning/procedureCore.ts` (`CORE_PRINCI
 
 ## Dispatch-eligibility boundary
 
-- **ops**: Diagnosis and reversible/resumable writes are what suit a dispatched (non-interactive) ops session. Irreversible/non-resumable writes and live-incident recovery lean interactive — hand those to an operator-present run instead of dispatching them.
+- **ops**: Diagnosis and reversible/resumable writes are what suit a dispatched (non-interactive) ops session. Irreversible/non-resumable writes and live-incident recovery lean interactive — hand those to an operator-present run instead of dispatching them. Authoring or rewriting a file — a script, a config, a deploy playbook — is always a 💻 Code task, never ops, regardless of how reversible the change looks: ops proposes the content (a staged intent, a chat write-up) and a Code task applies it with the Write/Edit tools ops does not have.
 
 ## Granted writes are idempotent and resumable
 
