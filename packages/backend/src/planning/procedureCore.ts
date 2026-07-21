@@ -264,6 +264,15 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'ask for approval before staging — staging is what puts the decision in ' +
         'front of the operator; asking first leaves the operator with nothing to ' +
         'act on.',
+      groom:
+        'A dispatched groom session has no synchronous chat turn to wait within — ' +
+        'end the turn and it parks. So presenting IS staging: once investigation ' +
+        'reaches a grooming decision, stage it (task.setStatus / setProperties / ' +
+        'setDependsOn to promote to 🗂️ Ready, or task.setStatus to Deferred with a ' +
+        'decisionProposal) rather than writing up an investigation report in chat ' +
+        'and asking whether to defer or groom to Ready. Never ask for sign-off ' +
+        'before staging — staging is what puts the decision in front of the ' +
+        'operator; asking first leaves the operator with nothing to act on.',
     },
   },
   {
