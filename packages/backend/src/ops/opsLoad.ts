@@ -78,7 +78,9 @@ export function isOpsEligibleType(type: string): boolean {
 }
 
 /** Resolves a dep task's merge commit; swappable so hot-path callers can skip network fallbacks. */
-type MergeCommitLookup = (depId: string) => Promise<string | null> | string | null;
+type MergeCommitLookup = (
+  depId: string,
+) => Promise<string | null> | string | null;
 
 /**
  * An ops task typically operates against live/prod state, so a ✅ Done dep

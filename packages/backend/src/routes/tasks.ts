@@ -58,9 +58,14 @@ async function annotateOpsDepBlocking(
   const opsTasks = allTasks.filter((t) => isOpsEligibleType(t.type));
   if (opsTasks.length === 0) return;
   try {
-    const blocking = await computeOpsBlockingDeps(allTasks, opsTasks, projectId, {
-      fast: true,
-    });
+    const blocking = await computeOpsBlockingDeps(
+      allTasks,
+      opsTasks,
+      projectId,
+      {
+        fast: true,
+      },
+    );
     for (const view of views) {
       const info = blocking.get(view.taskId);
       if (!info) continue;

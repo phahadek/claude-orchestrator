@@ -535,9 +535,7 @@ describe('loadOpsContext — dep deploy-gating', () => {
 
     const result = await loadOpsContext(MILESTONE);
 
-    expect(result.worklist.dep_blocked.map((t) => t.id)).toEqual([
-      'ops-task',
-    ]);
+    expect(result.worklist.dep_blocked.map((t) => t.id)).toEqual(['ops-task']);
     expect(result.worklist.executable.map((t) => t.id)).not.toContain(
       'ops-task',
     );
@@ -571,9 +569,7 @@ describe('loadOpsContext — dep deploy-gating', () => {
 
     const result = await loadOpsContext(MILESTONE);
 
-    expect(result.worklist.executable.map((t) => t.id)).toContain(
-      'ops-task',
-    );
+    expect(result.worklist.executable.map((t) => t.id)).toContain('ops-task');
     expect(result.worklist.dep_blocked.map((t) => t.id)).not.toContain(
       'ops-task',
     );

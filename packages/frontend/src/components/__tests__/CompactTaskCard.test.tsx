@@ -178,9 +178,9 @@ describe('CompactTaskCard', () => {
     );
     const checkbox = screen.getByRole('checkbox') as HTMLInputElement;
     expect(checkbox.disabled).toBe(true);
-    expect(
-      screen.getByTestId('ops-dep-blocked-reason').textContent,
-    ).toContain('waiting on Dep Task');
+    expect(screen.getByTestId('ops-dep-blocked-reason').textContent).toContain(
+      'waiting on Dep Task',
+    );
   });
 
   it('does not toggle a disabled checkbox on click', () => {

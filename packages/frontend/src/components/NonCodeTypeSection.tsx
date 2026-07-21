@@ -185,7 +185,9 @@ export function NonCodeTypeSection({
                       checked={checked}
                       onCheckChange={onCheckChange}
                       disabled={opsBlocked}
-                      disabledReason={opsBlocked ? task.opsDepBlockedReason : null}
+                      disabledReason={
+                        opsBlocked ? task.opsDepBlockedReason : null
+                      }
                       onClick={() => onSelectTask(task.taskId)}
                       showStatus
                     />
