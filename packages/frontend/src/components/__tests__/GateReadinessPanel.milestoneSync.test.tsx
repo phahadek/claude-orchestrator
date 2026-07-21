@@ -42,7 +42,10 @@ beforeEach(() => {
 describe('GateReadinessPanel milestone sync with the top bar', () => {
   it('defaults selectedMilestone to the top-bar-resolved milestone, not the first in the list', async () => {
     render(
-      <GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M12" />,
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12"
+      />,
     );
 
     const select = (await screen.findByLabelText(
@@ -53,7 +56,10 @@ describe('GateReadinessPanel milestone sync with the top bar', () => {
 
   it('updates the panel selection when the top-bar selection changes', async () => {
     const { rerender } = render(
-      <GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M10" />,
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M10"
+      />,
     );
 
     let select = (await screen.findByLabelText(
@@ -62,7 +68,10 @@ describe('GateReadinessPanel milestone sync with the top bar', () => {
     expect(select.value).toBe('M10');
 
     rerender(
-      <GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone="M11" />,
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M11"
+      />,
     );
 
     select = (await screen.findByLabelText(
@@ -73,7 +82,10 @@ describe('GateReadinessPanel milestone sync with the top bar', () => {
 
   it('falls back to the first milestone when the top-bar selection does not resolve', async () => {
     render(
-      <GateReadinessPanel activeProjectId="proj-1" activeBoardMilestone={null} />,
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone={null}
+      />,
     );
 
     const select = (await screen.findByLabelText(
