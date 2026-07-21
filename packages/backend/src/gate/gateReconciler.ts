@@ -107,7 +107,15 @@ const defaultFollowupFiler: FollowupFixTaskFiler = {
  * verifier only gathers read-only evidence, and gateService routes a pass to
  * 'pending-approval' (held until an operator calls approveGateItem) rather
  * than resolving it. needs-triage is excluded: it requires human
- * classification before it can be routed at all.
+ * classification before it can be routed at all. Human-Observation is
+ * excluded too, but for a different reason: it is not merely unrouted, it
+ * is unverifiable by any headless session (UI/visual/interactive behavior
+ * can only be judged by a human observing the running app) so it never
+ * enters the tick's auto-run loop. It can still be manually dispatched (the
+ * operator-triggered verify surface, dispatchGateItemVerification) to
+ * gather advisory pre-check evidence, but gateService.appendGateItemEvent
+ * refuses to let a verifier-originated pass resolve it regardless of how it
+ * was dispatched.
  */
 const AUTO_RUN_TIERS: GateItemClassification[] = [
   'Read-Only',

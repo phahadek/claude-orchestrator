@@ -454,6 +454,27 @@ function nextStateForDisposition(
 }
 
 /**
+ * True when a `pass` event must not advance state: a Human-Observation item
+ * (UI/visual/interactive) can only be passed by a human observing the
+ * running app — a verifier-originated `pass` (tagged operator:
+ * 'gate-verifier', see gateReconciler.ts's runReservedVerification) is
+ * advisory evidence only, never a final disposition. A human passing the
+ * same item through the /gate skill (any other operator) still resolves it
+ * normally.
+ */
+function isVerifierBlockedFromPassing(
+  disposition: GateDisposition,
+  classification: GateItemClassification,
+  operator: string | undefined,
+): boolean {
+  return (
+    disposition === 'pass' &&
+    classification === 'Human-Observation' &&
+    operator === 'gate-verifier'
+  );
+}
+
+/**
  * Appends an event and, when disposition is present and terminal, advances
  * the item's denormalized (state, current_disposition). A dispositionless
  * event, or one carrying the non-terminal `noted` disposition, is a pure log
@@ -484,7 +505,12 @@ export function appendGateItemEvent(
 
   const advances =
     event.disposition !== undefined &&
-    !NON_TERMINAL_DISPOSITIONS.has(event.disposition as GateDisposition);
+    !NON_TERMINAL_DISPOSITIONS.has(event.disposition as GateDisposition) &&
+    !isVerifierBlockedFromPassing(
+      event.disposition as GateDisposition,
+      item.classification,
+      event.operator,
+    );
   if (advances) {
     const nextState = nextStateForDisposition(
       event.disposition as GateDisposition,
@@ -589,6 +615,7 @@ const RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Read-Only',
   'Prod-Mutating',
   'Opportunistic',
+  'Human-Observation',
 ]);
 
 /** The /gate skill's triage step: moves a needs-triage (or any) item into a resolved classification. */

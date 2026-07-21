@@ -162,6 +162,31 @@ describe('dispatchGateItemVerification', () => {
     ]);
   });
 
+  it('a manually dispatched verifier pass on a Human-Observation item still cannot resolve it', async () => {
+    const item = makeRunnableItem({ classification: 'Human-Observation' });
+    const verify = vi.fn(async () => ({
+      disposition: 'pass' as const,
+      evidence: { basis: 'operational', note: 'audit_log shows it deployed' },
+    }));
+    configureGateVerification({
+      verifier: { verify },
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+    });
+
+    dispatchGateItemVerification([item.id]);
+
+    await vi.waitFor(() => {
+      expect(verify).toHaveBeenCalledTimes(1);
+    });
+    await vi.waitFor(() => {
+      expect(getItem(item.id)?.events.at(-1)).toMatchObject({
+        disposition: 'pass',
+        operator: 'gate-verifier',
+      });
+    });
+    expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
   it('skips an item already mid-verify rather than double-dispatching', async () => {
     const item = makeRunnableItem({ classification: 'Read-Only' });
     let resolveVerify: (() => void) | undefined;
@@ -255,6 +280,25 @@ describe('runGateReconcilerTick', () => {
     });
     expect(verifier.verify).not.toHaveBeenCalled();
     expect(getItem(untriaged.id)?.state).toBe('runnable');
+  });
+
+  it('never auto-runs Human-Observation items — they stay for human /gate disposition', async () => {
+    const item = makeRunnableItem({
+      text: 'panel renders a compact rollup header with a segmented progress bar',
+      classification: 'Human-Observation',
+    });
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({
+        disposition: 'pass',
+        evidence: { basis: 'operational' },
+      })),
+    };
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).not.toHaveBeenCalled();
+    expect(getItem(item.id)?.state).toBe('runnable');
   });
 
   it('auto-runs and auto-disposes an Opportunistic item on pass', async () => {
