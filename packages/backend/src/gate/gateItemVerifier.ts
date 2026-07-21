@@ -57,6 +57,15 @@ function buildGateVerifyContext(item: GateItem): string {
       'about whether the described behavior actually works. Go straight to ' +
       'the behavior.',
     '',
+    'Start with the operational record, not the source tree. Your first ' +
+      'moves should be against audit_log, session_events, pull_requests, ' +
+      'git history, and `gh` — not `grep`/`find`/`Read` over packages/*/src ' +
+      'to figure out how something is implemented. Opening with source ' +
+      'exploration is a known failure mode for this session: it burns the ' +
+      'bulk of the turn budget on understanding a mechanism instead of ' +
+      'checking whether it actually ran, and source code alone can never ' +
+      'settle this item (see below).',
+    '',
     'Read the operational record relevant to the item text above — audit_log, ' +
       'session_events, pull_requests, git history, and `gh` as needed — to ' +
       'determine whether the described behavior actually holds. This is a ' +
@@ -86,17 +95,20 @@ function buildGateVerifyContext(item: GateItem): string {
       'Never fabricate a pass/fail to route around a permission denial — a ' +
       'blocked read is grounds for needs-setup, not for guessing.',
     '',
-    'Source is a legitimate input for orienting yourself, but a `pass` ' +
-      'disposition must never rest on source-code reading alone — it must ' +
-      'be grounded in operational/runtime evidence (audit_log entries, ' +
-      'session_events, a merged PR, a deploy record, git history, `gh` ' +
-      'output). If the strongest evidence you found is "the source code ' +
-      'looks like it does X", that is not a pass — report needs-setup and ' +
-      'explain what operational trace is missing. Set `evidence.basis` to ' +
-      '"operational" only when your pass is actually backed by such a ' +
-      'trace; set it to "source" when you only read source code. A `pass` ' +
-      'with `evidence.basis` other than "operational" will be downgraded ' +
-      'to needs-setup regardless of what you report.',
+    'Source is, at most, a brief orient — a quick, targeted look to confirm ' +
+      'you are reading the right code path once the operational record has ' +
+      'pointed you at one, never the vehicle for the investigation itself ' +
+      'and never its verification body. A `pass` disposition must never ' +
+      'rest on source-code reading alone — it must be grounded in ' +
+      'operational/runtime evidence (audit_log entries, session_events, a ' +
+      'merged PR, a deploy record, git history, `gh` output). If the ' +
+      'strongest evidence you found is "the source code looks like it does ' +
+      'X", that is not a pass — report needs-setup and explain what ' +
+      'operational trace is missing. Set `evidence.basis` to "operational" ' +
+      'only when your pass is actually backed by such a trace; set it to ' +
+      '"source" when you only read source code. A `pass` with ' +
+      '`evidence.basis` other than "operational" will be downgraded to ' +
+      'needs-setup regardless of what you report.',
     '',
     ...(isHumanObservation
       ? [

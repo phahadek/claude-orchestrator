@@ -235,6 +235,46 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     expect(opsContext).not.toContain('SELECT * FROM');
   });
 
+  it('directs record-first investigation and de-emphasizes open-ended source reading', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-1',
+      disposition: { disposition: 'needs-setup' },
+    });
+    await resultPromise;
+
+    const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
+    const opsContext = (dispatchOpts as { opsContext: string }).opsContext;
+
+    // Tells the session to open on the operational record, not on grepping
+    // the source tree to understand the mechanism.
+    expect(opsContext).toMatch(
+      /start with the operational record, not the source tree/i,
+    );
+    expect(opsContext).toMatch(/known failure mode/i);
+
+    // Source is scoped down to a brief orient, never the investigation body.
+    expect(opsContext).toMatch(/at most, a brief orient/i);
+
+    // The record-first instruction appears before the "source as orient"
+    // caveat — the operational record is the investigation, source is a
+    // late, minor aside.
+    const recordFirstIndex = opsContext
+      .toLowerCase()
+      .indexOf('start with the operational record');
+    const sourceOrientIndex = opsContext
+      .toLowerCase()
+      .indexOf('at most, a brief orient');
+    expect(recordFirstIndex).toBeGreaterThan(-1);
+    expect(sourceOrientIndex).toBeGreaterThan(-1);
+    expect(recordFirstIndex).toBeLessThan(sourceOrientIndex);
+  });
+
   it('states the merge+deploy guarantee so the session does not re-verify it', async () => {
     const sessionManager = makeSessionManager();
     vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
