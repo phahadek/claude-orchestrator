@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { logger } from '../logger';
 
 export function runMigrations(target: Database.Database): void {
   target.exec(`
@@ -1256,11 +1257,11 @@ export function runMigrations(target: Database.Database): void {
   // ── milestones.canonical_short_id: stored canonical short-form key ─────────
   // Replaces the read-path extractMilestoneToken(name) parse in
   // milestoneResolver.ts with an explicit stored field, populated once at
-  // registration. Backfill mirrors the registration-time derivation so
-  // resolved keys stay identical to the already-normalized gate_item/seed_item
-  // rows above: yaml-sourced milestones (source_id set by reconcileYamlMilestones)
-  // keep their source_id; everything else falls back to the leading M<n> token,
-  // or the full name if it has none. Idempotent: only NULL rows are touched.
+  // registration. NOTE: this backfill's source_id-first precedence was wrong
+  // for Notion-synced milestones — it left canonical_short_id on the hex
+  // source_id while gate_item/seed_item key on the M<n> token. Left as-is
+  // (idempotent-on-NULL, so it won't re-run); the corrective follow-up
+  // migration below re-derives token-first for rows this one mis-populated.
   try {
     target.exec(`ALTER TABLE milestones ADD COLUMN canonical_short_id TEXT`);
   } catch {
@@ -1294,6 +1295,55 @@ export function runMigrations(target: Database.Database): void {
     ON milestones(project_id, canonical_short_id COLLATE NOCASE)
     WHERE canonical_short_id IS NOT NULL;
   `);
+
+  // ── milestones.canonical_short_id: corrective re-backfill, token-first ─────
+  // The backfill above derived canonical_short_id source_id-first, so
+  // Notion-synced milestones ended up keyed on their hex source_id while
+  // gate_item.milestone / seed_item.milestone (and reconcileYamlMilestones,
+  // and createMilestone) key on the M<n> token — the resolver never matched.
+  // Recompute only rows this migration itself mis-populated (canonical_short_id
+  // still equals source_id) where the name yields a token; token-less names
+  // (MVP, hex-named milestones) keep their existing fallback untouched.
+  // Migrations can't import app modules, so the token regex is duplicated
+  // inline (matches extractMilestoneToken / shortMilestoneToken above).
+  {
+    const shortMilestoneToken = (name: string): string | null => {
+      const match = /^([Mm]\d+[A-Za-z]?)(?=[\s—:-]|$)/.exec(name);
+      return match ? match[1] : null;
+    };
+    const rows = target
+      .prepare(
+        `SELECT id, project_id, name, source_id, canonical_short_id FROM milestones
+         WHERE source_id IS NOT NULL AND canonical_short_id = source_id`,
+      )
+      .all() as {
+      id: string;
+      project_id: string;
+      name: string;
+      source_id: string | null;
+      canonical_short_id: string | null;
+    }[];
+    const update = target.prepare(
+      `UPDATE milestones SET canonical_short_id = ? WHERE id = ?`,
+    );
+    const conflictCheck = target.prepare(
+      `SELECT id FROM milestones
+       WHERE project_id = ? AND id != ? AND canonical_short_id IS NOT NULL
+         AND canonical_short_id = ? COLLATE NOCASE`,
+    );
+    for (const row of rows) {
+      const token = shortMilestoneToken(row.name);
+      if (!token) continue;
+      const conflict = conflictCheck.get(row.project_id, row.id, token);
+      if (conflict) {
+        logger.warn(
+          `[schema] milestone canonical_short_id re-backfill: skipping "${row.name}" (${row.id}) — token "${token}" already used by another milestone in project ${row.project_id}`,
+        );
+        continue;
+      }
+      update.run(token, row.id);
+    }
+  }
 
   // ── projects.arch_store_adopted: per-project dual-read flag ─────────────
   // A whole project flips to reading the arch_unit store at once — no

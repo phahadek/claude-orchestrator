@@ -276,12 +276,13 @@ export const ProjectService = {
     for (let i = 0; i < yamlMilestones.length; i++) {
       const ym = yamlMilestones[i];
       const displayOrder = i;
+      const canonicalShortId = extractMilestoneToken(ym.name) ?? ym.id ?? ym.name;
 
       const bySourceId = existing.find((r) => r.source_id === ym.id);
       if (bySourceId) {
         updateMilestone(bySourceId.id, {
           name: ym.name,
-          canonical_short_id: ym.id,
+          canonical_short_id: canonicalShortId,
           display_order: displayOrder,
         });
         continue;
@@ -294,7 +295,7 @@ export const ProjectService = {
         updateMilestone(byName.id, {
           name: ym.name,
           source_id: ym.id,
-          canonical_short_id: ym.id,
+          canonical_short_id: canonicalShortId,
           display_order: displayOrder,
         });
         continue;
@@ -305,7 +306,7 @@ export const ProjectService = {
         project_id: projectId,
         name: ym.name,
         source_id: ym.id,
-        canonical_short_id: ym.id,
+        canonical_short_id: canonicalShortId,
         display_order: displayOrder,
       });
     }
