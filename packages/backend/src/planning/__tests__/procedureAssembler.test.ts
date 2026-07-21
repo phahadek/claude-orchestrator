@@ -326,6 +326,21 @@ describe('assemblePlanningProcedure', () => {
     expect(output).not.toMatch(/stop for explicit human sign-off/i);
   });
 
+  it('instructs the dispatched groom procedure that presenting IS staging, never ask-before-stage', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+
+    expect(output).toMatch(/presenting IS staging/i);
+    expect(output).toMatch(/never ask for sign-off before staging/i);
+    expect(output).not.toMatch(/stop for explicit human sign-off/i);
+  });
+
   it('offers the groom procedure a discard/defer proposal as an alternative to promoting to Ready', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
