@@ -1440,7 +1440,7 @@ describe('TaskList', () => {
       expect(screen.queryByTestId('ops-error')).toBeNull();
     });
 
-    it('renders a model selector and sends the chosen model when launching Ops(N)', async () => {
+    it('renders no model/effort selector and launches Ops(N) without a model argument', async () => {
       (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
         (url: string) => {
           if (url.includes('/api/planning/launch')) {
@@ -1476,13 +1476,12 @@ describe('TaskList', () => {
         .querySelector('input[type="checkbox"]') as HTMLInputElement;
       fireEvent.click(checkbox);
 
-      const modelSelect = screen.getByTestId(
-        'ops-model-select',
-      ) as HTMLSelectElement;
-      expect(modelSelect).toBeDefined();
-      fireEvent.change(modelSelect, {
-        target: { value: 'claude-opus-4-6' },
-      });
+      expect(screen.queryByTestId('ops-model-select')).toBeNull();
+      expect(screen.queryByTestId('ops-effort-select')).toBeNull();
+      expect(screen.queryByTestId('design-model-select')).toBeNull();
+      expect(screen.queryByTestId('design-effort-select')).toBeNull();
+      expect(screen.queryByTestId('groom-model-select')).toBeNull();
+      expect(screen.queryByTestId('groom-effort-select')).toBeNull();
 
       fireEvent.click(screen.getByTestId('ops-btn'));
 
@@ -1497,7 +1496,8 @@ describe('TaskList', () => {
       );
       expect(launchCall).toBeDefined();
       const body = JSON.parse((launchCall![1] as RequestInit).body as string);
-      expect(body.model).toBe('claude-opus-4-6');
+      expect(body.model).toBeUndefined();
+      expect(body.effort).toBeUndefined();
     });
 
     it('resets the staged ops panel when switching to a different milestone', async () => {
