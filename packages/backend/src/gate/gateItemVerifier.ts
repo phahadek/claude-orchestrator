@@ -243,38 +243,150 @@ export function isPreconditionOnlyEvidence(evidence: unknown): boolean {
   return remaining.length === 0;
 }
 
+function evidenceText(evidence: unknown): string | null {
+  if (!evidence || typeof evidence !== 'object') return null;
+  try {
+    return JSON.stringify(evidence).toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Tokens naming a store/channel this codebase actually captures runtime
+ * activity into (a live API or DB read), paired with an action token that
+ * shows it was read rather than merely mentioned in passing.
+ */
+const RUNTIME_STORE_TOKENS = new Set(['api', 'database', 'db']);
+const RUNTIME_ACTION_TOKENS = new Set([
+  'read',
+  'call',
+  'query',
+  'queried',
+  'response',
+  'record',
+  'live',
+  'fetched',
+  'fetch',
+]);
+
+/**
+ * True when a `pass` result's evidence names a concrete captured runtime
+ * record — `session_events`, `audit_log`, or a live API/DB read — rather
+ * than resting on source/CI-grade evidence (a CI check, a test file, a
+ * source-path trace) that never touches a runtime record at all. Exported
+ * for testing.
+ */
+export function hasConcreteRuntimeRecordEvidence(evidence: unknown): boolean {
+  const text = evidenceText(evidence);
+  if (!text) return false;
+  if (/audit_log/.test(text) || /session_events/.test(text)) return true;
+  const tokens = tokenize(text);
+  const mentionsStore = tokens.some((t) => RUNTIME_STORE_TOKENS.has(t));
+  if (!mentionsStore) return false;
+  return tokens.some((t) => RUNTIME_ACTION_TOKENS.has(t));
+}
+
+const LIVE_RECORD_UNREACHABLE_SIGNAL_TOKENS = new Set([
+  'unreachable',
+  'inaccessible',
+  'unavailable',
+]);
+const NEGATION_TOKENS = new Set([
+  'no',
+  'not',
+  'unable',
+  'couldnt',
+  'didnt',
+  'never',
+  'failed',
+  'without',
+]);
+const LIVE_RECORD_MENTION_TOKENS = new Set([
+  'live',
+  'record',
+  'audit',
+  'log',
+  'session',
+  'events',
+  'database',
+  'db',
+  'api',
+  'operational',
+]);
+
+/**
+ * True when the evidence itself carries a limitation/caveat admitting the
+ * live/operational record was not or could not be read — a self-reported
+ * admission that the substantive claim rests on inference rather than a
+ * captured runtime record. A pass paired with an admission like this is
+ * downgraded regardless of what else the evidence names. Exported for
+ * testing.
+ */
+export function admitsLiveRecordUnreachable(evidence: unknown): boolean {
+  const text = evidenceText(evidence);
+  if (!text) return false;
+  const tokens = tokenize(text);
+  if (tokens.some((t) => LIVE_RECORD_UNREACHABLE_SIGNAL_TOKENS.has(t))) {
+    return true;
+  }
+  const hasNegation = tokens.some((t) => NEGATION_TOKENS.has(t));
+  const hasLiveRecordMention = tokens.some((t) =>
+    LIVE_RECORD_MENTION_TOKENS.has(t),
+  );
+  return hasNegation && hasLiveRecordMention;
+}
+
+function downgrade(
+  reason: string,
+  reportedEvidence: unknown,
+): GateVerificationResult {
+  return {
+    disposition: 'needs-setup',
+    evidence: { reason, reportedEvidence },
+  };
+}
+
 /**
  * The disposition contract's enforcement half of "no pass on source alone,
- * no pass on a guaranteed precondition alone": a `pass` disposition whose
- * evidence doesn't claim operational grounding, or whose evidence only
- * confirms a guaranteed/mechanical precondition (PR merged, commit
- * deployed) rather than the described behavior itself, is downgraded to
- * `needs-setup` — the prompt asks nicely, this backstops it regardless of
- * what the session actually reported. Exported for testing.
+ * no pass on a guaranteed precondition alone, no pass without a concrete
+ * captured runtime record, no pass alongside a self-admitted unreachable
+ * record": a `pass` disposition is downgraded to `needs-setup` unless its
+ * evidence claims operational grounding, doesn't rest solely on a
+ * guaranteed/mechanical precondition (PR merged, commit deployed), names a
+ * concrete captured runtime record (session_events, audit_log, or a live
+ * API/DB read) rather than source/CI-grade evidence (a CI check, a test
+ * file, a source-path trace), and carries no limitation admitting the live
+ * record was unreachable — the prompt asks nicely, this backstops it
+ * regardless of what the session actually reported. Exported for testing.
  */
 export function enforcePassEvidenceContract(
   result: GateVerificationResult,
 ): GateVerificationResult {
   if (result.disposition !== 'pass') return result;
   if (!hasOperationalEvidence(result.evidence)) {
-    return {
-      disposition: 'needs-setup',
-      evidence: {
-        reason:
-          'pass disposition lacked operational/runtime evidence — a source-only verdict cannot pass',
-        reportedEvidence: result.evidence,
-      },
-    };
+    return downgrade(
+      'pass disposition lacked operational/runtime evidence — a source-only verdict cannot pass',
+      result.evidence,
+    );
   }
   if (isPreconditionOnlyEvidence(result.evidence)) {
-    return {
-      disposition: 'needs-setup',
-      evidence: {
-        reason:
-          'pass disposition was grounded only in a guaranteed precondition (PR merged/deployed) or other mechanical check — that proves nothing about whether the described behavior holds',
-        reportedEvidence: result.evidence,
-      },
-    };
+    return downgrade(
+      'pass disposition was grounded only in a guaranteed precondition (PR merged/deployed) or other mechanical check — that proves nothing about whether the described behavior holds',
+      result.evidence,
+    );
+  }
+  if (admitsLiveRecordUnreachable(result.evidence)) {
+    return downgrade(
+      "pass disposition's evidence admits the live/operational record was not or could not be read — a self-reported limitation like this cannot be paired with a pass",
+      result.evidence,
+    );
+  }
+  if (!hasConcreteRuntimeRecordEvidence(result.evidence)) {
+    return downgrade(
+      'pass disposition rested on source/CI-grade evidence (a CI check, a test file, a source-path trace) rather than a concrete captured runtime record (session_events, audit_log, or a live API/DB read)',
+      result.evidence,
+    );
   }
   return result;
 }

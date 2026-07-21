@@ -13,7 +13,9 @@ vi.mock('../../config', () => ({
 }));
 
 import {
+  admitsLiveRecordUnreachable,
   enforcePassEvidenceContract,
+  hasConcreteRuntimeRecordEvidence,
   hasOperationalEvidence,
   isPreconditionOnlyEvidence,
   SessionGateItemVerifier,
@@ -88,6 +90,78 @@ describe('isPreconditionOnlyEvidence', () => {
   });
 });
 
+describe('hasConcreteRuntimeRecordEvidence', () => {
+  it('is true for a note naming audit_log', () => {
+    expect(
+      hasConcreteRuntimeRecordEvidence({ note: 'audit_log shows the run' }),
+    ).toBe(true);
+  });
+
+  it('is true for a note naming session_events', () => {
+    expect(
+      hasConcreteRuntimeRecordEvidence({
+        note: 'session_events confirms the disposition was recorded',
+      }),
+    ).toBe(true);
+  });
+
+  it('is true for a note describing a live API or DB read', () => {
+    expect(
+      hasConcreteRuntimeRecordEvidence({
+        note: 'queried the database and read the live record',
+      }),
+    ).toBe(true);
+  });
+
+  it('is false for a CI check + test file + source-path trace with no captured runtime record', () => {
+    expect(
+      hasConcreteRuntimeRecordEvidence({
+        note: 'the CI build check passed, the test file covers this case, and a source-path trace through gateItemVerifier.ts confirms the code path',
+      }),
+    ).toBe(false);
+  });
+
+  it('is false for missing/malformed evidence', () => {
+    expect(hasConcreteRuntimeRecordEvidence(undefined)).toBe(false);
+    expect(hasConcreteRuntimeRecordEvidence(null)).toBe(false);
+    expect(hasConcreteRuntimeRecordEvidence('some string')).toBe(false);
+  });
+});
+
+describe('admitsLiveRecordUnreachable', () => {
+  it('is true when a limitation admits the live record was not read', () => {
+    expect(
+      admitsLiveRecordUnreachable({
+        note: 'audit_log entries look consistent',
+        limitation: 'no live record was read to confirm this directly',
+      }),
+    ).toBe(true);
+  });
+
+  it('is true when evidence says the record was unreachable', () => {
+    expect(
+      admitsLiveRecordUnreachable({
+        note: 'the session_events store was unreachable during this check',
+      }),
+    ).toBe(true);
+  });
+
+  it('is false when evidence has no such admission', () => {
+    expect(
+      admitsLiveRecordUnreachable({
+        basis: 'operational',
+        note: 'audit_log shows the deploy',
+      }),
+    ).toBe(false);
+  });
+
+  it('is false for missing/malformed evidence', () => {
+    expect(admitsLiveRecordUnreachable(undefined)).toBe(false);
+    expect(admitsLiveRecordUnreachable(null)).toBe(false);
+    expect(admitsLiveRecordUnreachable('some string')).toBe(false);
+  });
+});
+
 describe('enforcePassEvidenceContract', () => {
   it('downgrades a pass grounded only in "PR merged" to needs-setup', () => {
     const result = enforcePassEvidenceContract({
@@ -131,6 +205,46 @@ describe('enforcePassEvidenceContract', () => {
     const result = enforcePassEvidenceContract({
       disposition: 'pass',
       evidence: { basis: 'operational', note: 'audit_log shows the deploy' },
+    });
+    expect(result.disposition).toBe('pass');
+  });
+
+  it('downgrades a pass grounded in a CI check + test file + source-path trace with no captured runtime record', () => {
+    const result = enforcePassEvidenceContract({
+      disposition: 'pass',
+      evidence: {
+        basis: 'operational',
+        note: 'PR #974 merged, CI build check passed, test file gateItemVerifier.test.ts covers this, and a source-path trace through gateItemVerifier.ts confirms the code path',
+      },
+    });
+    expect(result.disposition).toBe('needs-setup');
+    expect(result.evidence).toMatchObject({
+      reason: expect.stringContaining('concrete captured runtime record'),
+    });
+  });
+
+  it('downgrades a pass whose evidence admits the live record could not be read', () => {
+    const result = enforcePassEvidenceContract({
+      disposition: 'pass',
+      evidence: {
+        basis: 'operational',
+        note: 'merged PR #974, a CI build check, and a source-path trace',
+        limitation: 'no live record was read to confirm this ran',
+      },
+    });
+    expect(result.disposition).toBe('needs-setup');
+    expect(result.evidence).toMatchObject({
+      reason: expect.stringContaining('live'),
+    });
+  });
+
+  it('keeps a pass naming a concrete captured runtime record', () => {
+    const result = enforcePassEvidenceContract({
+      disposition: 'pass',
+      evidence: {
+        basis: 'operational',
+        note: 'session_events shows the gate-verify session reported pass after reading audit_log entries for the run',
+      },
     });
     expect(result.disposition).toBe('pass');
   });
@@ -191,7 +305,7 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
       sessionId: 'sess-1',
       disposition: {
         disposition: 'pass',
-        evidence: { basis: 'operational' },
+        evidence: { basis: 'operational', note: 'audit_log shows the run' },
       },
     });
 
