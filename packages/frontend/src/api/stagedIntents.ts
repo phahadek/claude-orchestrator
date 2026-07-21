@@ -69,7 +69,7 @@ export interface StagedIntent {
 export type StagedIntentRejectOutcome = 'pushback' | 'decline';
 
 /** A single candidate the operator can pick for a decision.pickOne question-intent. */
-export interface DecisionPickOneOption {
+interface DecisionPickOneOption {
   label: string;
   description: string;
 }
@@ -82,7 +82,7 @@ export interface DecisionPickOnePayload {
 }
 
 /** The operator's response to a decision.pickOne question-intent. */
-export interface StagedIntentAnswer {
+interface StagedIntentAnswer {
   chosenLabel: string;
   freeForm: string | null;
 }
