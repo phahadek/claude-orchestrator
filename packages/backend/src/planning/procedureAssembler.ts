@@ -238,7 +238,7 @@ function renderSkeleton(
 function renderProcedureCore(workflow: PlanningWorkflow): string {
   const label = SKILL_LABELS[workflow];
   const lines: string[] = [`## ${label} Procedure`, ''];
-  for (const step of stepsFor(workflow)) {
+  for (const step of stepsFor(workflow, { dispatched: true })) {
     lines.push(`### ${step.title}`, '', step.summary, '');
   }
   lines.push('### Hard rules', '');

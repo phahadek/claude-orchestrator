@@ -163,6 +163,14 @@ export interface ProcedureStep {
   title: string;
   appliesTo: readonly SkillId[];
   summary: string;
+  /**
+   * True for a step meaningful only to the human-operated /groom or /design
+   * skill (reading the on-disk grooming manifest / `.skill-cache` mode
+   * detection) — neither exists for an injected/dispatched session, which
+   * receives its context pre-loaded (see the `deterministic-load` step).
+   * `stepsFor` drops these when called with `{ dispatched: true }`.
+   */
+  skillOnly?: boolean;
 }
 
 export const ORDERED_STEPS: readonly ProcedureStep[] = [
@@ -170,6 +178,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     id: 'resolve-manifest-and-mode',
     title: 'Resolve manifest & mode',
     appliesTo: ['groom', 'design'],
+    skillOnly: true,
     summary:
       'Read the grooming manifest from the central config tree, note ' +
       'architectural_control, determine the milestone, and determine fresh vs. ' +
@@ -222,8 +231,13 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
   },
 ] as const;
 
-export function stepsFor(skill: SkillId): ProcedureStep[] {
-  return ORDERED_STEPS.filter((s) => s.appliesTo.includes(skill));
+export function stepsFor(
+  skill: SkillId,
+  context: { dispatched?: boolean } = {},
+): ProcedureStep[] {
+  return ORDERED_STEPS.filter(
+    (s) => s.appliesTo.includes(skill) && !(context.dispatched && s.skillOnly),
+  );
 }
 
 /**

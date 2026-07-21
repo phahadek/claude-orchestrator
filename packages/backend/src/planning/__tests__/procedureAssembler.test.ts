@@ -249,6 +249,33 @@ describe('assemblePlanningProcedure', () => {
     });
   }
 
+  it('excludes the skill-mode "Resolve manifest & mode" step for groom and design (context is already injected)', () => {
+    for (const { workflow, digest } of cases) {
+      if (workflow === 'ops') continue;
+      const output = assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        digest,
+      });
+      expect(output).not.toContain('Resolve manifest & mode');
+      expect(output).not.toContain('grooming manifest');
+      expect(output).not.toContain('on-disk cache');
+    }
+  });
+
+  it('still includes the "Deterministic load" (context-injected) step for the dispatched groom procedure', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+    expect(output).toContain('Deterministic load');
+    expect(output).toContain('already injected into this prompt');
+  });
+
   it('the groom digest section is a constrained slice, not the full milestone-wide loader dump', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
