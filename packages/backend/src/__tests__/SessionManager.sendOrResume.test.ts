@@ -666,7 +666,9 @@ const PLANNING_SESSION_ROW = {
 
 describe('sendOrResume() planning session (starting): graceful initializing signal', () => {
   it('returns null without touching git worktree machinery', async () => {
-    vi.mocked(queries.getSession).mockReturnValue(PLANNING_SESSION_ROW as never);
+    vi.mocked(queries.getSession).mockReturnValue(
+      PLANNING_SESSION_ROW as never,
+    );
 
     const sm = new SessionManager();
     const result = await sm.sendOrResume(PLANNING_SESSION_ID, 'hello');
@@ -677,7 +679,9 @@ describe('sendOrResume() planning session (starting): graceful initializing sign
   });
 
   it('broadcasts a session_action_failed "still_initializing" signal, not a worktree error', async () => {
-    vi.mocked(queries.getSession).mockReturnValue(PLANNING_SESSION_ROW as never);
+    vi.mocked(queries.getSession).mockReturnValue(
+      PLANNING_SESSION_ROW as never,
+    );
 
     const sm = new SessionManager();
     const msgs: ServerMessage[] = [];
@@ -731,9 +735,10 @@ describe('sendOrResume() planning session: live in-memory session routes to send
 
     const sm = new SessionManager();
     const fakeSendMessage = vi.fn();
-    (
-      sm as unknown as { sessions: Map<string, unknown> }
-    ).sessions.set(PLANNING_SESSION_ID, { sendMessage: fakeSendMessage });
+    (sm as unknown as { sessions: Map<string, unknown> }).sessions.set(
+      PLANNING_SESSION_ID,
+      { sendMessage: fakeSendMessage },
+    );
 
     const result = await sm.sendOrResume(PLANNING_SESSION_ID, 'hello');
 
