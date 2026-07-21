@@ -1476,7 +1476,12 @@ export class SessionManager extends EventEmitter {
           actor_id: sessionId,
           project_id: null,
           task_id: null,
-          payload: { sessionId, worktreePath, projectDir, source: 'cleanupPartialWorktree' },
+          payload: {
+            sessionId,
+            worktreePath,
+            projectDir,
+            source: 'cleanupPartialWorktree',
+          },
         });
       }
       return;
@@ -2127,7 +2132,12 @@ export class SessionManager extends EventEmitter {
         actor_id: sessionId,
         project_id: null,
         task_id: null,
-        payload: { sessionId, worktreePath, projectDir, source: 'cleanupWorktree' },
+        payload: {
+          sessionId,
+          worktreePath,
+          projectDir,
+          source: 'cleanupWorktree',
+        },
       });
       return;
     }

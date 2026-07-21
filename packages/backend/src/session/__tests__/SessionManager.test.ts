@@ -840,7 +840,10 @@ describe('isRemovableWorktree', () => {
     expect(isRemovableWorktree('/somewhere/else', PROJECT_DIR)).toBe(false);
     // Prefix-but-not-nested lookalike (sibling dir starting with the same string)
     expect(
-      isRemovableWorktree(`${PROJECT_DIR}-evil/.claude/worktrees/x`, PROJECT_DIR),
+      isRemovableWorktree(
+        `${PROJECT_DIR}-evil/.claude/worktrees/x`,
+        PROJECT_DIR,
+      ),
     ).toBe(false);
   });
 
@@ -868,7 +871,12 @@ describe('cleanupWorktree — refuses non-worktree paths', () => {
   });
 
   it('worktreePath === projectDir: no git worktree remove, no fs.rmSync, and it returns', () => {
-    (sm as any).cleanupWorktree(SESSION_ID, PROJECT_DIR, undefined, PROJECT_DIR);
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      PROJECT_DIR,
+      undefined,
+      PROJECT_DIR,
+    );
 
     const removeCalls = vi
       .mocked(execSync)
@@ -880,7 +888,12 @@ describe('cleanupWorktree — refuses non-worktree paths', () => {
   });
 
   it('records a worktree_teardown_refused audit event when the guard fires', () => {
-    (sm as any).cleanupWorktree(SESSION_ID, PROJECT_DIR, undefined, PROJECT_DIR);
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      PROJECT_DIR,
+      undefined,
+      PROJECT_DIR,
+    );
 
     expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
       expect.objectContaining({
