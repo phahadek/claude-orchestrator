@@ -23,14 +23,17 @@ import {
   insertItem as insertGateItem,
   recordAccretionMarker,
   rehomeItemsBySourceTask as rehomeGateItems,
+  rollbackContribution as rollbackGateContribution,
   type GateAccretionMarker,
 } from '../gate/gateStore';
 import {
   insertItem as insertSeedItem,
   recordAccretionMarker as recordSeedAccretionMarker,
   rehomeItemsBySourceTask as rehomeSeedItems,
+  rollbackContribution as rollbackSeedContribution,
   type SeedAccretionMarker,
 } from '../seed/seedStore';
+import type { GroomingGateEntry } from '../groom/groomGate';
 import type { GateItemClassification } from '../db/types';
 import { recordEvent } from '../audit/AuditLog';
 import { logger } from '../logger';
@@ -272,6 +275,36 @@ export interface StageSeedContributionResult {
 }
 
 /**
+ * The full set of inputs the /groom skill's grooming-state.json entry already
+ * carries for a task once it's signed off — everything flipToReady needs to
+ * run gate accretion + seed accretion + setDependsOn + setStatus(Ready) as
+ * one call, with every id resolved from the entry rather than hand-typed.
+ */
+export interface FlipReadyParams {
+  taskId: string;
+  title: string;
+  project: string;
+  milestone: string;
+  /** The rendered array of hard-block task ids for the Depends On property (empty array is a valid "no deps"). */
+  dependsOn: string[];
+  /** The recorded size_check / type_check disposition — required by checkGroomingPromotionGate. */
+  groomingGate: GroomingGateEntry;
+  gateContribution: {
+    classification: GateContributionDecision;
+    items: GateContributionItemInput[];
+  };
+  seedContribution: {
+    decision: SeedContributionDecision;
+    seeds: SeedContributionItemInput[];
+  };
+}
+
+export interface FlipReadyResult {
+  gate: AccreteGateContributionResult;
+  seed: StageSeedContributionResult;
+}
+
+/**
  * The sanctioned write path atop the store-agnostic TaskBackend port. This is
  * the single chokepoint for validation and provenance for orchestrator-launched
  * producers — panels and sessions submit intents here rather than calling the
@@ -332,6 +365,17 @@ interface TaskWriteCommands {
     seeds: SeedContributionItemInput[],
     decision: SeedContributionDecision,
   ): Promise<StageSeedContributionResult>;
+  /**
+   * The consolidated grooming Ready-flip: one call, resolved entirely from
+   * the caller's grooming-state.json entry, that runs gate accretion + seed
+   * accretion + setDependsOn + setStatus(Ready) in the required order. Rolls
+   * back any already-completed accretion if a later step fails, so a failed
+   * flip leaves no orphan gate_item/seed_item and no status change.
+   */
+  flipToReady(
+    params: FlipReadyParams,
+    options?: TaskWriteOptions,
+  ): Promise<FlipReadyResult>;
   moveTask(
     params: MoveTaskParams,
     options?: TaskWriteOptions,
@@ -593,6 +637,62 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     recordSeedAccretionMarker(marker);
 
     return { itemIds, marker };
+  }
+
+  /**
+   * Runs gate accretion, seed accretion, setDependsOn, and setStatus(Ready)
+   * as one transaction: every id comes from `params` (the caller's
+   * grooming-state.json entry), never re-typed per step. Gate and seed
+   * accretion happen first — checkGroomingPromotionGate (inside setStatus)
+   * reads their durable markers — then setDependsOn, then the Ready flip
+   * itself. If setDependsOn or setStatus fails, both accretions already
+   * committed are rolled back before the error propagates, so a failed flip
+   * leaves no orphan gate_item/seed_item and the task's status unchanged.
+   * Accretion itself failing (e.g. a malformed contribution) rolls back
+   * only what already landed.
+   */
+  async flipToReady(
+    params: FlipReadyParams,
+    options?: TaskWriteOptions,
+  ): Promise<FlipReadyResult> {
+    const sourceTask = {
+      id: params.taskId,
+      title: params.title,
+      project: params.project,
+      milestone: params.milestone,
+    };
+
+    const gate = await this.accreteGateContribution(
+      sourceTask,
+      params.gateContribution.items,
+      params.gateContribution.classification,
+    );
+
+    let seed: StageSeedContributionResult;
+    try {
+      seed = await this.stageSeedContribution(
+        sourceTask,
+        params.seedContribution.seeds,
+        params.seedContribution.decision,
+      );
+    } catch (err) {
+      rollbackGateContribution(gate.itemIds, params.taskId);
+      throw err;
+    }
+
+    try {
+      await this.setDependsOn(params.taskId, params.dependsOn, options);
+      await this.setStatus(params.taskId, 'Ready', {
+        ...options,
+        groomingGate: params.groomingGate,
+      });
+    } catch (err) {
+      rollbackSeedContribution(seed.itemIds, params.taskId);
+      rollbackGateContribution(gate.itemIds, params.taskId);
+      throw err;
+    }
+
+    return { gate, seed };
   }
 
   /**

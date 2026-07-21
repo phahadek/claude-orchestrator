@@ -1,0 +1,186 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import express from 'express';
+import request from 'supertest';
+
+const mockFlipToReady = vi.fn();
+const mockGetTaskBackend = vi.fn();
+const mockResolveMilestoneForProject = vi.fn();
+
+vi.mock('../tasks/TaskBackend', () => ({
+  getTaskBackend: (...args: unknown[]) => mockGetTaskBackend(...args),
+}));
+
+vi.mock('../tasks/TaskWriteCommands', async () => {
+  const actual = await vi.importActual<
+    typeof import('../tasks/TaskWriteCommands')
+  >('../tasks/TaskWriteCommands');
+  return {
+    ...actual,
+    BackendTaskWriteCommands: vi.fn().mockImplementation(() => ({
+      flipToReady: (...args: unknown[]) => mockFlipToReady(...args),
+    })),
+  };
+});
+
+vi.mock('../projects/milestoneResolver', async () => {
+  const actual = await vi.importActual<
+    typeof import('../projects/milestoneResolver')
+  >('../projects/milestoneResolver');
+  return {
+    ...actual,
+    resolveMilestoneForProject: (...args: unknown[]) =>
+      mockResolveMilestoneForProject(...args),
+  };
+});
+
+import { GroomingGateError } from '../groom/groomGate';
+import { ReadinessGateError } from '../tasks/readinessGate';
+import { createGroomFlipRouter } from '../routes/groomFlip';
+
+function makeApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/api', createGroomFlipRouter());
+  return app;
+}
+
+const validBody = {
+  project: 'polimarket-analyser',
+  taskId: 'notion:abc',
+  title: 'Add the webhook',
+  milestone: 'M12',
+  dependsOn: ['notion:dep-1'],
+  groomingGate: {
+    size_check: { decision: 'no_split' },
+    type_check: { decision: 'none' },
+  },
+  gateContribution: {
+    classification: 'Read-Only',
+    items: [{ text: 'Verify the webhook fires' }],
+  },
+  seedContribution: {
+    decision: 'seeds',
+    seeds: [{ spec: 'Add webhook_url to config' }],
+  },
+};
+
+beforeEach(() => {
+  mockFlipToReady.mockReset();
+  mockGetTaskBackend.mockReset();
+  mockResolveMilestoneForProject.mockReset();
+  mockResolveMilestoneForProject.mockReturnValue('M12');
+  mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+});
+
+describe('POST /api/groom/flip', () => {
+  it('resolves the canonical milestone and delegates the whole payload to flipToReady, ids never re-typed', async () => {
+    mockFlipToReady.mockResolvedValue({
+      gate: { itemIds: ['gate-item-1'], marker: {} },
+      seed: { itemIds: ['seed-item-1'], marker: {} },
+    });
+
+    const res = await request(makeApp())
+      .post('/api/groom/flip')
+      .send(validBody);
+
+    expect(res.status).toBe(200);
+    expect(res.body.gate.itemIds).toEqual(['gate-item-1']);
+    expect(res.body.seed.itemIds).toEqual(['seed-item-1']);
+    expect(mockResolveMilestoneForProject).toHaveBeenCalledWith(
+      'polimarket-analyser',
+      'M12',
+    );
+    expect(mockFlipToReady).toHaveBeenCalledWith(
+      {
+        taskId: 'notion:abc',
+        title: 'Add the webhook',
+        project: 'polimarket-analyser',
+        milestone: 'M12',
+        dependsOn: ['notion:dep-1'],
+        groomingGate: validBody.groomingGate,
+        gateContribution: validBody.gateContribution,
+        seedContribution: validBody.seedContribution,
+      },
+      { source: 'human' },
+    );
+  });
+
+  for (const field of [
+    'project',
+    'taskId',
+    'title',
+    'milestone',
+    'dependsOn',
+    'groomingGate',
+  ]) {
+    it(`400s when ${field} is missing`, async () => {
+      const body = { ...validBody } as Record<string, unknown>;
+      delete body[field];
+
+      const res = await request(makeApp()).post('/api/groom/flip').send(body);
+
+      expect(res.status).toBe(400);
+      expect(mockFlipToReady).not.toHaveBeenCalled();
+    });
+  }
+
+  it('400s when gateContribution.classification is missing', async () => {
+    const body = {
+      ...validBody,
+      gateContribution: { items: [] },
+    };
+    const res = await request(makeApp()).post('/api/groom/flip').send(body);
+    expect(res.status).toBe(400);
+    expect(mockFlipToReady).not.toHaveBeenCalled();
+  });
+
+  it('400s when seedContribution.decision is missing', async () => {
+    const body = {
+      ...validBody,
+      seedContribution: { seeds: [] },
+    };
+    const res = await request(makeApp()).post('/api/groom/flip').send(body);
+    expect(res.status).toBe(400);
+    expect(mockFlipToReady).not.toHaveBeenCalled();
+  });
+
+  it('translates a GroomingGateError to 409 with the reasons', async () => {
+    mockFlipToReady.mockRejectedValue(
+      new GroomingGateError(['size_check is missing']),
+    );
+
+    const res = await request(makeApp())
+      .post('/api/groom/flip')
+      .send(validBody);
+
+    expect(res.status).toBe(409);
+    expect(res.body.reasons).toEqual(['size_check is missing']);
+  });
+
+  it('translates a ReadinessGateError to 409 with the violations', async () => {
+    const violations = [{ tier: 1, detail: 'missing summary' }];
+    mockFlipToReady.mockRejectedValue(
+      new ReadinessGateError(
+        violations as ConstructorParameters<typeof ReadinessGateError>[0],
+      ),
+    );
+
+    const res = await request(makeApp())
+      .post('/api/groom/flip')
+      .send(validBody);
+
+    expect(res.status).toBe(409);
+    expect(res.body.violations).toEqual(violations);
+  });
+
+  it('400s on any other flipToReady failure', async () => {
+    mockFlipToReady.mockRejectedValue(new Error('boom'));
+
+    const res = await request(makeApp())
+      .post('/api/groom/flip')
+      .send(validBody);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('boom');
+  });
+});

@@ -4063,6 +4063,35 @@ export function upsertGateAccretion(row: GateAccretionRow): void {
   });
 }
 
+let _stmtDeleteGateItem: Database.Statement | null = null;
+let _stmtDeleteGateAccretion: Database.Statement | null = null;
+
+/**
+ * Rolls back a gate accretion: deletes the given gate_item rows (cascades to
+ * their gate_item_source/gate_item_event rows) and the source task's
+ * gate_accretion marker. Used by the atomic Ready-flip transaction
+ * (TaskWriteCommands.flipToReady) to undo a completed accretion when a later
+ * step in the flip fails, so no orphan gate_item survives a failed flip.
+ */
+export function deleteGateContribution(
+  itemIds: string[],
+  sourceTaskId: string,
+): void {
+  _stmtDeleteGateItem ??= db.prepare<{ id: string }>(
+    `DELETE FROM gate_item WHERE id = @id`,
+  );
+  _stmtDeleteGateAccretion ??= db.prepare<{ source_task_id: string }>(
+    `DELETE FROM gate_accretion WHERE source_task_id = @source_task_id`,
+  );
+  const tx = db.transaction((ids: string[], normalizedSourceTaskId: string) => {
+    for (const id of ids) _stmtDeleteGateItem!.run({ id });
+    _stmtDeleteGateAccretion!.run({
+      source_task_id: normalizedSourceTaskId,
+    });
+  });
+  tx(itemIds, normalizeTaskId(sourceTaskId));
+}
+
 // ─── seed_item ────────────────────────────────────────────────────────────
 
 let _stmtGetSeedItem: Database.Statement | null = null;
@@ -4367,6 +4396,35 @@ export function upsertSeedAccretion(row: SeedAccretionRow): void {
     ...row,
     source_task_id: normalizeTaskId(row.source_task_id),
   });
+}
+
+let _stmtDeleteSeedItem: Database.Statement | null = null;
+let _stmtDeleteSeedAccretion: Database.Statement | null = null;
+
+/**
+ * Rolls back a seed accretion: deletes the given seed_item rows (cascades to
+ * their seed_item_source/seed_item_event rows) and the source task's
+ * seed_accretion marker. Used by the atomic Ready-flip transaction
+ * (TaskWriteCommands.flipToReady) to undo a completed accretion when a later
+ * step in the flip fails, so no orphan seed_item survives a failed flip.
+ */
+export function deleteSeedContribution(
+  itemIds: string[],
+  sourceTaskId: string,
+): void {
+  _stmtDeleteSeedItem ??= db.prepare<{ id: string }>(
+    `DELETE FROM seed_item WHERE id = @id`,
+  );
+  _stmtDeleteSeedAccretion ??= db.prepare<{ source_task_id: string }>(
+    `DELETE FROM seed_accretion WHERE source_task_id = @source_task_id`,
+  );
+  const tx = db.transaction((ids: string[], normalizedSourceTaskId: string) => {
+    for (const id of ids) _stmtDeleteSeedItem!.run({ id });
+    _stmtDeleteSeedAccretion!.run({
+      source_task_id: normalizedSourceTaskId,
+    });
+  });
+  tx(itemIds, normalizeTaskId(sourceTaskId));
 }
 
 // ─── session_feedback_inbox ─────────────────────────────────────────────────
