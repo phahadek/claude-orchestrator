@@ -8,34 +8,34 @@
 steps:
   - id: fetch
     kind: shell
-    command_or_prompt: "git fetch origin"
+    command_or_prompt: 'git fetch origin'
     is_prod_mutating: false
     supports_dry_run: true
 
   - id: merge-dev
     kind: shell
-    command_or_prompt: "git merge --ff-only origin/dev"
+    command_or_prompt: 'git merge --ff-only origin/dev'
     is_prod_mutating: false
     supports_dry_run: true
     rollback_ref: fetch
 
   - id: install-deps
     kind: shell
-    command_or_prompt: "npm ci"
+    command_or_prompt: 'npm ci'
     is_prod_mutating: false
     supports_dry_run: false
     rollback_ref: merge-dev
 
   - id: build
     kind: shell
-    command_or_prompt: "npm run build"
+    command_or_prompt: 'npm run build'
     is_prod_mutating: false
     supports_dry_run: false
     rollback_ref: install-deps
 
   - id: sync-runtime
     kind: shell
-    command_or_prompt: "rsync the built workspace into the runtime directory, excluding .git, .claude, *.db*, and .env"
+    command_or_prompt: 'rsync the built workspace into the runtime directory, excluding .git, .claude, *.db*, and .env'
     run_as: deploy
     is_prod_mutating: true
     supports_dry_run: true
@@ -43,51 +43,51 @@ steps:
 
   - id: restart
     kind: confirm-gate
-    command_or_prompt: "restart the running service so it picks up the synced build"
+    command_or_prompt: 'restart the running service so it picks up the synced build'
     run_as: deploy
     is_prod_mutating: true
     rollback_ref: sync-runtime
 
   - id: verify
     kind: validation
-    command_or_prompt: "confirm the service is healthy and serving the expected version after restart"
+    command_or_prompt: 'confirm the service is healthy and serving the expected version after restart'
     is_prod_mutating: false
-    poll_until: "health check reports the service up and responsive"
+    poll_until: 'health check reports the service up and responsive'
     rollback_ref: restart
 
   - id: report-in
     kind: agentic
-    command_or_prompt: "report the deploy outcome (success/failure, deployed sha) back to the operator"
+    command_or_prompt: 'report the deploy outcome (success/failure, deployed sha) back to the operator'
     is_prod_mutating: false
 
   - id: record-deployed-sha
     kind: shell
-    command_or_prompt: "write the deployed commit sha to the DEPLOYED_SHA marker in the runtime directory"
+    command_or_prompt: 'write the deployed commit sha to the DEPLOYED_SHA marker in the runtime directory'
     run_as: deploy
     is_prod_mutating: true
     rollback_ref: verify
 
 hazards:
-  - "never sync or restart before build succeeds — a partial build must never reach the runtime directory"
-  - "never overwrite .env, *.db*, .git, or .claude in the runtime directory during sync"
-  - "never merge anything other than a fast-forward from origin/dev — a non-ff merge means the runtime is out of sync with dev and must be investigated before deploying"
-  - "never restart without a successful sync immediately before it"
+  - 'never sync or restart before build succeeds — a partial build must never reach the runtime directory'
+  - 'never overwrite .env, *.db*, .git, or .claude in the runtime directory during sync'
+  - 'never merge anything other than a fast-forward from origin/dev — a non-ff merge means the runtime is out of sync with dev and must be investigated before deploying'
+  - 'never restart without a successful sync immediately before it'
 
 failure_diagnoses:
-  - symptom: "merge --ff-only fails"
-    cause: "the runtime checkout has diverged from origin/dev (local commits or a prior non-ff state)"
-    action: "stop and investigate the divergence before forcing any merge — do not force-push or reset the runtime checkout"
+  - symptom: 'merge --ff-only fails'
+    cause: 'the runtime checkout has diverged from origin/dev (local commits or a prior non-ff state)'
+    action: 'stop and investigate the divergence before forcing any merge — do not force-push or reset the runtime checkout'
 
-  - symptom: "npm ci fails"
-    cause: "a lockfile/registry mismatch or a stale node_modules incompatible with the new lockfile"
-    action: "inspect the npm ci error output; do not fall back to npm install as a substitute without operator confirmation"
+  - symptom: 'npm ci fails'
+    cause: 'a lockfile/registry mismatch or a stale node_modules incompatible with the new lockfile'
+    action: 'inspect the npm ci error output; do not fall back to npm install as a substitute without operator confirmation'
 
-  - symptom: "npm run build fails"
-    cause: "a type error or build-time failure introduced by the merged changes"
-    action: "stop the deploy — do not sync a failed build into the runtime directory"
+  - symptom: 'npm run build fails'
+    cause: 'a type error or build-time failure introduced by the merged changes'
+    action: 'stop the deploy — do not sync a failed build into the runtime directory'
 
-  - symptom: "service fails health checks after restart"
-    cause: "the new build is broken at runtime, or the restart did not pick up the synced files"
-    action: "roll back to the prior DEPLOYED_SHA by re-running sync-runtime and restart against that sha, then re-verify"
+  - symptom: 'service fails health checks after restart'
+    cause: 'the new build is broken at runtime, or the restart did not pick up the synced files'
+    action: 'roll back to the prior DEPLOYED_SHA by re-running sync-runtime and restart against that sha, then re-verify'
 
 companions: []
