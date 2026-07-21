@@ -28,6 +28,7 @@ import {
   getAccretionMarker,
   recordAccretionMarker,
   rehomeItemsBySourceTask,
+  rollbackContribution,
 } from '../gateStore.js';
 
 beforeEach(() => {
@@ -380,6 +381,69 @@ describe('gate_accretion marker', () => {
       accretedAt: new Date(1).toISOString(),
     });
 
+    expect(getAccretionMarker('notion:src-2')?.decision).toBe('items');
+  });
+});
+
+describe('gateStore.rollbackContribution', () => {
+  it('deletes the minted gate_item rows and the source task marker, leaving no orphan', () => {
+    const item = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Verify the webhook fires',
+      classification: 'Read-Only',
+      sources: [
+        { sourceTaskId: 'notion:src-1', sourceTaskTitle: 'Add the webhook' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    recordAccretionMarker({
+      sourceTaskId: 'notion:src-1',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'items',
+      accretedAt: new Date(0).toISOString(),
+    });
+
+    rollbackContribution([item.id], 'notion:src-1');
+
+    expect(getItem(item.id)).toBeUndefined();
+    expect(getAccretionMarker('notion:src-1')).toBeUndefined();
+  });
+
+  it('leaves other source tasks\' items and markers untouched', () => {
+    const rolledBack = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Rolled back item',
+      classification: 'Read-Only',
+      sources: [
+        { sourceTaskId: 'notion:src-1', sourceTaskTitle: 'Add the webhook' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    const untouched = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Untouched item',
+      classification: 'Read-Only',
+      sources: [
+        { sourceTaskId: 'notion:src-2', sourceTaskTitle: 'Add retries' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    recordAccretionMarker({
+      sourceTaskId: 'notion:src-2',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'items',
+      accretedAt: new Date(0).toISOString(),
+    });
+
+    rollbackContribution([rolledBack.id], 'notion:src-1');
+
+    expect(getItem(rolledBack.id)).toBeUndefined();
+    expect(getItem(untouched.id)).toBeDefined();
     expect(getAccretionMarker('notion:src-2')?.decision).toBe('items');
   });
 });

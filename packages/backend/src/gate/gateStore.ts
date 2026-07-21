@@ -19,6 +19,7 @@ import {
   rehomeGateItemsBySourceTask,
   getGateAccretion,
   upsertGateAccretion,
+  deleteGateContribution,
   listGateItemIdsBySourceTask,
   listUnfilledGateItemSourceTaskIds,
 } from '../db/queries';
@@ -501,4 +502,17 @@ export function recordAccretionMarker(marker: GateAccretionMarker): void {
     decision: marker.decision,
     accreted_at: marker.accretedAt,
   });
+}
+
+/**
+ * Undoes a completed accretion (the minted gate_item rows and the
+ * gate_accretion marker) — the rollback half of insertItem +
+ * recordAccretionMarker, used when a later step of an atomic Ready-flip
+ * transaction fails after gate accretion already committed.
+ */
+export function rollbackContribution(
+  itemIds: string[],
+  sourceTaskId: string,
+): void {
+  deleteGateContribution(itemIds, sourceTaskId);
 }

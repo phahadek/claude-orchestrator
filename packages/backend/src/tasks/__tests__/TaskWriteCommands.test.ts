@@ -10,6 +10,8 @@ const mockGetAccretionMarker = vi.fn();
 const mockInsertSeedItem = vi.fn();
 const mockRecordSeedAccretionMarker = vi.fn();
 const mockGetSeedAccretionMarker = vi.fn();
+const mockRollbackGateContribution = vi.fn();
+const mockRollbackSeedContribution = vi.fn();
 
 vi.mock('../../db/queries', () => ({
   getTaskCache: (...args: unknown[]) => mockGetTaskCache(...args),
@@ -27,6 +29,8 @@ vi.mock('../../gate/gateStore', () => ({
   recordAccretionMarker: (...args: unknown[]) =>
     mockRecordAccretionMarker(...args),
   getAccretionMarker: (...args: unknown[]) => mockGetAccretionMarker(...args),
+  rollbackContribution: (...args: unknown[]) =>
+    mockRollbackGateContribution(...args),
 }));
 
 vi.mock('../../seed/seedStore', () => ({
@@ -35,6 +39,8 @@ vi.mock('../../seed/seedStore', () => ({
     mockRecordSeedAccretionMarker(...args),
   getAccretionMarker: (...args: unknown[]) =>
     mockGetSeedAccretionMarker(...args),
+  rollbackContribution: (...args: unknown[]) =>
+    mockRollbackSeedContribution(...args),
 }));
 
 import {
@@ -89,6 +95,8 @@ beforeEach(() => {
   mockInsertSeedItem.mockReset();
   mockRecordSeedAccretionMarker.mockReset();
   mockGetSeedAccretionMarker.mockReset();
+  mockRollbackGateContribution.mockReset();
+  mockRollbackSeedContribution.mockReset();
 });
 
 describe('TaskWriteCommands.setStatus — state machine', () => {
@@ -1138,6 +1146,137 @@ describe('TaskWriteCommands.stageSeedContribution', () => {
     await expect(
       commands.stageSeedContribution(sourceTask, [], 'seeds'),
     ).rejects.toThrow(/at least one seed/);
+  });
+});
+
+describe('TaskWriteCommands.flipToReady', () => {
+  const flipParams = {
+    taskId: 'notion:abc',
+    title: 'Add the webhook',
+    project: 'polimarket-analyser',
+    milestone: 'M12',
+    dependsOn: ['notion:dep-1'],
+    groomingGate: {
+      size_check: { decision: 'no_split' as const },
+      type_check: { decision: 'none' as const },
+    },
+    gateContribution: {
+      classification: 'Read-Only' as const,
+      items: [{ text: 'Verify the webhook fires' }],
+    },
+    seedContribution: {
+      decision: 'seeds' as const,
+      seeds: [{ spec: 'Add webhook_url to config' }],
+    },
+  };
+
+  beforeEach(() => {
+    mockInsertItem.mockReturnValue({ id: 'gate-item-1' });
+    mockInsertSeedItem.mockReturnValue({ id: 'seed-item-1' });
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
+  });
+
+  it('runs gate accretion, seed accretion, setDependsOn, and setStatus(Ready) in order', async () => {
+    const calls: string[] = [];
+    mockRecordAccretionMarker.mockImplementation(() => calls.push('gate'));
+    mockRecordSeedAccretionMarker.mockImplementation(() =>
+      calls.push('seed'),
+    );
+    const backend = makeBackend({
+      setDependsOn: vi.fn().mockImplementation(async () => {
+        calls.push('setDependsOn');
+      }),
+      updateStatus: vi.fn().mockImplementation(async () => {
+        calls.push('setStatus');
+      }),
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    const result = await commands.flipToReady(flipParams);
+
+    expect(calls).toEqual(['gate', 'seed', 'setDependsOn', 'setStatus']);
+    expect(backend.setDependsOn).toHaveBeenCalledWith(
+      'notion:abc',
+      ['notion:dep-1'],
+      undefined,
+    );
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:abc',
+      '🗂️ Ready',
+      expect.objectContaining({ groomingGate: flipParams.groomingGate }),
+    );
+    expect(result.gate.itemIds).toEqual(['gate-item-1']);
+    expect(result.seed.itemIds).toEqual(['seed-item-1']);
+    expect(mockRollbackGateContribution).not.toHaveBeenCalled();
+    expect(mockRollbackSeedContribution).not.toHaveBeenCalled();
+  });
+
+  it('rolls back gate accretion (no seed accretion attempted) when seed accretion fails', async () => {
+    mockRecordSeedAccretionMarker.mockImplementation(() => {
+      throw new Error('seed store unavailable');
+    });
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(commands.flipToReady(flipParams)).rejects.toThrow(
+      /seed store unavailable/,
+    );
+
+    expect(mockRollbackGateContribution).toHaveBeenCalledWith(
+      ['gate-item-1'],
+      'notion:abc',
+    );
+    expect(mockRollbackSeedContribution).not.toHaveBeenCalled();
+    expect(backend.setDependsOn).not.toHaveBeenCalled();
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('rolls back both accretions and never flips status when setDependsOn fails', async () => {
+    const backend = makeBackend({
+      setDependsOn: vi.fn().mockRejectedValue(new Error('Notion API down')),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(commands.flipToReady(flipParams)).rejects.toThrow(
+      /Notion API down/,
+    );
+
+    expect(mockRollbackSeedContribution).toHaveBeenCalledWith(
+      ['seed-item-1'],
+      'notion:abc',
+    );
+    expect(mockRollbackGateContribution).toHaveBeenCalledWith(
+      ['gate-item-1'],
+      'notion:abc',
+    );
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('rolls back both accretions when the grooming promotion gate blocks the Ready flip', async () => {
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.flipToReady({
+        ...flipParams,
+        groomingGate: { size_check: null, type_check: null },
+      }),
+    ).rejects.toBeInstanceOf(GroomingGateError);
+
+    expect(mockRollbackSeedContribution).toHaveBeenCalledWith(
+      ['seed-item-1'],
+      'notion:abc',
+    );
+    expect(mockRollbackGateContribution).toHaveBeenCalledWith(
+      ['gate-item-1'],
+      'notion:abc',
+    );
+    expect(backend.updateStatus).not.toHaveBeenCalled();
   });
 });
 

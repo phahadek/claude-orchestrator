@@ -222,14 +222,36 @@ Only after explicit sign-off on the batch (_"looks good"_, _"ship it"_, _"next"_
 "decision": "no_split" }` for ≤500 LoC tasks, `{ "loc": <number>, "decision":
 "split_now", "split_into": ["<task-id>", …] }` after splitting, `{ "loc":
 <number>, "decision": "unsplittable", "reason": "<one-line>" }` for the atomic
-   case, or `{ "decision": "n/a" }` for Design/Planning tasks), run **Gate accretion**
-   and **Seed accretion** below for 💻 Code / 🛠️ Tooling tasks, and set
-   `signoff: { "by": "<human>", "at": "<iso>" }`. _(`signoff`, `hard_block_deps`, and
-   `size_check` are gated by the promotion hook and must be written in
-   `grooming-state.json` **before** the status flip, or the gate blocks the update.
-   `gate_contribution` / `seed_contribution` are no longer local `grooming-state.json`
-   fields — the accretion calls below write their durable record straight to the
-   gate/seed DB store, keyed by this task's id.)_
+   case, or `{ "decision": "n/a" }` for Design/Planning tasks), determine the
+   **Gate accretion** and **Seed accretion** content below for 💻 Code / 🛠️ Tooling
+   tasks (write it into the entry as `gate_contribution` / `seed_contribution` —
+   these are transient staging fields the flip command below reads and submits;
+   the durable record is still the gate/seed DB marker the flip call writes, keyed
+   by this task's id), and set `signoff: { "by": "<human>", "at": "<iso>" }`.
+   _(`signoff`, `hard_block_deps`, and `size_check` are gated by the promotion hook
+   and must be written in `grooming-state.json` **before** the status flip, or the
+   gate blocks the update.)_
+
+**One-shot Ready-flip:** once the entry above is complete, promote the task with a
+single call — no task id (or dependency id) is ever hand-typed on the command line,
+every id is resolved from the entry itself:
+
+```bash
+node ~/.claude/scripts/groom-flip-client.mjs .skill-cache/grooming/<M>/grooming-state.json <taskId>
+```
+
+This posts the whole entry to the backend's `POST /api/groom/flip` route
+(`packages/backend/src/routes/groomFlip.ts`, `TaskWriteCommands.flipToReady`), which
+runs gate accretion + seed accretion + `setDependsOn` + `setStatus(Ready)` as one
+transaction — the same order and the same `groomingGate` / dependsOn-before-Ready
+invariants as the per-call path below, but rolling back any accretion already
+committed if a later step fails, so a failed flip never leaves an orphan gate/seed
+item or a wrong status. This **replaces** the six separate calls (gate accrete, seed
+accrete, stage + apply `setDependsOn`, stage + apply `setStatus`) described next —
+read the per-call breakdown when you need to understand or troubleshoot what the
+one-shot command does, or when the discrete staged-intent surface is needed for
+something the one-shot command doesn't cover (e.g. reviewing a staged write before
+applying it).
 
 **Gate accretion (💻 Code / 🛠️ Tooling tasks):** Before flipping to Ready, mint the
 task's stripped runtime/launch-and-observe items onto the milestone gate store. Read
