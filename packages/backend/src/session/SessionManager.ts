@@ -298,6 +298,26 @@ const TERMINAL_STATUSES = new Set(['done', 'error', 'killed', 'superseded']);
 const ALWAYS_GUARDED_BRANCHES = new Set(['dev', 'main']);
 
 /**
+ * True only when `worktreePath` is a real per-session worktree — strictly
+ * nested under `<projectDir>/.claude/worktrees/` — and never the project
+ * checkout itself. Planning sessions (groom/design/ops) run with
+ * worktreePath === projectDir and must never be torn down as if they were
+ * disposable worktrees (2026-07-20 incident: this deleted a production
+ * checkout). Exported for unit testing.
+ */
+export function isRemovableWorktree(
+  worktreePath: string,
+  projectDir: string,
+): boolean {
+  const resolvedWorktree = path.resolve(worktreePath);
+  const resolvedProjectDir = path.resolve(projectDir);
+  if (resolvedWorktree === resolvedProjectDir) return false;
+  const worktreesRoot =
+    path.join(resolvedProjectDir, '.claude', 'worktrees') + path.sep;
+  return (resolvedWorktree + path.sep).startsWith(worktreesRoot);
+}
+
+/**
  * Error causes that are operator-intentional or infra-level and should NOT
  * count against the crash budget. All other causes increment the per-task
  * consecutive crash counter; reaching 2+ consecutive counted failures → 🚫
@@ -1446,9 +1466,21 @@ export class SessionManager extends EventEmitter {
 
     const projectDir = normalizePath(project.projectDir);
     const worktreePath = row.worktree_path;
-    // Planning sessions (groom/design) run directly in the project checkout —
+    // Planning sessions (groom/design/ops) run directly in the project checkout —
     // never remove it as if it were a disposable worktree.
-    if (!worktreePath || worktreePath === projectDir) return;
+    if (!worktreePath || !isRemovableWorktree(worktreePath, projectDir)) {
+      if (worktreePath) {
+        recordEvent({
+          event_type: 'worktree_teardown_refused',
+          actor_type: 'system',
+          actor_id: sessionId,
+          project_id: null,
+          task_id: null,
+          payload: { sessionId, worktreePath, projectDir, source: 'cleanupPartialWorktree' },
+        });
+      }
+      return;
+    }
 
     if (fs.existsSync(worktreePath)) {
       try {
@@ -2078,6 +2110,25 @@ export class SessionManager extends EventEmitter {
     // (PR merged/closed, session done/error/killed, explicit delete).
     const sessionRow = getSession(sessionId);
     if (sessionRow?.status === 'idle' && sessionRow?.pr_url) {
+      return;
+    }
+
+    // Guard: never run destructive teardown (git worktree remove / fs.rmSync)
+    // on anything but a real per-session worktree — never the project checkout
+    // itself (2026-07-20 incident: a planning session's worktreePath ===
+    // projectDir caused fs.rmSync to delete a production checkout).
+    if (!isRemovableWorktree(worktreePath, projectDir)) {
+      logger.error(
+        `[SessionManager] cleanupWorktree refused: worktreePath ${worktreePath} is not a removable worktree under ${projectDir} — skipping teardown for ${sessionId.slice(0, 8)}`,
+      );
+      recordEvent({
+        event_type: 'worktree_teardown_refused',
+        actor_type: 'system',
+        actor_id: sessionId,
+        project_id: null,
+        task_id: null,
+        payload: { sessionId, worktreePath, projectDir, source: 'cleanupWorktree' },
+      });
       return;
     }
 
