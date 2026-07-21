@@ -41,6 +41,7 @@ import {
   type SkillId,
 } from './procedureCore';
 import type { GroomLoadResult } from '../groom/groomLoad';
+import type { TaskRegions } from '../groom/codeWorklist';
 import type { TaskDependencyCandidates } from '../orchestration/milestoneDependencyGraph';
 import type { ReadinessViolation } from '../tasks/readinessGate';
 import type { TypeCheckResult } from '../groom/typeCheck';
@@ -78,6 +79,10 @@ export interface GroomDigestSlice {
   readinessViolations: ReadinessViolation[];
   bindingConstraints: string[];
   dependencyCandidates: TaskDependencyCandidates | null;
+  /** This task's declared scope, resolved into package/file regions — the code it touches. */
+  regions: TaskRegions;
+  /** The task's full markdown body, verbatim. */
+  body: string;
 }
 
 export interface DesignDigestSlice {
@@ -137,6 +142,8 @@ export function deriveGroomDigestSlice(
     readinessViolations: doc.readinessViolations,
     bindingConstraints: doc.bindingConstraints,
     dependencyCandidates,
+    regions: doc.regions,
+    body: doc.rawMarkdown,
   };
 }
 
@@ -316,6 +323,7 @@ function renderGroomDigest(data: GroomDigestSlice): string {
     `- size_check seed: ${data.sizeCheckSeed.files} files affected (${data.sizeCheckSeed.loc_method})`,
     `- type_check: ${data.typeCheck.decision}${data.typeCheck.signals?.length ? ` — ${data.typeCheck.signals.join('; ')}` : ''}`,
     `- Binding constraints: ${data.bindingConstraints.length ? data.bindingConstraints.join(', ') : '(none)'}`,
+    `- Code regions: packages: ${data.regions.packages.length ? data.regions.packages.join(', ') : '(none)'}; files: ${data.regions.files.length ? data.regions.files.join(', ') : '(none)'}`,
   ];
   if (data.readinessViolations.length) {
     lines.push('', '### Readiness violations', '');
@@ -332,6 +340,7 @@ function renderGroomDigest(data: GroomDigestSlice): string {
       `- Candidate blockers: ${data.dependencyCandidates.candidateBlockers.length ? JSON.stringify(data.dependencyCandidates.candidateBlockers) : '(none)'}`,
     );
   }
+  lines.push('', '### Task body', '', data.body || '(empty)');
   return lines.join('\n');
 }
 

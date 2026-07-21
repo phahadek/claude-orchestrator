@@ -30,11 +30,14 @@ function fixtureGroomLoadResult(): GroomLoadResult {
         priority: 'P1',
         url: 'https://notion.so/task-1',
         filesSection: '',
-        rawMarkdown: '',
+        rawMarkdown: '## Summary\n\nDo the thing body.',
         readinessViolations: [{ code: 'no_open_questions', message: 'ok' }],
         sizeCheckSeed: { files: 3, loc_method: 'estimated' },
         typeCheck: { decision: 'none' },
-        regions: { packages: [], files: [] },
+        regions: {
+          packages: ['packages/backend'],
+          files: ['packages/backend/src/foo.ts'],
+        },
         bindingConstraints: ['constraint-a'],
         filesPathsEntries: [],
         dependsOnTasks: [],
@@ -124,10 +127,18 @@ describe('deriveGroomDigestSlice', () => {
     expect(slice.typeCheck).toEqual({ decision: 'none' });
     expect(slice.bindingConstraints).toEqual(['constraint-a']);
     expect(slice.dependencyCandidates?.taskId).toBe('task-1');
+    expect(slice.regions).toEqual({
+      packages: ['packages/backend'],
+      files: ['packages/backend/src/foo.ts'],
+    });
+    expect(slice.body).toBe('## Summary\n\nDo the thing body.');
     // never carries the full loader result's milestone-wide fields
     expect(slice as unknown as GroomLoadResult).not.toHaveProperty('board');
     expect(slice as unknown as GroomLoadResult).not.toHaveProperty(
       'contextPages',
+    );
+    expect(slice as unknown as GroomLoadResult).not.toHaveProperty(
+      'neighbourBoards',
     );
   });
 
@@ -379,6 +390,22 @@ describe('assemblePlanningProcedure', () => {
     expect(output).toContain('type_check');
     // Milestone-wide context (the full board / context pages) is never inlined.
     expect(output).not.toContain('Master Context');
+  });
+
+  it('includes the task code regions and full body in the groom digest', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+    expect(output).toContain('Code regions');
+    expect(output).toContain('packages/backend');
+    expect(output).toContain('packages/backend/src/foo.ts');
+    expect(output).toContain('### Task body');
+    expect(output).toContain('Do the thing body.');
   });
 
   it('the design digest section omits raw code-map grounding, pointing at the on-demand route instead', () => {
