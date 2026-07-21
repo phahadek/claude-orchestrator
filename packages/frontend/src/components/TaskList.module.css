@@ -257,6 +257,15 @@
   cursor: not-allowed;
 }
 
+.select {
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}
+
 .groomBtn {
   font-size: 11px;
   padding: 2px 8px;

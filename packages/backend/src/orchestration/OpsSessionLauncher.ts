@@ -53,6 +53,9 @@ export interface OpsLaunchParams {
    */
   opsContext?: OpsLoadResult;
   tasks: PlanningTaskEntry[];
+  /** Per-launch model/effort override, forwarded to SessionManager.start(). */
+  model?: string;
+  effort?: string;
 }
 
 export interface OpsLaunchResult {
@@ -67,6 +70,8 @@ interface DeferredOpsTask {
   sessionType: PlanningSessionType;
   opsContext?: OpsLoadResult;
   task: PlanningTaskEntry;
+  model?: string;
+  effort?: string;
 }
 
 /**
@@ -104,6 +109,8 @@ export class OpsSessionLauncher {
           sessionType,
           opsContext: params.opsContext,
           task,
+          model: params.model,
+          effort: params.effort,
         });
         deferredIds.push(task.id);
         logger.info(
@@ -118,6 +125,8 @@ export class OpsSessionLauncher {
         sessionType,
         params.opsContext,
         task,
+        params.model,
+        params.effort,
       );
       launched.push(task.id);
     }
@@ -175,6 +184,8 @@ export class OpsSessionLauncher {
           entry.sessionType,
           opsContext,
           entry.task,
+          entry.model,
+          entry.effort,
         );
       }
     }
@@ -244,6 +255,8 @@ export class OpsSessionLauncher {
     sessionType: PlanningSessionType,
     opsContext: OpsLoadResult | undefined,
     task: PlanningTaskEntry,
+    model?: string,
+    effort?: string,
   ): Promise<void> {
     const taskUrl =
       task.url || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
@@ -275,6 +288,8 @@ export class OpsSessionLauncher {
             ),
           }),
           ...(injectedProcedureContent && { injectedProcedureContent }),
+          ...(model && { model }),
+          ...(effort && { effort }),
         },
       );
       logger.info(

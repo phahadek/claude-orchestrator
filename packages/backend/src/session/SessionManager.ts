@@ -289,6 +289,14 @@ export interface StartOptions {
    * transport rules those builders would otherwise inject.
    */
   injectedProcedureContent?: string;
+  /**
+   * Per-launch model/effort override (e.g. from the Ops(N)/Groom(N)/Design(N)
+   * launch picker). Takes precedence over runtimeSettings.*_session_model/
+   * _effort when set to a non-empty value; falls back to those settings when
+   * unset, same as before this option existed.
+   */
+  model?: string;
+  effort?: string;
 }
 
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
@@ -981,6 +989,8 @@ export class SessionManager extends EventEmitter {
       repo: resolvedRepo,
       opsContext,
       injectedProcedureContent,
+      model: launchModel,
+      effort: launchEffort,
     } = options;
 
     const project = getProjectById(projectId)!;
@@ -1384,6 +1394,8 @@ export class SessionManager extends EventEmitter {
       projectId,
       mcpConfigPath,
       systemPromptFilePath,
+      launchModel,
+      launchEffort,
     );
 
     this.pendingStarts.delete(sessionId);

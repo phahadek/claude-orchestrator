@@ -7,20 +7,14 @@ import {
   type SettingsValues,
   validateField,
   MIN_POLL_INTERVAL_MS,
+  MODEL_OPTIONS,
+  EFFORT_OPTIONS,
 } from './Settings.helpers';
 import styles from './Settings.module.css';
 
 const NOTIFICATIONS_ENABLED_KEY = 'notificationsEnabled';
 
 type Tab = 'general' | 'projects' | 'devices' | 'system_health';
-
-const MODEL_OPTIONS = [
-  { label: '(CLI default)', value: '' },
-  { label: 'claude-opus-4-6', value: 'claude-opus-4-6' },
-  { label: 'claude-sonnet-5', value: 'claude-sonnet-5' },
-  { label: 'claude-sonnet-4-6', value: 'claude-sonnet-4-6' },
-  { label: 'claude-haiku-4-5', value: 'claude-haiku-4-5' },
-];
 
 const LARGE_TASK_MODEL_OPTIONS = [
   { label: '(off)', value: '' },
@@ -36,15 +30,6 @@ const TIER3_CLASSIFIER_MODEL_OPTIONS = [
   { label: 'claude-haiku-4-5-20251001', value: 'claude-haiku-4-5-20251001' },
   { label: 'claude-haiku-4-5', value: 'claude-haiku-4-5' },
   { label: 'claude-sonnet-4-6', value: 'claude-sonnet-4-6' },
-];
-
-const EFFORT_OPTIONS = [
-  { label: 'Default', value: '' },
-  { label: 'low', value: 'low' },
-  { label: 'medium', value: 'medium' },
-  { label: 'high', value: 'high' },
-  { label: 'xhigh', value: 'xhigh' },
-  { label: 'max', value: 'max' },
 ];
 
 interface Props {
@@ -374,6 +359,70 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                     value={settings?.review_session_effort ?? ''}
                     onChange={(e) =>
                       void handleChange('review_session_effort', e.target.value)
+                    }
+                  >
+                    {EFFORT_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label}>Planning session model</label>
+                  <select
+                    className={styles.select}
+                    value={settings?.planning_session_model ?? ''}
+                    onChange={(e) =>
+                      void handleChange(
+                        'planning_session_model',
+                        e.target.value,
+                      )
+                    }
+                  >
+                    {MODEL_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className={styles.select}
+                    value={settings?.planning_session_effort ?? ''}
+                    onChange={(e) =>
+                      void handleChange(
+                        'planning_session_effort',
+                        e.target.value,
+                      )
+                    }
+                  >
+                    {EFFORT_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label}>Ops session model</label>
+                  <select
+                    className={styles.select}
+                    value={settings?.ops_session_model ?? ''}
+                    onChange={(e) =>
+                      void handleChange('ops_session_model', e.target.value)
+                    }
+                  >
+                    {MODEL_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className={styles.select}
+                    value={settings?.ops_session_effort ?? ''}
+                    onChange={(e) =>
+                      void handleChange('ops_session_effort', e.target.value)
                     }
                   >
                     {EFFORT_OPTIONS.map((o) => (
