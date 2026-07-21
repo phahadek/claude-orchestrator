@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { OpsSessionLauncher } from '../OpsSessionLauncher.js';
+import {
+  OpsSessionLauncher,
+  setOpsSessionLauncherRefreshFn,
+} from '../OpsSessionLauncher.js';
 import type { OpsLoadResult, OpsTaskEntry } from '../../ops/opsLoad.js';
 
 vi.mock('../../ops/opsSessionContext.js', () => ({
@@ -85,6 +88,42 @@ describe('OpsSessionLauncher', () => {
   beforeEach(() => {
     start = vi.fn().mockResolvedValue('session-id');
     sessionManager = { start };
+    setOpsSessionLauncherRefreshFn(null as never);
+  });
+
+  it('triggers an immediate task-cache refresh for the project after a successful launch', async () => {
+    const refreshFn = vi.fn().mockResolvedValue(undefined);
+    setOpsSessionLauncherRefreshFn(refreshFn);
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const tasks = [makeTask({ id: 'task-1' })];
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      opsContext: makeOpsContext(tasks),
+      tasks,
+    });
+    await Promise.resolve();
+
+    expect(refreshFn).toHaveBeenCalledWith('proj-1', true);
+  });
+
+  it('does not throw if the cache refresh hook rejects', async () => {
+    const refreshFn = vi.fn().mockRejectedValue(new Error('refresh failed'));
+    setOpsSessionLauncherRefreshFn(refreshFn);
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const tasks = [makeTask({ id: 'task-1' })];
+
+    const result = await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      opsContext: makeOpsContext(tasks),
+      tasks,
+    });
+
+    expect(result.launched).toEqual(['task-1']);
   });
 
   it('launches N individual sessions for N selected ready tasks (not one combined session)', async () => {

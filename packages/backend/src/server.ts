@@ -96,7 +96,10 @@ import { createMergeCandidatesRouter } from './routes/mergeCandidates';
 import { createOpsContextRouter } from './routes/opsContext';
 import { createOpsLaunchRouter } from './routes/opsLaunch';
 import { createPlanningLaunchRouter } from './routes/planningLaunch';
-import { OpsSessionLauncher } from './orchestration/OpsSessionLauncher';
+import {
+  OpsSessionLauncher,
+  setOpsSessionLauncherRefreshFn,
+} from './orchestration/OpsSessionLauncher';
 import { runBootSequence, getActiveBootTracker } from './bootSequence';
 import { logger } from './logger';
 import {
@@ -380,6 +383,9 @@ setWsRouterRefreshFn((projectId, skipCache) =>
   taskCacheRefresher.refreshProjectById(projectId, skipCache),
 );
 setTaskWriteRefreshFn((projectId, skipCache) =>
+  taskCacheRefresher.refreshProjectById(projectId, skipCache),
+);
+setOpsSessionLauncherRefreshFn((projectId, skipCache) =>
   taskCacheRefresher.refreshProjectById(projectId, skipCache),
 );
 

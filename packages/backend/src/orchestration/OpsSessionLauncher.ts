@@ -23,6 +23,20 @@ import {
 
 const POLL_INTERVAL_MS = 15_000;
 
+// ── TaskCacheRefresher hook ───────────────────────────────────────────────────
+// Same seam TaskWriteCommands.ts uses — without it, a freshly launched planning
+// session's task.planningSession stays null in the task cache until the next
+// scheduled TaskCacheRefresher tick, so it doesn't appear inline right away.
+let refreshProjectFn:
+  | ((projectId: string, skipCache?: boolean) => Promise<void>)
+  | null = null;
+
+export function setOpsSessionLauncherRefreshFn(
+  fn: (projectId: string, skipCache?: boolean) => Promise<void>,
+): void {
+  refreshProjectFn = fn;
+}
+
 /**
  * Session types dispatched by this launcher — see planningLaunch.ts's
  * workflow -> sessionType resolution.
@@ -302,6 +316,13 @@ export class OpsSessionLauncher {
       logger.info(
         `[OpsSessionLauncher] launched session ${sessionId.slice(0, 8)} for ops task ${task.id}`,
       );
+      if (refreshProjectFn) {
+        void refreshProjectFn(projectId, true).catch((err: unknown) => {
+          logger.warn(
+            `[OpsSessionLauncher] cache refresh after launch failed for project ${projectId}: ${err instanceof Error ? err.message : err}`,
+          );
+        });
+      }
     } catch (err) {
       logger.warn(
         `[OpsSessionLauncher] failed to launch ops task ${task.id}: ${err instanceof Error ? err.message : err}`,
