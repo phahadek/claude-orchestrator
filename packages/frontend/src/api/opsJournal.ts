@@ -50,8 +50,6 @@ export const opsJournalApi = {
     projectId: string,
     milestoneId: string,
     taskIds: string[],
-    model?: string,
-    effort?: string,
   ): Promise<OpsLaunchResult> {
     return apiRequest<OpsLaunchResult>('/api/planning/launch', {
       method: 'POST',
@@ -61,8 +59,6 @@ export const opsJournalApi = {
         projectId,
         milestone: milestoneId,
         taskIds,
-        ...(model && { model }),
-        ...(effort && { effort }),
       }),
     });
   },

@@ -9,7 +9,6 @@ import { NonCodeTypeSection } from './NonCodeTypeSection';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import type { StagedIntent } from '../api/stagedIntents';
 import { opsJournalApi } from '../api/opsJournal';
-import { MODEL_OPTIONS, EFFORT_OPTIONS } from './Settings.helpers';
 import { useDispatch } from '../hooks/useDispatch';
 import { projectsApi } from '../api/projects';
 import { sortByPriority } from '../utils/taskSort';
@@ -349,10 +348,6 @@ export function TaskList({
   const [designCheckedIds, setDesignCheckedIds] = useState<Set<string>>(
     new Set(),
   );
-  // Per-launch model/effort override shared by the Groom(N)/Ops(N)/Design(N)
-  // launch controls — '' falls back to the runtime setting for that session type.
-  const [launchModel, setLaunchModel] = useState('');
-  const [launchEffort, setLaunchEffort] = useState('');
   // Cross-milestone move: the shared staged-intent display renders whichever
   // task.move intent was most recently staged from a TaskCard on this board.
   const [moveIntent, setMoveIntent] = useState<StagedIntent | null>(null);
@@ -593,8 +588,6 @@ export function TaskList({
         activeProjectId,
         boardId,
         selectedIds,
-        launchModel,
-        launchEffort,
       );
       const launchedIds = new Set(result.launched);
       setGroomLaunchedIds(
@@ -686,8 +679,6 @@ export function TaskList({
         activeProjectId,
         boardId,
         selectedIds,
-        launchModel,
-        launchEffort,
       );
       const launchedIds = new Set(result.launched);
       const deferredIds = new Set(result.deferred);
@@ -769,8 +760,6 @@ export function TaskList({
         activeProjectId,
         boardId,
         selectedIds,
-        launchModel,
-        launchEffort,
       );
       const launchedIds = new Set(result.launched);
       const deferredIds = new Set(result.deferred);
@@ -890,10 +879,6 @@ export function TaskList({
           onGroomSelectAll={handleGroomSelectAll}
           onGroomLaunch={() => void handleGroomLaunch()}
           groomLoading={groomLoading}
-          launchModel={launchModel}
-          onLaunchModelChange={setLaunchModel}
-          launchEffort={launchEffort}
-          onLaunchEffortChange={setLaunchEffort}
         />
         {groomError && (
           <div className={styles.error} data-testid="groom-error">
@@ -928,32 +913,6 @@ export function TaskList({
                   >
                     Clear
                   </button>
-                  <select
-                    className={styles.select}
-                    value={launchModel}
-                    onChange={(e) => setLaunchModel(e.target.value)}
-                    disabled={opsLoading}
-                    data-testid="ops-model-select"
-                  >
-                    {MODEL_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className={styles.select}
-                    value={launchEffort}
-                    onChange={(e) => setLaunchEffort(e.target.value)}
-                    disabled={opsLoading}
-                    data-testid="ops-effort-select"
-                  >
-                    {EFFORT_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
                   <button
                     className={styles.opsBtn}
                     onClick={() => void handleOpsLaunch()}
@@ -982,32 +941,6 @@ export function TaskList({
                   >
                     Clear
                   </button>
-                  <select
-                    className={styles.select}
-                    value={launchModel}
-                    onChange={(e) => setLaunchModel(e.target.value)}
-                    disabled={designLoading}
-                    data-testid="design-model-select"
-                  >
-                    {MODEL_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className={styles.select}
-                    value={launchEffort}
-                    onChange={(e) => setLaunchEffort(e.target.value)}
-                    disabled={designLoading}
-                    data-testid="design-effort-select"
-                  >
-                    {EFFORT_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
                   <button
                     className={styles.opsBtn}
                     onClick={() => void handleDesignLaunch()}
