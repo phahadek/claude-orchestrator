@@ -1118,6 +1118,8 @@ export default function App() {
       : null;
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
+  const activeBoardMilestone =
+    activeProject?.boards?.find((b) => b.id === activeBoardId)?.name ?? null;
 
   const anyDragging = isDragging;
 
@@ -1564,7 +1566,10 @@ export default function App() {
         {topView === 'gate' && (
           <ErrorBoundary name="GateReadinessView">
             <div className={styles.analyticsView}>
-              <GateReadinessPanel activeProjectId={activeProjectId} />
+              <GateReadinessPanel
+                activeProjectId={activeProjectId}
+                activeBoardMilestone={activeBoardMilestone}
+              />
             </div>
           </ErrorBoundary>
         )}

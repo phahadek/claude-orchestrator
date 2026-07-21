@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useCallback } from 'react';
+import { Fragment, useState, useEffect, useCallback, useRef } from 'react';
 import { gateApi } from '../api/gate';
 import type {
   GateItem,
@@ -19,6 +19,8 @@ import styles from './GateReadinessPanel.module.css';
 
 interface Props {
   activeProjectId: string | null;
+  /** Milestone display name resolved from the top bar's selected board, if any. */
+  activeBoardMilestone?: string | null;
 }
 
 const PAGE_SIZE = 20;
@@ -135,7 +137,10 @@ function RollupHeader({
   );
 }
 
-export function GateReadinessPanel({ activeProjectId }: Props) {
+export function GateReadinessPanel({
+  activeProjectId,
+  activeBoardMilestone = null,
+}: Props) {
   const [milestones, setMilestones] = useState<MilestoneReadiness[]>([]);
   const [milestonesLoading, setMilestonesLoading] = useState(false);
   const [milestonesError, setMilestonesError] = useState<string | null>(null);
@@ -198,6 +203,13 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
   const [deployRun, setDeployRun] = useState<DeployRun | null>(null);
   const [deployEvents, setDeployEvents] = useState<DeployRunEvent[]>([]);
 
+  // Tracks the top-bar milestone selection without forcing a milestone-list
+  // refetch whenever it changes (see the resync effect below).
+  const activeBoardMilestoneRef = useRef(activeBoardMilestone);
+  useEffect(() => {
+    activeBoardMilestoneRef.current = activeBoardMilestone;
+  }, [activeBoardMilestone]);
+
   // Load milestone readiness for the active project.
   useEffect(() => {
     let cancelled = false;
@@ -208,11 +220,19 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
       .then((result) => {
         if (cancelled) return;
         setMilestones(result);
-        setSelectedMilestone((current) =>
-          current && result.some((m) => m.milestone === current)
-            ? current
-            : (result[0]?.milestone ?? null),
-        );
+        setSelectedMilestone((current) => {
+          const topBarMilestone = activeBoardMilestoneRef.current;
+          if (
+            topBarMilestone &&
+            result.some((m) => m.milestone === topBarMilestone)
+          ) {
+            return topBarMilestone;
+          }
+          if (current && result.some((m) => m.milestone === current)) {
+            return current;
+          }
+          return result[0]?.milestone ?? null;
+        });
       })
       .catch((err) => {
         if (cancelled) return;
@@ -226,6 +246,20 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
       cancelled = true;
     };
   }, [activeProjectId]);
+
+  // Re-sync the selected milestone whenever the top-bar selection changes
+  // (the panel's own dropdown remains an explicit override in between).
+  const lastSyncedBoardMilestoneRef = useRef(activeBoardMilestone);
+  useEffect(() => {
+    if (activeBoardMilestone === lastSyncedBoardMilestoneRef.current) return;
+    lastSyncedBoardMilestoneRef.current = activeBoardMilestone;
+    if (
+      activeBoardMilestone &&
+      milestones.some((m) => m.milestone === activeBoardMilestone)
+    ) {
+      setSelectedMilestone(activeBoardMilestone);
+    }
+  }, [activeBoardMilestone, milestones]);
 
   // Load config-seed milestone readiness alongside gate readiness.
   useEffect(() => {
