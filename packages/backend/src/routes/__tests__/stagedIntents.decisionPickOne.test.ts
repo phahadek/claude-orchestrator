@@ -54,8 +54,14 @@ function makeApp(
 }
 
 const OPTIONS = [
-  { label: 'Option A', description: 'Rewrite the reader to stream in batches.' },
-  { label: 'Option B', description: 'Cap the reader at 10MB and error above that.' },
+  {
+    label: 'Option A',
+    description: 'Rewrite the reader to stream in batches.',
+  },
+  {
+    label: 'Option B',
+    description: 'Cap the reader at 10MB and error above that.',
+  },
 ];
 
 beforeEach(() => {
@@ -202,7 +208,10 @@ describe('POST /api/staged-intents/:id/answer', () => {
 
     const res = await supertest(app)
       .post(`/api/staged-intents/${intent.id}/answer`)
-      .send({ chosenLabel: 'Option A', freeForm: 'Batching keeps memory flat.' });
+      .send({
+        chosenLabel: 'Option A',
+        freeForm: 'Batching keeps memory flat.',
+      });
 
     expect(res.status).toBe(200);
     const row = getStagedIntent(intent.id)!;
@@ -230,7 +239,10 @@ describe('POST /api/staged-intents/:id/answer', () => {
     expect(planningOrchestrator.handleDisposition).toHaveBeenCalledWith(
       expect.objectContaining({
         disposition: 'answer',
-        answer: { chosenLabel: 'Option A', freeForm: 'Batching keeps memory flat.' },
+        answer: {
+          chosenLabel: 'Option A',
+          freeForm: 'Batching keeps memory flat.',
+        },
       }),
     );
   });

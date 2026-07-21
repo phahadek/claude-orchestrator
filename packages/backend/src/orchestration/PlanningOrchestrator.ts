@@ -117,7 +117,12 @@ export class PlanningOrchestrator {
       listStagedIntentsBySession(sessionId).length,
     );
 
-    const message = formatDispositionMessage(intent, disposition, reason, answer);
+    const message = formatDispositionMessage(
+      intent,
+      disposition,
+      reason,
+      answer,
+    );
     try {
       await this.sessionManager.enqueueFeedback(
         sessionId,

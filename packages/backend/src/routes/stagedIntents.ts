@@ -1416,7 +1416,12 @@ export function createStagedIntentsRouter(
         actor_id: null,
         project_id: resolvedIntent.projectId,
         task_id: row.task_id,
-        payload: { intentId: row.id, disposition: 'answer', chosenLabel, freeForm },
+        payload: {
+          intentId: row.id,
+          disposition: 'answer',
+          chosenLabel,
+          freeForm,
+        },
       });
 
       await planningOrchestrator?.handleDisposition({
