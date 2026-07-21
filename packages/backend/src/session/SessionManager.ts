@@ -718,7 +718,8 @@ export class SessionManager extends EventEmitter {
     const projectId = row.project_id ?? '';
 
     if (movesTargetInProgress(row.session_type)) {
-      const revertStatus = row.session_type === 'ops' ? '🗂️ Ready' : '🔲 Backlog';
+      const revertStatus =
+        row.session_type === 'ops' ? '🗂️ Ready' : '🔲 Backlog';
       getTaskBackend(projectId)
         .updateStatus(taskId, revertStatus, {
           source: 'orchestrator',
