@@ -263,6 +263,30 @@ describe('assemblePlanningProcedure', () => {
     expect(output).not.toMatch(/stop for explicit human sign-off/i);
   });
 
+  it('offers the groom procedure a discard/defer proposal as an alternative to promoting to Ready', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+
+    expect(output).toMatch(/task\.setStatus.*Deferred/);
+    expect(output).toMatch(/discard\/defer/i);
+
+    for (const { workflow, digest } of cases) {
+      if (workflow === 'groom') continue;
+      const other = assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        digest,
+      });
+      expect(other).not.toMatch(/discard\/defer/i);
+    }
+  });
+
   it('excludes the skill-mode "Resolve manifest & mode" step for groom and design (context is already injected)', () => {
     for (const { workflow, digest } of cases) {
       if (workflow === 'ops') continue;

@@ -223,18 +223,30 @@ function AdvisoryRegister({
 
 function SetStatusHeadline({ intent }: { intent: StagedIntent }) {
   const payload = intent.payload as SetStatusPayload;
-  return (
-    <div className={styles.text}>
-      {payload.status === 'Ready' ? (
+  if (payload.status === 'Ready') {
+    return (
+      <div className={styles.text}>
         <p>
           <strong>Promote to Ready</strong> — {payload.taskId}
         </p>
-      ) : (
+      </div>
+    );
+  }
+  if (payload.status === 'Deferred') {
+    return (
+      <div className={styles.text} data-testid="staged-intent-discard-defer">
         <p>
-          Set status of <strong>{payload.taskId}</strong> to{' '}
-          <strong>{payload.status}</strong>
+          <strong>⏭️ Propose discard/defer</strong> — {payload.taskId}
         </p>
-      )}
+      </div>
+    );
+  }
+  return (
+    <div className={styles.text}>
+      <p>
+        Set status of <strong>{payload.taskId}</strong> to{' '}
+        <strong>{payload.status}</strong>
+      </p>
     </div>
   );
 }
