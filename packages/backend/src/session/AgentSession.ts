@@ -337,6 +337,79 @@ export function extractTextFromToolResultEvent(
   return '';
 }
 
+/** Max size (bytes, serialized) of a subagent tool_result's content kept in full. */
+export const MAX_SUBAGENT_RESULT_BYTES = 4000;
+
+/**
+ * Bound the content of a single tool_result block if its tool_use_id belongs to a
+ * subagent (Task/Agent) invocation and its serialized content exceeds the size cap.
+ * Preserves the invocation fact (tool_use_id, is_error) plus a bounded head of the
+ * output rather than the full dump. Deletes the id from `subagentToolUseIds` once
+ * matched so the set doesn't grow unbounded across a long session.
+ */
+function capSubagentToolResultBlock(
+  block: Record<string, unknown>,
+  subagentToolUseIds: Set<string>,
+): Record<string, unknown> {
+  const toolUseId = block.tool_use_id as string | undefined;
+  if (!toolUseId || !subagentToolUseIds.has(toolUseId)) return block;
+  subagentToolUseIds.delete(toolUseId);
+
+  const original = block.content;
+  const serialized =
+    typeof original === 'string' ? original : JSON.stringify(original);
+  if (Buffer.byteLength(serialized, 'utf8') <= MAX_SUBAGENT_RESULT_BYTES) {
+    return block;
+  }
+
+  const head = serialized.slice(0, MAX_SUBAGENT_RESULT_BYTES);
+  return {
+    ...block,
+    content: `${head}\n… [subagent result truncated: ${serialized.length} chars elided of ${serialized.length} total]`,
+    subagent_result_capped: true,
+  };
+}
+
+/**
+ * Bound subagent (Task/Agent) tool_result content in an event before it is persisted
+ * to SQLite / broadcast, so a large subagent output doesn't bloat the context
+ * re-hydrated into a resumed session or fed into a downstream prompt (e.g. the no-op
+ * investigator, which re-serializes stored session_events into a new session's prompt).
+ * Returns the original event unchanged (same reference) when no subagent tool_use_id
+ * is currently pending, or when the event has nothing to cap.
+ */
+export function capSubagentToolResults(
+  event: Record<string, unknown>,
+  subagentToolUseIds: Set<string>,
+): Record<string, unknown> {
+  if (subagentToolUseIds.size === 0) return event;
+
+  if (event.type === 'tool_result') {
+    return capSubagentToolResultBlock(event, subagentToolUseIds);
+  }
+
+  if (event.type === 'user') {
+    const msg = event.message as Record<string, unknown> | undefined;
+    const content = (msg?.content ?? event.content) as unknown;
+    if (!Array.isArray(content)) return event;
+
+    let changed = false;
+    const newContent = (content as Array<Record<string, unknown>>).map((b) => {
+      if (b?.type !== 'tool_result') return b;
+      const capped = capSubagentToolResultBlock(b, subagentToolUseIds);
+      if (capped !== b) changed = true;
+      return capped;
+    });
+    if (!changed) return event;
+
+    return msg?.content
+      ? { ...event, message: { ...msg, content: newContent } }
+      : { ...event, content: newContent };
+  }
+
+  return event;
+}
+
 function sessionLog(sessionId: string, ...args: unknown[]) {
   logger.info(`[Session ${sessionId.slice(0, 8)}]`, ...args);
 }
@@ -421,6 +494,10 @@ export class AgentSession extends EventEmitter {
   private pendingBashCommands = new Map<string, string>();
   /** Tracks mcp__github__push_files tool_use IDs awaiting a successful tool_result. */
   private pendingPushFileToolUseIds = new Set<string>();
+  /** Tracks Task/Agent (subagent) tool_use IDs so their tool_result payload can be
+   *  bounded before persisting/broadcasting — a subagent's full output would otherwise
+   *  bloat the context re-hydrated into a resumed session. */
+  private subagentToolUseIds = new Set<string>();
   /** True once a PR was detected and inserted during the live session. */
   private prDetectedLive = false;
   /** Accumulated token counts for this session (in-memory, synced to SQLite). */
@@ -1131,6 +1208,12 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             ) {
               this.pendingPushFileToolUseIds.add(block.id);
             }
+            if (
+              (block.name === 'Task' || block.name === 'Agent') &&
+              typeof block.id === 'string'
+            ) {
+              this.subagentToolUseIds.add(block.id);
+            }
 
             // In-flight worktree-escape detection: warn and continue.
             if (this.worktreePath && typeof block.name === 'string') {
@@ -1400,7 +1483,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
     // Persist event to SQLite then broadcast
     const eventType = toEventType(rawType);
-    let payload = JSON.stringify(event);
+    const cappedEvent = capSubagentToolResults(event, this.subagentToolUseIds);
+    let payload = JSON.stringify(cappedEvent);
 
     // Extract message ID from assistant/message events for deduplication.
     // The Claude CLI emits multiple incremental streaming events per message,
