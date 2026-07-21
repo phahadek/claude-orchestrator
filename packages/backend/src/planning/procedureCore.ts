@@ -125,7 +125,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'capability or access it needs — nothing beyond its base profile is ever ' +
       'speculatively handed to it. If a read or write the task needs is blocked by the ' +
       'sandbox, stage a `session.requestCapability` intent naming the exact capability ' +
-      'and wait to be re-dispatched on the operator\'s decision. If staging isn\'t possible ' +
+      "and wait to be re-dispatched on the operator's decision. If staging isn't possible " +
       'or the need is a one-off read-only investigation, report `needs-setup` and name the ' +
       'missing capability instead. Either ask or abstain — never fabricate a result to route ' +
       'around a denial.',

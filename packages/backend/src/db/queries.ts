@@ -4646,8 +4646,7 @@ let _stmtListStagedIntentsByGroup: Database.Statement | null = null;
 let _stmtFindActiveStagedIntentForTask: Database.Statement | null = null;
 let _stmtUpdateStagedIntentState: Database.Statement | null = null;
 let _stmtHasStagedIntentForSession: Database.Statement | null = null;
-let _stmtHasActiveCapabilityRequestForSession: Database.Statement | null =
-  null;
+let _stmtHasActiveCapabilityRequestForSession: Database.Statement | null = null;
 
 export function insertStagedIntent(row: StagedIntentRow): void {
   _stmtInsertStagedIntent ??= db.prepare<StagedIntentRow>(`
@@ -4692,7 +4691,9 @@ export function hasStagedIntentForSession(sessionId: string): boolean {
  * with an outstanding request must park idle for grant-on-re-dispatch rather
  * than being concluded done (see AgentSession.handleCleanExit).
  */
-export function hasActiveCapabilityRequestForSession(sessionId: string): boolean {
+export function hasActiveCapabilityRequestForSession(
+  sessionId: string,
+): boolean {
   _stmtHasActiveCapabilityRequestForSession ??= db.prepare<{
     session_id: string;
   }>(
