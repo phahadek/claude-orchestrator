@@ -1224,8 +1224,7 @@ export function createStagedIntentsRouter(
         body?.outcome === 'pushback' || body?.outcome === 'decline'
           ? body.outcome
           : null;
-      const reason =
-        typeof body?.reason === 'string' ? body.reason.trim() : '';
+      const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
       if (!outcome) {
         res
           .status(400)

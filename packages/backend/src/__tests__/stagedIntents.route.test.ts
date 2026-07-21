@@ -286,10 +286,7 @@ describe('POST /api/staged-intents/group/:groupId/commit — grooming promotion 
     });
     expect(staged.status).toBe(201);
 
-    const committed = await approveAndCommitGroup(
-      agent,
-      'group-groom-blocked',
-    );
+    const committed = await approveAndCommitGroup(agent, 'group-groom-blocked');
     expect(committed.status).toBe(409);
     expect(committed.body.reasons.join(' ')).toMatch(/size_check/);
     expect(updateStatus).not.toHaveBeenCalled();

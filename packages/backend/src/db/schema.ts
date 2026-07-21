@@ -1216,9 +1216,7 @@ export function runMigrations(target: Database.Database): void {
   // NULL (no reason on record for dispositions made before this column
   // existed).
   try {
-    target.exec(
-      `ALTER TABLE staged_intent ADD COLUMN disposition_reason TEXT`,
-    );
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN disposition_reason TEXT`);
   } catch {
     /* already exists */
   }

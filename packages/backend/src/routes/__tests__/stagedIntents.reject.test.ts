@@ -42,7 +42,9 @@ function makePlanningOrchestrator() {
   };
 }
 
-function makeApp(planningOrchestrator?: ReturnType<typeof makePlanningOrchestrator>) {
+function makeApp(
+  planningOrchestrator?: ReturnType<typeof makePlanningOrchestrator>,
+) {
   const app = express();
   app.use(express.json());
   app.use('/api', createStagedIntentsRouter(planningOrchestrator));
