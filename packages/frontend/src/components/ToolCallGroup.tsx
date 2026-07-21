@@ -20,7 +20,7 @@ interface Props {
 const RESULT_PREVIEW_LINES = 20;
 
 /** Extract the first tool_use block's input from a text/assistant event. */
-function extractCallInput(textEvent: CallPair['textEvent']): unknown {
+export function extractCallInput(textEvent: CallPair['textEvent']): unknown {
   const payload = tryParseJson(textEvent.content);
   if (typeof payload !== 'object' || payload === null) return null;
   const p = payload as Record<string, unknown>;

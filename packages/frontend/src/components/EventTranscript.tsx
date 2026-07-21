@@ -11,6 +11,7 @@ import {
   isHiddenSystemEvent,
 } from '../utils/eventParsing';
 import { ToolCallGroup } from './ToolCallGroup';
+import { SubagentBlock } from './SubagentBlock';
 import {
   type SessionEvent,
   groupSessionEvents,
@@ -457,6 +458,15 @@ export function EventTranscript({
       </div>
       <div className={styles.transcript} ref={transcriptRef}>
         {groupSessionEvents(events).map((item, i) => {
+          if (item.kind === 'subagent') {
+            return (
+              <SubagentBlock
+                key={`subagent-${i}`}
+                toolName={item.toolName}
+                calls={item.calls}
+              />
+            );
+          }
           if (item.kind === 'group') {
             return (
               <ToolCallGroup
