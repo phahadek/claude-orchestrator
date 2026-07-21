@@ -4646,6 +4646,7 @@ let _stmtListStagedIntentsByGroup: Database.Statement | null = null;
 let _stmtFindActiveStagedIntentForTask: Database.Statement | null = null;
 let _stmtUpdateStagedIntentState: Database.Statement | null = null;
 let _stmtHasStagedIntentForSession: Database.Statement | null = null;
+let _stmtHasActiveCapabilityRequestForSession: Database.Statement | null = null;
 
 export function insertStagedIntent(row: StagedIntentRow): void {
   _stmtInsertStagedIntent ??= db.prepare<StagedIntentRow>(`
@@ -4679,6 +4680,32 @@ export function hasStagedIntentForSession(sessionId: string): boolean {
   );
   return (
     _stmtHasStagedIntentForSession.get({ session_id: sessionId }) !== undefined
+  );
+}
+
+/**
+ * True if this session has an unresolved `session.requestCapability` intent
+ * (state `staged` or `approved`) awaiting an operator decision — the sanctioned
+ * ask-permission path a dispatched verify/ops session uses instead of being
+ * silently blocked or fabricating a result. A gate-verify (one-shot) session
+ * with an outstanding request must park idle for grant-on-re-dispatch rather
+ * than being concluded done (see AgentSession.handleCleanExit).
+ */
+export function hasActiveCapabilityRequestForSession(
+  sessionId: string,
+): boolean {
+  _stmtHasActiveCapabilityRequestForSession ??= db.prepare<{
+    session_id: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE session_id = @session_id
+       AND kind = 'session.requestCapability'
+       AND state IN ('staged', 'approved')
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasActiveCapabilityRequestForSession.get({ session_id: sessionId }) !==
+    undefined
   );
 }
 

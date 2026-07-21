@@ -329,4 +329,11 @@ describe('isGrantable', () => {
   it('returns true for a normal Bash grant', () => {
     expect(isGrantable('Bash(psql:*)')).toBe(true);
   });
+
+  it('returns true for an audited operational-record read an ops/gate-verify session might request', () => {
+    // e.g. a gate-verify session asking to read dashboard.db directly, since
+    // its base profile has no such tool — the sanctioned ask path, not
+    // speculative pre-provisioning by the gate mechanism.
+    expect(isGrantable('Bash(sqlite3 dashboard.db:*)')).toBe(true);
+  });
 });

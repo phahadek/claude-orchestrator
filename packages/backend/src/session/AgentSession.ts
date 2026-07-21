@@ -34,6 +34,7 @@ import {
   markSessionInitiatedPRClose,
   setTaskPauseReason,
   hasStagedIntentForSession,
+  hasActiveCapabilityRequestForSession,
   getGrantedCapabilities,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
@@ -2625,10 +2626,16 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // A gate-verify session (task_id `gate-item:<id>`) is one-shot: it exists
     // to settle a single gate item and has no resume purpose once it has
     // reported (a re-verify is a fresh session, not a resume of this one).
-    // Conclude it done/archived rather than parking it idle forever.
+    // Conclude it done/archived rather than parking it idle forever — unless
+    // it ended this turn with an unresolved session.requestCapability intent:
+    // the sanctioned ask-permission path (see stagedIntents.ts's
+    // resumeCapabilityRequester) needs the session to still be parkable so
+    // the operator's grant/pushback/reject can resume it, not archive it out
+    // from under its own pending request.
     if (
       isPlanningSession(this.sessionType) &&
-      isGateVerifySession(this.taskId)
+      isGateVerifySession(this.taskId) &&
+      !hasActiveCapabilityRequestForSession(this.sessionId)
     ) {
       markSessionDone(this.sessionId, endedAt, null, 'gate_verify_clean_exit');
       resetTaskCrashCount(this.taskId);

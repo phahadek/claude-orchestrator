@@ -3,6 +3,7 @@ import { getProjectById } from '../config';
 import { getSession, markSessionDone } from '../db/queries';
 import type { SessionManager } from '../session/SessionManager';
 import type { GateVerifyDispositionPayload } from '../session/AgentSession';
+import { renderOpsCapabilities } from '../planning/procedureAssembler';
 import type { GateItem } from './gateStore';
 import type {
   GateItemVerifier,
@@ -44,6 +45,7 @@ function buildGateVerifyContext(item: GateItem): string {
     `- classification: ${item.classification}`,
     `- text: ${item.text}`,
     '',
+    ...renderOpsCapabilities(),
     '### Procedure',
     '',
     'Read the operational record relevant to the item text above — audit_log, ' +
@@ -56,6 +58,16 @@ function buildGateVerifyContext(item: GateItem): string {
       'command. Auto-pass only on clear, direct evidence; if you cannot ' +
       'conclusively determine pass or fail, report needs-setup — abstain ' +
       'rather than guess.',
+    '',
+    'This session is responsible for asking for what it needs: nothing beyond ' +
+      'its base read/stage profile is ever speculatively handed to it. If ' +
+      'settling this item genuinely requires a read your base tools do not ' +
+      'cover (e.g. a direct database read), stage a `session.requestCapability` ' +
+      'intent naming that exact read and end the turn — an operator grant ' +
+      'resumes you with it. If that is not practical for a bounded one-shot ' +
+      'investigation, report `needs-setup` and name the missing capability. ' +
+      'Never fabricate a pass/fail to route around a permission denial — a ' +
+      'blocked read is grounds for needs-setup, not for guessing.',
     '',
     'Source is a legitimate input for orienting yourself, but a `pass` ' +
       'disposition must never rest on source-code reading alone — it must ' +

@@ -20,6 +20,7 @@ import {
   supersedeStagedIntent,
   incrementRouteBackCount,
   getStagedIntentGroup,
+  hasActiveCapabilityRequestForSession,
   IllegalStagedIntentTransitionError,
   hashIntentPayload,
 } from '../queries.js';
@@ -150,6 +151,51 @@ describe('supersede', () => {
     );
 
     expect(getStagedIntent('sibling')!.state).toBe('approved');
+  });
+});
+
+describe('hasActiveCapabilityRequestForSession', () => {
+  it('is false when the session has staged no capability request', () => {
+    expect(hasActiveCapabilityRequestForSession('sess-1')).toBe(false);
+  });
+
+  it('is true for a staged, unresolved session.requestCapability intent', () => {
+    insertStagedIntent(
+      makeRow({
+        id: 'cap-1',
+        kind: 'session.requestCapability',
+        session_id: 'sess-1',
+        payload: JSON.stringify({
+          capability: 'Bash(sqlite3 dashboard.db:*)',
+          plan: 'read the operational record',
+          evidence: 'gate item needs an audited DB read',
+        }),
+      }),
+    );
+    expect(hasActiveCapabilityRequestForSession('sess-1')).toBe(true);
+  });
+
+  it('is false once the request has been committed (resolved), not just staged/approved', () => {
+    insertStagedIntent(
+      makeRow({
+        id: 'cap-2',
+        kind: 'session.requestCapability',
+        session_id: 'sess-2',
+        payload: JSON.stringify({
+          capability: 'Bash(sqlite3 dashboard.db:*)',
+          plan: 'p',
+          evidence: 'e',
+        }),
+      }),
+    );
+    transitionStagedIntent('cap-2', 'approved');
+    transitionStagedIntent('cap-2', 'committed');
+    expect(hasActiveCapabilityRequestForSession('sess-2')).toBe(false);
+  });
+
+  it('is scoped to session.requestCapability — an unrelated staged intent from the same session does not count', () => {
+    insertStagedIntent(makeRow({ id: 'other-1', session_id: 'sess-3' }));
+    expect(hasActiveCapabilityRequestForSession('sess-3')).toBe(false);
   });
 });
 

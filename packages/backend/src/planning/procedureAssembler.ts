@@ -214,8 +214,14 @@ const PLANNING_INTENT_KINDS: Record<PlanningWorkflow, readonly string[]> = {
  * → `SessionManager.grantCapability`) and `GRANT_DENYLIST_PATTERNS` — kept in
  * prose here rather than imported, since this composer has no business
  * depending on the Express/DB wiring those modules pull in.
+ *
+ * Exported so the gate-verify dispatch path (`gate/gateItemVerifier.ts`),
+ * which builds its own injected context outside this assembler, can compose
+ * the same ask-permission guidance instead of restating it — a dispatched
+ * gate-verify session is an `ops`-typed session and gets the same base
+ * profile and the same `session.requestCapability` path.
  */
-function renderOpsCapabilities(): string[] {
+export function renderOpsCapabilities(): string[] {
   return [
     '## Capabilities',
     '',
