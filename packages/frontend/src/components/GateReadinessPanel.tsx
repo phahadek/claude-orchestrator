@@ -47,6 +47,17 @@ const GATE_DONE_STATES = ['pass', 'deferred'];
 const SEED_STATE_ORDER = ['pending', 'applied', 'confirmed', 'blocked'];
 const SEED_DONE_STATES = ['confirmed'];
 
+/**
+ * Extracts the leading milestone short-token (e.g. "M12") from a board name
+ * like "M12 — Orchestrator-run Planning" so it can be matched against a
+ * gate's short-token milestone key.
+ */
+function toMilestoneToken(boardMilestone: string | null | undefined) {
+  if (!boardMilestone) return null;
+  const match = boardMilestone.match(/^M\d+/i);
+  return match ? match[0].toUpperCase() : boardMilestone;
+}
+
 interface RollupHeaderProps {
   testId: string;
   title: string;
@@ -226,12 +237,14 @@ export function GateReadinessPanel({
         if (cancelled) return;
         setMilestones(result);
         setSelectedMilestone((current) => {
-          const topBarMilestone = activeBoardMilestoneRef.current;
+          const topBarMilestoneToken = toMilestoneToken(
+            activeBoardMilestoneRef.current,
+          );
           if (
-            topBarMilestone &&
-            result.some((m) => m.milestone === topBarMilestone)
+            topBarMilestoneToken &&
+            result.some((m) => m.milestone === topBarMilestoneToken)
           ) {
-            return topBarMilestone;
+            return topBarMilestoneToken;
           }
           if (current && result.some((m) => m.milestone === current)) {
             return current;
@@ -258,11 +271,12 @@ export function GateReadinessPanel({
   useEffect(() => {
     if (activeBoardMilestone === lastSyncedBoardMilestoneRef.current) return;
     lastSyncedBoardMilestoneRef.current = activeBoardMilestone;
+    const topBarMilestoneToken = toMilestoneToken(activeBoardMilestone);
     if (
-      activeBoardMilestone &&
-      milestones.some((m) => m.milestone === activeBoardMilestone)
+      topBarMilestoneToken &&
+      milestones.some((m) => m.milestone === topBarMilestoneToken)
     ) {
-      setSelectedMilestone(activeBoardMilestone);
+      setSelectedMilestone(topBarMilestoneToken);
     }
   }, [activeBoardMilestone, milestones]);
 

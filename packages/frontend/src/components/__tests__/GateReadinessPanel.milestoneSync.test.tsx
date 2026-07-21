@@ -80,6 +80,46 @@ describe('GateReadinessPanel milestone sync with the top bar', () => {
     expect(select.value).toBe('M11');
   });
 
+  it('defaults selectedMilestone to the normalized short-token when given a full board name', async () => {
+    render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M12 — Orchestrator-run Planning"
+      />,
+    );
+
+    const select = (await screen.findByLabelText(
+      'Select milestone',
+    )) as HTMLSelectElement;
+    expect(select.value).toBe('M12');
+  });
+
+  it('re-syncs the panel selection via the normalized token when the top-bar board changes', async () => {
+    const { rerender } = render(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M10 — Discovery"
+      />,
+    );
+
+    let select = (await screen.findByLabelText(
+      'Select milestone',
+    )) as HTMLSelectElement;
+    expect(select.value).toBe('M10');
+
+    rerender(
+      <GateReadinessPanel
+        activeProjectId="proj-1"
+        activeBoardMilestone="M11 — Build-out"
+      />,
+    );
+
+    select = (await screen.findByLabelText(
+      'Select milestone',
+    )) as HTMLSelectElement;
+    expect(select.value).toBe('M11');
+  });
+
   it('falls back to the first milestone when the top-bar selection does not resolve', async () => {
     render(
       <GateReadinessPanel
