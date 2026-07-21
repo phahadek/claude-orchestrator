@@ -3,6 +3,7 @@ import type { StagedIntent } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { subscribeStagedIntentChange } from '../hooks/stagedIntentBus';
 import { StagedIntentPanel } from './StagedIntentPanel';
+import { DecisionPickOnePanel } from './DecisionPickOnePanel';
 import { TriageBatchPanel } from './TriageBatchPanel';
 import { triageVerdict } from './triageVerdict';
 import styles from './DecisionPanel.module.css';
@@ -167,16 +168,25 @@ export function DecisionPanel({ sessionId }: Props) {
         );
       })}
 
-      {ungrouped.map((intent) => (
-        <StagedIntentPanel
-          key={intent.id}
-          intent={intent}
-          onApplied={remove}
-          onRejected={remove}
-          onDismiss={remove}
-          onApproved={upsert}
-        />
-      ))}
+      {ungrouped.map((intent) =>
+        intent.kind === 'decision.pickOne' ? (
+          <DecisionPickOnePanel
+            key={intent.id}
+            intent={intent}
+            onAnswered={remove}
+            onDismiss={remove}
+          />
+        ) : (
+          <StagedIntentPanel
+            key={intent.id}
+            intent={intent}
+            onApplied={remove}
+            onRejected={remove}
+            onDismiss={remove}
+            onApproved={upsert}
+          />
+        ),
+      )}
     </div>
   );
 }
