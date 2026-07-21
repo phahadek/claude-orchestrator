@@ -172,6 +172,7 @@ vi.mock('../config/corporateMode', () => ({
 }));
 
 import { execSync } from 'child_process';
+import fs from 'fs';
 import { SessionManager } from '../session/SessionManager';
 import { AgentSession } from '../session/AgentSession';
 import * as queries from '../db/queries';
@@ -646,5 +647,99 @@ describe('sendOrResume() overflow escalation: setPendingOverflowText', () => {
     expect(spy).not.toHaveBeenCalled();
 
     spy.mockRestore();
+  });
+});
+
+// ── Planning sessions (groom/design/ops): never respawn a worktree ───────────
+
+const PLANNING_SESSION_ID = 'ffffeeee-dddd-cccc-bbbb-aaaaaaaaaaaa';
+const PLANNING_SESSION_ROW = {
+  session_id: PLANNING_SESSION_ID,
+  task_name: 'nightly-groom',
+  task_id: 'notion:task-groom123',
+  project_id: 'test-proj',
+  status: 'starting',
+  session_type: 'ops',
+  worktree_path: null,
+  pause_reason: null,
+};
+
+describe('sendOrResume() planning session (starting): graceful initializing signal', () => {
+  it('returns null without touching git worktree machinery', async () => {
+    vi.mocked(queries.getSession).mockReturnValue(PLANNING_SESSION_ROW as never);
+
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume(PLANNING_SESSION_ID, 'hello');
+
+    expect(result).toBeNull();
+    const calls = vi.mocked(execSync).mock.calls.map((c) => c[0] as string);
+    expect(calls.some((c) => c.includes('worktree'))).toBe(false);
+  });
+
+  it('broadcasts a session_action_failed "still_initializing" signal, not a worktree error', async () => {
+    vi.mocked(queries.getSession).mockReturnValue(PLANNING_SESSION_ROW as never);
+
+    const sm = new SessionManager();
+    const msgs: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => msgs.push(m));
+
+    await sm.sendOrResume(PLANNING_SESSION_ID, 'hello');
+
+    const failedMsg = msgs.find((m) => m.type === 'session_action_failed') as
+      | { type: 'session_action_failed'; reason: string }
+      | undefined;
+    expect(failedMsg?.reason).toBe('still_initializing');
+    expect(
+      msgs.some(
+        (m) =>
+          m.type === 'session_action_failed' &&
+          (m as { reason: string }).reason === 'worktree_recreate_failed',
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('sendOrResume() planning session (idle, no worktree_path): resumes against projectDir, no worktree add', () => {
+  it('never invokes git worktree add for a planning session respawn', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      ...PLANNING_SESSION_ROW,
+      status: 'idle',
+    } as never);
+    // Simulate the fast path recognizing the project's own checkout as the
+    // planning session's "worktree" — projectDir exists and is a git repo.
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+
+    const sm = new SessionManager();
+    const result = await sm.sendOrResume(PLANNING_SESSION_ID, 'hello');
+
+    expect(result).toBe(PLANNING_SESSION_ID);
+    const calls = vi.mocked(execSync).mock.calls.map((c) => c[0] as string);
+    expect(calls.some((c) => c.includes('worktree'))).toBe(false);
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      PLANNING_SESSION_ID,
+      'running',
+    );
+  });
+});
+
+describe('sendOrResume() planning session: live in-memory session routes to send()', () => {
+  it('delivers directly via session.send() without any respawn/worktree logic', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      ...PLANNING_SESSION_ROW,
+      status: 'running',
+    } as never);
+
+    const sm = new SessionManager();
+    const fakeSendMessage = vi.fn();
+    (
+      sm as unknown as { sessions: Map<string, unknown> }
+    ).sessions.set(PLANNING_SESSION_ID, { sendMessage: fakeSendMessage });
+
+    const result = await sm.sendOrResume(PLANNING_SESSION_ID, 'hello');
+
+    expect(result).toBe(PLANNING_SESSION_ID);
+    expect(fakeSendMessage).toHaveBeenCalledWith('hello');
+    const calls = vi.mocked(execSync).mock.calls.map((c) => c[0] as string);
+    expect(calls.some((c) => c.includes('worktree'))).toBe(false);
   });
 });

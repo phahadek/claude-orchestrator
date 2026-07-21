@@ -2719,6 +2719,25 @@ export class SessionManager extends EventEmitter {
       return null;
     }
 
+    // Planning sessions (groom/design/ops) still in `starting` haven't finished
+    // completeStart() and aren't in this.sessions yet — respawning here would race
+    // a second AgentSession into existence against the one completeStart() is still
+    // constructing. Signal "still initializing" instead of falling through to the
+    // worktree-respawn path below, which planning sessions never had a worktree for.
+    if (isPlanningSession(row.session_type) && row.status === 'starting') {
+      logger.info(
+        `[SessionManager] sendOrResume: planning session ${sessionId} is still starting — declining respawn`,
+      );
+      this.emit('message', {
+        type: 'session_action_failed',
+        sessionId,
+        action: 'send_message',
+        reason: 'still_initializing',
+        detail: 'Session is still starting up — try again in a moment.',
+      } satisfies ServerMessage);
+      return null;
+    }
+
     const project = getProjectById(row.project_id ?? '');
     if (!project) {
       logger.error(
@@ -2742,7 +2761,14 @@ export class SessionManager extends EventEmitter {
     // resume path for idle sessions whose worktrees were preserved by the
     // chokepoint guard. No git worktree add needed — the session's own uncommitted
     // WIP is still there.
-    const recordedPath = row.worktree_path ?? worktreePath;
+    //
+    // Planning sessions (groom/design/ops) never get a per-session worktree —
+    // completeStart() runs them directly against the project checkout (see
+    // worktree_path: null at insertSession time). Point the fast path at
+    // projectDir for them instead of the per-session path that never existed.
+    const recordedPath = isPlanningSession(row.session_type)
+      ? (row.worktree_path ?? projectDir)
+      : (row.worktree_path ?? worktreePath);
     if (
       recordedPath &&
       fs.existsSync(recordedPath) &&
@@ -2821,6 +2847,32 @@ export class SessionManager extends EventEmitter {
       });
       this.wireSession(sessionId, session, projectDir, recordedPath);
       await firstEvent;
+      return sessionId;
+    }
+
+    // Planning sessions (groom/design/ops) never have a per-session worktree —
+    // the fast path above resolves against projectDir, which always exists for a
+    // valid project. Reaching here means the project checkout itself is missing;
+    // never fall through to git worktree recreation, which planning sessions have
+    // no branch/worktree state for.
+    if (isPlanningSession(row.session_type)) {
+      const detail = `project checkout missing or not a git repo at ${recordedPath}`;
+      logger.error(
+        `[SessionManager] sendOrResume: ${detail} for planning session ${sessionId}`,
+      );
+      this.markSessionErrored(
+        sessionId,
+        'error',
+        'planning_checkout_missing',
+        detail,
+      );
+      this.emit('message', {
+        type: 'session_action_failed',
+        sessionId,
+        action: 'sendOrResume',
+        reason: 'planning_checkout_missing',
+        detail,
+      } satisfies ServerMessage);
       return sessionId;
     }
 
