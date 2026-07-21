@@ -849,7 +849,7 @@ export function TaskDetail({
         )}
 
         {/* Empty state */}
-        {!task.codeSession && !task.pr && !task.review && (
+        {!task.codeSession && !task.pr && !task.review && !task.planningSession && (
           <div className={styles.emptyState}>
             <p>No active sessions or PRs for this task.</p>
           </div>
