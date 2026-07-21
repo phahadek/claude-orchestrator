@@ -567,7 +567,7 @@ export interface StagedIntentRow {
 export type StagedIntentRejectOutcome = 'pushback' | 'decline';
 
 /** A single candidate the operator can pick for a decision.pickOne question-intent. */
-export interface DecisionPickOneOption {
+interface DecisionPickOneOption {
   label: string;
   description: string;
 }
