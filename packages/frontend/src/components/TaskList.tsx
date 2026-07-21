@@ -12,6 +12,7 @@ import { opsJournalApi } from '../api/opsJournal';
 import { useDispatch } from '../hooks/useDispatch';
 import { projectsApi } from '../api/projects';
 import { sortByPriority } from '../utils/taskSort';
+import { bareTaskId } from '../utils/taskId';
 import styles from './TaskList.module.css';
 
 interface Props {
@@ -539,7 +540,7 @@ export function TaskList({
           : null,
       );
       const notLaunched = selectedIds.filter(
-        (id) => !result.launched.includes(id),
+        (id) => !result.launched.includes(bareTaskId(id)),
       );
       setGroomError(
         notLaunched.length > 0
@@ -621,7 +622,9 @@ export function TaskList({
             }
           : null,
       );
-      const notLaunched = selectedIds.filter((id) => !launchedIds.has(id));
+      const notLaunched = selectedIds.filter(
+        (id) => !launchedIds.has(bareTaskId(id)),
+      );
       setOpsError(
         notLaunched.length > 0
           ? `${notLaunched.length} selected task${notLaunched.length === 1 ? '' : 's'} did not launch (not ops-executable): ${notLaunched.join(', ')}`
