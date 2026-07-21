@@ -239,7 +239,9 @@ function fetchPageMeta(pageId) {
   try {
     return JSON.parse(out);
   } catch (e) {
-    fail(`could not parse notion-page.mjs --meta JSON for ${pageId}: ${e.message}`);
+    fail(
+      `could not parse notion-page.mjs --meta JSON for ${pageId}: ${e.message}`,
+    );
   }
 }
 
