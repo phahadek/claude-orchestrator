@@ -228,3 +228,44 @@ describe('CliSessionRunner --permission-mode', () => {
     },
   );
 });
+
+describe('CliSessionRunner --disallowed-tools', () => {
+  it.each(['groom', 'design', 'ops'] as const)(
+    'includes --disallowed-tools Skill for a %s (planning) session',
+    async (sessionType) => {
+      const runner = new CliSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      const idx = capturedSpawnArgs.indexOf('--disallowed-tools');
+      expect(idx).not.toBe(-1);
+      expect(capturedSpawnArgs[idx + 1]).toBe('Skill');
+    },
+  );
+
+  it.each(['standard', 'review'] as const)(
+    'omits --disallowed-tools for a %s (non-planning) session',
+    async (sessionType) => {
+      const runner = new CliSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      expect(capturedSpawnArgs).not.toContain('--disallowed-tools');
+    },
+  );
+
+  it('omits --disallowed-tools when sessionType is absent', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    expect(capturedSpawnArgs).not.toContain('--disallowed-tools');
+  });
+});
