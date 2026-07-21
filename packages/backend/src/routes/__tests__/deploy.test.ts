@@ -96,7 +96,7 @@ describe('POST /api/deploy/report-in', () => {
 });
 
 describe('POST /api/deploy/launch', () => {
-  it('starts a deploy_run behind the confirm-gate and returns it', async () => {
+  it('starts a deploy_run behind the confirm-gate and returns it, with no targetSha given', async () => {
     queriesMock.getProjectRowById.mockReturnValue({
       id: 'claude-orchestrator',
       project_dir: '/repo/claude-orchestrator',
@@ -104,7 +104,7 @@ describe('POST /api/deploy/launch', () => {
     const run = {
       run_id: 'run-1',
       project: 'claude-orchestrator',
-      target_sha: 'abc123',
+      target_sha: 'resolved-dev-sha',
       current_step: null,
       status: 'running',
       started_at: '2026-07-20T00:00:00.000Z',
@@ -114,17 +114,15 @@ describe('POST /api/deploy/launch', () => {
 
     const res = await request(makeApp())
       .post('/api/deploy/launch')
-      .send({ projectId: 'claude-orchestrator', targetSha: 'abc123' });
+      .send({ projectId: 'claude-orchestrator' });
 
-    expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith('abc123');
+    expect(deployOrchestratorMock.startDeploy).toHaveBeenCalledWith();
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ run });
   });
 
-  it('400s when projectId or targetSha is missing', async () => {
-    const res = await request(makeApp())
-      .post('/api/deploy/launch')
-      .send({ projectId: 'claude-orchestrator' });
+  it('400s when projectId is missing', async () => {
+    const res = await request(makeApp()).post('/api/deploy/launch').send({});
 
     expect(res.status).toBe(400);
     expect(deployOrchestratorMock.startDeploy).not.toHaveBeenCalled();
@@ -135,7 +133,7 @@ describe('POST /api/deploy/launch', () => {
 
     const res = await request(makeApp())
       .post('/api/deploy/launch')
-      .send({ projectId: 'unknown', targetSha: 'abc123' });
+      .send({ projectId: 'unknown' });
 
     expect(res.status).toBe(404);
   });
@@ -151,7 +149,7 @@ describe('POST /api/deploy/launch', () => {
 
     const res = await request(makeApp())
       .post('/api/deploy/launch')
-      .send({ projectId: 'claude-orchestrator', targetSha: 'abc123' });
+      .send({ projectId: 'claude-orchestrator' });
 
     expect(res.status).toBe(409);
   });

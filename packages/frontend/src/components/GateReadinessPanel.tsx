@@ -191,7 +191,6 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
   const [seedItemsLoading, setSeedItemsLoading] = useState(false);
   const [seedItemsError, setSeedItemsError] = useState<string | null>(null);
 
-  const [deployTargetSha, setDeployTargetSha] = useState('');
   const [deployLaunching, setDeployLaunching] = useState(false);
   const [deployLaunchError, setDeployLaunchError] = useState<string | null>(
     null,
@@ -426,11 +425,11 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
   }, [activeProjectId, deployRun?.status, refreshDeployStatus]);
 
   const launchDeploy = useCallback(() => {
-    if (!activeProjectId || !deployTargetSha.trim()) return;
+    if (!activeProjectId) return;
     setDeployLaunching(true);
     setDeployLaunchError(null);
     deployApi
-      .launch(activeProjectId, deployTargetSha.trim())
+      .launch(activeProjectId)
       .then((result) => {
         setDeployRun(result.run);
         setDeployEvents([]);
@@ -441,7 +440,7 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
       .finally(() => {
         setDeployLaunching(false);
       });
-  }, [activeProjectId, deployTargetSha]);
+  }, [activeProjectId]);
 
   const toggleExpanded = useCallback(
     (id: string) => {
@@ -625,23 +624,10 @@ export function GateReadinessPanel({ activeProjectId }: Props) {
           data-testid="deploy-launch-section"
         >
           <div className={styles.deployRow}>
-            <input
-              className={styles.deployShaInput}
-              type="text"
-              placeholder="Target SHA"
-              value={deployTargetSha}
-              onChange={(e) => setDeployTargetSha(e.target.value)}
-              aria-label="Deploy target SHA"
-              disabled={deployRun?.status === 'running'}
-            />
             <button
               className={styles.deployButton}
               onClick={launchDeploy}
-              disabled={
-                deployLaunching ||
-                !deployTargetSha.trim() ||
-                deployRun?.status === 'running'
-              }
+              disabled={deployLaunching || deployRun?.status === 'running'}
               data-testid="deploy-launch-button"
             >
               {deployRun?.status === 'running' ? 'Deploying…' : 'Launch Deploy'}

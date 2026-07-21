@@ -114,6 +114,36 @@ describe('DeployOrchestrator: step execution order and kinds', () => {
   });
 });
 
+describe('DeployOrchestrator: latest-dev target resolution', () => {
+  it('resolves the target via the injected resolver when no targetSha is passed', async () => {
+    const playbook = playbookWith([step({ id: 'build', kind: 'shell' })]);
+    const resolveDeployTarget = vi.fn(async () => 'resolved-dev-sha');
+    const deps = makeDeps(playbook, { resolveDeployTarget });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+
+    const run = await orchestrator.startDeploy();
+    await flush();
+
+    expect(resolveDeployTarget).toHaveBeenCalledWith('/tmp/proj');
+    expect(run.target_sha).toBe('resolved-dev-sha');
+    const completed = getDeployRun(run.run_id);
+    expect(completed?.target_sha).toBe('resolved-dev-sha');
+  });
+
+  it('does not call the resolver when targetSha is passed explicitly', async () => {
+    const playbook = playbookWith([step({ id: 'build', kind: 'shell' })]);
+    const resolveDeployTarget = vi.fn(async () => 'resolved-dev-sha');
+    const deps = makeDeps(playbook, { resolveDeployTarget });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+
+    const run = await orchestrator.startDeploy('pinned-sha');
+    await flush();
+
+    expect(resolveDeployTarget).not.toHaveBeenCalled();
+    expect(run.target_sha).toBe('pinned-sha');
+  });
+});
+
 describe('DeployOrchestrator: changed_paths skip', () => {
   it('skips a step whose changed_paths do not match the diff', async () => {
     const playbook = playbookWith([

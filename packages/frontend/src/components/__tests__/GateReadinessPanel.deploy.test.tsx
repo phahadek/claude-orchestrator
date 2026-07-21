@@ -34,7 +34,7 @@ beforeEach(() => {
 });
 
 describe('GateReadinessPanel deploy launch control', () => {
-  it('launches a deploy_run with the entered target sha', async () => {
+  it('renders no Target-SHA input and launches with just the projectId', async () => {
     deployApiMock.launch.mockResolvedValue({
       run: {
         run_id: 'run-123',
@@ -49,12 +49,14 @@ describe('GateReadinessPanel deploy launch control', () => {
 
     render(<GateReadinessPanel activeProjectId="proj-1" />);
 
-    const input = await screen.findByLabelText('Deploy target SHA');
-    fireEvent.change(input, { target: { value: 'abc123' } });
-    fireEvent.click(screen.getByTestId('deploy-launch-button'));
+    expect(screen.queryByLabelText('Deploy target SHA')).toBeNull();
+
+    const button = await screen.findByTestId('deploy-launch-button');
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(button);
 
     await waitFor(() => {
-      expect(deployApiMock.launch).toHaveBeenCalledWith('proj-1', 'abc123');
+      expect(deployApiMock.launch).toHaveBeenCalledWith('proj-1');
     });
 
     const status = await screen.findByTestId('deploy-run-status');

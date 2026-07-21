@@ -79,17 +79,16 @@ export function createDeployRouter(): Router {
     res.status(202).json({ projectId, sha });
   });
 
-  // POST /api/deploy/launch  { projectId, targetSha }
-  // Gate-panel launch control: starts a deploy_run for projectId at
-  // targetSha, gated by the playbook's initial confirm-gate.
+  // POST /api/deploy/launch  { projectId }
+  // Gate-panel launch control: starts a deploy_run targeting the playbook's
+  // latest dev (resolved server-side at launch), gated by the playbook's
+  // initial confirm-gate.
   router.post('/deploy/launch', async (req: Request, res: Response) => {
-    const body = req.body as { projectId?: unknown; targetSha?: unknown };
+    const body = req.body as { projectId?: unknown };
     const projectId =
       typeof body.projectId === 'string' ? body.projectId : null;
-    const targetSha =
-      typeof body.targetSha === 'string' ? body.targetSha : null;
-    if (!projectId || !targetSha) {
-      res.status(400).json({ error: 'projectId and targetSha are required' });
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' });
       return;
     }
 
@@ -101,7 +100,7 @@ export function createDeployRouter(): Router {
 
     try {
       const orchestrator = getOrchestrator(projectId, project.project_dir);
-      const run = await orchestrator.startDeploy(targetSha);
+      const run = await orchestrator.startDeploy();
       res.status(202).json({ run });
     } catch (err) {
       if (err instanceof DeployRunConflictError) {
