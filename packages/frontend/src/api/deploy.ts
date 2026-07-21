@@ -28,11 +28,11 @@ export interface DeployStatus {
 }
 
 export const deployApi = {
-  launch(projectId: string, targetSha: string): Promise<{ run: DeployRun }> {
+  launch(projectId: string): Promise<{ run: DeployRun }> {
     return apiRequest<{ run: DeployRun }>('/api/deploy/launch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ projectId, targetSha }),
+      body: JSON.stringify({ projectId }),
     });
   },
 

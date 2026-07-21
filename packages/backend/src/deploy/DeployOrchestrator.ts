@@ -54,6 +54,9 @@ export type DiffProvider = (input: {
   toSha: string;
 }) => Promise<string[]>;
 
+/** Resolves the deploy target when the caller doesn't pin one: fetches origin, then returns origin/dev HEAD. */
+export type DeployTargetResolver = (projectDir: string) => Promise<string>;
+
 interface NeedsAttentionInfo {
   runId: string;
   project: string;
@@ -80,6 +83,7 @@ export interface DeployOrchestratorDeps {
   spawnAgenticStep: AgenticStepSpawner;
   waitForConfirmGate: ConfirmGateWaiter;
   getDiffPaths?: DiffProvider;
+  resolveDeployTarget?: DeployTargetResolver;
   sink?: DeployOrchestratorSink;
   /** Injectable clock for deterministic tests; defaults to `new Date().toISOString()`. */
   now?: () => string;
@@ -142,6 +146,40 @@ function gitDiffNameOnly(input: {
   });
 }
 
+function spawnCapture(
+  cmd: string,
+  args: string[],
+  opts: { cwd: string },
+): Promise<{ ok: boolean; stdout: string }> {
+  return new Promise((resolve) => {
+    const proc = spawn(cmd, args, { cwd: opts.cwd });
+    let out = '';
+    proc.stdout?.on('data', (d: Buffer) => {
+      out += d.toString();
+    });
+    proc.on('error', () => resolve({ ok: false, stdout: '' }));
+    proc.on('close', (code) =>
+      resolve({ ok: code === 0, stdout: out.trim() }),
+    );
+  });
+}
+
+/**
+ * Default target resolution for a plain `startDeploy()` call: fetches
+ * origin, then resolves origin/dev HEAD — a deploy always targets the
+ * latest dev, not an operator-typed SHA.
+ */
+async function resolveDeployTarget(projectDir: string): Promise<string> {
+  await spawnCapture('git', ['fetch', 'origin'], { cwd: projectDir });
+  const result = await spawnCapture('git', ['rev-parse', 'origin/dev'], {
+    cwd: projectDir,
+  });
+  if (!result.ok || !result.stdout) {
+    throw new Error('failed to resolve origin/dev HEAD');
+  }
+  return result.stdout;
+}
+
 /**
  * Executes a project's deploy playbook step-by-step (external-promise family,
  * mirroring ReviewOrchestrator): shell steps run as `run_as`, agentic steps
@@ -157,6 +195,7 @@ export class DeployOrchestrator {
   private readonly loadPlaybook: (projectDir: string) => LoadPlaybookResult;
   private readonly runShell: ShellRunner;
   private readonly getDiffPaths: DiffProvider;
+  private readonly resolveDeployTarget: DeployTargetResolver;
   private readonly now: () => string;
   private readonly pollMaxAttempts: number;
   private readonly pollDelayMs: number;
@@ -183,28 +222,39 @@ export class DeployOrchestrator {
           fromSha: input.fromSha,
           toSha: input.toSha,
         }));
+    this.resolveDeployTarget = deps.resolveDeployTarget ?? resolveDeployTarget;
     this.now = deps.now ?? (() => new Date().toISOString());
     this.pollMaxAttempts = deps.pollMaxAttempts ?? 5;
     this.pollDelayMs = deps.pollDelayMs ?? 1000;
   }
 
   /**
-   * Starts a new deploy_run for `targetSha` and drives it to completion (or
-   * halt) in the background. Throws DeployRunConflictError if the project
-   * already has an active run — at most one active run per project.
+   * Starts a new deploy_run and drives it to completion (or halt) in the
+   * background. A deploy always targets the latest dev: when `targetSha`
+   * isn't passed, it's resolved server-side (fetch origin, then origin/dev
+   * HEAD) before the run row is created. Throws DeployRunConflictError if
+   * the project already has an active run — at most one active run per
+   * project.
    */
-  async startDeploy(targetSha: string): Promise<DeployRunRow> {
+  async startDeploy(targetSha?: string): Promise<DeployRunRow> {
     const loaded = this.loadPlaybook(this.projectDir);
     if (!loaded.ok) {
       throw new Error(`cannot start deploy: ${loaded.reason}`);
     }
+    const resolvedSha =
+      targetSha ?? (await this.resolveDeployTarget(this.projectDir));
     const run = startDeployRun({
       project: this.project,
-      targetSha,
+      targetSha: resolvedSha,
       startedAt: this.now(),
     });
     const deployedShaAtStart = getProjectDeployedSha(this.project);
-    void this.drive(run.run_id, loaded.playbook, targetSha, deployedShaAtStart);
+    void this.drive(
+      run.run_id,
+      loaded.playbook,
+      resolvedSha,
+      deployedShaAtStart,
+    );
     return run;
   }
 
