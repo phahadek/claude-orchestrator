@@ -114,9 +114,7 @@ describe('resolveMilestoneForProject', () => {
       sourceId: 'e4a105a2-1234-4abc-9def-000000000000',
       canonicalShortId: 'M11',
     };
-    projectServiceMock.getById.mockReturnValue(
-      project([notionSynced, M12]),
-    );
+    projectServiceMock.getById.mockReturnValue(project([notionSynced, M12]));
     expect(resolveMilestoneForProject('p1', 'M11')).toBe('M11');
   });
 });

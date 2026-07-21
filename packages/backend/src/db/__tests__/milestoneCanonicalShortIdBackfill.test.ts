@@ -132,7 +132,14 @@ describe('milestone canonical_short_id corrective re-backfill', () => {
           `INSERT INTO milestones (id, project_id, name, canonical_short_id, display_order, created_at, updated_at)
            VALUES (?, ?, ?, ?, 0, ?, ?)`,
         )
-        .run('ms-dup', 'proj-3', 'M1 — Duplicate', 'M1', Date.now(), Date.now()),
+        .run(
+          'ms-dup',
+          'proj-3',
+          'M1 — Duplicate',
+          'M1',
+          Date.now(),
+          Date.now(),
+        ),
     ).toThrow();
   });
 

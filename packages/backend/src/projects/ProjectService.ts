@@ -276,7 +276,8 @@ export const ProjectService = {
     for (let i = 0; i < yamlMilestones.length; i++) {
       const ym = yamlMilestones[i];
       const displayOrder = i;
-      const canonicalShortId = extractMilestoneToken(ym.name) ?? ym.id ?? ym.name;
+      const canonicalShortId =
+        extractMilestoneToken(ym.name) ?? ym.id ?? ym.name;
 
       const bySourceId = existing.find((r) => r.source_id === ym.id);
       if (bySourceId) {
