@@ -620,6 +620,19 @@ export function TaskList({
     }
   }
 
+  // A dep-blocked ops task (its dependency isn't ✅ Done + deployed, per the
+  // backend's opsLoad.ts classification) would otherwise render a selectable
+  // checkbox here, get selected, and then be silently dropped by
+  // /ops/launch's worklist.executable filter. Surface it as disabled +
+  // reasoned instead — see opsDepBlocked/opsDepBlockedReason on TaskView.
+  function isOpsDepBlocked(t: TaskView): boolean {
+    return (
+      OPS_TASK_TYPES.includes(t.taskType) &&
+      (t.displayStatus === 'ready' || t.displayStatus === 'in_progress') &&
+      !!t.opsDepBlocked
+    );
+  }
+
   // Ops(N) checkbox eligibility: mirrors the backend's executable predicate
   // (opsLoad.ts) — only 🗂️ Ready / 🔄 In Progress 🔧/🔎/observational-🧪 tasks are
   // launchable. Type-based only — the frontend can't see Mode, so an
@@ -630,7 +643,8 @@ export function TaskList({
   function isOpsEligible(t: TaskView): boolean {
     return (
       OPS_TASK_TYPES.includes(t.taskType) &&
-      (t.displayStatus === 'ready' || t.displayStatus === 'in_progress')
+      (t.displayStatus === 'ready' || t.displayStatus === 'in_progress') &&
+      !isOpsDepBlocked(t)
     );
   }
   const opsEligibleTasks = tasks.filter(isOpsEligible);
@@ -1027,6 +1041,7 @@ export function TaskList({
               opsCheckedIds={opsCheckedIds}
               onOpsCheckChange={toggleOpsCheck}
               isOpsEligible={isOpsEligible}
+              isOpsDepBlocked={isOpsDepBlocked}
               designCheckedIds={designCheckedIds}
               onDesignCheckChange={toggleDesignCheck}
               isDesignEligible={isDesignEligible}

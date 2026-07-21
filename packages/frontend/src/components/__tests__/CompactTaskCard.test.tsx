@@ -164,6 +164,55 @@ describe('CompactTaskCard', () => {
     expect(screen.queryByTestId('blocker-names')).toBeNull();
   });
 
+  it('renders a disabled checkbox with a reason when disabled', () => {
+    render(
+      <CompactTaskCard
+        task={makeTask({ taskType: '🔧 Operational' })}
+        showCheckbox={true}
+        checked={false}
+        onCheckChange={vi.fn()}
+        onClick={vi.fn()}
+        disabled={true}
+        disabledReason="waiting on Dep Task"
+      />,
+    );
+    const checkbox = screen.getByRole('checkbox') as HTMLInputElement;
+    expect(checkbox.disabled).toBe(true);
+    expect(screen.getByTestId('ops-dep-blocked-reason').textContent).toContain(
+      'waiting on Dep Task',
+    );
+  });
+
+  it('does not toggle a disabled checkbox on click', () => {
+    const onCheckChange = vi.fn();
+    render(
+      <CompactTaskCard
+        task={makeTask({ taskId: 'task-blocked' })}
+        showCheckbox={true}
+        checked={false}
+        onCheckChange={onCheckChange}
+        onClick={vi.fn()}
+        disabled={true}
+        disabledReason="waiting on Dep Task"
+      />,
+    );
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(onCheckChange).not.toHaveBeenCalled();
+  });
+
+  it('does not show the disabled-reason section when not disabled', () => {
+    render(
+      <CompactTaskCard
+        task={makeTask()}
+        showCheckbox={true}
+        checked={false}
+        onCheckChange={vi.fn()}
+        onClick={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('ops-dep-blocked-reason')).toBeNull();
+  });
+
   it('has data-status attribute matching the task displayStatus', () => {
     render(
       <CompactTaskCard

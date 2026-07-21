@@ -26,6 +26,7 @@ import { DependencyResolver } from '../notion/DependencyResolver';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
 import { parsePauseReason, deriveRecoveryDescriptor } from '../db/pauseReason';
+import { computeOpsBlockingDeps, isOpsEligibleType } from '../ops/opsLoad';
 import yaml from 'js-yaml';
 export type { TaskView } from '../ws/types';
 
@@ -38,6 +39,45 @@ export interface TasksActiveResponse {
 
 function getReviewIterationCap(): number {
   return typedGetSetting('max_review_iterations');
+}
+
+/**
+ * Mutates `views` in place with opsDepBlocked/opsDepBlockedReason for every
+ * ops-eligible task (🔧 Operational / 🔎 Investigation / 🧪 Testing) —
+ * mirrors the frontend's OPS_TASK_TYPES gate so the Ops(N) checkbox can be
+ * disabled up front instead of the task silently being dropped by
+ * /ops/launch's worklist.executable filter. Uses the local_branches-only
+ * (`fast`) merge-commit lookup — this runs on every poll of a frequently
+ * refetched list, so it can't afford a GitHub round trip per dependency.
+ */
+async function annotateOpsDepBlocking(
+  views: TaskView[],
+  allTasks: NotionTask[],
+  projectId: string,
+): Promise<void> {
+  const opsTasks = allTasks.filter((t) => isOpsEligibleType(t.type));
+  if (opsTasks.length === 0) return;
+  try {
+    const blocking = await computeOpsBlockingDeps(
+      allTasks,
+      opsTasks,
+      projectId,
+      {
+        fast: true,
+      },
+    );
+    for (const view of views) {
+      const info = blocking.get(view.taskId);
+      if (!info) continue;
+      view.opsDepBlocked = info.blockingDepIds.length > 0;
+      view.opsDepBlockedReason =
+        info.blockingDepTitles.length > 0
+          ? `waiting on ${info.blockingDepTitles.join(', ')}`
+          : null;
+    }
+  } catch {
+    // ignore — views retain default (undefined) ops dep-block fields
+  }
 }
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
@@ -436,7 +476,7 @@ export function createTasksRouter(
   });
 
   // ── GET /api/tasks/non-milestone?projectId=<id> ─────────────────────────
-  router.get('/tasks/non-milestone', (req: Request, res: Response) => {
+  router.get('/tasks/non-milestone', async (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : '';
     if (!projectId) {
@@ -489,11 +529,13 @@ export function createTasksRouter(
       // ignore — views retain their default blocked: false
     }
 
+    await annotateOpsDepBlocking(views, notionTasks, projectId);
+
     res.json(views);
   });
 
   // ── GET /api/tasks/active?projectId=<id>&boardId=<id> ────────────────────
-  router.get('/tasks/active', (req: Request, res: Response) => {
+  router.get('/tasks/active', async (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : '';
     if (!projectId) {
@@ -530,14 +572,13 @@ export function createTasksRouter(
       return;
     }
 
-    let taskIds: string[];
+    let allBoardTasks: NotionTask[];
     try {
-      taskIds = (JSON.parse(boardCacheRow.raw_json) as NotionTask[]).map(
-        (t) => t.id,
-      );
+      allBoardTasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
     } catch {
-      taskIds = [];
+      allBoardTasks = [];
     }
+    const taskIds = allBoardTasks.map((t) => t.id);
 
     const aggregates = getActiveTaskAggregates(taskIds);
     const cap = getReviewIterationCap();
@@ -547,7 +588,6 @@ export function createTasksRouter(
 
     // Resolve blocked status from the full board task list
     try {
-      const allBoardTasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
       const resolver = new DependencyResolver();
       const resolved = resolver.resolve(allBoardTasks);
       const resolvedMap = new Map(resolved.map((r) => [r.task.id, r]));
@@ -562,6 +602,8 @@ export function createTasksRouter(
     } catch {
       // ignore — views retain their default blocked: false
     }
+
+    await annotateOpsDepBlocking(views, allBoardTasks, projectId);
 
     const stale =
       Date.now() - boardCacheRow.fetched_at >

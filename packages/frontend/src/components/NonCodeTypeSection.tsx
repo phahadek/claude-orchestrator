@@ -16,6 +16,10 @@ interface Props {
   opsCheckedIds?: Set<string>;
   onOpsCheckChange?: (taskId: string, checked: boolean) => void;
   isOpsEligible?: (task: TaskView) => boolean;
+  /** When provided, tasks matching isOpsDepBlocked render a disabled Ops checkbox with a
+   * "waiting on <dep>" reason instead of no checkbox — surfaces dep-blocked ops tasks rather
+   * than letting them be selected and silently dropped by /ops/launch. */
+  isOpsDepBlocked?: (task: TaskView) => boolean;
   /** When provided, tasks matching isDesignEligible render a Design(N) selection checkbox —
    * takes precedence over the Groom checkbox when a task qualifies for both. */
   designCheckedIds?: Set<string>;
@@ -65,6 +69,7 @@ export function NonCodeTypeSection({
   opsCheckedIds,
   onOpsCheckChange,
   isOpsEligible,
+  isOpsDepBlocked,
   designCheckedIds,
   onDesignCheckChange,
   isDesignEligible,
@@ -143,17 +148,23 @@ export function NonCodeTypeSection({
                   const opsEligible =
                     opsCheckedIds !== undefined &&
                     (isOpsEligible?.(task) ?? false);
+                  const opsBlocked =
+                    !opsEligible &&
+                    opsCheckedIds !== undefined &&
+                    (isOpsDepBlocked?.(task) ?? false);
                   const designEligible =
                     !opsEligible &&
+                    !opsBlocked &&
                     designCheckedIds !== undefined &&
                     (isDesignEligible?.(task) ?? false);
                   const groomable =
                     !opsEligible &&
+                    !opsBlocked &&
                     !designEligible &&
                     groomCheckedIds !== undefined &&
                     task.displayStatus === 'backlog';
                   const showCheckbox =
-                    opsEligible || designEligible || groomable;
+                    opsEligible || opsBlocked || designEligible || groomable;
                   const checked = opsEligible
                     ? opsCheckedIds!.has(task.taskId)
                     : designEligible
@@ -173,6 +184,10 @@ export function NonCodeTypeSection({
                       showCheckbox={showCheckbox}
                       checked={checked}
                       onCheckChange={onCheckChange}
+                      disabled={opsBlocked}
+                      disabledReason={
+                        opsBlocked ? task.opsDepBlockedReason : null
+                      }
                       onClick={() => onSelectTask(task.taskId)}
                       showStatus
                     />

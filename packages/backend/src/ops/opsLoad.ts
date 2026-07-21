@@ -28,11 +28,15 @@ import {
   getTaskCache,
   upsertTaskCache,
   listOpsJournalEntries,
+  getMergeCommitForTask,
+  getMergeCommitFromLocalBranches,
 } from '../db/queries';
 import { NotionClient, normalizeNotionId } from '../notion/NotionClient';
 import type { NotionTask } from '../notion/types';
 import { reconcileJournal, type OpsBoardTaskRow } from './opsJournal';
 import { formatTaskId } from '../tasks/taskId';
+import { getProjectDeployedSha } from '../deploy/deployService';
+import { createLocalGitAncestrySource } from '../gate/gateService';
 
 // ─── Notion status vocabulary (matches the values NotionClient reads/writes) ──
 const STATUS = {
@@ -68,6 +72,104 @@ function isTestAuthoring(markdown: string): boolean {
 
 const normId = (id: string) => id.replace(/-/g, '').toLowerCase();
 
+/** True for a Type value /ops folds in: 🔧 Operational, 🔎 Investigation, or 🧪 Testing. */
+export function isOpsEligibleType(type: string): boolean {
+  return opsTypeMatcher(type) || testingTypeMatcher(type);
+}
+
+/** Resolves a dep task's merge commit; swappable so hot-path callers can skip network fallbacks. */
+type MergeCommitLookup = (
+  depId: string,
+) => Promise<string | null> | string | null;
+
+/**
+ * An ops task typically operates against live/prod state, so a ✅ Done dep
+ * isn't enough — its merge commit must actually be deployed. Reuses the same
+ * deploy-ancestry predicate the gate path uses (getProjectDeployedSha +
+ * git-ancestry, gateService.ts). Fails open (treated as satisfied) when
+ * either the dep's merge commit or the project's deployed SHA is unknown —
+ * mirroring reconcileGateRunnability's "unknown commit ⇒ covered" default —
+ * so tasks/projects without deploy tracking wired up aren't blocked forever.
+ */
+async function isDepDeployed(
+  depId: string,
+  project: string,
+  getMergeCommit: MergeCommitLookup,
+): Promise<boolean> {
+  const mergeCommit = await getMergeCommit(depId);
+  if (!mergeCommit) return true;
+  const deployedSha = getProjectDeployedSha(project);
+  if (!deployedSha) return true;
+  const projectDir = getProjectRowById(project)?.project_dir;
+  const ancestry = createLocalGitAncestrySource(projectDir);
+  return ancestry.isAncestor(mergeCommit, deployedSha);
+}
+
+export interface OpsDepBlockInfo {
+  blockingDepIds: string[];
+  blockingDepTitles: string[];
+}
+
+/**
+ * Same dep-satisfaction predicate loadOpsContext's classification loop uses
+ * (only ✅ Done + deployed satisfies a hard dep), factored out so callers
+ * outside the milestone-scoped loader (e.g. the general task-list routes)
+ * can surface the same dep-blocked reason on a task view. `allTasks` scopes
+ * the dep lookup the same way DependencyResolver does — deps outside the
+ * given list are treated as external/unresolved and never block.
+ */
+async function blockingDepsFor(
+  dependsOn: string[],
+  depMap: Map<string, { status: string; title: string }>,
+  project: string,
+  getMergeCommit: MergeCommitLookup,
+): Promise<OpsDepBlockInfo> {
+  const blockingDepIds: string[] = [];
+  const blockingDepTitles: string[] = [];
+  for (const depId of dependsOn) {
+    const dep = depMap.get(normId(depId));
+    if (dep === undefined) continue;
+    const doneNotDeployed =
+      dep.status === STATUS.done &&
+      !(await isDepDeployed(depId, project, getMergeCommit));
+    if (dep.status !== STATUS.done || doneNotDeployed) {
+      blockingDepIds.push(depId);
+      blockingDepTitles.push(dep.title);
+    }
+  }
+  return { blockingDepIds, blockingDepTitles };
+}
+
+/**
+ * `fast`, when true, resolves each dep's merge commit from local_branches
+ * only (no GitHub fallback) — for hot-path callers (e.g. the polled task-list
+ * routes) that can't afford a network round trip per dependency per request.
+ * The milestone-scoped /ops loader always uses the full fallback since it
+ * runs on explicit user action, not on a poll.
+ */
+export async function computeOpsBlockingDeps(
+  allTasks: { id: string; status: string; title: string }[],
+  targetTasks: { id: string; dependsOn: string[] }[],
+  project: string,
+  options: { fast?: boolean } = {},
+): Promise<Map<string, OpsDepBlockInfo>> {
+  const depMap = new Map<string, { status: string; title: string }>();
+  for (const t of allTasks) depMap.set(normId(t.id), t);
+
+  const getMergeCommit: MergeCommitLookup = options.fast
+    ? getMergeCommitFromLocalBranches
+    : getMergeCommitForTask;
+
+  const result = new Map<string, OpsDepBlockInfo>();
+  for (const task of targetTasks) {
+    result.set(
+      task.id,
+      await blockingDepsFor(task.dependsOn, depMap, project, getMergeCommit),
+    );
+  }
+  return result;
+}
+
 // ─── result shapes ──────────────────────────────────────────────────────────
 
 interface PageDoc {
@@ -94,6 +196,8 @@ export interface OpsTaskEntry extends TaskRef {
   priority?: string;
   dependsOn: string[];
   blockingDepIds: string[];
+  /** Titles of the blocking deps, parallel to blockingDepIds — surfaced to the UI as a reason. */
+  blockingDepTitles: string[];
   depStatus: 'ready' | 'blocked';
 }
 
@@ -263,10 +367,15 @@ export async function loadOpsContext(
 
     // Only ✅ Done satisfies a hard dep — 🗂️ Ready and ⏭️ Deferred both block.
     // Unresolved/external deps (on a board not loaded) are not counted as blocking.
-    const blockingDepIds = row.dependsOn.filter((depId) => {
-      const dep = depMap.get(normId(depId));
-      return dep !== undefined && dep.status !== STATUS.done;
-    });
+    // A ✅ Done dep additionally requires its merge commit be deployed — an
+    // ops task runs against live state, so a merged-but-undeployed dep still
+    // blocks it (see isDepDeployed above).
+    const { blockingDepIds, blockingDepTitles } = await blockingDepsFor(
+      row.dependsOn,
+      depMap,
+      project,
+      getMergeCommitForTask,
+    );
     const depStatus: 'ready' | 'blocked' =
       blockingDepIds.length === 0 ? 'ready' : 'blocked';
 
@@ -277,6 +386,7 @@ export async function loadOpsContext(
       priority: row.priority,
       dependsOn: row.dependsOn,
       blockingDepIds,
+      blockingDepTitles,
       depStatus,
     };
 

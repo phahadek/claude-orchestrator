@@ -75,6 +75,10 @@ export interface TaskView {
   blocked: boolean;
   blockerNames: string[];
   wave: number;
+  /** Ops-eligible task's dependency satisfaction (deploy-aware, not just ✅ Done) — absent for non-ops task types. */
+  opsDepBlocked?: boolean;
+  /** Human-readable reason when opsDepBlocked, e.g. "waiting on <dep title>". */
+  opsDepBlockedReason?: string | null;
   codeSession: {
     sessionId: string;
     status: string;
