@@ -595,7 +595,11 @@ export function StagedIntentPanel({
       )}
 
       <div className={styles.rejectForm}>
-        <div className={styles.outcomeToggle} role="radiogroup" aria-label="Reject outcome">
+        <div
+          className={styles.outcomeToggle}
+          role="radiogroup"
+          aria-label="Reject outcome"
+        >
           <button
             type="button"
             role="radio"

@@ -29,9 +29,7 @@ describe('StagedIntentPanel', () => {
   });
 
   it('renders no per-item Commit/Apply for a grouped intent, only Approve', () => {
-    render(
-      <StagedIntentPanel intent={makeIntent({ groupId: 'group-1' })} />,
-    );
+    render(<StagedIntentPanel intent={makeIntent({ groupId: 'group-1' })} />);
 
     expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /apply/i })).toBeNull();
@@ -138,9 +136,12 @@ describe('StagedIntentPanel', () => {
     const submit = screen.getByRole('button', { name: /pushback/i });
     expect(submit).toHaveProperty('disabled', true);
 
-    fireEvent.change(screen.getByPlaceholderText(/what should the session revise/i), {
-      target: { value: 'please revise the title' },
-    });
+    fireEvent.change(
+      screen.getByPlaceholderText(/what should the session revise/i),
+      {
+        target: { value: 'please revise the title' },
+      },
+    );
 
     expect(submit).toHaveProperty('disabled', false);
   });
@@ -154,9 +155,12 @@ describe('StagedIntentPanel', () => {
     const onRejected = vi.fn();
 
     render(<StagedIntentPanel intent={makeIntent()} onRejected={onRejected} />);
-    fireEvent.change(screen.getByPlaceholderText(/what should the session revise/i), {
-      target: { value: 'please revise the title' },
-    });
+    fireEvent.change(
+      screen.getByPlaceholderText(/what should the session revise/i),
+      {
+        target: { value: 'please revise the title' },
+      },
+    );
     fireEvent.click(screen.getByRole('button', { name: /pushback/i }));
 
     await waitFor(() => {
@@ -184,9 +188,12 @@ describe('StagedIntentPanel', () => {
 
     render(<StagedIntentPanel intent={makeIntent()} onRejected={onRejected} />);
     fireEvent.click(screen.getByRole('radio', { name: /decline/i }));
-    fireEvent.change(screen.getByPlaceholderText(/why is this being declined/i), {
-      target: { value: 'no longer needed' },
-    });
+    fireEvent.change(
+      screen.getByPlaceholderText(/why is this being declined/i),
+      {
+        target: { value: 'no longer needed' },
+      },
+    );
     fireEvent.click(screen.getByRole('button', { name: /decline/i }));
 
     await waitFor(() => {
@@ -245,9 +252,12 @@ describe('StagedIntentPanel', () => {
         onDismiss={onDismiss}
       />,
     );
-    fireEvent.change(screen.getByPlaceholderText(/what should the session revise/i), {
-      target: { value: 'please revise' },
-    });
+    fireEvent.change(
+      screen.getByPlaceholderText(/what should the session revise/i),
+      {
+        target: { value: 'please revise' },
+      },
+    );
     fireEvent.click(screen.getByRole('button', { name: /pushback/i }));
 
     await waitFor(() => expect(onDismiss).toHaveBeenCalledWith(makeIntent()));
