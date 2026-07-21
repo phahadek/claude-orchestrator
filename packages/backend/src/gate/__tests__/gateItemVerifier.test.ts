@@ -150,4 +150,72 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     expect(result.disposition).toBe('needs-setup');
     expect(markSessionDone).not.toHaveBeenCalled();
   });
+
+  it('captures a gate_verify_disposition emitted synchronously as start() resolves, before the poll fallback can fire', async () => {
+    // A fast session can emit its disposition the instant sessionManager.start()
+    // resolves — before any code after the `await` has had a chance to attach a
+    // listener. Simulate that by emitting from inside the mocked start()
+    // implementation itself, synchronously with resolution.
+    const emitter = new EventEmitter();
+    const sessionManager = Object.assign(emitter, {
+      start: vi.fn().mockImplementation(async () => {
+        emitter.emit('gate_verify_disposition', {
+          sessionId: 'sess-fast',
+          disposition: {
+            disposition: 'fail',
+            evidence: { basis: 'operational', note: 'PR was reverted' },
+          },
+        });
+        return 'sess-fast';
+      }),
+    });
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    // A long poll interval / budget so the fallback would never legitimately
+    // fire during this test — if the event were lost, the test would hang
+    // instead of silently passing with the wrong disposition.
+    const verifier = new SessionGateItemVerifier(sessionManager as never, {
+      pollIntervalMs: 60_000,
+      budgetMs: 60_000,
+    });
+
+    const result = await verifier.verify(item);
+
+    expect(result.disposition).toBe('fail');
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'sess-fast',
+      expect.any(Number),
+      null,
+      'gate_item_verifier_consumed',
+    );
+  });
+
+  it('records the session emitted disposition, not the needs-setup timeout fallback, when the event beat the poll', async () => {
+    const emitter = new EventEmitter();
+    const sessionManager = Object.assign(emitter, {
+      start: vi.fn().mockImplementation(async () => {
+        emitter.emit('gate_verify_disposition', {
+          sessionId: 'sess-fast-2',
+          disposition: {
+            disposition: 'pass',
+            evidence: { basis: 'operational', note: 'audit_log confirms it' },
+          },
+        });
+        return 'sess-fast-2';
+      }),
+    });
+    vi.mocked(getSession).mockReturnValue({ status: 'done' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never, {
+      pollIntervalMs: 5,
+      budgetMs: 60_000,
+    });
+
+    const result = await verifier.verify(item);
+
+    // Must reflect the emitted `pass`, not the poll fallback's
+    // needs-setup ("no gate_verify report on conclusion").
+    expect(result.disposition).toBe('pass');
+    expect(result.evidence).toMatchObject({ basis: 'operational' });
+  });
 });

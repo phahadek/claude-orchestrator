@@ -166,6 +166,19 @@ export class SessionGateItemVerifier implements GateItemVerifier {
       };
     }
 
+    // Register a capture listener before start() dispatches the session — a
+    // fast session can emit gate_verify_disposition before start() even
+    // resolves, and without a listener already attached that event is lost
+    // (the poll fallback would then wrongly record a needs-setup timeout
+    // instead of the session's actual verdict). We don't know sessionId yet,
+    // so buffer every disposition and filter by sessionId once start()
+    // resolves.
+    const captured: GateVerifyDispositionPayload[] = [];
+    const capture = (payload: GateVerifyDispositionPayload) => {
+      captured.push(payload);
+    };
+    this.sessionManager.on('gate_verify_disposition', capture);
+
     let sessionId: string;
     try {
       sessionId = await this.sessionManager.start(item.id, project.contextUrl, {
@@ -177,6 +190,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         opsContext: buildGateVerifyContext(item),
       });
     } catch (err) {
+      this.sessionManager.off('gate_verify_disposition', capture);
       return {
         disposition: 'needs-setup',
         evidence: {
@@ -185,19 +199,28 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         },
       };
     }
+    this.sessionManager.off('gate_verify_disposition', capture);
+    const preCaptured = captured.find((p) => p.sessionId === sessionId);
 
-    const result = await this.awaitDisposition(sessionId);
+    const result = await this.awaitDisposition(sessionId, preCaptured);
     return enforcePassEvidenceContract(result);
   }
 
-  private awaitDisposition(sessionId: string): Promise<GateVerificationResult> {
+  private awaitDisposition(
+    sessionId: string,
+    preCaptured?: GateVerifyDispositionPayload,
+  ): Promise<GateVerificationResult> {
     return new Promise((resolve) => {
       let settled = false;
+      const handles: {
+        poll?: ReturnType<typeof setInterval>;
+        budget?: ReturnType<typeof setTimeout>;
+      } = {};
       const finish = (result: GateVerificationResult) => {
         if (settled) return;
         settled = true;
-        clearInterval(pollHandle);
-        clearTimeout(budgetHandle);
+        if (handles.poll) clearInterval(handles.poll);
+        if (handles.budget) clearTimeout(handles.budget);
         this.sessionManager.off('gate_verify_disposition', onDisposition);
         // The disposition has now been consumed by the reconciler's caller —
         // this one-shot session has no resume purpose from here on (a
@@ -229,9 +252,18 @@ export class SessionGateItemVerifier implements GateItemVerifier {
           evidence: payload.disposition.evidence ?? { sessionId },
         });
       };
+
+      if (preCaptured) {
+        finish({
+          disposition: preCaptured.disposition.disposition,
+          evidence: preCaptured.disposition.evidence ?? { sessionId },
+        });
+        return;
+      }
+
       this.sessionManager.on('gate_verify_disposition', onDisposition);
 
-      const pollHandle = setInterval(() => {
+      handles.poll = setInterval(() => {
         const row = getSession(sessionId);
         if (row && TERMINAL_SESSION_STATUSES.has(row.status)) {
           if (row.status === 'error' || row.status === 'killed') {
@@ -261,7 +293,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         }
       }, this.pollIntervalMs);
 
-      const budgetHandle = setTimeout(() => {
+      handles.budget = setTimeout(() => {
         finish({
           disposition: 'needs-setup',
           evidence: { reason: 'verification budget exceeded', sessionId },
