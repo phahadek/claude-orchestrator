@@ -130,6 +130,19 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'missing capability instead. Either ask or abstain — never fabricate a result to route ' +
       'around a denial.',
   },
+  {
+    id: 'decision-pickone-genuine-forks-only',
+    title: 'decision.pickOne is for genuine forks only',
+    appliesTo: ['groom', 'design', 'ops'],
+    text:
+      'Reserve `decision.pickOne` for a genuine fork {skillLabel} cannot resolve ' +
+      'confidently — a question only the operator can decide. When {skillLabel} is ' +
+      'confident in one path, stage that proposal normally (its concrete write, with a ' +
+      'decisionProposal explaining the reasoning) and let a reject-with-pushback carry ' +
+      'any correction — never manufacture a decision.pickOne to hedge on a call ' +
+      '{skillLabel} is equipped to make, and never use it as a general-purpose ' +
+      'confirmation prompt.',
+  },
 ] as const;
 
 /** Resolve `{skillLabel}` against the given skill and return the finished prose. */

@@ -23,6 +23,8 @@ import type {
   StagedIntentRow,
   StagedIntentState,
   StagedIntentRejectOutcome,
+  DecisionPickOnePayload,
+  StagedIntentAnswer,
 } from '../db/types';
 import {
   hashIntentPayload,
@@ -33,6 +35,7 @@ import {
   listStagedIntentsByGroup,
   listStagedIntentsBySession,
   findActiveStagedIntentForTask,
+  findActiveDecisionPickOneForSession,
   transitionStagedIntent,
   supersedeStagedIntent,
   setStagedIntentAnnotation,
@@ -170,6 +173,8 @@ export interface StagedIntent {
   } | null;
   /** Operator-supplied rationale for a reject disposition (pushback | decline). Null until rejected. */
   dispositionReason?: string | null;
+  /** The operator's answer to a decision.pickOne question-intent. Null until answered. */
+  answer?: StagedIntentAnswer | null;
 }
 
 function rowToApi(row: StagedIntentRow): StagedIntent {
@@ -191,6 +196,7 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
       ? (JSON.parse(row.advisory) as StagedIntent['advisory'])
       : null,
     dispositionReason: row.disposition_reason,
+    answer: row.answer ? (JSON.parse(row.answer) as StagedIntentAnswer) : null,
   };
 }
 
@@ -329,6 +335,64 @@ function toArchUnitUpdateFields(
   };
 }
 
+/**
+ * Validates a decision.pickOne payload/staging request — throws
+ * DecisionPickOneValidationError on the first violation. A question-intent
+ * writes no task store, so it must carry its own substantive justification
+ * (decisionProposal) and per-option descriptions rather than leaning on a
+ * task-store diff for context; it also cannot belong to a group, since a
+ * group is a structural-change unit and this stages no write at all.
+ */
+class DecisionPickOneValidationError extends Error {
+  constructor(reason: string) {
+    super(`[stagedIntents] decision.pickOne rejected: ${reason}`);
+    this.name = 'DecisionPickOneValidationError';
+  }
+}
+
+function validateDecisionPickOnePayload(
+  payload: unknown,
+  groupId: string | null | undefined,
+  decisionProposal: string | null | undefined,
+): asserts payload is DecisionPickOnePayload {
+  if (groupId) {
+    throw new DecisionPickOneValidationError(
+      'a decision.pickOne question cannot belong to a group — it stages no concrete write',
+    );
+  }
+  if (!decisionProposal?.trim()) {
+    throw new DecisionPickOneValidationError(
+      'a substantive decisionProposal (why this fork needs an operator decision) is required',
+    );
+  }
+  const p = payload as Partial<DecisionPickOnePayload> | null;
+  if (!p || typeof p.prompt !== 'string' || !p.prompt.trim()) {
+    throw new DecisionPickOneValidationError('payload.prompt is required');
+  }
+  if (!Array.isArray(p.options) || p.options.length < 2) {
+    throw new DecisionPickOneValidationError(
+      'payload.options must list at least two candidate options',
+    );
+  }
+  for (const opt of p.options) {
+    if (!opt || typeof opt.label !== 'string' || !opt.label.trim()) {
+      throw new DecisionPickOneValidationError(
+        'every option requires a non-empty label',
+      );
+    }
+    if (typeof opt.description !== 'string' || !opt.description.trim()) {
+      throw new DecisionPickOneValidationError(
+        `option "${opt.label}" requires a substantive description`,
+      );
+    }
+  }
+  if (typeof p.allowFreeForm !== 'boolean') {
+    throw new DecisionPickOneValidationError(
+      'payload.allowFreeForm must be a boolean',
+    );
+  }
+}
+
 /** Intent kinds accepted by POST /staged-intents. */
 export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'task.create',
@@ -341,6 +405,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'task.move',
   'gate.accrete',
   'seed.stage',
+  'decision.pickOne',
   'journal.setState',
   'arch.createUnit',
   'arch.updateUnit',
@@ -360,7 +425,9 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
  * staged/approved intent for the same (projectId, kind, taskId) is a no-op —
  * the existing row (and its approval, if any) is returned untouched. A
  * re-emission that differs supersedes the standing intent (tombstoning it)
- * and re-enters `staged`, requiring fresh approval.
+ * and re-enters `staged`, requiring fresh approval. decision.pickOne carries
+ * no taskId (it is a question, not a task write), so it dedups instead on
+ * (sessionId, payload_hash) — see findActiveDecisionPickOneForSession.
  */
 export function stageIntent(
   kind: string,
@@ -370,38 +437,46 @@ export function stageIntent(
   sessionId?: string | null,
   decisionProposal?: string | null,
 ): StagedIntent {
+  if (kind === 'decision.pickOne') {
+    validateDecisionPickOnePayload(payload, groupId, decisionProposal);
+  }
+
   const taskId = extractTaskId(kind, payload);
   const payloadHash = hashIntentPayload(payload);
   const now = Date.now();
 
-  if (taskId) {
-    const existing = findActiveStagedIntentForTask(projectId, kind, taskId);
-    if (existing) {
-      if (existing.payload_hash === payloadHash) {
-        return rowToApi(existing);
-      }
-      const newRow: StagedIntentRow = {
-        id: randomUUID(),
-        kind,
-        payload: JSON.stringify(payload ?? null),
-        payload_hash: payloadHash,
-        task_id: taskId,
-        project_id: projectId,
-        session_id: sessionId ?? null,
-        group_id: groupId ?? null,
-        state: 'staged',
-        supersedes: null,
-        annotation: null,
-        decision_proposal: decisionProposal ?? null,
-        advisory: null,
-        disposition_reason: null,
-        created_at: now,
-        updated_at: now,
-      };
-      const superseded = rowToApi(supersedeStagedIntent(existing.id, newRow));
-      broadcastIntentChange(superseded);
-      return superseded;
+  const existing = taskId
+    ? findActiveStagedIntentForTask(projectId, kind, taskId)
+    : kind === 'decision.pickOne' && sessionId
+      ? findActiveDecisionPickOneForSession(sessionId)
+      : undefined;
+
+  if (existing) {
+    if (existing.payload_hash === payloadHash) {
+      return rowToApi(existing);
     }
+    const newRow: StagedIntentRow = {
+      id: randomUUID(),
+      kind,
+      payload: JSON.stringify(payload ?? null),
+      payload_hash: payloadHash,
+      task_id: taskId,
+      project_id: projectId,
+      session_id: sessionId ?? null,
+      group_id: groupId ?? null,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: decisionProposal ?? null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: now,
+      updated_at: now,
+    };
+    const superseded = rowToApi(supersedeStagedIntent(existing.id, newRow));
+    broadcastIntentChange(superseded);
+    return superseded;
   }
 
   const row: StagedIntentRow = {
@@ -419,6 +494,7 @@ export function stageIntent(
     decision_proposal: decisionProposal ?? null,
     advisory: null,
     disposition_reason: null,
+    answer: null,
     created_at: now,
     updated_at: now,
   };
@@ -939,6 +1015,12 @@ export function createStagedIntentsRouter(
         });
         return;
       }
+      if (row.kind === 'decision.pickOne') {
+        res.status(409).json({
+          error: `staged intent "${row.id}" is a decision.pickOne question — it writes no task store; resolve it via POST /staged-intents/:id/answer`,
+        });
+        return;
+      }
       const intent = rowToApi(row);
 
       const body = req.body as {
@@ -1055,6 +1137,15 @@ export function createStagedIntentsRouter(
           'approved',
         );
         res.json(committedIntent);
+        return;
+      }
+
+      // A decision.pickOne question has no approve step of its own — it is
+      // resolved only by POST /staged-intents/:id/answer.
+      if (intent.kind === 'decision.pickOne') {
+        res.status(409).json({
+          error: `staged intent "${intent.id}" is a decision.pickOne question — resolve it via POST /staged-intents/:id/answer`,
+        });
         return;
       }
 
@@ -1266,6 +1357,75 @@ export function createStagedIntentsRouter(
         });
       }
       res.json({ ok: true });
+    },
+  );
+
+  // ── POST /api/staged-intents/:id/answer ──────────────────────────────────
+  // Resolves a decision.pickOne question-intent: records the operator's
+  // chosen option + free-form text, transitions the intent straight to the
+  // terminal `committed` state (a second answer 404s — getActiveStagedIntent
+  // only surfaces staged/approved rows), and re-turns the originating
+  // session with the choice via PlanningOrchestrator. Never calls
+  // TaskWriteCommands / writes the task store — the re-turned session is
+  // responsible for staging the concrete writes for the chosen path as
+  // ordinary intents.
+  router.post(
+    '/staged-intents/:id/answer',
+    async (req: Request, res: Response) => {
+      const row = getActiveStagedIntent(String(req.params.id));
+      if (!row) {
+        res.status(404).json({ error: 'staged intent not found' });
+        return;
+      }
+      if (row.kind !== 'decision.pickOne') {
+        res.status(409).json({
+          error: `staged intent "${row.id}" is not a decision.pickOne question`,
+        });
+        return;
+      }
+
+      const payload = JSON.parse(row.payload) as DecisionPickOnePayload;
+      const body = req.body as { chosenLabel?: unknown; freeForm?: unknown };
+      const chosenLabel =
+        typeof body?.chosenLabel === 'string' ? body.chosenLabel : null;
+      const freeForm =
+        typeof body?.freeForm === 'string' && body.freeForm.trim()
+          ? body.freeForm
+          : null;
+      if (
+        !chosenLabel ||
+        !payload.options.some((o) => o.label === chosenLabel)
+      ) {
+        res
+          .status(400)
+          .json({ error: 'chosenLabel must match one of the staged options' });
+        return;
+      }
+
+      const answer: StagedIntentAnswer = { chosenLabel, freeForm };
+      const resolved = transitionStagedIntent(row.id, 'committed', {
+        annotation: null,
+        answer: JSON.stringify(answer),
+      });
+      const resolvedIntent = rowToApi(resolved);
+      broadcastIntentChange(resolvedIntent);
+
+      recordEvent({
+        event_type: 'staged_intent_disposition',
+        actor_type: 'human',
+        actor_id: null,
+        project_id: resolvedIntent.projectId,
+        task_id: row.task_id,
+        payload: { intentId: row.id, disposition: 'answer', chosenLabel, freeForm },
+      });
+
+      await planningOrchestrator?.handleDisposition({
+        intent: resolved,
+        disposition: 'answer',
+        answer,
+      });
+
+      res.json({ ok: true, intent: resolvedIntent });
     },
   );
 

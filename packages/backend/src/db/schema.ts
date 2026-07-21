@@ -1221,6 +1221,16 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // staged_intent.answer: the operator's response to a decision.pickOne
+  // question-intent — { chosenLabel, freeForm } as JSON. Set only on the
+  // terminal `committed` transition for that kind; never read by any apply
+  // path, since decision.pickOne writes no task-store mutation.
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN answer TEXT`);
+  } catch {
+    /* already exists */
+  }
+
   // ── arch_unit: architecture-information store ───────────────────────────
   // A single titled architecture statement (kind/topic/regions/status envelope
   // + markdown body). Mirrors the gate_item/seed_item shape: envelope as typed

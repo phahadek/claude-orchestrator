@@ -557,12 +557,40 @@ export interface StagedIntentRow {
   advisory: string | null;
   /** Operator-supplied rationale for a reject disposition (pushback | decline). Null until rejected. */
   disposition_reason: string | null;
+  /** The operator's answer to a decision.pickOne question-intent — JSON-serialized StagedIntentAnswer. Null until answered. */
+  answer: string | null;
   created_at: number;
   updated_at: number;
 }
 
 /** The two explicit operator-chosen outcomes for a reject disposition. */
 export type StagedIntentRejectOutcome = 'pushback' | 'decline';
+
+/** A single candidate the operator can pick for a decision.pickOne question-intent. */
+export interface DecisionPickOneOption {
+  label: string;
+  description: string;
+}
+
+/**
+ * Payload for the decision.pickOne question-intent kind — modeled on
+ * Claude's AskUserQuestion shape: a multi-option question a dispatched
+ * planning session poses to the operator when it cannot confidently resolve
+ * a fork itself. Staging this writes no task store; only the answer does
+ * (by re-turning the originating session, which then stages the concrete
+ * writes for the chosen path as ordinary intents).
+ */
+export interface DecisionPickOnePayload {
+  prompt: string;
+  options: DecisionPickOneOption[];
+  allowFreeForm: boolean;
+}
+
+/** The operator's response to a decision.pickOne question-intent. */
+export interface StagedIntentAnswer {
+  chosenLabel: string;
+  freeForm: string | null;
+}
 
 // ─── staged_intent_group ──────────────────────────────────────────────────
 
