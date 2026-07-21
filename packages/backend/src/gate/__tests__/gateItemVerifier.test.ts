@@ -138,6 +138,36 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     );
   });
 
+  it('injects ask-permission guidance (request or abstain) rather than pre-fetched operational data', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-1',
+      disposition: { disposition: 'needs-setup' },
+    });
+    await resultPromise;
+
+    expect(sessionManager.start).toHaveBeenCalledTimes(1);
+    const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
+    const opsContext = (dispatchOpts as { opsContext: string }).opsContext;
+
+    // States the responsibility: ask for what it needs, or abstain — never
+    // fabricate a result to route around a denial.
+    expect(opsContext).toMatch(/session\.requestCapability/);
+    expect(opsContext).toMatch(/never fabricate/i);
+    expect(opsContext).toMatch(/responsible for asking/i);
+
+    // The gate mechanism itself never pre-injects the operational record
+    // (audit_log/session_events/PR/git evidence) — the session is told what
+    // to go read, not handed the read's result.
+    expect(opsContext).not.toMatch(/```json\n\{"audit_log"/);
+    expect(opsContext).not.toContain('SELECT * FROM');
+  });
+
   it('does not re-archive a session already ended error/killed by AgentSession', async () => {
     const sessionManager = makeSessionManager();
     vi.mocked(getSession).mockReturnValue({ status: 'killed' } as never);

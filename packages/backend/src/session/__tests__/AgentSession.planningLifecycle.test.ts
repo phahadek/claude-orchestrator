@@ -24,6 +24,7 @@ vi.mock('../../db/queries', () => ({
   getSession: vi.fn().mockReturnValue(null),
   setTaskPauseReason: vi.fn(),
   hasStagedIntentForSession: vi.fn().mockReturnValue(true),
+  hasActiveCapabilityRequestForSession: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('../../config', () => ({
@@ -81,6 +82,7 @@ import {
   getEventsBySession,
   setTaskPauseReason,
   hasStagedIntentForSession,
+  hasActiveCapabilityRequestForSession,
 } from '../../db/queries';
 import { recoverSession } from '../sessionRecovery';
 import { countEventsBySessionAndType } from '../../audit/AuditLog';
@@ -166,6 +168,7 @@ describe('AgentSession.handleCleanExit — planning session gating', () => {
 describe('AgentSession.handleCleanExit — gate-verify session archival', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(hasActiveCapabilityRequestForSession).mockReturnValue(false);
   });
 
   it('a gate-verify session (task_id gate-item:%) is marked done, not idle', async () => {
@@ -192,6 +195,22 @@ describe('AgentSession.handleCleanExit — gate-verify session archival', () => 
         status: 'done',
       }),
     );
+  });
+
+  it('a gate-verify session with an unresolved capability request parks idle instead of being archived done', async () => {
+    vi.mocked(hasActiveCapabilityRequestForSession).mockReturnValue(true);
+    const session = makeSession('ops', 'gate-item:abc-123');
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(markSessionIdle).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      null,
+    );
+    expect(markSessionDone).not.toHaveBeenCalled();
   });
 
   it('a non-gate ops session still parks into idle (parking unchanged)', async () => {

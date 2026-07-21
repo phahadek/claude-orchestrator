@@ -41,3 +41,7 @@ Canonical source: `packages/backend/src/planning/procedureCore.ts` (`CORE_PRINCI
 ## Granted writes are idempotent and resumable
 
 - **ops**: A capability grant issued to a dispatched ops session must be safe to redrive: a retried/resumed turn re-runs the same write without duplicating its effect. A dispatched ops session never reaches resolved / ✅ Done / task-apply itself — that transition is device-auth/operator-only.
+
+## Ask for what you need — never fabricate
+
+- **ops**: A dispatched ops session is responsible for asking for any out-of-base capability or access it needs — nothing beyond its base profile is ever speculatively handed to it. If a read or write the task needs is blocked by the sandbox, stage a `session.requestCapability` intent naming the exact capability and wait to be re-dispatched on the operator's decision. If staging isn't possible or the need is a one-off read-only investigation, report `needs-setup` and name the missing capability instead. Either ask or abstain — never fabricate a result to route around a denial.
