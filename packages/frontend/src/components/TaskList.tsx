@@ -65,6 +65,11 @@ const GROUP_LABELS: Record<DisplayStatus, string> = {
 // /ops/launch's worklist.executable filter (the frontend can't see Mode to exclude them).
 const OPS_TASK_TYPES = ['🔧 Operational', '🔎 Investigation', '🧪 Testing'];
 
+// Task types eligible for the Design(N) checkbox — Ready/In Progress 📐 Design and
+// 📋 Planning tasks. Backlog tasks of these types remain groomable instead (they
+// need promotion to Ready first).
+const DESIGN_TASK_TYPES = ['📐 Design', '📋 Planning'];
+
 /** An ops intent with no task IDs has nothing to stage/apply — not actionable. */
 function opsIntentHasTasks(intent: StagedIntent): boolean {
   const payload = intent.payload as { taskIds?: unknown } | null | undefined;
@@ -290,6 +295,14 @@ export function TaskList({
   const [opsLoading, setOpsLoading] = useState(false);
   const [opsError, setOpsError] = useState<string | null>(null);
   const [opsCheckedIds, setOpsCheckedIds] = useState<Set<string>>(new Set());
+  // Design(N): mirrors Ops(N) — launches one individual design/planning session
+  // per selected task via the same unified planning-launch route.
+  const [designIntent, setDesignIntent] = useState<StagedIntent | null>(null);
+  const [designLoading, setDesignLoading] = useState(false);
+  const [designError, setDesignError] = useState<string | null>(null);
+  const [designCheckedIds, setDesignCheckedIds] = useState<Set<string>>(
+    new Set(),
+  );
   // Cross-milestone move: the shared staged-intent display renders whichever
   // task.move intent was most recently staged from a TaskCard on this board.
   const [moveIntent, setMoveIntent] = useState<StagedIntent | null>(null);
@@ -302,6 +315,9 @@ export function TaskList({
     setOpsIntent(null);
     setOpsError(null);
     setOpsCheckedIds(new Set());
+    setDesignIntent(null);
+    setDesignError(null);
+    setDesignCheckedIds(new Set());
     setMoveIntent(null);
   }, [activeProjectId, boardId]);
 
@@ -658,6 +674,97 @@ export function TaskList({
     }
   }
 
+  // Design(N) checkbox eligibility: Ready/In Progress 📐 Design and 📋 Planning
+  // tasks. Backlog tasks of these types fall through to the Groom checkbox
+  // instead (see groomableTasks above).
+  function isDesignEligible(t: TaskView): boolean {
+    return (
+      DESIGN_TASK_TYPES.includes(t.taskType) &&
+      (t.displayStatus === 'ready' || t.displayStatus === 'in_progress')
+    );
+  }
+  const designEligibleTasks = tasks.filter(isDesignEligible);
+  const designSelectedCount = designEligibleTasks.filter((t) =>
+    designCheckedIds.has(t.taskId),
+  ).length;
+
+  function toggleDesignCheck(taskId: string, checked: boolean) {
+    setDesignCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(taskId);
+      else next.delete(taskId);
+      return next;
+    });
+  }
+
+  function handleDesignSelectAll() {
+    setDesignCheckedIds(new Set(designEligibleTasks.map((t) => t.taskId)));
+  }
+
+  function handleDesignClearSelection() {
+    setDesignCheckedIds(new Set());
+  }
+
+  // Launches one individual design/planning session per checked, design-eligible
+  // task via the unified planning-launch route, mirroring handleOpsLaunch.
+  async function handleDesignLaunch() {
+    const selectedIds = designEligibleTasks
+      .filter((t) => designCheckedIds.has(t.taskId))
+      .map((t) => t.taskId);
+    if (!activeProjectId || !boardId || selectedIds.length === 0) return;
+    setDesignLoading(true);
+    setDesignError(null);
+    try {
+      const result = await opsJournalApi.launch(
+        'design',
+        activeProjectId,
+        boardId,
+        selectedIds,
+      );
+      const launchedIds = new Set(result.launched);
+      const deferredIds = new Set(result.deferred);
+      const entries = await opsJournalApi.listForMilestone(boardId);
+      const rows = entries.filter((e) => launchedIds.has(e.taskId));
+      setDesignIntent(
+        result.launched.length > 0
+          ? {
+              id: 'design-stub',
+              kind: 'ops',
+              payload: { taskIds: result.launched, rows },
+              projectId: activeProjectId ?? '',
+              createdAt: 0,
+            }
+          : null,
+      );
+      const deferred = selectedIds.filter((id) =>
+        deferredIds.has(bareTaskId(id)),
+      );
+      const notLaunched = selectedIds.filter(
+        (id) =>
+          !launchedIds.has(bareTaskId(id)) && !deferredIds.has(bareTaskId(id)),
+      );
+      const messages: string[] = [];
+      if (deferred.length > 0) {
+        messages.push(
+          `${deferred.length} selected task${deferred.length === 1 ? '' : 's'} waiting on dependencies — will launch when unblocked: ${deferred.join(', ')}`,
+        );
+      }
+      if (notLaunched.length > 0) {
+        messages.push(
+          `${notLaunched.length} selected task${notLaunched.length === 1 ? '' : 's'} did not launch (not design-executable): ${notLaunched.join(', ')}`,
+        );
+      }
+      setDesignError(messages.length > 0 ? messages.join(' ') : null);
+      setDesignCheckedIds(new Set());
+    } catch (err) {
+      setDesignError(
+        err instanceof Error ? err.message : 'Failed to launch design sessions',
+      );
+    } finally {
+      setDesignLoading(false);
+    }
+  }
+
   // Build per-status lookup for the remaining code groups (needs_attention, ready_to_merge,
   // in_progress, in_review, blocked, deferred) — ready/backlog/done have their own sections.
   const codeGroupMap = new Map<DisplayStatus, TaskView[]>();
@@ -786,10 +893,47 @@ export function TaskList({
                   </button>
                 </div>
               )}
+              {designEligibleTasks.length > 0 && (
+                <div className={styles.launchControls}>
+                  <button
+                    className={styles.selectAllBtn}
+                    onClick={handleDesignSelectAll}
+                    disabled={designLoading}
+                    data-testid="design-select-all-btn"
+                  >
+                    Select All
+                  </button>
+                  <button
+                    className={styles.selectAllBtn}
+                    onClick={handleDesignClearSelection}
+                    disabled={designLoading || designSelectedCount === 0}
+                    data-testid="design-clear-btn"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    className={styles.opsBtn}
+                    onClick={() => void handleDesignLaunch()}
+                    disabled={
+                      designLoading || !boardId || designSelectedCount === 0
+                    }
+                    data-testid="design-btn"
+                  >
+                    {designLoading
+                      ? 'Loading…'
+                      : `Design (${designSelectedCount})`}
+                  </button>
+                </div>
+              )}
             </div>
             {opsError && (
               <div className={styles.error} data-testid="ops-error">
                 {opsError}
+              </div>
+            )}
+            {designError && (
+              <div className={styles.error} data-testid="design-error">
+                {designError}
               </div>
             )}
             <NonCodeTypeSection
@@ -800,6 +944,9 @@ export function TaskList({
               opsCheckedIds={opsCheckedIds}
               onOpsCheckChange={toggleOpsCheck}
               isOpsEligible={isOpsEligible}
+              designCheckedIds={designCheckedIds}
+              onDesignCheckChange={toggleDesignCheck}
+              isDesignEligible={isDesignEligible}
             />
           </div>
         )}
@@ -825,6 +972,20 @@ export function TaskList({
               onApplied={() => setOpsIntent(null)}
               onRejected={() => setOpsIntent(null)}
               onDismiss={() => setOpsIntent(null)}
+            />
+          </div>
+        )}
+
+        {designIntent && opsIntentHasTasks(designIntent) && (
+          <div
+            className={styles.opsPlaceholderPanel}
+            data-testid="design-panel"
+          >
+            <StagedIntentPanel
+              intent={designIntent}
+              onApplied={() => setDesignIntent(null)}
+              onRejected={() => setDesignIntent(null)}
+              onDismiss={() => setDesignIntent(null)}
             />
           </div>
         )}

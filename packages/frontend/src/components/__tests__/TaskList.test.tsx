@@ -1506,6 +1506,129 @@ describe('TaskList', () => {
     });
   });
 
+  describe('Design(N) button', () => {
+    function mockPlanningEndpoint(launched: string[], entries: unknown[]) {
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched, deferred: [] }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ entries }),
+          });
+        },
+      );
+    }
+
+    it('renders a Design checkbox for a Ready 📐 Design task and a Groom checkbox for a Backlog 📐 Design task', () => {
+      renderList([
+        makeTask({
+          taskId: 'design-ready',
+          taskName: 'Ready Design Task',
+          displayStatus: 'ready',
+          taskType: '📐 Design',
+        }),
+        makeTask({
+          taskId: 'design-backlog',
+          taskName: 'Backlog Design Task',
+          displayStatus: 'backlog',
+          taskType: '📐 Design',
+        }),
+      ]);
+
+      expect(screen.getByTestId('design-btn')).toBeDefined();
+
+      fireEvent.click(screen.getByTestId('type-card-header-design'));
+      const readyCheckbox = screen
+        .getByTestId('type-card-design')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      expect(readyCheckbox).not.toBeNull();
+
+      const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
+      fireEvent.click(readyCheckbox);
+      expect(designBtn.textContent).toContain('Design (1)');
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      fireEvent.click(
+        within(backlogSection).getByTestId('groom-select-all-btn'),
+      );
+      expect(groomBtn.textContent).toContain('Groom (1)');
+    });
+
+    it('clicking Design(N) posts workflow "design" with the selected task ids and reconciles launched without a false error', async () => {
+      mockPlanningEndpoint(
+        ['design1', 'plan1'],
+        [
+          {
+            taskId: 'design1',
+            project: 'proj-1',
+            milestone: 'milestone-1',
+            state: 'candidate',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+          {
+            taskId: 'plan1',
+            project: 'proj-1',
+            milestone: 'milestone-1',
+            state: 'candidate',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'design1',
+            taskName: 'Design Task',
+            displayStatus: 'ready',
+            taskType: '📐 Design',
+          }),
+          makeTask({
+            taskId: 'plan1',
+            taskName: 'Planning Task',
+            displayStatus: 'in_progress',
+            taskType: '📋 Planning',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('design-select-all-btn'));
+      const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
+      expect(designBtn.textContent).toContain('Design (2)');
+
+      fireEvent.click(designBtn);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('design-panel')).toBeDefined();
+      });
+      expect(screen.queryByTestId('design-error')).toBeNull();
+
+      const launchCall = (
+        global.fetch as ReturnType<typeof vi.fn>
+      ).mock.calls.find(([url]) =>
+        (url as string).includes('/api/planning/launch'),
+      );
+      expect(launchCall).toBeDefined();
+      const body = JSON.parse((launchCall![1] as RequestInit).body as string);
+      expect(body.workflow).toBe('design');
+      expect(body.taskIds.sort()).toEqual(['design1', 'plan1']);
+    });
+  });
+
   describe('Sync button — send() boolean return and safety timeout', () => {
     it('clears syncing immediately when send() returns false (WS disconnected)', () => {
       const disconnectedSend = vi.fn().mockReturnValue(false);
