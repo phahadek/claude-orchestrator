@@ -15,6 +15,7 @@ vi.mock('../../config', () => ({
 import {
   enforcePassEvidenceContract,
   hasOperationalEvidence,
+  isPreconditionOnlyEvidence,
   SessionGateItemVerifier,
 } from '../gateItemVerifier';
 import { getSession, markSessionDone } from '../../db/queries';
@@ -43,7 +44,73 @@ describe('hasOperationalEvidence', () => {
   });
 });
 
+describe('isPreconditionOnlyEvidence', () => {
+  it('is true when evidence only confirms the PR was merged via an ancestry check', () => {
+    expect(
+      isPreconditionOnlyEvidence({
+        basis: 'operational',
+        note: 'Confirmed PR #974 merged via git merge-base --is-ancestor',
+      }),
+    ).toBe(true);
+  });
+
+  it('is true when evidence only confirms the commit was deployed', () => {
+    expect(
+      isPreconditionOnlyEvidence({
+        basis: 'operational',
+        note: 'commit deployed to production',
+      }),
+    ).toBe(true);
+  });
+
+  it('is false when evidence describes the behavior itself, even alongside a merge mention', () => {
+    expect(
+      isPreconditionOnlyEvidence({
+        basis: 'operational',
+        note: 'audit_log shows the gate-verify session transitioned running -> done after PR #974 merged, confirming the described behavior actually ran',
+      }),
+    ).toBe(false);
+  });
+
+  it('is false for evidence with no precondition-only phrasing', () => {
+    expect(
+      isPreconditionOnlyEvidence({
+        basis: 'operational',
+        note: 'audit_log shows the deploy',
+      }),
+    ).toBe(false);
+  });
+
+  it('is false for missing/malformed evidence', () => {
+    expect(isPreconditionOnlyEvidence(undefined)).toBe(false);
+    expect(isPreconditionOnlyEvidence(null)).toBe(false);
+    expect(isPreconditionOnlyEvidence('some string')).toBe(false);
+  });
+});
+
 describe('enforcePassEvidenceContract', () => {
+  it('downgrades a pass grounded only in "PR merged" to needs-setup', () => {
+    const result = enforcePassEvidenceContract({
+      disposition: 'pass',
+      evidence: {
+        basis: 'operational',
+        note: 'Ran git merge-base --is-ancestor and confirmed PR #974 merged',
+      },
+    });
+    expect(result.disposition).toBe('needs-setup');
+    expect(result.evidence).toMatchObject({
+      reason: expect.stringContaining('guaranteed precondition'),
+    });
+  });
+
+  it('downgrades a pass grounded only in "commit deployed" to needs-setup', () => {
+    const result = enforcePassEvidenceContract({
+      disposition: 'pass',
+      evidence: { basis: 'operational', note: 'deployed to production' },
+    });
+    expect(result.disposition).toBe('needs-setup');
+  });
+
   it('downgrades a source-only pass to needs-setup', () => {
     const result = enforcePassEvidenceContract({
       disposition: 'pass',
@@ -166,6 +233,27 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     // to go read, not handed the read's result.
     expect(opsContext).not.toMatch(/```json\n\{"audit_log"/);
     expect(opsContext).not.toContain('SELECT * FROM');
+  });
+
+  it('states the merge+deploy guarantee so the session does not re-verify it', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-1',
+      disposition: { disposition: 'needs-setup' },
+    });
+    await resultPromise;
+
+    const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
+    const opsContext = (dispatchOpts as { opsContext: string }).opsContext;
+
+    expect(opsContext).toMatch(/already merged and deployed/i);
+    expect(opsContext).toMatch(/spend zero turns re-confirming/i);
+    expect(opsContext).toMatch(/guaranteed precondition/i);
   });
 
   it('does not re-archive a session already ended error/killed by AgentSession', async () => {

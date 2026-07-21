@@ -48,6 +48,15 @@ function buildGateVerifyContext(item: GateItem): string {
     ...renderOpsCapabilities(),
     '### Procedure',
     '',
+    "This item's associated PR(s) are already merged and deployed — that " +
+      'guarantee is *why* this verification session exists (the item only ' +
+      'becomes runnable and launches a verifier once merged and deployed). ' +
+      'Spend zero turns re-confirming that: not `git merge-base ' +
+      '--is-ancestor`, not "is the PR merged", not "was it deployed". That ' +
+      "check is tautologically true by construction and proves nothing " +
+      'about whether the described behavior actually works. Go straight to ' +
+      'the behavior.',
+    '',
     'Read the operational record relevant to the item text above — audit_log, ' +
       'session_events, pull_requests, git history, and `gh` as needed — to ' +
       'determine whether the described behavior actually holds. This is a ' +
@@ -58,6 +67,14 @@ function buildGateVerifyContext(item: GateItem): string {
       'command. Auto-pass only on clear, direct evidence; if you cannot ' +
       'conclusively determine pass or fail, report needs-setup — abstain ' +
       'rather than guess.',
+    '',
+    'A pass must be grounded in evidence that the described behavior itself ' +
+      'occurred — not in a guaranteed precondition (the source PR being ' +
+      'merged/deployed) or any other mechanical/tautological check that ' +
+      'would be true regardless of whether the behavior works. "PR #N is ' +
+      'merged" or "commit X is deployed" is not evidence the behavior holds ' +
+      '— it is the reason this session was launched at all. If that is the ' +
+      'strongest thing you found, report needs-setup, not pass.',
     '',
     'This session is responsible for asking for what it needs: nothing beyond ' +
       'its base read/stage profile is ever speculatively handed to it. If ' +
@@ -127,24 +144,88 @@ export function hasOperationalEvidence(evidence: unknown): boolean {
 }
 
 /**
- * The disposition contract's enforcement half of "no pass on source alone":
- * a `pass` disposition whose evidence doesn't claim operational grounding is
- * downgraded to `needs-setup` — the prompt asks nicely, this backstops it
- * regardless of what the session actually reported. Exported for testing.
+ * Phrases that describe a guaranteed precondition (the source PR merged,
+ * the commit deployed) rather than evidence the described behavior actually
+ * occurred. These are mechanical/tautological by the time any verifier runs
+ * — the runnable-gate already guarantees merged+deployed — so confirming
+ * them proves nothing about the behavior.
+ */
+const PRECONDITION_ONLY_PATTERNS: RegExp[] = [
+  /\bmerge-base\b/i,
+  /\bis-ancestor\b/i,
+  /\bpr\s*#?\d+\s+(is\s+|was\s+)?merged\b/i,
+  /\b(already\s+)?merged\s+(into|to)\s+(main|dev|master|production)\b/i,
+  /\bmerged\s+and\s+deployed\b/i,
+  /\bcommit\s+[0-9a-f]{6,40}\s+(is\s+|was\s+)?deployed\b/i,
+  /\bdeployed\s+to\s+production\b/i,
+  /\b(the\s+)?pr\s+(is\s+|was\s+)?merged\b/i,
+];
+
+/**
+ * True when a `pass` result's evidence, after stripping guaranteed-
+ * precondition/mechanical phrasing (PR merged, commit deployed, ancestry
+ * checks), has nothing substantive left — i.e. the evidence amounts to
+ * confirming a precondition the item was already guaranteed to satisfy,
+ * never to observing the described behavior itself. Exported for testing.
+ */
+export function isPreconditionOnlyEvidence(evidence: unknown): boolean {
+  if (!evidence || typeof evidence !== 'object') return false;
+  const text = JSON.stringify(evidence);
+  const matchesPrecondition = PRECONDITION_ONLY_PATTERNS.some((re) =>
+    re.test(text),
+  );
+  if (!matchesPrecondition) return false;
+
+  let stripped = text;
+  for (const re of PRECONDITION_ONLY_PATTERNS) {
+    stripped = stripped.replace(new RegExp(re.source, 'gi'), ' ');
+  }
+  stripped = stripped
+    .replace(/["{}[\]:,._-]/g, ' ')
+    .replace(
+      /\b(basis|operational|source|reason|evidence|sessionid|note|confirmed|confirming|verified|checked|via|git|the|is|was|and|that|it|which|through)\b/gi,
+      ' ',
+    )
+    .replace(/\s+/g, '')
+    .trim();
+
+  return stripped.length < 8;
+}
+
+/**
+ * The disposition contract's enforcement half of "no pass on source alone,
+ * no pass on a guaranteed precondition alone": a `pass` disposition whose
+ * evidence doesn't claim operational grounding, or whose evidence only
+ * confirms a guaranteed/mechanical precondition (PR merged, commit
+ * deployed) rather than the described behavior itself, is downgraded to
+ * `needs-setup` — the prompt asks nicely, this backstops it regardless of
+ * what the session actually reported. Exported for testing.
  */
 export function enforcePassEvidenceContract(
   result: GateVerificationResult,
 ): GateVerificationResult {
   if (result.disposition !== 'pass') return result;
-  if (hasOperationalEvidence(result.evidence)) return result;
-  return {
-    disposition: 'needs-setup',
-    evidence: {
-      reason:
-        'pass disposition lacked operational/runtime evidence — a source-only verdict cannot pass',
-      reportedEvidence: result.evidence,
-    },
-  };
+  if (!hasOperationalEvidence(result.evidence)) {
+    return {
+      disposition: 'needs-setup',
+      evidence: {
+        reason:
+          'pass disposition lacked operational/runtime evidence — a source-only verdict cannot pass',
+        reportedEvidence: result.evidence,
+      },
+    };
+  }
+  if (isPreconditionOnlyEvidence(result.evidence)) {
+    return {
+      disposition: 'needs-setup',
+      evidence: {
+        reason:
+          'pass disposition was grounded only in a guaranteed precondition (PR merged/deployed) or other mechanical check — that proves nothing about whether the described behavior holds',
+        reportedEvidence: result.evidence,
+      },
+    };
+  }
+  return result;
 }
 
 /**
