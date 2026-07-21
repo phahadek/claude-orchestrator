@@ -55,6 +55,8 @@ function makeIntent(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow {
     supersedes: null,
     annotation: null,
     decision_proposal: null,
+    advisory: null,
+    disposition_reason: null,
     created_at: 1,
     updated_at: 2,
     ...overrides,
@@ -99,7 +101,7 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     await orch.handleDisposition({
       intent,
       disposition: 'pushback',
-      feedback: 'please reconsider the split',
+      reason: 'please reconsider the split',
     });
 
     expect(sm.enqueueFeedback).toHaveBeenCalledWith(
@@ -109,7 +111,7 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     );
   });
 
-  it('resumes with a reject message when rejected without feedback', async () => {
+  it('resumes with a decline message carrying the reason, distinct from pushback', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
     const orch = new PlanningOrchestrator(sm as any);
@@ -118,12 +120,21 @@ describe('PlanningOrchestrator.handleDisposition', () => {
       session_id: 'planning-session-1',
       state: 'rejected',
     });
-    await orch.handleDisposition({ intent, disposition: 'reject' });
+    await orch.handleDisposition({
+      intent,
+      disposition: 'decline',
+      reason: 'no longer needed',
+    });
 
     expect(sm.enqueueFeedback).toHaveBeenCalledWith(
       'planning-session-1',
       'operator-disposition',
-      expect.stringContaining('rejected'),
+      expect.stringContaining('declined'),
+    );
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'operator-disposition',
+      expect.stringContaining('no longer needed'),
     );
   });
 

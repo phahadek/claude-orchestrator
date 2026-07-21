@@ -4652,10 +4652,12 @@ export function insertStagedIntent(row: StagedIntentRow): void {
   _stmtInsertStagedIntent ??= db.prepare<StagedIntentRow>(`
     INSERT INTO staged_intent
       (id, kind, payload, payload_hash, task_id, project_id, session_id,
-       group_id, state, supersedes, annotation, decision_proposal, advisory, created_at, updated_at)
+       group_id, state, supersedes, annotation, decision_proposal, advisory,
+       disposition_reason, created_at, updated_at)
     VALUES
       (@id, @kind, @payload, @payload_hash, @task_id, @project_id, @session_id,
-       @group_id, @state, @supersedes, @annotation, @decision_proposal, @advisory, @created_at, @updated_at)
+       @group_id, @state, @supersedes, @annotation, @decision_proposal, @advisory,
+       @disposition_reason, @created_at, @updated_at)
   `);
   _stmtInsertStagedIntent.run(row);
 }
@@ -4791,7 +4793,12 @@ export function findActiveStagedIntentForTask(
 export function transitionStagedIntent(
   id: string,
   toState: StagedIntentState,
-  opts?: { annotation?: string | null; updatedAt?: number },
+  opts?: {
+    annotation?: string | null;
+    updatedAt?: number;
+    /** Operator rationale for a reject disposition — set on the rejected transition, left untouched otherwise. */
+    dispositionReason?: string | null;
+  },
 ): StagedIntentRow {
   const current = getStagedIntent(id);
   if (!current) {
@@ -4805,22 +4812,34 @@ export function transitionStagedIntent(
     id: string;
     state: StagedIntentState;
     annotation: string | null;
+    disposition_reason: string | null;
     updated_at: number;
   }>(
-    `UPDATE staged_intent SET state = @state, annotation = @annotation, updated_at = @updated_at WHERE id = @id`,
+    `UPDATE staged_intent SET state = @state, annotation = @annotation, disposition_reason = @disposition_reason, updated_at = @updated_at WHERE id = @id`,
   );
   const updatedAt = opts?.updatedAt ?? Date.now();
   const annotation =
     opts && 'annotation' in opts
       ? (opts.annotation ?? null)
       : current.annotation;
+  const dispositionReason =
+    opts && 'dispositionReason' in opts
+      ? (opts.dispositionReason ?? null)
+      : current.disposition_reason;
   _stmtUpdateStagedIntentState.run({
     id,
     state: toState,
     annotation,
+    disposition_reason: dispositionReason,
     updated_at: updatedAt,
   });
-  return { ...current, state: toState, annotation, updated_at: updatedAt };
+  return {
+    ...current,
+    state: toState,
+    annotation,
+    disposition_reason: dispositionReason,
+    updated_at: updatedAt,
+  };
 }
 
 /**
