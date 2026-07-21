@@ -220,7 +220,8 @@ export function reconcileGateRunnability(
       item.sources.length === 0 ||
       item.sources.every(
         (source) =>
-          source.mergeCommit && ancestry.isAncestor(source.mergeCommit, deploySha),
+          source.mergeCommit &&
+          ancestry.isAncestor(source.mergeCommit, deploySha),
       );
 
     if (item.state === 'pass') {
