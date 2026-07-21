@@ -1181,9 +1181,7 @@ describe('TaskWriteCommands.flipToReady', () => {
   it('runs gate accretion, seed accretion, setDependsOn, and setStatus(Ready) in order', async () => {
     const calls: string[] = [];
     mockRecordAccretionMarker.mockImplementation(() => calls.push('gate'));
-    mockRecordSeedAccretionMarker.mockImplementation(() =>
-      calls.push('seed'),
-    );
+    mockRecordSeedAccretionMarker.mockImplementation(() => calls.push('seed'));
     const backend = makeBackend({
       setDependsOn: vi.fn().mockImplementation(async () => {
         calls.push('setDependsOn');

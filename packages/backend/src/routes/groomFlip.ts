@@ -130,10 +130,7 @@ export function createGroomFlipRouter(): Router {
       : [];
 
     try {
-      const canonicalMilestone = resolveMilestoneForProject(
-        project,
-        milestone,
-      );
+      const canonicalMilestone = resolveMilestoneForProject(project, milestone);
       const backend = getTaskBackend(project);
       const commands = new BackendTaskWriteCommands(backend, project);
       const params: FlipReadyParams = {
@@ -160,7 +157,8 @@ export function createGroomFlipRouter(): Router {
         return;
       }
       res.status(400).json({
-        error: err instanceof Error ? err.message : 'grooming Ready-flip failed',
+        error:
+          err instanceof Error ? err.message : 'grooming Ready-flip failed',
       });
     }
   });

@@ -411,7 +411,7 @@ describe('gateStore.rollbackContribution', () => {
     expect(getAccretionMarker('notion:src-1')).toBeUndefined();
   });
 
-  it('leaves other source tasks\' items and markers untouched', () => {
+  it("leaves other source tasks' items and markers untouched", () => {
     const rolledBack = insertItem({
       project: 'polimarket-analyser',
       milestone: 'M12',

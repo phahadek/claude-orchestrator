@@ -94,9 +94,7 @@ export function buildFlipPayload(groomingStatePath, taskId) {
   const state = JSON.parse(readFileSync(groomingStatePath, 'utf8'));
   const entry = state[taskId];
   if (!entry) {
-    throw new Error(
-      `no entry for task "${taskId}" in ${groomingStatePath}`,
-    );
+    throw new Error(`no entry for task "${taskId}" in ${groomingStatePath}`);
   }
   const missing = [
     'title',
