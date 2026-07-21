@@ -6,6 +6,7 @@ import {
   nextRunnableGateItems,
   getGateItem,
   getGateItemDetail,
+  getVerifySessionsForGateItem,
   listGateItems,
   listMilestoneReadiness,
   appendGateItemEvent,
@@ -174,6 +175,17 @@ export function createGateStateRouter(): Router {
     }
     res.json(detail);
   });
+
+  // GET /api/gate/items/:id/verify-sessions
+  // The gate-item ↔ verify-session linkage: sessions dispatched by the
+  // GateItemVerifier for this item (task_id = 'gate-item:<id>'), most
+  // recent first.
+  router.get(
+    '/gate/items/:id/verify-sessions',
+    (req: Request, res: Response) => {
+      res.json(getVerifySessionsForGateItem(String(req.params.id)));
+    },
+  );
 
   // POST /api/gate/items/:id/events  { disposition, evidence, filedFollowon, deploySha, operator }
   router.post('/gate/items/:id/events', (req: Request, res: Response) => {

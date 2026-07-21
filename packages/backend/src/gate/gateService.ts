@@ -3,8 +3,8 @@ import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
 import type { GateItemClassification } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
-import { getTaskCache } from '../db/queries';
-import type { GateItemListOrder } from '../db/queries';
+import { getTaskCache, getVerifySessionsForGateItems } from '../db/queries';
+import type { GateItemListOrder, GateItemVerifySession } from '../db/queries';
 import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
 
 /**
@@ -319,6 +319,13 @@ export function getGateItemDetail(
   id: string,
 ): gateStore.GateItemDetail | undefined {
   return gateStore.getItemDetail(id);
+}
+
+/** The verify sessions dispatched for a gate item, most recent first. */
+export function getVerifySessionsForGateItem(
+  id: string,
+): GateItemVerifySession[] {
+  return getVerifySessionsForGateItems([id]);
 }
 
 const DEFAULT_LIST_LIMIT = 20;

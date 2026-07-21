@@ -4,6 +4,7 @@ import type {
   GateItem,
   GateItemClassification,
   GateItemDetail,
+  GateItemVerifySession,
   GateReadiness,
   MilestoneReadiness,
 } from '../api/gate';
@@ -167,6 +168,9 @@ export function GateReadinessPanel({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<GateItemDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [verifySessions, setVerifySessions] = useState<GateItemVerifySession[]>(
+    [],
+  );
 
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(
     new Set(),
@@ -482,19 +486,31 @@ export function GateReadinessPanel({
       if (expandedId === id) {
         setExpandedId(null);
         setDetail(null);
+        setVerifySessions([]);
         return;
       }
       setExpandedId(id);
       setDetail(null);
       setDetailLoading(true);
+      setVerifySessions([]);
       gateApi
         .getGateItemDetail(id)
         .then((result) => setDetail(result))
         .catch(() => setDetail(null))
         .finally(() => setDetailLoading(false));
+      gateApi
+        .getVerifySessions(id)
+        .then((result) => setVerifySessions(result))
+        .catch(() => setVerifySessions([]));
     },
     [expandedId],
   );
+
+  const jumpToSession = useCallback((sessionId: string) => {
+    window.dispatchEvent(
+      new CustomEvent('selectSession', { detail: { sessionId } }),
+    );
+  }, []);
 
   const toggleItemSelected = useCallback((id: string) => {
     setSelectedItemIds((prev) => {
@@ -837,6 +853,26 @@ export function GateReadinessPanel({
                             )}
                             {!detailLoading && detail && (
                               <div className={styles.detailBody}>
+                                {verifySessions.length > 0 && (
+                                  <div data-testid="gate-item-verify-session">
+                                    <strong>Verify session</strong>
+                                    <p>
+                                      {verifySessions[0].sessionStatus}
+                                      {' — '}
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          jumpToSession(
+                                            verifySessions[0].sessionId,
+                                          )
+                                        }
+                                        data-testid={`gate-item-verify-session-jump-${item.id}`}
+                                      >
+                                        View session
+                                      </button>
+                                    </p>
+                                  </div>
+                                )}
                                 <div>
                                   <strong>Sources</strong>
                                   {detail.sources.length === 0 ? (

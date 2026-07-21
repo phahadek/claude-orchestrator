@@ -88,6 +88,14 @@ export interface GateVerifyDispatchResult {
   skipped: { itemId: string; reason: string }[];
 }
 
+export interface GateItemVerifySession {
+  itemId: string;
+  sessionId: string;
+  sessionStatus: string;
+  startedAt: number;
+  endedAt: number | null;
+}
+
 function buildQuery(params: object): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -122,6 +130,13 @@ export const gateApi = {
   getGateItemDetail(id: string): Promise<GateItemDetail> {
     return apiRequest<GateItemDetail>(
       `/api/gate/items/${encodeURIComponent(id)}/detail`,
+    );
+  },
+
+  /** The verify sessions dispatched for a gate item, most recent first. */
+  getVerifySessions(id: string): Promise<GateItemVerifySession[]> {
+    return apiRequest<GateItemVerifySession[]>(
+      `/api/gate/items/${encodeURIComponent(id)}/verify-sessions`,
     );
   },
 
