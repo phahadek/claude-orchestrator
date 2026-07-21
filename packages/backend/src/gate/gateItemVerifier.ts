@@ -212,13 +212,15 @@ export class SessionGateItemVerifier implements GateItemVerifier {
   ): Promise<GateVerificationResult> {
     return new Promise((resolve) => {
       let settled = false;
-      let pollHandle: ReturnType<typeof setInterval> | undefined;
-      let budgetHandle: ReturnType<typeof setTimeout> | undefined;
+      const handles: {
+        poll?: ReturnType<typeof setInterval>;
+        budget?: ReturnType<typeof setTimeout>;
+      } = {};
       const finish = (result: GateVerificationResult) => {
         if (settled) return;
         settled = true;
-        if (pollHandle) clearInterval(pollHandle);
-        if (budgetHandle) clearTimeout(budgetHandle);
+        if (handles.poll) clearInterval(handles.poll);
+        if (handles.budget) clearTimeout(handles.budget);
         this.sessionManager.off('gate_verify_disposition', onDisposition);
         // The disposition has now been consumed by the reconciler's caller —
         // this one-shot session has no resume purpose from here on (a
@@ -261,7 +263,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
 
       this.sessionManager.on('gate_verify_disposition', onDisposition);
 
-      pollHandle = setInterval(() => {
+      handles.poll = setInterval(() => {
         const row = getSession(sessionId);
         if (row && TERMINAL_SESSION_STATUSES.has(row.status)) {
           if (row.status === 'error' || row.status === 'killed') {
@@ -291,7 +293,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         }
       }, this.pollIntervalMs);
 
-      budgetHandle = setTimeout(() => {
+      handles.budget = setTimeout(() => {
         finish({
           disposition: 'needs-setup',
           evidence: { reason: 'verification budget exceeded', sessionId },
