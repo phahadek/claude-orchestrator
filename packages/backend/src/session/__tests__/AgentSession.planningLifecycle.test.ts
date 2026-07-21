@@ -77,6 +77,7 @@ vi.mock('../CliSessionRunner', () => ({
 import { AgentSession } from '../AgentSession';
 import {
   markSessionIdle,
+  markSessionDone,
   getEventsBySession,
   setTaskPauseReason,
   hasStagedIntentForSession,
@@ -84,7 +85,10 @@ import {
 import { recoverSession } from '../sessionRecovery';
 import { countEventsBySessionAndType } from '../../audit/AuditLog';
 
-function makeSession(sessionType: 'standard' | 'groom' | 'design') {
+function makeSession(
+  sessionType: 'standard' | 'groom' | 'design' | 'ops',
+  taskId = 'task-123',
+) {
   const taskBackend = {
     attachPR: vi.fn().mockResolvedValue(undefined),
     getTask: vi.fn().mockResolvedValue(null),
@@ -95,7 +99,7 @@ function makeSession(sessionType: 'standard' | 'groom' | 'design') {
     'https://notion.so/project',
     taskBackend as never,
     '/tmp/project-checkout',
-    'task-123',
+    taskId,
     undefined,
     undefined,
     sessionType,
@@ -156,6 +160,53 @@ describe('AgentSession.handleCleanExit — planning session gating', () => {
 
     expect(getEventsBySession).toHaveBeenCalled();
     expect(recoverSession).toHaveBeenCalled();
+  });
+});
+
+describe('AgentSession.handleCleanExit — gate-verify session archival', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('a gate-verify session (task_id gate-item:%) is marked done, not idle', async () => {
+    const session = makeSession('ops', 'gate-item:abc-123');
+    const messages: unknown[] = [];
+    session.on('message', (m) => messages.push(m));
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      null,
+      'gate_verify_clean_exit',
+    );
+    expect(markSessionIdle).not.toHaveBeenCalled();
+    expect(getEventsBySession).not.toHaveBeenCalled();
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: 'session_ended',
+        sessionId: 'test-session-id',
+        status: 'done',
+      }),
+    );
+  });
+
+  it('a non-gate ops session still parks into idle (parking unchanged)', async () => {
+    const session = makeSession('ops', 'task-456');
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(markSessionIdle).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      null,
+    );
+    expect(markSessionDone).not.toHaveBeenCalled();
   });
 });
 
