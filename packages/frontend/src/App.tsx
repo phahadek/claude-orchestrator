@@ -1569,6 +1569,11 @@ export default function App() {
               <GateReadinessPanel
                 activeProjectId={activeProjectId}
                 activeBoardMilestone={activeBoardMilestone}
+                sessions={sessions}
+                send={send}
+                setSessionArchived={setSessionArchived}
+                setSessionFavorited={setSessionFavorited}
+                project={activeProject}
               />
             </div>
           </ErrorBoundary>

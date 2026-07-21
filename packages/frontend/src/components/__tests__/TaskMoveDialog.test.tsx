@@ -51,6 +51,7 @@ function makeTask(overrides: Partial<TaskView> = {}): TaskView {
     blockerNames: [],
     wave: 0,
     codeSession: null,
+    planningSession: null,
     ...overrides,
   } as unknown as TaskView;
 }

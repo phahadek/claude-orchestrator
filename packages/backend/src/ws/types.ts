@@ -92,6 +92,16 @@ export interface TaskView {
     compaction_count?: number;
     model?: string | null;
   } | null;
+  /** Latest launched planning (groom/design/ops) session for this task, if any. */
+  planningSession: {
+    sessionId: string;
+    status: string;
+    sessionType: string;
+    startedAt: number;
+    endedAt: number | null;
+    inputTokens: number;
+    outputTokens: number;
+  } | null;
   pr: {
     prNumber: number;
     prUrl: string;

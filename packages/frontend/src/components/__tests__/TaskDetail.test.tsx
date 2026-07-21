@@ -22,6 +22,7 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     blockerNames: [],
     wave: 1,
     codeSession: null,
+    planningSession: null,
     pr: null,
     review: null,
     totalTokens: { input: 0, output: 0 },
@@ -61,6 +62,21 @@ function makeCodeSession(
     lastMessage: 'Working on implementation…',
     inputTokens: 1000,
     outputTokens: 500,
+    ...overrides,
+  };
+}
+
+function makePlanningSession(
+  overrides?: Partial<NonNullable<TaskView['planningSession']>>,
+): NonNullable<TaskView['planningSession']> {
+  return {
+    sessionId: 'plan-sess-1',
+    status: 'running',
+    sessionType: 'groom',
+    startedAt: Date.now() - 60000,
+    endedAt: null,
+    inputTokens: 500,
+    outputTokens: 200,
     ...overrides,
   };
 }
@@ -424,6 +440,60 @@ describe('TaskDetail', () => {
   });
 
   // ── No task-level Overview/Diff tabs ──
+
+  // ── Planning session — embedded, collapsible SessionPanel ──
+
+  it('does not render planning session section when planningSession is null', () => {
+    render(
+      <TaskDetail
+        task={makeTask({ planningSession: null })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('planning-session-header')).toBeNull();
+  });
+
+  it('renders an inline collapsible SessionPanel for a launched planning session', () => {
+    const planningSession = makePlanningSession({ sessionId: 'plan-sess-1' });
+    const sessions: SessionState[] = [
+      makeSessionState({
+        sessionId: 'plan-sess-1',
+        sessionType: 'groom',
+        events: [],
+      }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ planningSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+      />,
+    );
+
+    const header = screen.getByTestId('planning-session-header');
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+    // Rendered as a live SessionPanel (transcript area), not just a banner.
+    expect(screen.getByText('No events yet.')).toBeTruthy();
+
+    fireEvent.click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByTestId('planning-session-body')).toBeNull();
+  });
+
+  it('shows placeholder when planningSession is set but not in sessions store', () => {
+    const planningSession = makePlanningSession();
+    render(
+      <TaskDetail
+        task={makeTask({ planningSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={[]}
+      />,
+    );
+    expect(screen.getByText(/Transcript not available/)).toBeTruthy();
+  });
 
   it('has no Overview tab at task level', () => {
     const pr = makePr();
