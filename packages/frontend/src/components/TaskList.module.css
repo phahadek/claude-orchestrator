@@ -290,11 +290,51 @@
   cursor: not-allowed;
 }
 
-/* No-op groom launch placeholder — stands in for the future groom-session right panel */
-.groomPlaceholderPanel {
+/* Links to the sessions a Groom(N)/Ops(N)/Design(N) launch just started */
+.launchedSessionsPanel {
   border-top: 1px solid var(--border-subtle);
   padding-top: 8px;
   margin-top: 4px;
+}
+
+.launchedSessionsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 0 2px 4px;
+}
+
+.launchedSessionsDismiss {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.launchedSessionsList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.launchedSessionLink {
+  text-align: left;
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.launchedSessionLink:hover {
+  background: var(--bg-hover);
 }
 
 .opsBtn {

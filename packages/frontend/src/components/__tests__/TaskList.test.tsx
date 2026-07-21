@@ -1010,14 +1010,17 @@ describe('TaskList', () => {
         },
       );
 
-      renderList([
-        makeTask({
-          taskId: `notion:${bareUuid}`,
-          taskName: 'Backlog Design Task',
-          displayStatus: 'backlog',
-          taskType: '📐 Design',
-        }),
-      ]);
+      renderList(
+        [
+          makeTask({
+            taskId: `notion:${bareUuid}`,
+            taskName: 'Backlog Design Task',
+            displayStatus: 'backlog',
+            taskType: '📐 Design',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
 
       const backlogSection = screen.getByTestId('backlog-section');
       fireEvent.click(
@@ -1037,7 +1040,7 @@ describe('TaskList', () => {
       fireEvent.click(groomBtn);
 
       await waitFor(() => {
-        expect(screen.getByTestId('groom-placeholder-panel')).toBeDefined();
+        expect(screen.getByTestId('groom-launched-panel')).toBeDefined();
       });
       expect(screen.queryByTestId('groom-error')).toBeNull();
     });
@@ -1073,7 +1076,7 @@ describe('TaskList', () => {
       expect(groomBtn.textContent).toContain('Groom (1)');
     });
 
-    it('clicking Groom(N) shows the StagedIntentPanel placeholder without a network write', () => {
+    it('clicking Groom(N) without a selected board is a no-op (no network write, no panel)', () => {
       (global.fetch as ReturnType<typeof vi.fn>).mockClear();
       renderList([
         makeTask({
@@ -1091,7 +1094,7 @@ describe('TaskList', () => {
       fireEvent.click(within(backlogSection).getByRole('checkbox'));
       fireEvent.click(within(backlogSection).getByTestId('groom-btn'));
 
-      expect(screen.getByTestId('groom-placeholder-panel')).toBeDefined();
+      expect(screen.queryByTestId('groom-launched-panel')).toBeNull();
       expect(fetch).not.toHaveBeenCalled();
     });
   });
@@ -1100,7 +1103,7 @@ describe('TaskList', () => {
     function mockOpsEndpoints(launched: string[], entries: unknown[]) {
       (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
         (url: string) => {
-          if (url.includes('/api/ops/launch')) {
+          if (url.includes('/api/planning/launch')) {
             return Promise.resolve({
               ok: true,
               status: 200,
@@ -1263,15 +1266,51 @@ describe('TaskList', () => {
       fireEvent.click(opsBtn);
 
       await waitFor(() => {
-        expect(screen.getByTestId('ops-panel')).toBeDefined();
+        expect(screen.getByTestId('ops-launched-panel')).toBeDefined();
       });
 
       const launchCall = (
         global.fetch as ReturnType<typeof vi.fn>
-      ).mock.calls.find(([url]) => (url as string).includes('/api/ops/launch'));
+      ).mock.calls.find(([url]) =>
+        (url as string).includes('/api/planning/launch'),
+      );
       expect(launchCall).toBeDefined();
       const body = JSON.parse((launchCall![1] as RequestInit).body as string);
       expect(body.taskIds.sort()).toEqual(['op1', 'test1']);
+    });
+
+    it('surfaces the launched session (no dead stub) — clicking it selects the task', async () => {
+      mockOpsEndpoints(['op1'], []);
+      const onSelectTask = vi.fn();
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'op1',
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1', onSelectTask },
+      );
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      const checkbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(checkbox);
+      fireEvent.click(screen.getByTestId('ops-btn'));
+
+      const panel = await waitFor(() =>
+        screen.getByTestId('ops-launched-panel'),
+      );
+      // The launched task is surfaced as a link, not a fake Apply/Reject intent.
+      expect(within(panel).queryByText(/apply/i)).toBeNull();
+      expect(within(panel).queryByText(/reject/i)).toBeNull();
+
+      fireEvent.click(within(panel).getByText('Op Task'));
+      expect(onSelectTask).toHaveBeenCalledWith('op1');
     });
 
     it('does not render an ops panel when nothing launched (empty taskIds)', async () => {
@@ -1300,7 +1339,7 @@ describe('TaskList', () => {
       await waitFor(() => {
         expect(screen.getByTestId('ops-error')).toBeDefined();
       });
-      expect(screen.queryByTestId('ops-panel')).toBeNull();
+      expect(screen.queryByTestId('ops-launched-panel')).toBeNull();
     });
 
     it('reconciles launched against a source-prefixed taskId (notion:<uuid>) without a false "did not launch" error', async () => {
@@ -1352,7 +1391,7 @@ describe('TaskList', () => {
       fireEvent.click(screen.getByTestId('ops-btn'));
 
       await waitFor(() => {
-        expect(screen.getByTestId('ops-panel')).toBeDefined();
+        expect(screen.getByTestId('ops-launched-panel')).toBeDefined();
       });
       expect(screen.queryByTestId('ops-error')).toBeNull();
     });
@@ -1404,7 +1443,7 @@ describe('TaskList', () => {
       fireEvent.click(screen.getByTestId('ops-btn'));
 
       await waitFor(() => {
-        expect(screen.getByTestId('ops-panel')).toBeDefined();
+        expect(screen.getByTestId('ops-launched-panel')).toBeDefined();
       });
 
       const launchCall = (
@@ -1460,7 +1499,7 @@ describe('TaskList', () => {
       fireEvent.click(screen.getByTestId('ops-btn'));
 
       await waitFor(() => {
-        expect(screen.getByTestId('ops-panel')).toBeDefined();
+        expect(screen.getByTestId('ops-launched-panel')).toBeDefined();
       });
 
       rerender(
@@ -1477,7 +1516,7 @@ describe('TaskList', () => {
         />,
       );
 
-      expect(screen.queryByTestId('ops-panel')).toBeNull();
+      expect(screen.queryByTestId('ops-launched-panel')).toBeNull();
     });
 
     it('excludes a 🔲 Backlog ops-type task from Ops eligibility, routing it to Groom instead', () => {
@@ -1673,7 +1712,7 @@ describe('TaskList', () => {
       fireEvent.click(designBtn);
 
       await waitFor(() => {
-        expect(screen.getByTestId('design-panel')).toBeDefined();
+        expect(screen.getByTestId('design-launched-panel')).toBeDefined();
       });
       expect(screen.queryByTestId('design-error')).toBeNull();
 
