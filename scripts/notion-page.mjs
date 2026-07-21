@@ -17,6 +17,10 @@
  *   --env <path>     Path to .env file to load NOTION_API_KEY from
  *   --format <fmt>   "md" (default) or "json"
  *   --depth <n>      Max recursion depth into nested children (default: unlimited)
+ *   --meta           Fetch only page metadata (id, last_edited_time) — no block
+ *                    children are paginated. Cheap freshness check for callers that
+ *                    cache page bodies. Prints `{"id","last_edited_time"}` JSON and
+ *                    exits; ignores --format/--depth.
  *
  * Environment:
  *   NOTION_API_KEY   Required. Notion integration token (ntn_...).
@@ -56,6 +60,7 @@ function option(name) {
 }
 
 const envPath = option('--env');
+const metaOnly = flag('--meta');
 const format = option('--format') ?? 'md';
 const maxDepth = option('--depth') ? Number(option('--depth')) : Infinity;
 const pageIdRaw = args[0];
@@ -356,6 +361,12 @@ function pageTitle(page) {
 // ── Main ─────────────────────────────────────────────────────────────
 async function main() {
   const page = await getPage(pageId);
+  if (metaOnly) {
+    console.log(
+      JSON.stringify({ id: pageId, last_edited_time: page.last_edited_time }),
+    );
+    return;
+  }
   const title = pageTitle(page);
   const tree = await getBlockTree(pageId, maxDepth);
 

@@ -232,6 +232,17 @@ function fetchPageMarkdown(pageId) {
   return runScript('notion-page.mjs', [pageId, '--format', 'md']);
 }
 
+/** Cheap metadata-only fetch (no block pagination) — used for the per-page
+ *  freshness check against a cached context page. */
+function fetchPageMeta(pageId) {
+  const out = runScript('notion-page.mjs', [pageId, '--meta']);
+  try {
+    return JSON.parse(out);
+  } catch (e) {
+    fail(`could not parse notion-page.mjs --meta JSON for ${pageId}: ${e.message}`);
+  }
+}
+
 // ── parsing helpers ──────────────────────────────────────────────────
 // Matches both full Notion UUIDs (32 hex, optionally dashed) and the truncated
 // 16-hex prefix form ("38522f91-52f3-81dd") that task bodies sometimes use.
@@ -502,21 +513,60 @@ function matchBodyLock(questionText, rawLocks) {
 }
 
 // ── Step 1: load context pages ───────────────────────────────────────
+// Freshness: a cached context page is reused only if its Notion
+// last_edited_time still matches the marker stamped alongside it. This
+// catches edits made by a sibling Done Design task (or a human) earlier in
+// the same milestone without paying for a full-body re-fetch on every run.
+// --refresh forces a full-body re-fetch of every page regardless.
 const contextPages = [];
 for (const pg of contextPagesCfg) {
   const slug = normaliseId(pg.id);
   const fileRel = join('context', `${slug}.md`);
   const filePath = join(cacheDir, fileRel);
-  let fetched = false;
-  if (refresh || !existsSync(filePath)) {
+  const metaFileRel = join('context', `${slug}.meta.json`);
+  const metaFilePath = join(cacheDir, metaFileRel);
+
+  const hadCache = existsSync(filePath);
+  let status; // 'fetched' | 'cached' | 'refetched' (stale)
+  if (refresh || !hadCache) {
+    const meta = fetchPageMeta(pg.id);
     writeFileSync(filePath, fetchPageMarkdown(pg.id), 'utf8');
-    fetched = true;
+    writeFileSync(
+      metaFilePath,
+      JSON.stringify({ last_edited_time: meta.last_edited_time }, null, 2),
+      'utf8',
+    );
+    status = refresh && hadCache ? 'refetched' : 'fetched';
+  } else {
+    let cachedLastEdited = null;
+    if (existsSync(metaFilePath)) {
+      try {
+        cachedLastEdited = JSON.parse(
+          readFileSync(metaFilePath, 'utf8'),
+        ).last_edited_time;
+      } catch {
+        cachedLastEdited = null;
+      }
+    }
+    const meta = fetchPageMeta(pg.id);
+    if (!cachedLastEdited || meta.last_edited_time !== cachedLastEdited) {
+      writeFileSync(filePath, fetchPageMarkdown(pg.id), 'utf8');
+      writeFileSync(
+        metaFilePath,
+        JSON.stringify({ last_edited_time: meta.last_edited_time }, null, 2),
+        'utf8',
+      );
+      status = 'refetched'; // stale → refetched
+    } else {
+      status = 'cached';
+    }
   }
+
   contextPages.push({
     id: pg.id,
     title: pg.title ?? '',
     file: fileRel.replace(/\\/g, '/'),
-    refetched: fetched,
+    status,
   });
 }
 
@@ -846,7 +896,10 @@ const blockedExec = tasks.executable.filter(
 const readyExec = tasks.executable.length - blockedExec;
 console.log(`design-load: milestone ${milestone} loaded into ${cacheDir}`);
 console.log(
-  `  context pages: ${contextPages.length} (${contextPages.filter((p) => p.refetched).length} fetched, rest cached)`,
+  `  context pages: ${contextPages.length} ` +
+    `(${contextPages.filter((p) => p.status === 'fetched').length} fetched, ` +
+    `${contextPages.filter((p) => p.status === 'refetched').length} stale→refetched, ` +
+    `${contextPages.filter((p) => p.status === 'cached').length} cached)`,
 );
 console.log(`  📐 Design + 📋 Planning tasks on target board:`);
 console.log(
