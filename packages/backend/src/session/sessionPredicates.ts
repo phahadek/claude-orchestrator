@@ -68,6 +68,8 @@ export function movesTargetInProgress(sessionType: string): boolean {
  * resume of this one, so it should conclude done/archived rather than park
  * idle.
  */
-export function isGateVerifySession(taskId: string | null | undefined): boolean {
+export function isGateVerifySession(
+  taskId: string | null | undefined,
+): boolean {
   return typeof taskId === 'string' && taskId.startsWith('gate-item:');
 }

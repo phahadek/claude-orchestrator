@@ -206,8 +206,18 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         // AgentSession owns those transitions) or already archived by the
         // session's own clean-exit path.
         const row = getSession(sessionId);
-        if (row && row.status !== 'error' && row.status !== 'killed' && row.status !== 'done') {
-          markSessionDone(sessionId, Date.now(), null, 'gate_item_verifier_consumed');
+        if (
+          row &&
+          row.status !== 'error' &&
+          row.status !== 'killed' &&
+          row.status !== 'done'
+        ) {
+          markSessionDone(
+            sessionId,
+            Date.now(),
+            null,
+            'gate_item_verifier_consumed',
+          );
         }
         resolve(result);
       };

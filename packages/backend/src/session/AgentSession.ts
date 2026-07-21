@@ -2542,7 +2542,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // to settle a single gate item and has no resume purpose once it has
     // reported (a re-verify is a fresh session, not a resume of this one).
     // Conclude it done/archived rather than parking it idle forever.
-    if (isPlanningSession(this.sessionType) && isGateVerifySession(this.taskId)) {
+    if (
+      isPlanningSession(this.sessionType) &&
+      isGateVerifySession(this.taskId)
+    ) {
       markSessionDone(this.sessionId, endedAt, null, 'gate_verify_clean_exit');
       resetTaskCrashCount(this.taskId);
       recordEvent({

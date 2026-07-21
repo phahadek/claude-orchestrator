@@ -7,7 +7,9 @@ vi.mock('../../db/queries', () => ({
 }));
 
 vi.mock('../../config', () => ({
-  getProjectById: vi.fn().mockReturnValue({ contextUrl: 'https://notion.so/project' }),
+  getProjectById: vi
+    .fn()
+    .mockReturnValue({ contextUrl: 'https://notion.so/project' }),
 }));
 
 import {
