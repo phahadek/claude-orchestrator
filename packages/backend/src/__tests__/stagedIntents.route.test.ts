@@ -721,4 +721,34 @@ describe('POST /api/staged-intents — decision-proposal annotation', () => {
       'Config drift observed; promote to candidate for review.',
     );
   });
+
+  it('stages a task.setStatus -> Deferred discard/defer proposal with its rationale, and it round-trips to the decision surface', async () => {
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-proposal',
+      payload: { taskId: 'notion:xyz', status: 'Deferred' },
+      decisionProposal:
+        'Superseded by task notion:abc — defer instead of grooming to Ready.',
+    });
+    expect(staged.status).toBe(201);
+    expect(staged.body.kind).toBe('task.setStatus');
+    expect(staged.body.payload.status).toBe('Deferred');
+    expect(staged.body.decisionProposal).toBe(
+      'Superseded by task notion:abc — defer instead of grooming to Ready.',
+    );
+
+    const list = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-proposal' });
+    const found = list.body.intents.find(
+      (i: { id: string }) => i.id === staged.body.id,
+    );
+    expect(found.payload.status).toBe('Deferred');
+    expect(found.decisionProposal).toBe(
+      'Superseded by task notion:abc — defer instead of grooming to Ready.',
+    );
+  });
 });

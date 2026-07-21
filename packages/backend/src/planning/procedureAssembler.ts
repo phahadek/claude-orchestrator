@@ -231,6 +231,14 @@ function renderSkeleton(
       'sees the proposal instead of a bare payload diff. Batch multiple independent ' +
       'findings under a shared `groupId` when they were derived together; never ' +
       "silently apply — staging is the full extent of this session's authority." +
+      (workflow === 'groom'
+        ? ' Promoting to Ready is not the only outcome available: if the task should ' +
+          'not move forward — it is out of scope, superseded, no longer worth doing, ' +
+          'or better revisited later — propose a discard/defer instead by staging ' +
+          '`task.setStatus` → `Deferred`, with a `decisionProposal` naming why ' +
+          'discard/defer is recommended over grooming it to Ready. This is a ' +
+          'first-class alternative outcome, not a fallback for a session that got stuck.'
+        : '') +
       (workflow === 'ops'
         ? ' Stage the decision, then park: once investigation reaches a proposal, ' +
           'stage it — never ask in chat whether to stage before doing so. Staging is ' +

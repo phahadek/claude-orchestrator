@@ -28,6 +28,25 @@ describe('StagedIntentPanel', () => {
     expect(screen.getByRole('button', { name: /reject/i })).toBeTruthy();
   });
 
+  it('renders a task.setStatus -> Deferred intent as a distinct discard/defer proposal with its rationale', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'task.setStatus',
+          payload: { taskId: 'notion:abc', status: 'Deferred' },
+          decisionProposal: 'Superseded by task notion:xyz — defer instead of grooming.',
+        })}
+      />,
+    );
+
+    const headline = screen.getByTestId('staged-intent-discard-defer');
+    expect(headline.textContent).toMatch(/discard\/defer/i);
+    expect(headline.textContent).toContain('notion:abc');
+    expect(
+      screen.getByText('Superseded by task notion:xyz — defer instead of grooming.'),
+    ).toBeTruthy();
+  });
+
   it('renders ops_journal (journal.setState) as a decision-surface kind with a task/state headline', () => {
     render(
       <StagedIntentPanel
