@@ -559,12 +559,18 @@ export function TaskList({
     }
   }
 
-  // Ops(N) checkbox eligibility: every not-Done 🔧/🔎/observational-🧪 task on the board.
-  // Type-based only — the frontend can't see Mode, so an authoring-Testing task also
-  // renders a checkbox here; /ops/launch drops it server-side and handleOpsLaunch
-  // surfaces the gap via the launched[] reconciliation below.
+  // Ops(N) checkbox eligibility: mirrors the backend's executable predicate
+  // (opsLoad.ts) — only 🗂️ Ready / 🔄 In Progress 🔧/🔎/observational-🧪 tasks are
+  // launchable. Type-based only — the frontend can't see Mode, so an
+  // authoring-Testing task also renders a checkbox here; /ops/launch drops it
+  // server-side and handleOpsLaunch surfaces the gap via the launched[]
+  // reconciliation below. Backlog ops-type tasks fall through to the Groom
+  // checkbox instead (see groomableTasks above).
   function isOpsEligible(t: TaskView): boolean {
-    return OPS_TASK_TYPES.includes(t.taskType) && t.displayStatus !== 'done';
+    return (
+      OPS_TASK_TYPES.includes(t.taskType) &&
+      (t.displayStatus === 'ready' || t.displayStatus === 'in_progress')
+    );
   }
   const opsEligibleTasks = tasks.filter(isOpsEligible);
   const opsSelectedCount = opsEligibleTasks.filter((t) =>
@@ -607,6 +613,7 @@ export function TaskList({
         selectedIds,
       );
       const launchedIds = new Set(result.launched);
+      const deferredIds = new Set(result.deferred);
       const entries = await opsJournalApi.listForMilestone(boardId);
       const rows = entries.filter((e) => launchedIds.has(e.taskId));
       // An ops intent with no launched task IDs has nothing to stage/apply —
@@ -622,14 +629,25 @@ export function TaskList({
             }
           : null,
       );
+      const deferred = selectedIds.filter((id) =>
+        deferredIds.has(bareTaskId(id)),
+      );
       const notLaunched = selectedIds.filter(
-        (id) => !launchedIds.has(bareTaskId(id)),
+        (id) =>
+          !launchedIds.has(bareTaskId(id)) && !deferredIds.has(bareTaskId(id)),
       );
-      setOpsError(
-        notLaunched.length > 0
-          ? `${notLaunched.length} selected task${notLaunched.length === 1 ? '' : 's'} did not launch (not ops-executable): ${notLaunched.join(', ')}`
-          : null,
-      );
+      const messages: string[] = [];
+      if (deferred.length > 0) {
+        messages.push(
+          `${deferred.length} selected task${deferred.length === 1 ? '' : 's'} waiting on dependencies — will launch when unblocked: ${deferred.join(', ')}`,
+        );
+      }
+      if (notLaunched.length > 0) {
+        messages.push(
+          `${notLaunched.length} selected task${notLaunched.length === 1 ? '' : 's'} did not launch (not ops-executable): ${notLaunched.join(', ')}`,
+        );
+      }
+      setOpsError(messages.length > 0 ? messages.join(' ') : null);
       setOpsCheckedIds(new Set());
     } catch (err) {
       setOpsError(

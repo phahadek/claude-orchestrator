@@ -1042,6 +1042,37 @@ describe('TaskList', () => {
       expect(screen.queryByTestId('groom-error')).toBeNull();
     });
 
+    it('includes a Backlog 🔧 Operational task in groomableTasks and renders a Groom checkbox', () => {
+      renderList([
+        makeTask({
+          taskId: 'bo1',
+          taskName: 'Backlog Operational Task',
+          displayStatus: 'backlog',
+          taskType: '🔧 Operational',
+        }),
+      ]);
+
+      const nonCodeSection = screen.getByTestId('non-code-section');
+      fireEvent.click(
+        within(nonCodeSection).getByTestId('type-card-header-operational'),
+      );
+      const checkbox = within(nonCodeSection)
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      expect(checkbox).not.toBeNull();
+
+      fireEvent.click(checkbox);
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      expect(groomBtn.textContent).toContain('Groom (1)');
+    });
+
     it('clicking Groom(N) shows the StagedIntentPanel placeholder without a network write', () => {
       (global.fetch as ReturnType<typeof vi.fn>).mockClear();
       renderList([
@@ -1387,6 +1418,91 @@ describe('TaskList', () => {
       );
 
       expect(screen.queryByTestId('ops-panel')).toBeNull();
+    });
+
+    it('excludes a 🔲 Backlog ops-type task from Ops eligibility, routing it to Groom instead', () => {
+      renderList([
+        makeTask({
+          taskId: 'op-backlog',
+          taskName: 'Backlog Op Task',
+          displayStatus: 'backlog',
+          taskType: '🔧 Operational',
+        }),
+        makeTask({
+          taskId: 'op-ready',
+          taskName: 'Ready Op Task',
+          displayStatus: 'ready',
+          taskType: '🔧 Operational',
+        }),
+        makeTask({
+          taskId: 'op-inprogress',
+          taskName: 'In Progress Op Task',
+          displayStatus: 'in_progress',
+          taskType: '🔧 Operational',
+        }),
+      ]);
+
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      // Only the ready + in_progress tasks are ops-eligible; the backlog one is not.
+      fireEvent.click(screen.getByTestId('ops-select-all-btn'));
+      expect(opsBtn.textContent).toContain('Ops (2)');
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      fireEvent.click(
+        within(backlogSection).getByTestId('groom-select-all-btn'),
+      );
+      expect(groomBtn.textContent).toContain('Groom (1)');
+    });
+
+    it('surfaces deferred launches distinctly from the not-ops-executable message', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched: [], deferred: ['op1'] }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ entries: [] }),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'op1',
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      const checkbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(checkbox);
+      fireEvent.click(screen.getByTestId('ops-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('ops-error')).toBeDefined();
+      });
+      const errorText = screen.getByTestId('ops-error').textContent ?? '';
+      expect(errorText).toContain('waiting on dependencies');
+      expect(errorText).not.toContain('not ops-executable');
     });
   });
 
