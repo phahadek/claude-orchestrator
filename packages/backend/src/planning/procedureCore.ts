@@ -171,6 +171,18 @@ export interface ProcedureStep {
    * `stepsFor` drops these when called with `{ dispatched: true }`.
    */
   skillOnly?: boolean;
+  /**
+   * Per-skill override of `summary` for a skill where the shared prose does
+   * not fit — e.g. a dispatched `ops` session has no synchronous chat turn
+   * to wait within, so "present, then wait, then apply" (the groom/design
+   * shape) inverts to "stage the decision, then park" for ops.
+   */
+  summaryOverrides?: Partial<Record<SkillId, string>>;
+}
+
+/** Resolve a step's summary against the given skill, honoring `summaryOverrides`. */
+export function stepSummaryFor(step: ProcedureStep, skill: SkillId): string {
+  return step.summaryOverrides?.[skill] ?? step.summary;
 }
 
 export const ORDERED_STEPS: readonly ProcedureStep[] = [
@@ -212,6 +224,16 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     summary:
       'Present findings and a recommendation in batches (or one task/question at a ' +
       'time), and stop for explicit human sign-off before proceeding.',
+    summaryOverrides: {
+      ops:
+        'A dispatched ops session has no synchronous chat turn to wait within — ' +
+        'end the turn and it parks. So presenting IS staging: once investigation ' +
+        'reaches a decision, stage it (a journal.setState to staged-proposal) rather ' +
+        'than describing the proposal in chat and asking whether to stage it. Never ' +
+        'ask for approval before staging — staging is what puts the decision in ' +
+        'front of the operator; asking first leaves the operator with nothing to ' +
+        'act on.',
+    },
   },
   {
     id: 'incorporate-feedback',
@@ -228,6 +250,15 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     summary:
       'Only after explicit sign-off, stage and apply the write through the ' +
       'sanctioned surface, and confirm the result in chat.',
+    summaryOverrides: {
+      ops:
+        'A dispatched ops session never applies — journal.setState is ' +
+        'human-apply-only. Its part of "sign-off" is already complete once the ' +
+        'decision is staged (the prior step): stage the decision, then park. The ' +
+        'operator reviews the staged proposal on the decision surface and applies ' +
+        '(or rejects) it asynchronously; there is nothing further for this session ' +
+        'to do or wait for.',
+    },
   },
 ] as const;
 

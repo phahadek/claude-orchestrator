@@ -8,7 +8,11 @@ vi.mock('../db/db.js', async () => {
 });
 
 import { db } from '../db/db.js';
-import { upsertOpsJournalEntry } from '../db/queries.js';
+import {
+  upsertOpsJournalEntry,
+  listStagedIntentsBySession,
+  listStagedIntentsByProject,
+} from '../db/queries.js';
 import { createOpsJournalRouter } from '../routes/opsJournal.js';
 
 function makeApp() {
@@ -43,6 +47,7 @@ function seedEntry(
 
 beforeEach(() => {
   db.prepare('DELETE FROM ops_journal').run();
+  db.prepare('DELETE FROM staged_intent').run();
 });
 
 describe('GET /api/ops-journal', () => {
@@ -134,5 +139,36 @@ describe('POST /api/ops-journal/:taskId/state', () => {
     expect(res.body.state).toBe('resolved');
     expect(res.body.disposition).toBe('pass');
     expect(res.body.resolution).toEqual({ note: 'looks good' });
+  });
+
+  it('transitioning into staged-proposal also stages a journal.setState staged_intent, so the decision renders on the decision surface', async () => {
+    seedEntry('task-1', 'M12', { state: 'pending' });
+    await request(makeApp())
+      .post('/api/ops-journal/task-1/state')
+      .send({
+        state: 'candidate',
+        findingOrProposal: { summary: 'Stand up off-box backups' },
+      });
+
+    // No decision surfaced yet — investigation bookkeeping only.
+    expect(listStagedIntentsBySession('n/a')).toEqual([]);
+
+    const res = await request(makeApp())
+      .post('/api/ops-journal/task-1/state')
+      .send({ state: 'staged-proposal' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('staged-proposal');
+
+    const staged = listStagedIntentsByProject('polimarket-analyser');
+    expect(staged).toHaveLength(1);
+    expect(staged[0].kind).toBe('journal.setState');
+    expect(staged[0].task_id).toBe('task-1');
+    expect(staged[0].state).toBe('staged');
+    expect(staged[0].decision_proposal).toBe('Stand up off-box backups');
+    const payload = JSON.parse(staged[0].payload);
+    expect(payload.fields.findingOrProposal).toEqual({
+      summary: 'Stand up off-box backups',
+    });
   });
 });

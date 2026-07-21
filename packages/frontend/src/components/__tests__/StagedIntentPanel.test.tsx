@@ -50,6 +50,29 @@ describe('StagedIntentPanel', () => {
     expect(screen.getByText(/Disposition: pass/)).toBeTruthy();
   });
 
+  it('renders a staged journal.setState finding/proposal so a parked ops decision is reviewable', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'journal.setState',
+          payload: {
+            taskId: 'notion:abc',
+            state: 'staged-proposal',
+            fields: {
+              findingOrProposal: { summary: 'Stand up off-box backups' },
+            },
+          },
+          decisionProposal: 'Stand up off-box backups',
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByTestId('staged-intent-ops-journal-finding'),
+    ).toBeTruthy();
+    expect(screen.getByText('Stand up off-box backups')).toBeTruthy();
+  });
+
   it('Apply calls the general command-layer route, not a bespoke endpoint', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
