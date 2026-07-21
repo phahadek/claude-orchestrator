@@ -583,6 +583,30 @@ describe('SessionManager.markSessionErrored() — planning session (design) cras
   });
 });
 
+describe('SessionManager.markSessionErrored() — planning session (ops) crash path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ session_type: 'ops' }) as never,
+    );
+  });
+
+  it('reverts the ops target to 🗂️ Ready (not Backlog) on first crash', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'notion-task-id',
+      '🗂️ Ready',
+      expect.anything(),
+    );
+  });
+});
+
 describe('SessionManager.markSessionErrored() — task_status_changed + emitTaskUpdated', () => {
   beforeEach(() => {
     vi.clearAllMocks();

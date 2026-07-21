@@ -41,12 +41,12 @@ describe('sessionPredicates', () => {
     expect(writesTaskStatus('ops')).toBe(false);
   });
 
-  it('movesTargetInProgress is true for standard and design, false for review, groom and ops', () => {
+  it('movesTargetInProgress is true for standard, design and ops, false for review and groom', () => {
     expect(movesTargetInProgress('standard')).toBe(true);
     expect(movesTargetInProgress('review')).toBe(false);
     expect(movesTargetInProgress('groom')).toBe(false);
     expect(movesTargetInProgress('design')).toBe(true);
-    expect(movesTargetInProgress('ops')).toBe(false);
+    expect(movesTargetInProgress('ops')).toBe(true);
   });
 
   it('isPlanningSession is true for groom, design and ops', () => {

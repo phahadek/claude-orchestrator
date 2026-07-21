@@ -71,10 +71,56 @@ const OPS_TASK_TYPES = ['🔧 Operational', '🔎 Investigation', '🧪 Testing'
 // need promotion to Ready first).
 const DESIGN_TASK_TYPES = ['📐 Design', '📋 Planning'];
 
-/** An ops intent with no task IDs has nothing to stage/apply — not actionable. */
-function opsIntentHasTasks(intent: StagedIntent): boolean {
-  const payload = intent.payload as { taskIds?: unknown } | null | undefined;
-  return Array.isArray(payload?.taskIds) && payload.taskIds.length > 0;
+/**
+ * Surfaces the sessions a Groom(N)/Ops(N)/Design(N) launch just started —
+ * each launched task is already a live session in the session grid with
+ * full controls, so this just links to it rather than staging a fake
+ * Apply/Reject intent for something that was never actually staged.
+ */
+function LaunchedSessionsBanner({
+  label,
+  taskIds,
+  tasks,
+  onSelectTask,
+  onDismiss,
+  testId,
+}: {
+  label: string;
+  taskIds: string[];
+  tasks: TaskView[];
+  onSelectTask: (taskId: string) => void;
+  onDismiss: () => void;
+  testId: string;
+}) {
+  if (taskIds.length === 0) return null;
+  return (
+    <div className={styles.launchedSessionsPanel} data-testid={testId}>
+      <div className={styles.launchedSessionsHeader}>
+        <span>{label}</span>
+        <button
+          className={styles.launchedSessionsDismiss}
+          onClick={onDismiss}
+          aria-label="Dismiss"
+        >
+          ×
+        </button>
+      </div>
+      <div className={styles.launchedSessionsList}>
+        {taskIds.map((taskId) => {
+          const task = tasks.find((t) => t.taskId === taskId);
+          return (
+            <button
+              key={taskId}
+              className={styles.launchedSessionLink}
+              onClick={() => onSelectTask(taskId)}
+            >
+              {task?.taskName ?? taskId}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 /** Group tasks by wave number, returning a map of wave → sorted tasks. */
@@ -283,22 +329,21 @@ export function TaskList({
   const [groomCheckedIds, setGroomCheckedIds] = useState<Set<string>>(
     new Set(),
   );
-  const [groomStubIntent, setGroomStubIntent] = useState<StagedIntent | null>(
-    null,
-  );
+  // Task ids for sessions the Groom(N)/Ops(N)/Design(N) buttons just
+  // launched, surfaced via LaunchedSessionsBanner — each is already a live
+  // session in the session grid, so this just links to it.
+  const [groomLaunchedIds, setGroomLaunchedIds] = useState<string[]>([]);
   const [groomLoading, setGroomLoading] = useState(false);
   const [groomError, setGroomError] = useState<string | null>(null);
   // Ops(N): launches one individual, dependency-ordered session per selected
-  // task (mirrors the manual-UI launch path), then renders the ops_journal
-  // rows for the launched set. Apply/reject of the resulting staged intents
-  // is a separate, later surface.
-  const [opsIntent, setOpsIntent] = useState<StagedIntent | null>(null);
+  // task (mirrors the manual-UI launch path).
+  const [opsLaunchedIds, setOpsLaunchedIds] = useState<string[]>([]);
   const [opsLoading, setOpsLoading] = useState(false);
   const [opsError, setOpsError] = useState<string | null>(null);
   const [opsCheckedIds, setOpsCheckedIds] = useState<Set<string>>(new Set());
   // Design(N): mirrors Ops(N) — launches one individual design/planning session
   // per selected task via the same unified planning-launch route.
-  const [designIntent, setDesignIntent] = useState<StagedIntent | null>(null);
+  const [designLaunchedIds, setDesignLaunchedIds] = useState<string[]>([]);
   const [designLoading, setDesignLoading] = useState(false);
   const [designError, setDesignError] = useState<string | null>(null);
   const [designCheckedIds, setDesignCheckedIds] = useState<Set<string>>(
@@ -315,12 +360,12 @@ export function TaskList({
   // Reset the shared staged-intent display when the active milestone/project
   // changes so a stale intent from the previous board never carries over.
   useEffect(() => {
-    setGroomStubIntent(null);
+    setGroomLaunchedIds([]);
     setGroomError(null);
-    setOpsIntent(null);
+    setOpsLaunchedIds([]);
     setOpsError(null);
     setOpsCheckedIds(new Set());
-    setDesignIntent(null);
+    setDesignLaunchedIds([]);
     setDesignError(null);
     setDesignCheckedIds(new Set());
     setMoveIntent(null);
@@ -551,16 +596,9 @@ export function TaskList({
         launchModel,
         launchEffort,
       );
-      setGroomStubIntent(
-        result.launched.length > 0
-          ? {
-              id: 'groom-launch',
-              kind: 'groom',
-              payload: { taskIds: result.launched },
-              projectId: activeProjectId,
-              createdAt: 0,
-            }
-          : null,
+      const launchedIds = new Set(result.launched);
+      setGroomLaunchedIds(
+        selectedIds.filter((id) => launchedIds.has(bareTaskId(id))),
       );
       const notLaunched = selectedIds.filter(
         (id) => !result.launched.includes(bareTaskId(id)),
@@ -639,20 +677,8 @@ export function TaskList({
       );
       const launchedIds = new Set(result.launched);
       const deferredIds = new Set(result.deferred);
-      const entries = await opsJournalApi.listForMilestone(boardId);
-      const rows = entries.filter((e) => launchedIds.has(e.taskId));
-      // An ops intent with no launched task IDs has nothing to stage/apply —
-      // don't render it as an actionable panel.
-      setOpsIntent(
-        result.launched.length > 0
-          ? {
-              id: 'ops-stub',
-              kind: 'ops',
-              payload: { taskIds: result.launched, rows },
-              projectId: activeProjectId ?? '',
-              createdAt: 0,
-            }
-          : null,
+      setOpsLaunchedIds(
+        selectedIds.filter((id) => launchedIds.has(bareTaskId(id))),
       );
       const deferred = selectedIds.filter((id) =>
         deferredIds.has(bareTaskId(id)),
@@ -734,18 +760,8 @@ export function TaskList({
       );
       const launchedIds = new Set(result.launched);
       const deferredIds = new Set(result.deferred);
-      const entries = await opsJournalApi.listForMilestone(boardId);
-      const rows = entries.filter((e) => launchedIds.has(e.taskId));
-      setDesignIntent(
-        result.launched.length > 0
-          ? {
-              id: 'design-stub',
-              kind: 'ops',
-              payload: { taskIds: result.launched, rows },
-              projectId: activeProjectId ?? '',
-              createdAt: 0,
-            }
-          : null,
+      setDesignLaunchedIds(
+        selectedIds.filter((id) => launchedIds.has(bareTaskId(id))),
       );
       const deferred = selectedIds.filter((id) =>
         deferredIds.has(bareTaskId(id)),
@@ -1018,44 +1034,32 @@ export function TaskList({
           </div>
         )}
 
-        {groomStubIntent && (
-          <div
-            className={styles.groomPlaceholderPanel}
-            data-testid="groom-placeholder-panel"
-          >
-            <StagedIntentPanel
-              intent={groomStubIntent}
-              onApplied={() => setGroomStubIntent(null)}
-              onRejected={() => setGroomStubIntent(null)}
-              onDismiss={() => setGroomStubIntent(null)}
-            />
-          </div>
-        )}
+        <LaunchedSessionsBanner
+          label={`${groomLaunchedIds.length} grooming session${groomLaunchedIds.length === 1 ? '' : 's'} launched`}
+          taskIds={groomLaunchedIds}
+          tasks={tasks}
+          onSelectTask={onSelectTask}
+          onDismiss={() => setGroomLaunchedIds([])}
+          testId="groom-launched-panel"
+        />
 
-        {opsIntent && opsIntentHasTasks(opsIntent) && (
-          <div className={styles.opsPlaceholderPanel} data-testid="ops-panel">
-            <StagedIntentPanel
-              intent={opsIntent}
-              onApplied={() => setOpsIntent(null)}
-              onRejected={() => setOpsIntent(null)}
-              onDismiss={() => setOpsIntent(null)}
-            />
-          </div>
-        )}
+        <LaunchedSessionsBanner
+          label={`${opsLaunchedIds.length} ops session${opsLaunchedIds.length === 1 ? '' : 's'} launched`}
+          taskIds={opsLaunchedIds}
+          tasks={tasks}
+          onSelectTask={onSelectTask}
+          onDismiss={() => setOpsLaunchedIds([])}
+          testId="ops-launched-panel"
+        />
 
-        {designIntent && opsIntentHasTasks(designIntent) && (
-          <div
-            className={styles.opsPlaceholderPanel}
-            data-testid="design-panel"
-          >
-            <StagedIntentPanel
-              intent={designIntent}
-              onApplied={() => setDesignIntent(null)}
-              onRejected={() => setDesignIntent(null)}
-              onDismiss={() => setDesignIntent(null)}
-            />
-          </div>
-        )}
+        <LaunchedSessionsBanner
+          label={`${designLaunchedIds.length} design session${designLaunchedIds.length === 1 ? '' : 's'} launched`}
+          taskIds={designLaunchedIds}
+          tasks={tasks}
+          onSelectTask={onSelectTask}
+          onDismiss={() => setDesignLaunchedIds([])}
+          testId="design-launched-panel"
+        />
 
         {moveIntent && (
           <div className={styles.opsPlaceholderPanel} data-testid="move-panel">

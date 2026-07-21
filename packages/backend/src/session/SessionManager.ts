@@ -692,15 +692,16 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * Planning-session (groom/design) crash handling, called from
+   * Planning-session (groom/design/ops) crash handling, called from
    * markSessionErrored. Reuses the same task_crash_counts budget as the
    * standard-session path but maps it onto the planning lifecycle instead
    * of Ready/Blocked:
-   * - Revert the mechanical In Progress move back to 🔲 Backlog (design
-   *   only — a groom target never left Backlog, so there's nothing to
-   *   revert for it).
-   * - Crash #1 (transient): stays reverted to Backlog with no
-   *   needs_attention flag — retry-eligible.
+   * - Revert the mechanical In Progress move back to its launch-time status
+   *   (design/groom → 🔲 Backlog, ops → 🗂️ Ready, since an ops task
+   *   launches from Ready — a groom target never left Backlog, so there's
+   *   nothing to revert for it).
+   * - Crash #1 (transient): stays reverted with no needs_attention flag —
+   *   retry-eligible.
    * - Crash #2+ (repeated): surface needs_attention via setTaskPauseReason,
    *   the planning analog of the standard-session's Blocked circuit breaker.
    * UNCOUNTED_REASONS (user_kill/pr_closed/launch_failed) never count
@@ -717,8 +718,10 @@ export class SessionManager extends EventEmitter {
     const projectId = row.project_id ?? '';
 
     if (movesTargetInProgress(row.session_type)) {
+      const revertStatus =
+        row.session_type === 'ops' ? '🗂️ Ready' : '🔲 Backlog';
       getTaskBackend(projectId)
-        .updateStatus(taskId, '🔲 Backlog', {
+        .updateStatus(taskId, revertStatus, {
           source: 'orchestrator',
           sessionId: row.session_id,
         })
@@ -726,13 +729,13 @@ export class SessionManager extends EventEmitter {
           this.emit('message', {
             type: 'task_status_changed',
             notionTaskId: taskId,
-            newStatus: '🔲 Backlog',
+            newStatus: revertStatus,
           } satisfies ServerMessage);
           emitTaskUpdated(taskId);
         })
         .catch((e) =>
           logger.error(
-            `[SessionManager] failed to revert planning target to Backlog: ${e}`,
+            `[SessionManager] failed to revert planning target to ${revertStatus}: ${e}`,
           ),
         );
     }
@@ -2457,8 +2460,15 @@ export class SessionManager extends EventEmitter {
     // or hung session — leaving a dead map entry that blocks relaunch.
     this.evictSession(sessionId);
 
-    // Reset the task to Ready so the next launch is a fresh session.
-    if (row.session_type !== 'standard' || !row.task_id) return;
+    // Reset the task to Ready so the next launch is a fresh session. Also
+    // applies to ops sessions — an ops launch mechanically moved the task to
+    // In Progress (movesTargetInProgress), and an abort without a resolving
+    // disposition must not strand it there.
+    if (
+      (row.session_type !== 'standard' && row.session_type !== 'ops') ||
+      !row.task_id
+    )
+      return;
     const notionTaskId = row.task_id;
     const projectId = row.project_id ?? '';
 

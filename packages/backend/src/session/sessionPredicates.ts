@@ -20,7 +20,8 @@
  *   the safe live-data/audited-read surface, no worktree, no PR; write
  *   capability into prod-mutating tools is earned per-session via
  *   grant-on-re-dispatch, never granted in the base profile. Shares the
- *   planning concurrency pool with groom/design rather than a dedicated cap.
+ *   planning concurrency pool with groom/design rather than a dedicated cap;
+ *   target task is mechanically moved to In Progress on start, like design.
  */
 
 /** True for session types that plan (groom/design/ops): stage-only base profile, no worktree, no PR. */
@@ -52,5 +53,9 @@ export function writesTaskStatus(sessionType: string): boolean {
 
 /** True for session types that mechanically move their target task to In Progress on start. */
 export function movesTargetInProgress(sessionType: string): boolean {
-  return sessionType === 'standard' || sessionType === 'design';
+  return (
+    sessionType === 'standard' ||
+    sessionType === 'design' ||
+    sessionType === 'ops'
+  );
 }
