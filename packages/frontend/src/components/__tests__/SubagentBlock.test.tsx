@@ -52,7 +52,11 @@ describe('SubagentBlock', () => {
     const calls = [
       makeCallPair(
         'Task',
-        { description: 'Find auth bug', prompt: 'Investigate...', subagent_type: 'Explore' },
+        {
+          description: 'Find auth bug',
+          prompt: 'Investigate...',
+          subagent_type: 'Explore',
+        },
         'Found it in auth.ts',
       ),
     ];
@@ -83,7 +87,9 @@ describe('SubagentBlock', () => {
       ),
     ];
     render(<SubagentBlock toolName="Task" calls={calls} />);
-    fireEvent.click(screen.getByRole('button', { name: /Subagent: Find auth bug/ }));
+    fireEvent.click(
+      screen.getByRole('button', { name: /Subagent: Find auth bug/ }),
+    );
     expect(screen.getByText(/Investigate the login flow/)).toBeTruthy();
     expect(screen.getByText(/Found it in auth\.ts/)).toBeTruthy();
   });
@@ -105,7 +111,11 @@ describe('SubagentBlock', () => {
 describe('groupSessionEvents (subagent grouping)', () => {
   it('groups a Task tool_use + result as a distinct subagent block', () => {
     const events = [
-      makeToolUseTextEvent('Task', { description: 'Find bug', prompt: 'go' }, 1000),
+      makeToolUseTextEvent(
+        'Task',
+        { description: 'Find bug', prompt: 'go' },
+        1000,
+      ),
       makeToolResultEvent('done', 1001),
     ];
     const items = groupSessionEvents(events);
@@ -127,9 +137,9 @@ describe('groupSessionEvents (subagent grouping)', () => {
     const items = groupSessionEvents(events);
     expect(items).toHaveLength(2);
     expect(items.every((i) => i.kind === 'subagent')).toBe(true);
-    expect(items.every((i) => i.kind === 'subagent' && i.calls.length === 1)).toBe(
-      true,
-    );
+    expect(
+      items.every((i) => i.kind === 'subagent' && i.calls.length === 1),
+    ).toBe(true);
   });
 
   it('keeps non-subagent tool calls in regular groups', () => {
