@@ -11,6 +11,10 @@ interface Props {
   onClick: () => void;
   /** Show a status emoji badge — used where rows mix multiple statuses (e.g. non-code type cards). */
   showStatus?: boolean;
+  /** Renders the checkbox disabled (e.g. a dep-blocked ops task) — cannot be checked, shows disabledReason. */
+  disabled?: boolean;
+  /** Reason shown below the row and as the checkbox's title when disabled, e.g. "waiting on <dep>". */
+  disabledReason?: string | null;
 }
 
 const PRIORITY_ICONS: Record<string, string> = {
@@ -26,6 +30,8 @@ export function CompactTaskCard({
   onCheckChange,
   onClick,
   showStatus = false,
+  disabled = false,
+  disabledReason = null,
 }: Props) {
   const priorityIcon = PRIORITY_ICONS[task.priority] ?? '';
   const isBlocked = task.blocked;
@@ -49,13 +55,17 @@ export function CompactTaskCard({
           <input
             type="checkbox"
             className={styles.checkbox}
-            checked={checked}
+            checked={disabled ? false : checked}
+            disabled={disabled}
+            title={disabled ? (disabledReason ?? undefined) : undefined}
             onChange={(e) => {
               e.stopPropagation();
+              if (disabled) return;
               onCheckChange(task.taskId, e.target.checked);
             }}
             onClick={(e) => e.stopPropagation()}
             aria-label={`Select ${task.taskName}`}
+            data-testid={disabled ? 'ops-checkbox-disabled' : undefined}
           />
         ) : (
           <span className={styles.checkboxPlaceholder} aria-hidden="true" />
@@ -92,6 +102,12 @@ export function CompactTaskCard({
               ↳ +{task.blockerNames.length - 2} more
             </span>
           )}
+        </div>
+      )}
+
+      {disabled && disabledReason && (
+        <div className={styles.blockers} data-testid="ops-dep-blocked-reason">
+          <span className={styles.blockerName}>↳ {disabledReason}</span>
         </div>
       )}
     </div>

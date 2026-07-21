@@ -20,6 +20,7 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+import { execFileSync } from 'child_process';
 import { db } from '../../db/db.js';
 import {
   insertProject,
@@ -27,6 +28,10 @@ import {
   upsertOpsJournalEntry,
   listOpsJournalEntries,
   getOpsJournalEntry,
+  insertSession,
+  insertLocalBranch,
+  markLocalBranchMerged,
+  recordProjectDeployedSha,
 } from '../../db/queries.js';
 import { loadOpsContext } from '../opsLoad.js';
 import { getEntry } from '../opsJournal.js';
@@ -56,6 +61,7 @@ beforeEach(() => {
     project_id: PROJECT,
     name: 'M1',
     source_id: TARGET_BOARD,
+    canonical_short_id: 'M1',
     display_order: 1,
   });
 });
@@ -439,5 +445,137 @@ describe('loadOpsContext — ops_journal pre-seed / reconcile', () => {
     expect(second.worklist.newly_unblocked.map((t) => t.id)).toEqual([
       'blocked-task',
     ]);
+  });
+});
+
+describe('loadOpsContext — dep deploy-gating', () => {
+  // Real commit shas from this repo's own history, so createLocalGitAncestrySource's
+  // `git merge-base --is-ancestor` has a genuine ancestry relationship to check
+  // against, run with project_dir pointed at this checkout.
+  const repoDir = process.cwd();
+  const headSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: repoDir,
+  })
+    .toString()
+    .trim();
+  const ancestorSha = execFileSync('git', ['rev-parse', 'HEAD~3'], {
+    cwd: repoDir,
+  })
+    .toString()
+    .trim();
+
+  function seedMergedDep(taskId: string, mergeCommitSha: string) {
+    const sessionId = `sess-${taskId}`;
+    // getMergeCommitForTask normalizes bare ids to `notion:<id>` before
+    // looking up sessions.task_id — match that here.
+    insertSession({
+      session_id: sessionId,
+      task_id: `notion:${taskId}`,
+      task_url: null,
+      project_context_url: null,
+      status: 'done',
+      started_at: 0,
+      session_type: 'standard',
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+    } as never);
+    const branch = insertLocalBranch({
+      project_id: PROJECT,
+      session_id: sessionId,
+      branch_name: `feature/${taskId}`,
+      base_branch: 'dev',
+      status: 'open',
+      review_result: null,
+      created_at: new Date(0).toISOString(),
+      updated_at: new Date(0).toISOString(),
+    });
+    markLocalBranchMerged(branch.id, mergeCommitSha);
+  }
+
+  beforeEach(() => {
+    // Point the fixture project at this real git checkout so the ancestry
+    // check has a genuine repo to run `git merge-base` against.
+    db.prepare('UPDATE projects SET project_dir = ? WHERE id = ?').run(
+      repoDir,
+      PROJECT,
+    );
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare('DELETE FROM local_branches').run();
+    db.prepare('DELETE FROM project_deployed_sha').run();
+  });
+
+  it('classifies a ✅ Done-but-undeployed dep as dep_blocked, not executable', async () => {
+    seedMergedDep('dep-task', headSha);
+    // Deployed SHA is an older commit that does not contain the dep's merge commit.
+    recordProjectDeployedSha(PROJECT, ancestorSha);
+
+    rows = [
+      {
+        id: 'dep-task',
+        name: 'Dependency',
+        type: '🔧 Operational',
+        status: '✅ Done',
+      },
+      {
+        id: 'ops-task',
+        name: 'Depends on undeployed dep',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+        dependsOn: 'dep-task',
+      },
+    ];
+
+    const result = await loadOpsContext(MILESTONE);
+
+    expect(result.worklist.dep_blocked.map((t) => t.id)).toEqual([
+      'ops-task',
+    ]);
+    expect(result.worklist.executable.map((t) => t.id)).not.toContain(
+      'ops-task',
+    );
+    const blocked = result.worklist.dep_blocked.find(
+      (t) => t.id === 'ops-task',
+    );
+    expect(blocked?.blockingDepIds).toEqual(['dep-task']);
+    expect(blocked?.blockingDepTitles).toEqual(['Dependency']);
+  });
+
+  it('becomes executable once the dep is ✅ Done and its merge commit is deployed', async () => {
+    seedMergedDep('dep-task', headSha);
+    // Deployed SHA now covers (is a descendant of / equal to) the dep's merge commit.
+    recordProjectDeployedSha(PROJECT, headSha);
+
+    rows = [
+      {
+        id: 'dep-task',
+        name: 'Dependency',
+        type: '🔧 Operational',
+        status: '✅ Done',
+      },
+      {
+        id: 'ops-task',
+        name: 'Depends on deployed dep',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+        dependsOn: 'dep-task',
+      },
+    ];
+
+    const result = await loadOpsContext(MILESTONE);
+
+    expect(result.worklist.executable.map((t) => t.id)).toContain(
+      'ops-task',
+    );
+    expect(result.worklist.dep_blocked.map((t) => t.id)).not.toContain(
+      'ops-task',
+    );
   });
 });

@@ -1202,6 +1202,50 @@ describe('TaskList', () => {
       expect(opsBtn.textContent).toContain('Ops (3)');
     });
 
+    it('disables selection of a dep-blocked ops task and shows the reason, instead of allowing select-then-silent-drop', () => {
+      renderList(
+        [
+          makeTask({
+            taskId: 'op-blocked',
+            taskName: 'Blocked Op Task',
+            displayStatus: 'ready',
+            taskType: '🔧 Operational',
+            opsDepBlocked: true,
+            opsDepBlockedReason: 'waiting on Dependency Task',
+          }),
+          makeTask({
+            taskId: 'op-ready',
+            taskName: 'Ready Op Task',
+            displayStatus: 'ready',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+
+      const typeCard = screen.getByTestId('type-card-operational');
+      const checkboxes = typeCard.querySelectorAll(
+        'input[type="checkbox"]',
+      ) as NodeListOf<HTMLInputElement>;
+      expect(checkboxes).toHaveLength(2);
+      const disabledCheckbox = Array.from(checkboxes).find((cb) => cb.disabled);
+      const enabledCheckbox = Array.from(checkboxes).find((cb) => !cb.disabled);
+      expect(disabledCheckbox).toBeDefined();
+      expect(enabledCheckbox).toBeDefined();
+
+      expect(
+        within(typeCard).getByTestId('ops-dep-blocked-reason').textContent,
+      ).toContain('waiting on Dependency Task');
+
+      // Select All only picks up the non-blocked task — the blocked one can't be
+      // checked at all, so it can't be selected and then silently dropped server-side.
+      fireEvent.click(screen.getByTestId('ops-select-all-btn'));
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      expect(opsBtn.textContent).toContain('Ops (1)');
+    });
+
     it('clicking Ops(N) launches only the checked subset, not every eligible task', async () => {
       mockOpsEndpoints(
         ['op1', 'test1'],
