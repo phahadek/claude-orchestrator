@@ -45,13 +45,15 @@ describe('POST /api/planning/launch', () => {
   });
 
   it('threads a model field from the request to the launched session', async () => {
-    const res = await request(app).post('/api/planning/launch').send({
-      workflow: 'groom',
-      milestone: 'm1',
-      taskIds: ['task-1'],
-      model: 'claude-opus-4-6',
-      effort: 'high',
-    });
+    const res = await request(app)
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'groom',
+        milestone: 'm1',
+        taskIds: ['task-1'],
+        model: 'claude-opus-4-6',
+        effort: 'high',
+      });
 
     expect(res.status).toBe(202);
     expect(launchSelected).toHaveBeenCalledWith(
@@ -63,11 +65,13 @@ describe('POST /api/planning/launch', () => {
   });
 
   it('falls back to runtimeSettings model resolution when no model is provided', async () => {
-    const res = await request(app).post('/api/planning/launch').send({
-      workflow: 'groom',
-      milestone: 'm1',
-      taskIds: ['task-1'],
-    });
+    const res = await request(app)
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'groom',
+        milestone: 'm1',
+        taskIds: ['task-1'],
+      });
 
     expect(res.status).toBe(202);
     expect(launchSelected).toHaveBeenCalledWith(
