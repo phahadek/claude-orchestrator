@@ -294,7 +294,9 @@ describe('assemblePlanningProcedure', () => {
       },
     });
 
-    expect(output).toMatch(/authoring or rewriting a file.+(is always a|Code task)/is);
+    expect(output).toMatch(
+      /authoring or rewriting a file.+(is always a|Code task)/is,
+    );
     expect(output).toMatch(/💻 Code task/);
     expect(output).toMatch(/ops proposes the content/i);
   });

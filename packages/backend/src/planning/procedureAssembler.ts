@@ -214,7 +214,7 @@ function renderOpsCapabilities(): string[] {
     '',
     'This session starts with a fixed base tool set and nothing more: read-only ' +
       'Bash (ls, cat, grep, find, git log/diff/show/status/blame/ls-files/rev-parse, ' +
-      'etc.), read-only Notion MCP tools, and this project\'s audited live-data read ' +
+      "etc.), read-only Notion MCP tools, and this project's audited live-data read " +
       'surface (analyst/alarm/read-only-DB MCP tools, where configured). No write, no ' +
       'Write/Edit tool, and no prod-mutating command is granted by default — do not ' +
       'probe for one.',
@@ -224,7 +224,7 @@ function renderOpsCapabilities(): string[] {
       'the exact capability (one Bash command prefix or one named MCP write verb — ' +
       'never a category). An operator reviews it; on approval the capability is ' +
       'durably granted to this session alone and it is re-dispatched with that tool ' +
-      'available. On rejection or pushback, the session resumes with the operator\'s ' +
+      "available. On rejection or pushback, the session resumes with the operator's " +
       'feedback instead.',
     '',
     'Some things are never grantable this way, no matter what an operator approves: ' +
