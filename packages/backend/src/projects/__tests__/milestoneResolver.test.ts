@@ -105,6 +105,18 @@ describe('resolveMilestoneForProject', () => {
       resolveMilestoneForProject('p1', 'M13 — Orchestrator-Owned Planning'),
     ).toBe('M13');
   });
+
+  it('resolves the M<n> token against a Notion-synced milestone (hex source_id, token-derived canonical_short_id) without throwing', () => {
+    const notionSynced = {
+      ...M11,
+      id: 'ms-uuid-11',
+      name: 'M11 — Orchestrator-Owned Planning',
+      sourceId: 'e4a105a2-1234-4abc-9def-000000000000',
+      canonicalShortId: 'M11',
+    };
+    projectServiceMock.getById.mockReturnValue(project([notionSynced, M12]));
+    expect(resolveMilestoneForProject('p1', 'M11')).toBe('M11');
+  });
 });
 
 describe('resolveMilestoneAnyProject', () => {
@@ -137,5 +149,17 @@ describe('resolveMilestoneAnyProject', () => {
       project([M11, M12, M13_FULL_TITLE]),
     ]);
     expect(resolveMilestoneAnyProject('M13')).toBe('M13');
+  });
+
+  it('resolves the M<n> token against a Notion-synced milestone (hex source_id, token-derived canonical_short_id) without throwing', () => {
+    const notionSynced = {
+      ...M11,
+      id: 'ms-uuid-11',
+      name: 'M11 — Orchestrator-Owned Planning',
+      sourceId: 'e4a105a2-1234-4abc-9def-000000000000',
+      canonicalShortId: 'M11',
+    };
+    projectServiceMock.list.mockReturnValue([project([notionSynced, M12])]);
+    expect(resolveMilestoneAnyProject('M11')).toBe('M11');
   });
 });

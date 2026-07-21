@@ -132,6 +132,23 @@ describe('reconcileYamlMilestones — creates new rows', () => {
   });
 });
 
+describe('reconcileYamlMilestones — canonical_short_id derivation', () => {
+  it('derives canonical_short_id from the M<n> token in the name, not the yaml id', () => {
+    writeTasksYaml(tmpDir, [
+      { id: 'e4a105a2-hex-id', name: 'M11 — Orchestrator-Owned Planning' },
+    ]);
+    vi.mocked(listMilestonesByProject).mockReturnValue([]);
+
+    ProjectService.reconcileYamlMilestones('proj-1', tmpDir);
+
+    expect(insertMilestone).toHaveBeenCalledOnce();
+    expect(vi.mocked(insertMilestone).mock.calls[0][0]).toMatchObject({
+      source_id: 'e4a105a2-hex-id',
+      canonical_short_id: 'M11',
+    });
+  });
+});
+
 describe('reconcileYamlMilestones — updates existing rows by source_id', () => {
   it('updates name and displayOrder for a row whose source_id matches', () => {
     writeTasksYaml(tmpDir, [{ id: 'ms-1', name: 'Sprint 1 renamed' }]);
