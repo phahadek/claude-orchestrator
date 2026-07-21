@@ -74,6 +74,7 @@ type EventType =
   | 'task_archived'
   | 'task_moved'
   | 'readiness_override'
+  | 'staged_intent_disposition'
   | 'flake_recovery_attempted'
   | 'flake_recovery_f2_invalidated'
   | 'flake_recovery_f2_rerun'

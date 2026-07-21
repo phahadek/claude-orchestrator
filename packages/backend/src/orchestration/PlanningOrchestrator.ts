@@ -9,13 +9,13 @@ import { isPlanningSession } from '../session/sessionPredicates';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage } from '../ws/types';
 
-type PlanningDisposition = 'approve' | 'pushback' | 'reject';
+type PlanningDisposition = 'approve' | 'pushback' | 'decline';
 
 export interface PlanningDispositionPayload {
   intent: StagedIntentRow;
   disposition: PlanningDisposition;
-  /** Operator-supplied rationale — required for pushback, optional for reject. */
-  feedback?: string | null;
+  /** Operator-supplied rationale — required for pushback and decline. */
+  reason?: string | null;
 }
 
 /**
@@ -101,7 +101,7 @@ export class PlanningOrchestrator {
    * no originating session, or whose session isn't a planning session.
    */
   async handleDisposition(payload: PlanningDispositionPayload): Promise<void> {
-    const { intent, disposition, feedback } = payload;
+    const { intent, disposition, reason } = payload;
     const sessionId = intent.session_id;
     if (!sessionId) return;
 
@@ -115,7 +115,7 @@ export class PlanningOrchestrator {
       listStagedIntentsBySession(sessionId).length,
     );
 
-    const message = formatDispositionMessage(intent, disposition, feedback);
+    const message = formatDispositionMessage(intent, disposition, reason);
     try {
       await this.sessionManager.enqueueFeedback(
         sessionId,
@@ -133,14 +133,14 @@ export class PlanningOrchestrator {
 function formatDispositionMessage(
   intent: StagedIntentRow,
   disposition: PlanningDisposition,
-  feedback?: string | null,
+  reason?: string | null,
 ): string {
   switch (disposition) {
     case 'approve':
       return `Staged intent ${intent.id} (${intent.kind}) was approved and applied.`;
-    case 'reject':
-      return `Staged intent ${intent.id} (${intent.kind}) was rejected.${feedback ? ` Reason: ${feedback}` : ''}`;
+    case 'decline':
+      return `Staged intent ${intent.id} (${intent.kind}) was declined. Reason: ${reason ?? ''}`;
     case 'pushback':
-      return `Staged intent ${intent.id} (${intent.kind}) was sent back for revision. Feedback: ${feedback ?? ''}`;
+      return `Staged intent ${intent.id} (${intent.kind}) was sent back for revision. Feedback: ${reason ?? ''}`;
   }
 }

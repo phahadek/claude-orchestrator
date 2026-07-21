@@ -555,9 +555,14 @@ export interface StagedIntentRow {
   decision_proposal: string | null;
   /** Tier-3 semantic readiness advisory — distinct from `annotation`'s deterministic hard-block channel. */
   advisory: string | null;
+  /** Operator-supplied rationale for a reject disposition (pushback | decline). Null until rejected. */
+  disposition_reason: string | null;
   created_at: number;
   updated_at: number;
 }
+
+/** The two explicit operator-chosen outcomes for a reject disposition. */
+export type StagedIntentRejectOutcome = 'pushback' | 'decline';
 
 // ─── staged_intent_group ──────────────────────────────────────────────────
 

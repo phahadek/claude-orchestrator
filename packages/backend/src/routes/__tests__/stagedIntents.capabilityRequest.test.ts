@@ -103,7 +103,7 @@ describe('session.requestCapability decision-surface kind', () => {
     );
   });
 
-  it('a rejected request grants nothing, but still resumes the session with the outcome', async () => {
+  it('a declined request grants nothing, but still resumes the session with the outcome', async () => {
     const sessionManager = makeSessionManager();
     const app = makeApp(sessionManager);
 
@@ -119,19 +119,20 @@ describe('session.requestCapability decision-surface kind', () => {
       'sess-3',
     );
 
-    const res = await supertest(app).post(
-      `/api/staged-intents/${intent.id}/reject`,
-    );
+    const res = await supertest(app)
+      .post(`/api/staged-intents/${intent.id}/reject`)
+      .send({ outcome: 'decline', reason: 'too risky' });
 
     expect(res.status).toBe(200);
     expect(sessionManager.grantCapability).not.toHaveBeenCalled();
     expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
     const [sessionId, , message] = sessionManager.enqueueFeedback.mock.calls[0];
     expect(sessionId).toBe('sess-3');
-    expect(message).toMatch(/rejected/i);
+    expect(message).toMatch(/declined/i);
+    expect(message).toContain('too risky');
   });
 
-  it('a pushed-back request (rejected with feedback) grants nothing and carries the feedback in the resume message', async () => {
+  it('a pushed-back request grants nothing and carries the reason in the resume message', async () => {
     const sessionManager = makeSessionManager();
     const app = makeApp(sessionManager);
 
@@ -149,11 +150,43 @@ describe('session.requestCapability decision-surface kind', () => {
 
     const res = await supertest(app)
       .post(`/api/staged-intents/${intent.id}/reject`)
-      .send({ feedback: 'use the existing loopback client instead' });
+      .send({
+        outcome: 'pushback',
+        reason: 'use the existing loopback client instead',
+      });
 
     expect(res.status).toBe(200);
     expect(sessionManager.grantCapability).not.toHaveBeenCalled();
     const [, , message] = sessionManager.enqueueFeedback.mock.calls[0];
     expect(message).toContain('use the existing loopback client instead');
+  });
+
+  it('rejects with 400 when outcome or reason is missing', async () => {
+    const sessionManager = makeSessionManager();
+    const app = makeApp(sessionManager);
+
+    const intent = stageIntent(
+      'session.requestCapability',
+      {
+        capability: 'Bash(curl:*)',
+        plan: 'ping an API',
+        evidence: 'debugging',
+      },
+      'proj-1',
+      null,
+      'sess-5',
+    );
+
+    const missingOutcome = await supertest(app)
+      .post(`/api/staged-intents/${intent.id}/reject`)
+      .send({ reason: 'no thanks' });
+    expect(missingOutcome.status).toBe(400);
+
+    const missingReason = await supertest(app)
+      .post(`/api/staged-intents/${intent.id}/reject`)
+      .send({ outcome: 'decline', reason: '   ' });
+    expect(missingReason.status).toBe(400);
+
+    expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
   });
 });

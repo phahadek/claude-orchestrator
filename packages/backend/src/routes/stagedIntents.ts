@@ -19,7 +19,11 @@ import {
   type ReadinessViolation,
 } from '../tasks/readinessGate';
 import { GroomingGateError, type GroomingGateEntry } from '../groom/groomGate';
-import type { StagedIntentRow, StagedIntentState } from '../db/types';
+import type {
+  StagedIntentRow,
+  StagedIntentState,
+  StagedIntentRejectOutcome,
+} from '../db/types';
 import {
   hashIntentPayload,
   insertStagedIntent,
@@ -33,6 +37,7 @@ import {
   supersedeStagedIntent,
   setStagedIntentAnnotation,
 } from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
 import type {
   GateContributionSourceTask,
   GateContributionItemInput,
@@ -163,6 +168,8 @@ export interface StagedIntent {
     model: string;
     checkedAt: number;
   } | null;
+  /** Operator-supplied rationale for a reject disposition (pushback | decline). Null until rejected. */
+  dispositionReason?: string | null;
 }
 
 function rowToApi(row: StagedIntentRow): StagedIntent {
@@ -183,6 +190,7 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
     advisory: row.advisory
       ? (JSON.parse(row.advisory) as StagedIntent['advisory'])
       : null,
+    dispositionReason: row.disposition_reason,
   };
 }
 
@@ -386,6 +394,7 @@ export function stageIntent(
         annotation: null,
         decision_proposal: decisionProposal ?? null,
         advisory: null,
+        disposition_reason: null,
         created_at: now,
         updated_at: now,
       };
@@ -409,6 +418,7 @@ export function stageIntent(
     annotation: null,
     decision_proposal: decisionProposal ?? null,
     advisory: null,
+    disposition_reason: null,
     created_at: now,
     updated_at: now,
   };
@@ -604,8 +614,8 @@ async function applyIntent(
 async function resumeCapabilityRequester(
   sessionManager: SessionManager | undefined,
   intent: StagedIntent,
-  outcome: 'approved' | 'rejected' | 'pushback',
-  feedback?: string | null,
+  outcome: 'approved' | StagedIntentRejectOutcome,
+  reason?: string | null,
 ): Promise<void> {
   if (!sessionManager || !intent.sessionId) return;
   const payload = intent.payload as CapabilityRequestPayload;
@@ -618,8 +628,8 @@ async function resumeCapabilityRequester(
     outcome === 'approved'
       ? `Capability request approved: "${payload.capability}" has been granted for this session.`
       : outcome === 'pushback'
-        ? `Capability request "${payload.capability}" was sent back for revision.${feedback ? ` Feedback: ${feedback}` : ''}`
-        : `Capability request "${payload.capability}" was rejected.${feedback ? ` Reason: ${feedback}` : ''}`;
+        ? `Capability request "${payload.capability}" was sent back for revision. Feedback: ${reason ?? ''}`
+        : `Capability request "${payload.capability}" was declined. Reason: ${reason ?? ''}`;
 
   try {
     await sessionManager.enqueueFeedback(
@@ -912,12 +922,21 @@ export function createStagedIntentsRouter(
   // ── POST /api/staged-intents/:id/apply ───────────────────────────────────
   // Human / device-authenticated surface only — the only place `override` is
   // accepted. Auto-dispatched, stage-only producers never call this route.
+  // Approve->Commit unification: a grouped intent (group_id set) is only
+  // ever written atomically via the group's commit route — apply is
+  // standalone-intents-only, server-enforced below.
   router.post(
     '/staged-intents/:id/apply',
     async (req: Request, res: Response) => {
       const row = getActiveStagedIntent(String(req.params.id));
       if (!row) {
         res.status(404).json({ error: 'staged intent not found' });
+        return;
+      }
+      if (row.group_id) {
+        res.status(409).json({
+          error: `staged intent "${row.id}" belongs to group "${row.group_id}" — grouped intents must be committed atomically via POST /staged-intents/group/:groupId/commit`,
+        });
         return;
       }
       const intent = rowToApi(row);
@@ -1184,9 +1203,14 @@ export function createStagedIntentsRouter(
   );
 
   // ── POST /api/staged-intents/:id/reject ──────────────────────────────────
-  // A non-empty `feedback` is a pushback (the planning session is expected to
-  // revise and re-stage); an empty one is a plain reject. Both dispositions
-  // resume the originating planning session with the outcome, when set.
+  // The reject disposition requires an explicit operator-chosen outcome and
+  // a non-blank reason — no more empty-textbox inference of plain-reject vs
+  // pushback. `pushback` re-turns the originating session to revise and
+  // re-emit; `decline` is terminal — the session, when present, is informed
+  // with the reason but not asked to re-emit. The reason is persisted on the
+  // intent (disposition_reason) and recorded in audit_log regardless of
+  // whether the originating session still exists — a disposition on an
+  // intent whose session has already ended is still durably recorded.
   router.post(
     '/staged-intents/:id/reject',
     async (req: Request, res: Response) => {
@@ -1195,27 +1219,50 @@ export function createStagedIntentsRouter(
         res.status(404).json({ error: 'staged intent not found' });
         return;
       }
-      const body = req.body as { feedback?: unknown };
-      const feedback =
-        typeof body?.feedback === 'string' && body.feedback.trim()
-          ? body.feedback.trim()
+      const body = req.body as { outcome?: unknown; reason?: unknown };
+      const outcome: StagedIntentRejectOutcome | null =
+        body?.outcome === 'pushback' || body?.outcome === 'decline'
+          ? body.outcome
           : null;
+      const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
+      if (!outcome) {
+        res
+          .status(400)
+          .json({ error: 'outcome must be "pushback" or "decline"' });
+        return;
+      }
+      if (!reason) {
+        res.status(400).json({ error: 'reason is required' });
+        return;
+      }
 
-      const rejected = transitionStagedIntent(row.id, 'rejected');
+      const rejected = transitionStagedIntent(row.id, 'rejected', {
+        dispositionReason: reason,
+      });
       const rejectedIntent = rowToApi(rejected);
       broadcastIntentChange(rejectedIntent);
+
+      recordEvent({
+        event_type: 'staged_intent_disposition',
+        actor_type: 'human',
+        actor_id: null,
+        project_id: rejectedIntent.projectId,
+        task_id: row.task_id,
+        payload: { intentId: row.id, disposition: outcome, reason },
+      });
+
       if (rejectedIntent.kind === 'session.requestCapability') {
         await resumeCapabilityRequester(
           sessionManager,
           rejectedIntent,
-          feedback ? 'pushback' : 'rejected',
-          feedback,
+          outcome,
+          reason,
         );
       } else {
         await planningOrchestrator?.handleDisposition({
           intent: rejected,
-          disposition: feedback ? 'pushback' : 'reject',
-          feedback,
+          disposition: outcome,
+          reason,
         });
       }
       res.json({ ok: true });

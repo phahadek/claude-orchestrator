@@ -91,7 +91,28 @@ async function stageReadyStatus(
   });
 }
 
-describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
+/**
+ * Grouped intents are only ever written through the group's atomic commit
+ * route (Approve->Commit unification) — POST /:id/apply is standalone-only
+ * and 409s for any intent carrying a group_id. Approves every live intent
+ * in the group, then commits it, mirroring the panel's Approve -> Commit flow.
+ */
+async function approveAndCommitGroup(
+  agent: ReturnType<typeof supertest>,
+  groupId: string,
+  body: Record<string, unknown> = {},
+) {
+  const list = await agent.get('/api/staged-intents').query({});
+  for (const intent of list.body.intents.filter(
+    (i: { groupId: string | null; state: string }) =>
+      i.groupId === groupId && i.state === 'staged',
+  )) {
+    await agent.post(`/api/staged-intents/${intent.id}/approve`).send({});
+  }
+  return agent.post(`/api/staged-intents/group/${groupId}/commit`).send(body);
+}
+
+describe('POST /api/staged-intents/group/:groupId/commit — readiness gate', () => {
   it('blocks a Ready transition with an unresolved Open Questions section, and keeps the intent staged with an annotation', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
@@ -99,6 +120,7 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
         .fn()
         .mockResolvedValue('## Open Questions\n- Still unresolved?\n'),
       updateStatus: vi.fn(),
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
     const app = makeApp();
     const agent = supertest(app);
@@ -111,11 +133,9 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
     );
     expect(staged.status).toBe(201);
 
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
-      .send({});
-    expect(applied.status).toBe(409);
-    expect(applied.body.violations).toEqual([
+    const committed = await approveAndCommitGroup(agent, 'group-blocked');
+    expect(committed.status).toBe(409);
+    expect(committed.body.violations).toEqual([
       expect.objectContaining({ tier: 'structural' }),
     ]);
 
@@ -141,6 +161,7 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
         .fn()
         .mockResolvedValue('## Open Questions\n- Still unresolved?\n'),
       updateStatus,
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
     const app = makeApp();
     const agent = supertest(app);
@@ -151,12 +172,14 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
       'notion:abc',
       'group-2',
     );
+    expect(staged.status).toBe(201);
 
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
-      .send({ override: true, reason: 'reviewed manually, safe to proceed' });
+    const committed = await approveAndCommitGroup(agent, 'group-2', {
+      override: true,
+      reason: 'reviewed manually, safe to proceed',
+    });
 
-    expect(applied.status).toBe(200);
+    expect(committed.status).toBe(200);
     expect(updateStatus).toHaveBeenCalledWith(
       'notion:abc',
       '🗂️ Ready',
@@ -210,6 +233,7 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll clear.'),
       updateStatus,
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
     const app = makeApp();
     const agent = supertest(app);
@@ -220,11 +244,10 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
       'notion:abc',
       'group-clean',
     );
+    expect(staged.status).toBe(201);
 
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
-      .send({});
-    expect(applied.status).toBe(200);
+    const committed = await approveAndCommitGroup(agent, 'group-clean');
+    expect(committed.status).toBe(200);
     expect(updateStatus).toHaveBeenCalledWith(
       'notion:abc',
       '🗂️ Ready',
@@ -233,13 +256,14 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
   });
 });
 
-describe('POST /api/staged-intents/:id/apply — grooming promotion gate', () => {
+describe('POST /api/staged-intents/group/:groupId/commit — grooming promotion gate', () => {
   it('blocks a Ready transition whose staged groomingGate entry is undispositioned, and keeps the intent staged with an annotation', async () => {
     const updateStatus = vi.fn();
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll clear.'),
       updateStatus,
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
     const app = makeApp();
     const agent = supertest(app);
@@ -262,11 +286,9 @@ describe('POST /api/staged-intents/:id/apply — grooming promotion gate', () =>
     });
     expect(staged.status).toBe(201);
 
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
-      .send({});
-    expect(applied.status).toBe(409);
-    expect(applied.body.reasons.join(' ')).toMatch(/size_check/);
+    const committed = await approveAndCommitGroup(agent, 'group-groom-blocked');
+    expect(committed.status).toBe(409);
+    expect(committed.body.reasons.join(' ')).toMatch(/size_check/);
     expect(updateStatus).not.toHaveBeenCalled();
 
     const list = await agent
@@ -287,6 +309,7 @@ describe('POST /api/staged-intents/:id/apply — grooming promotion gate', () =>
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll clear.'),
       updateStatus,
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
     const app = makeApp();
     const agent = supertest(app);
@@ -310,11 +333,10 @@ describe('POST /api/staged-intents/:id/apply — grooming promotion gate', () =>
         },
       },
     });
+    expect(staged.status).toBe(201);
 
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
-      .send({});
-    expect(applied.status).toBe(200);
+    const committed = await approveAndCommitGroup(agent, 'group-groom-clean');
+    expect(committed.status).toBe(200);
     expect(updateStatus).toHaveBeenCalledWith(
       'notion:abc',
       '🗂️ Ready',
