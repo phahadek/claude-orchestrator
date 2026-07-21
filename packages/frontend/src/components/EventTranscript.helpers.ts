@@ -14,7 +14,7 @@ type RenderItem =
   | { kind: 'subagent'; toolName: string; calls: CallPair[] };
 
 /** Tool names that represent a subagent invocation (the Task tool). */
-export const SUBAGENT_TOOL_NAMES = new Set(['Task', 'Agent']);
+const SUBAGENT_TOOL_NAMES = new Set(['Task', 'Agent']);
 
 function getToolNameFromTextEvent(event: SessionEvent): string | null {
   if (event.eventType !== 'text') return null;
