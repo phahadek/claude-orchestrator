@@ -152,7 +152,8 @@ export function NonCodeTypeSection({
                     !designEligible &&
                     groomCheckedIds !== undefined &&
                     task.displayStatus === 'backlog';
-                  const showCheckbox = opsEligible || designEligible || groomable;
+                  const showCheckbox =
+                    opsEligible || designEligible || groomable;
                   const checked = opsEligible
                     ? opsCheckedIds!.has(task.taskId)
                     : designEligible
