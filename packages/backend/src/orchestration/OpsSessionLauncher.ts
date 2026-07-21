@@ -200,21 +200,22 @@ export class OpsSessionLauncher {
       if (sessionType === 'groom') {
         const project = getProjectRowById(projectId);
         if (!project) throw new Error(`unknown project ${projectId}`);
-        const milestoneKey = resolveMilestoneForProject(
-          projectId,
-          milestoneId,
-        );
+        const milestoneKey = resolveMilestoneForProject(projectId, milestoneId);
         const result = await loadGroomContext(milestoneKey, {
           repoRoot: project.project_dir,
         });
-        digest = { workflow: 'groom', data: deriveGroomDigestSlice(result, task.id) };
+        digest = {
+          workflow: 'groom',
+          data: deriveGroomDigestSlice(result, task.id),
+        };
       } else if (sessionType === 'design') {
         const result = await loadDesignContext(milestoneId, task.id, {
           project: projectId,
         });
         digest = { workflow: 'design', data: deriveDesignDigestSlice(result) };
       } else if (sessionType === 'ops') {
-        if (!opsContext) throw new Error('ops session launched without opsContext');
+        if (!opsContext)
+          throw new Error('ops session launched without opsContext');
         const journalEntry = getOpsJournalEntry(task.id) ?? null;
         digest = {
           workflow: 'ops',

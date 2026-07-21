@@ -215,7 +215,9 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     const [, , options] = start.mock.calls[0];
     expect(options.sessionType).toBe('ops');
     expect(typeof options.injectedProcedureContent).toBe('string');
-    expect((options.injectedProcedureContent as string).length).toBeGreaterThan(0);
+    expect((options.injectedProcedureContent as string).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it('passes a non-empty injectedProcedureContent for a groom dispatch', async () => {
@@ -238,7 +240,12 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     });
 
     const launcher = new OpsSessionLauncher(sessionManager as never);
-    const task = { id: 'task-1', title: 'Groom me', url: '', blockingDepIds: [] };
+    const task = {
+      id: 'task-1',
+      title: 'Groom me',
+      url: '',
+      blockingDepIds: [],
+    };
 
     await launcher.launchSelected({
       projectId: 'proj-1',
@@ -252,7 +259,9 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     const [, , options] = start.mock.calls[0];
     expect(options.sessionType).toBe('groom');
     expect(typeof options.injectedProcedureContent).toBe('string');
-    expect((options.injectedProcedureContent as string).length).toBeGreaterThan(0);
+    expect((options.injectedProcedureContent as string).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it('passes a non-empty injectedProcedureContent for a design dispatch', async () => {
@@ -273,7 +282,12 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     });
 
     const launcher = new OpsSessionLauncher(sessionManager as never);
-    const task = { id: 'task-1', title: 'Design me', url: '', blockingDepIds: [] };
+    const task = {
+      id: 'task-1',
+      title: 'Design me',
+      url: '',
+      blockingDepIds: [],
+    };
 
     await launcher.launchSelected({
       projectId: 'proj-1',
@@ -287,12 +301,19 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     const [, , options] = start.mock.calls[0];
     expect(options.sessionType).toBe('design');
     expect(typeof options.injectedProcedureContent).toBe('string');
-    expect((options.injectedProcedureContent as string).length).toBeGreaterThan(0);
+    expect((options.injectedProcedureContent as string).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it('does not pass injectedProcedureContent for a standard (code) dispatch', async () => {
     const launcher = new OpsSessionLauncher(sessionManager as never);
-    const task = { id: 'task-1', title: 'Code me', url: '', blockingDepIds: [] };
+    const task = {
+      id: 'task-1',
+      title: 'Code me',
+      url: '',
+      blockingDepIds: [],
+    };
 
     await launcher.launchSelected({
       projectId: 'proj-1',
