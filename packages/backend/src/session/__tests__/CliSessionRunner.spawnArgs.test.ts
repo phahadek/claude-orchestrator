@@ -187,3 +187,44 @@ describe('CliSessionRunner spawn args', () => {
     expect(argsWithEnabled).not.toContain('--settings');
   });
 });
+
+describe('CliSessionRunner --permission-mode', () => {
+  it('uses acceptEdits for a standard (code) session', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, sessionType: 'standard' },
+      () => {},
+    );
+
+    const idx = capturedSpawnArgs.indexOf('--permission-mode');
+    expect(idx).not.toBe(-1);
+    expect(capturedSpawnArgs[idx + 1]).toBe('acceptEdits');
+  });
+
+  it('uses acceptEdits when sessionType is absent (back-compat default)', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    const idx = capturedSpawnArgs.indexOf('--permission-mode');
+    expect(capturedSpawnArgs[idx + 1]).toBe('acceptEdits');
+  });
+
+  it.each(['groom', 'design', 'ops'] as const)(
+    'does not use acceptEdits for a %s (planning) session',
+    async (sessionType) => {
+      const runner = new CliSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      const idx = capturedSpawnArgs.indexOf('--permission-mode');
+      expect(idx).not.toBe(-1);
+      expect(capturedSpawnArgs[idx + 1]).not.toBe('acceptEdits');
+    },
+  );
+});

@@ -7,6 +7,19 @@ import {
   type OpsTaskEntry,
 } from '../ops/opsLoad';
 import { buildOpsSessionContext } from '../ops/opsSessionContext';
+import { getEntry as getOpsJournalEntry } from '../ops/opsJournal';
+import { loadGroomContext } from '../groom/groomLoad';
+import { loadDesignContext } from '../design/designLoad';
+import { getProjectRowById } from '../db/queries';
+import { resolveMilestoneForProject } from '../projects/milestoneResolver';
+import { isPlanningSession } from '../session/sessionPredicates';
+import {
+  assemblePlanningProcedure,
+  deriveGroomDigestSlice,
+  deriveDesignDigestSlice,
+  deriveOpsDigestSlice,
+  type PlanningDigest,
+} from '../planning/procedureAssembler';
 
 const POLL_INTERVAL_MS = 15_000;
 
@@ -167,6 +180,63 @@ export class OpsSessionLauncher {
     }
   }
 
+  /**
+   * Load this workflow's per-task digest and assemble the injected planning
+   * procedure (`planning/procedureAssembler.ts`) for a groom/design/ops
+   * dispatch. Returns undefined (never throws) on any loader failure — the
+   * session still launches, falling back to the code-session context build
+   * in that case, but a warning is logged so the gap is visible.
+   */
+  private async buildInjectedProcedure(
+    projectId: string,
+    milestoneId: string,
+    sessionType: PlanningSessionType,
+    opsContext: OpsLoadResult | undefined,
+    task: PlanningTaskEntry,
+    taskUrl: string,
+  ): Promise<string | undefined> {
+    try {
+      let digest: PlanningDigest;
+      if (sessionType === 'groom') {
+        const project = getProjectRowById(projectId);
+        if (!project) throw new Error(`unknown project ${projectId}`);
+        const milestoneKey = resolveMilestoneForProject(projectId, milestoneId);
+        const result = await loadGroomContext(milestoneKey, {
+          repoRoot: project.project_dir,
+        });
+        digest = {
+          workflow: 'groom',
+          data: deriveGroomDigestSlice(result, task.id),
+        };
+      } else if (sessionType === 'design') {
+        const result = await loadDesignContext(milestoneId, task.id, {
+          project: projectId,
+        });
+        digest = { workflow: 'design', data: deriveDesignDigestSlice(result) };
+      } else if (sessionType === 'ops') {
+        if (!opsContext)
+          throw new Error('ops session launched without opsContext');
+        const journalEntry = getOpsJournalEntry(task.id) ?? null;
+        digest = {
+          workflow: 'ops',
+          data: deriveOpsDigestSlice(opsContext, task.id, journalEntry),
+        };
+      } else {
+        return undefined;
+      }
+      return assemblePlanningProcedure({
+        taskName: task.title || taskUrl,
+        taskUrl,
+        digest,
+      });
+    } catch (err) {
+      logger.warn(
+        `[OpsSessionLauncher] failed to assemble planning procedure for task ${task.id} (${sessionType}): ${err instanceof Error ? err.message : err}`,
+      );
+      return undefined;
+    }
+  }
+
   private async launchOne(
     projectId: string,
     projectContextUrl: string,
@@ -177,6 +247,16 @@ export class OpsSessionLauncher {
   ): Promise<void> {
     const taskUrl =
       task.url || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
+    const injectedProcedureContent = isPlanningSession(sessionType)
+      ? await this.buildInjectedProcedure(
+          projectId,
+          milestoneId,
+          sessionType,
+          opsContext,
+          task,
+          taskUrl,
+        )
+      : undefined;
     try {
       const sessionId = await this.sessionManager.start(
         taskUrl,
@@ -194,6 +274,7 @@ export class OpsSessionLauncher {
               task as OpsTaskEntry,
             ),
           }),
+          ...(injectedProcedureContent && { injectedProcedureContent }),
         },
       );
       logger.info(

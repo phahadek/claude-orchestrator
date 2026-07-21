@@ -10,6 +10,28 @@ vi.mock('../../ops/opsLoad.js', () => ({
   loadOpsContext: vi.fn(),
 }));
 
+vi.mock('../../ops/opsJournal.js', () => ({
+  getEntry: vi.fn().mockReturnValue(undefined),
+}));
+
+vi.mock('../../groom/groomLoad.js', () => ({
+  loadGroomContext: vi.fn(),
+}));
+
+vi.mock('../../design/designLoad.js', () => ({
+  loadDesignContext: vi.fn(),
+}));
+
+vi.mock('../../db/queries.js', () => ({
+  getProjectRowById: vi
+    .fn()
+    .mockReturnValue({ id: 'proj-1', project_dir: '/tmp/proj-1' }),
+}));
+
+vi.mock('../../projects/milestoneResolver.js', () => ({
+  resolveMilestoneForProject: vi.fn().mockReturnValue('M1'),
+}));
+
 function makeTask(overrides: Partial<OpsTaskEntry> = {}): OpsTaskEntry {
   return {
     id: 'task-1',
@@ -163,5 +185,146 @@ describe('OpsSessionLauncher', () => {
 
     expect(start).not.toHaveBeenCalled();
     expect(launcher.hasDeferred('task-blocked')).toBe(true);
+  });
+});
+
+describe('OpsSessionLauncher — injected planning procedure', () => {
+  let start: ReturnType<typeof vi.fn>;
+  let sessionManager: { start: typeof start };
+
+  beforeEach(() => {
+    start = vi.fn().mockResolvedValue('session-id');
+    sessionManager = { start };
+    vi.clearAllMocks();
+  });
+
+  it('passes a non-empty injectedProcedureContent (from assemblePlanningProcedure) for an ops dispatch', async () => {
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = makeTask({ id: 'task-1' });
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'ops',
+      opsContext: makeOpsContext([task]),
+      tasks: [task],
+    });
+
+    expect(start).toHaveBeenCalledTimes(1);
+    const [, , options] = start.mock.calls[0];
+    expect(options.sessionType).toBe('ops');
+    expect(typeof options.injectedProcedureContent).toBe('string');
+    expect((options.injectedProcedureContent as string).length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it('passes a non-empty injectedProcedureContent for a groom dispatch', async () => {
+    const { loadGroomContext } = await import('../../groom/groomLoad.js');
+    (loadGroomContext as ReturnType<typeof vi.fn>).mockResolvedValue({
+      targetTasks: [
+        {
+          id: 'task-1',
+          title: 'Groom me',
+          status: '🔲 Backlog',
+          type: '🔨 Task',
+          url: 'https://www.notion.so/task-1',
+          sizeCheckSeed: { files: 1, loc_method: 'estimated' },
+          typeCheck: { mismatch: false, notes: [] },
+          readinessViolations: [],
+          bindingConstraints: [],
+        },
+      ],
+      dependencyCandidates: [],
+    });
+
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = {
+      id: 'task-1',
+      title: 'Groom me',
+      url: '',
+      blockingDepIds: [],
+    };
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'groom',
+      tasks: [task],
+    });
+
+    expect(start).toHaveBeenCalledTimes(1);
+    const [, , options] = start.mock.calls[0];
+    expect(options.sessionType).toBe('groom');
+    expect(typeof options.injectedProcedureContent).toBe('string');
+    expect((options.injectedProcedureContent as string).length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it('passes a non-empty injectedProcedureContent for a design dispatch', async () => {
+    const { loadDesignContext } = await import('../../design/designLoad.js');
+    (loadDesignContext as ReturnType<typeof vi.fn>).mockResolvedValue({
+      task: {
+        id: 'task-1',
+        title: 'Design me',
+        status: '🔲 Backlog',
+        type: '🎨 Design',
+        url: 'https://www.notion.so/task-1',
+      },
+      markdown: '## Task\nSome design body.',
+      openQuestions: { items: [], source: 'none' },
+      archUnits: [],
+      unresolvedPageRefs: [],
+      codeMapGrounding: {},
+    });
+
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = {
+      id: 'task-1',
+      title: 'Design me',
+      url: '',
+      blockingDepIds: [],
+    };
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'design',
+      tasks: [task],
+    });
+
+    expect(start).toHaveBeenCalledTimes(1);
+    const [, , options] = start.mock.calls[0];
+    expect(options.sessionType).toBe('design');
+    expect(typeof options.injectedProcedureContent).toBe('string');
+    expect((options.injectedProcedureContent as string).length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it('does not pass injectedProcedureContent for a standard (code) dispatch', async () => {
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = {
+      id: 'task-1',
+      title: 'Code me',
+      url: '',
+      blockingDepIds: [],
+    };
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'standard',
+      tasks: [task],
+    });
+
+    expect(start).toHaveBeenCalledTimes(1);
+    const [, , options] = start.mock.calls[0];
+    expect(options.injectedProcedureContent).toBeUndefined();
   });
 });

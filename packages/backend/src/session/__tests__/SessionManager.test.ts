@@ -1642,3 +1642,51 @@ describe('start() — bootstrap gate', () => {
     expect(bootstrapErrorCalls).toHaveLength(0);
   });
 });
+
+// ── start() — worktree_path persistence by session type ────────────────────
+
+describe('start() — worktree_path persistence', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      mcp_servers: undefined,
+      allowed_tools: [],
+    } as any);
+  });
+
+  it.each(['groom', 'design', 'ops'] as const)(
+    'persists worktree_path as null for a %s (planning) session — no worktree is ever created on disk',
+    async (sessionType) => {
+      await sm.start('https://notion.so/task', 'https://notion.so/project', {
+        projectId: PROJECT_ID,
+        taskKind: 'milestone',
+        taskName: 'my-task',
+        sessionType,
+      });
+
+      expect(vi.mocked(insertSession)).toHaveBeenCalledWith(
+        expect.objectContaining({ worktree_path: null }),
+      );
+    },
+  );
+
+  it('persists a real worktree_path for a standard (code) session', async () => {
+    await sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'non_milestone',
+      taskName: 'my-task',
+      sessionType: 'standard',
+    });
+
+    expect(vi.mocked(insertSession)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        worktree_path: expect.stringContaining('.claude/worktrees/'),
+      }),
+    );
+  });
+});
