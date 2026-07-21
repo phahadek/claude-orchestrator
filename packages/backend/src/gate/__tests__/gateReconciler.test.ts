@@ -27,6 +27,7 @@ import { upsertTaskCache } from '../../db/queries.js';
 import {
   insertItem,
   setMinDeployedCommit,
+  setSourceMergeCommit,
   advanceState,
   getItem,
 } from '../gateStore.js';
@@ -64,11 +65,22 @@ function makeItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
   });
 }
 
+/** Marks the item's (default, single) source as merged — the coverage computation in reconcileGateRunnability keys off the source's merge_commit, not min_deployed_commit directly. */
+function mergeSource(
+  itemId: string,
+  sha: string,
+  at: string,
+  sourceTaskId = 'notion:abc',
+) {
+  setSourceMergeCommit(itemId, sourceTaskId, sha);
+  setMinDeployedCommit(itemId, sha, at);
+}
+
 function makeRunnableItem(
   overrides: Partial<Parameters<typeof insertItem>[0]> = {},
 ) {
   const item = makeItem(overrides);
-  setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
+  mergeSource(item.id, 'sha1', new Date(1).toISOString());
   reconcileGateRunnability('sha1');
   return item;
 }
@@ -396,6 +408,11 @@ describe('runGateReconcilerTick', () => {
     expect(followupFiler.fileFollowupFixTask).toHaveBeenCalledTimes(1);
 
     upsertTaskCache('notion:followup-1', JSON.stringify({ status: '✅ Done' }));
+    // The follow-up task reaching Done also means its fix merged and
+    // deployed — otherwise the reconciler's own coverage check (every
+    // source's merge_commit must be an ancestor of the deployed sha) would
+    // immediately flip the item back to open before verification runs.
+    setSourceMergeCommit(item.id, 'notion:followup-1', 'sha1');
     advanceState(
       item.id,
       'runnable',
@@ -506,7 +523,7 @@ describe('runGateReconcilerTick — default deploy-advance trigger (getProjectDe
   it('marks a commit-gated item runnable once getProjectDeployedSha reports a covering sha', async () => {
     deployServiceMock.getProjectDeployedSha.mockReturnValue('sha1');
     const gated = makeItem();
-    setMinDeployedCommit(gated.id, 'sha1', new Date(1).toISOString());
+    mergeSource(gated.id, 'sha1', new Date(1).toISOString());
 
     const result = await runGateReconcilerTick({
       ancestrySourceForProject: exactMatchAncestrySource,

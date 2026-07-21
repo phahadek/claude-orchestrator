@@ -185,8 +185,10 @@ function minDeployedCommitAtLastFail(item: GateItem): string | null {
 
 /**
  * Recomputes runnability against `deploySha` (injected — see DeployAncestrySource
- * above for the swappable half). An item becomes runnable once deploySha
- * contains its min_deployed_commit. A pass is terminal for runnability — a
+ * above for the swappable half). An item becomes runnable once every one of
+ * its sources has merged and deploySha contains that source's merge commit —
+ * an un-merged source (no merge_commit yet) keeps the item open even if
+ * other sources are fully deployed. A pass is terminal for runnability — a
  * redeploy only unblocks previously-blocked items, it never re-opens a pass.
  *
  * A `fail` item is auto-reopened (fail -> open -> runnable, in the same
@@ -210,9 +212,17 @@ export function reconcileGateRunnability(
     : gateStore.listAll();
 
   for (const item of items) {
-    const covered = item.minDeployedCommit
-      ? ancestry.isAncestor(item.minDeployedCommit, deploySha)
-      : true;
+    // Covered only once every source has merged AND its merge commit has
+    // deployed — a null merge_commit (source not merged yet) or an
+    // undeployed merge commit both keep the item open. An item with no
+    // sources at all has no code dependency, so it's trivially covered.
+    const covered =
+      item.sources.length === 0 ||
+      item.sources.every(
+        (source) =>
+          source.mergeCommit &&
+          ancestry.isAncestor(source.mergeCommit, deploySha),
+      );
 
     if (item.state === 'pass') {
       // A pass is terminal for runnability — a redeploy never re-opens it.
