@@ -100,7 +100,11 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     text:
       'Diagnosis and reversible/resumable writes are what suit a dispatched (non-interactive) ' +
       '{skillLabel} session. Irreversible/non-resumable writes and live-incident recovery lean ' +
-      'interactive — hand those to an operator-present run instead of dispatching them.',
+      'interactive — hand those to an operator-present run instead of dispatching them. ' +
+      'Authoring or rewriting a file — a script, a config, a deploy playbook — is always a ' +
+      '💻 Code task, never {skillLabel}, regardless of how reversible the change looks: ' +
+      '{skillLabel} proposes the content (a staged intent, a chat write-up) and a Code task ' +
+      'applies it with the Write/Edit tools {skillLabel} does not have.',
   },
   {
     id: 'granted-writes-idempotent-resumable',

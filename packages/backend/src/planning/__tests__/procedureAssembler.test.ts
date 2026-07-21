@@ -249,6 +249,58 @@ describe('assemblePlanningProcedure', () => {
     });
   }
 
+  it('states an up-front capability inventory for the dispatched ops procedure: base tools, how to request more, what is never grantable', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
+      },
+    });
+
+    expect(output).toContain('## Capabilities');
+    expect(output).toMatch(/read-only Bash/i);
+    expect(output).toMatch(/no write.+granted by default/i);
+    expect(output).toMatch(/session\.requestCapability/);
+    expect(output).toMatch(/never grantable/i);
+    expect(output).toMatch(/Write\/Edit tools/i);
+
+    // Stated up-front — before the Transport section, not buried at the end.
+    const capabilitiesIdx = output.indexOf('## Capabilities');
+    const transportIdx = output.indexOf('## Transport');
+    expect(capabilitiesIdx).toBeGreaterThanOrEqual(0);
+    expect(transportIdx).toBeGreaterThan(capabilitiesIdx);
+
+    // groom/design never see the ops-only capability inventory.
+    for (const { workflow, digest } of cases) {
+      if (workflow === 'ops') continue;
+      const other = assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        digest,
+      });
+      expect(other).not.toContain('## Capabilities');
+    }
+  });
+
+  it('states file authorship is a Code task, not something ops writes directly', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
+      },
+    });
+
+    expect(output).toMatch(
+      /authoring or rewriting a file.+(is always a|Code task)/is,
+    );
+    expect(output).toMatch(/💻 Code task/);
+    expect(output).toMatch(/ops proposes the content/i);
+  });
+
   it('instructs the dispatched ops procedure to stage the decision then park, never ask-before-stage', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
