@@ -633,7 +633,8 @@ export function TaskList({
         deferredIds.has(bareTaskId(id)),
       );
       const notLaunched = selectedIds.filter(
-        (id) => !launchedIds.has(bareTaskId(id)) && !deferredIds.has(bareTaskId(id)),
+        (id) =>
+          !launchedIds.has(bareTaskId(id)) && !deferredIds.has(bareTaskId(id)),
       );
       const messages: string[] = [];
       if (deferred.length > 0) {
