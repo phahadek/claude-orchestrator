@@ -1403,6 +1403,39 @@ export class SessionManager extends EventEmitter {
 
     this.pendingStarts.delete(sessionId);
     this.sessions.set(sessionId, session);
+
+    // Look up the PR for review sessions so session_started carries prNumber.
+    const reviewPr =
+      sessionType === 'review' && sessionTaskId
+        ? (getPRByNotionTaskId(sessionTaskId) ?? undefined)
+        : undefined;
+    const reviewPrNumber = reviewPr?.pr_number;
+    const reviewCodeSessionId = reviewPr?.session_id ?? undefined;
+
+    // Broadcast session_started BEFORE wireSession() — wireSession calls
+    // session.run(), which synchronously broadcasts a session_status
+    // ('running') message as its first statement. If session_started were
+    // emitted after wireSession(), that running update could reach clients
+    // before session_started, get dropped (unknown session), and leave the
+    // session stuck showing "starting" until a refresh re-reads the DB.
+    this.emit('message', {
+      type: 'session_started',
+      sessionId,
+      taskName: taskName ?? taskUrl,
+      notionTaskUrl: taskUrl,
+      ...(taskType != null && { taskType }),
+      ...(sessionType !== 'standard' && { sessionType }),
+      ...(reviewPrNumber != null && { prNumber: reviewPrNumber }),
+      ...(reviewCodeSessionId != null && {
+        codeSessionId: reviewCodeSessionId,
+      }),
+      started_at: startedAt,
+      project_id: projectId,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      ...(sessionTaskId && { taskId: sessionTaskId }),
+    } satisfies ServerMessage);
+
     this.wireSession(sessionId, session, projectDir, worktreePath);
 
     // Update task status to In Progress (fire-and-forget; failures logged, not thrown).
@@ -1428,33 +1461,6 @@ export class SessionManager extends EventEmitter {
           } satisfies ServerMessage);
         });
     }
-
-    // Look up the PR for review sessions so session_started carries prNumber.
-    const reviewPr =
-      sessionType === 'review' && sessionTaskId
-        ? (getPRByNotionTaskId(sessionTaskId) ?? undefined)
-        : undefined;
-    const reviewPrNumber = reviewPr?.pr_number;
-    const reviewCodeSessionId = reviewPr?.session_id ?? undefined;
-
-    // Broadcast session_started — git + bootstrap complete, runner spawned.
-    this.emit('message', {
-      type: 'session_started',
-      sessionId,
-      taskName: taskName ?? taskUrl,
-      notionTaskUrl: taskUrl,
-      ...(taskType != null && { taskType }),
-      ...(sessionType !== 'standard' && { sessionType }),
-      ...(reviewPrNumber != null && { prNumber: reviewPrNumber }),
-      ...(reviewCodeSessionId != null && {
-        codeSessionId: reviewCodeSessionId,
-      }),
-      started_at: startedAt,
-      project_id: projectId,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      ...(sessionTaskId && { taskId: sessionTaskId }),
-    } satisfies ServerMessage);
   }
 
   /**
