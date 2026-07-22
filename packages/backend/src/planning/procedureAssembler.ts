@@ -201,7 +201,7 @@ const PLANNING_INTENT_KINDS: Record<PlanningWorkflow, readonly string[]> = {
     'task.setStatus',
     'seed.stage',
   ],
-  ops: ['journal.setState', 'task.setStatus'],
+  ops: ['journal.setState', 'task.setStatus', 'session.requestCapability'],
 };
 
 /**
