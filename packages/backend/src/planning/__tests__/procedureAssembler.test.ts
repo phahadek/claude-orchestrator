@@ -37,6 +37,7 @@ function fixtureGroomLoadResult(): GroomLoadResult {
         regions: {
           packages: ['packages/backend'],
           files: ['packages/backend/src/foo.ts'],
+          planned: [],
         },
         bindingConstraints: ['constraint-a'],
         filesPathsEntries: [],
@@ -130,6 +131,7 @@ describe('deriveGroomDigestSlice', () => {
     expect(slice.regions).toEqual({
       packages: ['packages/backend'],
       files: ['packages/backend/src/foo.ts'],
+      planned: [],
     });
     expect(slice.body).toBe('## Summary\n\nDo the thing body.');
     // never carries the full loader result's milestone-wide fields
@@ -421,6 +423,72 @@ describe('assemblePlanningProcedure', () => {
     expect(output).toContain('packages/backend/src/foo.ts');
     expect(output).toContain('### Task body');
     expect(output).toContain('Do the thing body.');
+  });
+
+  it('replaces the bare (none) with a bounded-exploration directive + orientation graft when regions resolve empty', () => {
+    const result = fixtureGroomLoadResult();
+    result.targetTasks[0].regions = { packages: [], files: [], planned: [] };
+    result.codeWorklist = new Map([
+      ['packages/backend/src/notion', ['packages/backend/src/notion/x.ts']],
+    ]);
+    result.targetTasks.push({
+      ...result.targetTasks[0],
+      id: 'task-2',
+      title: 'Sibling task',
+      regions: {
+        packages: ['packages/backend/src/notion'],
+        files: ['packages/backend/src/notion/x.ts'],
+        planned: [],
+      },
+    });
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      digest: { workflow: 'groom', data: deriveGroomDigestSlice(result, 'task-1') },
+    });
+
+    expect(output).not.toMatch(/Code regions:.*\(none\)$/m);
+    expect(output).toContain('bounded exploration');
+    expect(output).toContain('do not loop');
+    expect(output).toContain('packages/backend/src/notion');
+    expect(output).toContain('Sibling task');
+  });
+
+  it('degrades gracefully when regions AND the orientation graft are both empty (fresh milestone)', () => {
+    const result = fixtureGroomLoadResult();
+    result.targetTasks[0].regions = { packages: [], files: [], planned: [] };
+    result.codeWorklist = new Map();
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      digest: { workflow: 'groom', data: deriveGroomDigestSlice(result, 'task-1') },
+    });
+
+    expect(output).toContain('bounded exploration');
+    expect(output).toContain('fresh milestone');
+  });
+
+  it('surfaces greenfield declared paths as planned regions instead of a bare (none)', () => {
+    const result = fixtureGroomLoadResult();
+    result.targetTasks[0].regions = {
+      packages: [],
+      files: [],
+      planned: [
+        { path: 'packages/search/globalSearchIndex.ts', package: 'packages' },
+      ],
+    };
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      digest: { workflow: 'groom', data: deriveGroomDigestSlice(result, 'task-1') },
+    });
+
+    expect(output).toContain('planned');
+    expect(output).toContain('packages/search/globalSearchIndex.ts');
+    expect(output).not.toContain('bounded exploration');
   });
 
   it('the design digest section omits raw code-map grounding, pointing at the on-demand route instead', () => {
