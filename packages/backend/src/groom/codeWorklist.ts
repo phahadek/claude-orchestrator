@@ -169,7 +169,7 @@ function resolveTaskPackages(
  * consumers can render it honestly while still binding it, via `package`,
  * to the nearest real package for constraint/size/injection purposes.
  */
-export interface PlannedRegion {
+interface PlannedRegion {
   /** The declared path exactly as it appeared in the task's Files section. */
   path: string;
   /** Nearest existing ancestor directory with tracked files, or null if none resolves (e.g. a brand-new top-level area). */

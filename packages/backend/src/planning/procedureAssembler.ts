@@ -75,7 +75,7 @@ export const WORKFLOW_LOADERS: Record<PlanningWorkflow, string> = {
  * `(none)`. Empty on a fresh milestone with no other resolved regions
  * either — callers must degrade gracefully, not treat it as an error.
  */
-export interface GroomOrientation {
+interface GroomOrientation {
   /** Every package the milestone's target tasks collectively declare. */
   milestonePackages: string[];
   /** Other target tasks' own resolved regions, for "what does a sibling task touch" context. */
