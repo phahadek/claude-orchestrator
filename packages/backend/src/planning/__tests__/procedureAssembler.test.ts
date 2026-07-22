@@ -445,7 +445,10 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
-      digest: { workflow: 'groom', data: deriveGroomDigestSlice(result, 'task-1') },
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(result, 'task-1'),
+      },
     });
 
     expect(output).not.toMatch(/Code regions:.*\(none\)$/m);
@@ -463,7 +466,10 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
-      digest: { workflow: 'groom', data: deriveGroomDigestSlice(result, 'task-1') },
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(result, 'task-1'),
+      },
     });
 
     expect(output).toContain('bounded exploration');
@@ -483,7 +489,10 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
-      digest: { workflow: 'groom', data: deriveGroomDigestSlice(result, 'task-1') },
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(result, 'task-1'),
+      },
     });
 
     expect(output).toContain('planned');

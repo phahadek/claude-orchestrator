@@ -371,7 +371,7 @@ function renderExplorationDirective(orientation: GroomOrientation): string[] {
   ) {
     lines.push(
       'No paths declared on this task resolved to tracked files. Below is milestone-wide ' +
-        'orientation (not this task\'s own scope) to seed your search for the actual reference code:',
+        "orientation (not this task's own scope) to seed your search for the actual reference code:",
       '',
       `- Milestone packages touched by other tasks: ${orientation.milestonePackages.length ? orientation.milestonePackages.join(', ') : '(none)'}`,
     );
@@ -394,7 +394,7 @@ function renderExplorationDirective(orientation: GroomOrientation): string[] {
     '',
     'Directive: run one bounded exploration pass (e.g. an Explore agent, or targeted Grep/Read) ' +
       'to bind the reference code this task actually touches, using the orientation above as a ' +
-      "starting point. If that pass finds nothing, proceed anyway and note the gap in your " +
+      'starting point. If that pass finds nothing, proceed anyway and note the gap in your ' +
       'findings — do not loop on further exploration.',
   );
   return lines;

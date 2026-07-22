@@ -276,11 +276,7 @@ export function resolveTaskRegions(
     declared,
   );
 
-  const planned = resolvePlannedRegions(
-    task.filesSection,
-    fileIndex,
-    declared,
-  );
+  const planned = resolvePlannedRegions(task.filesSection, fileIndex, declared);
 
   return {
     packages: [...pkgFiles.keys()].sort(),
