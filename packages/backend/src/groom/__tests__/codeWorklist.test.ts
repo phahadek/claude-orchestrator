@@ -165,5 +165,55 @@ describe('resolveTaskRegions', () => {
 
     expect(regions.files).toEqual([]);
     expect(regions.packages).toEqual([]);
+    expect(regions.planned).toEqual([]);
+  });
+
+  it('surfaces a declared-but-nonexistent Files-section path as planned, resolved to its nearest existing ancestor', () => {
+    const task: WorklistTask = {
+      id: 'task-1',
+      title: 'Add a global search / jump palette',
+      filesSection:
+        '- `packages/search/globalSearchIndex.ts` *(new)*\n- `packages/backend/src/notion/NotionClient.ts`',
+      rawMarkdown: '',
+    };
+
+    const regions = resolveTaskRegions(task, {
+      sourceRoot: 'packages',
+      packages: ['backend/src/notion'],
+      areaAliases: {},
+      trackedFiles: TRACKED_FILES,
+    });
+
+    // The existing tracked file still resolves normally.
+    expect(regions.packages).toEqual(['packages/backend/src/notion']);
+    expect(regions.files).toEqual([
+      'packages/backend/src/notion/NotionClient.ts',
+    ]);
+    // The nonexistent path surfaces as planned, resolved to its nearest tracked ancestor.
+    expect(regions.planned).toEqual([
+      {
+        path: 'packages/search/globalSearchIndex.ts',
+        package: 'packages',
+      },
+    ]);
+  });
+
+  it('still drops a path-shaped prose token when there is no Files section (noise-guard unchanged)', () => {
+    const task: WorklistTask = {
+      id: 'task-1',
+      title: 'Add a global search / jump palette',
+      filesSection: '',
+      rawMarkdown:
+        'This will live under `packages/search/globalSearchIndex.ts` eventually.',
+    };
+
+    const regions = resolveTaskRegions(task, {
+      sourceRoot: 'packages',
+      packages: ['backend/src/notion'],
+      areaAliases: {},
+      trackedFiles: TRACKED_FILES,
+    });
+
+    expect(regions.planned).toEqual([]);
   });
 });

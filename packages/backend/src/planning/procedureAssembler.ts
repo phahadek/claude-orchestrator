@@ -66,6 +66,27 @@ export const WORKFLOW_LOADERS: Record<PlanningWorkflow, string> = {
 // ─── per-type digest slices (Q3: a constrained section set, not the loader's
 // full milestone-wide result) ───────────────────────────────────────────────
 
+/**
+ * Orientation grafted into the digest when a task's own declared scope
+ * resolves empty — the milestone-wide code-worklist packages and sibling
+ * target tasks' resolved regions, already computed/cached in the bundle
+ * (`GroomLoadResult`), so a session with nothing of its own still gets a
+ * starting point for its one bounded exploration pass instead of a bare
+ * `(none)`. Empty on a fresh milestone with no other resolved regions
+ * either — callers must degrade gracefully, not treat it as an error.
+ */
+interface GroomOrientation {
+  /** Every package the milestone's target tasks collectively declare. */
+  milestonePackages: string[];
+  /** Other target tasks' own resolved regions, for "what does a sibling task touch" context. */
+  siblingRegions: {
+    taskId: string;
+    title: string;
+    packages: string[];
+    files: string[];
+  }[];
+}
+
 export interface GroomDigestSlice {
   task: {
     id: string;
@@ -83,6 +104,8 @@ export interface GroomDigestSlice {
   regions: TaskRegions;
   /** The task's full markdown body, verbatim. */
   body: string;
+  /** Milestone-wide orientation, consulted by the digest only when `regions` resolves empty. */
+  orientation: GroomOrientation;
 }
 
 export interface DesignDigestSlice {
@@ -129,6 +152,18 @@ export function deriveGroomDigestSlice(
     result.dependencyCandidates.find(
       (c) => normId(c.taskId) === normId(taskId),
     ) ?? null;
+  const orientation: GroomOrientation = {
+    milestonePackages: [...result.codeWorklist.keys()].sort(),
+    siblingRegions: result.targetTasks
+      .filter((t) => normId(t.id) !== normId(taskId))
+      .filter((t) => t.regions.packages.length || t.regions.files.length)
+      .map((t) => ({
+        taskId: t.id,
+        title: t.title,
+        packages: t.regions.packages,
+        files: t.regions.files,
+      })),
+  };
   return {
     task: {
       id: doc.id,
@@ -144,6 +179,7 @@ export function deriveGroomDigestSlice(
     dependencyCandidates,
     regions: doc.regions,
     body: doc.rawMarkdown,
+    orientation,
   };
 }
 
@@ -321,6 +357,49 @@ function renderProcedureCore(workflow: PlanningWorkflow): string {
 
 // ─── per-type digest ────────────────────────────────────────────────────────
 
+/** Renders the bounded-exploration directive that replaces a bare `(none)` when regions resolve fully empty. */
+function renderExplorationDirective(orientation: GroomOrientation): string[] {
+  const lines: string[] = [
+    '- Code regions: (none resolved — this task declares no path that matched a tracked file)',
+    '',
+    '### No resolvable code regions — bounded exploration required',
+    '',
+  ];
+  if (
+    orientation.milestonePackages.length ||
+    orientation.siblingRegions.length
+  ) {
+    lines.push(
+      'No paths declared on this task resolved to tracked files. Below is milestone-wide ' +
+        "orientation (not this task's own scope) to seed your search for the actual reference code:",
+      '',
+      `- Milestone packages touched by other tasks: ${orientation.milestonePackages.length ? orientation.milestonePackages.join(', ') : '(none)'}`,
+    );
+    if (orientation.siblingRegions.length) {
+      lines.push('- Sibling task regions:');
+      for (const s of orientation.siblingRegions) {
+        lines.push(
+          `  - ${s.title} (${s.taskId}): packages: ${s.packages.length ? s.packages.join(', ') : '(none)'}; files: ${s.files.length ? s.files.join(', ') : '(none)'}`,
+        );
+      }
+    }
+  } else {
+    lines.push(
+      'No paths declared on this task resolved to tracked files, and no milestone-wide ' +
+        'orientation is available either (this looks like a fresh milestone with no other ' +
+        'resolved regions yet).',
+    );
+  }
+  lines.push(
+    '',
+    'Directive: run one bounded exploration pass (e.g. an Explore agent, or targeted Grep/Read) ' +
+      'to bind the reference code this task actually touches, using the orientation above as a ' +
+      'starting point. If that pass finds nothing, proceed anyway and note the gap in your ' +
+      'findings — do not loop on further exploration.',
+  );
+  return lines;
+}
+
 function renderGroomDigest(data: GroomDigestSlice): string {
   const lines: string[] = [
     '## Grooming Validation Slice',
@@ -329,8 +408,26 @@ function renderGroomDigest(data: GroomDigestSlice): string {
     `- size_check seed: ${data.sizeCheckSeed.files} files affected (${data.sizeCheckSeed.loc_method})`,
     `- type_check: ${data.typeCheck.decision}${data.typeCheck.signals?.length ? ` — ${data.typeCheck.signals.join('; ')}` : ''}`,
     `- Binding constraints: ${data.bindingConstraints.length ? data.bindingConstraints.join(', ') : '(none)'}`,
-    `- Code regions: packages: ${data.regions.packages.length ? data.regions.packages.join(', ') : '(none)'}; files: ${data.regions.files.length ? data.regions.files.join(', ') : '(none)'}`,
   ];
+  const hasResolvedRegions =
+    data.regions.packages.length > 0 || data.regions.files.length > 0;
+  const hasPlanned = data.regions.planned.length > 0;
+  if (hasResolvedRegions) {
+    lines.push(
+      `- Code regions: packages: ${data.regions.packages.length ? data.regions.packages.join(', ') : '(none)'}; files: ${data.regions.files.length ? data.regions.files.join(', ') : '(none)'}`,
+    );
+    if (hasPlanned) {
+      lines.push(
+        `- Planned (declared, not yet created): ${data.regions.planned.map((p) => `${p.path}${p.package ? ` → nearest ${p.package}` : ''}`).join(', ')}`,
+      );
+    }
+  } else if (hasPlanned) {
+    lines.push(
+      `- Code regions: (none resolved) — planned (declared, not yet created): ${data.regions.planned.map((p) => `${p.path}${p.package ? ` → nearest ${p.package}` : ''}`).join(', ')}`,
+    );
+  } else {
+    lines.push(...renderExplorationDirective(data.orientation));
+  }
   if (data.readinessViolations.length) {
     lines.push('', '### Readiness violations', '');
     for (const v of data.readinessViolations) {

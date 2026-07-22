@@ -174,8 +174,16 @@ export function computeTraceCoverage(
       rawMarkdown: task.rawMarkdown,
     };
     const regions = resolveTaskRegions(worklistTask, input.worklistOptions);
-    const regionLabels =
-      regions.packages.length > 0 ? regions.packages : regions.files;
+    const plannedPackages = regions.planned
+      .map((p) => p.package)
+      .filter((p): p is string => !!p);
+    const regionLabels = [
+      ...new Set(
+        regions.packages.length > 0
+          ? [...regions.packages, ...plannedPackages]
+          : [...regions.files, ...plannedPackages],
+      ),
+    ];
     for (const label of regionLabels) {
       const outputText = `${task.title} ${label}`;
       if (!tracesToADecision(outputText, input.lockedDecisions)) {

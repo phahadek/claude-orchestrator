@@ -19,6 +19,7 @@ import { config } from '../config';
 import { NotionClient } from '../notion/NotionClient';
 import {
   buildCodeWorklist,
+  regionsForBinding,
   resolveTaskRegions,
   TaskRegions,
   WorklistTask,
@@ -392,10 +393,15 @@ export async function loadGroomContext(
       filesSection: page.filesSection,
       rawMarkdown: page.rawMarkdown,
       readinessViolations: checkReadiness(page.rawMarkdown),
-      sizeCheckSeed: { files: regions.files.length, loc_method: 'estimated' },
+      sizeCheckSeed: {
+        files: regions.files.length + regions.planned.length,
+        loc_method: 'estimated',
+      },
       typeCheck: scanTypeCheck(row.type, page.rawMarkdown),
       regions,
-      bindingConstraints: bindingConstraintIdsForRegions(regions),
+      bindingConstraints: bindingConstraintIdsForRegions(
+        regionsForBinding(regions),
+      ),
       filesPathsEntries: parseFilesPathsEntries(
         page.filesSection,
         trackedFilesSet,

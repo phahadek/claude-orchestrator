@@ -162,11 +162,88 @@ function resolveTaskPackages(
   return pkgFiles;
 }
 
+/**
+ * A declared-but-nonexistent path from a task's `## Files / paths affected`
+ * section — greenfield code the task will create. Tagged distinct from
+ * `packages`/`files` (which are validated against tracked files) so
+ * consumers can render it honestly while still binding it, via `package`,
+ * to the nearest real package for constraint/size/injection purposes.
+ */
+interface PlannedRegion {
+  /** The declared path exactly as it appeared in the task's Files section. */
+  path: string;
+  /** Nearest existing ancestor directory with tracked files, or null if none resolves (e.g. a brand-new top-level area). */
+  package: string | null;
+}
+
 export interface TaskRegions {
   /** Coarse package paths this task's declared scope resolves to. */
   packages: string[];
   /** Deduped, repo-validated tokens declared in the task's scope text (drives size_check.files). */
   files: string[];
+  /** Declared paths from `## Files / paths affected` that don't exist yet — greenfield, not noise. */
+  planned: PlannedRegion[];
+}
+
+/** Walk up `rawPath`'s ancestor directories to the nearest one with tracked files. */
+function nearestExistingAncestor(
+  rawPath: string,
+  fileIndex: FileIndex,
+): string | null {
+  const segs = rawPath.split('/');
+  segs.pop();
+  while (segs.length > 0) {
+    const candidate = segs.join('/');
+    if (pkgHasFiles(fileIndex, candidate)) return candidate;
+    segs.pop();
+  }
+  return null;
+}
+
+/**
+ * Backtick-only counterpart to `extractCandidates` — a declared path in a
+ * structured Files section is conventionally backtick-quoted (as every
+ * fixture in this file's own tests shows). Since a planned region has no
+ * tracked file to validate against (it doesn't exist yet, by definition),
+ * this is the noise-guard for planned surfacing: it skips the bare,
+ * unquoted path-shaped regex `extractCandidates` also matches, which is
+ * exactly the prose false-positive (e.g. `try/except`) `pkgHasFiles`
+ * exists to drop for resolved paths.
+ */
+function extractBacktickCandidates(text: string): string[] {
+  const found = new Set<string>();
+  for (const m of text.matchAll(/`([^`]+)`/g)) {
+    const t = cleanToken(m[1]);
+    if (t.includes('/') || /\.[a-z0-9]+$/i.test(t)) found.add(t);
+  }
+  return [...found].filter(Boolean);
+}
+
+/**
+ * Surfaces declared-but-nonexistent paths from the task's explicit
+ * `## Files / paths affected` section as planned regions. Deliberately
+ * scoped to `filesSection` only (never the `rawMarkdown` prose fallback) —
+ * an explicit Files entry is a declaration of intent to create that path,
+ * while a path-shaped token in free prose is exactly the noise
+ * `pkgHasFiles` exists to drop.
+ */
+function resolvePlannedRegions(
+  filesSection: string,
+  fileIndex: FileIndex,
+  alreadyDeclared: Set<string>,
+): PlannedRegion[] {
+  if (!filesSection) return [];
+  const planned = new Map<string, PlannedRegion>();
+  for (const tok of extractBacktickCandidates(filesSection)) {
+    if (!tok.includes('/')) continue;
+    if (alreadyDeclared.has(tok)) continue;
+    if (planned.has(tok)) continue;
+    planned.set(tok, {
+      path: tok,
+      package: nearestExistingAncestor(tok, fileIndex),
+    });
+  }
+  return [...planned.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 
 /**
@@ -199,9 +276,32 @@ export function resolveTaskRegions(
     declared,
   );
 
+  const planned = resolvePlannedRegions(task.filesSection, fileIndex, declared);
+
   return {
     packages: [...pkgFiles.keys()].sort(),
     files: [...declared].sort(),
+    planned,
+  };
+}
+
+/**
+ * Regions a planned region binds via for downstream purposes — constraint
+ * catalog intersection, selective architecture injection, size accounting.
+ * A greenfield file legitimately inherits its nearest existing package's
+ * constraints/injection, so planned entries fold into `packages` here; the
+ * `planned` tag itself stays digest-only, never a binding exclusion.
+ */
+export function regionsForBinding(regions: TaskRegions): {
+  packages: string[];
+  files: string[];
+} {
+  const plannedPackages = regions.planned
+    .map((p) => p.package)
+    .filter((p): p is string => !!p);
+  return {
+    packages: [...new Set([...regions.packages, ...plannedPackages])].sort(),
+    files: regions.files,
   };
 }
 
