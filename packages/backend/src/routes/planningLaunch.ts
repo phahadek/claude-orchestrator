@@ -7,7 +7,7 @@ import type {
   PlanningSessionType,
   PlanningTaskEntry,
 } from '../orchestration/OpsSessionLauncher';
-import { toExternalId } from '../tasks/taskId';
+import { toExternalId, normalizeTaskId } from '../tasks/taskId';
 
 /**
  * Worklist entry ids from loadOpsContext are bare Notion UUIDs, but the
@@ -137,7 +137,12 @@ export function createPlanningLaunchRouter(
       // out is the injected-assembler's job, not this dispatch seam's.
       const tasks: PlanningTaskEntry[] = taskIds.map((id) => {
         const cleanId = bareId(id);
-        return { id: cleanId, title: cleanId, url: '', blockingDepIds: [] };
+        return {
+          id: normalizeTaskId(id),
+          title: cleanId,
+          url: '',
+          blockingDepIds: [],
+        };
       });
       const result = await launcher.launchSelected({
         projectId: milestone.project_id,

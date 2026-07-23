@@ -81,4 +81,38 @@ describe('POST /api/planning/launch', () => {
       }),
     );
   });
+
+  it('records the launched task id in canonical notion:<uuid> form for a bare input id', async () => {
+    const res = await request(app)
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'groom',
+        milestone: 'm1',
+        taskIds: ['abc-123'],
+      });
+
+    expect(res.status).toBe(202);
+    expect(launchSelected).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tasks: [expect.objectContaining({ id: 'notion:abc-123' })],
+      }),
+    );
+  });
+
+  it('records the launched task id in canonical notion:<uuid> form for an already-prefixed input id', async () => {
+    const res = await request(app)
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'design',
+        milestone: 'm1',
+        taskIds: ['notion:abc-123'],
+      });
+
+    expect(res.status).toBe(202);
+    expect(launchSelected).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tasks: [expect.objectContaining({ id: 'notion:abc-123' })],
+      }),
+    );
+  });
 });
