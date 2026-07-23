@@ -280,12 +280,12 @@ const PLANNING_INTENT_KINDS: Record<PlanningWorkflow, readonly string[]> = {
 };
 
 /**
- * One concrete example `stage-task-intent.mjs` payload per known intent
- * kind — placeholders (`<task-id>`, `<milestone-id>`, ...) stand in for
- * real values. Rendered next to each allowed kind in the Transport section
- * so a dispatched session has the exact invocation shape in hand instead of
- * grepping `KNOWN_INTENT_KINDS` / `staged-intents-client.mjs` usage
- * comments to reconstruct a payload shape by trial and error.
+ * One concrete example payload per known intent kind — placeholders
+ * (`<task-id>`, `<milestone-id>`, ...) stand in for real values. Rendered
+ * next to each allowed kind in the Transport section so a dispatched
+ * session has the exact tool-call shape in hand instead of grepping
+ * `KNOWN_INTENT_KINDS` / `staged-intents-client.mjs` usage comments to
+ * reconstruct a payload shape by trial and error.
  */
 const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
   'task.setStatus': '{"taskId":"<task-id>","status":"Ready"}',
@@ -309,16 +309,17 @@ const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
   'session.requestCapability':
     '{"capability":"<one Bash command prefix, one named MCP write verb, or ' +
     "read:session-record:<target-session-id> for the orchestrator's own " +
-    'session_events/audit_log>","reason":"<why this session needs it>"}',
+    'session_events/audit_log>","plan":"<what this session will do with it>",' +
+    '"evidence":"<why this session needs it>"}',
 };
 
-/** Render one `node stage-task-intent.mjs <kind> '<payload>'` line per allowed kind. */
+/** Render one `mcp__orchestrator__<kind>` tool-call example per allowed kind. */
 function renderIntentKindInvocations(kinds: readonly string[]): string[] {
   return kinds.map((kind) => {
     const payload = INTENT_KIND_EXAMPLE_PAYLOADS[kind];
     return payload
-      ? `- \`node ~/.claude/scripts/stage-task-intent.mjs ${kind} '${payload}'\``
-      : `- \`node ~/.claude/scripts/stage-task-intent.mjs ${kind} '<json-payload>'\``;
+      ? `- \`mcp__orchestrator__${kind}\` with \`{"payload": ${payload}}\``
+      : `- \`mcp__orchestrator__${kind}\` with \`{"payload": <json-payload>}\``;
   });
 }
 
@@ -354,10 +355,10 @@ export function renderOpsCapabilities(): string[] {
       '(one Bash command prefix or one named MCP write verb — never a category) the ' +
       'moment the task genuinely needs a write or a prod-mutating command this ' +
       'session does not have. Concrete invocation — this is the exact call, not just ' +
-      'the grant model: ' +
-      '`node ~/.claude/scripts/stage-task-intent.mjs session.requestCapability ' +
-      '\'{"capability":"<one Bash command prefix or one named MCP write verb>",' +
-      '"reason":"<why this session needs it>"}\'`. An operator reviews it; on ' +
+      'the grant model: call the `mcp__orchestrator__session.requestCapability` ' +
+      'tool with `{"payload":{"capability":"<one Bash command prefix or one named ' +
+      'MCP write verb>","plan":"<what this session will do with it>",' +
+      '"evidence":"<why this session needs it>"}}`. An operator reviews it; on ' +
       'approval the capability is durably granted to this session alone and it is ' +
       're-dispatched with that tool available. On rejection or pushback, the ' +
       "session resumes with the operator's feedback instead. DO NOT probe for a " +
@@ -366,14 +367,15 @@ export function renderOpsCapabilities(): string[] {
     "To verify by value against this orchestrator's own runtime state (e.g. " +
       "confirming a prior session's turn actually ran, or reading its staged/audit " +
       'trail), request the one grantable own-record read instead of a Bash prefix: ' +
-      'stage `session.requestCapability` with ' +
-      '`capability: "read:session-record:<target-session-id>"` — never ' +
-      "`Bash(sqlite3 ...)` or similar, which cannot reach the orchestrator's DB from " +
-      'this sandbox and cannot authenticate to its device-authed API. On approval, ' +
-      'read the result with `node ~/.claude/scripts/read-session-record.mjs ' +
-      "<target-session-id>` — it returns that session's session_events and " +
-      'audit_log, brokered by the orchestrator itself since this session holds no ' +
-      'device auth. Read-only: there is no write form of this capability.',
+      'call `mcp__orchestrator__session.requestCapability` with ' +
+      '`{"payload":{"capability":"read:session-record:<target-session-id>",' +
+      '"plan":"...","evidence":"..."}}` — never `Bash(sqlite3 ...)` or similar, ' +
+      "which cannot reach the orchestrator's DB from this sandbox and cannot " +
+      'authenticate to its device-authed API. On approval, read the result with ' +
+      '`node ~/.claude/scripts/read-session-record.mjs <target-session-id>` — it ' +
+      "returns that session's session_events and audit_log, brokered by the " +
+      'orchestrator itself since this session holds no device auth. Read-only: ' +
+      'there is no write form of this capability.',
     '',
     'Some things are never grantable this way, no matter what an operator approves: ' +
       'anything that reaches the resolved / ✅ Done / task-intent-apply transition ' +
@@ -433,34 +435,26 @@ function renderSkeleton(
     '## Transport',
     '',
     'Do not call the task backend, Notion, or any raw HTTP client directly. Every ' +
-      'write is a staged intent submitted through the sanctioned session-side CLI ' +
-      "client (POST /api/task-intents, authenticated by this session's scoped stage " +
-      'credential). That endpoint only ever stages — applying a staged intent is a ' +
-      'separate human/device-authenticated action this session cannot reach.',
+      'write is a staged intent submitted by calling the matching tool on the ' +
+      "`orchestrator` MCP server injected into this session's MCP config, each " +
+      'tool named `mcp__orchestrator__<kind>` (e.g. `mcp__orchestrator__task.create`), ' +
+      "authenticated transparently by this session's scoped stage credential — " +
+      'never presented or re-derived by hand. Every tool only ever stages — ' +
+      'applying a staged intent is a separate human/device-authenticated action ' +
+      'this session cannot reach.',
     '',
     `- Milestone: \`${milestoneId}\``,
     `- Project: \`${projectId}\``,
     '- Credential: the scoped stage-only token in the `ORCHESTRATOR_STAGE_TOKEN` ' +
-      'env var (already set in this process — never printed, never re-derived; ' +
-      'this is the only credential this session holds unless the credential ' +
-      'list below says otherwise).',
-    `- Allowed intent kinds for this session: ${kinds.join(', ')}. Staging any ` +
-      'other kind is rejected server-side — do not grep `KNOWN_INTENT_KINDS` to ' +
-      'check; this list is already the authoritative subset for this session type.',
-    '- Client invocation, one example per allowed kind:',
+      'env var authenticates the MCP connection itself (already wired into this ' +
+      "session's MCP config at spawn — never printed, never re-derived); this is " +
+      'the only credential this session holds.',
+    `- Allowed intent kinds for this session: ${kinds.join(', ')}. Only the ` +
+      'matching `mcp__orchestrator__<kind>` tools for this list are present on ' +
+      "this session's MCP connection — any other kind's tool is not resolvable, " +
+      'so do not grep `KNOWN_INTENT_KINDS` looking for one.',
+    '- Tool call, one example per allowed kind:',
     ...renderIntentKindInvocations(kinds),
-    ...(workflow === 'ops'
-      ? [
-          '- Additional ops-only credential: `ORCHESTRATOR_OPS_JOURNAL_TOKEN` — a ' +
-            'second, session-scoped token set only for this session type, distinct ' +
-            'from `ORCHESTRATOR_STAGE_TOKEN` above. It authorizes ' +
-            '`POST /api/ops-journal/:taskId/state` directly (loopback-only, ' +
-            "restricted to this session's own task and to the staging transitions " +
-            '— never `-> resolved`), for driving the ops_journal itself while a ' +
-            'change is in progress, separately from staging a `journal.setState` ' +
-            'intent through `stage-task-intent.mjs` above.',
-        ]
-      : []),
     '',
     '## Structured Output Contract',
     '',
@@ -487,12 +481,13 @@ function renderSkeleton(
           'single `decisionProposal` paragraph. This is the same contract the ' +
           'interactive `/groom` skill presents for human sign-off; a dispatched ' +
           'session emits it as data so the reviewing human sees fields, not a prose ' +
-          "summary to re-parse. Pass it as the invocation's 5th argument: " +
-          '`node ~/.claude/scripts/stage-task-intent.mjs task.setStatus ' +
-          '\'{"taskId":"<task-id>","status":"Ready"}\' <groupId> "" ' +
-          '\'{"achieves":"...","openQuestions":"None.","automatedTests":"...",' +
-          '"manualVerification":"None.","operationalSeed":"None."}\'` ' +
-          '(the 4th argument, `decisionProposal`, is left empty here — `groomProposal` ' +
+          'summary to re-parse. Pass it as the `groomProposal` field alongside ' +
+          '`payload`: call the `mcp__orchestrator__task.setStatus` tool with ' +
+          '`{"payload":{"taskId":"<task-id>","status":"Ready"},"groupId":"<groupId>",' +
+          '"groomProposal":{"achieves":"...","openQuestions":"None.",' +
+          '"automatedTests":"...","manualVerification":"None.",' +
+          '"operationalSeed":"None."}}` ' +
+          '(`decisionProposal` is omitted here — `groomProposal` ' +
           'replaces it for this kind; `decisionProposal` still applies to a ' +
           '`Deferred` proposal, which has no achieves/tests to report).\n\n' +
           'A `task.setStatus` → `Ready` proposal also carries a `groomingGate` object ' +
@@ -517,16 +512,16 @@ function renderSkeleton(
           '(one `{"id": "<task-id>", "type": "<type>", "status": "<status>"}` per ' +
           'declared Depends On edge — `[]` when there are none). A worked, ' +
           'field-complete example for a 💻 Code task with one binding constraint, ' +
-          'one Files/paths entry, and no dependencies: ' +
-          '`node ~/.claude/scripts/stage-task-intent.mjs task.setStatus ' +
-          '\'{"taskId":"<task-id>","status":"Ready","groomingGate":{' +
+          'one Files/paths entry, and no dependencies: call the ' +
+          '`mcp__orchestrator__task.setStatus` tool with `{"payload":' +
+          '{"taskId":"<task-id>","status":"Ready","groomingGate":{' +
           '"size_check":{"decision":"no_split"},' +
           '"type_check":{"decision":"none"},' +
           '"type":"💻 Code",' +
           '"regions":{"packages":["packages/backend"],"files":["packages/backend/src/foo.ts"]},' +
           '"constraintsDispositioned":{"constraint-a":{"disposition":"complies"}},' +
           '"filesPathsEntries":[{"raw":"packages/backend/src/foo.ts","isNew":false,"existsInRepo":true}],' +
-          '"dependsOnTasks":[]}}\'` — omitting any one of these six `groomingGate` ' +
+          '"dependsOnTasks":[]}}}` — omitting any one of these six `groomingGate` ' +
           'fields (even as an empty array/object where genuinely empty) is what ' +
           'blocks the Ready flip; fill every field from the digest above rather ' +
           'than carrying only `type`.'

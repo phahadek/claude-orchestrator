@@ -3,10 +3,12 @@
  * its allowed intent kinds (procedureAssembler.ts's PLANNING_INTENT_KINDS)
  * so it can stage mandated follow-on Code tasks instead of handing the spec
  * back in chat. This covers the apply-path guarantee that makes staging safe:
- * a task.create staged through the loopback session-stage endpoint
- * (POST /api/task-intents, the transport a dispatched planning session
- * actually uses) commits, on operator approval, to a task the backend always
- * creates at 🔲 Backlog — never Ready — regardless of the staged payload.
+ * a task.create staged through the orchestrator MCP tool surface (the
+ * transport a dispatched planning session actually uses — see
+ * mcp/tools/stageProposalTools.ts, which stages through the exact same
+ * `stageIntent` chokepoint called directly below) commits, on operator
+ * approval, to a task the backend always creates at 🔲 Backlog — never
+ * Ready — regardless of the staged payload.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -57,19 +59,16 @@ vi.mock('../../audit/AuditLog', () => ({
 }));
 
 import { db } from '../../db/db';
-import { createTaskIntentsRouter } from '../taskIntents';
-import { createStagedIntentsRouter } from '../stagedIntents';
 import {
-  mintStageCredential,
-  _resetStageCredentialsForTesting,
-} from '../../auth/SessionStageAuth';
+  createStagedIntentsRouter,
+  stageIntent,
+  runStageTimeReadyChecks,
+} from '../stagedIntents';
 
-/** Wired like the real server: the loopback session-stage endpoint ahead of
- *  the human/device-authed staged-intents apply surface. */
+/** Wired like the real server: the human/device-authed staged-intents apply surface. */
 function buildApp() {
   const app = express();
   app.use(express.json());
-  app.use('/api', createTaskIntentsRouter());
   app.use('/api', createStagedIntentsRouter());
   return app;
 }
@@ -79,50 +78,46 @@ beforeEach(() => {
   mockGetSession.mockReset();
   mockRecordEvent.mockReset();
   mockResolveMilestoneDatabaseId.mockReset();
-  _resetStageCredentialsForTesting();
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
 });
 
 describe('task.create staged by a planning session', () => {
   it('applies through createTask, which the backend hard-codes to Backlog regardless of the payload', async () => {
-    mockGetSession.mockReturnValue({
-      session_id: 'session-ops-1',
-      project_id: 'proj-1',
-    });
-    const token = mintStageCredential('session-ops-1');
     const createTask = vi.fn().mockResolvedValue('notion:new-task-id');
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
       createTask,
     });
 
-    const app = buildApp();
-    const agent = supertest(app);
-
-    const staged = await agent
-      .post('/api/task-intents')
-      .set('Authorization', `Bearer ${token}`)
-      .send({
-        kind: 'task.create',
-        decisionProposal:
-          'Follow-on Code task filed by a dispatched ops session',
-        payload: {
-          databaseId: 'db-1',
-          title: 'Fix the thing the investigation found',
-          type: '💻 Code',
-          // A planning session cannot smuggle a Ready status through the
-          // payload — NewTaskFields carries no status field at all, and the
-          // backend enforces Backlog unconditionally.
-        },
-      });
-    expect(staged.status).toBe(201);
-    expect(staged.body.sessionId).toBe('session-ops-1');
-    expect(staged.body.state).toBe('staged');
+    // Stage directly through stageIntent — the exact chokepoint the
+    // `mcp__orchestrator__task.create` tool calls (see
+    // mcp/tools/stageProposalTools.ts's `stage()` helper), rather than
+    // exercising the retired loopback REST route.
+    const intent = stageIntent(
+      'task.create',
+      {
+        databaseId: 'db-1',
+        title: 'Fix the thing the investigation found',
+        type: '💻 Code',
+        // A planning session cannot smuggle a Ready status through the
+        // payload — NewTaskFields carries no status field at all, and the
+        // backend enforces Backlog unconditionally.
+      },
+      'proj-1',
+      null,
+      'session-ops-1',
+      'Follow-on Code task filed by a dispatched ops session',
+    );
+    const staged = await runStageTimeReadyChecks(intent);
+    expect(staged.sessionId).toBe('session-ops-1');
+    expect(staged.state).toBe('staged');
     expect(mockGetTaskBackend).not.toHaveBeenCalled();
 
+    const app = buildApp();
+    const agent = supertest(app);
     const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .post(`/api/staged-intents/${staged.id}/apply`)
       .send({});
     expect(applied.status).toBe(200);
     expect(applied.body.result).toEqual({ id: 'notion:new-task-id' });
@@ -138,11 +133,6 @@ describe('task.create staged by a planning session', () => {
   });
 
   it('resolves the board databaseId server-side from a milestone reference — a session never supplies a raw databaseId', async () => {
-    mockGetSession.mockReturnValue({
-      session_id: 'session-ops-1',
-      project_id: 'proj-1',
-    });
-    const token = mintStageCredential('session-ops-1');
     const createTask = vi.fn().mockResolvedValue('notion:new-task-id');
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
@@ -152,24 +142,24 @@ describe('task.create staged by a planning session', () => {
       '6614adb5-5bec-4b9a-b9a4-208ae0f00f3c',
     );
 
+    const intent = stageIntent(
+      'task.create',
+      {
+        milestone: 'M12',
+        title: 'Fix the thing the investigation found',
+        type: '💻 Code',
+      },
+      'proj-1',
+      null,
+      'session-ops-1',
+      null,
+    );
+    const staged = await runStageTimeReadyChecks(intent);
+
     const app = buildApp();
     const agent = supertest(app);
-
-    const staged = await agent
-      .post('/api/task-intents')
-      .set('Authorization', `Bearer ${token}`)
-      .send({
-        kind: 'task.create',
-        payload: {
-          milestone: 'M12',
-          title: 'Fix the thing the investigation found',
-          type: '💻 Code',
-        },
-      });
-    expect(staged.status).toBe(201);
-
     const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .post(`/api/staged-intents/${staged.id}/apply`)
       .send({});
     expect(applied.status).toBe(200);
     expect(applied.body.result).toEqual({ id: 'notion:new-task-id' });
@@ -189,11 +179,6 @@ describe('task.create staged by a planning session', () => {
   });
 
   it('fails with a clear "which milestone/board?" error, not an opaque Notion parent error, when the milestone is unresolvable', async () => {
-    mockGetSession.mockReturnValue({
-      session_id: 'session-ops-1',
-      project_id: 'proj-1',
-    });
-    const token = mintStageCredential('session-ops-1');
     const createTask = vi.fn();
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
@@ -205,23 +190,23 @@ describe('task.create staged by a planning session', () => {
       );
     });
 
+    const intent = stageIntent(
+      'task.create',
+      {
+        milestone: 'M99',
+        title: 'Fix the thing the investigation found',
+      },
+      'proj-1',
+      null,
+      'session-ops-1',
+      null,
+    );
+    const staged = await runStageTimeReadyChecks(intent);
+
     const app = buildApp();
     const agent = supertest(app);
-
-    const staged = await agent
-      .post('/api/task-intents')
-      .set('Authorization', `Bearer ${token}`)
-      .send({
-        kind: 'task.create',
-        payload: {
-          milestone: 'M99',
-          title: 'Fix the thing the investigation found',
-        },
-      });
-    expect(staged.status).toBe(201);
-
     const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .post(`/api/staged-intents/${staged.id}/apply`)
       .send({});
     expect(applied.status).toBe(500);
     expect(applied.body.error).toMatch(/not a known milestone/);

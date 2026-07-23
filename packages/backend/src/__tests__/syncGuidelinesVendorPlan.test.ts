@@ -33,7 +33,6 @@ describe('sync-guidelines-load.mjs vendor plan', () => {
       'script:groom-context-client.mjs',
       'script:gate-state-client.mjs',
       'script:seed-state-client.mjs',
-      'script:stage-task-intent.mjs',
       'script:staged-intents-client.mjs',
       'skill:groom',
       'skill:design',

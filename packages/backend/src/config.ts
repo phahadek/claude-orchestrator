@@ -143,14 +143,21 @@ export const ALLOWED_TOOLS = [
   'mcp__github__search_users',
   'mcp__github__update_issue',
   'mcp__github__update_pull_request_branch',
+  // Orchestrator MCP verdict-delivery tools — a standard/review session
+  // reports how it addressed a PR review comment or whether a CI/gate
+  // failure is verified-flaky through these, replacing the retired
+  // stdout-scraped `dispositions`/`verified_flaky` JSON blocks (see
+  // mcp/tools/verdictTools.ts, AgentSession.recordReviewDisposition /
+  // recordVerifiedFlakyDisposition).
+  'mcp__orchestrator__health',
+  'mcp__orchestrator__review.disposition',
+  'mcp__orchestrator__flaky.confirm',
 ];
 
-// Read-only Bash subset shared by planning sessions (groom/design) — no
+// Read-only Bash subset shared by planning sessions (groom/design/ops) — no
 // mutating commands (git commit/push/checkout/etc, rm, write redirects) and
-// no PR/github MCP or Notion-write MCP tools. 'Bash(node:*)' covers the
-// task-write-stage client (~/.claude/scripts/stage-task-intent.mjs).
+// no PR/github MCP or Notion-write MCP tools.
 const PLANNING_READONLY_BASH_TOOLS = [
-  'Bash(node:*)',
   'Bash(cd:*)',
   'Bash(which:*)',
   'Bash(where:*)',
@@ -180,14 +187,60 @@ const NOTION_READ_MCP_TOOLS = [
   'mcp__claude_ai_Notion__notion-download-attachment',
 ];
 
+// Orchestrator MCP handshake tool — every session type that holds a stage
+// credential gets this (see mcp/orchestratorMcpServer.ts).
+const ORCHESTRATOR_MCP_HEALTH_TOOL = 'mcp__orchestrator__health';
+
+// Orchestrator MCP stage-proposal tools, one per staged-intent kind a groom
+// session is allowed to stage (mirrors procedureAssembler.ts's
+// PLANNING_INTENT_KINDS.groom — kept in sync manually, asserted by
+// config.test.ts). Supersedes the retired 'Bash(node:*)' + stage-task-intent.mjs.
+const GROOM_MCP_TOOLS = [
+  ORCHESTRATOR_MCP_HEALTH_TOOL,
+  'mcp__orchestrator__task.setStatus',
+  'mcp__orchestrator__task.setProperties',
+  'mcp__orchestrator__task.setDependsOn',
+  'mcp__orchestrator__gate.accrete',
+  'mcp__orchestrator__seed.stage',
+  'mcp__orchestrator__task.create',
+];
+
+// Orchestrator MCP stage-proposal tools a design session is allowed to stage
+// (mirrors procedureAssembler.ts's PLANNING_INTENT_KINDS.design).
+const DESIGN_MCP_TOOLS = [
+  ORCHESTRATOR_MCP_HEALTH_TOOL,
+  'mcp__orchestrator__task.updateBody',
+  'mcp__orchestrator__task.setProperties',
+  'mcp__orchestrator__task.setStatus',
+  'mcp__orchestrator__seed.stage',
+  'mcp__orchestrator__task.create',
+];
+
+// Orchestrator MCP stage-proposal tools an ops session is allowed to stage
+// (mirrors procedureAssembler.ts's PLANNING_INTENT_KINDS.ops), plus
+// gate.verify — a gate-item-verification session is sessionType 'ops' (see
+// sessionPredicates.ts#isGateVerifySession) and reports its finding through
+// this same verdict-delivery tool (mcp/tools/verdictTools.ts), replacing the
+// retired stdout-scraped `gate_verify` JSON block.
+const OPS_MCP_TOOLS = [
+  ORCHESTRATOR_MCP_HEALTH_TOOL,
+  'mcp__orchestrator__journal.setState',
+  'mcp__orchestrator__task.setStatus',
+  'mcp__orchestrator__session.requestCapability',
+  'mcp__orchestrator__task.create',
+  'mcp__orchestrator__gate.verify',
+];
+
 /**
  * groom session tool set: deterministic backlog grooming — stage-only/read-only.
- * Notion-read MCP + the task-write-stage client + light read-only code tools.
- * Excludes Write/Edit, git-mutation, PR/github MCP, and Notion-write MCP.
+ * Notion-read MCP + the orchestrator MCP stage-proposal tools + light
+ * read-only code tools. Excludes Write/Edit, git-mutation, PR/github MCP,
+ * and Notion-write MCP.
  */
 export const GROOM_ALLOWED_TOOLS = [
   ...PLANNING_READONLY_BASH_TOOLS,
   ...NOTION_READ_MCP_TOOLS,
+  ...GROOM_MCP_TOOLS,
 ];
 
 /**
@@ -198,6 +251,7 @@ export const GROOM_ALLOWED_TOOLS = [
 export const DESIGN_ALLOWED_TOOLS = [
   ...PLANNING_READONLY_BASH_TOOLS,
   ...NOTION_READ_MCP_TOOLS,
+  ...DESIGN_MCP_TOOLS,
   'Bash(git log:*)',
   'Bash(git diff:*)',
   'Bash(git show:*)',
@@ -215,10 +269,17 @@ export const DESIGN_ALLOWED_TOOLS = [
  * .claude-orchestrator.yml (see getSessionAllowedTools). No prod-mutating
  * tool is ever in this base; write capability is earned per-session via
  * grant-on-re-dispatch, not by widening this constant.
+ * 'Bash(node ~/.claude/scripts/read-session-record.mjs:*)' is scoped to that
+ * one vendored client — the granted-capability read it authenticates
+ * (`read:session-record:<id>`) isn't tool-shaped so it never widens the CLI
+ * allowlist itself (see orchestrator-config.ts#isToolShapedCapability); the
+ * session still needs Bash access to invoke the script.
  */
 export const OPS_ALLOWED_TOOLS = [
   ...PLANNING_READONLY_BASH_TOOLS,
   ...NOTION_READ_MCP_TOOLS,
+  ...OPS_MCP_TOOLS,
+  'Bash(node ~/.claude/scripts/read-session-record.mjs:*)',
   'Bash(git log:*)',
   'Bash(git diff:*)',
   'Bash(git show:*)',

@@ -463,7 +463,7 @@ const GROOM_PROPOSAL_FIELDS = [
 ] as const;
 
 /** Validates the /groom skill's structured proposal shape — every field must be present and a string. */
-export function parseGroomProposal(value: unknown): GroomProposalFields | null {
+function parseGroomProposal(value: unknown): GroomProposalFields | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   for (const field of GROOM_PROPOSAL_FIELDS) {

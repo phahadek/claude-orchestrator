@@ -281,7 +281,7 @@ describe('assemblePlanningProcedure', () => {
       expect(output).toContain('## Session Lifecycle');
       expect(output).toContain('## Transport');
       expect(output).toContain('## Structured Output Contract');
-      expect(output).toContain('POST /api/task-intents');
+      expect(output).toContain('mcp__orchestrator__');
       expect(output).toContain('decisionProposal');
 
       // Per-kind procedure core, sourced from procedureCore.ts.
@@ -302,9 +302,11 @@ describe('assemblePlanningProcedure', () => {
       expect(output).toContain('`m1`');
       expect(output).toContain('`p1`');
       expect(output).toContain('ORCHESTRATOR_STAGE_TOKEN');
-      expect(output).toMatch(
-        /node ~\/\.claude\/scripts\/stage-task-intent\.mjs \S+ '/,
-      );
+      expect(output).toMatch(/`mcp__orchestrator__\S+` with `\{"payload":/);
+      // Retired session-facing edges never resurface in the injected prompt.
+      expect(output).not.toContain('stage-task-intent.mjs');
+      expect(output).not.toContain('/api/task-intents');
+      expect(output).not.toContain('ORCHESTRATOR_OPS_JOURNAL_TOKEN');
       const allowedKinds: Record<PlanningDigest['workflow'], string[]> = {
         groom: [
           'task.setStatus',
@@ -330,9 +332,6 @@ describe('assemblePlanningProcedure', () => {
       };
       for (const kind of allowedKinds[workflow]) {
         expect(output).toContain(kind);
-      }
-      if (workflow === 'ops') {
-        expect(output).toContain('ORCHESTRATOR_OPS_JOURNAL_TOKEN');
       }
     });
   }
@@ -1002,7 +1001,7 @@ describe('injected-procedure style standard', () => {
     expect(transportIdx).toBeGreaterThan(capIdx);
     const capabilitiesSection = output.slice(capIdx, transportIdx);
     expect(capabilitiesSection).toMatch(
-      /node ~\/\.claude\/scripts\/stage-task-intent\.mjs session\.requestCapability/,
+      /mcp__orchestrator__session\.requestCapability/,
     );
     expect(capabilitiesSection).toMatch(/^DO stage/m);
   });

@@ -6,7 +6,6 @@ import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
 import type { GateItemClassification } from '../db/types';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { mintStageCredential } from '../auth/SessionStageAuth';
-import { mintOpsJournalCredential } from '../auth/OpsJournalAuth';
 import {
   upsertSessionEvent,
   updateSessionStatus,
@@ -92,110 +91,6 @@ const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
 
 /**
- * Extract and validate a dispositions block from session assistant text.
- * Returns the array of parsed items on success, null when absent or malformed.
- * Exported for unit testing.
- */
-export function parseDispositionBlock(
-  text: string,
-): ParsedDispositionItem[] | null {
-  const idx = text.indexOf('"dispositions"');
-  if (idx === -1) return null;
-  // Walk back to find the opening brace
-  const openBrace = text.lastIndexOf('{', idx);
-  if (openBrace === -1) return null;
-  // Find the matching closing brace (brace-counting)
-  let depth = 0;
-  let closeBrace = -1;
-  for (let i = openBrace; i < text.length; i++) {
-    if (text[i] === '{') depth++;
-    else if (text[i] === '}') {
-      depth--;
-      if (depth === 0) {
-        closeBrace = i;
-        break;
-      }
-    }
-  }
-  if (closeBrace === -1) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.slice(openBrace, closeBrace + 1));
-  } catch {
-    return null;
-  }
-  if (
-    typeof parsed !== 'object' ||
-    parsed === null ||
-    !Array.isArray((parsed as Record<string, unknown>).dispositions)
-  ) {
-    return null;
-  }
-  const items: ParsedDispositionItem[] = [];
-  for (const item of (parsed as { dispositions: unknown[] }).dispositions) {
-    if (
-      typeof item !== 'object' ||
-      item === null ||
-      typeof (item as Record<string, unknown>).comment_id !== 'number' ||
-      !['addressed', 'wont_fix', 'out_of_scope'].includes(
-        (item as Record<string, unknown>).disposition as string,
-      )
-    ) {
-      continue;
-    }
-    const d = item as Record<string, unknown>;
-    items.push({
-      comment_id: d.comment_id as number,
-      disposition: d.disposition as ParsedDispositionItem['disposition'],
-      reason: typeof d.reason === 'string' ? d.reason : undefined,
-    });
-  }
-  return items.length > 0 ? items : null;
-}
-
-/**
- * Extract and validate a verified-flaky disposition block from session assistant
- * text — emitted when the session has cleared the flake-verification bar (ran the
- * failing test in isolation, re-ran the full suite, confirmed the failure is
- * unrelated to its diff) instead of pushing an empty commit. Exported for testing.
- */
-export function parseVerifiedFlakyDisposition(
-  text: string,
-): VerifiedFlakyDisposition | null {
-  const idx = text.indexOf('"verified_flaky"');
-  if (idx === -1) return null;
-  const openBrace = text.lastIndexOf('{', idx);
-  if (openBrace === -1) return null;
-  let depth = 0;
-  let closeBrace = -1;
-  for (let i = openBrace; i < text.length; i++) {
-    if (text[i] === '{') depth++;
-    else if (text[i] === '}') {
-      depth--;
-      if (depth === 0) {
-        closeBrace = i;
-        break;
-      }
-    }
-  }
-  if (closeBrace === -1) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.slice(openBrace, closeBrace + 1));
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== 'object' || parsed === null) return null;
-  const block = (parsed as Record<string, unknown>).verified_flaky;
-  if (typeof block !== 'object' || block === null) return null;
-  const gate = (block as Record<string, unknown>).gate;
-  const reason = (block as Record<string, unknown>).reason;
-  if (gate !== 'ci' && gate !== 'f2') return null;
-  if (typeof reason !== 'string' || reason.length === 0) return null;
-  return { gate, reason };
-}
-
-/**
  * Classifications a gate-verify session may propose reclassifying its item
  * to — a self-correction channel, not a free-form retag. Both targets add
  * oversight (route the item out of auto-run), matching the grooming
@@ -223,76 +118,6 @@ export interface GateVerifyDisposition {
 export interface GateVerifyDispositionPayload {
   sessionId: string;
   disposition: GateVerifyDisposition;
-}
-
-function parseGateVerifyReclassify(
-  raw: unknown,
-): GateVerifyReclassifyProposal | undefined {
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const r = raw as Record<string, unknown>;
-  if (
-    typeof r.to !== 'string' ||
-    !VERIFIER_RECLASSIFY_TARGETS.has(r.to as GateItemClassification)
-  ) {
-    return undefined;
-  }
-  if (typeof r.reason !== 'string' || r.reason.length === 0) return undefined;
-  return { to: r.to as GateItemClassification, reason: r.reason };
-}
-
-/**
- * Extract and validate a gate-verify disposition block from session
- * assistant text — the read-only investigation session's self-reported
- * finding for the single gate item it was dispatched to verify. The backend
- * (never the session) turns this into the authoritative gate_item_event
- * write; the session has no gate-write authority. Exported for testing.
- */
-export function parseGateVerifyDisposition(
-  text: string,
-): GateVerifyDisposition | null {
-  const idx = text.indexOf('"gate_verify"');
-  if (idx === -1) return null;
-  const openBrace = text.lastIndexOf('{', idx);
-  if (openBrace === -1) return null;
-  let depth = 0;
-  let closeBrace = -1;
-  for (let i = openBrace; i < text.length; i++) {
-    if (text[i] === '{') depth++;
-    else if (text[i] === '}') {
-      depth--;
-      if (depth === 0) {
-        closeBrace = i;
-        break;
-      }
-    }
-  }
-  if (closeBrace === -1) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.slice(openBrace, closeBrace + 1));
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== 'object' || parsed === null) return null;
-  const block = (parsed as Record<string, unknown>).gate_verify;
-  if (typeof block !== 'object' || block === null) return null;
-  const b = block as Record<string, unknown>;
-  if (
-    b.disposition !== 'pass' &&
-    b.disposition !== 'fail' &&
-    b.disposition !== 'needs-setup'
-  ) {
-    return null;
-  }
-  if (typeof b.gate_item_id !== 'string' || b.gate_item_id.length === 0) {
-    return null;
-  }
-  return {
-    gateItemId: b.gate_item_id,
-    disposition: b.disposition,
-    evidence: b.evidence,
-    reclassify: parseGateVerifyReclassify(b.reclassify),
-  };
 }
 
 /** Maximum number of rebase nudges sent to a session before escalating to needs_attention. */
@@ -571,17 +396,6 @@ export class AgentSession extends EventEmitter {
   private lastSignalledHeadSha: string | null = null;
   /** Tracks message IDs whose <pr-body> marker has already been processed (deduplicate streaming chunks). */
   private readonly processedPRBodyMessageIds = new Set<string>();
-  /** Tracks message IDs whose disposition block has already been parsed (deduplicate streaming chunks). */
-  private readonly processedDispositionMessageIds = new Set<string>();
-  /** Dispositions parsed from the current turn's assistant text; cleared after result event. */
-  private pendingParsedDispositions: ParsedDispositionItem[] | null = null;
-  /** Tracks message IDs whose verified-flaky disposition block has already been parsed (deduplicate streaming chunks). */
-  private readonly processedVerifiedFlakyMessageIds = new Set<string>();
-  /** Verified-flaky disposition parsed from the current turn's assistant text; cleared after result event. */
-  private pendingVerifiedFlakyDisposition: VerifiedFlakyDisposition | null =
-    null;
-  private readonly processedGateVerifyMessageIds = new Set<string>();
-  private pendingGateVerifyDisposition: GateVerifyDisposition | null = null;
   /** Last-recorded verdict per key, serialized — MCP verdict tools dedup a
    *  same-content repeat call against these before emitting (see recordReviewDisposition,
    *  recordVerifiedFlakyDisposition, recordGateVerifyDisposition below). */
@@ -846,12 +660,6 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       }
 
       const stageToken = mintStageCredential(this.sessionId);
-      // Only a dispatched `ops` session drives ops_journal directly — the
-      // interactive device-authed /ops path never runs as this sessionType.
-      const opsJournalToken =
-        this.sessionType === 'ops'
-          ? mintOpsJournalCredential(this.sessionId)
-          : undefined;
       const exitCode = await this.runner.run(
         resumeIdForSpawn ? undefined : initialPrompt,
         resumeIdForSpawn,
@@ -879,14 +687,13 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             ORCHESTRATOR_BACKEND_PORT: String(
               getOrchestratorConfig().server.port,
             ),
+            // Sessions stage task-write intents and deliver verdicts through
+            // the orchestrator MCP tool surface (see mcpConfigPath above),
+            // authenticated by this same per-session stage credential. The
+            // token is also read directly by the vendored
+            // ~/.claude/scripts/read-session-record.mjs client for the one
+            // brokered REST read this session may hold no other way to reach.
             ORCHESTRATOR_STAGE_TOKEN: stageToken,
-            // Sessions submit staged task-write intents via the vendored
-            // ~/.claude/scripts/stage-task-intent.mjs client (curl/wget are
-            // off the auto-dispatch allowlist; node is) — re-vendored via
-            // scripts/sync-guidelines-load.mjs (the /sync-guidelines skill).
-            ...(opsJournalToken && {
-              ORCHESTRATOR_OPS_JOURNAL_TOKEN: opsJournalToken,
-            }),
           },
         },
         (event) => {
@@ -1397,85 +1204,6 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         ackPendingComments(pr.pr_number, pr.repo);
       }
 
-      // Drive review-thread disposition actions (reply/resolve) for any
-      // dispositions the session emitted this turn. Fires after ack so the
-      // ack is never gated on disposition success.
-      if (
-        pr &&
-        event.is_error !== true &&
-        this.pendingParsedDispositions !== null
-      ) {
-        const dispositions = this.pendingParsedDispositions;
-        this.pendingParsedDispositions = null;
-        let headSha: string | null = null;
-        if (this.worktreePath) {
-          try {
-            headSha = execSync('git rev-parse HEAD', {
-              cwd: this.worktreePath,
-            })
-              .toString()
-              .trim();
-          } catch {
-            // non-fatal
-          }
-        }
-        const payload: DispositionsParsedPayload = {
-          sessionId: this.sessionId,
-          prNumber: pr.pr_number,
-          repo: pr.repo,
-          headSha,
-          dispositions,
-        };
-        this.emit('dispositions_parsed', payload);
-      }
-
-      // Actuate a verified-flaky disposition the session emitted this turn —
-      // same-commit gate re-run, not a new push.
-      if (
-        pr &&
-        event.is_error !== true &&
-        this.pendingVerifiedFlakyDisposition !== null
-      ) {
-        const disposition = this.pendingVerifiedFlakyDisposition;
-        this.pendingVerifiedFlakyDisposition = null;
-        let headSha: string | null = null;
-        if (this.worktreePath) {
-          try {
-            headSha = execSync('git rev-parse HEAD', {
-              cwd: this.worktreePath,
-            })
-              .toString()
-              .trim();
-          } catch {
-            // non-fatal
-          }
-        }
-        const payload: VerifiedFlakyDispositionPayload = {
-          sessionId: this.sessionId,
-          prNumber: pr.pr_number,
-          repo: pr.repo,
-          headSha,
-          disposition,
-        };
-        this.emit('verified_flaky_disposition', payload);
-      }
-
-      // Surface a gate-verify disposition the session emitted this turn — a
-      // read-only investigation session with no PR of its own, so unlike the
-      // two blocks above this fires unconditionally (not gated on `pr`).
-      if (
-        event.is_error !== true &&
-        this.pendingGateVerifyDisposition !== null
-      ) {
-        const disposition = this.pendingGateVerifyDisposition;
-        this.pendingGateVerifyDisposition = null;
-        const payload: GateVerifyDispositionPayload = {
-          sessionId: this.sessionId,
-          disposition,
-        };
-        this.emit('gate_verify_disposition', payload);
-      }
-
       // Deliver any undelivered inbox items at the turn boundary.
       if (event.is_error !== true) {
         void this.deliverInboxItems();
@@ -1560,47 +1288,19 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           message: { ...msg, content: mergedContent },
         });
 
-        // Detect <pr-body>…</pr-body> marker or disposition block in session text.
-        // Both are guarded by message ID so streaming chunks don't fire multiple times.
-        if (
-          !this.processedPRBodyMessageIds.has(messageId) ||
-          !this.processedDispositionMessageIds.has(messageId) ||
-          !this.processedVerifiedFlakyMessageIds.has(messageId) ||
-          !this.processedGateVerifyMessageIds.has(messageId)
-        ) {
+        // Detect the <pr-body>…</pr-body> marker in session text, guarded by
+        // message ID so streaming chunks don't fire multiple times.
+        if (!this.processedPRBodyMessageIds.has(messageId)) {
           const accumulatedText = mergedContent
             .filter((b) => b.type === 'text' && typeof b.text === 'string')
             .map((b) => b.text as string)
             .join('');
-          if (!this.processedPRBodyMessageIds.has(messageId)) {
-            const markerMatch = accumulatedText.match(PR_BODY_MARKER_REGEX);
-            if (markerMatch) {
-              this.processedPRBodyMessageIds.add(messageId);
-              this.prBodyMarkerPromise = this.handlePRBodyMarker(
-                markerMatch[1].trim(),
-              );
-            }
-          }
-          if (!this.processedDispositionMessageIds.has(messageId)) {
-            const dispositions = parseDispositionBlock(accumulatedText);
-            if (dispositions !== null) {
-              this.processedDispositionMessageIds.add(messageId);
-              this.pendingParsedDispositions = dispositions;
-            }
-          }
-          if (!this.processedVerifiedFlakyMessageIds.has(messageId)) {
-            const disposition = parseVerifiedFlakyDisposition(accumulatedText);
-            if (disposition !== null) {
-              this.processedVerifiedFlakyMessageIds.add(messageId);
-              this.pendingVerifiedFlakyDisposition = disposition;
-            }
-          }
-          if (!this.processedGateVerifyMessageIds.has(messageId)) {
-            const gateVerify = parseGateVerifyDisposition(accumulatedText);
-            if (gateVerify !== null) {
-              this.processedGateVerifyMessageIds.add(messageId);
-              this.pendingGateVerifyDisposition = gateVerify;
-            }
+          const markerMatch = accumulatedText.match(PR_BODY_MARKER_REGEX);
+          if (markerMatch) {
+            this.processedPRBodyMessageIds.add(messageId);
+            this.prBodyMarkerPromise = this.handlePRBodyMarker(
+              markerMatch[1].trim(),
+            );
           }
         }
       }

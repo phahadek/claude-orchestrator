@@ -9,17 +9,7 @@ import {
   type OpsJournalEntry,
 } from '../ops/opsJournal';
 import { requireDeviceAuth } from '../auth/DeviceAuth';
-import {
-  requireOpsJournalWriteAuth,
-  type OpsJournalWriteAuthedRequest,
-} from '../auth/OpsJournalAuth';
-import { getSession } from '../db/queries';
 import { stageIntent } from './stagedIntents';
-
-/** Terminal state — reachable only through the device-authed operator path,
- *  never through a session-scoped journal-write credential. See § Terminal
- *  in the ops_journal decision-surface task. */
-const RESOLVED_STATE: OpsState = 'resolved';
 
 /** The state at which an ops_journal entry becomes an operator-reviewable
  *  decision — the point this route also mirrors it into a staged_intent so
@@ -74,18 +64,16 @@ function stageJournalDecision(
 }
 
 /**
- * Read/write surface for the Ops(N) staged-intent view: exposes per-task
- * ops_journal rows for a milestone so the frontend can render them in the
- * shared StagedIntentPanel, and the single state-transition write
- * (setEntryState) the skill performs while working a task. Disposition
- * stays human-gated at the transition level via isValidOpsTransition.
- *
- * The state-transition write additionally accepts a dispatched ops
- * session's scoped journal-write credential (requireOpsJournalWriteAuth),
- * restricted to that session's own task and to the staging transitions —
- * never -> resolved, which stays device-auth/operator-only. This is
- * additive: the existing device-authed interactive /ops path keeps full,
- * unrestricted access to every transition.
+ * Read/operator-write surface for the Ops(N) staged-intent view: exposes
+ * per-task ops_journal rows for a milestone so the frontend can render them
+ * in the shared StagedIntentPanel, and the state-transition write
+ * (setEntryState) the interactive /ops skill performs while working a task.
+ * Disposition stays human-gated at the transition level via
+ * isValidOpsTransition. Device-authed only — a dispatched ops session
+ * drives its journal forward by staging a `journal.setState` intent through
+ * the orchestrator MCP tool surface instead (see mcp/tools/stageProposalTools.ts);
+ * the session-scoped journal-write credential this route used to also accept
+ * has been retired.
  */
 export function createOpsJournalRouter(): Router {
   const router = Router();
@@ -109,22 +97,9 @@ export function createOpsJournalRouter(): Router {
   // POST /api/ops-journal/:taskId/state
   router.post(
     '/ops-journal/:taskId/state',
-    requireOpsJournalWriteAuth,
+    requireDeviceAuth,
     (req: Request, res: Response) => {
       const taskId = String(req.params.taskId);
-      const opsJournalSession = (req as OpsJournalWriteAuthedRequest)
-        .opsJournalSession;
-
-      if (opsJournalSession) {
-        const session = getSession(opsJournalSession.sessionId);
-        if (!session?.task_id || session.task_id !== taskId) {
-          res.status(403).json({
-            error: 'ops_journal: session credential is scoped to its own task',
-            code: 'ops_journal_wrong_task',
-          });
-          return;
-        }
-      }
 
       const body = req.body as {
         state?: unknown;
@@ -141,15 +116,6 @@ export function createOpsJournalRouter(): Router {
         typeof body.state === 'string' ? (body.state as OpsState) : null;
       if (!state) {
         res.status(400).json({ error: 'state is required' });
-        return;
-      }
-
-      if (opsJournalSession && state === RESOLVED_STATE) {
-        res.status(403).json({
-          error:
-            'ops_journal: -> resolved requires device-auth (operator), not a session credential',
-          code: 'ops_journal_resolved_requires_device_auth',
-        });
         return;
       }
 
@@ -193,7 +159,7 @@ export function createOpsJournalRouter(): Router {
         // renders on the decision surface, regardless of whether the
         // session also stages a journal.setState intent itself.
         if (updated && updated.state === STAGED_PROPOSAL_STATE) {
-          stageJournalDecision(updated, opsJournalSession?.sessionId ?? null);
+          stageJournalDecision(updated, null);
         }
         res.json(updated);
       } catch (err) {

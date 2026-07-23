@@ -223,31 +223,26 @@ Only disposition a failure as flaky after clearing this verification bar, in ord
 2. Run the full test suite once more end-to-end and confirm it passes clean.
 3. Confirm the failure is unrelated to your diff (e.g. infra contention, test-ordering/parallelism interference, a timing race) — not a real regression you introduced.
 
-If all three hold, emit a verified-flaky disposition instead of pushing a commit. Include it as a JSON block in your response text, parsed the same way as review-thread dispositions:
+If all three hold, call the \`mcp__orchestrator__flaky.confirm\` tool instead of pushing a commit, with:
 
-\`\`\`
-{"verified_flaky":{"gate":"ci","reason":"<one line: what you ran and what you concluded>"}}
-\`\`\`
+- \`gate\`: \`"ci"\` for a failing GitHub check or \`"f2"\` for the orchestrator-run test gate — whichever gate actually failed.
+- \`reason\`: one line naming what you ran and what you concluded.
 
-\`gate\` is \`"ci"\` for a failing GitHub check or \`"f2"\` for the orchestrator-run test gate — use whichever gate actually failed. The orchestrator re-runs that gate on the same commit (no new push) and re-drives the merge loop on a pass. This is bounded — after a small number of re-run attempts the PR stays paused for human attention, so only disposition a failure as flaky when you've genuinely cleared the verification bar above, not as a way to skip investigating.
+The orchestrator re-runs that gate on the same commit (no new push) and re-drives the merge loop on a pass. This is bounded — after a small number of re-run attempts the PR stays paused for human attention, so only call this when you've genuinely cleared the verification bar above, not as a way to skip investigating.
 
 ---
 
 ## Responding to Review Comments
 
-When a follow-up message delivers review feedback tied to specific GitHub review comments (each comment has a \`comment_id\`), after you've addressed them — by pushing a commit, or by deciding a comment doesn't need a code change — report the outcome for each comment as a JSON block in your response text:
-
-\`\`\`
-{"dispositions":[{"comment_id":123456789,"disposition":"addressed","reason":"<one line: what changed>"}]}
-\`\`\`
+When a follow-up message delivers review feedback tied to specific GitHub review comments (each comment has a \`comment_id\`), after you've addressed them — by pushing a commit, or by deciding a comment doesn't need a code change — call the \`mcp__orchestrator__review.disposition\` tool once per \`comment_id\` to report the outcome:
 
 - \`comment_id\` is the numeric GitHub review comment ID from the feedback message — not the PR number.
 - \`disposition\` is one of:
   - \`"addressed"\` — you changed code (or confirmed existing behavior already satisfies the comment) and pushed a commit.
   - \`"wont_fix"\` — you deliberately did not change anything; the comment is valid but out of scope for a fix here, or you disagree with it.
   - \`"out_of_scope"\` — the comment asks for something beyond this task's scope (scope creep, unrelated refactor, etc.).
-- \`reason\` is required for every disposition — a one-line explanation a human reviewer can read without opening the diff.
-- Include one entry per routed review comment you were given, not just the ones you changed code for. The orchestrator replies to and resolves each comment's thread on GitHub based on this block — a comment with no entry stays open and unresolved.
+- \`reason\` is required for every call — a one-line explanation a human reviewer can read without opening the diff.
+- Call it once per routed review comment you were given, not just the ones you changed code for. The orchestrator replies to and resolves each comment's thread on GitHub based on these calls — a comment with no call stays open and unresolved.
 
 ---
 

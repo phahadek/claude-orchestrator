@@ -10,11 +10,12 @@
 // like the dashboard panels and the other device-authed clients
 // (groom-context-client.mjs, gate-state-client.mjs, seed-state-client.mjs).
 //
-// It is NOT a replacement for stage-task-intent.mjs, which remains the
-// correct transport for unattended orchestrator-launched worktree sessions —
-// those are authenticated by a per-session, stage-only scoped credential
-// minted at spawn time (see SessionStageAuth.ts), never the static device
-// token, and can never apply an intent, only stage one.
+// It is NOT a replacement for the orchestrator MCP tool surface (see
+// mcp/orchestratorMcpServer.ts), which remains the correct transport for
+// unattended orchestrator-launched worktree sessions — those are
+// authenticated by a per-session, stage-only scoped credential minted at
+// spawn time (see SessionStageAuth.ts), never the static device token, and
+// can never apply an intent, only stage one.
 //
 // Usage:
 //   node staged-intents-client.mjs create <kind> <json-payload> <projectId> [groupId]
