@@ -32,6 +32,12 @@
  * carrying this module's output instead. Planning sessions never receive
  * `buildOrchestratorClaudeMd` content (see `SessionManager.completeStart`'s
  * `injectedProcedureContent` branch).
+ *
+ * Style: every load-bearing directive rendered here follows
+ * `packages/backend/src/planning/INJECTED_PROCEDURE_STYLE.md` — terse,
+ * imperative DO / DO NOT bullets, IS / IS-NOT lists for load-bearing
+ * definitions, and the concrete invocation (not just the grant model) for
+ * anything a session must call. Read that file before editing this one.
  */
 
 import {
@@ -344,13 +350,18 @@ export function renderOpsCapabilities(): string[] {
       'Write/Edit tool, and no prod-mutating command is granted by default — do not ' +
       'probe for one.',
     '',
-    'If the task genuinely needs a write or a prod-mutating command this session ' +
-      'does not have, request it: stage a `session.requestCapability` intent naming ' +
-      'the exact capability (one Bash command prefix or one named MCP write verb — ' +
-      'never a category). An operator reviews it; on approval the capability is ' +
-      'durably granted to this session alone and it is re-dispatched with that tool ' +
-      "available. On rejection or pushback, the session resumes with the operator's " +
-      'feedback instead.',
+    'DO stage a `session.requestCapability` intent naming the exact capability ' +
+      '(one Bash command prefix or one named MCP write verb — never a category) the ' +
+      'moment the task genuinely needs a write or a prod-mutating command this ' +
+      'session does not have. Concrete invocation — this is the exact call, not just ' +
+      'the grant model: ' +
+      '`node ~/.claude/scripts/stage-task-intent.mjs session.requestCapability ' +
+      '\'{"capability":"<one Bash command prefix or one named MCP write verb>",' +
+      '"reason":"<why this session needs it>"}\'`. An operator reviews it; on ' +
+      'approval the capability is durably granted to this session alone and it is ' +
+      "re-dispatched with that tool available. On rejection or pushback, the " +
+      "session resumes with the operator's feedback instead. DO NOT probe for a " +
+      'write tool by trial and error — request it.',
     '',
     "To verify by value against this orchestrator's own runtime state (e.g. " +
       "confirming a prior session's turn actually ran, or reading its staged/audit " +

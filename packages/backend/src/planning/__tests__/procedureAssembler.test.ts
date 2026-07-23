@@ -541,7 +541,7 @@ describe('assemblePlanningProcedure', () => {
     expect(output).not.toMatch(/stop for explicit human sign-off/i);
   });
 
-  it('states the terminal mandate: not finished until the grooming decision is staged, a chat write-up is never the deliverable', () => {
+  it('states the terminal mandate for every workflow: not finished until the decision is staged, a chat write-up is never the deliverable', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
@@ -559,7 +559,9 @@ describe('assemblePlanningProcedure', () => {
       /chat write-up.+is never the deliverable and is never a valid place to end the turn/is,
     );
 
-    // ops/design never see this groom-specific terminal-mandate language.
+    // design and ops carry the same staging-as-terminal-action mandate, in
+    // their own wording — the directive generalizes across all three, not
+    // just groom.
     for (const { workflow, digest } of cases) {
       if (workflow === 'groom') continue;
       const other = assemblePlanningProcedure({
@@ -569,7 +571,8 @@ describe('assemblePlanningProcedure', () => {
         projectId: 'p1',
         digest,
       });
-      expect(other).not.toMatch(/terminal mandate/i);
+      expect(other).toMatch(/staging is the terminal action|terminal action/i);
+      expect(other).toMatch(/DO NOT/);
     }
   });
 
@@ -968,6 +971,40 @@ describe('planning intent kinds', () => {
     for (const kind of kinds) {
       expect(KNOWN_INTENT_KINDS.has(kind)).toBe(true);
     }
+  });
+});
+
+// ─── injected-instruction style ────────────────────────────────────────────
+
+describe('injected-procedure style standard', () => {
+  it('references the style doc from procedureAssembler', () => {
+    const source = readFileSync(
+      join(__dirname, '..', 'procedureAssembler.ts'),
+      'utf-8',
+    );
+    expect(source).toContain('INJECTED_PROCEDURE_STYLE.md');
+  });
+
+  it('states the capability-request invocation concretely inside the Capabilities section, not just the grant model', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
+      },
+    });
+    const capIdx = output.indexOf('## Capabilities');
+    const transportIdx = output.indexOf('## Transport');
+    expect(capIdx).toBeGreaterThanOrEqual(0);
+    expect(transportIdx).toBeGreaterThan(capIdx);
+    const capabilitiesSection = output.slice(capIdx, transportIdx);
+    expect(capabilitiesSection).toMatch(
+      /node ~\/\.claude\/scripts\/stage-task-intent\.mjs session\.requestCapability/,
+    );
+    expect(capabilitiesSection).toMatch(/^DO stage/m);
   });
 });
 

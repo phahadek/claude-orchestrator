@@ -11,6 +11,7 @@ import {
   renderPrinciple,
   principlesFor,
   stepsFor,
+  stepSummaryFor,
   type SkillId,
 } from '../procedureCore';
 
@@ -120,5 +121,55 @@ describe('procedureCore', () => {
     );
     expect(SIZE_TYPE_CHECK.locSplitThreshold).toBe(500);
     expect(SIZE_TYPE_CHECK.implementedBy.length).toBeGreaterThan(0);
+  });
+
+  it('states the staging-as-terminal mandate as an explicit imperative DO/DO NOT directive for groom, design, and ops', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+    const skills: SkillId[] = ['groom', 'design', 'ops'];
+    for (const skill of skills) {
+      const text = stepSummaryFor(step, skill);
+      expect(text, `${skill} present-for-signoff summary`).toMatch(
+        /^\*\*Directive/m,
+      );
+      expect(text, `${skill} present-for-signoff summary`).toMatch(
+        /- DO stage/,
+      );
+      expect(text, `${skill} present-for-signoff summary`).toMatch(
+        /- DO NOT/,
+      );
+    }
+  });
+
+  it('states the ops capability-request path as a concrete imperative directive, not just the grant model', () => {
+    const principle = CORE_PRINCIPLES.find(
+      (p) => p.id === 'ask-permission-not-speculative',
+    )!;
+    const rendered = renderPrinciple(principle, 'ops');
+    expect(rendered).toMatch(/^DO stage/);
+    expect(rendered).toContain(
+      'node ~/.claude/scripts/stage-task-intent.mjs session.requestCapability',
+    );
+    expect(rendered).toMatch(/DO NOT abstain/);
+    expect(rendered).toMatch(/DO NOT fabricate/);
+  });
+
+  it('anchors the injected-instruction style standard and references it from procedureCore', () => {
+    const styleDocPath = join(
+      repoRoot,
+      'packages',
+      'backend',
+      'src',
+      'planning',
+      'INJECTED_PROCEDURE_STYLE.md',
+    );
+    const styleDoc = readFileSync(styleDocPath, 'utf8');
+    expect(styleDoc).toMatch(/DO\b[\s\S]+DO NOT/);
+    expect(styleDoc).toMatch(/IS \/ IS[- ]NOT/i);
+
+    const coreSource = readFileSync(
+      join(__dirname, '..', 'procedureCore.ts'),
+      'utf8',
+    );
+    expect(coreSource).toContain('INJECTED_PROCEDURE_STYLE.md');
   });
 });
