@@ -92,13 +92,9 @@ export function createOrchestratorMcpRouter(): Router {
   router.get(ORCHESTRATOR_MCP_PATH, requireSessionStageAuth, (_req, res) => {
     res.status(405).json({ error: 'method_not_allowed' });
   });
-  router.delete(
-    ORCHESTRATOR_MCP_PATH,
-    requireSessionStageAuth,
-    (_req, res) => {
-      res.status(405).json({ error: 'method_not_allowed' });
-    },
-  );
+  router.delete(ORCHESTRATOR_MCP_PATH, requireSessionStageAuth, (_req, res) => {
+    res.status(405).json({ error: 'method_not_allowed' });
+  });
 
   return router;
 }
