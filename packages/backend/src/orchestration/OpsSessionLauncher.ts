@@ -272,7 +272,10 @@ export class OpsSessionLauncher {
           ),
         };
       } else if (sessionType === 'design') {
+        const project = getProjectRowById(projectId);
+        if (!project) throw new Error(`unknown project ${projectId}`);
         const result = await loadDesignContext(milestoneId, task.id, {
+          repoRoot: project.project_dir,
           project: projectId,
         });
         digest = { workflow: 'design', data: deriveDesignDigestSlice(result) };

@@ -229,7 +229,11 @@ export async function loadDesignContext(
   opts: LoadDesignContextOptions = {},
 ): Promise<DesignLoadResult> {
   const repoRoot = opts.repoRoot ?? config.projectDir;
-  const manifest = opts.manifest ?? loadManifest(repoRoot, opts.project);
+  // `opts.project`, when present, is the project *registry* id — used below
+  // only to validate against the milestone's registry id. The manifest
+  // config-dir key is a separate id-space (the repo checkout's basename);
+  // mirror groomLoad and never resolve it from the registry id.
+  const manifest = opts.manifest ?? loadManifest(repoRoot);
   const notion = opts.notion ?? new NotionClient();
 
   // We need the target task's board to locate it among the board rows (for
