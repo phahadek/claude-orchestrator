@@ -579,9 +579,7 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
       .send({});
     expect(codeCommit.status).toBe(409);
     expect(codeCommit.body.violations).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ tier: 'structural' }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ tier: 'structural' })]),
     );
   });
 });
