@@ -133,7 +133,8 @@ function timestamp(date) {
 
 function runOrFail(step, cmd, cmdArgs, opts = {}) {
   const result = spawnSync(cmd, cmdArgs, { encoding: 'utf8', ...opts });
-  if (result.error) fail(step, `${cmd} failed to start: ${result.error.message}`);
+  if (result.error)
+    fail(step, `${cmd} failed to start: ${result.error.message}`);
   if (result.status !== 0) {
     fail(
       step,
@@ -156,9 +157,13 @@ async function main() {
 
   if (!existsSync(dbPath)) fail('snapshot', `source DB not found: ${dbPath}`);
   if (!passphrase) fail('config', 'BACKUP_GPG_PASSPHRASE is required');
-  if (!args.dryRun && !remote) fail('config', 'RCLONE_REMOTE is required (unless --dry-run)');
+  if (!args.dryRun && !remote)
+    fail('config', 'RCLONE_REMOTE is required (unless --dry-run)');
   if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
-    fail('config', `RETENTION_DAYS must be a positive number, got: ${process.env.RETENTION_DAYS}`);
+    fail(
+      'config',
+      `RETENTION_DAYS must be a positive number, got: ${process.env.RETENTION_DAYS}`,
+    );
   }
 
   mkdirSync(workDir, { recursive: true });
@@ -180,7 +185,8 @@ async function main() {
     rmSync(snapshotPath, { force: true });
     fail('snapshot', err.message);
   }
-  if (!existsSync(snapshotPath)) fail('snapshot', 'backup() completed but no file was produced');
+  if (!existsSync(snapshotPath))
+    fail('snapshot', 'backup() completed but no file was produced');
 
   // ── 2. Encrypt ───────────────────────────────────────────────────────────
   console.log(`[encrypt] ${snapshotPath} -> ${encryptedPath}`);
@@ -210,10 +216,13 @@ async function main() {
     // Plaintext snapshot never survives past this step, success or failure.
     rmSync(snapshotPath, { force: true });
   }
-  if (!existsSync(encryptedPath)) fail('encrypt', 'gpg completed but no output file was produced');
+  if (!existsSync(encryptedPath))
+    fail('encrypt', 'gpg completed but no output file was produced');
 
   if (args.dryRun) {
-    console.log(`[dry-run] encrypted snapshot left at ${encryptedPath} (upload/prune skipped)`);
+    console.log(
+      `[dry-run] encrypted snapshot left at ${encryptedPath} (upload/prune skipped)`,
+    );
     return;
   }
 
@@ -232,7 +241,9 @@ async function main() {
   const cutoff = now.getTime() - retentionDays * 24 * 60 * 60 * 1000;
   const isBackupFile = (name) => /^dashboard-.*\.db\.gpg$/.test(name);
 
-  console.log(`[prune] local ${workDir}, remote ${remote} — older than ${retentionDays}d`);
+  console.log(
+    `[prune] local ${workDir}, remote ${remote} — older than ${retentionDays}d`,
+  );
   for (const name of readdirSync(workDir)) {
     if (!isBackupFile(name)) continue;
     const filePath = path.join(workDir, name);
@@ -242,7 +253,11 @@ async function main() {
     }
   }
 
-  const lsResult = runOrFail('prune', 'rclone', [...rcloneBaseArgs, 'lsjson', remote]);
+  const lsResult = runOrFail('prune', 'rclone', [
+    ...rcloneBaseArgs,
+    'lsjson',
+    remote,
+  ]);
   let remoteFiles;
   try {
     remoteFiles = JSON.parse(lsResult.stdout);
