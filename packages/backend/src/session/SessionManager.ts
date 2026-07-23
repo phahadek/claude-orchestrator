@@ -28,7 +28,10 @@ import {
   mintStageCredential,
 } from '../auth/SessionStageAuth';
 import { revokeOpsJournalCredential } from '../auth/OpsJournalAuth';
-import { buildOrchestratorMcpServerEntry } from '../mcp/orchestratorMcpServer';
+import {
+  buildOrchestratorMcpServerEntry,
+  ORCHESTRATOR_MCP_SERVER_NAME,
+} from '../mcp/orchestratorMcpServer';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { ApiSessionRunner } from './ApiSessionRunner';
 import type { ISessionRunner } from './SessionRunner';
@@ -210,7 +213,10 @@ export function writeMcpConfig(
   const port = resolveBackendPort();
   const merged = {
     ...mcpServers,
-    orchestrator: buildOrchestratorMcpServerEntry(port, stageToken),
+    [ORCHESTRATOR_MCP_SERVER_NAME]: buildOrchestratorMcpServerEntry(
+      port,
+      stageToken,
+    ),
   };
   const dir = path.join(worktreePath, '.claude');
   fs.mkdirSync(dir, { recursive: true });

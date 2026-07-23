@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { requireSessionStageAuth } from '../auth/SessionStageAuth';
 
 /** Path the router registers, relative to where it's mounted (see server.ts: app.use('/api', ...)). */
-export const ORCHESTRATOR_MCP_PATH = '/mcp';
+const ORCHESTRATOR_MCP_PATH = '/mcp';
 
 /** Full path as reachable from the backend root, for building the session's MCP config URL. */
 const ORCHESTRATOR_MCP_FULL_PATH = `/api${ORCHESTRATOR_MCP_PATH}`;
