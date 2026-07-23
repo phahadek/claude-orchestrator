@@ -40,7 +40,7 @@ export const gateContributionDecisionSchema = z.enum([
 
 export const seedContributionDecisionSchema = z.enum(['seeds', 'none', 'n/a']);
 
-export const archUnitKindSchema = z.enum([
+const archUnitKindSchema = z.enum([
   'subsystem',
   'invariant',
   'decision',
@@ -48,11 +48,7 @@ export const archUnitKindSchema = z.enum([
   'reference',
 ]);
 
-export const archUnitStatusSchema = z.enum([
-  'active',
-  'deferred',
-  'superseded',
-]);
+const archUnitStatusSchema = z.enum(['active', 'deferred', 'superseded']);
 
 /** OpsJournalState — see ops/opsJournal.ts. */
 export const opsStateSchema = z.enum([
@@ -66,7 +62,7 @@ export const opsStateSchema = z.enum([
 ]);
 
 /** bodyRender.ts's BlockModel union — the Context section's structured content model. */
-export const blockModelSchema = z.discriminatedUnion('type', [
+const blockModelSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('paragraph'), text: z.string() }),
   z.object({ type: z.literal('heading_3'), text: z.string() }),
   z.object({ type: z.literal('bulleted_list_item'), text: z.string() }),
@@ -115,7 +111,7 @@ export const groomingGateEntrySchema = z
   .optional();
 
 /** The /groom skill's structured Ready-flip proposal — see stagedIntents.ts's GroomProposalFields. */
-export const groomProposalSchema = z.object({
+const groomProposalSchema = z.object({
   achieves: z.string(),
   openQuestions: z.string(),
   automatedTests: z.string(),
