@@ -22,6 +22,7 @@ vi.mock('../ProjectService.js', () => ({
 import {
   resolveMilestoneForProject,
   resolveMilestoneAnyProject,
+  resolveMilestoneDatabaseId,
   UnknownMilestoneError,
 } from '../milestoneResolver.js';
 
@@ -116,6 +117,51 @@ describe('resolveMilestoneForProject', () => {
     };
     projectServiceMock.getById.mockReturnValue(project([notionSynced, M12]));
     expect(resolveMilestoneForProject('p1', 'M11')).toBe('M11');
+  });
+});
+
+describe('resolveMilestoneDatabaseId', () => {
+  it('resolves claude-dashboard / M12 to its Notion board source_id (task.create parent resolution)', () => {
+    const claudeDashboardM12 = {
+      ...M12,
+      id: 'ms-uuid-12',
+      name: 'M12',
+      sourceId: '6614adb5-5bec-4b9a-b9a4-208ae0f00f3c',
+      canonicalShortId: 'M12',
+    };
+    projectServiceMock.getById.mockReturnValue(
+      project([M11, claudeDashboardM12]),
+    );
+    expect(resolveMilestoneDatabaseId('claude-dashboard', 'M12')).toBe(
+      '6614adb5-5bec-4b9a-b9a4-208ae0f00f3c',
+    );
+  });
+
+  it('resolves a milestone DB id to its board source_id', () => {
+    const withSource = { ...M11, sourceId: 'db-source-11' };
+    projectServiceMock.getById.mockReturnValue(project([withSource, M12]));
+    expect(resolveMilestoneDatabaseId('p1', 'ms-uuid-11')).toBe('db-source-11');
+  });
+
+  it('throws a clear error (not an opaque Notion parent error) for an unresolvable milestone', () => {
+    projectServiceMock.getById.mockReturnValue(project());
+    expect(() => resolveMilestoneDatabaseId('p1', 'M99')).toThrow(
+      UnknownMilestoneError,
+    );
+  });
+
+  it('throws a clear error when the resolved milestone has no source_id configured', () => {
+    projectServiceMock.getById.mockReturnValue(project([M11, M12]));
+    expect(() => resolveMilestoneDatabaseId('p1', 'M11')).toThrow(
+      /no source_id/,
+    );
+  });
+
+  it('throws when the project itself is unknown', () => {
+    projectServiceMock.getById.mockReturnValue(undefined);
+    expect(() => resolveMilestoneDatabaseId('no-such-project', 'M11')).toThrow(
+      UnknownMilestoneError,
+    );
   });
 });
 

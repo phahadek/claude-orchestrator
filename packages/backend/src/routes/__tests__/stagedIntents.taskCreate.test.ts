@@ -13,17 +13,30 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
 
-const { mockGetTaskBackend, mockGetSession, mockRecordEvent } = vi.hoisted(
-  () => ({
-    mockGetTaskBackend: vi.fn(),
-    mockGetSession: vi.fn(),
-    mockRecordEvent: vi.fn(),
-  }),
-);
+const {
+  mockGetTaskBackend,
+  mockGetSession,
+  mockRecordEvent,
+  mockResolveMilestoneDatabaseId,
+} = vi.hoisted(() => ({
+  mockGetTaskBackend: vi.fn(),
+  mockGetSession: vi.fn(),
+  mockRecordEvent: vi.fn(),
+  mockResolveMilestoneDatabaseId: vi.fn(),
+}));
 
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: mockGetTaskBackend,
 }));
+
+vi.mock('../../projects/milestoneResolver', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../projects/milestoneResolver')>();
+  return {
+    ...actual,
+    resolveMilestoneDatabaseId: mockResolveMilestoneDatabaseId,
+  };
+});
 
 vi.mock('../../db/db', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -65,6 +78,7 @@ beforeEach(() => {
   mockGetTaskBackend.mockReset();
   mockGetSession.mockReset();
   mockRecordEvent.mockReset();
+  mockResolveMilestoneDatabaseId.mockReset();
   _resetStageCredentialsForTesting();
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
@@ -121,5 +135,96 @@ describe('task.create staged by a planning session', () => {
       type: '💻 Code',
     });
     expect(fields).not.toHaveProperty('status');
+  });
+
+  it('resolves the board databaseId server-side from a milestone reference — a session never supplies a raw databaseId', async () => {
+    mockGetSession.mockReturnValue({
+      session_id: 'session-ops-1',
+      project_id: 'proj-1',
+    });
+    const token = mintStageCredential('session-ops-1');
+    const createTask = vi.fn().mockResolvedValue('notion:new-task-id');
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      createTask,
+    });
+    mockResolveMilestoneDatabaseId.mockReturnValue(
+      '6614adb5-5bec-4b9a-b9a4-208ae0f00f3c',
+    );
+
+    const app = buildApp();
+    const agent = supertest(app);
+
+    const staged = await agent
+      .post('/api/task-intents')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        kind: 'task.create',
+        payload: {
+          milestone: 'M12',
+          title: 'Fix the thing the investigation found',
+          type: '💻 Code',
+        },
+      });
+    expect(staged.status).toBe(201);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(200);
+    expect(applied.body.result).toEqual({ id: 'notion:new-task-id' });
+
+    expect(mockResolveMilestoneDatabaseId).toHaveBeenCalledWith(
+      'proj-1',
+      'M12',
+    );
+    expect(createTask).toHaveBeenCalledWith(
+      {
+        databaseId: '6614adb5-5bec-4b9a-b9a4-208ae0f00f3c',
+        title: 'Fix the thing the investigation found',
+        type: '💻 Code',
+      },
+      { source: 'human' },
+    );
+  });
+
+  it('fails with a clear "which milestone/board?" error, not an opaque Notion parent error, when the milestone is unresolvable', async () => {
+    mockGetSession.mockReturnValue({
+      session_id: 'session-ops-1',
+      project_id: 'proj-1',
+    });
+    const token = mintStageCredential('session-ops-1');
+    const createTask = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      createTask,
+    });
+    mockResolveMilestoneDatabaseId.mockImplementation(() => {
+      throw new Error(
+        '"M99" is not a known milestone for project "proj-1" — expected one of: M11, M12',
+      );
+    });
+
+    const app = buildApp();
+    const agent = supertest(app);
+
+    const staged = await agent
+      .post('/api/task-intents')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        kind: 'task.create',
+        payload: {
+          milestone: 'M99',
+          title: 'Fix the thing the investigation found',
+        },
+      });
+    expect(staged.status).toBe(201);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(500);
+    expect(applied.body.error).toMatch(/not a known milestone/);
+    expect(createTask).not.toHaveBeenCalled();
   });
 });

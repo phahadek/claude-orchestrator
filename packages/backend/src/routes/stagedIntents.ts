@@ -10,8 +10,9 @@ import {
   type MoveTaskContent,
   type MoveTaskMilestoneRef,
   type MoveTaskTargetMilestone,
+  type CreateTaskCommandFields,
 } from '../tasks/TaskWriteCommands';
-import type { NewTaskFields, TaskPropertiesPatch } from '../tasks/TaskBackend';
+import type { TaskPropertiesPatch } from '../tasks/TaskBackend';
 import type { TaskBodySections } from '../tasks/bodyRender';
 import {
   checkReadiness,
@@ -236,7 +237,7 @@ function extractTaskId(kind: string, payload: unknown): string | null {
   return typeof taskId === 'string' ? taskId : null;
 }
 
-type CreateTaskPayload = NewTaskFields;
+type CreateTaskPayload = CreateTaskCommandFields;
 interface SetStatusPayload {
   taskId: string;
   status: TaskStatus;

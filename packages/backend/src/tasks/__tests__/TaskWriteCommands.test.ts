@@ -33,6 +33,18 @@ vi.mock('../../gate/gateStore', () => ({
     mockRollbackGateContribution(...args),
 }));
 
+const mockResolveMilestoneDatabaseId = vi.fn();
+
+vi.mock('../../projects/milestoneResolver', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../projects/milestoneResolver')>();
+  return {
+    ...actual,
+    resolveMilestoneDatabaseId: (...args: unknown[]) =>
+      mockResolveMilestoneDatabaseId(...args),
+  };
+});
+
 vi.mock('../../seed/seedStore', () => ({
   insertItem: (...args: unknown[]) => mockInsertSeedItem(...args),
   recordAccretionMarker: (...args: unknown[]) =>
@@ -98,6 +110,7 @@ beforeEach(() => {
   mockGetSeedAccretionMarker.mockReset();
   mockRollbackGateContribution.mockReset();
   mockRollbackSeedContribution.mockReset();
+  mockResolveMilestoneDatabaseId.mockReset();
 });
 
 describe('TaskWriteCommands.setStatus — state machine', () => {
@@ -631,6 +644,85 @@ describe('TaskWriteCommands.createTask', () => {
     await expect(
       commands.createTask({ databaseId: 'db-1', title: 'x' }),
     ).rejects.toThrow(/not supported/i);
+  });
+
+  it('resolves the board databaseId server-side from the target milestone when the payload carries no raw databaseId', async () => {
+    mockResolveMilestoneDatabaseId.mockReturnValue(
+      '6614adb5-5bec-4b9a-b9a4-208ae0f00f3c',
+    );
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend, 'claude-dashboard');
+
+    const id = await commands.createTask({
+      milestone: 'M12',
+      title: 'Follow-on Code task',
+      type: '💻 Code',
+    });
+
+    expect(id).toBe('notion:new-id');
+    expect(mockResolveMilestoneDatabaseId).toHaveBeenCalledWith(
+      'claude-dashboard',
+      'M12',
+    );
+    expect(backend.createTask).toHaveBeenCalledWith(
+      {
+        databaseId: '6614adb5-5bec-4b9a-b9a4-208ae0f00f3c',
+        title: 'Follow-on Code task',
+        type: '💻 Code',
+      },
+      undefined,
+    );
+  });
+
+  it('prefers an explicit databaseId over milestone resolution when both are present', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend, 'claude-dashboard');
+
+    await commands.createTask({
+      databaseId: 'db-explicit',
+      milestone: 'M12',
+      title: 'x',
+    });
+
+    expect(mockResolveMilestoneDatabaseId).not.toHaveBeenCalled();
+    expect(backend.createTask).toHaveBeenCalledWith(
+      { databaseId: 'db-explicit', title: 'x' },
+      undefined,
+    );
+  });
+
+  it('throws a clear error when neither databaseId nor milestone is supplied', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend, 'claude-dashboard');
+
+    await expect(commands.createTask({ title: 'x' } as never)).rejects.toThrow(
+      /requires either databaseId or milestone/,
+    );
+  });
+
+  it('throws a clear error when a milestone is supplied but no projectId is bound', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.createTask({ milestone: 'M12', title: 'x' }),
+    ).rejects.toThrow(/without a projectId/);
+    expect(mockResolveMilestoneDatabaseId).not.toHaveBeenCalled();
+  });
+
+  it('propagates an unresolvable milestone as a clear error, not an opaque Notion parent error', async () => {
+    mockResolveMilestoneDatabaseId.mockImplementation(() => {
+      throw new Error(
+        '"M99" is not a known milestone for project "claude-dashboard"',
+      );
+    });
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend, 'claude-dashboard');
+
+    await expect(
+      commands.createTask({ milestone: 'M99', title: 'x' }),
+    ).rejects.toThrow(/not a known milestone/);
+    expect(backend.createTask).not.toHaveBeenCalled();
   });
 });
 
