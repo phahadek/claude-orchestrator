@@ -69,6 +69,42 @@ const STEP_KINDS: StepKind[] = [
   'confirm-gate',
 ];
 
+/** Kinds whose `command_or_prompt` (and `poll_until`) run verbatim in a shell — must be executable, not prose. */
+const EXECUTABLE_KINDS: StepKind[] = ['shell', 'validation'];
+
+const EXECUTABLE_TOKEN_RE = /^(sudo )?[A-Za-z0-9_./-]+$/;
+
+/**
+ * Function words that show up in prose instructions ("rsync the built
+ * workspace into the runtime directory...") but essentially never appear as
+ * bare words in a shell command line — their presence is a stronger prose
+ * signal than the first token alone, since a real command's own name (e.g.
+ * `rsync`) can itself pass the first-token executable-shape check.
+ */
+const PROSE_STOPWORDS = new Set([
+  'the',
+  'a',
+  'an',
+  'and',
+  'into',
+  'using',
+  'excluding',
+  'including',
+  'then',
+  'please',
+]);
+
+/** True when `command` looks like an executable invocation rather than a natural-language instruction. */
+function looksExecutable(command: string): boolean {
+  const trimmed = command.trim();
+  const firstToken = trimmed.split(/\s+/)[0];
+  if (firstToken === undefined || !EXECUTABLE_TOKEN_RE.test(firstToken)) {
+    return false;
+  }
+  const words = trimmed.toLowerCase().match(/[a-z']+/g) ?? [];
+  return !words.some((word) => PROSE_STOPWORDS.has(word));
+}
+
 /** Validates and narrows a raw parsed value to a `StepDescriptor`; returns an error message on failure. */
 function validateStep(raw: unknown, index: number): StepDescriptor | string {
   if (raw === null || typeof raw !== 'object') {
@@ -87,6 +123,12 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
   ) {
     return `steps[${index}].command_or_prompt must be a non-empty string`;
   }
+  if (
+    EXECUTABLE_KINDS.includes(step.kind as StepKind) &&
+    !looksExecutable(step.command_or_prompt)
+  ) {
+    return `steps[${index}].command_or_prompt for a ${step.kind} step must be an executable command, not prose`;
+  }
   if (typeof step.is_prod_mutating !== 'boolean') {
     return `steps[${index}].is_prod_mutating must be a boolean`;
   }
@@ -104,6 +146,13 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
   }
   if (step.poll_until !== undefined && !isString(step.poll_until)) {
     return `steps[${index}].poll_until must be a string`;
+  }
+  if (
+    step.kind === 'validation' &&
+    isString(step.poll_until) &&
+    !looksExecutable(step.poll_until)
+  ) {
+    return `steps[${index}].poll_until for a validation step must be an executable command, not prose`;
   }
   if (step.rollback_ref !== undefined && !isString(step.rollback_ref)) {
     return `steps[${index}].rollback_ref must be a string`;

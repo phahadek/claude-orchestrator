@@ -161,4 +161,71 @@ steps:
       expect(result.reason).toMatch(/failed to parse/);
     }
   });
+
+  it('rejects a shell step whose command is prose instead of an executable command', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-deploy-playbook.yml'),
+      `
+steps:
+  - id: sync-runtime
+    kind: shell
+    command_or_prompt: "rsync the built workspace into the runtime directory, excluding .git, .claude, *.db*, and .env"
+    is_prod_mutating: true
+`,
+    );
+
+    const result = loadDeployPlaybook(tmpDir);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/invalid deploy playbook/);
+      expect(result.reason).toMatch(
+        /command_or_prompt for a shell step must be an executable command, not prose/,
+      );
+    }
+  });
+
+  it('accepts valid shell commands for shell and validation steps', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-deploy-playbook.yml'),
+      `
+steps:
+  - id: sync
+    kind: shell
+    command_or_prompt: "rsync -az --exclude node_modules ./dist/ deploy@target:/srv/app/"
+    is_prod_mutating: true
+  - id: install
+    kind: shell
+    command_or_prompt: "npm ci"
+    is_prod_mutating: false
+  - id: fetch
+    kind: shell
+    command_or_prompt: "git fetch origin"
+    is_prod_mutating: false
+  - id: health
+    kind: validation
+    command_or_prompt: "curl -sf http://localhost:3000/health"
+    is_prod_mutating: false
+    poll_until: "curl -sf http://localhost:3000/health"
+`,
+    );
+
+    const result = loadDeployPlaybook(tmpDir);
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts a natural-language prompt for an agentic step', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-deploy-playbook.yml'),
+      `
+steps:
+  - id: sanity-check
+    kind: agentic
+    command_or_prompt: "review the deploy logs for unexpected errors and summarize findings"
+    is_prod_mutating: false
+`,
+    );
+
+    const result = loadDeployPlaybook(tmpDir);
+    expect(result.ok).toBe(true);
+  });
 });
