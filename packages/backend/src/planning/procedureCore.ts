@@ -301,7 +301,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     title: 'File follow-on tasks',
     appliesTo: ['groom', 'design', 'ops'],
     summary:
-      'When the mandate calls for follow-on work — an Investigation\'s decision plus ' +
+      "When the mandate calls for follow-on work — an Investigation's decision plus " +
       'filed follow-on tasks, a /design "🔲 Backlog" split, or a /groom split-off — ' +
       'stage each one as a `task.create` intent (landing at 🔲 Backlog) rather than ' +
       'describing the task spec in chat for the operator to create by hand. The ' +
