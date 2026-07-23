@@ -435,7 +435,7 @@ function renderSkeleton(
     '## Transport',
     '',
     'Do not call the task backend, Notion, or any raw HTTP client directly. Every ' +
-      "write is a staged intent submitted by calling the matching tool on the " +
+      'write is a staged intent submitted by calling the matching tool on the ' +
       "`orchestrator` MCP server injected into this session's MCP config, each " +
       'tool named `mcp__orchestrator__<kind>` (e.g. `mcp__orchestrator__task.create`), ' +
       "authenticated transparently by this session's scoped stage credential — " +
@@ -446,8 +446,8 @@ function renderSkeleton(
     `- Milestone: \`${milestoneId}\``,
     `- Project: \`${projectId}\``,
     '- Credential: the scoped stage-only token in the `ORCHESTRATOR_STAGE_TOKEN` ' +
-      "env var authenticates the MCP connection itself (already wired into this " +
-      'session\'s MCP config at spawn — never printed, never re-derived); this is ' +
+      'env var authenticates the MCP connection itself (already wired into this ' +
+      "session's MCP config at spawn — never printed, never re-derived); this is " +
       'the only credential this session holds.',
     `- Allowed intent kinds for this session: ${kinds.join(', ')}. Only the ` +
       'matching `mcp__orchestrator__<kind>` tools for this list are present on ' +
@@ -481,7 +481,7 @@ function renderSkeleton(
           'single `decisionProposal` paragraph. This is the same contract the ' +
           'interactive `/groom` skill presents for human sign-off; a dispatched ' +
           'session emits it as data so the reviewing human sees fields, not a prose ' +
-          "summary to re-parse. Pass it as the `groomProposal` field alongside " +
+          'summary to re-parse. Pass it as the `groomProposal` field alongside ' +
           '`payload`: call the `mcp__orchestrator__task.setStatus` tool with ' +
           '`{"payload":{"taskId":"<task-id>","status":"Ready"},"groupId":"<groupId>",' +
           '"groomProposal":{"achieves":"...","openQuestions":"None.",' +
