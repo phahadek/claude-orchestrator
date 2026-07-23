@@ -276,6 +276,57 @@
   font-family: monospace;
 }
 
+.eventList {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.eventItem {
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #bac2de);
+}
+
+.evidenceDetails {
+  margin: 4px 0 0;
+  font-size: 0.75rem;
+}
+
+.evidenceSummary {
+  cursor: pointer;
+  color: var(--text-muted, #a6adc8);
+}
+
+.evidenceBody {
+  margin: 4px 0 0 4px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border, #313244);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.evidenceRow {
+  margin: 0;
+  color: var(--text-secondary, #bac2de);
+  word-break: break-word;
+}
+
+.evidenceFieldList {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.evidenceKey {
+  color: var(--text-muted, #a6adc8);
+  font-weight: 600;
+}
+
 @media (max-width: 768px) {
   .rollupHeaderTop {
     flex-direction: column;

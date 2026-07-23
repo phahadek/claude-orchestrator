@@ -4,6 +4,7 @@ import type {
   GateItem,
   GateItemClassification,
   GateItemDetail,
+  GateItemEvidence,
   GateItemVerifySession,
   GateReadiness,
   MilestoneReadiness,
@@ -66,6 +67,87 @@ function toMilestoneToken(boardMilestone: string | null | undefined) {
   if (!boardMilestone) return null;
   const match = boardMilestone.match(/^M\d+/i);
   return match ? match[0].toUpperCase() : boardMilestone;
+}
+
+function formatEvidenceValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) return value.map(formatEvidenceValue).join(', ');
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/**
+ * The pass-evidence-contract downgrade's reason always starts with
+ * "<disposition> disposition" (e.g. "pass disposition lacked operational
+ * evidence…"), which is the only place the originally-reported disposition
+ * survives once it's been downgraded to needs-setup.
+ */
+function deriveReportedDisposition(reason: string | undefined): string | null {
+  if (!reason) return null;
+  const match = reason.match(/^(pass|fail|needs-setup)\s+disposition/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
+function EvidenceFields({ value }: { value: unknown }) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    const text = formatEvidenceValue(value);
+    return text ? <p className={styles.evidenceRow}>{text}</p> : null;
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) return null;
+  return (
+    <ul className={styles.evidenceFieldList}>
+      {entries.map(([key, val]) => (
+        <li key={key} className={styles.evidenceRow}>
+          <span className={styles.evidenceKey}>{key}:</span>{' '}
+          {formatEvidenceValue(val)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Renders a gate item event's evidence — the verifier's actual verdict — legibly, not just as the recorded disposition. */
+function EventEvidence({
+  evidence,
+  recordedDisposition,
+}: {
+  evidence?: GateItemEvidence;
+  recordedDisposition: string;
+}) {
+  if (!evidence || typeof evidence !== 'object') return null;
+
+  const { reason, reportedEvidence, verifierEvidence, ...rest } = evidence;
+  const nested = reportedEvidence ?? verifierEvidence;
+  const reportedDisposition = deriveReportedDisposition(reason);
+  const hasRest = Object.keys(rest).length > 0;
+
+  if (reason === undefined && nested === undefined && !hasRest) return null;
+
+  return (
+    <details className={styles.evidenceDetails}>
+      <summary className={styles.evidenceSummary}>Evidence</summary>
+      <div className={styles.evidenceBody}>
+        {reportedDisposition && reportedDisposition !== recordedDisposition && (
+          <p className={styles.evidenceRow}>
+            Reported: <strong>{reportedDisposition}</strong> (recorded as{' '}
+            {recordedDisposition})
+          </p>
+        )}
+        {reason && <p className={styles.evidenceRow}>Reason: {reason}</p>}
+        {nested !== undefined && <EvidenceFields value={nested} />}
+        {hasRest && <EvidenceFields value={rest} />}
+      </div>
+    </details>
+  );
 }
 
 interface RollupHeaderProps {
@@ -1029,14 +1111,21 @@ export function GateReadinessPanel({
                                   {detail.events.length === 0 ? (
                                     <p className={styles.muted}>None</p>
                                   ) : (
-                                    <ul>
+                                    <ul className={styles.eventList}>
                                       {detail.events.map((e, i) => (
-                                        <li key={i}>
+                                        <li
+                                          key={i}
+                                          className={styles.eventItem}
+                                        >
                                           {e.disposition} —{' '}
                                           {new Date(e.at).toLocaleString()}
                                           {e.operator
                                             ? ` by ${e.operator}`
                                             : ''}
+                                          <EventEvidence
+                                            evidence={e.evidence}
+                                            recordedDisposition={e.disposition}
+                                          />
                                         </li>
                                       ))}
                                     </ul>
