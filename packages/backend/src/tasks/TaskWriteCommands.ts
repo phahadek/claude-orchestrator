@@ -213,7 +213,14 @@ export interface MoveTaskTargetMilestone extends MoveTaskMilestoneRef {
 /** Original task content copied onto the new page. */
 export interface MoveTaskContent {
   title: string;
-  sections: TaskBodySections;
+  /**
+   * The source page's body, carried verbatim as raw markdown (converted
+   * directly to blocks — see bodyRender.ts's markdownToBlocks) rather than
+   * threaded through the structured section renderer, which would otherwise
+   * nest it under a fresh Summary heading and append an empty section
+   * skeleton.
+   */
+  bodyMarkdown: string;
   /** Display-format type, e.g. '💻 Code'. */
   type?: string;
   /** Display-format priority, e.g. '🔴 High'. */
@@ -747,7 +754,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
   ): Promise<MoveTaskResult> {
     if (
       !this.backend.createTask ||
-      !this.backend.updateBody ||
+      !this.backend.updateBodyRaw ||
       !this.backend.setDependsOn ||
       !this.backend.archive
     ) {
@@ -785,7 +792,11 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     );
 
     try {
-      await this.backend.updateBody(newTaskId, content.sections, options);
+      await this.backend.updateBodyRaw(
+        newTaskId,
+        content.bodyMarkdown,
+        options,
+      );
 
       if (content.status !== 'Backlog') {
         await this.restoreStatus(newTaskId, content.status, options);

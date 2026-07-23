@@ -154,20 +154,26 @@ function italicRichText(text: string): NotionRichTextItem[] {
 
 // ─── Block builders ─────────────────────────────────────────────────────────
 
-function heading2(text: string): RenderedBlock {
+/** Generic heading builder for levels 1-4, keyed by the Notion block type name. */
+function heading(level: 1 | 2 | 3 | 4, text: string): RenderedBlock {
+  const type = `heading_${level}`;
   return {
     object: 'block',
-    type: 'heading_2',
-    heading_2: { rich_text: richText(text) },
+    type,
+    [type]: { rich_text: richText(text) },
   };
 }
 
+function heading2(text: string): RenderedBlock {
+  return heading(2, text);
+}
+
 function heading3(text: string): RenderedBlock {
-  return {
-    object: 'block',
-    type: 'heading_3',
-    heading_3: { rich_text: richText(text) },
-  };
+  return heading(3, text);
+}
+
+function divider(): RenderedBlock {
+  return { object: 'block', type: 'divider', divider: {} };
 }
 
 function paragraph(
@@ -317,6 +323,75 @@ export function renderTaskBody(sections: TaskBodySections): RenderedBlock[] {
   blocks.push(heading2('Implementation notes'));
   blocks.push(quote('To be filled in during/after task completion.'));
 
+  return blocks;
+}
+
+/**
+ * Converts raw task-page markdown (one line per block, as produced by
+ * NotionClient's blockToLine/fetchTaskPage) back into Notion blocks. This is
+ * blockToLine's inverse — used for a verbatim body carry (e.g. a
+ * cross-milestone move) that bypasses renderTaskBody's section template
+ * entirely, so a body whose structure is already baked into the markdown
+ * isn't re-wrapped in a fresh Summary heading and empty section skeleton.
+ */
+export function markdownToBlocks(markdown: string): RenderedBlock[] {
+  const lines = markdown.split('\n');
+  const blocks: RenderedBlock[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    const fenceMatch = /^```(.*)$/.exec(line);
+    if (fenceMatch) {
+      const language = fenceMatch[1].trim() || undefined;
+      const codeLines: string[] = [];
+      i += 1;
+      while (i < lines.length && lines[i].trim() !== '```') {
+        codeLines.push(lines[i]);
+        i += 1;
+      }
+      i += 1; // skip the closing fence
+      blocks.push(renderCode(codeLines.join('\n'), language));
+      continue;
+    }
+
+    const headingMatch = /^(#{1,4})\s+(.*)$/.exec(line);
+    if (headingMatch) {
+      blocks.push(
+        heading(headingMatch[1].length as 1 | 2 | 3 | 4, headingMatch[2]),
+      );
+      i += 1;
+      continue;
+    }
+
+    const numberedMatch = /^\d+\.\s+(.*)$/.exec(line);
+    if (numberedMatch) {
+      blocks.push(numberedListItem(numberedMatch[1]));
+      i += 1;
+      continue;
+    }
+
+    if (line.startsWith('- ')) {
+      blocks.push(bulletedListItem(line.slice(2)));
+      i += 1;
+      continue;
+    }
+
+    if (line.startsWith('> ')) {
+      blocks.push(quote(line.slice(2)));
+      i += 1;
+      continue;
+    }
+
+    if (line.trim() === '---') {
+      blocks.push(divider());
+      i += 1;
+      continue;
+    }
+
+    blocks.push(paragraph(line));
+    i += 1;
+  }
   return blocks;
 }
 

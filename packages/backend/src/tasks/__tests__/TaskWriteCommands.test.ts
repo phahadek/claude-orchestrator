@@ -71,6 +71,7 @@ function makeBackend(overrides: Partial<TaskBackend> = {}): TaskBackend {
     setProperties: vi.fn().mockResolvedValue(undefined),
     archive: vi.fn().mockResolvedValue(undefined),
     updateBody: vi.fn().mockResolvedValue(undefined),
+    updateBodyRaw: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -811,13 +812,7 @@ describe('TaskWriteCommands.moveTask', () => {
       taskId: 'notion:abc',
       content: {
         title: 'Some task',
-        sections: {
-          summary: 'Summary',
-          dependencies: [],
-          context: [],
-          automatedCriteria: [],
-          manualCriteria: [],
-        },
+        bodyMarkdown: '## Summary\nSummary',
         status: 'In Progress',
       },
       sourceMilestone: { id: 'ms-source', displayOrder: 1 },
@@ -840,9 +835,9 @@ describe('TaskWriteCommands.moveTask', () => {
     });
   }
 
-  it('rolls back the created target page when updateBody throws, and leaves the source undisposed', async () => {
+  it('rolls back the created target page when updateBodyRaw throws, and leaves the source undisposed', async () => {
     const backend = makeMoveBackend({
-      updateBody: vi.fn().mockRejectedValue(new Error('Notion 400')),
+      updateBodyRaw: vi.fn().mockRejectedValue(new Error('Notion 400')),
     });
     const commands = new BackendTaskWriteCommands(backend);
 
@@ -863,9 +858,9 @@ describe('TaskWriteCommands.moveTask', () => {
 
     expect(result.newTaskId).toBe('notion:new-id');
     expect(backend.createTask).toHaveBeenCalledTimes(1);
-    expect(backend.updateBody).toHaveBeenCalledWith(
+    expect(backend.updateBodyRaw).toHaveBeenCalledWith(
       'notion:new-id',
-      expect.objectContaining({ summary: 'Summary' }),
+      '## Summary\nSummary',
       undefined,
     );
     expect(backend.updateStatus).toHaveBeenCalledWith(

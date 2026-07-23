@@ -181,6 +181,18 @@ export interface TaskBackend {
   ): Promise<void>;
 
   /**
+   * Overwrite the page body from raw markdown, converted directly to blocks
+   * (bypassing the section-template renderer) — used to carry a body
+   * verbatim, e.g. for a cross-milestone move. Optional for the same reason
+   * as createTask.
+   */
+  updateBodyRaw?(
+    taskId: string,
+    markdown: string,
+    options?: TaskWriteOptions,
+  ): Promise<void>;
+
+  /**
    * Overwrite the Type select property (display-format, e.g. '💻 Code').
    * Optional for the same reason as createTask.
    */
@@ -355,6 +367,28 @@ export class AuditingTaskBackend implements TaskBackend {
       project_id: this.projectId,
       task_id: taskId,
       payload: { source },
+    });
+  }
+
+  async updateBodyRaw(
+    taskId: string,
+    markdown: string,
+    options?: TaskWriteOptions,
+  ): Promise<void> {
+    if (!this.inner.updateBodyRaw) {
+      throw new Error(
+        `[AuditingTaskBackend] updateBodyRaw is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    await this.inner.updateBodyRaw(taskId, markdown);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_body_updated',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { source, raw: true },
     });
   }
 
