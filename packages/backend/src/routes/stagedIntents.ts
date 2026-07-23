@@ -285,12 +285,17 @@ interface JournalSetStatePayload {
   fields?: Parameters<typeof setEntryState>[2];
 }
 /**
- * How a dispatched session expresses a write-capability request: the exact
- * tool/command it wants (a Bash command prefix or a named MCP write verb —
- * never a category), the plan it intends to use it for, and the evidence
- * behind the request. The target session is always this intent's own
- * session_id (set by the staging auth context), never a payload field — a
- * session cannot request a grant onto another session.
+ * How a dispatched session expresses a capability request: the exact
+ * tool/command or read it wants — a Bash command prefix, a named MCP write
+ * verb, or the one grantable own-record read
+ * (`read:session-record:<targetSessionId>`, see
+ * `session/orchestrator-config.ts#sessionRecordReadCapability`) — never a
+ * category, the plan it intends to use it for, and the evidence behind the
+ * request. The target session (whose grant this becomes, once approved) is
+ * always this intent's own session_id (set by the staging auth context),
+ * never a payload field — a session cannot request a grant onto another
+ * session, even for a read whose target-session-id parameter names a
+ * different session's records.
  */
 interface CapabilityRequestPayload {
   capability: string;

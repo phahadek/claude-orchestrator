@@ -220,6 +220,45 @@ export function isGrantable(capability: string): boolean {
 }
 
 /**
+ * Prefix for the one grantable own-record read capability: the
+ * orchestrator's own runtime records (session_events + audit_log) for a
+ * single named target session id, brokered loopback via
+ * `routes/sessionRecordRead.ts` and the sanctioned
+ * `read-session-record.mjs` client — never a Bash-command prefix or MCP
+ * verb, since the read reaches the orchestrator's own DB (outside a
+ * dispatched session's worktree sandbox and its device-authed API) rather
+ * than a tool this session's shell can already invoke. Read-only: there is
+ * no write counterpart, and `isGrantable` never denies this prefix.
+ */
+const SESSION_RECORD_READ_PREFIX = 'read:session-record:';
+
+/** Builds the exact capability string for reading one target session's own record. */
+export function sessionRecordReadCapability(targetSessionId: string): string {
+  return `${SESSION_RECORD_READ_PREFIX}${targetSessionId}`;
+}
+
+/** Extracts the target session id from a granted own-record-read capability, or null if it isn't one. */
+export function parseSessionRecordReadCapability(
+  capability: string,
+): string | null {
+  return capability.startsWith(SESSION_RECORD_READ_PREFIX)
+    ? capability.slice(SESSION_RECORD_READ_PREFIX.length)
+    : null;
+}
+
+/**
+ * A granted capability shaped like an actual CLI tool permission — a Bash
+ * command prefix or a named MCP verb. Only these widen `--allowed-tools` at
+ * spawn (see `getSessionAllowedTools` below); the own-record-read capability
+ * is checked directly by `routes/sessionRecordRead.ts` against
+ * `getGrantedCapabilities`, not merged into the CLI tool allowlist, since it
+ * names no tool the CLI resolves.
+ */
+function isToolShapedCapability(capability: string): boolean {
+  return capability.startsWith('Bash(') || capability.startsWith('mcp__');
+}
+
+/**
  * The full allowlist a spawned session is granted. For code/review sessions
  * this is the base ALLOWED_TOOLS plus the per-project extras from
  * .claude-orchestrator.yml. Planning sessions (groom/design) get a dedicated,
@@ -243,7 +282,7 @@ export function getSessionAllowedTools(
   orchConfig: Pick<OrchestratorConfig, 'allowed_tools'>,
   granted: string[] = [],
 ): string[] {
-  const grantable = granted.filter(isGrantable);
+  const grantable = granted.filter(isGrantable).filter(isToolShapedCapability);
   const base =
     sessionType === 'groom'
       ? [...GROOM_ALLOWED_TOOLS]

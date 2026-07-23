@@ -84,6 +84,7 @@ import {
   setStagedIntentBroadcast,
 } from './routes/stagedIntents';
 import { createTaskIntentsRouter } from './routes/taskIntents';
+import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
 import { createOpsJournalRouter } from './routes/opsJournal';
 import { createGateStateRouter } from './routes/gateState';
 import { createSeedStateRouter } from './routes/seedState';
@@ -167,6 +168,11 @@ app.use('/api/enrollment', createPublicEnrollmentRouter());
 // requireDeviceAuth deliberately — it must stay reachable only via
 // requireSessionStageAuth, never fall back to the device-auth surface.
 app.use('/api', createTaskIntentsRouter());
+// The own-record read (session_events + audit_log, by target session id) an
+// operator-approved session.requestCapability grant materialises — same
+// loopback-only, stage-credential auth as above, plus its own per-request
+// granted-capability check (see routes/sessionRecordRead.ts).
+app.use('/api', createSessionRecordReadRouter());
 // Ops-journal state-transition writes accept a dispatched ops session's own
 // scoped journal-write credential in addition to a device token (see
 // requireOpsJournalWriteAuth) — mounted ahead of requireDeviceAuth so that

@@ -28,6 +28,44 @@ export function recordEvent(event: AuditEvent): void {
   );
 }
 
+export interface AuditLogEntry {
+  id: number;
+  ts: number;
+  eventType: string;
+  actorType: string;
+  actorId: string | null;
+  projectId: string | null;
+  taskId: string | null;
+  payload: unknown;
+}
+
+/**
+ * Returns every audit_log row recorded for the given session (matched on
+ * actor_id, the convention every session-attributed audit event already
+ * writes — see recordEvent call sites) — the own-record read this
+ * orchestrator's grant surface can broker for a dispatched session
+ * verifying its own or another session's runtime history (see
+ * routes/sessionRecordRead.ts).
+ */
+export function getAuditLogByActorId(actorId: string): AuditLogEntry[] {
+  const rows = db
+    .prepare<
+      [string],
+      AuditRow
+    >(`SELECT * FROM audit_log WHERE actor_id = ? ORDER BY id ASC`)
+    .all(actorId);
+  return rows.map((r) => ({
+    id: r.id,
+    ts: r.ts,
+    eventType: r.event_type,
+    actorType: r.actor_type,
+    actorId: r.actor_id,
+    projectId: r.project_id,
+    taskId: r.task_id,
+    payload: JSON.parse(r.payload) as unknown,
+  }));
+}
+
 /**
  * Returns the number of task_orphan_nudged events recorded for the given
  * session. Used to derive the persisted nudge count across sweeper cycles.

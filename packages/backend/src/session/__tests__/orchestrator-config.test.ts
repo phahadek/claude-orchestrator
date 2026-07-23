@@ -6,6 +6,8 @@ import {
   loadOrchestratorConfig,
   getSessionAllowedTools,
   isGrantable,
+  sessionRecordReadCapability,
+  parseSessionRecordReadCapability,
 } from '../orchestrator-config';
 
 describe('loadOrchestratorConfig', () => {
@@ -335,5 +337,40 @@ describe('isGrantable', () => {
     // its base profile has no such tool — the sanctioned ask path, not
     // speculative pre-provisioning by the gate mechanism.
     expect(isGrantable('Bash(sqlite3 dashboard.db:*)')).toBe(true);
+  });
+
+  it('returns true for the own-record read capability — the never-grantable set stays unchanged', () => {
+    expect(isGrantable(sessionRecordReadCapability('session-abc'))).toBe(true);
+  });
+});
+
+describe('sessionRecordReadCapability / parseSessionRecordReadCapability', () => {
+  it('round-trips the target session id through the capability string', () => {
+    const capability = sessionRecordReadCapability('session-abc');
+    expect(capability).toBe('read:session-record:session-abc');
+    expect(parseSessionRecordReadCapability(capability)).toBe('session-abc');
+  });
+
+  it('returns null for a capability that is not an own-record-read grant', () => {
+    expect(parseSessionRecordReadCapability('Bash(psql:*)')).toBeNull();
+    expect(
+      parseSessionRecordReadCapability('mcp__github__merge_pull_request'),
+    ).toBeNull();
+  });
+
+  it('is read-only: there is no write/mutation counterpart capability string', () => {
+    // The own-record read has exactly one grantable form — a read keyed by
+    // target session id. There is no `write:session-record:...` or similar,
+    // and this prefix never widens into anything other than that one read.
+    const capability = sessionRecordReadCapability('session-xyz');
+    expect(capability).not.toMatch(/write|mutate|delete|update/i);
+  });
+
+  it("is never merged into the spawned session's CLI --allowed-tools — it names no tool the CLI resolves, only a route-level grant check", () => {
+    const capability = sessionRecordReadCapability('session-abc');
+    const merged = getSessionAllowedTools('ops', { allowed_tools: [] }, [
+      capability,
+    ]);
+    expect(merged).not.toContain(capability);
   });
 });

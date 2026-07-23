@@ -86,6 +86,7 @@ const SCRIPT_SOURCES = [
       'seed-state-client.mjs',
       'stage-task-intent.mjs',
       'staged-intents-client.mjs',
+      'read-session-record.mjs',
     ],
   },
 ];

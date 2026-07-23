@@ -125,10 +125,17 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'capability or access it needs — nothing beyond its base profile is ever ' +
       'speculatively handed to it. If a read or write the task needs is blocked by the ' +
       'sandbox, stage a `session.requestCapability` intent naming the exact capability ' +
-      "and wait to be re-dispatched on the operator's decision. If staging isn't possible " +
-      'or the need is a one-off read-only investigation, report `needs-setup` and name the ' +
-      'missing capability instead. Either ask or abstain — never fabricate a result to route ' +
-      'around a denial.',
+      "and wait to be re-dispatched on the operator's decision. When the blocked read is " +
+      "this orchestrator's own runtime record (session_events/audit_log for a session by " +
+      'id) rather than project/prod data, that exact capability is ' +
+      '`read:session-record:<target-session-id>` — request that, not a Bash command ' +
+      "prefix; a Bash prefix can neither reach this orchestrator's own DB (outside the " +
+      'sandbox) nor authenticate to its device-authed API, so it never actually ' +
+      "materialises the read once granted. Request the capability, don't abstain " +
+      'straight to `needs-setup`, whenever a live record is reachable this way. If ' +
+      "staging isn't possible or the need is a one-off read-only investigation, report " +
+      '`needs-setup` and name the missing capability instead. Either ask or abstain — ' +
+      'never fabricate a result to route around a denial.',
   },
   {
     id: 'decision-pickone-genuine-forks-only',
