@@ -198,6 +198,7 @@ import {
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
+import { buildSessionContext } from '../ContextBuilder';
 import { execSync, exec as execCb } from 'child_process';
 import { recordEvent } from '../../audit/AuditLog';
 import * as fsModule from 'fs';
@@ -1688,5 +1689,72 @@ describe('start() — worktree_path persistence', () => {
         worktree_path: expect.stringContaining('.claude/worktrees/'),
       }),
     );
+  });
+});
+
+// ── start() — planning/ops prompt assembly (gate-verify hardening) ─────────
+
+describe('start() — planning/ops prompt assembly (gate-verify hardening)', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      mcp_servers: undefined,
+      allowed_tools: [],
+    } as any);
+  });
+
+  it('an ops session dispatched with injectedProcedureContent writes it verbatim and never runs buildSessionContext (the coding scaffold)', async () => {
+    const procedure =
+      '## Session Lifecycle\n\nGate-verify procedure content — read-only, one-shot.';
+
+    await sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'non_milestone',
+      taskName: 'gate-verify-task',
+      sessionType: 'ops',
+      injectedProcedureContent: procedure,
+    });
+
+    await vi.waitFor(() => expect(vi.mocked(AgentSession)).toHaveBeenCalled());
+
+    expect(vi.mocked(buildSessionContext)).not.toHaveBeenCalled();
+
+    const writeCalls = vi.mocked((fsModule as any).default.writeFileSync).mock
+      .calls;
+    const promptCall = writeCalls.find(([p]: [string]) =>
+      String(p).includes('session-prompts'),
+    );
+    expect(promptCall).toBeDefined();
+    const writtenContent = promptCall![1] as string;
+    expect(writtenContent).toBe(procedure);
+    expect(writtenContent).not.toMatch(/Pre-PR Gate/);
+    expect(writtenContent).not.toMatch(/Open a draft PR/);
+    expect(writtenContent).not.toMatch(/Responding to Review Comments/);
+    expect(writtenContent).not.toMatch(/rebase/i);
+  });
+
+  it('an ops session dispatched with no injectedProcedureContent fails loud instead of falling back to buildOrchestratorClaudeMd', async () => {
+    sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'non_milestone',
+      taskName: 'gate-verify-task',
+      sessionType: 'ops',
+    });
+
+    await vi.waitFor(() =>
+      expect(vi.mocked(setSessionLastErrorDetail)).toHaveBeenCalled(),
+    );
+
+    expect(vi.mocked(setSessionLastErrorDetail)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('injectedProcedureContent'),
+    );
+    expect(vi.mocked(buildSessionContext)).not.toHaveBeenCalled();
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
   });
 });

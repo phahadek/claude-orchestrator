@@ -24,18 +24,29 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000;
 
 /**
  * The gate-verify injected procedure: a bounded best-effort single-item
- * read-history doctrine. Rendered as the session's opsContext (the same
- * append-only injection seam an Ops(N)-launched session gets) — the session
- * never runs a vendored skill to assemble this itself.
+ * read-history doctrine, assembled and passed as the session's
+ * `injectedProcedureContent` — the same seam a groom/design/ops-planning
+ * session gets via `procedureAssembler.assemblePlanningProcedure`. Passing
+ * it this way makes `SessionManager.start` use it verbatim and skip
+ * `buildOrchestratorClaudeMd` (the implement/branch/Pre-PR-Gate/open-PR/
+ * review-loop coding scaffold), which has no business in a worktree-less,
+ * read-only verification session. The session never runs a vendored skill
+ * to assemble this itself.
  */
-function buildGateVerifyContext(item: GateItem): string {
+function buildGateVerifyProcedure(item: GateItem): string {
   const isHumanObservation = item.classification === 'Human-Observation';
   return [
-    '## Gate Verification Context',
+    '## Session Lifecycle',
     '',
-    'This is an individual, backend-dispatched read-only investigation ' +
-      'session verifying a single Manual Verification Gate item. It is not ' +
-      'auto-dispatched onto anything else — it exists to settle this one item.',
+    'This is an injected, non-interactive, one-shot gate-verification ' +
+      `session dispatched to settle a single Manual Verification Gate item ` +
+      `(${item.id}). It is not auto-dispatched onto anything else. There is ` +
+      'no worktree and no feature branch, and this session never stages ' +
+      'code, opens a PR, or drives an ops_journal transition — it is ' +
+      'strictly read-only against the operational record and, at most, a ' +
+      'brief source orient (see "Procedure" below). Its only job is to ' +
+      'investigate and report exactly one disposition, then end the turn — ' +
+      'there is no follow-up loop or review cycle to wait for.',
     '',
     '### Gate item',
     '',
@@ -448,7 +459,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         sessionType: 'ops',
         taskKind: 'non_milestone',
         taskId: `gate-item:${item.id}`,
-        opsContext: buildGateVerifyContext(item),
+        injectedProcedureContent: buildGateVerifyProcedure(item),
       });
     } catch (err) {
       this.sessionManager.off('gate_verify_disposition', capture);

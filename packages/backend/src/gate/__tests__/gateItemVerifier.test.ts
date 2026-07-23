@@ -334,19 +334,21 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
 
     expect(sessionManager.start).toHaveBeenCalledTimes(1);
     const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
-    const opsContext = (dispatchOpts as { opsContext: string }).opsContext;
+    const injectedProcedureContent = (
+      dispatchOpts as { injectedProcedureContent: string }
+    ).injectedProcedureContent;
 
     // States the responsibility: ask for what it needs, or abstain — never
     // fabricate a result to route around a denial.
-    expect(opsContext).toMatch(/session\.requestCapability/);
-    expect(opsContext).toMatch(/never fabricate/i);
-    expect(opsContext).toMatch(/responsible for asking/i);
+    expect(injectedProcedureContent).toMatch(/session\.requestCapability/);
+    expect(injectedProcedureContent).toMatch(/never fabricate/i);
+    expect(injectedProcedureContent).toMatch(/responsible for asking/i);
 
     // The gate mechanism itself never pre-injects the operational record
     // (audit_log/session_events/PR/git evidence) — the session is told what
     // to go read, not handed the read's result.
-    expect(opsContext).not.toMatch(/```json\n\{"audit_log"/);
-    expect(opsContext).not.toContain('SELECT * FROM');
+    expect(injectedProcedureContent).not.toMatch(/```json\n\{"audit_log"/);
+    expect(injectedProcedureContent).not.toContain('SELECT * FROM');
   });
 
   it('directs record-first investigation and de-emphasizes open-ended source reading', async () => {
@@ -363,25 +365,27 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     await resultPromise;
 
     const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
-    const opsContext = (dispatchOpts as { opsContext: string }).opsContext;
+    const injectedProcedureContent = (
+      dispatchOpts as { injectedProcedureContent: string }
+    ).injectedProcedureContent;
 
     // Tells the session to open on the operational record, not on grepping
     // the source tree to understand the mechanism.
-    expect(opsContext).toMatch(
+    expect(injectedProcedureContent).toMatch(
       /start with the operational record, not the source tree/i,
     );
-    expect(opsContext).toMatch(/known failure mode/i);
+    expect(injectedProcedureContent).toMatch(/known failure mode/i);
 
     // Source is scoped down to a brief orient, never the investigation body.
-    expect(opsContext).toMatch(/at most, a brief orient/i);
+    expect(injectedProcedureContent).toMatch(/at most, a brief orient/i);
 
     // The record-first instruction appears before the "source as orient"
     // caveat — the operational record is the investigation, source is a
     // late, minor aside.
-    const recordFirstIndex = opsContext
+    const recordFirstIndex = injectedProcedureContent
       .toLowerCase()
       .indexOf('start with the operational record');
-    const sourceOrientIndex = opsContext
+    const sourceOrientIndex = injectedProcedureContent
       .toLowerCase()
       .indexOf('at most, a brief orient');
     expect(recordFirstIndex).toBeGreaterThan(-1);
@@ -403,11 +407,13 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     await resultPromise;
 
     const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
-    const opsContext = (dispatchOpts as { opsContext: string }).opsContext;
+    const injectedProcedureContent = (
+      dispatchOpts as { injectedProcedureContent: string }
+    ).injectedProcedureContent;
 
-    expect(opsContext).toMatch(/already merged and deployed/i);
-    expect(opsContext).toMatch(/spend zero turns re-confirming/i);
-    expect(opsContext).toMatch(/guaranteed precondition/i);
+    expect(injectedProcedureContent).toMatch(/already merged and deployed/i);
+    expect(injectedProcedureContent).toMatch(/spend zero turns re-confirming/i);
+    expect(injectedProcedureContent).toMatch(/guaranteed precondition/i);
   });
 
   it('does not re-archive a session already ended error/killed by AgentSession', async () => {
