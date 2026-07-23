@@ -61,6 +61,42 @@ export function resolveMilestoneForProject(
 }
 
 /**
+ * Resolves a milestone reference (its DB id, display name, or canonical
+ * short-form key) to the board's raw Notion database ID — the same
+ * resolution the move path already gets for free via
+ * MoveTaskTargetMilestone.databaseId, made available to the create path so a
+ * caller only ever supplies a milestone reference, never a raw Notion id.
+ * Throws UnknownMilestoneError (not an opaque Notion parent error) for an
+ * unresolvable milestone or one with no source_id configured.
+ */
+export function resolveMilestoneDatabaseId(
+  projectId: string,
+  milestone: string,
+): string {
+  const project = ProjectService.getById(projectId);
+  if (!project) {
+    throw new UnknownMilestoneError(`unknown project "${projectId}"`);
+  }
+  const match = findMilestone(project.milestones, milestone);
+  if (!match) {
+    const known = project.milestones.map((m) => m.name).join(', ');
+    throw new UnknownMilestoneError(
+      `"${milestone}" is not a known milestone for project "${projectId}"` +
+        (known
+          ? ` — expected one of: ${known}`
+          : ' — project has no milestones configured'),
+    );
+  }
+  if (!match.sourceId) {
+    throw new UnknownMilestoneError(
+      `milestone "${milestone}" (project "${projectId}") has no source_id — ` +
+        'set it to the board\'s Notion database ID before creating tasks under it',
+    );
+  }
+  return match.sourceId;
+}
+
+/**
  * Same resolution without a project scope, for the multi-project gate/seed
  * read routes (readiness/next) that key purely by milestone short-form key
  * across every project's items.

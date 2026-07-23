@@ -39,7 +39,10 @@ import { recordEvent } from '../audit/AuditLog';
 import { logger } from '../logger';
 import { planMove, type MoveGraphTask } from '../orchestration/moveTask';
 import { normalizeTaskId, toExternalId } from './taskId';
-import { resolveMilestoneForProject } from '../projects/milestoneResolver';
+import {
+  resolveMilestoneForProject,
+  resolveMilestoneDatabaseId,
+} from '../projects/milestoneResolver';
 import {
   toCanonicalStatus,
   isValidTransition,
@@ -210,6 +213,22 @@ export interface MoveTaskTargetMilestone extends MoveTaskMilestoneRef {
   databaseId: string;
 }
 
+/**
+ * Fields accepted by the command-layer createTask. Like NewTaskFields, but
+ * `databaseId` is optional — a caller supplies `milestone` (the milestone's
+ * DB id, display name, or canonical short key) instead, and createTask
+ * resolves the board databaseId server-side (resolveMilestoneDatabaseId),
+ * the same resolution the move path already gets via
+ * MoveTaskTargetMilestone.databaseId. A caller never needs to know a raw
+ * Notion database id.
+ */
+export interface CreateTaskCommandFields
+  extends Omit<NewTaskFields, 'databaseId'> {
+  databaseId?: string;
+  /** Milestone reference to resolve databaseId from when databaseId is omitted. */
+  milestone?: string;
+}
+
 /** Original task content copied onto the new page. */
 export interface MoveTaskContent {
   title: string;
@@ -331,7 +350,7 @@ export interface FlipReadyResult {
  */
 interface TaskWriteCommands {
   createTask(
-    fields: NewTaskFields,
+    fields: CreateTaskCommandFields,
     options?: TaskWriteOptions,
   ): Promise<string>;
   setStatus(
@@ -421,7 +440,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
   }
 
   async createTask(
-    fields: NewTaskFields,
+    fields: CreateTaskCommandFields,
     options?: TaskWriteOptions,
   ): Promise<string> {
     if (!this.backend.createTask) {
@@ -429,10 +448,25 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
         `[TaskWriteCommands] createTask is not supported by backend type "${this.backend.type}"`,
       );
     }
+    const { milestone, ...rest } = fields;
+    let databaseId = fields.databaseId;
+    if (!databaseId) {
+      if (!milestone) {
+        throw new Error(
+          '[TaskWriteCommands] createTask requires either databaseId or milestone to resolve the target board',
+        );
+      }
+      if (!this.projectId) {
+        throw new Error(
+          '[TaskWriteCommands] cannot resolve milestone databaseId without a projectId',
+        );
+      }
+      databaseId = resolveMilestoneDatabaseId(this.projectId, milestone);
+    }
     // Status is intentionally not accepted here — createTask always lands in
     // Backlog, enforced by the backend/adapter regardless of any field a
     // caller might try to pass.
-    return this.backend.createTask(fields, options);
+    return this.backend.createTask({ ...rest, databaseId }, options);
   }
 
   async setStatus(
