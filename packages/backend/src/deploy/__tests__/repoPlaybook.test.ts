@@ -30,7 +30,7 @@ describe('the repo-committed deploy playbook', () => {
     expect(raw).not.toMatch(/ssh\s+\S+@/);
   });
 
-  it('prod-mutating steps carry no run_as — they run as the engine\'s own runtime user, not a sudo -u switch to a placeholder that may not exist on the host', () => {
+  it("prod-mutating steps carry no run_as — they run as the engine's own runtime user, not a sudo -u switch to a placeholder that may not exist on the host", () => {
     const result = loadDeployPlaybook(REPO_ROOT);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
