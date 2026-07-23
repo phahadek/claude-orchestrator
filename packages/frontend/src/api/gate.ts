@@ -33,7 +33,7 @@ export interface GateItemEvidence {
   [key: string]: unknown;
 }
 
-export interface GateItemEvent {
+interface GateItemEvent {
   disposition: string;
   evidence?: GateItemEvidence;
   filedFollowon?: string;
