@@ -409,6 +409,29 @@ describe('loadGroomContext', () => {
     ]);
   });
 
+  it('threads opts.skipCache through to fetchReadyTasks for the target board and every neighbour board', async () => {
+    ({ repoDir } = setupRepo());
+    const notion = fakeNotion();
+    const calls: [string, boolean | undefined][] = [];
+    const original = notion.fetchReadyTasks.bind(notion);
+    notion.fetchReadyTasks = async (boardId: string, skipCache?: boolean) => {
+      calls.push([boardId, skipCache]);
+      return original(boardId, skipCache);
+    };
+
+    await loadGroomContext('M-test', {
+      repoRoot: repoDir,
+      manifest: MANIFEST,
+      notionClient: notion,
+      skipCache: true,
+    });
+
+    expect(calls).toEqual([
+      ['fake-board', true],
+      ['fake-neighbour-board', true],
+    ]);
+  });
+
   it('throws for an unregistered milestone', async () => {
     ({ repoDir } = setupRepo());
     await expect(

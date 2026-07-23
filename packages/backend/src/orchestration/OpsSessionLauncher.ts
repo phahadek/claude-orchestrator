@@ -18,6 +18,7 @@ import {
   deriveGroomDigestSlice,
   deriveDesignDigestSlice,
   deriveOpsDigestSlice,
+  GroomWorklistTaskNotFoundError,
   type PlanningDigest,
 } from '../planning/procedureAssembler';
 
@@ -206,14 +207,47 @@ export class OpsSessionLauncher {
   }
 
   /**
+   * Load the groom digest for `taskId`, reconciling the worklist against a
+   * cache miss: `loadGroomContext` reads Notion's board through NotionClient's
+   * ~60s board cache, so a task created/moved to Backlog just before dispatch
+   * can be absent from the first read even though it's genuinely groomable.
+   * On a not-found, retry once with `skipCache: true` to force a fresh board
+   * read before concluding the task truly isn't in the worklist.
+   */
+  private async loadGroomDigestReconciling(
+    milestoneKey: string,
+    repoRoot: string,
+    taskId: string,
+  ) {
+    const result = await loadGroomContext(milestoneKey, { repoRoot });
+    try {
+      return deriveGroomDigestSlice(result, taskId, milestoneKey);
+    } catch (err) {
+      if (!(err instanceof GroomWorklistTaskNotFoundError)) throw err;
+      logger.info(
+        `[OpsSessionLauncher] task ${taskId} missing from groom worklist on first read — refreshing worklist and retrying`,
+      );
+      const refreshed = await loadGroomContext(milestoneKey, {
+        repoRoot,
+        skipCache: true,
+      });
+      return deriveGroomDigestSlice(refreshed, taskId, milestoneKey);
+    }
+  }
+
+  /**
    * Load this workflow's per-task digest and assemble the injected planning
    * procedure (`planning/procedureAssembler.ts`) for a groom/design/ops
-   * dispatch. Returns undefined (never throws) on any loader failure — the
+   * dispatch. Returns undefined on any *unexpected* loader failure — the
    * session still launches, falling back to the code-session context build
-   * in that case, but a warning is logged so the gap is visible. Also
-   * surfaces the digest's resolved task title (groom/design load real
-   * titles even when the caller only had the bare task id) so the session
-   * can be named after it instead of the id.
+   * in that case, but a warning is logged so the gap is visible. Re-throws
+   * `GroomWorklistTaskNotFoundError` (even after the worklist-reconciliation
+   * retry above) so the caller can fail the dispatch fast with that specific
+   * reason instead of launching a session that then errors on the generic
+   * no-injectedProcedureContent fail-loud. Also surfaces the digest's
+   * resolved task title (groom/design load real titles even when the caller
+   * only had the bare task id) so the session can be named after it instead
+   * of the id.
    */
   private async buildInjectedProcedure(
     projectId: string,
@@ -229,12 +263,13 @@ export class OpsSessionLauncher {
         const project = getProjectRowById(projectId);
         if (!project) throw new Error(`unknown project ${projectId}`);
         const milestoneKey = resolveMilestoneForProject(projectId, milestoneId);
-        const result = await loadGroomContext(milestoneKey, {
-          repoRoot: project.project_dir,
-        });
         digest = {
           workflow: 'groom',
-          data: deriveGroomDigestSlice(result, task.id),
+          data: await this.loadGroomDigestReconciling(
+            milestoneKey,
+            project.project_dir,
+            task.id,
+          ),
         };
       } else if (sessionType === 'design') {
         const result = await loadDesignContext(milestoneId, task.id, {
@@ -262,6 +297,7 @@ export class OpsSessionLauncher {
       });
       return { content, title: resolvedTitle };
     } catch (err) {
+      if (err instanceof GroomWorklistTaskNotFoundError) throw err;
       logger.warn(
         `[OpsSessionLauncher] failed to assemble planning procedure for task ${task.id} (${sessionType}): ${err instanceof Error ? err.message : err}`,
       );
@@ -281,16 +317,30 @@ export class OpsSessionLauncher {
   ): Promise<void> {
     const taskUrl =
       task.url || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
-    const injectedProcedure = isPlanningSession(sessionType)
-      ? await this.buildInjectedProcedure(
+    let injectedProcedure: { content: string; title?: string } | undefined;
+    if (isPlanningSession(sessionType)) {
+      try {
+        injectedProcedure = await this.buildInjectedProcedure(
           projectId,
           milestoneId,
           sessionType,
           opsContext,
           task,
           taskUrl,
-        )
-      : undefined;
+        );
+      } catch (err) {
+        if (err instanceof GroomWorklistTaskNotFoundError) {
+          // Fail fast at dispatch instead of launching a session that then
+          // errors on SessionManager's generic no-injectedProcedureContent
+          // fail-loud — this reason is specific to the worklist miss.
+          logger.warn(
+            `[OpsSessionLauncher] skipping ${sessionType} dispatch for task ${task.id}: ${err.message}`,
+          );
+          return;
+        }
+        throw err;
+      }
+    }
     const injectedProcedureContent = injectedProcedure?.content;
     const taskName = injectedProcedure?.title || task.title || taskUrl;
     try {

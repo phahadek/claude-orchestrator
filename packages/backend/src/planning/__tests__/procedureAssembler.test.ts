@@ -6,6 +6,7 @@ import {
   deriveGroomDigestSlice,
   deriveDesignDigestSlice,
   deriveOpsDigestSlice,
+  GroomWorklistTaskNotFoundError,
   WORKFLOW_LOADERS,
   type PlanningDigest,
 } from '../procedureAssembler';
@@ -149,10 +150,44 @@ describe('deriveGroomDigestSlice', () => {
     expect(slice.task.id).toBe('task-1');
   });
 
-  it('throws when the task is not in targetTasks', () => {
-    expect(() =>
-      deriveGroomDigestSlice(fixtureGroomLoadResult(), 'nope'),
-    ).toThrow();
+  it('throws a GroomWorklistTaskNotFoundError naming the task + milestone when wholly absent from the board', () => {
+    let thrown: unknown;
+    try {
+      deriveGroomDigestSlice(fixtureGroomLoadResult(), 'nope', 'M12');
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(GroomWorklistTaskNotFoundError);
+    const err = thrown as GroomWorklistTaskNotFoundError;
+    expect(err.taskId).toBe('nope');
+    expect(err.message).toContain('nope');
+    expect(err.message).toContain('M12');
+    expect(err.message).toMatch(/not present on the milestone board/);
+  });
+
+  it('gives a distinct reason when the task is present on the board but excluded as Done/Deferred', () => {
+    const result = fixtureGroomLoadResult();
+    result.board = [
+      {
+        id: 'done-task',
+        title: 'Already finished',
+        status: '✅ Done',
+        type: '💻 Code',
+        priority: '',
+        url: 'https://notion.so/done-task',
+      },
+    ] as unknown as GroomLoadResult['board'];
+
+    let thrown: unknown;
+    try {
+      deriveGroomDigestSlice(result, 'done-task');
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(GroomWorklistTaskNotFoundError);
+    expect((thrown as GroomWorklistTaskNotFoundError).message).toMatch(
+      /excluded as Done\/Deferred/,
+    );
   });
 });
 
