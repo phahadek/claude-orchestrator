@@ -222,8 +222,10 @@ export interface MoveTaskTargetMilestone extends MoveTaskMilestoneRef {
  * MoveTaskTargetMilestone.databaseId. A caller never needs to know a raw
  * Notion database id.
  */
-export interface CreateTaskCommandFields
-  extends Omit<NewTaskFields, 'databaseId'> {
+export interface CreateTaskCommandFields extends Omit<
+  NewTaskFields,
+  'databaseId'
+> {
   databaseId?: string;
   /** Milestone reference to resolve databaseId from when databaseId is omitted. */
   milestone?: string;

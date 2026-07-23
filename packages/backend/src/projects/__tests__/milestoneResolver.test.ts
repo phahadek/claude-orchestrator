@@ -140,9 +140,7 @@ describe('resolveMilestoneDatabaseId', () => {
   it('resolves a milestone DB id to its board source_id', () => {
     const withSource = { ...M11, sourceId: 'db-source-11' };
     projectServiceMock.getById.mockReturnValue(project([withSource, M12]));
-    expect(resolveMilestoneDatabaseId('p1', 'ms-uuid-11')).toBe(
-      'db-source-11',
-    );
+    expect(resolveMilestoneDatabaseId('p1', 'ms-uuid-11')).toBe('db-source-11');
   });
 
   it('throws a clear error (not an opaque Notion parent error) for an unresolvable milestone', () => {
@@ -161,9 +159,9 @@ describe('resolveMilestoneDatabaseId', () => {
 
   it('throws when the project itself is unknown', () => {
     projectServiceMock.getById.mockReturnValue(undefined);
-    expect(() =>
-      resolveMilestoneDatabaseId('no-such-project', 'M11'),
-    ).toThrow(UnknownMilestoneError);
+    expect(() => resolveMilestoneDatabaseId('no-such-project', 'M11')).toThrow(
+      UnknownMilestoneError,
+    );
   });
 });
 

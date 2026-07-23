@@ -90,7 +90,7 @@ export function resolveMilestoneDatabaseId(
   if (!match.sourceId) {
     throw new UnknownMilestoneError(
       `milestone "${milestone}" (project "${projectId}") has no source_id — ` +
-        'set it to the board\'s Notion database ID before creating tasks under it',
+        "set it to the board's Notion database ID before creating tasks under it",
     );
   }
   return match.sourceId;

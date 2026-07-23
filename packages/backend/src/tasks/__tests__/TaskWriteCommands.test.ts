@@ -695,9 +695,9 @@ describe('TaskWriteCommands.createTask', () => {
     const backend = makeBackend();
     const commands = new BackendTaskWriteCommands(backend, 'claude-dashboard');
 
-    await expect(
-      commands.createTask({ title: 'x' } as never),
-    ).rejects.toThrow(/requires either databaseId or milestone/);
+    await expect(commands.createTask({ title: 'x' } as never)).rejects.toThrow(
+      /requires either databaseId or milestone/,
+    );
   });
 
   it('throws a clear error when a milestone is supplied but no projectId is bound', async () => {
