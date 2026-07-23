@@ -28,5 +28,11 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    // Force NODE_ENV=test for the test run regardless of the ambient env (some
+    // sandboxes inherit NODE_ENV=production), so React resolves its test build —
+    // the production react-dom/test-utils build removes `act`.
+    env: {
+      NODE_ENV: 'test',
+    },
   },
 });
