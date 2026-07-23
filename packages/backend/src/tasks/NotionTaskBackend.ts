@@ -14,7 +14,11 @@ import {
   getTaskCache,
   getTasksByStatusFromCache,
 } from '../db/queries';
-import { renderTaskBody, type TaskBodySections } from './bodyRender';
+import {
+  renderTaskBody,
+  markdownToBlocks,
+  type TaskBodySections,
+} from './bodyRender';
 
 /**
  * Notion-backed implementation of TaskBackend. Resolves the Notion database ID
@@ -199,6 +203,11 @@ export class NotionTaskBackend implements TaskBackend {
 
   async updateBody(taskId: string, sections: TaskBodySections): Promise<void> {
     const blocks = renderTaskBody(sections);
+    await this.client.updateBody(normalizeTaskId(taskId), blocks);
+  }
+
+  async updateBodyRaw(taskId: string, markdown: string): Promise<void> {
+    const blocks = markdownToBlocks(markdown);
     await this.client.updateBody(normalizeTaskId(taskId), blocks);
   }
 
