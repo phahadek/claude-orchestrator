@@ -20,14 +20,24 @@ describe('the repo-committed deploy playbook', () => {
     expect(result.playbook.steps.length).toBeGreaterThan(0);
   });
 
-  it('is host-agnostic: no absolute host paths or hostnames leak into it', () => {
+  it('carries no ssh remote-host bindings — this repo deploys in place, not over ssh', () => {
     const raw = fs.readFileSync(
       path.join(REPO_ROOT, '.claude-deploy-playbook.yml'),
       'utf-8',
     );
-    expect(raw).not.toMatch(/\/srv\//);
-    expect(raw).not.toMatch(/\/home\//);
     expect(raw).not.toMatch(/ssh\s+\S+@/);
+  });
+
+  it("sync-runtime runs a real rsync into this host's runtime directory", () => {
+    const result = loadDeployPlaybook(REPO_ROOT);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const syncStep = result.playbook.steps.find((s) => s.id === 'sync-runtime');
+    expect(syncStep).toBeDefined();
+    expect(syncStep?.command_or_prompt).toMatch(/^rsync\b/);
+    expect(syncStep?.command_or_prompt).toMatch(/--delete/);
+    expect(syncStep?.command_or_prompt).toContain('/srv/orchestrator/runtime/');
   });
 
   it("prod-mutating steps carry no run_as — they run as the engine's own runtime user, not a sudo -u switch to a placeholder that may not exist on the host", () => {
