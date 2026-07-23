@@ -74,7 +74,7 @@ function buildGateVerifyProcedure(item: GateItem): string {
       'is a known failure mode for this session: it burns the turn budget ' +
       'without ever checking whether the behavior actually ran.',
     '',
-    '**The operational record IS** — the running system\'s behavioral ' +
+    "**The operational record IS** — the running system's behavioral " +
       'trace. A pass must cite one of these:',
     '- `audit_log` entries',
     '- `session_events`',
