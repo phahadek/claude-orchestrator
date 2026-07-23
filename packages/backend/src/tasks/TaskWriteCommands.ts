@@ -792,7 +792,11 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     );
 
     try {
-      await this.backend.updateBodyRaw(newTaskId, content.bodyMarkdown, options);
+      await this.backend.updateBodyRaw(
+        newTaskId,
+        content.bodyMarkdown,
+        options,
+      );
 
       if (content.status !== 'Backlog') {
         await this.restoreStatus(newTaskId, content.status, options);

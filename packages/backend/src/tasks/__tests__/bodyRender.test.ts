@@ -262,7 +262,9 @@ describe('markdownToBlocks — move round-trip (blockToLine inverse)', () => {
   /** Mirrors NotionClient.fetchTaskPage: one blockToLine per block, joined. */
   function toMarkdown(blocks: ReturnType<typeof renderTaskBody>): string {
     return blocks
-      .map((b) => blockToLine(b as unknown as Parameters<typeof blockToLine>[0]))
+      .map((b) =>
+        blockToLine(b as unknown as Parameters<typeof blockToLine>[0]),
+      )
       .join('\n');
   }
 
@@ -287,7 +289,9 @@ describe('markdownToBlocks — move round-trip (blockToLine inverse)', () => {
     movedBlocks.push({
       object: 'block',
       type: 'paragraph',
-      paragraph: { rich_text: [{ type: 'text', text: { content: provenanceLine } }] },
+      paragraph: {
+        rich_text: [{ type: 'text', text: { content: provenanceLine } }],
+      },
     });
 
     const movedMarkdown = toMarkdown(movedBlocks);
