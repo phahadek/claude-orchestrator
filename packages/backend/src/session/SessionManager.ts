@@ -27,7 +27,6 @@ import {
   revokeStageCredential,
   mintStageCredential,
 } from '../auth/SessionStageAuth';
-import { revokeOpsJournalCredential } from '../auth/OpsJournalAuth';
 import {
   buildOrchestratorMcpServerEntry,
   ORCHESTRATOR_MCP_SERVER_NAME,
@@ -2187,7 +2186,6 @@ export class SessionManager extends EventEmitter {
   ): void {
     this.sessions.delete(sessionId);
     revokeStageCredential(sessionId);
-    revokeOpsJournalCredential(sessionId);
 
     // Chokepoint guard: never tear down an idle session's worktree.
     // The worktree IS the session state for idle sessions — uncommitted WIP must

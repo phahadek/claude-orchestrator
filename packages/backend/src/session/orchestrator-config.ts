@@ -200,9 +200,15 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
  * Capability strings a grant can never widen the allowlist with, regardless
  * of what an operator approved. Resolved/Done/task-intent-apply stay
  * device-authed — a session-scoped grant is not a substitute for that auth
- * boundary. Write/Edit stay off ops/planning sessions entirely — file
- * authorship is a Code task, not something an operator grant can approve.
- * Matched against the raw granted-capability string.
+ * boundary. No orchestrator MCP tool ever names an apply/resolve/Done
+ * transition (the tool surface is staging + verdict-delivery only, see
+ * mcp/tools/stageProposalTools.ts and mcp/tools/verdictTools.ts — apply
+ * lives solely on the device-authed /api/staged-intents REST surface), so
+ * these patterns never need to special-case an `mcp__orchestrator__*` tool
+ * name; a session may freely request a grant for any of them. Write/Edit
+ * stay off ops/planning sessions entirely — file authorship is a Code task,
+ * not something an operator grant can approve. Matched against the raw
+ * granted-capability string.
  */
 const GRANT_DENYLIST_PATTERNS = [
   /task-intent/i,

@@ -168,13 +168,13 @@ function buildGateVerifyProcedure(item: GateItem): string {
             'change what you report for `disposition`.',
           '',
         ]),
-    'Report your finding by ending your final message with exactly one block ' +
-      'of this shape (a bare JSON object is not enough — it must be the ' +
-      '`gate_verify` key; `reclassify` is optional — omit it unless you are ' +
-      'proposing a self-correction as described above):',
+    'Report your finding by calling the `mcp__orchestrator__gate.verify` tool ' +
+      'exactly once, as your final action — never a chat JSON block, which is ' +
+      'not delivered anywhere. `reclassify` is optional — omit it unless you ' +
+      'are proposing a self-correction as described above:',
     '',
     '```json',
-    `{"gate_verify": {"gate_item_id": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"basis": "operational"|"source", "...": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}}`,
+    `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"basis": "operational"|"source", "...": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,
     '```',
   ].join('\n');
 }

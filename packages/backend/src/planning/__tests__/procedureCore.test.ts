@@ -145,7 +145,7 @@ describe('procedureCore', () => {
     const rendered = renderPrinciple(principle, 'ops');
     expect(rendered).toMatch(/^DO stage/);
     expect(rendered).toContain(
-      'node ~/.claude/scripts/stage-task-intent.mjs session.requestCapability',
+      'mcp__orchestrator__session.requestCapability',
     );
     expect(rendered).toMatch(/DO NOT abstain/);
     expect(rendered).toMatch(/DO NOT fabricate/);

@@ -3,14 +3,16 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Grep-guard: the seven route-based cutover clients (ops/groom/gate/seed/
-// staged-intents + stage-task-intent + read-session-record) must agree on one
-// host var name and one port var name (ORCHESTRATOR_BACKEND_HOST /
-// ORCHESTRATOR_BACKEND_PORT). Token vars stay deliberately distinct — the
-// five device-auth clients read ORCHESTRATOR_DEVICE_TOKEN, the two
-// stage-token clients read the separate, lesser-privileged
-// ORCHESTRATOR_STAGE_TOKEN — so this only asserts each client's token var is
-// one of those two known names, not a single name.
+// Grep-guard: the six route-based cutover clients (ops/groom/gate/seed/
+// staged-intents + read-session-record) must agree on one host var name and
+// one port var name (ORCHESTRATOR_BACKEND_HOST / ORCHESTRATOR_BACKEND_PORT).
+// Token vars stay deliberately distinct — the five device-auth clients read
+// ORCHESTRATOR_DEVICE_TOKEN, the one remaining stage-token client
+// (read-session-record — task-write staging + verdict delivery now go
+// through the orchestrator MCP tool surface instead of a CLI client) reads
+// the separate, lesser-privileged ORCHESTRATOR_STAGE_TOKEN — so this only
+// asserts each client's token var is one of those two known names, not a
+// single name.
 
 const backendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const repoRoot = resolve(backendRoot, '../..');
@@ -23,7 +25,6 @@ const DEVICE_AUTH_CLIENTS = [
   resolve(backendRoot, 'scripts/staged-intents-client.mjs'),
 ];
 const STAGE_TOKEN_CLIENTS = [
-  resolve(backendRoot, 'scripts/stage-task-intent.mjs'),
   resolve(backendRoot, 'scripts/read-session-record.mjs'),
 ];
 const ALL_CLIENTS = [...DEVICE_AUTH_CLIENTS, ...STAGE_TOKEN_CLIENTS];

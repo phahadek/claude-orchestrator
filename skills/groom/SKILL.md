@@ -307,7 +307,8 @@ Confirm the accretion in chat before the Ready-flip.
    use (`POST /api/staged-intents`, authenticated by
    `$ORCHESTRATOR_DEVICE_TOKEN` — **not** the stage-only
    `ORCHESTRATOR_STAGE_TOKEN` transport, which is reserved for unattended
-   orchestrator-launched worktree sessions, see `stage-task-intent.mjs`).
+   orchestrator-launched worktree sessions staging through the orchestrator
+   MCP tool surface).
    After conversational sign-off in this session, apply each staged intent
    with `node ~/.claude/scripts/staged-intents-client.mjs apply <intentId>`
    (`POST /api/staged-intents/:id/apply`) — the readiness/groomGate guards

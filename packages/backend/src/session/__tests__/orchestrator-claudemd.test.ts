@@ -103,17 +103,17 @@ describe('buildOrchestratorClaudeMd', () => {
     });
   });
 
-  describe('Responding to Review Comments section (disposition JSON format)', () => {
-    it('documents the dispositions schema and the three disposition values', () => {
+  describe('Responding to Review Comments section (MCP verdict-delivery tool)', () => {
+    it('documents the review.disposition tool and the three disposition values', () => {
       const output = buildOrchestratorClaudeMd(BASE_PARAMS);
       expect(output).toContain('## Responding to Review Comments');
-      expect(output).toContain('"dispositions"');
-      expect(output).toContain('"comment_id"');
-      expect(output).toContain('"disposition"');
+      expect(output).toContain('mcp__orchestrator__review.disposition');
+      expect(output).toContain('comment_id');
+      expect(output).toContain('disposition');
       expect(output).toContain('"addressed"');
       expect(output).toContain('"wont_fix"');
       expect(output).toContain('"out_of_scope"');
-      expect(output).toContain('"reason"');
+      expect(output).toContain('reason');
     });
 
     it('omits the section for local-only git mode (no PR review threads)', () => {
@@ -126,7 +126,7 @@ describe('buildOrchestratorClaudeMd', () => {
   });
 });
 
-describe('assembled session instructions include the disposition JSON format', () => {
+describe('assembled session instructions include the review.disposition MCP tool', () => {
   const contextParams = {
     taskName: 'test-task',
     taskUrl: 'https://example.com/task',
@@ -141,7 +141,7 @@ describe('assembled session instructions include the disposition JSON format', (
     // the `buildSessionContext` call inside the non-planning/non-review branch).
     const output = buildSessionContext(contextParams);
     expect(output).toContain('## Responding to Review Comments');
-    expect(output).toContain('"dispositions"');
+    expect(output).toContain('mcp__orchestrator__review.disposition');
   });
 
   it('resume-rebuild path (buildSessionContext rebuilt from a persisted session row)', () => {
@@ -154,6 +154,6 @@ describe('assembled session instructions include the disposition JSON format', (
       taskContent: 'pre-fetched task spec markdown',
     });
     expect(output).toContain('## Responding to Review Comments');
-    expect(output).toContain('"dispositions"');
+    expect(output).toContain('mcp__orchestrator__review.disposition');
   });
 });

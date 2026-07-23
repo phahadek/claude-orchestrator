@@ -253,8 +253,31 @@ describe('getSessionAllowedTools', () => {
     const groom = getSessionAllowedTools('groom', { allowed_tools: [] });
     const standard = getSessionAllowedTools('standard', { allowed_tools: [] });
     expect(ops).not.toEqual(standard);
+    expect(ops).not.toEqual(groom);
     expect(ops.some((t) => t.startsWith('Bash(git '))).toBe(true);
-    expect(ops).toEqual(expect.arrayContaining(groom));
+    // Shared read-only Bash + Notion-read base carries over even though each
+    // type's orchestrator MCP stage-proposal tools are scoped to its own
+    // staged-intent kinds (see config.ts's PLANNING_INTENT_KINDS-mirrored
+    // GROOM_MCP_TOOLS/OPS_MCP_TOOLS) rather than being one shared set.
+    const opsSet = new Set(ops);
+    for (const tool of groom) {
+      if (tool.startsWith('mcp__orchestrator__')) continue;
+      expect(opsSet.has(tool)).toBe(true);
+    }
+  });
+
+  it('ops and groom each get only the orchestrator MCP stage-proposal tools for their own staged-intent kinds', () => {
+    const ops = getSessionAllowedTools('ops', { allowed_tools: [] });
+    const groom = getSessionAllowedTools('groom', { allowed_tools: [] });
+    expect(ops).toContain('mcp__orchestrator__journal.setState');
+    expect(ops).toContain('mcp__orchestrator__session.requestCapability');
+    expect(ops).toContain('mcp__orchestrator__gate.verify');
+    expect(ops).not.toContain('mcp__orchestrator__gate.accrete');
+    expect(ops).not.toContain('mcp__orchestrator__task.setDependsOn');
+    expect(groom).toContain('mcp__orchestrator__gate.accrete');
+    expect(groom).toContain('mcp__orchestrator__task.setDependsOn');
+    expect(groom).not.toContain('mcp__orchestrator__journal.setState');
+    expect(groom).not.toContain('mcp__orchestrator__gate.verify');
   });
 
   describe('granted-capability composition', () => {
@@ -296,7 +319,7 @@ describe('getSessionAllowedTools', () => {
     });
 
     it.each([
-      'Bash(node ~/.claude/scripts/stage-task-intent.mjs apply:*)',
+      'Bash(node ~/.claude/scripts/apply-task-intent.mjs:*)',
       'Bash(node ~/.claude/scripts/resolve-task.mjs:*)',
       'mark-task-done',
     ])('never merges a resolved/apply/done-scoped grant (%s)', (capability) => {

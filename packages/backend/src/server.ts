@@ -83,7 +83,6 @@ import {
   createStagedIntentsRouter,
   setStagedIntentBroadcast,
 } from './routes/stagedIntents';
-import { createTaskIntentsRouter } from './routes/taskIntents';
 import { createOrchestratorMcpRouter } from './mcp/orchestratorMcpServer';
 import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
 import { createOpsJournalRouter } from './routes/opsJournal';
@@ -164,27 +163,23 @@ const app = express();
 app.use(express.json());
 // Public enrollment routes (bootstrap, request, status) — no token required
 app.use('/api/enrollment', createPublicEnrollmentRouter());
-// Loopback-only session stage endpoint: authed by its own scoped session
-// credential (never a device token), so it is mounted ahead of
-// requireDeviceAuth deliberately — it must stay reachable only via
-// requireSessionStageAuth, never fall back to the device-auth surface.
-app.use('/api', createTaskIntentsRouter());
-// Long-lived, loopback-only orchestrator MCP server (streamable-HTTP). Same
-// per-session stage credential as the task-intents stage endpoint above, so
-// it too is mounted ahead of requireDeviceAuth. Scope is staging + verdict
-// reporting only (never apply) — the tool surface lands in a follow-on
-// task; today this exposes a minimal handshake tool only.
+// Long-lived, loopback-only orchestrator MCP server (streamable-HTTP): the
+// sole session-facing write edge for staged task-write intents and verdict
+// delivery, authed by its own scoped session stage credential (never a
+// device token), so it is mounted ahead of requireDeviceAuth deliberately —
+// it must stay reachable only via requireSessionStageAuth, never fall back
+// to the device-auth surface. Supersedes the retired POST /api/task-intents
+// REST route + its sanctioned stage-task-intent.mjs CLI client.
 app.use('/api', createOrchestratorMcpRouter(sessionManager));
 // The own-record read (session_events + audit_log, by target session id) an
 // operator-approved session.requestCapability grant materialises — same
 // loopback-only, stage-credential auth as above, plus its own per-request
 // granted-capability check (see routes/sessionRecordRead.ts).
 app.use('/api', createSessionRecordReadRouter());
-// Ops-journal state-transition writes accept a dispatched ops session's own
-// scoped journal-write credential in addition to a device token (see
-// requireOpsJournalWriteAuth) — mounted ahead of requireDeviceAuth so that
-// credential is reachable; each route inside applies its own auth
-// (requireDeviceAuth for GET, requireOpsJournalWriteAuth for the write).
+// Ops-journal read + operator-resolve surface — device-authed only; the
+// dispatched-session write path (a scoped journal-write credential) has
+// been retired in favor of staging journal.setState through the MCP tool
+// surface above.
 app.use('/api', createOpsJournalRouter());
 // Setup endpoints are public — wizard UI uses them before credentials exist
 app.use('/api', setupRouter);

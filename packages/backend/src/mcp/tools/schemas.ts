@@ -166,17 +166,17 @@ export const decisionPickOneOptionSchema = z.object({
   description: z.string(),
 });
 
-/** ParsedDispositionItem's disposition vocabulary — see AgentSession.ts's parseDispositionBlock. */
+/** ParsedDispositionItem's disposition vocabulary — see AgentSession.ts's recordReviewDisposition. */
 export const reviewDispositionSchema = z.enum([
   'addressed',
   'wont_fix',
   'out_of_scope',
 ]);
 
-/** VerifiedFlakyDisposition's gate vocabulary — see AgentSession.ts's parseVerifiedFlakyDisposition. */
+/** VerifiedFlakyDisposition's gate vocabulary — see AgentSession.ts's recordVerifiedFlakyDisposition. */
 export const flakyGateSchema = z.enum(['ci', 'f2']);
 
-/** GateVerifyDisposition's disposition vocabulary — see AgentSession.ts's parseGateVerifyDisposition. */
+/** GateVerifyDisposition's disposition vocabulary — see AgentSession.ts's recordGateVerifyDisposition. */
 export const gateVerifyDispositionSchema = z.enum([
   'pass',
   'fail',

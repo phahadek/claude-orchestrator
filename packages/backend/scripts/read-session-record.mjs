@@ -7,9 +7,10 @@
 // own runtime records (session_events + audit_log) for one target session
 // id: it GETs the backend's loopback-only read endpoint
 // (GET /api/session-record-reads/:targetSessionId), authenticated by the
-// same per-session scoped stage credential stage-task-intent.mjs uses.
+// same per-session scoped stage credential the orchestrator MCP tool
+// surface uses (see mcp/orchestratorMcpServer.ts).
 //
-// Unlike stage-task-intent.mjs, this read only succeeds once an operator has
+// Unlike that MCP tool surface, this read only succeeds once an operator has
 // approved a `session.requestCapability` request naming
 // `read:session-record:<targetSessionId>` for this session — see
 // session/orchestrator-config.ts#sessionRecordReadCapability. A 403 with
