@@ -1433,7 +1433,10 @@ export function createStagedIntentsRouter(
             intent.groupId,
             payload.taskId,
           );
-          const violations = checkReadiness(body);
+          const violations = checkReadiness(
+            body,
+            getCachedType(payload.taskId),
+          );
           if (violations.length > 0) {
             annotation = { blocked: true, violations };
           }
