@@ -8,9 +8,23 @@ vi.mock('../../hooks/stagedIntentBus', () => ({
   subscribeStagedIntentChange: () => () => {},
 }));
 
+function mockMobileViewport() {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: query.includes('max-width'),
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }));
+}
+
 describe('DecisionPanel', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("renders a parked ops session's staged journal.setState decision", async () => {
@@ -145,6 +159,39 @@ describe('DecisionPanel', () => {
         outcome: 'decline',
         reason: 'out of scope',
       }),
+    );
+  });
+
+  it('exposes a reachable dismiss control at mobile viewport widths, which collapses the panel to a reopenable badge', async () => {
+    mockMobileViewport();
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
+      groomGroupIntents('group-4', 't-4'),
+    );
+
+    render(<DecisionPanel sessionId="groom-session-1" />);
+    await waitFor(() => screen.getByTestId('decision-panel'));
+
+    const dismissButton = screen.getByRole('button', {
+      name: /dismiss proposals panel/i,
+    });
+    expect(dismissButton).toBeTruthy();
+
+    fireEvent.click(dismissButton);
+
+    const panel = screen.getByTestId('decision-panel');
+    expect(panel.getAttribute('data-collapsed')).toBe('true');
+
+    // Collapsing must not tear down the underlying decision — it stays
+    // reachable via a reopen control, not lost.
+    const reopenButton = screen.getByRole('button', {
+      name: /show 2 pending proposals/i,
+    });
+    fireEvent.click(reopenButton);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /dismiss proposals panel/i }),
+      ).toBeTruthy(),
     );
   });
 });

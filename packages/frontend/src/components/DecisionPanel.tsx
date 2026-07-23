@@ -32,10 +32,12 @@ export function DecisionPanel({ sessionId }: Props) {
   const [rejectDrafts, setRejectDrafts] = useState<
     Record<string, { outcome: StagedIntentRejectOutcome; reason: string }>
   >({});
+  const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setLoaded(false);
+    setCollapsed(false);
     stagedIntentsApi
       .listBySession(sessionId)
       .then((fetched) => {
@@ -172,9 +174,38 @@ export function DecisionPanel({ sessionId }: Props) {
     }
   };
 
+  if (collapsed) {
+    return (
+      <div
+        className={styles.collapsedBar}
+        data-testid="decision-panel"
+        data-collapsed="true"
+      >
+        <button
+          type="button"
+          className={styles.expandButton}
+          onClick={() => setCollapsed(false)}
+          aria-label={`Show ${intents.length} pending proposal${intents.length === 1 ? '' : 's'}`}
+        >
+          ▲ Proposals ({intents.length})
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className={styles.panel} data-testid="decision-panel">
-      <div className={styles.heading}>Proposals ({intents.length})</div>
+      <div className={styles.headingRow}>
+        <div className={styles.heading}>Proposals ({intents.length})</div>
+        <button
+          type="button"
+          className={styles.dismissButton}
+          onClick={() => setCollapsed(true)}
+          aria-label="Dismiss proposals panel"
+        >
+          ✕
+        </button>
+      </div>
 
       <TriageBatchPanel
         groups={cleanTriageGroups}

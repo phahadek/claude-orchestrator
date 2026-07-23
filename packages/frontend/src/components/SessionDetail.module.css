@@ -710,9 +710,17 @@
   padding: 24px;
 }
 
-/* ── Mobile overlay: remove left border when rendering as overlay ── */
+/* ── Mobile overlay: remove left border when rendering as overlay ──
+   Stack the decision surface below the transcript instead of squeezing it
+   into a flex row, where the decision panel's min-width could crush the
+   main panel (and its close control) down to nothing. ── */
 @media (max-width: 768px) {
+  .layout {
+    flex-direction: column;
+  }
+
   .panel {
     border-left: none;
+    min-height: 0;
   }
 }
