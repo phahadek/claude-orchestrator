@@ -261,31 +261,6 @@
   margin-right: 4px;
 }
 
-/* Launch button */
-.launchButton {
-  background: none;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm, 4px);
-  padding: 2px 6px;
-  font-size: 12px;
-  cursor: pointer;
-  color: var(--text-primary);
-  flex-shrink: 0;
-  transition:
-    border-color 0.15s,
-    opacity 0.15s;
-  line-height: 1;
-}
-
-.launchButton:hover:not(:disabled) {
-  border-color: var(--accent);
-}
-
-.launchButton:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
 /* Unblock button */
 .unblockButton {
   background: none;
