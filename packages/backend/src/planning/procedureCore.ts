@@ -247,7 +247,10 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     summary:
       'Read the code / live data / architecture pages the open items actually turn ' +
       'on, once per region, keeping the reads in subagents so the main window stays ' +
-      'small.',
+      'small. The injected digest (resolved regions + verbatim task body) is ' +
+      'authoritative for a dispatched session — verify scope by spot-checking the ' +
+      'specific claims the decision actually turns on, not by re-deriving findings ' +
+      'the digest already traced from git history or from scratch.',
   },
   {
     id: 'present-for-signoff',

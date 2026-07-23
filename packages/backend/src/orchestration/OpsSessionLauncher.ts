@@ -257,6 +257,8 @@ export class OpsSessionLauncher {
         taskName: resolvedTitle || task.title || taskUrl,
         taskUrl,
         digest,
+        milestoneId,
+        projectId,
       });
       return { content, title: resolvedTitle };
     } catch (err) {
