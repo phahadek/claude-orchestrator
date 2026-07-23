@@ -111,7 +111,11 @@ describe('POST /api/staged-intents — stage-time gate/seed accretion feedback',
             type_check: { decision: 'none' },
             type: '💻 Code',
             filesPathsEntries: [
-              { raw: 'packages/backend/src/foo.ts', isNew: true, existsInRepo: false },
+              {
+                raw: 'packages/backend/src/foo.ts',
+                isNew: true,
+                existsInRepo: false,
+              },
             ],
           },
         },
