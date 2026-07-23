@@ -1587,3 +1587,31 @@ describe('GitHubApiError — enumerable properties and toJSON', () => {
     expect(err.message).toBe('GitHub API error 403: Forbidden');
   });
 });
+
+describe('GitHubClient.resolveViewerLogin', () => {
+  it('returns the login on a successful probe', async () => {
+    mockFetch({ json: async () => ({ login: 'orchestrator-bot' }) });
+    const login = await GitHubClient.resolveViewerLogin('some-token');
+    expect(login).toBe('orchestrator-bot');
+  });
+
+  it('degrades gracefully (returns null, does not throw) when the probe fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        text: async () => 'Bad credentials',
+      }),
+    );
+    const login = await GitHubClient.resolveViewerLogin('bad-token');
+    expect(login).toBeNull();
+  });
+
+  it('degrades gracefully when the probe rejects (network error)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNRESET')));
+    const login = await GitHubClient.resolveViewerLogin('some-token');
+    expect(login).toBeNull();
+  });
+});

@@ -54,7 +54,7 @@ import { PlanningOrchestrator } from './orchestration/PlanningOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AutoMerger } from './github/AutoMerger';
 import { ReviewerCommentsWatcher } from './github/ReviewerCommentsWatcher';
-import { AUTO_REVIEW_ENABLED } from './config';
+import { AUTO_REVIEW_ENABLED, GITHUB_TOKEN } from './config';
 import { getCorporateMode } from './config/corporateMode';
 import { getOrchestratorConfig } from './config/appConfig';
 import { AutoLauncher } from './orchestration/AutoLauncher';
@@ -224,6 +224,16 @@ const reviewerCommentsWatcher = new ReviewerCommentsWatcher(
   sessionManager,
   broadcast,
 );
+// Resolve the orchestrator's own GitHub posting identity so the watcher never
+// re-ingests its own disposition replies as fresh human feedback. Never
+// blocks boot: a failed probe just falls back to the manual deny-list.
+void GitHubClient.resolveViewerLogin(GITHUB_TOKEN).then((login) => {
+  if (!login) return;
+  reviewerCommentsWatcher.setSelfIdentity(login);
+  logger.info(
+    `[server] resolved orchestrator GitHub identity for reviewer-comment self-exclusion: @${login}`,
+  );
+});
 app.use(
   '/api',
   createPrsRouter(

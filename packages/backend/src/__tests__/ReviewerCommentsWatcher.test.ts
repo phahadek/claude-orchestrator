@@ -982,6 +982,49 @@ describe('bot-authored comments are filtered out', () => {
   });
 });
 
+describe('self-identity exclusion', () => {
+  it('excludes the derived self-identity login even when not [bot], not typed Bot, and not in bot_comment_deny_list', async () => {
+    vi.useFakeTimers();
+    vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
+
+    const github = makeGitHub({
+      issueComments: [
+        {
+          id: 1,
+          author: 'orchestrator-bot-user',
+          authorType: 'User',
+          body: 'Addressed: fixed the thing',
+          createdAt: '',
+        },
+        {
+          id: 2,
+          author: 'alice',
+          authorType: 'User',
+          body: 'Please also check this',
+          createdAt: '',
+        },
+      ],
+    });
+    const watcher = new ReviewerCommentsWatcher(
+      github as never,
+      makeSessionManager() as never,
+    );
+    watcher.setSelfIdentity('orchestrator-bot-user');
+
+    await watcher.pollAll();
+    await vi.advanceTimersByTimeAsync(120_001);
+
+    expect(enqueueFeedbackItem).toHaveBeenCalledOnce();
+    const payload = (
+      vi.mocked(enqueueFeedbackItem).mock.calls[0] as [string, string, string]
+    )[2];
+    expect(payload).toContain('Please also check this');
+    expect(payload).not.toContain('Addressed: fixed the thing');
+
+    vi.useRealTimers();
+  });
+});
+
 describe('already-routed comments are not re-sent', () => {
   it('skips comment IDs present in getRoutedCommentIds()', async () => {
     vi.useFakeTimers();
