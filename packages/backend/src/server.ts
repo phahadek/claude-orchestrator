@@ -84,6 +84,7 @@ import {
   setStagedIntentBroadcast,
 } from './routes/stagedIntents';
 import { createTaskIntentsRouter } from './routes/taskIntents';
+import { createOrchestratorMcpRouter } from './mcp/orchestratorMcpServer';
 import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
 import { createOpsJournalRouter } from './routes/opsJournal';
 import { createGateStateRouter } from './routes/gateState';
@@ -168,6 +169,12 @@ app.use('/api/enrollment', createPublicEnrollmentRouter());
 // requireDeviceAuth deliberately — it must stay reachable only via
 // requireSessionStageAuth, never fall back to the device-auth surface.
 app.use('/api', createTaskIntentsRouter());
+// Long-lived, loopback-only orchestrator MCP server (streamable-HTTP). Same
+// per-session stage credential as the task-intents stage endpoint above, so
+// it too is mounted ahead of requireDeviceAuth. Scope is staging + verdict
+// reporting only (never apply) — the tool surface lands in a follow-on
+// task; today this exposes a minimal handshake tool only.
+app.use('/api', createOrchestratorMcpRouter());
 // The own-record read (session_events + audit_log, by target session id) an
 // operator-approved session.requestCapability grant materialises — same
 // loopback-only, stage-credential auth as above, plus its own per-request
