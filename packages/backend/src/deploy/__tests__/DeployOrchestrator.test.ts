@@ -369,7 +369,9 @@ describe('DeployOrchestrator: default shell runner env', () => {
     const originalNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     try {
-      const result = await spawnShell('echo "$NODE_ENV"', { cwd: process.cwd() });
+      const result = await spawnShell('echo "$NODE_ENV"', {
+        cwd: process.cwd(),
+      });
       expect(result.ok).toBe(true);
       expect(result.output.trim()).not.toBe('production');
     } finally {
