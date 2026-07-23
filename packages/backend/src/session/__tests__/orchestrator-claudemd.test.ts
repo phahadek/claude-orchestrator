@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildOrchestratorClaudeMd } from '../orchestrator-claudemd';
+import { buildSessionContext } from '../ContextBuilder';
 
 const BASE_PARAMS = {
   taskName: 'test-task',
@@ -100,5 +101,59 @@ describe('buildOrchestratorClaudeMd', () => {
       expect(output).not.toContain('## Local Context');
       expect(output).not.toContain('local-context.md');
     });
+  });
+
+  describe('Responding to Review Comments section (disposition JSON format)', () => {
+    it('documents the dispositions schema and the three disposition values', () => {
+      const output = buildOrchestratorClaudeMd(BASE_PARAMS);
+      expect(output).toContain('## Responding to Review Comments');
+      expect(output).toContain('"dispositions"');
+      expect(output).toContain('"comment_id"');
+      expect(output).toContain('"disposition"');
+      expect(output).toContain('"addressed"');
+      expect(output).toContain('"wont_fix"');
+      expect(output).toContain('"out_of_scope"');
+      expect(output).toContain('"reason"');
+    });
+
+    it('omits the section for local-only git mode (no PR review threads)', () => {
+      const output = buildOrchestratorClaudeMd({
+        ...BASE_PARAMS,
+        gitMode: 'local-only',
+      });
+      expect(output).not.toContain('## Responding to Review Comments');
+    });
+  });
+});
+
+describe('assembled session instructions include the disposition JSON format', () => {
+  const contextParams = {
+    taskName: 'test-task',
+    taskUrl: 'https://example.com/task',
+    projectContextUrl: 'https://example.com/project',
+    targetBranch: 'dev',
+    projectDir: '/tmp/project',
+    worktreePath: '/tmp/worktree',
+  };
+
+  it('initial-dispatch path (buildSessionContext without pre-fetched task content)', () => {
+    // Mirrors SessionManager's initial dispatch call site (SessionManager.ts,
+    // the `buildSessionContext` call inside the non-planning/non-review branch).
+    const output = buildSessionContext(contextParams);
+    expect(output).toContain('## Responding to Review Comments');
+    expect(output).toContain('"dispositions"');
+  });
+
+  it('resume-rebuild path (buildSessionContext rebuilt from a persisted session row)', () => {
+    // Mirrors SessionManager's `_buildAndWriteResumeSystemPrompt`, which rebuilds
+    // the system prompt for a resumed session from the DB row rather than fresh
+    // dispatch params — guards against a cached/short-circuited resume path that
+    // silently skips this instruction.
+    const output = buildSessionContext({
+      ...contextParams,
+      taskContent: 'pre-fetched task spec markdown',
+    });
+    expect(output).toContain('## Responding to Review Comments');
+    expect(output).toContain('"dispositions"');
   });
 });
