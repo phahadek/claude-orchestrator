@@ -467,9 +467,13 @@ export class PRMergeWatcher extends EventEmitter {
 
   private async runMergeabilityCheck(pr: PullRequestRow): Promise<void> {
     if (pr.state === 'merged' || pr.state === 'closed') return;
-    // Skip PRs paused for terminal reasons — AutoMerger has given up or human
-    // intervention is needed. Polling GitHub's merge state can't change the outcome.
-    if (isTerminalMergePause(pr.pause_reason)) return;
+    // PRs paused for terminal reasons (AutoMerger given up / human intervention
+    // needed) still get their observability columns (merge_state/failing_checks)
+    // refreshed below — otherwise the CI-failing pill freezes at whatever GitHub
+    // state existed the instant the pause fired. Only the remediation side
+    // effects (autofix, conflict nudges, pause clearing, AutoMerger retries) are
+    // skipped, since polling can't change a terminal outcome.
+    const terminalPause = isTerminalMergePause(pr.pause_reason);
 
     const project = getProjectByGithubRepo(pr.repo);
     const config = project ? loadOrchestratorConfig(project.projectDir) : null;
@@ -478,7 +482,15 @@ export class PRMergeWatcher extends EventEmitter {
     // When test: commands are configured, the per-SHA test result is the
     // authoritative CI signal — GitHub CI is disabled on private repos so
     // GitHub reports the PR mergeable; we gate on F1's result instead.
-    if (config && config.test.length > 0 && pr.head_sha && pr.session_id) {
+    // Skipped for terminally-paused PRs so we fall through to the read-only
+    // GitHub merge-state refresh below instead of remediating.
+    if (
+      !terminalPause &&
+      config &&
+      config.test.length > 0 &&
+      pr.head_sha &&
+      pr.session_id
+    ) {
       const testResult = getTestResult(pr.pr_number, pr.repo, pr.head_sha);
       if (testResult && !testResult.passed) {
         if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
@@ -555,7 +567,7 @@ export class PRMergeWatcher extends EventEmitter {
     // CI-failure remediation: decoupled from stateChanged via per-SHA dedup.
     // Fires whenever we observe ci_failed for a SHA we haven't remediated yet,
     // regardless of whether AutoMerger already wrote merge_state='ci_failed'.
-    if (category.category === 'ci_failed' && pr.session_id) {
+    if (!terminalPause && category.category === 'ci_failed' && pr.session_id) {
       if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
         // Reserve this SHA atomically before running remediation so a restart
         // can't re-fire for the same SHA.
@@ -597,7 +609,7 @@ export class PRMergeWatcher extends EventEmitter {
     // Conflict path: SHA-deduped nudge runs regardless of stateChanged.
     // PRs already conflicted at first poll (or whose transition happened during
     // a backend restart) are correctly nudged because dedup is state-based.
-    if (category.category === 'conflict') {
+    if (!terminalPause && category.category === 'conflict') {
       logger.info(
         `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has merge conflicts`,
       );
@@ -606,7 +618,7 @@ export class PRMergeWatcher extends EventEmitter {
 
     // Only update + broadcast if something actually changed.
     if (!stateChanged && !failingChecksChanged) {
-      this.tryCIFailingRecovery(pr, category);
+      if (!terminalPause) this.tryCIFailingRecovery(pr, category);
       return;
     }
 
@@ -631,7 +643,7 @@ export class PRMergeWatcher extends EventEmitter {
       emitTaskUpdated(pr.task_id);
     }
 
-    this.tryCIFailingRecovery(pr, category);
+    if (!terminalPause) this.tryCIFailingRecovery(pr, category);
 
     if (stateChanged && category.category === 'blocked') {
       logger.info(

@@ -2361,7 +2361,7 @@ describe('PRMergeWatcher — branches on pause-reason structure', () => {
     retry_strategy: 'manual_action',
   });
 
-  it('isTerminalMergePause: a JSON-serialized terminal pause skips mergeability polling', async () => {
+  it('isTerminalMergePause: a JSON-serialized terminal pause still refreshes observability via categorizeMergeability', async () => {
     const pr = makePRRow({ state: 'open', pause_reason: serializedTerminal });
     vi.mocked(getPRByNumber).mockReturnValue(pr);
     const github = makeMockGitHub();
@@ -2374,10 +2374,10 @@ describe('PRMergeWatcher — branches on pause-reason structure', () => {
     );
     await watcher.checkMergeabilityNow(42, 'owner/repo');
 
-    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+    expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
   });
 
-  it('isTerminalMergePause: a legacy bare-string terminal pause also skips polling', async () => {
+  it('isTerminalMergePause: a legacy bare-string terminal pause also refreshes observability', async () => {
     const pr = makePRRow({ state: 'open', pause_reason: 'auto_merge_failed' });
     vi.mocked(getPRByNumber).mockReturnValue(pr);
     const github = makeMockGitHub();
@@ -2390,7 +2390,84 @@ describe('PRMergeWatcher — branches on pause-reason structure', () => {
     );
     await watcher.checkMergeabilityNow(42, 'owner/repo');
 
-    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+    expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
+  });
+
+  it('terminally-paused (max_reviews) PR: refreshes merge_state/failing_checks once GitHub CI recovers', async () => {
+    const pr = makePRRow({
+      state: 'open',
+      pause_reason: 'max_reviews',
+      merge_state: 'ci_failed',
+      failing_checks: JSON.stringify(['lint']),
+      session_id: 'coding-session',
+    });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    const github = makeMockGitHub();
+    vi.mocked((github as any).categorizeMergeability).mockResolvedValue({
+      category: 'clean',
+      mergeState: 'clean',
+      rawMergeableState: 'clean',
+      failingChecks: [],
+    });
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.checkMergeabilityNow(42, 'owner/repo');
+
+    expect(vi.mocked(updateMergeState)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      1,
+      'clean',
+      null,
+    );
+  });
+
+  it('terminally-paused (max_reviews) PR: skips remediation side effects even when the refresh reports ci_failed', async () => {
+    const pr = makePRRow({
+      state: 'open',
+      pause_reason: 'max_reviews',
+      merge_state: 'clean',
+      session_id: 'coding-session',
+      head_sha: 'sha-terminal',
+    });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    const github = makeMockGitHub();
+    vi.mocked((github as any).categorizeMergeability).mockResolvedValue({
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [{ name: 'lint', conclusion: 'failure' }],
+    });
+    const sessions = makeMockSessions();
+    const autoMerger = makeMockAutoMerger();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setAutoMerger(autoMerger);
+    await watcher.checkMergeabilityNow(42, 'owner/repo');
+
+    // Observability column still refreshed...
+    expect(vi.mocked(updateMergeState)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      0,
+      'ci_failed',
+      ['lint'],
+    );
+    // ...but no remediation: no autofix/session nudge, no pause-reason
+    // transition, no AutoMerger retry.
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(autoMerger.attempt)).not.toHaveBeenCalled();
   });
 
   it('handlePushDetected: clears a JSON-serialized human_changes_requested pause and restarts AutoMerger', async () => {
