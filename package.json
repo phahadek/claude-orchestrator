@@ -29,6 +29,7 @@
     "lint:fix": "eslint packages/backend/src packages/frontend/src --fix --cache",
     "test": "echo \"Error: no test specified\" && exit 1",
     "scan:identifiers": "node scripts/scan-identifiers.mjs",
+    "backup:db": "node scripts/backup-database.mjs",
     "audit:licenses": "npx --yes license-checker --failOn 'GPL;AGPL'",
     "start:win": "powershell -ExecutionPolicy Bypass -File start.ps1",
     "stop:win": "powershell -ExecutionPolicy Bypass -File stop.ps1",
