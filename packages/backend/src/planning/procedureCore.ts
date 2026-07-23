@@ -10,6 +10,12 @@
  * stage-output) is meant to import this same module rather than re-derive
  * the procedure from the vendored SKILL.md prose — that is the drift this
  * module exists to confine to thin execution-mode wrappers.
+ *
+ * Style: every load-bearing directive added here (a principle `text`, a
+ * step `summary`/`summaryOverrides`) follows
+ * `packages/backend/src/planning/INJECTED_PROCEDURE_STYLE.md` — terse,
+ * imperative DO / DO NOT bullets, IS / IS-NOT lists for load-bearing
+ * definitions. Read that file before editing this one.
  */
 
 export type SkillId = 'groom' | 'design' | 'ops';
@@ -121,21 +127,23 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     title: 'Ask for what you need — never fabricate',
     appliesTo: ['ops'],
     text:
-      'A dispatched {skillLabel} session is responsible for asking for any out-of-base ' +
-      'capability or access it needs — nothing beyond its base profile is ever ' +
-      'speculatively handed to it. If a read or write the task needs is blocked by the ' +
-      'sandbox, stage a `session.requestCapability` intent naming the exact capability ' +
-      "and wait to be re-dispatched on the operator's decision. When the blocked read is " +
-      "this orchestrator's own runtime record (session_events/audit_log for a session by " +
-      'id) rather than project/prod data, that exact capability is ' +
-      '`read:session-record:<target-session-id>` — request that, not a Bash command ' +
-      "prefix; a Bash prefix can neither reach this orchestrator's own DB (outside the " +
-      'sandbox) nor authenticate to its device-authed API, so it never actually ' +
-      "materialises the read once granted. Request the capability, don't abstain " +
-      'straight to `needs-setup`, whenever a live record is reachable this way. If ' +
-      "staging isn't possible or the need is a one-off read-only investigation, report " +
-      '`needs-setup` and name the missing capability instead. Either ask or abstain — ' +
-      'never fabricate a result to route around a denial.',
+      'DO stage `session.requestCapability` naming the exact capability the moment a ' +
+      'read/write the task needs is blocked by the sandbox — nothing beyond the base ' +
+      'profile is ever speculatively handed to a dispatched {skillLabel} session. ' +
+      'Concrete invocation: `node ~/.claude/scripts/stage-task-intent.mjs ' +
+      'session.requestCapability \'{"capability":"<capability>","reason":"<reason>"}\'` ' +
+      "— then end the turn and wait to be re-dispatched on the operator's decision. " +
+      'DO request `read:session-record:<target-session-id>` as the capability value, ' +
+      "specifically, when the blocked read is this orchestrator's own runtime record " +
+      '(session_events/audit_log for a session by id) rather than project/prod data — ' +
+      'never request a Bash command prefix for that read: a Bash prefix can neither ' +
+      "reach this orchestrator's own DB (outside the sandbox) nor authenticate to its " +
+      'device-authed API, so it never materialises the read even once granted. DO NOT ' +
+      'abstain straight to `needs-setup` when a live record is reachable this way — ' +
+      'request the capability first. DO report `needs-setup` naming the missing ' +
+      "capability when staging isn't possible or the need is a one-off read-only " +
+      'investigation. DO NOT fabricate a result to route around a denial — ask or ' +
+      'abstain, never invent.',
   },
   {
     id: 'decision-pickone-genuine-forks-only',
@@ -268,6 +276,15 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'time), and stop for explicit human sign-off before proceeding.',
     summaryOverrides: {
       ops:
+        '**Directive — stage or request is the terminal action, then keep driving:**\n' +
+        '- DO stage the next step the moment investigation reaches a decision — ' +
+        'either the ops_journal transition (`journal.setState` → staged-proposal), ' +
+        'or, if applying it needs a capability this session lacks, a ' +
+        '`session.requestCapability` naming the exact write.\n' +
+        '- DO NOT ask in chat whether to stage or request first.\n' +
+        '- DO end the turn immediately once staged/requested — that is what puts ' +
+        'the decision in front of the operator; asking first leaves them nothing ' +
+        'to act on.\n\n' +
         'A dispatched ops session has no synchronous chat turn to wait within — ' +
         'end the turn and it parks. So presenting IS staging, but for ops staging ' +
         'is the first move in a drive-to-applied loop, not a handoff: once ' +
@@ -278,6 +295,12 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'first — staging/requesting is what puts the decision in front of the ' +
         'operator; asking first leaves them with nothing to act on.',
       groom:
+        '**Directive — staging is the terminal action:**\n' +
+        '- DO stage the grooming decision (Ready or Deferred) as the last action ' +
+        'of every turn that reaches a conclusion.\n' +
+        '- DO NOT end the turn on a chat write-up, findings recap, or "plan ready ' +
+        'to hand off" summary — none of those is a valid stopping point.\n' +
+        '- DO NOT ask for sign-off before staging.\n\n' +
         'A dispatched groom session has no synchronous chat turn to wait within — ' +
         'end the turn and it parks. So presenting IS staging: once investigation ' +
         'reaches a grooming decision, stage it (task.setStatus / setProperties / ' +
@@ -304,6 +327,29 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'field-level format of every field in each — reaching the right ' +
         'conclusion and not staging it in full is the same failure as reaching ' +
         'no conclusion at all.',
+      design:
+        '**Directive — staging is the terminal action:**\n' +
+        '- DO stage the design decision or open-question resolution ' +
+        '(`task.updateBody` / `task.setProperties` / `task.setStatus`, carrying a ' +
+        '`decisionProposal`) as the last action of every turn that reaches a ' +
+        'conclusion.\n' +
+        '- DO NOT end the turn on a chat write-up, findings recap, or "here is ' +
+        'what I think" summary — none of those is a valid stopping point.\n' +
+        '- DO NOT ask for sign-off before staging.\n\n' +
+        'A dispatched design session has no synchronous chat turn to wait ' +
+        'within — end the turn and it parks. So presenting IS staging: once ' +
+        'investigation reaches a design decision or resolves an open question, ' +
+        'stage it rather than writing up an investigation report in chat and ' +
+        'asking whether to proceed. Never ask for sign-off before staging — ' +
+        'staging is what puts the decision in front of the operator; asking ' +
+        'first leaves the operator with nothing to act on. This is the terminal ' +
+        'mandate, stated unambiguously: you are NOT finished once you have ' +
+        'reached a conclusion — you are finished only once that conclusion ' +
+        'exists as a staged intent. A "plan ready to hand off" chat write-up, a ' +
+        'findings recap, or any other prose summary of the decision is never the ' +
+        'deliverable and is never a valid place to end the turn; a session that ' +
+        'ends there has produced nothing an operator can act on, no matter how ' +
+        'correct its analysis was.',
     },
   },
   {
