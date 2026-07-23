@@ -451,7 +451,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     }
     if (status === 'Ready') {
       const body = (await this.backend.fetchTaskPage(taskId)) ?? '';
-      const violations = checkReadiness(body);
+      const violations = checkReadiness(body, getCachedType(taskId));
       if (violations.length > 0) {
         const readinessOverride = resolveReadinessOverride(taskId, options);
         if (!readinessOverride) {
@@ -898,7 +898,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
   ): Promise<void> {
     if (status === 'Ready') {
       const body = (await this.backend.fetchTaskPage(taskId)) ?? '';
-      const violations = checkReadiness(body);
+      const violations = checkReadiness(body, getCachedType(taskId));
       if (violations.length > 0) {
         const readinessOverride = resolveReadinessOverride(taskId, options);
         if (!readinessOverride) {

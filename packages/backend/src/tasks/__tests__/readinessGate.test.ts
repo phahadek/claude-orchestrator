@@ -99,3 +99,44 @@ describe('checkReadiness — Tier 2 (grooming-instruction residue)', () => {
     expect(violations.some((v) => v.detail.includes('residue'))).toBe(false);
   });
 });
+
+describe('checkReadiness — type-aware Open Questions / deferral exemption', () => {
+  const openQuestionsBody =
+    '## Open Questions\n- Which retry policy should we use?\n';
+  const deferralBody = 'The retry policy will be decide during implementation.';
+
+  it('does not flag a non-empty Open Questions section for 📐 Design', () => {
+    expect(checkReadiness(openQuestionsBody, '📐 Design')).toEqual([]);
+  });
+
+  it('still flags a non-empty Open Questions section for 💻 Code', () => {
+    const violations = checkReadiness(openQuestionsBody, '💻 Code');
+    expect(violations.some((v) => v.tier === 'structural')).toBe(true);
+  });
+
+  it('does not flag a deferral phrase for 📐 Design', () => {
+    expect(checkReadiness(deferralBody, '📐 Design')).toEqual([]);
+  });
+
+  it('still flags a deferral phrase for 💻 Code', () => {
+    const violations = checkReadiness(deferralBody, '💻 Code');
+    expect(violations.some((v) => v.tier === 'lexical')).toBe(true);
+  });
+
+  it('does not flag Open Questions / deferral for 📋 Planning', () => {
+    expect(checkReadiness(openQuestionsBody, '📋 Planning')).toEqual([]);
+    expect(checkReadiness(deferralBody, '📋 Planning')).toEqual([]);
+  });
+
+  it('flags structural grooming residue for both 📐 Design and 💻 Code', () => {
+    const residueBody = 'Files affected: confirm the exact module at grooming.';
+    const designViolations = checkReadiness(residueBody, '📐 Design');
+    const codeViolations = checkReadiness(residueBody, '💻 Code');
+    expect(designViolations.some((v) => v.detail.includes('residue'))).toBe(
+      true,
+    );
+    expect(codeViolations.some((v) => v.detail.includes('residue'))).toBe(
+      true,
+    );
+  });
+});

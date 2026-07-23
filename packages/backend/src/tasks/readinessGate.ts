@@ -173,14 +173,34 @@ function checkGroomingResidue(body: string): ReadinessViolation[] {
   return violations;
 }
 
-/** Run both deterministic tiers against a task page body. */
+/**
+ * Task types whose readiness is about their own scope/method being clear,
+ * not about the questions they exist to answer being pre-resolved (see
+ * config/task-writing.md § Readiness gate carve-out #4). For these types,
+ * Open Questions is the /design worklist deliverable and a decision-space
+ * body legitimately weighs deferral-shaped phrasing — neither is a
+ * readiness violation. checkGroomingResidue still applies to every type.
+ */
+const OPEN_QUESTIONS_EXEMPT_TYPES: ReadonlySet<string> = new Set([
+  '📐 Design',
+  '📋 Planning',
+]);
+
+/**
+ * Run the deterministic tiers against a task page body. `type` is the
+ * task's display-format Type (e.g. '💻 Code'); when it is 📐 Design or
+ * 📋 Planning, the Open Questions and deferral-phrase checks are skipped —
+ * see OPEN_QUESTIONS_EXEMPT_TYPES. checkGroomingResidue is type-agnostic.
+ */
 export function checkReadiness(
   body: string | null | undefined,
+  type?: string | null,
 ): ReadinessViolation[] {
   const text = body ?? '';
+  const exempt = type != null && OPEN_QUESTIONS_EXEMPT_TYPES.has(type);
   return [
-    ...checkOpenQuestionsSection(text),
-    ...checkDeferralPhrases(text),
+    ...(exempt ? [] : checkOpenQuestionsSection(text)),
+    ...(exempt ? [] : checkDeferralPhrases(text)),
     ...checkGroomingResidue(text),
   ];
 }
