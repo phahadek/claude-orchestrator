@@ -342,7 +342,9 @@ describe('assemblePlanningProcedure', () => {
     expect(output).not.toMatch(/read-only\/stage-only/i);
     expect(output).not.toMatch(/parks into idle/i);
     expect(output).toMatch(/write-capable/i);
-    expect(output).toMatch(/drive the operational change itself to completion/i);
+    expect(output).toMatch(
+      /drive the operational change itself to completion/i,
+    );
     expect(output).toMatch(/applied-pending-confirm/);
     expect(output).toMatch(/resolved/);
 
