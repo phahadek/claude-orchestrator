@@ -5,6 +5,7 @@ import {
   KNOWN_INTENT_KINDS,
   stageIntent,
   parseGroomProposal,
+  runStageTimeReadyChecks,
 } from './stagedIntents';
 import { getSession } from '../db/queries';
 
@@ -26,7 +27,7 @@ export function createTaskIntentsRouter(): Router {
   router.post(
     '/task-intents',
     requireSessionStageAuth,
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       const { sessionId } = (
         req as Request & { stageSession: { sessionId: string } }
       ).stageSession;
@@ -70,7 +71,8 @@ export function createTaskIntentsRouter(): Router {
         decisionProposal,
         groomProposal,
       );
-      res.status(201).json(intent);
+      const checked = await runStageTimeReadyChecks(intent);
+      res.status(201).json(checked);
     },
   );
 
