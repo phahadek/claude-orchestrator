@@ -642,7 +642,7 @@ describe('proposeGateItemReclassification', () => {
     expect(outcome.rejectedReason).toMatch(/only propose/);
   });
 
-  it('rejects a no-op proposal to the item\'s current classification', () => {
+  it("rejects a no-op proposal to the item's current classification", () => {
     const item = makeItem({ classification: 'Human-Observation' });
     const outcome = proposeGateItemReclassification(
       item.id,

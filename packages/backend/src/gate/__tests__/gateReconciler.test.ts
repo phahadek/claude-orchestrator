@@ -383,7 +383,7 @@ describe('runGateReconcilerTick', () => {
     expect(second.processed).toEqual([]);
   });
 
-  it('applies a verifier-proposed reclassification, superseding the run\'s disposition for routing', async () => {
+  it("applies a verifier-proposed reclassification, superseding the run's disposition for routing", async () => {
     const item = makeRunnableItem({
       classification: 'Read-Only',
       text: 'a Task/Agent subagent call renders as a single distinct collapsible block',

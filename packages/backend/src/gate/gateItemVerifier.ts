@@ -146,7 +146,7 @@ function buildGateVerifyProcedure(item: GateItem): string {
             'running app can judge, but it is tagged an auto-run tier ' +
             '(Read-Only/Opportunistic/Prod-Mutating) so this session was ' +
             'dispatched to headlessly verify something it structurally ' +
-            "cannot observe — propose the correct classification instead " +
+            'cannot observe — propose the correct classification instead ' +
             'of forcing a pass/fail, or abstaining to a bare needs-setup ' +
             'that leaves the same mis-routing to recur next time. You may ' +
             'only propose `Human-Observation` (this is that case) or ' +
