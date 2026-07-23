@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   BackendTaskWriteCommands,
+  getCachedType,
   type TaskStatus,
   type TaskType,
   type MoveTaskContent,
@@ -18,7 +19,11 @@ import {
   ReadinessGateError,
   type ReadinessViolation,
 } from '../tasks/readinessGate';
-import { GroomingGateError, type GroomingGateEntry } from '../groom/groomGate';
+import {
+  GroomingGateError,
+  checkAccretionContributions,
+  type GroomingGateEntry,
+} from '../groom/groomGate';
 import type {
   StagedIntentRow,
   StagedIntentState,
@@ -992,6 +997,36 @@ export function createStagedIntentsRouter(
       null,
       decisionProposal,
     );
+
+    // Stage-time accretion feedback: a Code task.setStatus -> Ready intent
+    // staged with no gate_contribution / seed_contribution marker recorded
+    // yet surfaces those block reasons immediately, rather than only at a
+    // human's later apply attempt (checkGroomingPromotionGate at commit time
+    // remains the sole hard authority — this never blocks the stage itself).
+    if (intent.kind === 'task.setStatus') {
+      const payload = intent.payload as SetStatusPayload;
+      if (payload.status === 'Ready') {
+        const resolvedType =
+          getCachedType(payload.taskId) ?? payload.groomingGate?.type;
+        const accretion = checkAccretionContributions(
+          payload.groomingGate ?? {},
+          payload.taskId,
+          resolvedType,
+        );
+        if (!accretion.allowed) {
+          setStagedIntentAnnotation(
+            intent.id,
+            JSON.stringify({ blocked: true, reasons: accretion.reasons }),
+          );
+          const annotated = getStagedIntentRow(intent.id);
+          if (annotated) {
+            res.status(201).json(rowToApi(annotated));
+            return;
+          }
+        }
+      }
+    }
+
     res.status(201).json(intent);
   });
 

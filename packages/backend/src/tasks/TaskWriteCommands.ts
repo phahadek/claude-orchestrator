@@ -94,7 +94,7 @@ function getCachedStatus(taskId: string): TaskStatus | null {
  * groomingGate.type is not trustworthy on its own, since omitting it would
  * otherwise fail the accretion check open.
  */
-function getCachedType(taskId: string): string | null {
+export function getCachedType(taskId: string): string | null {
   const row = getTaskCache(taskId);
   if (!row) return null;
   try {
