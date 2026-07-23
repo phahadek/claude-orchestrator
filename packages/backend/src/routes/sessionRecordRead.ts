@@ -1,7 +1,11 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { requireSessionStageAuth } from '../auth/SessionStageAuth';
-import { getSession, getEventsBySession, getGrantedCapabilities } from '../db/queries';
+import {
+  getSession,
+  getEventsBySession,
+  getGrantedCapabilities,
+} from '../db/queries';
 import { getAuditLogByActorId } from '../audit/AuditLog';
 import { sessionRecordReadCapability } from '../session/orchestrator-config';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';

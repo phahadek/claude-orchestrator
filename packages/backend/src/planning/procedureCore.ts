@@ -130,7 +130,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'id) rather than project/prod data, that exact capability is ' +
       '`read:session-record:<target-session-id>` — request that, not a Bash command ' +
       "prefix; a Bash prefix can neither reach this orchestrator's own DB (outside the " +
-      "sandbox) nor authenticate to its device-authed API, so it never actually " +
+      'sandbox) nor authenticate to its device-authed API, so it never actually ' +
       "materialises the read once granted. Request the capability, don't abstain " +
       'straight to `needs-setup`, whenever a live record is reachable this way. If ' +
       "staging isn't possible or the need is a one-off read-only investigation, report " +

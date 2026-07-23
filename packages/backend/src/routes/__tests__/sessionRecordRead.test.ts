@@ -22,7 +22,11 @@ import {
   mintStageCredential,
   _resetStageCredentialsForTesting,
 } from '../../auth/SessionStageAuth';
-import { insertSession, insertEvent, addGrantedCapability } from '../../db/queries';
+import {
+  insertSession,
+  insertEvent,
+  addGrantedCapability,
+} from '../../db/queries';
 import { recordEvent } from '../../audit/AuditLog';
 import { sessionRecordReadCapability } from '../../session/orchestrator-config';
 
@@ -41,7 +45,7 @@ beforeEach(() => {
 });
 
 describe('GET /api/session-record-reads/:targetSessionId', () => {
-  it('returns the target session\'s session_events and audit_log once the exact capability is granted', async () => {
+  it("returns the target session's session_events and audit_log once the exact capability is granted", async () => {
     insertSession({
       session_id: 'requester-1',
       task_id: null,
@@ -73,7 +77,10 @@ describe('GET /api/session-record-reads/:targetSessionId', () => {
       payload: { note: 'dispatched' },
     });
 
-    addGrantedCapability('requester-1', sessionRecordReadCapability('target-1'));
+    addGrantedCapability(
+      'requester-1',
+      sessionRecordReadCapability('target-1'),
+    );
     const token = mintStageCredential('requester-1');
 
     const res = await supertest(buildApp())
@@ -81,7 +88,9 @@ describe('GET /api/session-record-reads/:targetSessionId', () => {
       .set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.session.session_id ?? res.body.session.sessionId).toBeTruthy();
+    expect(
+      res.body.session.session_id ?? res.body.session.sessionId,
+    ).toBeTruthy();
     expect(res.body.events).toHaveLength(1);
     expect(res.body.auditLog).toHaveLength(1);
     expect(res.body.auditLog[0].eventType).toBe('gate_verify_dispatched');
@@ -139,7 +148,10 @@ describe('GET /api/session-record-reads/:targetSessionId', () => {
       status: 'done',
       started_at: Date.now(),
     });
-    addGrantedCapability('requester-3', sessionRecordReadCapability('target-3'));
+    addGrantedCapability(
+      'requester-3',
+      sessionRecordReadCapability('target-3'),
+    );
     const token = mintStageCredential('requester-3');
 
     const res = await supertest(buildApp())

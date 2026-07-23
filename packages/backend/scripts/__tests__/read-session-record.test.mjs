@@ -19,7 +19,11 @@ beforeEach(async () => {
   lastRequestPath = null;
   lastAuthHeader = null;
   responseStatus = 200;
-  responseBody = { session: { session_id: 'target-1' }, events: [], auditLog: [] };
+  responseBody = {
+    session: { session_id: 'target-1' },
+    events: [],
+    auditLog: [],
+  };
   server = http.createServer((req, res) => {
     lastRequestPath = req.url;
     lastAuthHeader = req.headers['authorization'];
@@ -56,7 +60,10 @@ describe('read-session-record.mjs', () => {
 
   it('exits non-zero when the backend responds 403 (capability not granted)', async () => {
     responseStatus = 403;
-    responseBody = { error: 'capability not granted', code: 'capability_not_granted' };
+    responseBody = {
+      error: 'capability not granted',
+      code: 'capability_not_granted',
+    };
 
     await expect(runScript(['target-1'])).rejects.toThrow();
   });

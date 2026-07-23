@@ -366,7 +366,7 @@ describe('sessionRecordReadCapability / parseSessionRecordReadCapability', () =>
     expect(capability).not.toMatch(/write|mutate|delete|update/i);
   });
 
-  it('is never merged into the spawned session\'s CLI --allowed-tools — it names no tool the CLI resolves, only a route-level grant check', () => {
+  it("is never merged into the spawned session's CLI --allowed-tools — it names no tool the CLI resolves, only a route-level grant check", () => {
     const capability = sessionRecordReadCapability('session-abc');
     const merged = getSessionAllowedTools('ops', { allowed_tools: [] }, [
       capability,

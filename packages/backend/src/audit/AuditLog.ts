@@ -49,9 +49,10 @@ export interface AuditLogEntry {
  */
 export function getAuditLogByActorId(actorId: string): AuditLogEntry[] {
   const rows = db
-    .prepare<[string], AuditRow>(
-      `SELECT * FROM audit_log WHERE actor_id = ? ORDER BY id ASC`,
-    )
+    .prepare<
+      [string],
+      AuditRow
+    >(`SELECT * FROM audit_log WHERE actor_id = ? ORDER BY id ASC`)
     .all(actorId);
   return rows.map((r) => ({
     id: r.id,

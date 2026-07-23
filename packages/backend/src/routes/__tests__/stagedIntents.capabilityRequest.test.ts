@@ -88,7 +88,8 @@ describe('session.requestCapability decision-surface kind', () => {
       {
         capability: 'read:session-record:target-session-9',
         plan: "verify gate item d9a3d3e2 by reading the target session's own record",
-        evidence: "no other grantable capability reaches this orchestrator's own DB",
+        evidence:
+          "no other grantable capability reaches this orchestrator's own DB",
       },
       'proj-1',
       null,
