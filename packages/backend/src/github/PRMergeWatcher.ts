@@ -484,7 +484,13 @@ export class PRMergeWatcher extends EventEmitter {
     // GitHub reports the PR mergeable; we gate on F1's result instead.
     // Skipped for terminally-paused PRs so we fall through to the read-only
     // GitHub merge-state refresh below instead of remediating.
-    if (!terminalPause && config && config.test.length > 0 && pr.head_sha && pr.session_id) {
+    if (
+      !terminalPause &&
+      config &&
+      config.test.length > 0 &&
+      pr.head_sha &&
+      pr.session_id
+    ) {
       const testResult = getTestResult(pr.pr_number, pr.repo, pr.head_sha);
       if (testResult && !testResult.passed) {
         if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
