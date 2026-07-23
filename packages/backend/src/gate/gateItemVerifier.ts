@@ -65,36 +65,46 @@ function buildGateVerifyProcedure(item: GateItem): string {
       'Spend zero turns re-confirming that: not `git merge-base ' +
       '--is-ancestor`, not "is the PR merged", not "was it deployed". That ' +
       'check is tautologically true by construction and proves nothing ' +
-      'about whether the described behavior actually works. Go straight to ' +
-      'the behavior.',
+      'about whether the described behavior actually works — it is a ' +
+      'guaranteed precondition, not evidence the behavior holds. Go ' +
+      'straight to the behavior.',
     '',
-    'Start with the operational record, not the source tree. Your first ' +
-      'moves should be against audit_log, session_events, pull_requests, ' +
-      'git history, and `gh` — not `grep`/`find`/`Read` over packages/*/src ' +
-      'to figure out how something is implemented. Opening with source ' +
-      'exploration is a known failure mode for this session: it burns the ' +
-      'bulk of the turn budget on understanding a mechanism instead of ' +
-      'checking whether it actually ran, and source code alone can never ' +
-      'settle this item (see below).',
+    'Start with the operational record, not the source tree — opening on ' +
+      '`grep`/`find`/`Read` over packages/*/src to understand a mechanism ' +
+      'is a known failure mode for this session: it burns the turn budget ' +
+      'without ever checking whether the behavior actually ran.',
     '',
-    'Read the operational record relevant to the item text above — audit_log, ' +
-      'session_events, pull_requests, git history, and `gh` as needed — to ' +
-      'determine whether the described behavior actually holds. This is a ' +
-      'bounded best-effort read: settle within your time/turn budget, or ' +
-      'abstain. Never stage, commit, or mutate anything, and never call a ' +
-      'gate-write API — you have no gate-write authority; the backend is the ' +
-      'only writer of gate state, and treats this report as evidence, not a ' +
-      'command. Auto-pass only on clear, direct evidence; if you cannot ' +
-      'conclusively determine pass or fail, report needs-setup — abstain ' +
-      'rather than guess.',
+    "**The operational record IS** — the running system's behavioral " +
+      'trace. A pass must cite one of these:',
+    '- `audit_log` entries',
+    '- `session_events`',
+    '- live DB/API state',
+    '- an observed runtime occurrence of the described behavior',
     '',
-    'A pass must be grounded in evidence that the described behavior itself ' +
-      'occurred — not in a guaranteed precondition (the source PR being ' +
-      'merged/deployed) or any other mechanical/tautological check that ' +
-      'would be true regardless of whether the behavior works. "PR #N is ' +
-      'merged" or "commit X is deployed" is not evidence the behavior holds ' +
-      '— it is the reason this session was launched at all. If that is the ' +
-      'strongest thing you found, report needs-setup, not pass.',
+    '**The operational record is NOT** — preconditions and source, ' +
+      'guaranteed true by this item being runnable at all, never pass ' +
+      'evidence:',
+    '- pull requests',
+    '- git history',
+    '- `gh` output',
+    '- a merged PR',
+    '- a deploy record',
+    '- CI checks',
+    '- source code',
+    '- unit tests',
+    '',
+    'Your job, in one line: validate the described behavior by its runtime ' +
+      'trace. If there is no such trace, or you cannot read it, abstain ' +
+      '(`needs-setup`) or reclassify (`Human-Observation`) — never ' +
+      'substitute a precondition or source reading for it.',
+    '',
+    'This is a bounded best-effort read: settle within your time/turn ' +
+      'budget, or abstain. Never stage, commit, or mutate anything, and ' +
+      'never call a gate-write API — you have no gate-write authority; the ' +
+      'backend is the only writer of gate state, and treats this report as ' +
+      'evidence, not a command. Auto-pass only on clear, direct evidence; ' +
+      'if you cannot conclusively determine pass or fail, report ' +
+      'needs-setup — abstain rather than guess.',
     '',
     'This session is responsible for asking for what it needs: nothing beyond ' +
       'its base read/stage profile is ever speculatively handed to it. If ' +
@@ -115,16 +125,16 @@ function buildGateVerifyProcedure(item: GateItem): string {
       'you are reading the right code path once the operational record has ' +
       'pointed you at one, never the vehicle for the investigation itself ' +
       'and never its verification body. A `pass` disposition must never ' +
-      'rest on source-code reading alone — it must be grounded in ' +
-      'operational/runtime evidence (audit_log entries, session_events, a ' +
-      'merged PR, a deploy record, git history, `gh` output). If the ' +
-      'strongest evidence you found is "the source code looks like it does ' +
-      'X", that is not a pass — report needs-setup and explain what ' +
-      'operational trace is missing. Set `evidence.basis` to "operational" ' +
-      'only when your pass is actually backed by such a trace; set it to ' +
-      '"source" when you only read source code. A `pass` with ' +
-      '`evidence.basis` other than "operational" will be downgraded to ' +
-      'needs-setup regardless of what you report.',
+      'rest on source-code reading alone — it must be grounded in one of ' +
+      'the operational-record items listed above (audit_log, ' +
+      'session_events, live DB/API state, an observed runtime occurrence). ' +
+      'If the strongest evidence you found is "the source code looks like ' +
+      'it does X", that is not a pass — report needs-setup and explain ' +
+      'what operational trace is missing. Set `evidence.basis` to ' +
+      '"operational" only when your pass is actually backed by such a ' +
+      'trace; set it to "source" when you only read source code. A `pass` ' +
+      'with `evidence.basis` other than "operational" will be downgraded ' +
+      'to needs-setup regardless of what you report.',
     '',
     ...(isHumanObservation
       ? [

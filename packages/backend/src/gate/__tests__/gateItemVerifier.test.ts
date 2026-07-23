@@ -393,6 +393,59 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     expect(recordFirstIndex).toBeLessThan(sourceOrientIndex);
   });
 
+  it('defines the operational record with distinct IS / IS-NOT sections', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-1',
+      disposition: { disposition: 'needs-setup' },
+    });
+    await resultPromise;
+
+    const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
+    const injectedProcedureContent = (
+      dispatchOpts as { injectedProcedureContent: string }
+    ).injectedProcedureContent;
+    const lower = injectedProcedureContent.toLowerCase();
+
+    const isIndex = lower.indexOf('the operational record is**');
+    const isNotIndex = lower.indexOf('the operational record is not**');
+    expect(isIndex).toBeGreaterThan(-1);
+    expect(isNotIndex).toBeGreaterThan(-1);
+    expect(isIndex).toBeLessThan(isNotIndex);
+
+    const isSection = injectedProcedureContent.slice(isIndex, isNotIndex);
+    const isNotSection = injectedProcedureContent.slice(
+      isNotIndex,
+      injectedProcedureContent.indexOf('Your job, in one line'),
+    );
+
+    // The genuine operational record only appears in the IS section.
+    expect(isSection).toMatch(/audit_log/i);
+    expect(isSection).toMatch(/session_events/i);
+    expect(isSection).toMatch(/live db\/api state/i);
+
+    // Preconditions/source only appear in the IS-NOT section, never in IS.
+    const notOnlyTerms = [
+      'pull request',
+      'git history',
+      '`gh` output',
+      'merged pr',
+      'deploy record',
+      'ci check',
+      'source code',
+      'unit test',
+    ];
+    for (const term of notOnlyTerms) {
+      expect(isNotSection.toLowerCase()).toContain(term);
+      expect(isSection.toLowerCase()).not.toContain(term);
+    }
+  });
+
   it('states the merge+deploy guarantee so the session does not re-verify it', async () => {
     const sessionManager = makeSessionManager();
     vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
