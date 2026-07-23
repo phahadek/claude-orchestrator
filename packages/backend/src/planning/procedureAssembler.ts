@@ -472,11 +472,11 @@ function renderSkeleton(
           '"flagged"|"n/a"}`, plus `signals` naming the matched phrases when ' +
           '"flagged"), `type` (the task\'s display-format Type, e.g. `"💻 Code"`), ' +
           '`regions` (`{"packages": [...], "files": [...]}` — this task\'s resolved ' +
-          'code regions, the same shape as the digest\'s Code regions section), ' +
+          "code regions, the same shape as the digest's Code regions section), " +
           '`constraintsDispositioned` (a map of binding-constraint id → ' +
           '`{"disposition": "complies"}` | `{"disposition": "n/a", "why": "..."}` | ' +
           '`{"disposition": "conflict_route", "routedTaskId": "<design-task-id>"}` — ' +
-          'one entry per id in the digest\'s Binding constraints list), ' +
+          "one entry per id in the digest's Binding constraints list), " +
           '`filesPathsEntries` (one `{"raw": "<list item text>", "isNew": false, ' +
           '"existsInRepo": true}` per `## Files / paths affected` line — `isNew: ' +
           'true` for a `*(new)*`-marked not-yet-created path), and `dependsOnTasks` ' +
