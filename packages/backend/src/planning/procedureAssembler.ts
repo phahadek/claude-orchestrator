@@ -359,7 +359,7 @@ export function renderOpsCapabilities(): string[] {
       '\'{"capability":"<one Bash command prefix or one named MCP write verb>",' +
       '"reason":"<why this session needs it>"}\'`. An operator reviews it; on ' +
       'approval the capability is durably granted to this session alone and it is ' +
-      "re-dispatched with that tool available. On rejection or pushback, the " +
+      're-dispatched with that tool available. On rejection or pushback, the ' +
       "session resumes with the operator's feedback instead. DO NOT probe for a " +
       'write tool by trial and error — request it.',
     '',

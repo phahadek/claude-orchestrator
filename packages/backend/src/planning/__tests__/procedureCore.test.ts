@@ -134,9 +134,7 @@ describe('procedureCore', () => {
       expect(text, `${skill} present-for-signoff summary`).toMatch(
         /- DO stage/,
       );
-      expect(text, `${skill} present-for-signoff summary`).toMatch(
-        /- DO NOT/,
-      );
+      expect(text, `${skill} present-for-signoff summary`).toMatch(/- DO NOT/);
     }
   });
 
