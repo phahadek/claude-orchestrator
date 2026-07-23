@@ -21,7 +21,6 @@ import {
 } from '../tasks/readinessGate';
 import {
   GroomingGateError,
-  checkAccretionContributions,
   checkGroomingPromotionGate,
   type GroomingGateEntry,
 } from '../groom/groomGate';
@@ -866,6 +865,63 @@ async function computeProposedBody(
   return composeProposedBody(stored, payload.sections);
 }
 
+/**
+ * Stage-time eager validation for a task.setStatus -> Ready intent: runs the
+ * same grooming-promotion-gate and readiness-gate checks the commit-time path
+ * (applyIntent's task.setStatus case) enforces, but only to annotate the
+ * intent — never to block the stage itself. Surfacing the gap here, in the
+ * response to the session's own stage call, lets a session that mis-filled a
+ * field self-correct in-turn (re-stage a corrected intent) instead of the
+ * gap only being discovered later by the operator reviewing the decision
+ * surface. checkGroomingPromotionGate + checkReadiness at commit time remain
+ * the sole hard authority — this never replaces that check, only precedes
+ * it. Shared by both stage-time surfaces (POST /staged-intents and the
+ * session loopback POST /task-intents), since both stage through the same
+ * `stageIntent` chokepoint.
+ */
+export async function runStageTimeReadyChecks(
+  intent: StagedIntent,
+): Promise<StagedIntent> {
+  if (intent.kind !== 'task.setStatus') return intent;
+  const payload = intent.payload as SetStatusPayload;
+  if (payload.status !== 'Ready') return intent;
+
+  const resolvedType =
+    getCachedType(payload.taskId) ?? payload.groomingGate?.type;
+
+  const gateResult = checkGroomingPromotionGate(
+    payload.groomingGate ?? {},
+    payload.taskId,
+    resolvedType,
+  );
+  if (!gateResult.allowed) {
+    setStagedIntentAnnotation(
+      intent.id,
+      JSON.stringify({ blocked: true, reasons: gateResult.reasons }),
+    );
+    const annotated = getStagedIntentRow(intent.id);
+    return annotated ? rowToApi(annotated) : intent;
+  }
+
+  const backend = getTaskBackend(intent.projectId);
+  const body = await computeProposedBody(
+    backend,
+    intent.groupId,
+    payload.taskId,
+  );
+  const violations = checkReadiness(body, resolvedType);
+  if (violations.length > 0) {
+    setStagedIntentAnnotation(
+      intent.id,
+      JSON.stringify({ blocked: true, violations }),
+    );
+    const annotated = getStagedIntentRow(intent.id);
+    return annotated ? rowToApi(annotated) : intent;
+  }
+
+  return intent;
+}
+
 interface GroupCommitOptions {
   override: boolean;
   reason: string;
@@ -1168,7 +1224,7 @@ export function createStagedIntentsRouter(
   });
 
   // ── POST /api/staged-intents ─────────────────────────────────────────────
-  router.post('/staged-intents', (req: Request, res: Response) => {
+  router.post('/staged-intents', async (req: Request, res: Response) => {
     const body = req.body as {
       kind?: unknown;
       payload?: unknown;
@@ -1208,36 +1264,8 @@ export function createStagedIntentsRouter(
       groomProposal,
     );
 
-    // Stage-time accretion feedback: a Code task.setStatus -> Ready intent
-    // staged with no gate_contribution / seed_contribution marker recorded
-    // yet surfaces those block reasons immediately, rather than only at a
-    // human's later apply attempt (checkGroomingPromotionGate at commit time
-    // remains the sole hard authority — this never blocks the stage itself).
-    if (intent.kind === 'task.setStatus') {
-      const payload = intent.payload as SetStatusPayload;
-      if (payload.status === 'Ready') {
-        const resolvedType =
-          getCachedType(payload.taskId) ?? payload.groomingGate?.type;
-        const accretion = checkAccretionContributions(
-          payload.groomingGate ?? {},
-          payload.taskId,
-          resolvedType,
-        );
-        if (!accretion.allowed) {
-          setStagedIntentAnnotation(
-            intent.id,
-            JSON.stringify({ blocked: true, reasons: accretion.reasons }),
-          );
-          const annotated = getStagedIntentRow(intent.id);
-          if (annotated) {
-            res.status(201).json(rowToApi(annotated));
-            return;
-          }
-        }
-      }
-    }
-
-    res.status(201).json(intent);
+    const checked = await runStageTimeReadyChecks(intent);
+    res.status(201).json(checked);
   });
 
   // ── POST /api/staged-intents/:id/apply ───────────────────────────────────
