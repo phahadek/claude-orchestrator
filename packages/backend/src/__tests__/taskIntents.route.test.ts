@@ -110,6 +110,62 @@ describe('POST /api/task-intents — loopback session stage endpoint', () => {
     expect(res.body.groupId).toBe('batch-1');
   });
 
+  it("stages the /groom skill's structured proposal fields on a Ready-flip decision, not free prose", async () => {
+    mockGetSession.mockReturnValue({
+      session_id: 'session-1',
+      project_id: 'proj-1',
+    });
+    const token = mintStageCredential('session-1');
+
+    const groomProposal = {
+      achieves: 'Stops re-ingesting unchanged HLTV items.',
+      openQuestions: 'None.',
+      automatedTests: 'dedupe drops a duplicate GUID.',
+      manualVerification: 'Covered by gate only.',
+      operationalSeed: 'None.',
+    };
+
+    const res = await supertest(buildApp())
+      .post('/api/task-intents')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        kind: 'task.setStatus',
+        payload: { taskId: 't-1', status: 'Ready' },
+        groupId: 'batch-1',
+        groomProposal,
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.groomProposal).toEqual(groomProposal);
+    // Structured, not free prose: every field is its own string, not one
+    // paragraph packed into decisionProposal.
+    expect(typeof res.body.groomProposal.achieves).toBe('string');
+    expect(typeof res.body.groomProposal.openQuestions).toBe('string');
+    expect(typeof res.body.groomProposal.automatedTests).toBe('string');
+    expect(typeof res.body.groomProposal.manualVerification).toBe('string');
+    expect(typeof res.body.groomProposal.operationalSeed).toBe('string');
+  });
+
+  it('drops a malformed groomProposal (missing fields) rather than staging a partial one', async () => {
+    mockGetSession.mockReturnValue({
+      session_id: 'session-1',
+      project_id: 'proj-1',
+    });
+    const token = mintStageCredential('session-1');
+
+    const res = await supertest(buildApp())
+      .post('/api/task-intents')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        kind: 'task.setStatus',
+        payload: { taskId: 't-2', status: 'Ready' },
+        groomProposal: { achieves: 'Only this field.' },
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.groomProposal).toBeNull();
+  });
+
   it('rejects an unknown intent kind', async () => {
     mockGetSession.mockReturnValue({
       session_id: 'session-1',

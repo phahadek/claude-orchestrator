@@ -367,3 +367,199 @@ describe('POST /api/staged-intents/group/:groupId/commit', () => {
     expect(commit.status).toBe(400);
   });
 });
+
+describe('group commit — whole-group precheck (all-or-nothing)', () => {
+  it('a group whose arming Ready intent fails its grooming gate commits none of its member intents', async () => {
+    const setDependsOn = vi.fn();
+    const updateStatus = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      setDependsOn,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-i',
+      groupId: 'g-i',
+      payload: { taskId: 't-9', dependsOn: [] },
+    });
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-i',
+      groupId: 'g-i',
+      payload: {
+        taskId: 't-9',
+        status: 'Ready',
+        // size_check deliberately omitted — fails checkGroomingPromotionGate.
+        groomingGate: { type_check: { decision: 'none' } },
+      },
+    });
+
+    await agent
+      .post(`/api/staged-intents/${dependsOn.body.id}/approve`)
+      .send({});
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-i/commit')
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.reasons).toEqual(
+      expect.arrayContaining([expect.stringContaining('size_check')]),
+    );
+    // The confirmed bug: a sibling non-arming intent must never commit ahead
+    // of the arming Ready intent's gate check — neither backend write fires.
+    expect(setDependsOn).not.toHaveBeenCalled();
+    expect(updateStatus).not.toHaveBeenCalled();
+
+    const list = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-i' });
+    const states = Object.fromEntries(
+      list.body.intents.map((i: { id: string; state: string }) => [
+        i.id,
+        i.state,
+      ]),
+    );
+    expect(states[dependsOn.body.id]).toBe('approved');
+    expect(states[setStatus.body.id]).toBe('approved');
+  });
+});
+
+describe('group-level atomic disposition (approve / pushback / decline the whole groom)', () => {
+  it('POST /group/:groupId/approve commits all members in dependency order without a prior per-item approve', async () => {
+    const calls: string[] = [];
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn().mockImplementation(async () => {
+        calls.push('setStatus');
+      }),
+      setDependsOn: vi.fn().mockImplementation(async () => {
+        calls.push('setDependsOn');
+      }),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-j',
+      't-10',
+      'g-j',
+    );
+
+    const approve = await agent
+      .post('/api/staged-intents/group/g-j/approve')
+      .send({});
+
+    expect(approve.status).toBe(200);
+    expect(approve.body.committed).toEqual([dependsOn.id, setStatus.id]);
+    expect(calls).toEqual(['setDependsOn', 'setStatus']);
+
+    const list = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-j' });
+    expect(list.body.intents).toHaveLength(0);
+  });
+
+  it('POST /group/:groupId/reject with outcome=pushback rejects every live member and commits none', async () => {
+    const setDependsOn = vi.fn();
+    const updateStatus = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      setDependsOn,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-k',
+      't-11',
+      'g-k',
+    );
+
+    const reject = await agent
+      .post('/api/staged-intents/group/g-k/reject')
+      .send({ outcome: 'pushback', reason: 'revise the dep classification' });
+
+    expect(reject.status).toBe(200);
+    expect(reject.body.rejected.sort()).toEqual(
+      [dependsOn.id, setStatus.id].sort(),
+    );
+    expect(setDependsOn).not.toHaveBeenCalled();
+    expect(updateStatus).not.toHaveBeenCalled();
+
+    const list = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-k' });
+    expect(list.body.intents).toHaveLength(0);
+  });
+
+  it('POST /group/:groupId/reject with outcome=decline requires a non-blank reason', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    await stageGroup(agent, 'proj-l', 't-12', 'g-l');
+
+    const reject = await agent
+      .post('/api/staged-intents/group/g-l/reject')
+      .send({ outcome: 'decline', reason: '' });
+
+    expect(reject.status).toBe(400);
+  });
+
+  it('POST /group/:groupId/approve is all-or-nothing when the arming Ready intent fails its gate', async () => {
+    const setDependsOn = vi.fn();
+    const updateStatus = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      setDependsOn,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-m',
+      groupId: 'g-m',
+      payload: { taskId: 't-13', dependsOn: [] },
+    });
+    await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-m',
+      groupId: 'g-m',
+      payload: {
+        taskId: 't-13',
+        status: 'Ready',
+        groomingGate: { type_check: { decision: 'none' } },
+      },
+    });
+
+    const approve = await agent
+      .post('/api/staged-intents/group/g-m/approve')
+      .send({});
+
+    expect(approve.status).toBe(409);
+    expect(setDependsOn).not.toHaveBeenCalled();
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+});

@@ -53,3 +53,74 @@
   font-size: 0.78rem;
   color: var(--ctp-red);
 }
+
+/*
+ * The group-level atomic disposition bar: one Approve action commits the
+ * whole grooming decision, and one Pushback/Decline form rejects it as a
+ * unit — replaces per-item approve/reject controls for a grouped intent
+ * (see StagedIntentPanel's `hideActions`).
+ */
+.groupActions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+}
+
+.denyButton {
+  background: rgba(243, 139, 168, 0.15);
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-red);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 6px 14px;
+  transition: background 0.15s;
+}
+
+.denyButton:disabled,
+.commitButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.outcomeToggle {
+  display: flex;
+  gap: 6px;
+}
+
+.outcomeOption {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 4px 10px;
+}
+
+.outcomeOption:hover {
+  color: var(--text-primary);
+}
+
+.outcomeOptionActive {
+  background: rgba(243, 139, 168, 0.15);
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-red);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 4px 10px;
+}
+
+.reasonInput {
+  font-size: 0.82rem;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  resize: vertical;
+  min-height: 40px;
+}

@@ -105,6 +105,23 @@
   font-style: italic;
 }
 
+.groomProposal {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0.4rem 0;
+  font-size: 0.82rem;
+}
+
+.groomProposal dt {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.groomProposal dd {
+  margin: 0;
+}
+
 .bodyDiff {
   display: flex;
   flex-direction: column;

@@ -1231,6 +1231,17 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // staged_intent.groom_proposal: the /groom skill's structured proposal
+  // fields (achieves / openQuestions / automatedTests / manualVerification /
+  // operationalSeed — presentation.md's per-task summary) as JSON, carried by
+  // a dispatched groom session's Ready-flip decision instead of a free-prose
+  // decisionProposal string. Forward-only: existing rows get NULL.
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN groom_proposal TEXT`);
+  } catch {
+    /* already exists */
+  }
+
   // ── arch_unit: architecture-information store ───────────────────────────
   // A single titled architecture statement (kind/topic/regions/status envelope
   // + markdown body). Mirrors the gate_item/seed_item shape: envelope as typed

@@ -3,6 +3,7 @@ import { renderTaskBodyMarkdown } from '@claude-orchestrator/backend/src/tasks/b
 import type {
   StagedIntent,
   StagedIntentRejectOutcome,
+  GroomProposalFields,
 } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { diffTaskBody, type SectionDiff } from './bodyDiff';
@@ -24,6 +25,14 @@ interface Props {
    * panel can refresh the group's live state (e.g. enable "Commit group").
    */
   onApproved?: (intent: StagedIntent) => void;
+  /**
+   * Suppresses this panel's own apply/approve/reject controls — used when a
+   * grouped intent is dispositioned as part of one atomic group-level
+   * approval unit (see DecisionPanel's group action bar) rather than
+   * individually. The headline, registers, and proposal are still rendered;
+   * only the per-item action surface is hidden.
+   */
+  hideActions?: boolean;
 }
 
 function isNotFoundError(err: unknown): boolean {
@@ -221,6 +230,32 @@ function AdvisoryRegister({
         </ul>
       )}
     </div>
+  );
+}
+
+/**
+ * The /groom skill's structured proposal (presentation.md's 4/5-point
+ * summary) — rendered as labeled fields instead of `decisionProposal`'s
+ * single prose paragraph, so the reviewing human sees the same shape the
+ * interactive /groom skill presents for sign-off.
+ */
+function GroomProposalSummary({ proposal }: { proposal: GroomProposalFields }) {
+  return (
+    <dl
+      className={styles.groomProposal}
+      data-testid="staged-intent-groom-proposal"
+    >
+      <dt>Achieves</dt>
+      <dd>{proposal.achieves}</dd>
+      <dt>Open questions</dt>
+      <dd>{proposal.openQuestions}</dd>
+      <dt>Automated tests</dt>
+      <dd>{proposal.automatedTests}</dd>
+      <dt>Manual verification</dt>
+      <dd>{proposal.manualVerification}</dd>
+      <dt>Operational seed</dt>
+      <dd>{proposal.operationalSeed}</dd>
+    </dl>
   );
 }
 
@@ -462,6 +497,7 @@ export function StagedIntentPanel({
   onRejected,
   onDismiss,
   onApproved,
+  hideActions,
 }: Props) {
   const [inFlight, setInFlight] = useState<
     'apply' | 'reject' | 'approve' | 'override' | null
@@ -559,8 +595,12 @@ export function StagedIntentPanel({
         )}
       </div>
 
-      {intent.decisionProposal && (
-        <p className={styles.rationale}>{intent.decisionProposal}</p>
+      {intent.groomProposal ? (
+        <GroomProposalSummary proposal={intent.groomProposal} />
+      ) : (
+        intent.decisionProposal && (
+          <p className={styles.rationale}>{intent.decisionProposal}</p>
+        )
       )}
 
       <div className={styles.body}>{renderHeadline(intent)}</div>
@@ -575,118 +615,123 @@ export function StagedIntentPanel({
 
       {error && <div className={styles.error}>{error}</div>}
 
-      {showOverride && (
-        <div className={styles.overrideBox}>
-          <textarea
-            className={styles.feedbackInput}
-            placeholder="Reason for overriding the block…"
-            value={overrideReason}
-            onChange={(e) => setOverrideReason(e.target.value)}
-          />
-          <button
-            type="button"
-            className={styles.approveButton}
-            disabled={inFlight !== null || !overrideReason.trim()}
-            onClick={() => void handleApply({ reason: overrideReason })}
-          >
-            {inFlight === 'override' ? 'Applying…' : 'Apply with override'}
-          </button>
-        </div>
+      {hideActions ? null : (
+        <>
+          {showOverride && (
+            <div className={styles.overrideBox}>
+              <textarea
+                className={styles.feedbackInput}
+                placeholder="Reason for overriding the block…"
+                value={overrideReason}
+                onChange={(e) => setOverrideReason(e.target.value)}
+              />
+              <button
+                type="button"
+                className={styles.approveButton}
+                disabled={inFlight !== null || !overrideReason.trim()}
+                onClick={() => void handleApply({ reason: overrideReason })}
+              >
+                {inFlight === 'override' ? 'Applying…' : 'Apply with override'}
+              </button>
+            </div>
+          )}
+
+          <div className={styles.rejectForm}>
+            <div
+              className={styles.outcomeToggle}
+              role="radiogroup"
+              aria-label="Reject outcome"
+            >
+              <button
+                type="button"
+                role="radio"
+                aria-checked={rejectOutcome === 'pushback'}
+                className={
+                  rejectOutcome === 'pushback'
+                    ? styles.outcomeOptionActive
+                    : styles.outcomeOption
+                }
+                onClick={() => setRejectOutcome('pushback')}
+              >
+                Pushback
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={rejectOutcome === 'decline'}
+                className={
+                  rejectOutcome === 'decline'
+                    ? styles.outcomeOptionActive
+                    : styles.outcomeOption
+                }
+                onClick={() => setRejectOutcome('decline')}
+              >
+                Decline
+              </button>
+            </div>
+            <textarea
+              className={styles.feedbackInput}
+              placeholder={
+                rejectOutcome === 'pushback'
+                  ? 'What should the session revise?'
+                  : 'Why is this being declined?'
+              }
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+            />
+          </div>
+
+          <div className={styles.permissionButtons}>
+            {!isGrouped && !blocked && !isCapabilityRequest && (
+              <button
+                type="button"
+                className={styles.approveButton}
+                disabled={inFlight !== null}
+                onClick={() => void handleApply()}
+              >
+                {inFlight === 'apply' ? 'Committing...' : '✓ Commit'}
+              </button>
+            )}
+            {!isGrouped && blocked && !isCapabilityRequest && !showOverride && (
+              <button
+                type="button"
+                className={styles.approveButton}
+                disabled={inFlight !== null}
+                onClick={() => setShowOverride(true)}
+              >
+                Override block…
+              </button>
+            )}
+            {(isGrouped || isCapabilityRequest) &&
+              intent.state !== 'approved' && (
+                <button
+                  type="button"
+                  className={styles.approveButton}
+                  disabled={inFlight !== null}
+                  onClick={() => void handleApprove()}
+                >
+                  {inFlight === 'approve'
+                    ? 'Approving...'
+                    : isCapabilityRequest
+                      ? '✓ Grant'
+                      : 'Approve'}
+                </button>
+              )}
+            <button
+              type="button"
+              className={styles.denyButton}
+              disabled={inFlight !== null || !rejectReason.trim()}
+              onClick={() => void handleReject()}
+            >
+              {inFlight === 'reject'
+                ? 'Submitting...'
+                : rejectOutcome === 'pushback'
+                  ? '↩ Pushback'
+                  : '✕ Decline'}
+            </button>
+          </div>
+        </>
       )}
-
-      <div className={styles.rejectForm}>
-        <div
-          className={styles.outcomeToggle}
-          role="radiogroup"
-          aria-label="Reject outcome"
-        >
-          <button
-            type="button"
-            role="radio"
-            aria-checked={rejectOutcome === 'pushback'}
-            className={
-              rejectOutcome === 'pushback'
-                ? styles.outcomeOptionActive
-                : styles.outcomeOption
-            }
-            onClick={() => setRejectOutcome('pushback')}
-          >
-            Pushback
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={rejectOutcome === 'decline'}
-            className={
-              rejectOutcome === 'decline'
-                ? styles.outcomeOptionActive
-                : styles.outcomeOption
-            }
-            onClick={() => setRejectOutcome('decline')}
-          >
-            Decline
-          </button>
-        </div>
-        <textarea
-          className={styles.feedbackInput}
-          placeholder={
-            rejectOutcome === 'pushback'
-              ? 'What should the session revise?'
-              : 'Why is this being declined?'
-          }
-          value={rejectReason}
-          onChange={(e) => setRejectReason(e.target.value)}
-        />
-      </div>
-
-      <div className={styles.permissionButtons}>
-        {!isGrouped && !blocked && !isCapabilityRequest && (
-          <button
-            type="button"
-            className={styles.approveButton}
-            disabled={inFlight !== null}
-            onClick={() => void handleApply()}
-          >
-            {inFlight === 'apply' ? 'Committing...' : '✓ Commit'}
-          </button>
-        )}
-        {!isGrouped && blocked && !isCapabilityRequest && !showOverride && (
-          <button
-            type="button"
-            className={styles.approveButton}
-            disabled={inFlight !== null}
-            onClick={() => setShowOverride(true)}
-          >
-            Override block…
-          </button>
-        )}
-        {(isGrouped || isCapabilityRequest) && intent.state !== 'approved' && (
-          <button
-            type="button"
-            className={styles.approveButton}
-            disabled={inFlight !== null}
-            onClick={() => void handleApprove()}
-          >
-            {inFlight === 'approve'
-              ? 'Approving...'
-              : isCapabilityRequest
-                ? '✓ Grant'
-                : 'Approve'}
-          </button>
-        )}
-        <button
-          type="button"
-          className={styles.denyButton}
-          disabled={inFlight !== null || !rejectReason.trim()}
-          onClick={() => void handleReject()}
-        >
-          {inFlight === 'reject'
-            ? 'Submitting...'
-            : rejectOutcome === 'pushback'
-              ? '↩ Pushback'
-              : '✕ Decline'}
-        </button>
-      </div>
     </div>
   );
 }

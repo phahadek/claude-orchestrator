@@ -46,6 +46,7 @@ function makeRow(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow {
     supersedes: null,
     annotation: null,
     decision_proposal: null,
+    groom_proposal: null,
     advisory: null,
     disposition_reason: null,
     answer: null,
