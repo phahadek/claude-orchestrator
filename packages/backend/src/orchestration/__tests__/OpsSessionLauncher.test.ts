@@ -436,7 +436,9 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
       .mockResolvedValueOnce(makeGroomResult([]))
       // Reconciliation retry with skipCache: the fresh read finds it.
       .mockResolvedValueOnce(
-        makeGroomResult([makeGroomTaskDoc({ title: 'Newly created backlog task' })]),
+        makeGroomResult([
+          makeGroomTaskDoc({ title: 'Newly created backlog task' }),
+        ]),
       );
 
     const launcher = new OpsSessionLauncher(sessionManager as never);
@@ -451,9 +453,9 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     });
 
     expect(loadGroomContext).toHaveBeenCalledTimes(2);
-    expect((loadGroomContext as ReturnType<typeof vi.fn>).mock.calls[1][1]).toMatchObject(
-      { skipCache: true },
-    );
+    expect(
+      (loadGroomContext as ReturnType<typeof vi.fn>).mock.calls[1][1],
+    ).toMatchObject({ skipCache: true });
     expect(start).toHaveBeenCalledTimes(1);
     const [, , options] = start.mock.calls[0];
     expect(options.taskName).toBe('Newly created backlog task');
