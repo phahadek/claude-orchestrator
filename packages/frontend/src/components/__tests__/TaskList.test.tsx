@@ -1014,6 +1014,12 @@ describe('TaskList', () => {
       renderList(
         [
           makeTask({
+            taskId: 'bc-companion-1',
+            taskName: 'Backlog Code Task',
+            displayStatus: 'backlog',
+            taskType: '💻 Code',
+          }),
+          makeTask({
             taskId: `notion:${bareUuid}`,
             taskName: 'Backlog Design Task',
             displayStatus: 'backlog',
@@ -1044,6 +1050,143 @@ describe('TaskList', () => {
         expect(screen.getByTestId('groom-launched-panel')).toBeDefined();
       });
       expect(screen.queryByTestId('groom-error')).toBeNull();
+    });
+
+    it('reconciles launched when the server returns source-prefixed ids (notion:<uuid>) without a false "did not launch" error', async () => {
+      const bareUuid = 'def-uuid';
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                launched: [`notion:${bareUuid}`],
+                deferred: [],
+              }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({}),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'bc-companion-2',
+            taskName: 'Backlog Code Task',
+            displayStatus: 'backlog',
+            taskType: '💻 Code',
+          }),
+          makeTask({
+            taskId: `notion:${bareUuid}`,
+            taskName: 'Backlog Design Task',
+            displayStatus: 'backlog',
+            taskType: '📐 Design',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      const nonCodeSection = screen.getByTestId('non-code-section');
+      fireEvent.click(
+        within(nonCodeSection).getByTestId('type-card-header-design'),
+      );
+      fireEvent.click(
+        within(nonCodeSection)
+          .getByTestId('type-card-design')
+          .querySelector('input[type="checkbox"]') as HTMLInputElement,
+      );
+
+      const groomBtn = within(backlogSection).getByTestId('groom-btn');
+      fireEvent.click(groomBtn);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('groom-launched-panel')).toBeDefined();
+      });
+      expect(screen.queryByTestId('groom-error')).toBeNull();
+    });
+
+    it('reports a genuinely-not-launched task as "did not launch" even when launched[] holds prefixed ids', async () => {
+      const launchedUuid = 'launched-uuid';
+      const notLaunchedUuid = 'not-launched-uuid';
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                launched: [`notion:${launchedUuid}`],
+                deferred: [],
+              }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({}),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'bc-companion-3',
+            taskName: 'Backlog Code Task',
+            displayStatus: 'backlog',
+            taskType: '💻 Code',
+          }),
+          makeTask({
+            taskId: `notion:${launchedUuid}`,
+            taskName: 'Backlog Design Task',
+            displayStatus: 'backlog',
+            taskType: '📐 Design',
+          }),
+          makeTask({
+            taskId: `notion:${notLaunchedUuid}`,
+            taskName: 'Backlog Design Task 2',
+            displayStatus: 'backlog',
+            taskType: '📐 Design',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      const nonCodeSection = screen.getByTestId('non-code-section');
+      fireEvent.click(
+        within(nonCodeSection).getByTestId('type-card-header-design'),
+      );
+      const designCheckboxes = within(nonCodeSection)
+        .getByTestId('type-card-design')
+        .querySelectorAll('input[type="checkbox"]');
+      designCheckboxes.forEach((checkbox) => fireEvent.click(checkbox));
+
+      const groomBtn = within(backlogSection).getByTestId('groom-btn');
+      fireEvent.click(groomBtn);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('groom-error')).toBeDefined();
+      });
+      expect(screen.getByTestId('groom-error').textContent).toContain(
+        `notion:${notLaunchedUuid}`,
+      );
+      expect(screen.getByTestId('groom-error').textContent).not.toContain(
+        `notion:${launchedUuid},`,
+      );
     });
 
     it('includes a Backlog 🔧 Operational task in groomableTasks and renders a Groom checkbox', () => {
@@ -1439,6 +1582,63 @@ describe('TaskList', () => {
       expect(screen.queryByTestId('ops-error')).toBeNull();
     });
 
+    it('reconciles launched when the server returns source-prefixed ids (notion:<uuid>) without a false "did not launch" error', async () => {
+      const bareUuid = 'def-uuid';
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                launched: [`notion:${bareUuid}`],
+                deferred: [],
+              }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              entries: [
+                {
+                  taskId: bareUuid,
+                  project: 'proj-1',
+                  milestone: 'milestone-1',
+                  state: 'candidate',
+                  updatedAt: '2026-01-01T00:00:00.000Z',
+                },
+              ],
+            }),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: `notion:${bareUuid}`,
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      const checkbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(checkbox);
+      fireEvent.click(screen.getByTestId('ops-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('ops-launched-panel')).toBeDefined();
+      });
+      expect(screen.queryByTestId('ops-error')).toBeNull();
+    });
+
     it('renders no model/effort selector and launches Ops(N) without a model argument', async () => {
       (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
         (url: string) => {
@@ -1768,6 +1968,79 @@ describe('TaskList', () => {
       const body = JSON.parse((launchCall![1] as RequestInit).body as string);
       expect(body.workflow).toBe('design');
       expect(body.taskIds.sort()).toEqual(['design1', 'plan1']);
+    });
+
+    it('reconciles launched when the server returns source-prefixed ids (notion:<uuid>) without a false "did not launch" error', async () => {
+      const bareUuid = 'design-uuid';
+      mockPlanningEndpoint(
+        [`notion:${bareUuid}`],
+        [
+          {
+            taskId: bareUuid,
+            project: 'proj-1',
+            milestone: 'milestone-1',
+            state: 'candidate',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: `notion:${bareUuid}`,
+            taskName: 'Design Task',
+            displayStatus: 'ready',
+            taskType: '📐 Design',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('design-select-all-btn'));
+      fireEvent.click(screen.getByTestId('design-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('design-launched-panel')).toBeDefined();
+      });
+      expect(screen.queryByTestId('design-error')).toBeNull();
+    });
+
+    it('reports a genuinely-not-launched task as "did not launch" even when launched[] holds prefixed ids', async () => {
+      const launchedUuid = 'design-launched-uuid';
+      const notLaunchedUuid = 'design-not-launched-uuid';
+      mockPlanningEndpoint([`notion:${launchedUuid}`], []);
+
+      renderList(
+        [
+          makeTask({
+            taskId: `notion:${launchedUuid}`,
+            taskName: 'Design Task',
+            displayStatus: 'ready',
+            taskType: '📐 Design',
+          }),
+          makeTask({
+            taskId: `notion:${notLaunchedUuid}`,
+            taskName: 'Design Task 2',
+            displayStatus: 'ready',
+            taskType: '📐 Design',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('design-select-all-btn'));
+      fireEvent.click(screen.getByTestId('design-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('design-error')).toBeDefined();
+      });
+      expect(screen.getByTestId('design-error').textContent).toContain(
+        `notion:${notLaunchedUuid}`,
+      );
+      expect(screen.getByTestId('design-error').textContent).not.toContain(
+        `notion:${launchedUuid},`,
+      );
     });
   });
 
