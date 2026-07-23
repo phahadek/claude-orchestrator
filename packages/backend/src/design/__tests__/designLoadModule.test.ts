@@ -8,6 +8,9 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 vi.mock('../../config', () => ({
   config: { notionApiKey: 'test', notionDatabaseId: 'test', port: 3000 },
@@ -45,6 +48,7 @@ beforeEach(() => {
     project_id: PROJECT,
     name: 'M1',
     source_id: TARGET_BOARD,
+    canonical_short_id: 'M1',
     display_order: 1,
   });
 });
@@ -200,6 +204,57 @@ describe('loadDesignContext', () => {
 
     // No code-map.json cache under this repoRoot — grounding is empty.
     expect(result.codeMapGrounding).toEqual({});
+  });
+
+  it('resolves the manifest at config/projects/<repo-basename>, not the registry id, when they differ', async () => {
+    // Regression for the design-session launch failure: a project's registry
+    // id (e.g. "claude-dashboard") can differ from its repo checkout's
+    // basename (e.g. "claude-orchestrator"); the manifest lives under the
+    // config-dir key (basename), same as groomLoad.
+    const root = mkdtempSync(join(tmpdir(), 'design-load-manifest-key-'));
+    const repoRoot = join(root, 'claude-orchestrator');
+    mkdirSync(repoRoot, { recursive: true });
+    const manifestDir = join(root, 'config', 'projects', 'claude-orchestrator');
+    mkdirSync(manifestDir, { recursive: true });
+    writeFileSync(
+      join(manifestDir, 'grooming.json'),
+      JSON.stringify({
+        context_pages: [{ id: ARCH_PAGE_ID, title: 'Technical Architecture' }],
+      }),
+    );
+
+    // Registry id ("claude-dashboard") differs from the repo checkout's
+    // basename ("claude-orchestrator") — the milestone's project_id is the
+    // registry id, matching what a real dispatch passes as opts.project.
+    insertProject({
+      id: 'claude-dashboard',
+      name: 'Claude Dashboard',
+      project_dir: repoRoot,
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    insertMilestone({
+      id: 'm-2',
+      project_id: 'claude-dashboard',
+      name: 'M2',
+      source_id: TARGET_BOARD,
+      canonical_short_id: 'M2',
+      display_order: 1,
+    });
+
+    const result = await loadDesignContext('m-2', TASK_ID, {
+      repoRoot,
+      project: 'claude-dashboard', // registry id — must NOT be used as the manifest key
+    });
+
+    expect(result.archUnits).toEqual([
+      {
+        id: ARCH_PAGE_ID,
+        title: 'Technical Architecture',
+        raw: 'Technical Architecture *(update — Section X)*',
+      },
+    ]);
   });
 
   it('throws when the task is not on the milestone board', async () => {

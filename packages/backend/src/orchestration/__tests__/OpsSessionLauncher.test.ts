@@ -367,6 +367,17 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     expect((options.injectedProcedureContent as string).length).toBeGreaterThan(
       0,
     );
+
+    // Regression: the manifest config-dir key must come from the project's
+    // repo checkout (project_dir), not the registry id (proj-1) — passing
+    // the registry id as the key looks for config/projects/<registry-id>/
+    // grooming.json, which doesn't exist when the config-dir basename
+    // differs (e.g. registry id "claude-dashboard" vs. dir "claude-orchestrator").
+    expect(loadDesignContext).toHaveBeenCalledWith(
+      'milestone-1',
+      'task-1',
+      expect.objectContaining({ repoRoot: '/tmp/proj-1', project: 'proj-1' }),
+    );
   });
 
   it('names a groom session after the digest-resolved title, not the bare task id', async () => {
