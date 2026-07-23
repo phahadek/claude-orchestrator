@@ -5000,6 +5000,33 @@ export function setStagedIntentAnnotation(
   });
 }
 
+let _stmtSetStagedIntentGroup: Database.Statement | null = null;
+
+/**
+ * Sets group_id on a matched re-stage without moving the intent off its
+ * current state or minting a new row — group_id is settable grouping
+ * metadata, not part of the content-idempotent (task_id, payload_hash)
+ * identity a re-stage dedups on. See stageIntent (routes/stagedIntents.ts).
+ */
+export function setStagedIntentGroup(
+  id: string,
+  groupId: string,
+): StagedIntentRow {
+  _stmtSetStagedIntentGroup ??= db.prepare<{
+    id: string;
+    group_id: string;
+    updated_at: number;
+  }>(
+    `UPDATE staged_intent SET group_id = @group_id, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtSetStagedIntentGroup.run({
+    id,
+    group_id: groupId,
+    updated_at: Date.now(),
+  });
+  return getStagedIntent(id) as StagedIntentRow;
+}
+
 let _stmtSetStagedIntentAdvisory: Database.Statement | null = null;
 
 /**

@@ -46,6 +46,7 @@ import {
   transitionStagedIntent,
   supersedeStagedIntent,
   setStagedIntentAnnotation,
+  setStagedIntentGroup,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import type {
@@ -444,9 +445,12 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
  * Content-idempotent banked approval: for kinds that carry a taskId (every
  * kind except task.create), a re-emission that exactly matches the standing
  * staged/approved intent for the same (projectId, kind, taskId) is a no-op —
- * the existing row (and its approval, if any) is returned untouched. A
- * re-emission that differs supersedes the standing intent (tombstoning it)
- * and re-enters `staged`, requiring fresh approval. decision.pickOne carries
+ * the existing row (and its approval, if any) is returned untouched, except
+ * that a groupId carried by the re-emission which the existing row lacks (or
+ * differs from) is applied to the existing row in place — groupId is settable
+ * grouping metadata, not part of the content-idempotent identity. A
+ * re-emission that differs on payload supersedes the standing intent
+ * (tombstoning it) and re-enters `staged`, requiring fresh approval. decision.pickOne carries
  * no taskId (it is a question, not a task write), so it dedups instead on
  * (sessionId, payload_hash) — see findActiveDecisionPickOneForSession.
  */
@@ -502,6 +506,11 @@ export function stageIntent(
 
   if (existing) {
     if (existing.payload_hash === payloadHash) {
+      if (groupId && groupId !== existing.group_id) {
+        const grouped = setStagedIntentGroup(existing.id, groupId);
+        broadcastIntentChange(rowToApi(grouped));
+        return rowToApi(grouped);
+      }
       return rowToApi(existing);
     }
     const newRow: StagedIntentRow = {
