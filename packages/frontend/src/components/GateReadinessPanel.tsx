@@ -1113,7 +1113,10 @@ export function GateReadinessPanel({
                                   ) : (
                                     <ul className={styles.eventList}>
                                       {detail.events.map((e, i) => (
-                                        <li key={i} className={styles.eventItem}>
+                                        <li
+                                          key={i}
+                                          className={styles.eventItem}
+                                        >
                                           {e.disposition} —{' '}
                                           {new Date(e.at).toLocaleString()}
                                           {e.operator
