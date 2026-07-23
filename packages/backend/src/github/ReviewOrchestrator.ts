@@ -641,9 +641,10 @@ export class ReviewOrchestrator {
       }
       try {
         if (d.disposition === 'addressed') {
+          const reasonSuffix = d.reason ? `: ${d.reason}` : '';
           await this.github.addPullRequestReviewThreadReply(
             threadId,
-            `Addressed in ${shaLabel}`,
+            `Addressed in ${shaLabel}${reasonSuffix}`,
           );
           await this.github.resolveReviewThread(threadId);
         } else if (d.disposition === 'wont_fix') {
