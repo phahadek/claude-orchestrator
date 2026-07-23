@@ -35,6 +35,7 @@ vi.mock('child_process', () => ({
   }),
   execSync: vi.fn(() => 'claude'),
   execFile: vi.fn(),
+  exec: vi.fn(),
 }));
 
 vi.mock('../db/queries', () => ({
@@ -64,6 +65,7 @@ vi.mock('../routes/tasks', () => ({ emitTaskUpdated: vi.fn() }));
 
 import { AgentSession } from '../session/AgentSession';
 import { writeMcpConfig } from '../session/SessionManager';
+import { _resetStageCredentialsForTesting } from '../auth/SessionStageAuth';
 import type { TaskBackend } from '../tasks/TaskBackend';
 
 function fakeBackend(): TaskBackend {
@@ -82,43 +84,58 @@ describe('writeMcpConfig', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-config-'));
+    _resetStageCredentialsForTesting();
   });
 
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('writes orchestrator-mcp.json with mcpServers when mcp_servers is non-empty', () => {
+  it('merges the orchestrator MCP entry with per-project mcp_servers when non-empty', () => {
     const mcpServers = {
       github: { type: 'http', url: 'https://api.githubcopilot.com/mcp/' },
     };
-    const filePath = writeMcpConfig(tmpDir, mcpServers);
+    const filePath = writeMcpConfig(tmpDir, 'session-1', mcpServers);
     expect(filePath).toBe(
       path.join(tmpDir, '.claude', 'orchestrator-mcp.json'),
     );
-    const written = JSON.parse(fs.readFileSync(filePath!, 'utf-8'));
-    expect(written).toEqual({ mcpServers });
+    const written = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    expect(written.mcpServers.github).toEqual(mcpServers.github);
+    expect(written.mcpServers.orchestrator).toMatchObject({
+      type: 'http',
+      url: expect.stringContaining('/api/mcp'),
+      headers: { Authorization: expect.stringMatching(/^Bearer .+/) },
+    });
   });
 
-  it('returns undefined when mcp_servers is undefined', () => {
-    const filePath = writeMcpConfig(tmpDir, undefined);
-    expect(filePath).toBeUndefined();
-    expect(
-      fs.existsSync(path.join(tmpDir, '.claude', 'orchestrator-mcp.json')),
-    ).toBe(false);
+  it('writes just the orchestrator MCP entry when mcp_servers is undefined', () => {
+    const filePath = writeMcpConfig(tmpDir, 'session-2', undefined);
+    const written = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    expect(Object.keys(written.mcpServers)).toEqual(['orchestrator']);
   });
 
-  it('returns undefined when mcp_servers is empty object', () => {
-    const filePath = writeMcpConfig(tmpDir, {});
-    expect(filePath).toBeUndefined();
+  it('writes just the orchestrator MCP entry when mcp_servers is an empty object', () => {
+    const filePath = writeMcpConfig(tmpDir, 'session-3', {});
+    const written = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    expect(Object.keys(written.mcpServers)).toEqual(['orchestrator']);
   });
 
   it('creates the .claude directory if it does not exist', () => {
     const mcpServers = { notion: { type: 'stdio', command: 'npx' } };
-    writeMcpConfig(tmpDir, mcpServers);
+    writeMcpConfig(tmpDir, 'session-4', mcpServers);
     expect(
       fs.existsSync(path.join(tmpDir, '.claude', 'orchestrator-mcp.json')),
     ).toBe(true);
+  });
+
+  it('mints an idempotent stage credential per session id across multiple writes', () => {
+    const filePath1 = writeMcpConfig(tmpDir, 'session-5', undefined);
+    const written1 = JSON.parse(fs.readFileSync(filePath1, 'utf-8'));
+    const filePath2 = writeMcpConfig(tmpDir, 'session-5', undefined);
+    const written2 = JSON.parse(fs.readFileSync(filePath2, 'utf-8'));
+    expect(written1.mcpServers.orchestrator.headers.Authorization).toBe(
+      written2.mcpServers.orchestrator.headers.Authorization,
+    );
   });
 });
 
@@ -217,8 +234,14 @@ describe('cleanupWorktree — orchestrator-mcp.json removal', () => {
     );
     expect(source).toContain('orchestrator-mcp.json');
     expect(source).toContain('unlinkSync');
-    const unlinkIdx = source.indexOf('unlinkSync');
-    const worktreeRemoveIdx = source.indexOf('git worktree remove --force');
+    // Scope the ordering check to the cleanupWorktree method body — an
+    // unrelated earlier `git worktree remove --force` call exists elsewhere
+    // in the file (the resumeSession worktree-recreate path).
+    const cleanupWorktreeIdx = source.indexOf('private cleanupWorktree(');
+    expect(cleanupWorktreeIdx).toBeGreaterThan(0);
+    const body = source.slice(cleanupWorktreeIdx);
+    const unlinkIdx = body.indexOf('unlinkSync');
+    const worktreeRemoveIdx = body.indexOf('git worktree remove --force');
     expect(unlinkIdx).toBeGreaterThan(0);
     expect(worktreeRemoveIdx).toBeGreaterThan(unlinkIdx);
   });

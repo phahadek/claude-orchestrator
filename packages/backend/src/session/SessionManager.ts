@@ -23,8 +23,13 @@ import {
 import { loadOrchestratorConfig } from './orchestrator-config';
 import { WorktreeSetupError } from './WorktreeSetupError';
 import { CliSessionRunner } from './CliSessionRunner';
-import { revokeStageCredential } from '../auth/SessionStageAuth';
+import {
+  revokeStageCredential,
+  mintStageCredential,
+} from '../auth/SessionStageAuth';
 import { revokeOpsJournalCredential } from '../auth/OpsJournalAuth';
+import { buildOrchestratorMcpServerEntry } from '../mcp/orchestratorMcpServer';
+import { getOrchestratorConfig } from '../config/appConfig';
 import { ApiSessionRunner } from './ApiSessionRunner';
 import type { ISessionRunner } from './SessionRunner';
 import {
@@ -175,19 +180,46 @@ function readTaskFiles(
 }
 
 /**
+ * Resolves the backend's own port for the orchestrator MCP server URL,
+ * falling back to the documented default (see CONFIG_DEFAULTS) if the app
+ * config can't be resolved — this runs on every session start/resume, so it
+ * must not take the whole spawn down over a transient config read issue.
+ */
+function resolveBackendPort(): number {
+  try {
+    return getOrchestratorConfig().server.port;
+  } catch {
+    return 3000;
+  }
+}
+
+/**
  * Write a per-session MCP config file to `<worktreePath>/.claude/orchestrator-mcp.json`
- * and return its absolute path. Returns undefined if mcpServers is empty/undefined.
+ * and return its absolute path. Always includes the loopback-only orchestrator
+ * MCP server entry (authed with this session's stage credential), merged
+ * with any per-project mcp_servers — under the CLI's strict-mcp-config flag
+ * a session sees exactly the configured servers, so both must be present.
  * Exported for unit testing.
  */
 export function writeMcpConfig(
   worktreePath: string,
+  sessionId: string,
   mcpServers: Record<string, unknown> | undefined,
-): string | undefined {
-  if (!mcpServers || Object.keys(mcpServers).length === 0) return undefined;
+): string {
+  const stageToken = mintStageCredential(sessionId);
+  const port = resolveBackendPort();
+  const merged = {
+    ...mcpServers,
+    orchestrator: buildOrchestratorMcpServerEntry(port, stageToken),
+  };
   const dir = path.join(worktreePath, '.claude');
   fs.mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, 'orchestrator-mcp.json');
-  fs.writeFileSync(filePath, JSON.stringify({ mcpServers }, null, 2), 'utf-8');
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({ mcpServers: merged }, null, 2),
+    'utf-8',
+  );
   return filePath;
 }
 
@@ -1374,7 +1406,11 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    const mcpConfigPath = writeMcpConfig(worktreePath, orchConfig.mcp_servers);
+    const mcpConfigPath = writeMcpConfig(
+      worktreePath,
+      sessionId,
+      orchConfig.mcp_servers,
+    );
     if (mcpConfigPath) {
       logger.info(
         `[SessionManager] wrote MCP config to ${mcpConfigPath} for ${sessionId.slice(0, 8)}`,
@@ -1880,6 +1916,7 @@ export class SessionManager extends EventEmitter {
 
     const resumeMcpConfigPath = writeMcpConfig(
       worktreePath,
+      row.session_id,
       orchConfig.mcp_servers,
     );
 
@@ -2807,6 +2844,7 @@ export class SessionManager extends EventEmitter {
             : new CliSessionRunner(sessionId);
       const mcpConfigPath = writeMcpConfig(
         recordedPath,
+        sessionId,
         orchConfig.mcp_servers,
       );
       const fastPathSystemPromptPath =
@@ -3054,7 +3092,11 @@ export class SessionManager extends EventEmitter {
           ? new DockerSessionRunner(sessionId)
           : new CliSessionRunner(sessionId);
 
-    const mcpConfigPath = writeMcpConfig(worktreePath, orchConfig.mcp_servers);
+    const mcpConfigPath = writeMcpConfig(
+      worktreePath,
+      sessionId,
+      orchConfig.mcp_servers,
+    );
 
     const slowPathSystemPromptPath =
       mode === 'cli' && row.task_url
