@@ -260,10 +260,8 @@ const PLANNING_INTENT_KINDS: Record<PlanningWorkflow, readonly string[]> = {
  */
 const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
   'task.setStatus': '{"taskId":"<task-id>","status":"Ready"}',
-  'task.setProperties':
-    '{"taskId":"<task-id>","properties":{"priority":"P1"}}',
-  'task.setDependsOn':
-    '{"taskId":"<task-id>","dependsOn":["<other-task-id>"]}',
+  'task.setProperties': '{"taskId":"<task-id>","properties":{"priority":"P1"}}',
+  'task.setDependsOn': '{"taskId":"<task-id>","dependsOn":["<other-task-id>"]}',
   'gate.accrete':
     '{"project":"<project-id>","taskId":"<task-id>","title":"<title>",' +
     '"milestone":"<milestone-id>","classification":"Read-Only",' +
@@ -407,7 +405,7 @@ function renderSkeleton(
     ...(workflow === 'ops'
       ? [
           '- Additional ops-only credential: `ORCHESTRATOR_OPS_JOURNAL_TOKEN` — a ' +
-            "second, session-scoped token set only for this session type, distinct " +
+            'second, session-scoped token set only for this session type, distinct ' +
             'from `ORCHESTRATOR_STAGE_TOKEN` above. It authorizes ' +
             '`POST /api/ops-journal/:taskId/state` directly (loopback-only, ' +
             "restricted to this session's own task and to the staging transitions " +

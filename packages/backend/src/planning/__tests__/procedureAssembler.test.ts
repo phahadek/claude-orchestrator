@@ -353,8 +353,8 @@ describe('assemblePlanningProcedure', () => {
       const other = assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
-      milestoneId: 'm1',
-      projectId: 'p1',
+        milestoneId: 'm1',
+        projectId: 'p1',
         digest,
       });
       expect(other).not.toContain('## Capabilities');
@@ -424,8 +424,8 @@ describe('assemblePlanningProcedure', () => {
       const other = assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
-      milestoneId: 'm1',
-      projectId: 'p1',
+        milestoneId: 'm1',
+        projectId: 'p1',
         digest,
       });
       expect(other).toMatch(/read-only\/stage-only/i);
@@ -487,8 +487,8 @@ describe('assemblePlanningProcedure', () => {
       const other = assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
-      milestoneId: 'm1',
-      projectId: 'p1',
+        milestoneId: 'm1',
+        projectId: 'p1',
         digest,
       });
       expect(other).not.toMatch(/discard\/defer/i);
@@ -501,8 +501,8 @@ describe('assemblePlanningProcedure', () => {
       const output = assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
-      milestoneId: 'm1',
-      projectId: 'p1',
+        milestoneId: 'm1',
+        projectId: 'p1',
         digest,
       });
       expect(output).not.toContain('Resolve manifest & mode');
@@ -746,8 +746,8 @@ describe('planning intent kinds', () => {
       assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
-      milestoneId: 'm1',
-      projectId: 'p1',
+        milestoneId: 'm1',
+        projectId: 'p1',
         digest: {
           workflow: 'groom',
           data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
@@ -756,8 +756,8 @@ describe('planning intent kinds', () => {
       assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
-      milestoneId: 'm1',
-      projectId: 'p1',
+        milestoneId: 'm1',
+        projectId: 'p1',
         digest: {
           workflow: 'design',
           data: deriveDesignDigestSlice(fixtureDesignLoadResult()),
@@ -766,8 +766,8 @@ describe('planning intent kinds', () => {
       assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
-      milestoneId: 'm1',
-      projectId: 'p1',
+        milestoneId: 'm1',
+        projectId: 'p1',
         digest: {
           workflow: 'ops',
           data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
