@@ -322,6 +322,45 @@ describe('assemblePlanningProcedure', () => {
     }
   });
 
+  it('requires the /groom skill\'s structured proposal format (groomProposal fields) on a groom Ready-flip, not free prose', () => {
+    const groomOutput = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+
+    expect(groomOutput).toContain('groomProposal');
+    expect(groomOutput).toContain('presentation.md');
+    for (const field of [
+      'achieves',
+      'openQuestions',
+      'automatedTests',
+      'manualVerification',
+      'operationalSeed',
+    ]) {
+      expect(groomOutput).toContain(field);
+    }
+
+    // design/ops share the generic decisionProposal contract — the
+    // structured groomProposal requirement is groom-specific.
+    const designOutput = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'design',
+        data: deriveDesignDigestSlice(fixtureDesignLoadResult()),
+      },
+    });
+    expect(designOutput).not.toContain('groomProposal');
+  });
+
   it('states an up-front capability inventory for the dispatched ops procedure: base tools, how to request more, what is never grantable', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',

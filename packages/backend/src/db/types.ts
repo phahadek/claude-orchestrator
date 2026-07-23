@@ -553,6 +553,12 @@ export interface StagedIntentRow {
   annotation: string | null;
   /** Human-facing rationale/summary the decision surface renders beside the payload. */
   decision_proposal: string | null;
+  /**
+   * The /groom skill's structured proposal fields (JSON-encoded
+   * `GroomProposalFields`), carried by a dispatched groom session's
+   * Ready-flip decision in place of a free-prose `decision_proposal`.
+   */
+  groom_proposal: string | null;
   /** Tier-3 semantic readiness advisory — distinct from `annotation`'s deterministic hard-block channel. */
   advisory: string | null;
   /** Operator-supplied rationale for a reject disposition (pushback | decline). Null until rejected. */
@@ -590,6 +596,22 @@ export interface DecisionPickOnePayload {
 export interface StagedIntentAnswer {
   chosenLabel: string;
   freeForm: string | null;
+}
+
+/**
+ * The /groom skill's per-task proposal shape (`presentation.md`'s 4/5-point
+ * summary: what it achieves, open questions, automated tests, manual
+ * verification, and operational seed) — the structured contract a dispatched
+ * groom session's Ready-flip decision carries instead of free prose, so the
+ * reviewing human (and the decision surface) can render/judge it as fields
+ * rather than parse a paragraph.
+ */
+export interface GroomProposalFields {
+  achieves: string;
+  openQuestions: string;
+  automatedTests: string;
+  manualVerification: string;
+  operationalSeed: string;
 }
 
 // ─── staged_intent_group ──────────────────────────────────────────────────

@@ -430,7 +430,24 @@ function renderSkeleton(
           'or better revisited later — propose a discard/defer instead by staging ' +
           '`task.setStatus` → `Deferred`, with a `decisionProposal` naming why ' +
           'discard/defer is recommended over grooming it to Ready. This is a ' +
-          'first-class alternative outcome, not a fallback for a session that got stuck.'
+          'first-class alternative outcome, not a fallback for a session that got stuck.\n\n' +
+          'A `task.setStatus` → `Ready` proposal is structured, not free prose: carry ' +
+          'the `/groom` skill\'s defined proposal format (`skills/groom/reference/' +
+          'presentation.md` § "The 4-point summary") as a `groomProposal` object — ' +
+          '`{achieves, openQuestions, automatedTests, manualVerification, ' +
+          'operationalSeed}`, every field a string (write `"None."` for a genuinely ' +
+          'clean field, never omit it) — instead of packing the same judgment into a ' +
+          'single `decisionProposal` paragraph. This is the same contract the ' +
+          'interactive `/groom` skill presents for human sign-off; a dispatched ' +
+          'session emits it as data so the reviewing human sees fields, not a prose ' +
+          'summary to re-parse. Pass it as the invocation\'s 5th argument: ' +
+          '`node ~/.claude/scripts/stage-task-intent.mjs task.setStatus ' +
+          '\'{"taskId":"<task-id>","status":"Ready"}\' <groupId> "" ' +
+          '\'{"achieves":"...","openQuestions":"None.","automatedTests":"...",' +
+          '"manualVerification":"None.","operationalSeed":"None."}\'` ' +
+          '(the 4th argument, `decisionProposal`, is left empty here — `groomProposal` ' +
+          'replaces it for this kind; `decisionProposal` still applies to a ' +
+          '`Deferred` proposal, which has no achieves/tests to report).'
         : '') +
       (workflow === 'ops'
         ? ' Stage the next step, then keep driving: once investigation reaches a ' +

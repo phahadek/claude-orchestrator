@@ -264,4 +264,51 @@ describe('StagedIntentPanel', () => {
     expect(onRejected).not.toHaveBeenCalled();
     expect(screen.queryByText(/staged intent not found/i)).toBeNull();
   });
+
+  it('hideActions suppresses every per-item action control, leaving only the headline and registers', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({ groupId: 'group-1' })}
+        hideActions
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /approve/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /pushback/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /decline/i })).toBeNull();
+    expect(screen.getByText('task.setStatus')).toBeTruthy();
+  });
+
+  it("renders the /groom skill's structured proposal fields instead of decisionProposal prose", () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          groupId: 'group-1',
+          decisionProposal: 'this should not render when groomProposal is set',
+          groomProposal: {
+            achieves: 'Stops re-ingesting unchanged HLTV items.',
+            openQuestions: 'None.',
+            automatedTests: 'dedupe drops a duplicate GUID.',
+            manualVerification: 'Covered by gate only.',
+            operationalSeed: 'None.',
+          },
+        })}
+        hideActions
+      />,
+    );
+
+    expect(
+      screen.getByTestId('staged-intent-groom-proposal'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText('Stops re-ingesting unchanged HLTV items.'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText('dedupe drops a duplicate GUID.'),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText('this should not render when groomProposal is set'),
+    ).toBeNull();
+  });
 });

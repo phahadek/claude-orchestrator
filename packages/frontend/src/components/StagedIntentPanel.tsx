@@ -24,6 +24,14 @@ interface Props {
    * panel can refresh the group's live state (e.g. enable "Commit group").
    */
   onApproved?: (intent: StagedIntent) => void;
+  /**
+   * Suppresses this panel's own apply/approve/reject controls — used when a
+   * grouped intent is dispositioned as part of one atomic group-level
+   * approval unit (see DecisionPanel's group action bar) rather than
+   * individually. The headline, registers, and proposal are still rendered;
+   * only the per-item action surface is hidden.
+   */
+  hideActions?: boolean;
 }
 
 function isNotFoundError(err: unknown): boolean {
@@ -221,6 +229,33 @@ function AdvisoryRegister({
         </ul>
       )}
     </div>
+  );
+}
+
+/**
+ * The /groom skill's structured proposal (presentation.md's 4/5-point
+ * summary) — rendered as labeled fields instead of `decisionProposal`'s
+ * single prose paragraph, so the reviewing human sees the same shape the
+ * interactive /groom skill presents for sign-off.
+ */
+function GroomProposalSummary({
+  proposal,
+}: {
+  proposal: NonNullable<StagedIntent['groomProposal']>;
+}) {
+  return (
+    <dl className={styles.groomProposal} data-testid="staged-intent-groom-proposal">
+      <dt>Achieves</dt>
+      <dd>{proposal.achieves}</dd>
+      <dt>Open questions</dt>
+      <dd>{proposal.openQuestions}</dd>
+      <dt>Automated tests</dt>
+      <dd>{proposal.automatedTests}</dd>
+      <dt>Manual verification</dt>
+      <dd>{proposal.manualVerification}</dd>
+      <dt>Operational seed</dt>
+      <dd>{proposal.operationalSeed}</dd>
+    </dl>
   );
 }
 
@@ -462,6 +497,7 @@ export function StagedIntentPanel({
   onRejected,
   onDismiss,
   onApproved,
+  hideActions,
 }: Props) {
   const [inFlight, setInFlight] = useState<
     'apply' | 'reject' | 'approve' | 'override' | null
@@ -559,8 +595,12 @@ export function StagedIntentPanel({
         )}
       </div>
 
-      {intent.decisionProposal && (
-        <p className={styles.rationale}>{intent.decisionProposal}</p>
+      {intent.groomProposal ? (
+        <GroomProposalSummary proposal={intent.groomProposal} />
+      ) : (
+        intent.decisionProposal && (
+          <p className={styles.rationale}>{intent.decisionProposal}</p>
+        )
       )}
 
       <div className={styles.body}>{renderHeadline(intent)}</div>
@@ -575,6 +615,8 @@ export function StagedIntentPanel({
 
       {error && <div className={styles.error}>{error}</div>}
 
+      {hideActions ? null : (
+        <>
       {showOverride && (
         <div className={styles.overrideBox}>
           <textarea
@@ -687,6 +729,8 @@ export function StagedIntentPanel({
               : '✕ Decline'}
         </button>
       </div>
+        </>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { requireSessionStageAuth } from '../auth/SessionStageAuth';
-import { KNOWN_INTENT_KINDS, stageIntent } from './stagedIntents';
+import { KNOWN_INTENT_KINDS, stageIntent, parseGroomProposal } from './stagedIntents';
 import { getSession } from '../db/queries';
 
 /**
@@ -38,6 +38,7 @@ export function createTaskIntentsRouter(): Router {
         payload?: unknown;
         groupId?: unknown;
         decisionProposal?: unknown;
+        groomProposal?: unknown;
       };
       const kind = typeof body.kind === 'string' ? body.kind : null;
       const groupId = typeof body.groupId === 'string' ? body.groupId : null;
@@ -45,6 +46,7 @@ export function createTaskIntentsRouter(): Router {
         typeof body.decisionProposal === 'string'
           ? body.decisionProposal
           : null;
+      const groomProposal = parseGroomProposal(body.groomProposal);
 
       if (!kind) {
         res.status(400).json({ error: 'kind is required' });
@@ -62,6 +64,7 @@ export function createTaskIntentsRouter(): Router {
         groupId,
         sessionId,
         decisionProposal,
+        groomProposal,
       );
       res.status(201).json(intent);
     },

@@ -12,7 +12,7 @@
 // one for a human to review and apply.
 //
 // Usage:
-//   node stage-task-intent.mjs <kind> <json-payload> [groupId] [decisionProposal]
+//   node stage-task-intent.mjs <kind> <json-payload> [groupId] [decisionProposal] [groomProposalJson]
 //
 // Example:
 //   node stage-task-intent.mjs task.setStatus \
@@ -26,6 +26,13 @@
 // staged intent (e.g. why this write is being proposed) — it's rendered
 // above the payload in the staged-intent review panel. Pass an empty string
 // to supply a groupId without a decisionProposal.
+//
+// The optional [groomProposalJson] is the /groom skill's structured
+// per-task proposal (presentation.md's 4/5-point summary) as a JSON object
+// with string fields {achieves, openQuestions, automatedTests,
+// manualVerification, operationalSeed} — carried on a groom session's
+// task.setStatus -> Ready decision instead of a free-prose decisionProposal.
+// Pass an empty string to supply a decisionProposal without a groomProposal.
 //
 // Env:
 //   ORCHESTRATOR_BACKEND_HOST backend loopback host (default 127.0.0.1)
@@ -42,12 +49,22 @@ function fail(message) {
   process.exit(1);
 }
 
-const [kind, payloadJson, groupId, decisionProposal] = process.argv.slice(2);
+const [kind, payloadJson, groupId, decisionProposal, groomProposalJson] =
+  process.argv.slice(2);
 if (!kind || payloadJson === undefined) {
   fail(
-    'usage: node stage-task-intent.mjs <kind> <json-payload> [groupId] [decisionProposal]\n' +
+    'usage: node stage-task-intent.mjs <kind> <json-payload> [groupId] [decisionProposal] [groomProposalJson]\n' +
       'example: node stage-task-intent.mjs task.setStatus \'{"taskId":"...","status":"In Review"}\'',
   );
+}
+
+let groomProposal;
+if (groomProposalJson) {
+  try {
+    groomProposal = JSON.parse(groomProposalJson);
+  } catch {
+    fail(`invalid JSON groomProposal: ${groomProposalJson}`);
+  }
 }
 
 const host = process.env.ORCHESTRATOR_BACKEND_HOST ?? '127.0.0.1';
@@ -72,6 +89,7 @@ const body = JSON.stringify({
   payload,
   ...(groupId ? { groupId } : {}),
   ...(decisionProposal ? { decisionProposal } : {}),
+  ...(groomProposal ? { groomProposal } : {}),
 });
 
 const req = http.request(

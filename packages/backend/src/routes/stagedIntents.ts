@@ -22,6 +22,7 @@ import {
 import {
   GroomingGateError,
   checkAccretionContributions,
+  checkGroomingPromotionGate,
   type GroomingGateEntry,
 } from '../groom/groomGate';
 import type {
@@ -30,6 +31,7 @@ import type {
   StagedIntentRejectOutcome,
   DecisionPickOnePayload,
   StagedIntentAnswer,
+  GroomProposalFields,
 } from '../db/types';
 import {
   hashIntentPayload,
@@ -162,6 +164,12 @@ export interface StagedIntent {
    */
   decisionProposal?: string | null;
   /**
+   * The /groom skill's structured proposal fields (presentation.md's
+   * 4/5-point summary), carried by a dispatched groom session's Ready-flip
+   * decision in place of a free-prose `decisionProposal`.
+   */
+  groomProposal?: GroomProposalFields | null;
+  /**
    * Tier-3 semantic readiness advisory (paraphrased-deferral classifier) —
    * a caution signal distinct from `annotation`'s deterministic hard-block
    * channel. The surface reads annotation -> hard-block, advisory -> caution;
@@ -197,6 +205,9 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
       : null,
     groupId: row.group_id,
     decisionProposal: row.decision_proposal,
+    groomProposal: row.groom_proposal
+      ? (JSON.parse(row.groom_proposal) as GroomProposalFields)
+      : null,
     advisory: row.advisory
       ? (JSON.parse(row.advisory) as StagedIntent['advisory'])
       : null,
@@ -434,6 +445,30 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
  * no taskId (it is a question, not a task write), so it dedups instead on
  * (sessionId, payload_hash) — see findActiveDecisionPickOneForSession.
  */
+const GROOM_PROPOSAL_FIELDS = [
+  'achieves',
+  'openQuestions',
+  'automatedTests',
+  'manualVerification',
+  'operationalSeed',
+] as const;
+
+/** Validates the /groom skill's structured proposal shape — every field must be present and a string. */
+export function parseGroomProposal(value: unknown): GroomProposalFields | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  for (const field of GROOM_PROPOSAL_FIELDS) {
+    if (typeof record[field] !== 'string') return null;
+  }
+  return {
+    achieves: record.achieves as string,
+    openQuestions: record.openQuestions as string,
+    automatedTests: record.automatedTests as string,
+    manualVerification: record.manualVerification as string,
+    operationalSeed: record.operationalSeed as string,
+  };
+}
+
 export function stageIntent(
   kind: string,
   payload: unknown,
@@ -441,6 +476,7 @@ export function stageIntent(
   groupId?: string | null,
   sessionId?: string | null,
   decisionProposal?: string | null,
+  groomProposal?: GroomProposalFields | null,
 ): StagedIntent {
   if (kind === 'decision.pickOne') {
     validateDecisionPickOnePayload(payload, groupId, decisionProposal);
@@ -449,6 +485,7 @@ export function stageIntent(
   const taskId = extractTaskId(kind, payload);
   const payloadHash = hashIntentPayload(payload);
   const now = Date.now();
+  const groomProposalJson = groomProposal ? JSON.stringify(groomProposal) : null;
 
   const existing = taskId
     ? findActiveStagedIntentForTask(projectId, kind, taskId)
@@ -473,6 +510,7 @@ export function stageIntent(
       supersedes: null,
       annotation: null,
       decision_proposal: decisionProposal ?? null,
+      groom_proposal: groomProposalJson,
       advisory: null,
       disposition_reason: null,
       answer: null,
@@ -497,6 +535,7 @@ export function stageIntent(
     supersedes: null,
     annotation: null,
     decision_proposal: decisionProposal ?? null,
+    groom_proposal: groomProposalJson,
     advisory: null,
     disposition_reason: null,
     answer: null,
@@ -692,6 +731,53 @@ async function applyIntent(
  * resume input. No-ops (grants nothing) if the intent has no originating
  * session or no sessionManager was wired in.
  */
+/**
+ * Rejects one staged intent row — pushback | decline, with a durable reason —
+ * and notifies the originating session/orchestrator. Shared by the per-item
+ * `/:id/reject` route (the reject-form / decision.pickOne surface, unchanged
+ * per the grooming decision) and the group-level `/group/:groupId/reject`
+ * route (the new atomic group-disposition surface), so both dispose through
+ * the exact same transition + audit + notify path.
+ */
+async function rejectStagedIntentRow(
+  row: StagedIntentRow,
+  outcome: StagedIntentRejectOutcome,
+  reason: string,
+  sessionManager: SessionManager | undefined,
+  planningOrchestrator: PlanningOrchestrator | undefined,
+): Promise<StagedIntent> {
+  const rejected = transitionStagedIntent(row.id, 'rejected', {
+    dispositionReason: reason,
+  });
+  const rejectedIntent = rowToApi(rejected);
+  broadcastIntentChange(rejectedIntent);
+
+  recordEvent({
+    event_type: 'staged_intent_disposition',
+    actor_type: 'human',
+    actor_id: null,
+    project_id: rejectedIntent.projectId,
+    task_id: row.task_id,
+    payload: { intentId: row.id, disposition: outcome, reason },
+  });
+
+  if (rejectedIntent.kind === 'session.requestCapability') {
+    await resumeCapabilityRequester(
+      sessionManager,
+      rejectedIntent,
+      outcome,
+      reason,
+    );
+  } else {
+    await planningOrchestrator?.handleDisposition({
+      intent: rejected,
+      disposition: outcome,
+      reason,
+    });
+  }
+  return rejectedIntent;
+}
+
 async function resumeCapabilityRequester(
   sessionManager: SessionManager | undefined,
   intent: StagedIntent,
@@ -784,6 +870,99 @@ interface GroupCommitResult {
 }
 
 /**
+ * Mirrors `resolveReadinessOverride` in TaskWriteCommands.ts (not imported —
+ * that module's override resolution is private to `setStatus`): true when
+ * the real apply would bypass the readiness gate, either because the caller
+ * passed an explicit operator override, or because this is an
+ * approve-by-standard batch commit (`triageMilestoneLabel` set) for a task
+ * carrying a recorded triage verdict on an interactive (📐 Design) type. The
+ * precheck must recognize both paths — otherwise a legitimate
+ * approve-by-standard commit would be wrongly 409'd before ever reaching
+ * `applyIntent`.
+ */
+function readinessOverrideWouldApply(
+  payload: SetStatusPayload,
+  opts: GroupCommitOptions,
+): boolean {
+  if (opts.override) return true;
+  if (payload.groomingGate?.triage && opts.triageMilestoneLabel) {
+    return getCachedType(payload.taskId) === '📐 Design';
+  }
+  return false;
+}
+
+/**
+ * Whole-group pre-commit gate check: re-derives, for every arming
+ * task.setStatus -> Ready intent in the group, the exact same gates
+ * `applyIntent`'s task.setStatus case would hit (the DependsOn-completeness
+ * invariant, the grooming promotion gate, and the readiness gate against the
+ * composed proposed body) — but purely as a read, before any member intent
+ * is applied. This is what makes group commit genuinely all-or-nothing: the
+ * confirmed bug (setDependsOn committed, setStatus -> Ready blocked) came
+ * from discovering the arming intent's gate failure only after a sibling had
+ * already been applied and marked committed. Running the same check first
+ * means a doomed commit never touches the task store at all.
+ */
+async function precheckGroupCommit(
+  groupId: string,
+  ordered: StagedIntentRow[],
+  opts: GroupCommitOptions,
+): Promise<GroupCommitResult | null> {
+  for (const row of ordered) {
+    if (!isArmingReadyIntent(row)) continue;
+    const payload = JSON.parse(row.payload) as SetStatusPayload;
+
+    if (!hasGroupDependsOn(groupId, payload.taskId)) {
+      const err = new DependsOnCompletenessError(payload.taskId);
+      return { status: 409, body: { error: err.message, precheck: true } };
+    }
+
+    const gateResult = checkGroomingPromotionGate(
+      payload.groomingGate ?? {},
+      payload.taskId,
+      getCachedType(payload.taskId) ?? payload.groomingGate?.type,
+    );
+    if (!gateResult.allowed) {
+      setStagedIntentAnnotation(
+        row.id,
+        JSON.stringify({ blocked: true, reasons: gateResult.reasons }),
+      );
+      broadcastIntentById(row.id);
+      return {
+        status: 409,
+        body: {
+          error: new GroomingGateError(gateResult.reasons).message,
+          reasons: gateResult.reasons,
+          precheck: true,
+        },
+      };
+    }
+
+    if (!readinessOverrideWouldApply(payload, opts)) {
+      const backend = getTaskBackend(row.project_id);
+      const body = await computeProposedBody(backend, groupId, payload.taskId);
+      const violations = checkReadiness(body, getCachedType(payload.taskId));
+      if (violations.length > 0) {
+        setStagedIntentAnnotation(
+          row.id,
+          JSON.stringify({ blocked: true, violations }),
+        );
+        broadcastIntentById(row.id);
+        return {
+          status: 409,
+          body: {
+            error: new ReadinessGateError(violations).message,
+            violations,
+            precheck: true,
+          },
+        };
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Atomic, dependency-ordered commit of one task's intent group: applies
  * every live intent all-or-nothing, non-arming kinds first and
  * task.setStatus -> Ready last. Shared by the single-group commit route and
@@ -822,6 +1001,18 @@ async function commitGroupIntents(
     ...live.filter((r) => !isArmingReadyIntent(r)),
     ...live.filter((r) => isArmingReadyIntent(r)),
   ];
+
+  const precheckFailure = await precheckGroupCommit(groupId, ordered, opts);
+  if (precheckFailure) {
+    return {
+      status: precheckFailure.status,
+      body: {
+        ...precheckFailure.body,
+        committed: [],
+        remaining: ordered.map((r) => r.id),
+      },
+    };
+  }
 
   const committed: string[] = [];
   for (const row of ordered) {
@@ -968,6 +1159,7 @@ export function createStagedIntentsRouter(
       projectId?: unknown;
       groupId?: unknown;
       decisionProposal?: unknown;
+      groomProposal?: unknown;
     };
     const kind = typeof body.kind === 'string' ? body.kind : null;
     const projectId =
@@ -975,6 +1167,7 @@ export function createStagedIntentsRouter(
     const groupId = typeof body.groupId === 'string' ? body.groupId : null;
     const decisionProposal =
       typeof body.decisionProposal === 'string' ? body.decisionProposal : null;
+    const groomProposal = parseGroomProposal(body.groomProposal);
 
     if (!kind) {
       res.status(400).json({ error: 'kind is required' });
@@ -996,6 +1189,7 @@ export function createStagedIntentsRouter(
       groupId,
       null,
       decisionProposal,
+      groomProposal,
     );
 
     // Stage-time accretion feedback: a Code task.setStatus -> Ready intent
@@ -1250,6 +1444,96 @@ export function createStagedIntentsRouter(
     },
   );
 
+  // ── POST /api/staged-intents/group/:groupId/approve ──────────────────────
+  // The single atomic-approval-unit surface: approves and commits every live
+  // intent in the group in one operator action, without requiring each
+  // member to be individually approved first (autoApprove skips that
+  // precondition — the group itself, not its members, is what the operator
+  // disposes). Goes through the exact same `commitGroupIntents` path as
+  // `/group/:groupId/commit` — including the whole-group precheck — so
+  // "approve the groom" can never partially commit.
+  router.post(
+    '/staged-intents/group/:groupId/approve',
+    async (req: Request, res: Response) => {
+      const groupId = String(req.params.groupId);
+      const body = req.body as {
+        override?: unknown;
+        reason?: unknown;
+        actorType?: unknown;
+      };
+      const override = body?.override === true;
+      const reason = typeof body?.reason === 'string' ? body.reason : '';
+      if (override && !reason.trim()) {
+        res
+          .status(400)
+          .json({ error: 'reason is required when override is true' });
+        return;
+      }
+      const actorType: ApplyActorType =
+        body?.actorType === 'session' ? 'session' : 'human';
+
+      const result = await commitGroupIntents(
+        groupId,
+        { override, reason, actorType, autoApprove: true },
+        planningOrchestrator,
+      );
+      res.status(result.status).json(result.body);
+    },
+  );
+
+  // ── POST /api/staged-intents/group/:groupId/reject ───────────────────────
+  // The group-level twin of `/group/:groupId/approve`: pushback | decline the
+  // whole grooming decision as one unit — every live intent in the group is
+  // rejected with the same outcome + reason, none of them committed. This is
+  // the group-disposition layer above the unchanged per-item reject-form
+  // surface (`/:id/reject`), which stays available for standalone intents
+  // (e.g. a decision.pickOne) that were never grouped in the first place.
+  router.post(
+    '/staged-intents/group/:groupId/reject',
+    async (req: Request, res: Response) => {
+      const groupId = String(req.params.groupId);
+      const body = req.body as { outcome?: unknown; reason?: unknown };
+      const outcome: StagedIntentRejectOutcome | null =
+        body?.outcome === 'pushback' || body?.outcome === 'decline'
+          ? body.outcome
+          : null;
+      const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
+      if (!outcome) {
+        res
+          .status(400)
+          .json({ error: 'outcome must be "pushback" or "decline"' });
+        return;
+      }
+      if (!reason) {
+        res.status(400).json({ error: 'reason is required' });
+        return;
+      }
+
+      const live = listStagedIntentsByGroup(groupId).filter((r) =>
+        ACTIVE_STATES.includes(r.state),
+      );
+      if (live.length === 0) {
+        res.status(404).json({
+          error: `no live staged intents found for group "${groupId}"`,
+        });
+        return;
+      }
+
+      const rejected: string[] = [];
+      for (const row of live) {
+        const rejectedIntent = await rejectStagedIntentRow(
+          row,
+          outcome,
+          reason,
+          sessionManager,
+          planningOrchestrator,
+        );
+        rejected.push(rejectedIntent.id);
+      }
+      res.json({ ok: true, rejected });
+    },
+  );
+
   // ── POST /api/staged-intents/batch/commit ─────────────────────────────────
   // The approve-by-standard decision surface (planning/triage.ts): commits a
   // default-approved clean set spanning MULTIPLE task groups from one
@@ -1362,35 +1646,13 @@ export function createStagedIntentsRouter(
         return;
       }
 
-      const rejected = transitionStagedIntent(row.id, 'rejected', {
-        dispositionReason: reason,
-      });
-      const rejectedIntent = rowToApi(rejected);
-      broadcastIntentChange(rejectedIntent);
-
-      recordEvent({
-        event_type: 'staged_intent_disposition',
-        actor_type: 'human',
-        actor_id: null,
-        project_id: rejectedIntent.projectId,
-        task_id: row.task_id,
-        payload: { intentId: row.id, disposition: outcome, reason },
-      });
-
-      if (rejectedIntent.kind === 'session.requestCapability') {
-        await resumeCapabilityRequester(
-          sessionManager,
-          rejectedIntent,
-          outcome,
-          reason,
-        );
-      } else {
-        await planningOrchestrator?.handleDisposition({
-          intent: rejected,
-          disposition: outcome,
-          reason,
-        });
-      }
+      await rejectStagedIntentRow(
+        row,
+        outcome,
+        reason,
+        sessionManager,
+        planningOrchestrator,
+      );
       res.json({ ok: true });
     },
   );

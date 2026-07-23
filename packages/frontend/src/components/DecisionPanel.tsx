@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { StagedIntent } from '../api/stagedIntents';
+import type { StagedIntent, StagedIntentRejectOutcome } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { subscribeStagedIntentChange } from '../hooks/stagedIntentBus';
 import { StagedIntentPanel } from './StagedIntentPanel';
@@ -26,6 +26,9 @@ export function DecisionPanel({ sessionId }: Props) {
   const [loaded, setLoaded] = useState(false);
   const [groupError, setGroupError] = useState<string | null>(null);
   const [groupInFlight, setGroupInFlight] = useState<string | null>(null);
+  const [rejectDrafts, setRejectDrafts] = useState<
+    Record<string, { outcome: StagedIntentRejectOutcome; reason: string }>
+  >({});
 
   useEffect(() => {
     let cancelled = false;
@@ -112,15 +115,54 @@ export function DecisionPanel({ sessionId }: Props) {
     );
   };
 
-  const handleCommitGroup = async (groupId: string) => {
+  const draftFor = (groupId: string) =>
+    rejectDrafts[groupId] ?? { outcome: 'pushback' as const, reason: '' };
+
+  const setDraft = (
+    groupId: string,
+    patch: Partial<{ outcome: StagedIntentRejectOutcome; reason: string }>,
+  ) => {
+    setRejectDrafts((prev) => ({
+      ...prev,
+      [groupId]: { ...draftFor(groupId), ...patch },
+    }));
+  };
+
+  // The grooming outcome is one atomic approval unit: approve, pushback, or
+  // decline the whole group in a single operator action — no per-item
+  // approve/reject step. Both handlers below dispatch through the group-level
+  // routes, which apply/reject every live member together (all-or-nothing on
+  // approve — a member whose gate fails commits none of its siblings).
+  const handleApproveGroup = async (groupId: string) => {
     setGroupInFlight(groupId);
     setGroupError(null);
     try {
-      await stagedIntentsApi.commitGroup(groupId);
+      await stagedIntentsApi.approveGroup(groupId);
       setIntents((prev) => prev.filter((i) => i.groupId !== groupId));
     } catch (err) {
       setGroupError(
-        err instanceof Error ? err.message : 'Failed to commit group',
+        err instanceof Error ? err.message : 'Failed to approve group',
+      );
+    } finally {
+      setGroupInFlight(null);
+    }
+  };
+
+  const handleRejectGroup = async (groupId: string) => {
+    const draft = draftFor(groupId);
+    const reason = draft.reason.trim();
+    if (!reason) return;
+    setGroupInFlight(groupId);
+    setGroupError(null);
+    try {
+      await stagedIntentsApi.rejectGroup(groupId, {
+        outcome: draft.outcome,
+        reason,
+      });
+      setIntents((prev) => prev.filter((i) => i.groupId !== groupId));
+    } catch (err) {
+      setGroupError(
+        err instanceof Error ? err.message : 'Failed to reject group',
       );
     } finally {
       setGroupInFlight(null);
@@ -137,19 +179,12 @@ export function DecisionPanel({ sessionId }: Props) {
       />
 
       {otherGroups.map(([groupId, groupIntents]) => {
-        const allApproved = groupIntents.every((i) => i.state === 'approved');
+        const draft = draftFor(groupId);
+        const inFlight = groupInFlight === groupId;
         return (
           <div key={groupId} className={styles.group}>
             <div className={styles.groupHeader}>
               <span>Group {groupId}</span>
-              <button
-                type="button"
-                className={styles.commitButton}
-                disabled={!allApproved || groupInFlight === groupId}
-                onClick={() => void handleCommitGroup(groupId)}
-              >
-                {groupInFlight === groupId ? 'Committing…' : 'Commit group'}
-              </button>
             </div>
             {groupError && groupInFlight === null && (
               <div className={styles.groupError}>{groupError}</div>
@@ -162,8 +197,73 @@ export function DecisionPanel({ sessionId }: Props) {
                 onRejected={remove}
                 onDismiss={remove}
                 onApproved={upsert}
+                hideActions
               />
             ))}
+            <div className={styles.groupActions}>
+              <button
+                type="button"
+                className={styles.commitButton}
+                disabled={inFlight}
+                onClick={() => void handleApproveGroup(groupId)}
+              >
+                {inFlight ? 'Approving…' : '✓ Approve groom'}
+              </button>
+              <div
+                className={styles.outcomeToggle}
+                role="radiogroup"
+                aria-label="Reject outcome"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={draft.outcome === 'pushback'}
+                  className={
+                    draft.outcome === 'pushback'
+                      ? styles.outcomeOptionActive
+                      : styles.outcomeOption
+                  }
+                  onClick={() => setDraft(groupId, { outcome: 'pushback' })}
+                >
+                  Pushback
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={draft.outcome === 'decline'}
+                  className={
+                    draft.outcome === 'decline'
+                      ? styles.outcomeOptionActive
+                      : styles.outcomeOption
+                  }
+                  onClick={() => setDraft(groupId, { outcome: 'decline' })}
+                >
+                  Decline
+                </button>
+              </div>
+              <textarea
+                className={styles.reasonInput}
+                placeholder={
+                  draft.outcome === 'pushback'
+                    ? 'What should the session revise?'
+                    : 'Why is this being declined?'
+                }
+                value={draft.reason}
+                onChange={(e) => setDraft(groupId, { reason: e.target.value })}
+              />
+              <button
+                type="button"
+                className={styles.denyButton}
+                disabled={inFlight || !draft.reason.trim()}
+                onClick={() => void handleRejectGroup(groupId)}
+              >
+                {inFlight
+                  ? 'Submitting…'
+                  : draft.outcome === 'pushback'
+                    ? '↩ Pushback groom'
+                    : '✕ Decline groom'}
+              </button>
+            </div>
           </div>
         );
       })}

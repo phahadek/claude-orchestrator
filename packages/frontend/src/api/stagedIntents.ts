@@ -21,6 +21,19 @@ interface StagedIntentAdvisory {
   checkedAt: number;
 }
 
+/**
+ * The /groom skill's structured per-task proposal (presentation.md's 4/5-point
+ * summary), carried by a dispatched groom session's Ready-flip decision in
+ * place of a free-prose `decisionProposal`.
+ */
+export interface GroomProposalFields {
+  achieves: string;
+  openQuestions: string;
+  automatedTests: string;
+  manualVerification: string;
+  operationalSeed: string;
+}
+
 type StagedIntentState =
   | 'staged'
   | 'approved'
@@ -44,6 +57,8 @@ export interface StagedIntent {
   groupId?: string | null;
   /** The human-facing rationale/summary the decision surface renders beside the payload. */
   decisionProposal?: string | null;
+  /** The /groom skill's structured proposal fields — see `GroomProposalFields`. */
+  groomProposal?: GroomProposalFields | null;
   /**
    * Set when the last apply attempt was hard-blocked by the readiness gate
    * (violations) or the grooming promotion gate (reasons) — the blocking
@@ -161,6 +176,49 @@ export const stagedIntentsApi = {
           override: options?.override ?? false,
           reason: options?.reason ?? '',
         }),
+      },
+    );
+  },
+
+  /**
+   * The single atomic-approval-unit surface: approves and commits every live
+   * intent in the group in one operator action — no per-item approve needed
+   * first. A grooming outcome is one decision, not N independently-committing
+   * writes; a group whose arming Ready intent fails its gate commits none of
+   * its members.
+   */
+  approveGroup(
+    groupId: string,
+    options?: ApplyOptions,
+  ): Promise<{ ok: boolean; committed: string[] }> {
+    return apiRequest<{ ok: boolean; committed: string[] }>(
+      `/api/staged-intents/group/${encodeURIComponent(groupId)}/approve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          override: options?.override ?? false,
+          reason: options?.reason ?? '',
+        }),
+      },
+    );
+  },
+
+  /**
+   * The group-level twin of `approveGroup`: pushback | decline the whole
+   * grooming decision as one unit — every live intent in the group is
+   * rejected with the same outcome + reason, none of them committed.
+   */
+  rejectGroup(
+    groupId: string,
+    disposition: { outcome: StagedIntentRejectOutcome; reason: string },
+  ): Promise<{ ok: boolean; rejected: string[] }> {
+    return apiRequest<{ ok: boolean; rejected: string[] }>(
+      `/api/staged-intents/group/${encodeURIComponent(groupId)}/reject`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(disposition),
       },
     );
   },
