@@ -240,9 +240,9 @@ describe('ReviewerCommentsWatcher quiescence + at-least-once delivery', () => {
 
     // Task is retried and resumes with the same session id before quiescence
     // flush — flush() independently re-checks liveness at delivery time.
-    db.prepare(`UPDATE sessions SET status = 'running' WHERE session_id = ?`).run(
-      SESSION_ID,
-    );
+    db.prepare(
+      `UPDATE sessions SET status = 'running' WHERE session_id = ?`,
+    ).run(SESSION_ID);
     await vi.advanceTimersByTimeAsync(120_001);
 
     expect(listUndeliveredInboxItems(SESSION_ID)).toHaveLength(2);
