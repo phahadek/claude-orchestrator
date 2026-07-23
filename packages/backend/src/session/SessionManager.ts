@@ -1326,6 +1326,20 @@ export class SessionManager extends EventEmitter {
           ? orchConfig.review_rules
           : undefined,
       );
+    } else if (isPlanning) {
+      // A planning/ops session (groom/design/ops) with no assembled procedure
+      // is a dispatch mis-wire, not a case to silently paper over: falling
+      // through to buildOrchestratorClaudeMd would inject the implement →
+      // branch → Pre-PR Gate → open-PR → review-loop coding scaffold into a
+      // worktree-less, often read-only session. Fail loud instead so the
+      // caller that forgot to assemble+pass injectedProcedureContent is
+      // surfaced immediately rather than the session quietly running the
+      // wrong procedure.
+      throw new Error(
+        `[SessionManager] planning/ops session (sessionType=${sessionType}) dispatched ` +
+          `for ${sessionId.slice(0, 8)} with no injectedProcedureContent — refusing to ` +
+          'fall back to buildOrchestratorClaudeMd',
+      );
     } else {
       try {
         sessionContextContent = buildSessionContext({
