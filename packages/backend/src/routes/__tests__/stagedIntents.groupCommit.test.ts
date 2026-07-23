@@ -37,7 +37,10 @@ vi.mock('../../db/queries', async (importOriginal) => {
 });
 
 import { db } from '../../db/db';
+import { getTaskCache } from '../../db/queries';
 import { createStagedIntentsRouter } from '../stagedIntents';
+import { recordAccretionMarker } from '../../gate/gateStore';
+import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
 
 function makeApp() {
   const app = express();
@@ -60,8 +63,11 @@ function sections(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   mockGetTaskBackend.mockReset();
   mockRecordEvent.mockReset();
+  vi.mocked(getTaskCache).mockReturnValue(null);
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
+  db.prepare('DELETE FROM gate_accretion').run();
+  db.prepare('DELETE FROM seed_accretion').run();
 });
 
 async function stageGroup(
@@ -70,6 +76,7 @@ async function stageGroup(
   taskId: string,
   groupId: string,
   updateBodySections?: Record<string, unknown>,
+  groomingGateOverrides?: Record<string, unknown>,
 ) {
   const dependsOn = await agent.post('/api/staged-intents').send({
     kind: 'task.setDependsOn',
@@ -96,6 +103,7 @@ async function stageGroup(
       groomingGate: {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
+        ...groomingGateOverrides,
       },
     },
   });
@@ -176,6 +184,39 @@ describe('POST /api/staged-intents/:id/approve', () => {
     const { setStatus } = await stageGroup(agent, 'proj-c', 't-3', 'g-c', {
       ...sections(),
       context: [{ type: 'paragraph', text: 'No open questions here.' }],
+    });
+
+    const approved = await agent
+      .post(`/api/staged-intents/${setStatus.id}/approve`)
+      .send({});
+
+    expect(approved.status).toBe(200);
+    expect(approved.body.annotation).toBeNull();
+  });
+
+  it('does not annotate a 📐 Design task with an open-questions/deferral body as blocked — the interactive type is exempt from those structural checks', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Summary\nClean stored body.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: 't-4',
+      fetched_at: 0,
+      raw_json: JSON.stringify({ type: '📐 Design' }),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const { setStatus } = await stageGroup(agent, 'proj-d', 't-4', 'g-d', {
+      ...sections(),
+      context: [
+        { type: 'heading_3', text: 'Open Questions' },
+        { type: 'bulleted_list_item', text: 'Still unresolved?' },
+      ],
     });
 
     const approved = await agent
@@ -430,6 +471,118 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
     );
     expect(states[dependsOn.body.id]).toBe('approved');
     expect(states[setStatus.body.id]).toBe('approved');
+  });
+
+  it('commits a 📐 Design task.setStatus->Ready group without an override even though the body has a non-empty Open Questions section — the same body for a 💻 Code task still blocks', async () => {
+    const openQuestionsBody = () => ({
+      ...sections(),
+      context: [
+        { type: 'heading_3', text: 'Open Questions' },
+        { type: 'bulleted_list_item', text: 'Still unresolved?' },
+      ],
+    });
+
+    // 📐 Design: precheck passes, commits with no readiness_override.
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      updateBody: vi.fn(),
+    });
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: 't-design',
+      fetched_at: 0,
+      raw_json: JSON.stringify({ type: '📐 Design' }),
+    });
+    const designApp = makeApp();
+    const designAgent = supertest(designApp);
+    const design = await stageGroup(
+      designAgent,
+      'proj-design',
+      't-design',
+      'g-design',
+      openQuestionsBody(),
+      { triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true } },
+    );
+    await designAgent
+      .post(`/api/staged-intents/${design.dependsOn.id}/approve`)
+      .send({});
+    await designAgent
+      .post(`/api/staged-intents/${design.updateBody.id}/approve`)
+      .send({});
+    await designAgent
+      .post(`/api/staged-intents/${design.setStatus.id}/approve`)
+      .send({});
+    const designCommit = await designAgent
+      .post('/api/staged-intents/group/g-design/commit')
+      .send({});
+    expect(designCommit.status).toBe(200);
+
+    // 💻 Code: same body, still blocked by the readiness gate.
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      updateBody: vi.fn(),
+    });
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: 't-code',
+      fetched_at: 0,
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    recordAccretionMarker({
+      sourceTaskId: 't-code',
+      project: 'proj-code',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 't-code',
+      project: 'proj-code',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+    const codeApp = makeApp();
+    const codeAgent = supertest(codeApp);
+    const code = await stageGroup(
+      codeAgent,
+      'proj-code',
+      't-code',
+      'g-code',
+      openQuestionsBody(),
+      {
+        type: '💻 Code',
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/foo.ts',
+            isNew: true,
+            existsInRepo: false,
+          },
+        ],
+      },
+    );
+    await codeAgent
+      .post(`/api/staged-intents/${code.dependsOn.id}/approve`)
+      .send({});
+    await codeAgent
+      .post(`/api/staged-intents/${code.updateBody.id}/approve`)
+      .send({});
+    await codeAgent
+      .post(`/api/staged-intents/${code.setStatus.id}/approve`)
+      .send({});
+    const codeCommit = await codeAgent
+      .post('/api/staged-intents/group/g-code/commit')
+      .send({});
+    expect(codeCommit.status).toBe(409);
+    expect(codeCommit.body.violations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ tier: 'structural' }),
+      ]),
+    );
   });
 });
 
