@@ -169,6 +169,34 @@ describe('ReviewOrchestrator.handleDispositions — addressed', () => {
     );
     expect(github.resolveReviewThread).toHaveBeenCalledWith('PRRT_thread_xyz');
   });
+
+  it('includes the reason in the reply when present', async () => {
+    const github = makeGitHubClient({ 303: 'PRRT_thread_reason' });
+    const sm = makeSessionManager();
+    const rs = makeReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true, github as any);
+
+    await orch.handleDispositions(
+      makePayload({
+        headSha: 'abc1234',
+        dispositions: [
+          {
+            comment_id: 303,
+            disposition: 'addressed',
+            reason: 'switched to a null check',
+          },
+        ],
+      }),
+    );
+
+    expect(github.addPullRequestReviewThreadReply).toHaveBeenCalledWith(
+      'PRRT_thread_reason',
+      'Addressed in abc1234: switched to a null check',
+    );
+    expect(github.resolveReviewThread).toHaveBeenCalledWith(
+      'PRRT_thread_reason',
+    );
+  });
 });
 
 // ── wont_fix → reply only ────────────────────────────────────────────────────
