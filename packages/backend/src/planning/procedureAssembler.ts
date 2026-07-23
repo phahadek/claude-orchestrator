@@ -432,7 +432,7 @@ function renderSkeleton(
           'discard/defer is recommended over grooming it to Ready. This is a ' +
           'first-class alternative outcome, not a fallback for a session that got stuck.\n\n' +
           'A `task.setStatus` → `Ready` proposal is structured, not free prose: carry ' +
-          'the `/groom` skill\'s defined proposal format (`skills/groom/reference/' +
+          "the `/groom` skill's defined proposal format (`skills/groom/reference/" +
           'presentation.md` § "The 4-point summary") as a `groomProposal` object — ' +
           '`{achieves, openQuestions, automatedTests, manualVerification, ' +
           'operationalSeed}`, every field a string (write `"None."` for a genuinely ' +
@@ -440,7 +440,7 @@ function renderSkeleton(
           'single `decisionProposal` paragraph. This is the same contract the ' +
           'interactive `/groom` skill presents for human sign-off; a dispatched ' +
           'session emits it as data so the reviewing human sees fields, not a prose ' +
-          'summary to re-parse. Pass it as the invocation\'s 5th argument: ' +
+          "summary to re-parse. Pass it as the invocation's 5th argument: " +
           '`node ~/.claude/scripts/stage-task-intent.mjs task.setStatus ' +
           '\'{"taskId":"<task-id>","status":"Ready"}\' <groupId> "" ' +
           '\'{"achieves":"...","openQuestions":"None.","automatedTests":"...",' +

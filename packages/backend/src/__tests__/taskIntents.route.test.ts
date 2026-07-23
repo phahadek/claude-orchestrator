@@ -110,7 +110,7 @@ describe('POST /api/task-intents — loopback session stage endpoint', () => {
     expect(res.body.groupId).toBe('batch-1');
   });
 
-  it('stages the /groom skill\'s structured proposal fields on a Ready-flip decision, not free prose', async () => {
+  it("stages the /groom skill's structured proposal fields on a Ready-flip decision, not free prose", async () => {
     mockGetSession.mockReturnValue({
       session_id: 'session-1',
       project_id: 'proj-1',

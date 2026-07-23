@@ -1,7 +1,11 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { requireSessionStageAuth } from '../auth/SessionStageAuth';
-import { KNOWN_INTENT_KINDS, stageIntent, parseGroomProposal } from './stagedIntents';
+import {
+  KNOWN_INTENT_KINDS,
+  stageIntent,
+  parseGroomProposal,
+} from './stagedIntents';
 import { getSession } from '../db/queries';
 
 /**

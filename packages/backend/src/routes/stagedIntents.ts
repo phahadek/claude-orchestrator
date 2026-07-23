@@ -485,7 +485,9 @@ export function stageIntent(
   const taskId = extractTaskId(kind, payload);
   const payloadHash = hashIntentPayload(payload);
   const now = Date.now();
-  const groomProposalJson = groomProposal ? JSON.stringify(groomProposal) : null;
+  const groomProposalJson = groomProposal
+    ? JSON.stringify(groomProposal)
+    : null;
 
   const existing = taskId
     ? findActiveStagedIntentForTask(projectId, kind, taskId)

@@ -322,7 +322,7 @@ describe('assemblePlanningProcedure', () => {
     }
   });
 
-  it('requires the /groom skill\'s structured proposal format (groomProposal fields) on a groom Ready-flip, not free prose', () => {
+  it("requires the /groom skill's structured proposal format (groomProposal fields) on a groom Ready-flip, not free prose", () => {
     const groomOutput = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',

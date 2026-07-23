@@ -244,7 +244,10 @@ function GroomProposalSummary({
   proposal: NonNullable<StagedIntent['groomProposal']>;
 }) {
   return (
-    <dl className={styles.groomProposal} data-testid="staged-intent-groom-proposal">
+    <dl
+      className={styles.groomProposal}
+      data-testid="staged-intent-groom-proposal"
+    >
       <dt>Achieves</dt>
       <dd>{proposal.achieves}</dd>
       <dt>Open questions</dt>
@@ -617,118 +620,119 @@ export function StagedIntentPanel({
 
       {hideActions ? null : (
         <>
-      {showOverride && (
-        <div className={styles.overrideBox}>
-          <textarea
-            className={styles.feedbackInput}
-            placeholder="Reason for overriding the block…"
-            value={overrideReason}
-            onChange={(e) => setOverrideReason(e.target.value)}
-          />
-          <button
-            type="button"
-            className={styles.approveButton}
-            disabled={inFlight !== null || !overrideReason.trim()}
-            onClick={() => void handleApply({ reason: overrideReason })}
-          >
-            {inFlight === 'override' ? 'Applying…' : 'Apply with override'}
-          </button>
-        </div>
-      )}
+          {showOverride && (
+            <div className={styles.overrideBox}>
+              <textarea
+                className={styles.feedbackInput}
+                placeholder="Reason for overriding the block…"
+                value={overrideReason}
+                onChange={(e) => setOverrideReason(e.target.value)}
+              />
+              <button
+                type="button"
+                className={styles.approveButton}
+                disabled={inFlight !== null || !overrideReason.trim()}
+                onClick={() => void handleApply({ reason: overrideReason })}
+              >
+                {inFlight === 'override' ? 'Applying…' : 'Apply with override'}
+              </button>
+            </div>
+          )}
 
-      <div className={styles.rejectForm}>
-        <div
-          className={styles.outcomeToggle}
-          role="radiogroup"
-          aria-label="Reject outcome"
-        >
-          <button
-            type="button"
-            role="radio"
-            aria-checked={rejectOutcome === 'pushback'}
-            className={
-              rejectOutcome === 'pushback'
-                ? styles.outcomeOptionActive
-                : styles.outcomeOption
-            }
-            onClick={() => setRejectOutcome('pushback')}
-          >
-            Pushback
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={rejectOutcome === 'decline'}
-            className={
-              rejectOutcome === 'decline'
-                ? styles.outcomeOptionActive
-                : styles.outcomeOption
-            }
-            onClick={() => setRejectOutcome('decline')}
-          >
-            Decline
-          </button>
-        </div>
-        <textarea
-          className={styles.feedbackInput}
-          placeholder={
-            rejectOutcome === 'pushback'
-              ? 'What should the session revise?'
-              : 'Why is this being declined?'
-          }
-          value={rejectReason}
-          onChange={(e) => setRejectReason(e.target.value)}
-        />
-      </div>
+          <div className={styles.rejectForm}>
+            <div
+              className={styles.outcomeToggle}
+              role="radiogroup"
+              aria-label="Reject outcome"
+            >
+              <button
+                type="button"
+                role="radio"
+                aria-checked={rejectOutcome === 'pushback'}
+                className={
+                  rejectOutcome === 'pushback'
+                    ? styles.outcomeOptionActive
+                    : styles.outcomeOption
+                }
+                onClick={() => setRejectOutcome('pushback')}
+              >
+                Pushback
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={rejectOutcome === 'decline'}
+                className={
+                  rejectOutcome === 'decline'
+                    ? styles.outcomeOptionActive
+                    : styles.outcomeOption
+                }
+                onClick={() => setRejectOutcome('decline')}
+              >
+                Decline
+              </button>
+            </div>
+            <textarea
+              className={styles.feedbackInput}
+              placeholder={
+                rejectOutcome === 'pushback'
+                  ? 'What should the session revise?'
+                  : 'Why is this being declined?'
+              }
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+            />
+          </div>
 
-      <div className={styles.permissionButtons}>
-        {!isGrouped && !blocked && !isCapabilityRequest && (
-          <button
-            type="button"
-            className={styles.approveButton}
-            disabled={inFlight !== null}
-            onClick={() => void handleApply()}
-          >
-            {inFlight === 'apply' ? 'Committing...' : '✓ Commit'}
-          </button>
-        )}
-        {!isGrouped && blocked && !isCapabilityRequest && !showOverride && (
-          <button
-            type="button"
-            className={styles.approveButton}
-            disabled={inFlight !== null}
-            onClick={() => setShowOverride(true)}
-          >
-            Override block…
-          </button>
-        )}
-        {(isGrouped || isCapabilityRequest) && intent.state !== 'approved' && (
-          <button
-            type="button"
-            className={styles.approveButton}
-            disabled={inFlight !== null}
-            onClick={() => void handleApprove()}
-          >
-            {inFlight === 'approve'
-              ? 'Approving...'
-              : isCapabilityRequest
-                ? '✓ Grant'
-                : 'Approve'}
-          </button>
-        )}
-        <button
-          type="button"
-          className={styles.denyButton}
-          disabled={inFlight !== null || !rejectReason.trim()}
-          onClick={() => void handleReject()}
-        >
-          {inFlight === 'reject'
-            ? 'Submitting...'
-            : rejectOutcome === 'pushback'
-              ? '↩ Pushback'
-              : '✕ Decline'}
-        </button>
-      </div>
+          <div className={styles.permissionButtons}>
+            {!isGrouped && !blocked && !isCapabilityRequest && (
+              <button
+                type="button"
+                className={styles.approveButton}
+                disabled={inFlight !== null}
+                onClick={() => void handleApply()}
+              >
+                {inFlight === 'apply' ? 'Committing...' : '✓ Commit'}
+              </button>
+            )}
+            {!isGrouped && blocked && !isCapabilityRequest && !showOverride && (
+              <button
+                type="button"
+                className={styles.approveButton}
+                disabled={inFlight !== null}
+                onClick={() => setShowOverride(true)}
+              >
+                Override block…
+              </button>
+            )}
+            {(isGrouped || isCapabilityRequest) &&
+              intent.state !== 'approved' && (
+                <button
+                  type="button"
+                  className={styles.approveButton}
+                  disabled={inFlight !== null}
+                  onClick={() => void handleApprove()}
+                >
+                  {inFlight === 'approve'
+                    ? 'Approving...'
+                    : isCapabilityRequest
+                      ? '✓ Grant'
+                      : 'Approve'}
+                </button>
+              )}
+            <button
+              type="button"
+              className={styles.denyButton}
+              disabled={inFlight !== null || !rejectReason.trim()}
+              onClick={() => void handleReject()}
+            >
+              {inFlight === 'reject'
+                ? 'Submitting...'
+                : rejectOutcome === 'pushback'
+                  ? '↩ Pushback'
+                  : '✕ Decline'}
+            </button>
+          </div>
         </>
       )}
     </div>

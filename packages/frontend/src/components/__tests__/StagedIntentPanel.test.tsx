@@ -298,15 +298,11 @@ describe('StagedIntentPanel', () => {
       />,
     );
 
-    expect(
-      screen.getByTestId('staged-intent-groom-proposal'),
-    ).toBeTruthy();
+    expect(screen.getByTestId('staged-intent-groom-proposal')).toBeTruthy();
     expect(
       screen.getByText('Stops re-ingesting unchanged HLTV items.'),
     ).toBeTruthy();
-    expect(
-      screen.getByText('dedupe drops a duplicate GUID.'),
-    ).toBeTruthy();
+    expect(screen.getByText('dedupe drops a duplicate GUID.')).toBeTruthy();
     expect(
       screen.queryByText('this should not render when groomProposal is set'),
     ).toBeNull();

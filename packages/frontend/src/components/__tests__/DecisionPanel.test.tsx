@@ -92,7 +92,9 @@ describe('DecisionPanel', () => {
       expect(screen.getByTestId('decision-panel')).toBeTruthy();
     });
 
-    expect(screen.getAllByRole('button', { name: /approve groom/i })).toHaveLength(1);
+    expect(
+      screen.getAllByRole('button', { name: /approve groom/i }),
+    ).toHaveLength(1);
     expect(screen.queryByRole('button', { name: /^approve$/i })).toBeNull();
   });
 
@@ -102,7 +104,10 @@ describe('DecisionPanel', () => {
     );
     const approveGroup = vi
       .spyOn(stagedIntentsApi, 'approveGroup')
-      .mockResolvedValue({ ok: true, committed: ['group-2-dep', 'group-2-status'] });
+      .mockResolvedValue({
+        ok: true,
+        committed: ['group-2-dep', 'group-2-status'],
+      });
 
     render(<DecisionPanel sessionId="groom-session-1" />);
     await waitFor(() => screen.getByTestId('decision-panel'));
@@ -118,15 +123,21 @@ describe('DecisionPanel', () => {
     );
     const rejectGroup = vi
       .spyOn(stagedIntentsApi, 'rejectGroup')
-      .mockResolvedValue({ ok: true, rejected: ['group-3-dep', 'group-3-status'] });
+      .mockResolvedValue({
+        ok: true,
+        rejected: ['group-3-dep', 'group-3-status'],
+      });
 
     render(<DecisionPanel sessionId="groom-session-1" />);
     await waitFor(() => screen.getByTestId('decision-panel'));
 
     fireEvent.click(screen.getByRole('radio', { name: /decline/i }));
-    fireEvent.change(screen.getByPlaceholderText(/why is this being declined/i), {
-      target: { value: 'out of scope' },
-    });
+    fireEvent.change(
+      screen.getByPlaceholderText(/why is this being declined/i),
+      {
+        target: { value: 'out of scope' },
+      },
+    );
     fireEvent.click(screen.getByRole('button', { name: /decline groom/i }));
 
     await waitFor(() =>

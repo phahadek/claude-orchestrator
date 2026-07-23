@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { StagedIntent, StagedIntentRejectOutcome } from '../api/stagedIntents';
+import type {
+  StagedIntent,
+  StagedIntentRejectOutcome,
+} from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { subscribeStagedIntentChange } from '../hooks/stagedIntentBus';
 import { StagedIntentPanel } from './StagedIntentPanel';
