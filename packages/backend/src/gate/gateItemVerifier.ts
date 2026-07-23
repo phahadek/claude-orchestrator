@@ -33,7 +33,7 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000;
  * read-only verification session. The session never runs a vendored skill
  * to assemble this itself.
  */
-export function buildGateVerifyProcedure(item: GateItem): string {
+function buildGateVerifyProcedure(item: GateItem): string {
   const isHumanObservation = item.classification === 'Human-Observation';
   return [
     '## Session Lifecycle',
