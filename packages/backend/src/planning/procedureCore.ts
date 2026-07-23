@@ -297,6 +297,18 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'time — never stage the Ready flip first and leave accretion for later.',
   },
   {
+    id: 'file-follow-on-tasks',
+    title: 'File follow-on tasks',
+    appliesTo: ['groom', 'design', 'ops'],
+    summary:
+      "When the mandate calls for follow-on work — an Investigation's decision plus " +
+      'filed follow-on tasks, a /design "🔲 Backlog" split, or a /groom split-off — ' +
+      'stage each one as a `task.create` intent (landing at 🔲 Backlog) rather than ' +
+      'describing the task spec in chat for the operator to create by hand. The ' +
+      'operator disposes the staged task like any other intent; never treat handing ' +
+      'a task spec back in chat as an acceptable substitute for staging it.',
+  },
+  {
     id: 'apply-on-signoff',
     title: 'Apply on sign-off',
     appliesTo: ['groom', 'design', 'ops'],
