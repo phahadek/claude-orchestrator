@@ -3,6 +3,7 @@ import { renderTaskBodyMarkdown } from '@claude-orchestrator/backend/src/tasks/b
 import type {
   StagedIntent,
   StagedIntentRejectOutcome,
+  GroomProposalFields,
 } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { diffTaskBody, type SectionDiff } from './bodyDiff';
@@ -238,11 +239,7 @@ function AdvisoryRegister({
  * single prose paragraph, so the reviewing human sees the same shape the
  * interactive /groom skill presents for sign-off.
  */
-function GroomProposalSummary({
-  proposal,
-}: {
-  proposal: NonNullable<StagedIntent['groomProposal']>;
-}) {
+function GroomProposalSummary({ proposal }: { proposal: GroomProposalFields }) {
   return (
     <dl
       className={styles.groomProposal}
