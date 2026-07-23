@@ -590,12 +590,12 @@ export function TaskList({
         boardId,
         selectedIds,
       );
-      const launchedIds = new Set(result.launched);
+      const launchedIds = new Set(result.launched.map(bareTaskId));
       setGroomLaunchedIds(
         selectedIds.filter((id) => launchedIds.has(bareTaskId(id))),
       );
       const notLaunched = selectedIds.filter(
-        (id) => !result.launched.includes(bareTaskId(id)),
+        (id) => !launchedIds.has(bareTaskId(id)),
       );
       setGroomError(
         notLaunched.length > 0
@@ -681,8 +681,8 @@ export function TaskList({
         boardId,
         selectedIds,
       );
-      const launchedIds = new Set(result.launched);
-      const deferredIds = new Set(result.deferred);
+      const launchedIds = new Set(result.launched.map(bareTaskId));
+      const deferredIds = new Set(result.deferred.map(bareTaskId));
       setOpsLaunchedIds(
         selectedIds.filter((id) => launchedIds.has(bareTaskId(id))),
       );
@@ -762,8 +762,8 @@ export function TaskList({
         boardId,
         selectedIds,
       );
-      const launchedIds = new Set(result.launched);
-      const deferredIds = new Set(result.deferred);
+      const launchedIds = new Set(result.launched.map(bareTaskId));
+      const deferredIds = new Set(result.deferred.map(bareTaskId));
       setDesignLaunchedIds(
         selectedIds.filter((id) => launchedIds.has(bareTaskId(id))),
       );
