@@ -84,7 +84,10 @@ export function getActiveDeployRun(project: string): DeployRunRow | undefined {
 
 /** The project's active run, or (if none) its most recent terminal run. */
 export function getLatestDeployRun(project: string): DeployRunRow | undefined {
-  return getActiveDeployRunForProject(project) ?? getLatestDeployRunForProject(project);
+  return (
+    getActiveDeployRunForProject(project) ??
+    getLatestDeployRunForProject(project)
+  );
 }
 
 /** Advances the run's step pointer — a step id in the engine's playbook, not a StepDescriptor. */
