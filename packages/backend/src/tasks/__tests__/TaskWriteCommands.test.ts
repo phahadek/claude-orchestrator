@@ -304,6 +304,9 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
   });
 
   it('applies the standard triage-clean-Design readiness_override reason when triageCleanDesign is set and no explicit override is given', async () => {
+    // Open Questions is exempt for 📐 Design (readinessGate.ts), so this uses
+    // grooming residue — the one check that stays type-agnostic — to still
+    // exercise the triageCleanDesign override path.
     mockGetTaskCache.mockReturnValue(
       cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '📐 Design'),
     );
@@ -311,7 +314,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       fetchTaskPage: vi
         .fn()
         .mockResolvedValue(
-          '## Open Questions\n- Which retry policy should we use?\n',
+          'Files affected: confirm the exact module at grooming.',
         ),
     });
     const commands = new BackendTaskWriteCommands(backend, 'proj-1');

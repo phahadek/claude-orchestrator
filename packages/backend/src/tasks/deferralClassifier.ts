@@ -350,7 +350,7 @@ export async function classifyReadyProposal(groupId: string): Promise<void> {
         payload.taskId,
       );
 
-      if (checkReadiness(body).length > 0) return;
+      if (checkReadiness(body, taskType).length > 0) return;
 
       const release = await classifySemaphore.acquire();
       let advisory: Advisory;

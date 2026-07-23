@@ -392,7 +392,7 @@ export async function loadGroomContext(
       ...row,
       filesSection: page.filesSection,
       rawMarkdown: page.rawMarkdown,
-      readinessViolations: checkReadiness(page.rawMarkdown),
+      readinessViolations: checkReadiness(page.rawMarkdown, row.type),
       sizeCheckSeed: {
         files: regions.files.length + regions.planned.length,
         loc_method: 'estimated',
