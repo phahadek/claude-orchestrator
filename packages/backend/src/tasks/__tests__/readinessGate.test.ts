@@ -135,8 +135,6 @@ describe('checkReadiness — type-aware Open Questions / deferral exemption', ()
     expect(designViolations.some((v) => v.detail.includes('residue'))).toBe(
       true,
     );
-    expect(codeViolations.some((v) => v.detail.includes('residue'))).toBe(
-      true,
-    );
+    expect(codeViolations.some((v) => v.detail.includes('residue'))).toBe(true);
   });
 });

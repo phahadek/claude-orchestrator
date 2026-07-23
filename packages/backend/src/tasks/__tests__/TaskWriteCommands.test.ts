@@ -313,7 +313,9 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
     const backend = makeBackend({
       fetchTaskPage: vi
         .fn()
-        .mockResolvedValue('Files affected: confirm the exact module at grooming.'),
+        .mockResolvedValue(
+          'Files affected: confirm the exact module at grooming.',
+        ),
     });
     const commands = new BackendTaskWriteCommands(backend, 'proj-1');
 
