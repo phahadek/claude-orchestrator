@@ -9,12 +9,76 @@
   max-width: 380px;
 }
 
+.headingRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .heading {
   font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.03em;
+}
+
+.dismissButton {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  padding: 4px 8px;
+  flex-shrink: 0;
+}
+
+.dismissButton:hover {
+  color: var(--text-primary);
+}
+
+/* Collapsed state: a small reachable badge instead of the full panel, so
+   the decision surface never traps the rest of the UI on narrow viewports. */
+.collapsedBar {
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+}
+
+.expandButton {
+  width: 100%;
+  background: var(--bg-secondary);
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.expandButton:hover {
+  color: var(--text-primary);
+}
+
+/* ── Mobile (<=768px): stacked below the transcript, bounded height, and
+   always dismissible so it can never cover the whole screen ── */
+@media (max-width: 768px) {
+  .panel {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+    max-height: 45vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .collapsedBar {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
 }
 
 .group {
