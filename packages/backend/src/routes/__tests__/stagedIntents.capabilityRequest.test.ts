@@ -79,6 +79,33 @@ describe('session.requestCapability decision-surface kind', () => {
     expect(message).toContain('Bash(psql:*)');
   });
 
+  it('grants the own-record read capability (session_events/audit_log by target session id) through the same approve -> grant -> re-dispatch loop', async () => {
+    const sessionManager = makeSessionManager();
+    const app = makeApp(sessionManager);
+
+    const intent = stageIntent(
+      'session.requestCapability',
+      {
+        capability: 'read:session-record:target-session-9',
+        plan: "verify gate item d9a3d3e2 by reading the target session's own record",
+        evidence: "no other grantable capability reaches this orchestrator's own DB",
+      },
+      'proj-1',
+      null,
+      'sess-verify-1',
+    );
+
+    const res = await supertest(app).post(
+      `/api/staged-intents/${intent.id}/approve`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(sessionManager.grantCapability).toHaveBeenCalledWith(
+      'sess-verify-1',
+      'read:session-record:target-session-9',
+    );
+  });
+
   it('never grants a broader or resolved/apply scope than the exact requested capability', async () => {
     const sessionManager = makeSessionManager();
     const app = makeApp(sessionManager);

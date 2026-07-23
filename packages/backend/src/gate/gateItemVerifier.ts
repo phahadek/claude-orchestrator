@@ -87,13 +87,18 @@ function buildGateVerifyContext(item: GateItem): string {
     '',
     'This session is responsible for asking for what it needs: nothing beyond ' +
       'its base read/stage profile is ever speculatively handed to it. If ' +
-      'settling this item genuinely requires a read your base tools do not ' +
-      'cover (e.g. a direct database read), stage a `session.requestCapability` ' +
-      'intent naming that exact read and end the turn — an operator grant ' +
-      'resumes you with it. If that is not practical for a bounded one-shot ' +
-      'investigation, report `needs-setup` and name the missing capability. ' +
-      'Never fabricate a pass/fail to route around a permission denial — a ' +
-      'blocked read is grounds for needs-setup, not for guessing.',
+      "settling this item genuinely requires reading this orchestrator's own " +
+      "runtime record (session_events/audit_log for a session you're verifying), " +
+      'request the own-record read (see "Capabilities" above — ' +
+      '`read:session-record:<target-session-id>`), not a Bash prefix like ' +
+      '`sqlite3` or a direct filesystem/DB path: the live DB sits outside this ' +
+      "sandbox and neither reaches it. For any other read your base tools don't " +
+      'cover, stage a `session.requestCapability` intent naming that exact read ' +
+      'and end the turn — an operator grant resumes you with it. If that is not ' +
+      'practical for a bounded one-shot investigation, report `needs-setup` and ' +
+      'name the missing capability. Never fabricate a pass/fail to route around ' +
+      'a permission denial — a blocked read is grounds for needs-setup, not for ' +
+      'guessing.',
     '',
     'Source is, at most, a brief orient — a quick, targeted look to confirm ' +
       'you are reading the right code path once the operational record has ' +

@@ -278,8 +278,9 @@ const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
     '{"taskId":"<task-id>","state":"staged-proposal",' +
     '"fields":{"findingOrProposal":"<finding or proposal>"}}',
   'session.requestCapability':
-    '{"capability":"<one Bash command prefix or one named MCP write verb>",' +
-    '"reason":"<why this session needs it>"}',
+    '{"capability":"<one Bash command prefix, one named MCP write verb, or ' +
+    'read:session-record:<target-session-id> for the orchestrator\'s own ' +
+    'session_events/audit_log>","reason":"<why this session needs it>"}',
 };
 
 /** Render one `node stage-task-intent.mjs <kind> '<payload>'` line per allowed kind. */
@@ -327,6 +328,18 @@ export function renderOpsCapabilities(): string[] {
       'durably granted to this session alone and it is re-dispatched with that tool ' +
       "available. On rejection or pushback, the session resumes with the operator's " +
       'feedback instead.',
+    '',
+    'To verify by value against this orchestrator\'s own runtime state (e.g. ' +
+      "confirming a prior session's turn actually ran, or reading its staged/audit " +
+      "trail), request the one grantable own-record read instead of a Bash prefix: " +
+      'stage `session.requestCapability` with ' +
+      '`capability: "read:session-record:<target-session-id>"` — never ' +
+      '`Bash(sqlite3 ...)` or similar, which cannot reach the orchestrator\'s DB from ' +
+      'this sandbox and cannot authenticate to its device-authed API. On approval, ' +
+      'read the result with `node ~/.claude/scripts/read-session-record.mjs ' +
+      '<target-session-id>` — it returns that session\'s session_events and ' +
+      'audit_log, brokered by the orchestrator itself since this session holds no ' +
+      'device auth. Read-only: there is no write form of this capability.',
     '',
     'Some things are never grantable this way, no matter what an operator approves: ' +
       'anything that reaches the resolved / ✅ Done / task-intent-apply transition ' +
