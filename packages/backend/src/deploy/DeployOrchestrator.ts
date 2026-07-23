@@ -97,15 +97,27 @@ interface StepOutcome {
   detail?: string;
 }
 
-function spawnShell(
+/** Deploy steps build artifacts; they must not inherit the host service's
+ *  NODE_ENV=production, which makes npm omit devDependencies (vite etc.). */
+export function buildDeployStepEnv(
+  base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  return { ...base, NODE_ENV: 'development' };
+}
+
+/** The default `ShellRunner` used when no `runShell` dep is injected. */
+export function spawnShell(
   command: string,
   opts: { cwd: string; runAs?: string },
 ): Promise<ShellResult> {
   return new Promise((resolve) => {
     const [cmd, args] = opts.runAs
-      ? ['sudo', ['-u', opts.runAs, 'bash', '-lc', command]]
+      ? [
+          'sudo',
+          ['-u', opts.runAs, 'NODE_ENV=development', 'bash', '-lc', command],
+        ]
       : ['bash', ['-lc', command]];
-    const proc = spawn(cmd, args, { cwd: opts.cwd });
+    const proc = spawn(cmd, args, { cwd: opts.cwd, env: buildDeployStepEnv() });
     let out = '';
     proc.stdout?.on('data', (d: Buffer) => {
       out += d.toString();

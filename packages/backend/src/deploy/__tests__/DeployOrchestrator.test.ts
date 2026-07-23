@@ -17,6 +17,8 @@ vi.mock('../../db/db.js', async () => {
 import { db } from '../../db/db.js';
 import {
   DeployOrchestrator,
+  buildDeployStepEnv,
+  spawnShell,
   type DeployOrchestratorDeps,
   type ShellResult,
 } from '../DeployOrchestrator';
@@ -348,6 +350,31 @@ describe('DeployOrchestrator: companion-diff flags', () => {
     expect(info.companions.map((c: { name: string }) => c.name)).toEqual([
       'worker',
     ]);
+  });
+});
+
+describe('buildDeployStepEnv', () => {
+  it('scrubs NODE_ENV=production while passing other keys through', () => {
+    const base = { NODE_ENV: 'production', PATH: '/usr/bin', FOO: 'bar' };
+    const env = buildDeployStepEnv(base);
+
+    expect(env.NODE_ENV).not.toBe('production');
+    expect(env.PATH).toBe('/usr/bin');
+    expect(env.FOO).toBe('bar');
+  });
+});
+
+describe('DeployOrchestrator: default shell runner env', () => {
+  it('spawns steps with a non-production NODE_ENV', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const result = await spawnShell('echo "$NODE_ENV"', { cwd: process.cwd() });
+      expect(result.ok).toBe(true);
+      expect(result.output.trim()).not.toBe('production');
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
   });
 });
 
