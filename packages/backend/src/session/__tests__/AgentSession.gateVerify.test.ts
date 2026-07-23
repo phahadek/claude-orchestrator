@@ -187,6 +187,48 @@ describe('parseGateVerifyDisposition()', () => {
       ),
     ).toBeNull();
   });
+
+  it('parses a reclassify proposal to Human-Observation alongside a disposition', () => {
+    const text = `{"gate_verify":{"gate_item_id":"item-6","disposition":"needs-setup","reclassify":{"to":"Human-Observation","reason":"describes a rendered UI block"}}}`;
+    const result = parseGateVerifyDisposition(text);
+    expect(result).toEqual({
+      gateItemId: 'item-6',
+      disposition: 'needs-setup',
+      evidence: undefined,
+      reclassify: {
+        to: 'Human-Observation',
+        reason: 'describes a rendered UI block',
+      },
+    });
+  });
+
+  it('parses a reclassify proposal to needs-triage', () => {
+    const text = `{"gate_verify":{"gate_item_id":"item-7","disposition":"needs-setup","reclassify":{"to":"needs-triage","reason":"unclear what tier fits"}}}`;
+    const result = parseGateVerifyDisposition(text);
+    expect(result?.reclassify).toEqual({
+      to: 'needs-triage',
+      reason: 'unclear what tier fits',
+    });
+  });
+
+  it('drops a reclassify proposal targeting an auto-run tier rather than accepting it', () => {
+    const text = `{"gate_verify":{"gate_item_id":"item-8","disposition":"needs-setup","reclassify":{"to":"Read-Only","reason":"looks headless"}}}`;
+    const result = parseGateVerifyDisposition(text);
+    expect(result?.disposition).toBe('needs-setup');
+    expect(result?.reclassify).toBeUndefined();
+  });
+
+  it('drops a reclassify proposal missing a reason', () => {
+    const text = `{"gate_verify":{"gate_item_id":"item-9","disposition":"needs-setup","reclassify":{"to":"Human-Observation"}}}`;
+    const result = parseGateVerifyDisposition(text);
+    expect(result?.reclassify).toBeUndefined();
+  });
+
+  it('omits reclassify when absent from the report', () => {
+    const text = `{"gate_verify":{"gate_item_id":"item-10","disposition":"pass","evidence":{"note":"ok"}}}`;
+    const result = parseGateVerifyDisposition(text);
+    expect(result?.reclassify).toBeUndefined();
+  });
 });
 
 // ── AgentSession: gate_verify_disposition emission ───────────────────────────

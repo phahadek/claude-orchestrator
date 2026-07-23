@@ -37,6 +37,7 @@ import {
   approveGateItem,
   reopenGateItem,
   reclassifyGateItem,
+  proposeGateItemReclassification,
   type DeployAncestrySource,
 } from '../gateService.js';
 
@@ -588,6 +589,90 @@ describe('reopenGateItem', () => {
     expect(getGateItem(item.id)?.state).toBe('runnable');
 
     expect(() => reopenGateItem(item.id)).toThrow();
+  });
+});
+
+describe('proposeGateItemReclassification', () => {
+  it('applies a proposal to Human-Observation with provenance and reason', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    const outcome = proposeGateItemReclassification(
+      item.id,
+      'Human-Observation',
+      'this describes a rendered UI block, not a headlessly-observable behavior',
+    );
+    expect(outcome.applied).toBe(true);
+    expect(outcome.item.classification).toBe('Human-Observation');
+
+    const detail = getGateItemDetail(item.id);
+    expect(detail!.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          disposition: 'reclassified',
+          operator: 'gate-verifier',
+          evidence: expect.objectContaining({
+            from: 'Read-Only',
+            to: 'Human-Observation',
+            reason: expect.stringContaining('rendered UI block'),
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('applies a proposal to needs-triage', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    const outcome = proposeGateItemReclassification(
+      item.id,
+      'needs-triage',
+      'cannot tell what tier fits',
+    );
+    expect(outcome.applied).toBe(true);
+    expect(outcome.item.classification).toBe('needs-triage');
+  });
+
+  it('rejects a proposal to an auto-run tier', () => {
+    const item = makeItem({ classification: 'needs-triage' });
+    const outcome = proposeGateItemReclassification(
+      item.id,
+      'Read-Only',
+      'looks headlessly verifiable',
+    );
+    expect(outcome.applied).toBe(false);
+    expect(outcome.item.classification).toBe('needs-triage');
+    expect(outcome.rejectedReason).toMatch(/only propose/);
+  });
+
+  it('rejects a no-op proposal to the item\'s current classification', () => {
+    const item = makeItem({ classification: 'Human-Observation' });
+    const outcome = proposeGateItemReclassification(
+      item.id,
+      'Human-Observation',
+      'still UI',
+    );
+    expect(outcome.applied).toBe(false);
+    expect(outcome.rejectedReason).toMatch(/already classified/);
+  });
+
+  it('guards against reclassify ping-pong by rejecting a repeat verifier proposal', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    const first = proposeGateItemReclassification(
+      item.id,
+      'Human-Observation',
+      'first proposal',
+    );
+    expect(first.applied).toBe(true);
+
+    // An operator reclassifies it back to an auto-run tier...
+    reclassifyGateItem(item.id, 'Read-Only', 'pedro');
+
+    // ...and a verifier proposes moving it again — rejected by the guard.
+    const second = proposeGateItemReclassification(
+      item.id,
+      'Human-Observation',
+      'second proposal',
+    );
+    expect(second.applied).toBe(false);
+    expect(second.rejectedReason).toMatch(/needs operator attention/);
   });
 });
 

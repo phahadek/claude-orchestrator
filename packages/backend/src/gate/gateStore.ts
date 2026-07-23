@@ -276,18 +276,26 @@ const VALID_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Prod-Mutating',
   'Opportunistic',
   'Human-Observation',
+  // A verifier's self-correction proposal (see gateService's
+  // proposeGateItemReclassification) may hand an item back to needs-triage
+  // when it cannot tell what tier fits — the human /gate reclassify step
+  // never targets this itself, but this store-level primitive is shared.
+  'needs-triage',
 ]);
 
 /**
  * Triages a `needs-triage` (or any) item into one of the resolved tiers —
- * the /gate skill's reclassify step. Refuses to set `needs-triage` back:
- * that state is only ever a default at insert time, never a target.
+ * the /gate skill's reclassify step, and a gate-verify session's
+ * self-correction proposal (gateService.proposeGateItemReclassification).
+ * `evidenceExtra` merges additional fields (e.g. a verifier's `reason`) into
+ * the recorded event's evidence alongside the standard {from, to}.
  */
 export function setClassification(
   gateItemId: string,
   classification: GateItemClassification,
   updatedAt: string,
   operator?: string,
+  evidenceExtra?: Record<string, unknown>,
 ): GateItem {
   if (!VALID_RECLASSIFY_TARGETS.has(classification)) {
     throw new Error(
@@ -307,7 +315,7 @@ export function setClassification(
   insertGateItemEvent({
     gate_item_id: gateItemId,
     disposition: 'reclassified',
-    evidence: stringifyJson({ from, to: classification }),
+    evidence: stringifyJson({ from, to: classification, ...evidenceExtra }),
     filed_followon: null,
     deploy_sha: null,
     operator: operator ?? null,

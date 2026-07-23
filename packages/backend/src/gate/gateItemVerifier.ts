@@ -139,13 +139,32 @@ function buildGateVerifyProcedure(item: GateItem): string {
             'through the /gate flow.',
           '',
         ]
-      : []),
+      : [
+          'If, while investigating, you determine this item is ' +
+            'mis-classified — most commonly, it actually describes ' +
+            'UI/visual/interactive behavior that only a human observing the ' +
+            'running app can judge, but it is tagged an auto-run tier ' +
+            '(Read-Only/Opportunistic/Prod-Mutating) so this session was ' +
+            'dispatched to headlessly verify something it structurally ' +
+            "cannot observe — propose the correct classification instead " +
+            'of forcing a pass/fail, or abstaining to a bare needs-setup ' +
+            'that leaves the same mis-routing to recur next time. You may ' +
+            'only propose `Human-Observation` (this is that case) or ' +
+            '`needs-triage` (you cannot tell what tier actually fits and a ' +
+            'human should decide) — never an auto-run tier. Include it as ' +
+            'a `reclassify` field alongside your disposition (typically ' +
+            '`needs-setup`, since you are also abstaining on this run); ' +
+            'the backend applies it and re-routes the item, it does not ' +
+            'change what you report for `disposition`.',
+          '',
+        ]),
     'Report your finding by ending your final message with exactly one block ' +
       'of this shape (a bare JSON object is not enough — it must be the ' +
-      '`gate_verify` key):',
+      '`gate_verify` key; `reclassify` is optional — omit it unless you are ' +
+      'proposing a self-correction as described above):',
     '',
     '```json',
-    `{"gate_verify": {"gate_item_id": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"basis": "operational"|"source", "...": "..."}}}`,
+    `{"gate_verify": {"gate_item_id": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"basis": "operational"|"source", "...": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}}`,
     '```',
   ].join('\n');
 }
@@ -356,10 +375,12 @@ export function admitsLiveRecordUnreachable(evidence: unknown): boolean {
 function downgrade(
   reason: string,
   reportedEvidence: unknown,
+  reclassify?: GateVerificationResult['reclassify'],
 ): GateVerificationResult {
   return {
     disposition: 'needs-setup',
     evidence: { reason, reportedEvidence },
+    reclassify,
   };
 }
 
@@ -384,24 +405,28 @@ export function enforcePassEvidenceContract(
     return downgrade(
       'pass disposition lacked operational/runtime evidence — a source-only verdict cannot pass',
       result.evidence,
+      result.reclassify,
     );
   }
   if (isPreconditionOnlyEvidence(result.evidence)) {
     return downgrade(
       'pass disposition was grounded only in a guaranteed precondition (PR merged/deployed) or other mechanical check — that proves nothing about whether the described behavior holds',
       result.evidence,
+      result.reclassify,
     );
   }
   if (admitsLiveRecordUnreachable(result.evidence)) {
     return downgrade(
       "pass disposition's evidence admits the live/operational record was not or could not be read — a self-reported limitation like this cannot be paired with a pass",
       result.evidence,
+      result.reclassify,
     );
   }
   if (!hasConcreteRuntimeRecordEvidence(result.evidence)) {
     return downgrade(
       'pass disposition rested on source/CI-grade evidence (a CI check, a test file, a source-path trace) rather than a concrete captured runtime record (session_events, audit_log, or a live API/DB read)',
       result.evidence,
+      result.reclassify,
     );
   }
   return result;
@@ -522,6 +547,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         finish({
           disposition: payload.disposition.disposition,
           evidence: payload.disposition.evidence ?? { sessionId },
+          reclassify: payload.disposition.reclassify,
         });
       };
 
@@ -529,6 +555,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         finish({
           disposition: preCaptured.disposition.disposition,
           evidence: preCaptured.disposition.evidence ?? { sessionId },
+          reclassify: preCaptured.disposition.reclassify,
         });
         return;
       }

@@ -3,6 +3,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
+import type { GateItemClassification } from '../db/types';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { mintStageCredential } from '../auth/SessionStageAuth';
 import { mintOpsJournalCredential } from '../auth/OpsJournalAuth';
@@ -194,15 +195,49 @@ export function parseVerifiedFlakyDisposition(
   return { gate, reason };
 }
 
+/**
+ * Classifications a gate-verify session may propose reclassifying its item
+ * to — a self-correction channel, not a free-form retag. Both targets add
+ * oversight (route the item out of auto-run), matching the grooming
+ * decision that only downgrade-style reclassifications are permitted from
+ * this channel; a verifier can never propose an auto-run tier.
+ */
+const VERIFIER_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
+  'Human-Observation',
+  'needs-triage',
+]);
+
+export interface GateVerifyReclassifyProposal {
+  to: GateItemClassification;
+  reason: string;
+}
+
 export interface GateVerifyDisposition {
   gateItemId: string;
   disposition: 'pass' | 'fail' | 'needs-setup';
   evidence?: unknown;
+  /** The session's self-correction: "this item is mis-classified" — see gateItemVerifier's report contract. */
+  reclassify?: GateVerifyReclassifyProposal;
 }
 
 export interface GateVerifyDispositionPayload {
   sessionId: string;
   disposition: GateVerifyDisposition;
+}
+
+function parseGateVerifyReclassify(
+  raw: unknown,
+): GateVerifyReclassifyProposal | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const r = raw as Record<string, unknown>;
+  if (
+    typeof r.to !== 'string' ||
+    !VERIFIER_RECLASSIFY_TARGETS.has(r.to as GateItemClassification)
+  ) {
+    return undefined;
+  }
+  if (typeof r.reason !== 'string' || r.reason.length === 0) return undefined;
+  return { to: r.to as GateItemClassification, reason: r.reason };
 }
 
 /**
@@ -256,6 +291,7 @@ export function parseGateVerifyDisposition(
     gateItemId: b.gate_item_id,
     disposition: b.disposition,
     evidence: b.evidence,
+    reclassify: parseGateVerifyReclassify(b.reclassify),
   };
 }
 
