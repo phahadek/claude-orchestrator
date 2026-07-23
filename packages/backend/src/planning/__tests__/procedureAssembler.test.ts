@@ -589,6 +589,46 @@ describe('planning intent kinds', () => {
     }
   });
 
+  it('advertises task.create for groom, design, and ops, so a dispatched session can stage its mandated follow-on tasks', () => {
+    const outputs = [
+      assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        digest: {
+          workflow: 'groom',
+          data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+        },
+      }),
+      assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        digest: {
+          workflow: 'design',
+          data: deriveDesignDigestSlice(fixtureDesignLoadResult()),
+        },
+      }),
+      assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        digest: {
+          workflow: 'ops',
+          data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
+        },
+      }),
+    ];
+    for (const output of outputs) {
+      const match = output.match(
+        /Stage findings as one of: (.+?)\. Every staged intent/,
+      );
+      expect(match).toBeTruthy();
+      const kinds = match![1].split(',').map((k) => k.trim());
+      expect(kinds).toContain('task.create');
+      for (const kind of kinds) {
+        expect(KNOWN_INTENT_KINDS.has(kind)).toBe(true);
+      }
+    }
+  });
+
   it('advertises session.requestCapability for ops, coherent with the capability inventory section', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',

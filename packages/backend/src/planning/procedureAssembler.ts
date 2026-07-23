@@ -231,14 +231,21 @@ const PLANNING_INTENT_KINDS: Record<PlanningWorkflow, readonly string[]> = {
     'task.setDependsOn',
     'gate.accrete',
     'seed.stage',
+    'task.create',
   ],
   design: [
     'task.updateBody',
     'task.setProperties',
     'task.setStatus',
     'seed.stage',
+    'task.create',
   ],
-  ops: ['journal.setState', 'task.setStatus', 'session.requestCapability'],
+  ops: [
+    'journal.setState',
+    'task.setStatus',
+    'session.requestCapability',
+    'task.create',
+  ],
 };
 
 /**
