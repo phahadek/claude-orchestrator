@@ -54,10 +54,10 @@ const SIZE_CHECK_DECISIONS = new Set([
 ]);
 
 /** Task types that require a gate_contribution accretion marker before Ready. */
-const GATE_CONTRIBUTION_TYPES = new Set(['💻 Code', '🛠️ Tooling']);
+const GATE_CONTRIBUTION_TYPES = new Set(['💻 Code']);
 
 /** Task types that require a seed_contribution accretion marker before Ready. */
-const SEED_CONTRIBUTION_TYPES = new Set(['💻 Code', '🛠️ Tooling']);
+const SEED_CONTRIBUTION_TYPES = new Set(['💻 Code']);
 
 /** Statuses that clear a Depends On edge / a cited Design task as "settled". */
 const DONE_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
@@ -177,7 +177,7 @@ function isTypeCheckDispositioned(entry: GroomingGateEntry): boolean {
  * gate_contribution requires a durable gate_accretion marker for the task
  * being promoted (accreteGateContribution writes it, keyed by source task id
  * — the task being promoted is its own source). Absent a resolved type, or a
- * type outside Code/Tooling, fail-open (allow) — mirrors groom-gate.mjs's
+ * type outside Code, fail-open (allow) — mirrors groom-gate.mjs's
  * needsGate check.
  */
 function isGateContributionRecorded(
@@ -192,7 +192,7 @@ function isGateContributionRecorded(
  * seed_contribution requires a durable seed_accretion marker for the task
  * being promoted (stageSeedContribution writes it, keyed by source task id —
  * the task being promoted is its own source). Absent a resolved type, or a
- * type outside Code/Tooling, fail-open (allow) — mirrors gate_contribution's
+ * type outside Code, fail-open (allow) — mirrors gate_contribution's
  * treatment and groom-gate.mjs's needsSeed check.
  */
 function isSeedContributionRecorded(
@@ -414,21 +414,9 @@ export function checkGroomingPromotionGate(
     );
   }
 
-  if (!isGateContributionRecorded(resolvedType, taskId)) {
-    reasons.push(
-      'gate_contribution is not recorded — for 💻 Code and 🛠️ Tooling tasks, accreteGateContribution ' +
-        'must record a gate_accretion marker (items appended to the milestone gate, or an explicit ' +
-        '"none"/"n/a" decision) for this task before promotion.',
-    );
-  }
-
-  if (!isSeedContributionRecorded(resolvedType, taskId)) {
-    reasons.push(
-      'seed_contribution is not recorded — for 💻 Code and 🛠️ Tooling tasks, stageSeedContribution ' +
-        'must record a seed_accretion marker (config-change seeds minted onto the milestone seed store, ' +
-        'or an explicit "none"/"n/a" decision) for this task before promotion.',
-    );
-  }
+  reasons.push(
+    ...checkAccretionContributions(entry, taskId, resolvedType).reasons,
+  );
 
   reasons.push(
     ...isFilesPathsResolved(resolvedType, entry.filesPathsEntries).reasons,
@@ -436,6 +424,45 @@ export function checkGroomingPromotionGate(
   reasons.push(...isDependsOnDesignClear(entry.dependsOnTasks).reasons);
   reasons.push(...isConstraintsDispositioned(entry).reasons);
   reasons.push(...isInteractiveTriageClean(resolvedType, entry).reasons);
+
+  return { allowed: reasons.length === 0, reasons };
+}
+
+/**
+ * The gate_contribution/seed_contribution subset of checkGroomingPromotionGate
+ * — every other artifact (size_check, type_check, Files/paths, constraints,
+ * triage) is only knowable from the full grooming-state entry a dispatched
+ * session builds up over a turn, but the accretion markers are durable
+ * cross-turn state a session can (and does) skip recording. Run at stage time
+ * (POST /staged-intents) so a session that stages a Ready flip with no
+ * gate/seed accretion sees the gap in-turn instead of discovering it only
+ * when a human later tries to apply — that eager check never blocks staging
+ * itself; checkGroomingPromotionGate at commit time remains the sole hard
+ * authority.
+ */
+export function checkAccretionContributions(
+  entry: GroomingGateEntry,
+  taskId: string,
+  authoritativeType?: string,
+): GroomingGateResult {
+  const reasons: string[] = [];
+  const resolvedType = authoritativeType ?? entry.type;
+
+  if (!isGateContributionRecorded(resolvedType, taskId)) {
+    reasons.push(
+      'gate_contribution is not recorded — for 💻 Code tasks, accreteGateContribution ' +
+        'must record a gate_accretion marker (items appended to the milestone gate, or an explicit ' +
+        '"none"/"n/a" decision) for this task before promotion.',
+    );
+  }
+
+  if (!isSeedContributionRecorded(resolvedType, taskId)) {
+    reasons.push(
+      'seed_contribution is not recorded — for 💻 Code tasks, stageSeedContribution ' +
+        'must record a seed_accretion marker (config-change seeds minted onto the milestone seed store, ' +
+        'or an explicit "none"/"n/a" decision) for this task before promotion.',
+    );
+  }
 
   return { allowed: reasons.length === 0, reasons };
 }

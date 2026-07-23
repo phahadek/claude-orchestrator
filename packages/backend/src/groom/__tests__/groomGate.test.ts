@@ -6,7 +6,10 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { checkGroomingPromotionGate } from '../groomGate';
+import {
+  checkGroomingPromotionGate,
+  checkAccretionContributions,
+} from '../groomGate';
 import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
 import { BackendTaskWriteCommands } from '../../tasks/TaskWriteCommands';
@@ -145,30 +148,19 @@ describe('checkGroomingPromotionGate', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('allows a Tooling-task Ready flip whose marker decision is "none"', () => {
-    recordAccretionMarker({
-      sourceTaskId: 'notion:no-items',
-      project: 'polimarket-analyser',
-      milestone: 'M12',
-      decision: 'none',
-      accretedAt: new Date(0).toISOString(),
-    });
-    recordSeedAccretionMarker({
-      sourceTaskId: 'notion:no-items',
-      project: 'polimarket-analyser',
-      milestone: 'M12',
-      decision: 'none',
-      accretedAt: new Date(0).toISOString(),
-    });
+  it('retired 🛠️ Tooling no longer requires a gate_accretion marker — fails open with none recorded', () => {
     const result = checkGroomingPromotionGate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
         type: '🛠️ Tooling',
       },
-      'notion:no-items',
+      'notion:tooling-retired-gate',
     );
     expect(result.allowed).toBe(true);
+    expect(result.reasons.some((r) => r.includes('gate_contribution'))).toBe(
+      false,
+    );
   });
 
   it('allows a Design-task Ready flip with no marker at all (type not gate-checked)', () => {
@@ -241,30 +233,19 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
     expect(result.allowed).toBe(true);
   });
 
-  it('allows a Tooling-task Ready flip whose seed marker decision is "none"', () => {
-    recordAccretionMarker({
-      sourceTaskId: 'notion:no-seed-items',
-      project: 'polimarket-analyser',
-      milestone: 'M12',
-      decision: 'n/a',
-      accretedAt: new Date(0).toISOString(),
-    });
-    recordSeedAccretionMarker({
-      sourceTaskId: 'notion:no-seed-items',
-      project: 'polimarket-analyser',
-      milestone: 'M12',
-      decision: 'none',
-      accretedAt: new Date(0).toISOString(),
-    });
+  it('retired 🛠️ Tooling no longer requires a seed_accretion marker — fails open with none recorded', () => {
     const result = checkGroomingPromotionGate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
         type: '🛠️ Tooling',
       },
-      'notion:no-seed-items',
+      'notion:tooling-retired-seed',
     );
     expect(result.allowed).toBe(true);
+    expect(result.reasons.some((r) => r.includes('seed_contribution'))).toBe(
+      false,
+    );
   });
 
   it('allows a Code-task Ready flip whose seed marker decision is "n/a"', () => {
@@ -622,6 +603,52 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
         ],
       },
       'notion:fm3-unaffected',
+    );
+    expect(result.allowed).toBe(true);
+  });
+});
+
+describe('checkAccretionContributions', () => {
+  it('surfaces both reasons for a Code task with neither marker recorded', () => {
+    const result = checkAccretionContributions(
+      { type: '💻 Code' },
+      'notion:accretion-none',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('gate_contribution'))).toBe(
+      true,
+    );
+    expect(result.reasons.some((r) => r.includes('seed_contribution'))).toBe(
+      true,
+    );
+  });
+
+  it('allows a Code task once both markers are recorded', () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:accretion-both',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:accretion-both',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+    const result = checkAccretionContributions(
+      { type: '💻 Code' },
+      'notion:accretion-both',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('fails open for a retired 🛠️ Tooling task with no markers', () => {
+    const result = checkAccretionContributions(
+      { type: '🛠️ Tooling' },
+      'notion:accretion-tooling',
     );
     expect(result.allowed).toBe(true);
   });
