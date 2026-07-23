@@ -3,13 +3,15 @@
  * behind a dispatched planning session's appended-prompt file, mirroring
  * buildOrchestratorClaudeMd's single-builder-with-branches pattern (see
  * `session/orchestrator-claudemd.ts`) but for the stage-then-human-apply
- * (groom/design/ops) execution mode instead of the code-dispatch one.
+ * (groom/design) / drive-to-applied (ops) execution modes instead of the
+ * code-dispatch one.
  *
  * Composition (three slots, always in this order):
  *
- *   1. Skeleton (written once, shared by every workflow): session lifecycle,
- *      the stage-only transport, and the structured output contract (staged
- *      intents + the decision-proposal annotation).
+ *   1. Skeleton (written once, shared by every workflow): session lifecycle
+ *      (stage-only for groom/design, write-capable drive-to-applied for ops),
+ *      the transport, and the structured output contract (staged intents +
+ *      the decision-proposal annotation).
  *   2. Per-kind procedure core: `procedureCore.ts`'s principles + ordered
  *      steps for the workflow — the same canonical module the interactive
  *      SKILL.md files compose, so an injected session and an interactive one
@@ -291,6 +293,14 @@ export function renderOpsCapabilities(): string[] {
       'file is always a Code task, not something a capability grant hands to ops ' +
       '(see "Dispatch-eligibility boundary" below).',
     '',
+    'Never create a PR, and never author or land code yourself, no matter how small ' +
+      'the change looks: this session has no worktree or branch (see "Session ' +
+      'Lifecycle" above), and a code change is categorically a 💻 Code task. If ' +
+      'driving the operational change to `applied-pending-confirm` turns out to need ' +
+      'one, stage a `task.create` intent carrying the spec instead of opening a PR — ' +
+      'then continue driving the rest of the change, or park on it if the whole ' +
+      'thing is now blocked on that Code task landing.',
+    '',
   ];
 }
 
@@ -301,15 +311,32 @@ function renderSkeleton(
 ): string {
   const label = SKILL_LABELS[workflow];
   const kinds = PLANNING_INTENT_KINDS[workflow];
+  const lifecycle =
+    workflow === 'ops'
+      ? `This is an injected, non-interactive ${label} session for a single target task ` +
+        `(${taskName} — ${taskUrl}). There is no worktree and no feature branch, and this ` +
+        'session never creates a PR — the worktree-branch-PR invariant holds for ops too ' +
+        '(see "Capabilities" below for what a code change routes through instead). Unlike ' +
+        'groom/design, this session is write-capable, earning capabilities on request, and ' +
+        'its job is to drive the operational change itself to completion, not to stage a ' +
+        'proposal and hand execution back. The terminal state is the ops_journal ' +
+        'reaching `applied-pending-confirm` — the change actually applied, reconciled, and ' +
+        'its evidence captured — not a staged proposal parked for someone else to execute. ' +
+        'End the turn only when genuinely blocked on an operator decision (a pending ' +
+        'capability request, or a step only a human can perform, like secret provisioning) ' +
+        '— never at a "proposal staged" point when there is more of the change left to ' +
+        'drive; the only operator/device-auth-only step is the final ' +
+        '`applied-pending-confirm` → `resolved` confirmation, not anything before it.'
+      : `This is an injected, non-interactive ${label} session for a single target task ` +
+        `(${taskName} — ${taskUrl}). There is no worktree and no feature branch — this ` +
+        'session runs read-only/stage-only against the project checkout. When the ' +
+        'procedure below reaches a natural stopping point (every open item presented ' +
+        'and either staged or explicitly deferred), end the turn instead of waiting — ' +
+        'the session parks into idle rather than scraping for a PR.';
   return [
     '## Session Lifecycle',
     '',
-    `This is an injected, non-interactive ${label} session for a single target task ` +
-      `(${taskName} — ${taskUrl}). There is no worktree and no feature branch — this ` +
-      'session runs read-only/stage-only against the project checkout. When the ' +
-      'procedure below reaches a natural stopping point (every open item presented ' +
-      'and either staged or explicitly deferred), end the turn instead of waiting — ' +
-      'the session parks into idle rather than scraping for a PR.',
+    lifecycle,
     '',
     ...(workflow === 'ops' ? renderOpsCapabilities() : []),
     '## Transport',
@@ -338,10 +365,16 @@ function renderSkeleton(
           'first-class alternative outcome, not a fallback for a session that got stuck.'
         : '') +
       (workflow === 'ops'
-        ? ' Stage the decision, then park: once investigation reaches a proposal, ' +
-          'stage it — never ask in chat whether to stage before doing so. Staging is ' +
-          'the reviewable action the human then approves; asking first inverts the ' +
-          'flow and leaves the operator with nothing to act on.'
+        ? ' Stage the next step, then keep driving: once investigation reaches a ' +
+          'decision, stage it (a `journal.setState` transition, or a ' +
+          '`session.requestCapability` naming the exact write you need) — never ask ' +
+          'in chat whether to stage or request first. On a capability grant or an ' +
+          'approved staged-proposal, apply the write, reconcile + capture, and ' +
+          'advance the ops_journal again; keep looping until it reaches ' +
+          '`applied-pending-confirm` or you are genuinely blocked on the next ' +
+          'operator decision. Staging/requesting is what puts each decision in ' +
+          'front of the operator; asking first inverts the flow and leaves them ' +
+          'with nothing to act on.'
         : ''),
   ].join('\n');
 }

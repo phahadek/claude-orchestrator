@@ -206,7 +206,8 @@ export interface ProcedureStep {
    * Per-skill override of `summary` for a skill where the shared prose does
    * not fit — e.g. a dispatched `ops` session has no synchronous chat turn
    * to wait within, so "present, then wait, then apply" (the groom/design
-   * shape) inverts to "stage the decision, then park" for ops.
+   * shape) inverts to "stage/request, then drive to applied-pending-confirm"
+   * for ops.
    */
   summaryOverrides?: Partial<Record<SkillId, string>>;
 }
@@ -258,12 +259,14 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     summaryOverrides: {
       ops:
         'A dispatched ops session has no synchronous chat turn to wait within — ' +
-        'end the turn and it parks. So presenting IS staging: once investigation ' +
-        'reaches a decision, stage it (a journal.setState to staged-proposal) rather ' +
-        'than describing the proposal in chat and asking whether to stage it. Never ' +
-        'ask for approval before staging — staging is what puts the decision in ' +
-        'front of the operator; asking first leaves the operator with nothing to ' +
-        'act on.',
+        'end the turn and it parks. So presenting IS staging, but for ops staging ' +
+        'is the first move in a drive-to-applied loop, not a handoff: once ' +
+        'investigation reaches a decision, stage the ops_journal transition ' +
+        '(`journal.setState` → staged-proposal), or, if applying it needs a ' +
+        'capability this session lacks, stage a `session.requestCapability` ' +
+        'naming the exact write. Never ask in chat whether to stage or request ' +
+        'first — staging/requesting is what puts the decision in front of the ' +
+        'operator; asking first leaves them with nothing to act on.',
       groom:
         'A dispatched groom session has no synchronous chat turn to wait within — ' +
         'end the turn and it parks. So presenting IS staging: once investigation ' +
@@ -307,6 +310,18 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'describing the task spec in chat for the operator to create by hand. The ' +
       'operator disposes the staged task like any other intent; never treat handing ' +
       'a task spec back in chat as an acceptable substitute for staging it.',
+    summaryOverrides: {
+      ops:
+        'When the mandate calls for follow-on work — including an operational ' +
+        'change that turns out to need a code change — stage it as a ' +
+        '`task.create` intent (landing at 🔲 Backlog, typed 💻 Code) carrying the ' +
+        'spec, rather than describing it in chat. This session has no worktree or ' +
+        'branch and must never create a PR or author code directly: a code ' +
+        'change is categorically routed through a staged 💻 Code task, never ' +
+        'applied by ops itself — stage the task and continue driving the rest of ' +
+        'the operational change (or park on it if the whole thing is now blocked ' +
+        'on that Code task landing).',
+    },
   },
   {
     id: 'apply-on-signoff',
@@ -317,12 +332,16 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'sanctioned surface, and confirm the result in chat.',
     summaryOverrides: {
       ops:
-        'A dispatched ops session never applies — journal.setState is ' +
-        'human-apply-only. Its part of "sign-off" is already complete once the ' +
-        'decision is staged (the prior step): stage the decision, then park. The ' +
-        'operator reviews the staged proposal on the decision surface and applies ' +
-        '(or rejects) it asynchronously; there is nothing further for this session ' +
-        'to do or wait for.',
+        'A dispatched ops session drives the change itself once a capability is ' +
+        'granted or a staged-proposal is approved: apply the write, reconcile and ' +
+        'capture evidence of the result, and advance the ops_journal — then ' +
+        'repeat the request → grant → apply → reconcile loop, one atomic action ' +
+        'at a time, until the journal reaches `applied-pending-confirm`, or park ' +
+        'because you are genuinely blocked on the next operator decision (a ' +
+        'pending capability grant, or a step only a human can perform, like ' +
+        'secret provisioning). The one transition this session never makes ' +
+        'itself is `applied-pending-confirm` → `resolved` — that confirmation is ' +
+        'device-auth/operator-only, always.',
     },
   },
 ] as const;

@@ -314,7 +314,7 @@ describe('assemblePlanningProcedure', () => {
     expect(output).toMatch(/ops proposes the content/i);
   });
 
-  it('instructs the dispatched ops procedure to stage the decision then park, never ask-before-stage', () => {
+  it('instructs the dispatched ops procedure to stage/request then keep driving, never ask-before-stage', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
@@ -324,8 +324,54 @@ describe('assemblePlanningProcedure', () => {
       },
     });
 
-    expect(output).toMatch(/stage the decision, then park/i);
+    expect(output).toMatch(/stage the next step, then keep driving/i);
+    expect(output).toMatch(/applied-pending-confirm/);
     expect(output).not.toMatch(/stop for explicit human sign-off/i);
+  });
+
+  it('does not label the ops procedure read-only/stage-only or tell it to park at a stopping point, and states the write-capable drive-to-applied-pending-confirm posture', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
+      },
+    });
+
+    expect(output).not.toMatch(/read-only\/stage-only/i);
+    expect(output).not.toMatch(/parks into idle/i);
+    expect(output).toMatch(/write-capable/i);
+    expect(output).toMatch(/drive the operational change itself to completion/i);
+    expect(output).toMatch(/applied-pending-confirm/);
+    expect(output).toMatch(/resolved/);
+
+    // groom/design keep the original read-only/stage-only, parks-into-idle framing.
+    for (const { workflow, digest } of cases) {
+      if (workflow === 'ops') continue;
+      const other = assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        digest,
+      });
+      expect(other).toMatch(/read-only\/stage-only/i);
+      expect(other).toMatch(/parks into idle/i);
+    }
+  });
+
+  it('states the explicit never-create-a-PR rule for ops, routing PR-bearing work to a staged 💻 Code task instead', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
+      },
+    });
+
+    expect(output).toMatch(/never create a PR/i);
+    expect(output).toMatch(/💻 Code task/);
+    expect(output).toMatch(/task\.create/);
   });
 
   it('instructs the dispatched groom procedure that presenting IS staging, never ask-before-stage', () => {
