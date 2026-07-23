@@ -3,6 +3,8 @@ import type { Request, Response } from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { requireSessionStageAuth } from '../auth/SessionStageAuth';
+import { getSession } from '../db/queries';
+import { registerStageProposalTools } from './tools/stageProposalTools';
 
 /** Path the router registers, relative to where it's mounted (see server.ts: app.use('/api', ...)). */
 const ORCHESTRATOR_MCP_PATH = '/mcp';
@@ -31,14 +33,12 @@ export function buildOrchestratorMcpServerEntry(
 }
 
 /**
- * Builds the McpServer instance and registers the minimal handshake tool.
- * This is the transport foundation only — task-write/verdict tools land in
- * a follow-on task; a health tool is enough to prove connectivity end to
- * end (a dispatched session connects with its injected credential and can
- * list/call tools; a wrong credential is rejected before it ever reaches
- * here).
+ * Builds the McpServer instance for one connection, registering the health
+ * handshake tool plus — when the connecting session resolves to a project —
+ * the stage-proposal tool surface (one tool per staged-intent kind, see
+ * mcp/tools/stageProposalTools.ts). Verdict-delivery tools are a sibling task.
  */
-function buildMcpServer(): McpServer {
+function buildMcpServer(sessionId: string): McpServer {
   const server = new McpServer({
     name: 'claude-orchestrator',
     version: '1.0.0',
@@ -55,6 +55,14 @@ function buildMcpServer(): McpServer {
       content: [{ type: 'text', text: JSON.stringify({ status: 'ok' }) }],
     }),
   );
+
+  const session = getSession(sessionId);
+  if (session?.project_id) {
+    registerStageProposalTools(server, {
+      sessionId,
+      projectId: session.project_id,
+    });
+  }
 
   return server;
 }
@@ -75,7 +83,10 @@ export function createOrchestratorMcpRouter(): Router {
     ORCHESTRATOR_MCP_PATH,
     requireSessionStageAuth,
     async (req: Request, res: Response) => {
-      const server = buildMcpServer();
+      const { sessionId } = (
+        req as Request & { stageSession: { sessionId: string } }
+      ).stageSession;
+      const server = buildMcpServer(sessionId);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });
