@@ -36,15 +36,13 @@ steps:
   - id: sync-runtime
     kind: shell
     command_or_prompt: 'rsync the built workspace into the runtime directory, excluding .git, .claude, *.db*, and .env'
-    run_as: deploy
     is_prod_mutating: true
     supports_dry_run: true
     rollback_ref: build
 
   - id: restart
     kind: confirm-gate
-    command_or_prompt: 'restart the running service so it picks up the synced build'
-    run_as: deploy
+    command_or_prompt: 'restart the running service so it picks up the synced build (escalate to root via sudo in the restart command itself, e.g. sudo systemctl restart <unit> — never via run_as)'
     is_prod_mutating: true
     rollback_ref: sync-runtime
 
@@ -63,7 +61,6 @@ steps:
   - id: record-deployed-sha
     kind: shell
     command_or_prompt: 'write the deployed commit sha to the DEPLOYED_SHA marker in the runtime directory'
-    run_as: deploy
     is_prod_mutating: true
     rollback_ref: verify
 

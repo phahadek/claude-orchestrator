@@ -364,6 +364,14 @@ describe('buildDeployStepEnv', () => {
   });
 });
 
+describe('spawnShell: run_as handling', () => {
+  it('runs a step directly as the current process user when no run_as is given (no sudo -u)', async () => {
+    const result = await spawnShell('whoami', { cwd: process.cwd() });
+    expect(result.ok).toBe(true);
+    expect(result.output).not.toMatch(/sudo/);
+  });
+});
+
 describe('DeployOrchestrator: default shell runner env', () => {
   it('spawns steps with a non-production NODE_ENV', async () => {
     const originalNodeEnv = process.env.NODE_ENV;
