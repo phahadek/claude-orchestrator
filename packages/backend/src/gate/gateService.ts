@@ -644,6 +644,91 @@ export function reclassifyGateItem(
   return gateStore.setClassification(gateItemId, classification, now, operator);
 }
 
+/**
+ * Reclassification targets a gate-verify session is permitted to propose
+ * (see gateItemVerifier's `reclassify` report field) — both route the item
+ * *out* of auto-run rather than into it, so gateService auto-applies them
+ * with provenance instead of staging for operator approval (locked at
+ * grooming: low-risk, reversible, "more oversight" moves are auto-applied;
+ * a move that would add auto-run, e.g. -> Read-Only, would need staging,
+ * but a verifier is never allowed to propose one).
+ */
+const VERIFIER_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
+  'Human-Observation',
+  'needs-triage',
+]);
+
+/** Ping-pong guard: caps how many times a verifier may reclassify the same item before a human has to step in via /gate. */
+const MAX_VERIFIER_RECLASSIFY_ATTEMPTS = 1;
+
+/** Verifier-attributed reclassify events already recorded against this item. */
+function countVerifierReclassifications(item: GateItem): number {
+  return item.events.filter(
+    (e) => e.disposition === 'reclassified' && e.operator === 'gate-verifier',
+  ).length;
+}
+
+export interface GateItemReclassifyOutcome {
+  applied: boolean;
+  item: GateItem;
+  /** Why the proposal was not applied — present only when `applied` is false. */
+  rejectedReason?: string;
+}
+
+/**
+ * Applies (or rejects) a gate-verify session's self-correction proposal —
+ * "this item is mis-classified, route it to X instead." The backend
+ * remains the only writer of gate state: this validates the proposed target
+ * against the closed verifier-reclassify vocabulary, checks it's not a
+ * no-op, and enforces the ping-pong guard, before ever touching state.
+ * Auto-applied with provenance (operator: 'gate-verifier') per the grooming
+ * decision — both permitted targets add oversight, so there's no
+ * operator-approval stage on this path. Reversible by an operator through
+ * the normal /gate reclassify flow.
+ */
+export function proposeGateItemReclassification(
+  gateItemId: string,
+  to: GateItemClassification,
+  reason: string,
+): GateItemReclassifyOutcome {
+  const item = gateStore.getItem(gateItemId);
+  if (!item) {
+    throw new Error(`gate_item: no item ${gateItemId}`);
+  }
+  if (!VERIFIER_RECLASSIFY_TARGETS.has(to)) {
+    return {
+      applied: false,
+      item,
+      rejectedReason: `verifier may only propose reclassification to ${[...VERIFIER_RECLASSIFY_TARGETS].join(' or ')}, not ${to}`,
+    };
+  }
+  if (item.classification === to) {
+    return {
+      applied: false,
+      item,
+      rejectedReason: `item is already classified ${to}`,
+    };
+  }
+  if (
+    countVerifierReclassifications(item) >= MAX_VERIFIER_RECLASSIFY_ATTEMPTS
+  ) {
+    return {
+      applied: false,
+      item,
+      rejectedReason: `item has already been reclassified by a verifier ${MAX_VERIFIER_RECLASSIFY_ATTEMPTS} time(s) — needs operator attention via /gate rather than a further automatic reclassification`,
+    };
+  }
+  const now = new Date().toISOString();
+  const updated = gateStore.setClassification(
+    gateItemId,
+    to,
+    now,
+    'gate-verifier',
+    { reason },
+  );
+  return { applied: true, item: updated };
+}
+
 /** A raw Notion-style status string counts as not-started when it hasn't left Backlog/Ready. */
 function isNotStartedStatus(notionStatus: string): boolean {
   if (!notionStatus) return true;

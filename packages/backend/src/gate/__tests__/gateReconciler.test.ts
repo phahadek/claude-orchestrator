@@ -383,6 +383,119 @@ describe('runGateReconcilerTick', () => {
     expect(second.processed).toEqual([]);
   });
 
+  it("applies a verifier-proposed reclassification, superseding the run's disposition for routing", async () => {
+    const item = makeRunnableItem({
+      classification: 'Read-Only',
+      text: 'a Task/Agent subagent call renders as a single distinct collapsible block',
+    });
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({
+        disposition: 'needs-setup',
+        evidence: { reason: 'cannot observe rendering headlessly' },
+        reclassify: {
+          to: 'Human-Observation',
+          reason: 'this is UI/visual behavior, not headlessly verifiable',
+        },
+      })),
+    };
+
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(result.processed).toEqual([
+      {
+        itemId: item.id,
+        classification: 'Human-Observation',
+        disposition: 'needs-setup',
+        reclassifiedTo: 'Human-Observation',
+      },
+    ]);
+    expect(getItem(item.id)?.classification).toBe('Human-Observation');
+    expect(getItem(item.id)?.events.at(-1)).toMatchObject({
+      disposition: 'reclassified',
+      operator: 'gate-verifier',
+    });
+
+    // The item is no longer in the Read-Only auto-run tier, so a later tick
+    // never re-dispatches it — the mis-routing this proposal exists to fix
+    // cannot recur.
+    const second = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(second.processed).toEqual([]);
+    expect(verifier.verify).toHaveBeenCalledTimes(1);
+  });
+
+  it('abstains to needs-setup and records the rejection when a reclassify proposal targets an auto-run tier', async () => {
+    const item = makeRunnableItem({ classification: 'needs-triage' });
+    // Bypass the reconciler's own auto-run-tier skip by using
+    // dispatchGateItemVerification for a direct, manually-dispatched
+    // verification against a non-auto-run item.
+    const verify = vi.fn(async () => ({
+      disposition: 'needs-setup' as const,
+      reclassify: {
+        to: 'Read-Only' as never,
+        reason: 'looks headlessly verifiable after all',
+      },
+    }));
+    configureGateVerification({
+      verifier: { verify },
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+    });
+
+    dispatchGateItemVerification([item.id]);
+    await vi.waitFor(() => {
+      expect(verify).toHaveBeenCalledTimes(1);
+    });
+    await vi.waitFor(() => {
+      expect(getItem(item.id)?.events.at(-1)).toMatchObject({
+        disposition: 'needs-setup',
+      });
+    });
+    expect(getItem(item.id)?.classification).toBe('needs-triage');
+  });
+
+  it('guards against reclassify ping-pong: a second verifier proposal after an operator reverts it is rejected', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({
+      disposition: 'needs-setup' as const,
+      reclassify: {
+        to: 'Human-Observation' as const,
+        reason: 'UI behavior',
+      },
+    }));
+    configureGateVerification({
+      verifier: { verify },
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+    });
+
+    dispatchGateItemVerification([item.id]);
+    await vi.waitFor(() => {
+      expect(getItem(item.id)?.classification).toBe('Human-Observation');
+    });
+
+    // An operator disagrees and reverts it back to an auto-run tier...
+    const { reclassifyGateItem } = await import('../gateService.js');
+    reclassifyGateItem(item.id, 'Read-Only', 'pedro');
+    mergeSource(item.id, 'sha1', new Date(2).toISOString());
+    reconcileGateRunnability('sha1');
+
+    // ...and the verifier proposes reclassifying it again — the ping-pong
+    // guard rejects it, falling back to needs-setup rather than looping.
+    dispatchGateItemVerification([item.id]);
+    await vi.waitFor(() => {
+      expect(verify).toHaveBeenCalledTimes(2);
+    });
+    await vi.waitFor(() => {
+      expect(getItem(item.id)?.events.at(-1)).toMatchObject({
+        disposition: 'needs-setup',
+      });
+    });
+    expect(getItem(item.id)?.classification).toBe('Read-Only');
+  });
+
   it('fail dedup: skips refiling while a prior filed follow-up is not yet Done', async () => {
     const item = makeRunnableItem({ classification: 'Read-Only' });
     const verifier: GateItemVerifier = {

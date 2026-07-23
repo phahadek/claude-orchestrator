@@ -13,6 +13,7 @@ import {
   appendGateItemEvent,
   createLocalGitAncestrySource,
   isFollowupTaskDone,
+  proposeGateItemReclassification,
   type GateReadiness,
   type ReconcileGateRunnabilityResult,
   type DeployAncestrySource,
@@ -46,6 +47,17 @@ export interface GateVerificationResult {
    */
   disposition: 'pass' | 'fail' | 'needs-setup';
   evidence?: unknown;
+  /**
+   * A self-correction: the session determined the item is mis-classified
+   * and proposes the correct tier instead of forcing a pass/fail (or a bare
+   * abstain) on a tier it structurally cannot verify. Supersedes
+   * `disposition` for routing purposes when the backend accepts it — see
+   * gateService.proposeGateItemReclassification.
+   */
+  reclassify?: {
+    to: GateItemClassification;
+    reason: string;
+  };
 }
 
 /**
@@ -155,6 +167,8 @@ interface ProcessedGateItem {
   itemId: string;
   classification: GateItemClassification;
   disposition: 'pass' | 'fail' | 'needs-setup';
+  /** Set when this run applied a verifier-proposed self-correction — `classification` above already reflects it. */
+  reclassifiedTo?: GateItemClassification;
 }
 
 export interface GateReconcileTickResult {
@@ -288,6 +302,42 @@ async function runReservedVerification(
   crashCounts.delete(item.id);
 
   try {
+    if (result.reclassify) {
+      const outcome = proposeGateItemReclassification(
+        item.id,
+        result.reclassify.to,
+        result.reclassify.reason,
+      );
+      if (outcome.applied) {
+        logger.info(
+          `[GateReconciler] gate item ${item.id} reclassified ${item.classification} -> ${outcome.item.classification} by verifier: ${result.reclassify.reason}`,
+        );
+        return {
+          itemId: item.id,
+          classification: outcome.item.classification,
+          disposition: 'needs-setup',
+          reclassifiedTo: outcome.item.classification,
+        };
+      }
+      // Rejected (invalid target, no-op, or the ping-pong guard) — abstain
+      // rather than silently drop the run; the rejection reason and the
+      // session's original evidence both ride along for a human to see.
+      appendGateItemEvent(item.id, {
+        disposition: 'needs-setup',
+        evidence: {
+          reason: 'verifier-proposed reclassification rejected',
+          rejectedReason: outcome.rejectedReason,
+          proposedReclassify: result.reclassify,
+          verifierEvidence: result.evidence,
+        },
+        deploySha: deploySha ?? undefined,
+      });
+      return {
+        itemId: item.id,
+        classification: item.classification,
+        disposition: 'needs-setup',
+      };
+    }
     if (result.disposition === 'needs-setup') {
       appendGateItemEvent(item.id, {
         disposition: 'needs-setup',
