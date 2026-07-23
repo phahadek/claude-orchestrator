@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const deployServiceMock = vi.hoisted(() => ({
   reportProjectDeploy: vi.fn(),
-  getActiveDeployRun: vi.fn(),
+  getLatestDeployRun: vi.fn(),
   listDeployRunEvents: vi.fn(),
   DeployRunConflictError: class DeployRunConflictError extends Error {},
 }));
@@ -177,7 +177,7 @@ describe('GET /api/deploy/status', () => {
         at: '2026-07-20T00:00:01.000Z',
       },
     ];
-    deployServiceMock.getActiveDeployRun.mockReturnValue(run);
+    deployServiceMock.getLatestDeployRun.mockReturnValue(run);
     deployServiceMock.listDeployRunEvents.mockReturnValue(events);
 
     const res = await request(makeApp()).get(
@@ -189,7 +189,7 @@ describe('GET /api/deploy/status', () => {
   });
 
   it('returns a null run and empty events when the project has none active', async () => {
-    deployServiceMock.getActiveDeployRun.mockReturnValue(undefined);
+    deployServiceMock.getLatestDeployRun.mockReturnValue(undefined);
 
     const res = await request(makeApp()).get(
       '/api/deploy/status?projectId=claude-orchestrator',
@@ -197,6 +197,38 @@ describe('GET /api/deploy/status', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ run: null, events: [] });
+  });
+
+  it('returns the latest terminal run with its failure-detail events when no run is active', async () => {
+    const run = {
+      run_id: 'run-2',
+      project: 'claude-orchestrator',
+      target_sha: 'abc123',
+      current_step: 'provision',
+      status: 'failed',
+      started_at: '2026-07-20T00:00:00.000Z',
+      completed_at: '2026-07-20T00:05:00.000Z',
+    };
+    const events = [
+      {
+        id: 5,
+        run_id: 'run-2',
+        step: 'provision',
+        event_type: 'step_failed',
+        disposition: null,
+        detail: 'sudo: unknown user deploy',
+        at: '2026-07-20T00:04:59.000Z',
+      },
+    ];
+    deployServiceMock.getLatestDeployRun.mockReturnValue(run);
+    deployServiceMock.listDeployRunEvents.mockReturnValue(events);
+
+    const res = await request(makeApp()).get(
+      '/api/deploy/status?projectId=claude-orchestrator',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ run, events });
   });
 
   it('400s when projectId is missing', async () => {

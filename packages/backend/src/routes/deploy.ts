@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import type { Scheduler } from '../orchestration/Scheduler';
 import {
   reportProjectDeploy,
-  getActiveDeployRun,
+  getLatestDeployRun,
   listDeployRunEvents,
   DeployRunConflictError,
 } from '../deploy/deployService';
@@ -114,8 +114,9 @@ export function createDeployRouter(): Router {
   });
 
   // GET /api/deploy/status?projectId=...
-  // Gate-panel progress read: the project's active deploy_run (if any) plus
-  // its event log, for polling-driven progress display.
+  // Gate-panel progress read: the project's active deploy_run if any,
+  // otherwise its most recent terminal run (so a failure's reason stays
+  // visible after the run leaves 'running'), plus its event log.
   router.get('/deploy/status', (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : null;
@@ -124,7 +125,7 @@ export function createDeployRouter(): Router {
       return;
     }
 
-    const run = getActiveDeployRun(projectId) ?? null;
+    const run = getLatestDeployRun(projectId) ?? null;
     const events = run ? listDeployRunEvents(run.run_id) : [];
     res.status(200).json({ run, events });
   });

@@ -4,6 +4,7 @@ import {
   getProjectDeployedShaRow,
   getDeployRun as getDeployRunRow,
   getActiveDeployRunForProject,
+  getLatestDeployRunForProject,
   insertDeployRun,
   updateDeployRunStep,
   updateDeployRunStatus,
@@ -79,6 +80,14 @@ export function getDeployRun(runId: string): DeployRunRow | undefined {
 /** The project's in-flight run, or undefined if it has none. */
 export function getActiveDeployRun(project: string): DeployRunRow | undefined {
   return getActiveDeployRunForProject(project);
+}
+
+/** The project's active run, or (if none) its most recent terminal run. */
+export function getLatestDeployRun(project: string): DeployRunRow | undefined {
+  return (
+    getActiveDeployRunForProject(project) ??
+    getLatestDeployRunForProject(project)
+  );
 }
 
 /** Advances the run's step pointer — a step id in the engine's playbook, not a StepDescriptor. */
