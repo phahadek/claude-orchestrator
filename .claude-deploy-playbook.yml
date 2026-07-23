@@ -1,9 +1,13 @@
-# Structured, host-agnostic deploy playbook for the claude-orchestrator repo.
+# Structured deploy playbook for the claude-orchestrator repo.
 # Read by loadDeployPlaybook() and validated against playbookSchema.ts.
 #
-# Host, runtime user, and path bindings (checkout dir, runtime dir, restart
-# mechanism) live in this project's context.md, not here — this file only
-# encodes the ordered, generic steps, hazards, and diagnoses.
+# The engine runs `shell`/`validation`/`confirm-gate` steps' command_or_prompt
+# (and validation's poll_until) verbatim as shell commands — it performs no
+# variable substitution (see DeployOrchestrator.executeStep). Since this
+# playbook is per-repo (loadPlaybook.ts reads it from THIS checkout only),
+# this host's concrete paths (checkout root, /srv/orchestrator/runtime/, the
+# orchestrator.service unit, the DEPLOYED_SHA marker location) are embedded
+# directly in the steps below rather than in context.md.
 
 steps:
   - id: fetch
@@ -35,22 +39,28 @@ steps:
 
   - id: sync-runtime
     kind: shell
-    command_or_prompt: 'rsync the built workspace into the runtime directory, excluding .git, .claude, *.db*, and .env'
+    command_or_prompt: "rsync -a --delete --exclude='.git/' --exclude='.claude/' --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' --exclude='.env' ./ /srv/orchestrator/runtime/"
     is_prod_mutating: true
     supports_dry_run: true
     rollback_ref: build
 
-  - id: restart
+  - id: confirm-restart
     kind: confirm-gate
-    command_or_prompt: 'restart the running service so it picks up the synced build (escalate to root via sudo in the restart command itself, e.g. sudo systemctl restart <unit> — never via run_as)'
+    command_or_prompt: 'operator approval to restart orchestrator.service now that the synced build is in place'
+    is_prod_mutating: false
+    rollback_ref: sync-runtime
+
+  - id: restart
+    kind: shell
+    command_or_prompt: 'sudo systemctl restart orchestrator.service'
     is_prod_mutating: true
     rollback_ref: sync-runtime
 
   - id: verify
     kind: validation
-    command_or_prompt: 'confirm the service is healthy and serving the expected version after restart'
+    command_or_prompt: 'systemctl is-active --quiet orchestrator.service && curl -sf -o /dev/null http://localhost:3000/'
     is_prod_mutating: false
-    poll_until: 'health check reports the service up and responsive'
+    poll_until: 'systemctl is-active --quiet orchestrator.service && curl -sf -o /dev/null http://localhost:3000/'
     rollback_ref: restart
 
   - id: report-in
@@ -60,7 +70,7 @@ steps:
 
   - id: record-deployed-sha
     kind: shell
-    command_or_prompt: 'write the deployed commit sha to the DEPLOYED_SHA marker in the runtime directory'
+    command_or_prompt: 'git rev-parse HEAD > config/projects/claude-orchestrator/DEPLOYED_SHA'
     is_prod_mutating: true
     rollback_ref: verify
 
