@@ -14,7 +14,11 @@ vi.mock('../../db/db.js', async () => {
 
 import { db } from '../../db/db.js';
 import { stageIntent } from '../stagedIntents.js';
-import { transitionStagedIntent, getStagedIntent } from '../../db/queries.js';
+import {
+  transitionStagedIntent,
+  getStagedIntent,
+  listStagedIntentsByGroup,
+} from '../../db/queries.js';
 
 beforeEach(() => {
   db.prepare('DELETE FROM staged_intent').run();
@@ -70,5 +74,65 @@ describe('stageIntent — content-idempotent dedup', () => {
     const second = stageIntent('task.create', { title: 'New task' }, 'proj-1');
 
     expect(second.id).not.toBe(first.id);
+  });
+
+  it('a re-stage with a groupId the matched intent lacks sets group_id on the existing row', () => {
+    const first = stageIntent(
+      'task.setStatus',
+      { taskId: 't-1', status: 'Ready' },
+      'proj-1',
+    );
+    expect(first.groupId).toBeFalsy();
+
+    const second = stageIntent(
+      'task.setStatus',
+      { taskId: 't-1', status: 'Ready' },
+      'proj-1',
+      'group-1',
+    );
+
+    expect(second.id).toBe(first.id);
+    expect(second.groupId).toBe('group-1');
+    expect(getStagedIntent(first.id)!.group_id).toBe('group-1');
+    expect(listStagedIntentsByGroup('group-1').map((r) => r.id)).toContain(
+      first.id,
+    );
+  });
+
+  it('a true duplicate (same payload, same group) still dedups to the existing row untouched', () => {
+    const first = stageIntent(
+      'task.setStatus',
+      { taskId: 't-1', status: 'Ready' },
+      'proj-1',
+      'group-1',
+    );
+
+    const second = stageIntent(
+      'task.setStatus',
+      { taskId: 't-1', status: 'Ready' },
+      'proj-1',
+      'group-1',
+    );
+
+    expect(second.id).toBe(first.id);
+    expect(second.groupId).toBe('group-1');
+  });
+
+  it('a true duplicate with no group carried still dedups without clearing an existing group', () => {
+    const first = stageIntent(
+      'task.setStatus',
+      { taskId: 't-1', status: 'Ready' },
+      'proj-1',
+      'group-1',
+    );
+
+    const second = stageIntent(
+      'task.setStatus',
+      { taskId: 't-1', status: 'Ready' },
+      'proj-1',
+    );
+
+    expect(second.id).toBe(first.id);
+    expect(second.groupId).toBe('group-1');
   });
 });
