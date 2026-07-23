@@ -24,7 +24,9 @@ function notLive(): { content: { type: 'text'; text: string }[] } {
 }
 
 function ok(): { content: { type: 'text'; text: string }[] } {
-  return { content: [{ type: 'text', text: JSON.stringify({ status: 'ok' }) }] };
+  return {
+    content: [{ type: 'text', text: JSON.stringify({ status: 'ok' }) }],
+  };
 }
 
 /**
@@ -48,7 +50,7 @@ export function registerVerdictTools(
     {
       title: 'Report a review-thread disposition',
       description:
-        "Reports how this session addressed one PR review comment — addressed/wont_fix/out_of_scope. Call once per comment_id; a repeat call with a changed disposition is last-write-wins.",
+        'Reports how this session addressed one PR review comment — addressed/wont_fix/out_of_scope. Call once per comment_id; a repeat call with a changed disposition is last-write-wins.',
       inputSchema: {
         comment_id: z.number(),
         disposition: reviewDispositionSchema,
@@ -94,7 +96,7 @@ export function registerVerdictTools(
     {
       title: 'Report a gate-item verification disposition',
       description:
-        'Reports this read-only gate-verify session\'s finding for the single gate item it was dispatched to verify — pass/fail/needs-setup, plus an optional self-correction reclassify proposal (Human-Observation or needs-triage only). The backend, never the session, turns this into the authoritative gate_item_event write.',
+        "Reports this read-only gate-verify session's finding for the single gate item it was dispatched to verify — pass/fail/needs-setup, plus an optional self-correction reclassify proposal (Human-Observation or needs-triage only). The backend, never the session, turns this into the authoritative gate_item_event write.",
       inputSchema: {
         gateItemId: z.string(),
         disposition: gateVerifyDispositionSchema,

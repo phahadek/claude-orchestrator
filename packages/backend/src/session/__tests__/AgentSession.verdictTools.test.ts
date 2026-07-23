@@ -156,7 +156,9 @@ describe('AgentSession.recordReviewDisposition', () => {
       prNumber: 42,
       repo: 'owner/repo',
       headSha: 'abc1234567890',
-      dispositions: [{ comment_id: 1, disposition: 'addressed', reason: 'fixed' }],
+      dispositions: [
+        { comment_id: 1, disposition: 'addressed', reason: 'fixed' },
+      ],
     });
   });
 
@@ -165,7 +167,10 @@ describe('AgentSession.recordReviewDisposition', () => {
     const emitted: unknown[] = [];
     session.on('dispositions_parsed', (p) => emitted.push(p));
 
-    session.recordReviewDisposition({ comment_id: 1, disposition: 'addressed' });
+    session.recordReviewDisposition({
+      comment_id: 1,
+      disposition: 'addressed',
+    });
 
     expect(emitted).toHaveLength(0);
   });
@@ -179,7 +184,11 @@ describe('AgentSession.recordReviewDisposition', () => {
     const emitted: unknown[] = [];
     session.on('dispositions_parsed', (p) => emitted.push(p));
 
-    const item = { comment_id: 1, disposition: 'addressed' as const, reason: 'fixed' };
+    const item = {
+      comment_id: 1,
+      disposition: 'addressed' as const,
+      reason: 'fixed',
+    };
     session.recordReviewDisposition(item);
     session.recordReviewDisposition({ ...item });
 
@@ -195,8 +204,15 @@ describe('AgentSession.recordReviewDisposition', () => {
     const emitted: unknown[] = [];
     session.on('dispositions_parsed', (p) => emitted.push(p));
 
-    session.recordReviewDisposition({ comment_id: 1, disposition: 'addressed' });
-    session.recordReviewDisposition({ comment_id: 1, disposition: 'wont_fix', reason: 'changed my mind' });
+    session.recordReviewDisposition({
+      comment_id: 1,
+      disposition: 'addressed',
+    });
+    session.recordReviewDisposition({
+      comment_id: 1,
+      disposition: 'wont_fix',
+      reason: 'changed my mind',
+    });
 
     expect(emitted).toHaveLength(2);
   });
@@ -210,7 +226,10 @@ describe('AgentSession.recordReviewDisposition', () => {
     const emitted: unknown[] = [];
     session.on('dispositions_parsed', (p) => emitted.push(p));
 
-    session.recordReviewDisposition({ comment_id: 1, disposition: 'addressed' });
+    session.recordReviewDisposition({
+      comment_id: 1,
+      disposition: 'addressed',
+    });
     session.recordReviewDisposition({ comment_id: 2, disposition: 'wont_fix' });
 
     expect(emitted).toHaveLength(2);
@@ -229,7 +248,10 @@ describe('AgentSession.recordVerifiedFlakyDisposition', () => {
     const emitted: unknown[] = [];
     session.on('verified_flaky_disposition', (p) => emitted.push(p));
 
-    session.recordVerifiedFlakyDisposition({ gate: 'ci', reason: 'ran in isolation, passed clean' });
+    session.recordVerifiedFlakyDisposition({
+      gate: 'ci',
+      reason: 'ran in isolation, passed clean',
+    });
 
     expect(emitted).toEqual([
       {
@@ -291,13 +313,21 @@ describe('AgentSession.recordGateVerifyDisposition', () => {
     const emitted: unknown[] = [];
     session.on('gate_verify_disposition', (p) => emitted.push(p));
 
-    session.recordGateVerifyDisposition({ gateItemId: 'item-1', disposition: 'pass', evidence: { note: 'ok' } });
+    session.recordGateVerifyDisposition({
+      gateItemId: 'item-1',
+      disposition: 'pass',
+      evidence: { note: 'ok' },
+    });
 
     expect(getPRBySessionId).not.toHaveBeenCalled();
     expect(emitted).toEqual([
       {
         sessionId: 'test-session-id',
-        disposition: { gateItemId: 'item-1', disposition: 'pass', evidence: { note: 'ok' } },
+        disposition: {
+          gateItemId: 'item-1',
+          disposition: 'pass',
+          evidence: { note: 'ok' },
+        },
       },
     ]);
   });
@@ -307,8 +337,14 @@ describe('AgentSession.recordGateVerifyDisposition', () => {
     const emitted: unknown[] = [];
     session.on('gate_verify_disposition', (p) => emitted.push(p));
 
-    session.recordGateVerifyDisposition({ gateItemId: 'item-1', disposition: 'pass' });
-    session.recordGateVerifyDisposition({ gateItemId: 'item-1', disposition: 'pass' });
+    session.recordGateVerifyDisposition({
+      gateItemId: 'item-1',
+      disposition: 'pass',
+    });
+    session.recordGateVerifyDisposition({
+      gateItemId: 'item-1',
+      disposition: 'pass',
+    });
 
     expect(emitted).toHaveLength(1);
   });
@@ -318,8 +354,14 @@ describe('AgentSession.recordGateVerifyDisposition', () => {
     const emitted: unknown[] = [];
     session.on('gate_verify_disposition', (p) => emitted.push(p));
 
-    session.recordGateVerifyDisposition({ gateItemId: 'item-1', disposition: 'pass' });
-    session.recordGateVerifyDisposition({ gateItemId: 'item-1', disposition: 'fail' });
+    session.recordGateVerifyDisposition({
+      gateItemId: 'item-1',
+      disposition: 'pass',
+    });
+    session.recordGateVerifyDisposition({
+      gateItemId: 'item-1',
+      disposition: 'fail',
+    });
 
     expect(emitted).toHaveLength(2);
   });
