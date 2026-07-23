@@ -460,7 +460,42 @@ function renderSkeleton(
           '"manualVerification":"None.","operationalSeed":"None."}\'` ' +
           '(the 4th argument, `decisionProposal`, is left empty here — `groomProposal` ' +
           'replaces it for this kind; `decisionProposal` still applies to a ' +
-          '`Deferred` proposal, which has no achieves/tests to report).'
+          '`Deferred` proposal, which has no achieves/tests to report).\n\n' +
+          'A `task.setStatus` → `Ready` proposal also carries a `groomingGate` object ' +
+          'on the same payload, alongside `taskId`/`status` — every field below is ' +
+          'required (checkGroomingPromotionGate in `groomGate.ts` blocks the Ready ' +
+          'flip at commit time on anything missing, and the block is surfaced back to ' +
+          'you at stage time, not silently dropped): `size_check` ' +
+          '(`{"decision": "no_split"|"split_now"|"unsplittable"|"n/a"}` — Code/Tooling ' +
+          'tasks default to "no_split" under the 500-LoC-estimated threshold, "n/a" is ' +
+          'for Design/Planning types only), `type_check` (`{"decision": "none"|' +
+          '"flagged"|"n/a"}`, plus `signals` naming the matched phrases when ' +
+          '"flagged"), `type` (the task\'s display-format Type, e.g. `"💻 Code"`), ' +
+          '`regions` (`{"packages": [...], "files": [...]}` — this task\'s resolved ' +
+          'code regions, the same shape as the digest\'s Code regions section), ' +
+          '`constraintsDispositioned` (a map of binding-constraint id → ' +
+          '`{"disposition": "complies"}` | `{"disposition": "n/a", "why": "..."}` | ' +
+          '`{"disposition": "conflict_route", "routedTaskId": "<design-task-id>"}` — ' +
+          'one entry per id in the digest\'s Binding constraints list), ' +
+          '`filesPathsEntries` (one `{"raw": "<list item text>", "isNew": false, ' +
+          '"existsInRepo": true}` per `## Files / paths affected` line — `isNew: ' +
+          'true` for a `*(new)*`-marked not-yet-created path), and `dependsOnTasks` ' +
+          '(one `{"id": "<task-id>", "type": "<type>", "status": "<status>"}` per ' +
+          'declared Depends On edge — `[]` when there are none). A worked, ' +
+          'field-complete example for a 💻 Code task with one binding constraint, ' +
+          'one Files/paths entry, and no dependencies: ' +
+          '`node ~/.claude/scripts/stage-task-intent.mjs task.setStatus ' +
+          '\'{"taskId":"<task-id>","status":"Ready","groomingGate":{' +
+          '"size_check":{"decision":"no_split"},' +
+          '"type_check":{"decision":"none"},' +
+          '"type":"💻 Code",' +
+          '"regions":{"packages":["packages/backend"],"files":["packages/backend/src/foo.ts"]},' +
+          '"constraintsDispositioned":{"constraint-a":{"disposition":"complies"}},' +
+          '"filesPathsEntries":[{"raw":"packages/backend/src/foo.ts","isNew":false,"existsInRepo":true}],' +
+          '"dependsOnTasks":[]}}\'` — omitting any one of these six `groomingGate` ' +
+          'fields (even as an empty array/object where genuinely empty) is what ' +
+          'blocks the Ready flip; fill every field from the digest above rather ' +
+          'than carrying only `type`.'
         : '') +
       (workflow === 'ops'
         ? ' Stage the next step, then keep driving: once investigation reaches a ' +
