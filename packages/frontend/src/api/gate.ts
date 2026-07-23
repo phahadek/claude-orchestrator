@@ -14,9 +14,28 @@ interface GateItemSource {
   addedAt: string;
 }
 
-interface GateItemEvent {
+/**
+ * The common shape seen in practice: a downgrade (e.g. pass -> needs-setup)
+ * carries `reason` plus the originally-reported evidence under
+ * `reportedEvidence` (or `verifierEvidence` for the max-fix-attempts path);
+ * an un-downgraded verify result carries its evidence fields directly
+ * (e.g. `basis`, `note`). Kept loose since the verifier's evidence payload
+ * is otherwise free-form.
+ */
+export interface GateItemEvidence {
+  reason?: string;
+  reportedEvidence?: unknown;
+  verifierEvidence?: unknown;
+  basis?: string | string[];
+  note?: string;
+  error?: string;
+  attempts?: number;
+  [key: string]: unknown;
+}
+
+export interface GateItemEvent {
   disposition: string;
-  evidence?: unknown;
+  evidence?: GateItemEvidence;
   filedFollowon?: string;
   deploySha?: string;
   operator?: string;
