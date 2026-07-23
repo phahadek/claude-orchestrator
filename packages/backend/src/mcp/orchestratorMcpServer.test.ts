@@ -12,11 +12,12 @@ import {
   mintStageCredential,
   _resetStageCredentialsForTesting,
 } from '../auth/SessionStageAuth';
+import { SessionManager } from '../session/SessionManager';
 
 function buildApp() {
   const app = express();
   app.use(express.json());
-  app.use('/api', createOrchestratorMcpRouter());
+  app.use('/api', createOrchestratorMcpRouter(new SessionManager()));
   return app;
 }
 

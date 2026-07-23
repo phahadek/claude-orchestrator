@@ -2445,6 +2445,11 @@ export class SessionManager extends EventEmitter {
     this.evictDeadSessionEntry(sessionId);
   }
 
+  /** The live in-memory AgentSession for sessionId, if one is currently running — used by the orchestrator MCP verdict tools to deliver verdicts onto the correct session's emitter. */
+  getLiveSession(sessionId: string): AgentSession | undefined {
+    return this.sessions.get(sessionId);
+  }
+
   async kill(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (session) {
