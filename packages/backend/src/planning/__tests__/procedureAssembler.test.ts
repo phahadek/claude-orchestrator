@@ -506,6 +506,93 @@ describe('assemblePlanningProcedure', () => {
     expect(output).not.toMatch(/stop for explicit human sign-off/i);
   });
 
+  it('states the terminal mandate: not finished until the grooming decision is staged, a chat write-up is never the deliverable', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+
+    expect(output).toMatch(/terminal mandate/i);
+    expect(output).toMatch(/NOT finished once you have reached a conclusion/i);
+    expect(output).toMatch(
+      /chat write-up.+is never the deliverable and is never a valid place to end the turn/is,
+    );
+
+    // ops/design never see this groom-specific terminal-mandate language.
+    for (const { workflow, digest } of cases) {
+      if (workflow === 'groom') continue;
+      const other = assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        milestoneId: 'm1',
+        projectId: 'p1',
+        digest,
+      });
+      expect(other).not.toMatch(/terminal mandate/i);
+    }
+  });
+
+  it('enumerates the terminal intent set by kind for both the Ready and Deferred grooming paths', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+
+    expect(output).toMatch(/Ready path stages/i);
+    expect(output).toMatch(/Deferred path stages/i);
+    expect(output).toContain('task.setStatus');
+    expect(output).toContain('task.setDependsOn');
+    expect(output).toContain('gate.accrete');
+    expect(output).toContain('seed.stage');
+  });
+
+  it('gives the field-level format of a Ready groomingGate intent with a filled worked example', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+
+    expect(output).toContain('groomingGate');
+    for (const field of [
+      'size_check',
+      'type_check',
+      'constraintsDispositioned',
+      'filesPathsEntries',
+      'dependsOnTasks',
+    ]) {
+      expect(output).toContain(field);
+    }
+
+    // The worked example is field-complete, not just `{"type": "..."}`.
+    const exampleStart = output.indexOf('"groomingGate":{');
+    expect(exampleStart).toBeGreaterThanOrEqual(0);
+    const example = output.slice(exampleStart, exampleStart + 600);
+    expect(example).toContain('"size_check"');
+    expect(example).toContain('"type_check"');
+    expect(example).toContain('"regions"');
+    expect(example).toContain('"constraintsDispositioned"');
+    expect(example).toContain('"filesPathsEntries"');
+    expect(example).toContain('"dependsOnTasks"');
+  });
+
   it('offers the groom procedure a discard/defer proposal as an alternative to promoting to Ready', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',

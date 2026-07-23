@@ -285,7 +285,25 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'decisionProposal) rather than writing up an investigation report in chat ' +
         'and asking whether to defer or groom to Ready. Never ask for sign-off ' +
         'before staging — staging is what puts the decision in front of the ' +
-        'operator; asking first leaves the operator with nothing to act on.',
+        'operator; asking first leaves the operator with nothing to act on. ' +
+        'This is the terminal mandate, stated unambiguously: you are NOT finished ' +
+        'once you have reached a conclusion — you are finished only once that ' +
+        'conclusion exists as a staged intent. A "plan ready to hand off" chat ' +
+        'write-up, a findings recap, or any other prose summary of the decision ' +
+        'is never the deliverable and is never a valid place to end the turn; a ' +
+        'session that ends there has produced nothing an operator can act on, ' +
+        'no matter how correct its analysis was. The terminal intent set is ' +
+        'exactly one of two paths, by intent kind: the Ready path stages ' +
+        '`task.setStatus` (status: "Ready", carrying every `groomingGate` field) ' +
+        '+ `task.setDependsOn` (when dependencies were found) + `gate.accrete` + ' +
+        '`seed.stage` (both required for every 💻 Code task — an explicit ' +
+        '`{"decision":"none"}` when there is genuinely nothing to accrete, never ' +
+        'a field left unstaged); the Deferred path stages a single ' +
+        '`task.setStatus` (status: "Deferred") carrying a `decisionProposal` ' +
+        'naming why. See the Structured Output Contract below for the ' +
+        'field-level format of every field in each — reaching the right ' +
+        'conclusion and not staging it in full is the same failure as reaching ' +
+        'no conclusion at all.',
     },
   },
   {
