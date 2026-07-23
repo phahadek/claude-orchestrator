@@ -17,10 +17,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerStageProposalTools } from './stageProposalTools.js';
-import {
-  getStagedIntent,
-  listStagedIntentsByGroup,
-} from '../../db/queries.js';
+import { getStagedIntent, listStagedIntentsByGroup } from '../../db/queries.js';
 
 const SESSION_ID = 'session-1';
 const PROJECT_ID = 'proj-1';

@@ -156,7 +156,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a runtime-item gate contribution',
       description:
-        'Stages a gate.accrete intent — the source task\'s stripped runtime/launch-and-observe items to mint onto the milestone gate.',
+        "Stages a gate.accrete intent — the source task's stripped runtime/launch-and-observe items to mint onto the milestone gate.",
       inputSchema: envelope({
         sourceTask: gateContributionSourceTaskSchema,
         items: z.array(gateContributionItemInputSchema),
@@ -171,7 +171,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a config-change seed contribution',
       description:
-        'Stages a seed.stage intent — the source task\'s config-change seeds to mint onto the milestone seed store.',
+        "Stages a seed.stage intent — the source task's config-change seeds to mint onto the milestone seed store.",
       inputSchema: envelope({
         sourceTask: seedContributionSourceTaskSchema,
         seeds: z.array(seedContributionItemInputSchema),
@@ -263,7 +263,7 @@ export function registerStageProposalTools(
     {
       title: 'Request a capability grant for this session',
       description:
-        'Stages a session.requestCapability intent — the exact tool/command or read this session wants (never a category), the plan it intends to use it for, and the evidence behind the request. The grant target is always this connection\'s own session.',
+        "Stages a session.requestCapability intent — the exact tool/command or read this session wants (never a category), the plan it intends to use it for, and the evidence behind the request. The grant target is always this connection's own session.",
       inputSchema: envelope({
         capability: z.string(),
         plan: z.string(),
