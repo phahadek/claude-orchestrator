@@ -79,8 +79,8 @@ export function setTaskWriteRefreshFn(
 }
 
 /** Reads the last-known status for a task from the task cache. */
-function getCachedStatus(taskId: string): TaskStatus | null {
-  const row = getTaskCache(taskId);
+export function getCachedStatus(taskId: string): TaskStatus | null {
+  const row = getTaskCache(normalizeTaskId(taskId));
   if (!row) return null;
   try {
     const parsed = JSON.parse(row.raw_json) as { status?: string };
@@ -98,7 +98,7 @@ function getCachedStatus(taskId: string): TaskStatus | null {
  * otherwise fail the accretion check open.
  */
 export function getCachedType(taskId: string): string | null {
-  const row = getTaskCache(taskId);
+  const row = getTaskCache(normalizeTaskId(taskId));
   if (!row) return null;
   try {
     const parsed = JSON.parse(row.raw_json) as { type?: string };

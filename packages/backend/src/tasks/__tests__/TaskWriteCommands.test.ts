@@ -59,6 +59,8 @@ import {
   BackendTaskWriteCommands,
   isValidTransition,
   STATUS_DISPLAY,
+  getCachedType,
+  getCachedStatus,
 } from '../TaskWriteCommands';
 import { ReadinessGateError } from '../readinessGate';
 import { GroomingGateError } from '../../groom/groomGate';
@@ -208,6 +210,48 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
         },
       },
     );
+  });
+});
+
+describe('getCachedType / getCachedStatus — task ID normalization', () => {
+  it('getCachedType resolves a bare Notion UUID against the notion:-keyed cache row', () => {
+    mockGetTaskCache.mockImplementation((id: string) =>
+      id === 'notion:abc-uuid'
+        ? cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '📐 Design')
+        : undefined,
+    );
+
+    expect(getCachedType('abc-uuid')).toBe('📐 Design');
+  });
+
+  it('getCachedType is idempotent when already given a notion:-prefixed id', () => {
+    mockGetTaskCache.mockImplementation((id: string) =>
+      id === 'notion:abc-uuid'
+        ? cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '📐 Design')
+        : undefined,
+    );
+
+    expect(getCachedType('notion:abc-uuid')).toBe('📐 Design');
+  });
+
+  it('getCachedStatus resolves a bare Notion UUID against the notion:-keyed cache row', () => {
+    mockGetTaskCache.mockImplementation((id: string) =>
+      id === 'notion:abc-uuid'
+        ? cacheRowWithStatus(STATUS_DISPLAY.Backlog)
+        : undefined,
+    );
+
+    expect(getCachedStatus('abc-uuid')).toBe('Backlog');
+  });
+
+  it('getCachedStatus is idempotent when already given a notion:-prefixed id', () => {
+    mockGetTaskCache.mockImplementation((id: string) =>
+      id === 'notion:abc-uuid'
+        ? cacheRowWithStatus(STATUS_DISPLAY.Backlog)
+        : undefined,
+    );
+
+    expect(getCachedStatus('notion:abc-uuid')).toBe('Backlog');
   });
 });
 
@@ -384,6 +428,39 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
 
     expect(caught).toBeInstanceOf(ReadinessGateError);
     expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not throw on a non-empty Open Questions section for a Design task Ready-transition staged with a bare taskId', async () => {
+    // Regression for the bare-id cache-miss bug: task_cache rows are keyed
+    // notion:<id>, so a raw-id read must be normalized before the lookup or
+    // the cached type resolves null and the gate runs type-blind.
+    mockGetTaskCache.mockImplementation((id: string) =>
+      id === 'notion:abc-uuid'
+        ? cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '📐 Design')
+        : undefined,
+    );
+    const backend = makeBackend({
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue(
+          '## Open Questions\n- Which retry policy should we use?\n',
+        ),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('abc-uuid', 'Ready', {
+      groomingGate: {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'n/a' },
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+      },
+    });
+
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'abc-uuid',
+      '🗂️ Ready',
+      expect.anything(),
+    );
   });
 });
 
