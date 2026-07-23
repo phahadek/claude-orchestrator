@@ -139,16 +139,39 @@ export type PlanningDigest =
 
 const normId = (id: string) => id.replace(/-/g, '').toLowerCase();
 
+/**
+ * Thrown by `deriveGroomDigestSlice` when the dispatched task isn't in the
+ * loaded worklist. Distinct from a generic Error so `OpsSessionLauncher` can
+ * tell "worklist reconciliation still didn't find it" apart from any other
+ * assembly failure, and surface a specific reason instead of the session
+ * launching and later hitting SessionManager's generic no-procedure fail-loud.
+ */
+export class GroomWorklistTaskNotFoundError extends Error {
+  constructor(
+    public readonly taskId: string,
+    public readonly reason: string,
+    milestone?: string,
+  ) {
+    super(
+      `task ${taskId} not present in the ${milestone ? `${milestone} ` : ''}groom worklist — ${reason}`,
+    );
+    this.name = 'GroomWorklistTaskNotFoundError';
+  }
+}
+
 /** Narrow a full `loadGroomContext` result to the one target task's validation slice. */
 export function deriveGroomDigestSlice(
   result: GroomLoadResult,
   taskId: string,
+  milestone?: string,
 ): GroomDigestSlice {
   const doc = result.targetTasks.find((t) => normId(t.id) === normId(taskId));
   if (!doc) {
-    throw new Error(
-      `procedureAssembler: task ${taskId} not found in groom target tasks`,
-    );
+    const boardRow = result.board.find((r) => normId(r.id) === normId(taskId));
+    const reason = boardRow
+      ? `task status is "${boardRow.status}" — excluded as Done/Deferred, not groomable`
+      : 'task is not present on the milestone board — worklist may be stale or the task is on a different milestone/board';
+    throw new GroomWorklistTaskNotFoundError(taskId, reason, milestone);
   }
   const dependencyCandidates =
     result.dependencyCandidates.find(

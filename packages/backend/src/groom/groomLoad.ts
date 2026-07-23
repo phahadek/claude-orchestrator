@@ -149,7 +149,10 @@ export interface NotionTaskLike {
 }
 
 export interface NotionReadClient {
-  fetchReadyTasks(boardId: string): Promise<{ task: NotionTaskLike }[]>;
+  fetchReadyTasks(
+    boardId: string,
+    skipCache?: boolean,
+  ): Promise<{ task: NotionTaskLike }[]>;
   fetchTaskPage(
     taskId: string,
   ): Promise<{ name: string; filesSection: string; rawMarkdown: string }>;
@@ -162,6 +165,14 @@ export interface LoadGroomContextOptions {
   /** Cached head SHA per package from a prior explore pass; absent = 'missing'. */
   priorShaByPackage?: Record<string, string>;
   notionClient?: NotionReadClient;
+  /**
+   * Bypass NotionClient's board-fetch cache. A dispatched groom session
+   * targets one specific task, so a stale ~60s board cache (see
+   * NotionClient.fetchBoardTasks) can omit a just-created/just-moved task —
+   * callers that need the freshest worklist for a known target (e.g. a
+   * worklist-miss reconciliation retry) should set this.
+   */
+  skipCache?: boolean;
 }
 
 const DONE_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
@@ -339,7 +350,11 @@ export async function loadGroomContext(
   }
   const baselineSha = baseline.stdout;
 
-  const boardResolved = await notion.fetchReadyTasks(milestoneCfg.board);
+  const skipCache = opts?.skipCache ?? false;
+  const boardResolved = await notion.fetchReadyTasks(
+    milestoneCfg.board,
+    skipCache,
+  );
   const board: TaskRow[] = boardResolved.map((r) => rowFromTask(r.task));
   const dependsOnById = new Map(
     boardResolved.map((r) => [r.task.id, r.task.dependsOn ?? []] as const),
@@ -352,7 +367,7 @@ export async function loadGroomContext(
 
   const neighbourBoards: TaskRow[] = [];
   for (const n of milestoneCfg.neighbours ?? []) {
-    const rows = await notion.fetchReadyTasks(n.board);
+    const rows = await notion.fetchReadyTasks(n.board, skipCache);
     for (const r of rows) {
       rowsByNormId.set(stripHyphens(r.task.id), r.task);
       if (!DONE_STATUSES.has(r.task.status))

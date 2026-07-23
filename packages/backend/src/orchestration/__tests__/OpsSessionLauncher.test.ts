@@ -50,6 +50,43 @@ function makeTask(overrides: Partial<OpsTaskEntry> = {}): OpsTaskEntry {
   };
 }
 
+function makeGroomTaskDoc(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'task-1',
+    title: 'Groom me',
+    status: '🔲 Backlog',
+    type: '🔨 Task',
+    url: 'https://www.notion.so/task-1',
+    sizeCheckSeed: { files: 1, loc_method: 'estimated' },
+    typeCheck: { mismatch: false, notes: [] },
+    readinessViolations: [],
+    bindingConstraints: [],
+    regions: { packages: [], files: [], planned: [] },
+    rawMarkdown: '',
+    ...overrides,
+  };
+}
+
+function makeGroomResult(
+  targetTasks: ReturnType<typeof makeGroomTaskDoc>[],
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    board: targetTasks.map((t) => ({
+      id: t.id,
+      title: t.title,
+      status: t.status,
+      type: t.type,
+      priority: '',
+      url: t.url,
+    })),
+    targetTasks,
+    codeWorklist: new Map<string, string[]>(),
+    dependencyCandidates: [],
+    ...overrides,
+  };
+}
+
 function makeOpsContext(executable: OpsTaskEntry[] = []): OpsLoadResult {
   return {
     contextPages: [],
@@ -261,22 +298,9 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
 
   it('passes a non-empty injectedProcedureContent for a groom dispatch', async () => {
     const { loadGroomContext } = await import('../../groom/groomLoad.js');
-    (loadGroomContext as ReturnType<typeof vi.fn>).mockResolvedValue({
-      targetTasks: [
-        {
-          id: 'task-1',
-          title: 'Groom me',
-          status: '🔲 Backlog',
-          type: '🔨 Task',
-          url: 'https://www.notion.so/task-1',
-          sizeCheckSeed: { files: 1, loc_method: 'estimated' },
-          typeCheck: { mismatch: false, notes: [] },
-          readinessViolations: [],
-          bindingConstraints: [],
-        },
-      ],
-      dependencyCandidates: [],
-    });
+    (loadGroomContext as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeGroomResult([makeGroomTaskDoc()]),
+    );
 
     const launcher = new OpsSessionLauncher(sessionManager as never);
     const task = {
@@ -347,22 +371,11 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
 
   it('names a groom session after the digest-resolved title, not the bare task id', async () => {
     const { loadGroomContext } = await import('../../groom/groomLoad.js');
-    (loadGroomContext as ReturnType<typeof vi.fn>).mockResolvedValue({
-      targetTasks: [
-        {
-          id: 'task-1',
-          title: 'Fix the flaky retry logic',
-          status: '🔲 Backlog',
-          type: '🔨 Task',
-          url: 'https://www.notion.so/task-1',
-          sizeCheckSeed: { files: 1, loc_method: 'estimated' },
-          typeCheck: { mismatch: false, notes: [] },
-          readinessViolations: [],
-          bindingConstraints: [],
-        },
-      ],
-      dependencyCandidates: [],
-    });
+    (loadGroomContext as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeGroomResult([
+        makeGroomTaskDoc({ title: 'Fix the flaky retry logic' }),
+      ]),
+    );
 
     const launcher = new OpsSessionLauncher(sessionManager as never);
     // Mirrors planningLaunch.ts's groom/design dispatch, which only knows
@@ -414,6 +427,63 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     expect(start).toHaveBeenCalledTimes(1);
     const [, , options] = start.mock.calls[0];
     expect(options.taskName).toBe('Design the retry backoff strategy');
+  });
+
+  it('reconciles a stale groom worklist: refreshes with skipCache and assembles once the freshly-created task is found', async () => {
+    const { loadGroomContext } = await import('../../groom/groomLoad.js');
+    (loadGroomContext as ReturnType<typeof vi.fn>)
+      // First read (cached): the just-created task isn't in the board yet.
+      .mockResolvedValueOnce(makeGroomResult([]))
+      // Reconciliation retry with skipCache: the fresh read finds it.
+      .mockResolvedValueOnce(
+        makeGroomResult([
+          makeGroomTaskDoc({ title: 'Newly created backlog task' }),
+        ]),
+      );
+
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = { id: 'task-1', title: 'task-1', url: '', blockingDepIds: [] };
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'groom',
+      tasks: [task],
+    });
+
+    expect(loadGroomContext).toHaveBeenCalledTimes(2);
+    expect(
+      (loadGroomContext as ReturnType<typeof vi.fn>).mock.calls[1][1],
+    ).toMatchObject({ skipCache: true });
+    expect(start).toHaveBeenCalledTimes(1);
+    const [, , options] = start.mock.calls[0];
+    expect(options.taskName).toBe('Newly created backlog task');
+    expect(typeof options.injectedProcedureContent).toBe('string');
+  });
+
+  it('skips the dispatch (does not launch a session) with a clear reason when the task is genuinely absent from the groom worklist', async () => {
+    const { loadGroomContext } = await import('../../groom/groomLoad.js');
+    (loadGroomContext as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeGroomResult([]),
+    );
+
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = { id: 'task-1', title: 'task-1', url: '', blockingDepIds: [] };
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'groom',
+      tasks: [task],
+    });
+
+    // Reconciliation is attempted (2 loads) but the task is still absent —
+    // dispatch is skipped rather than launching a session that then errors
+    // on the generic no-injectedProcedureContent fail-loud.
+    expect(loadGroomContext).toHaveBeenCalledTimes(2);
+    expect(start).not.toHaveBeenCalled();
   });
 
   it('does not pass injectedProcedureContent for a standard (code) dispatch', async () => {
