@@ -3032,6 +3032,7 @@ export function getProjectDeployedShaRow(
 
 let _stmtGetDeployRun: Database.Statement | null = null;
 let _stmtGetActiveDeployRunForProject: Database.Statement | null = null;
+let _stmtGetLatestDeployRunForProject: Database.Statement | null = null;
 let _stmtInsertDeployRun: Database.Statement | null = null;
 let _stmtUpdateDeployRunStep: Database.Statement | null = null;
 let _stmtUpdateDeployRunStatus: Database.Statement | null = null;
@@ -3053,6 +3054,18 @@ export function getActiveDeployRunForProject(
     `SELECT * FROM deploy_run WHERE project = @project AND status = 'running'`,
   );
   return _stmtGetActiveDeployRunForProject.get({ project }) as
+    | DeployRunRow
+    | undefined;
+}
+
+/** The project's most recently started run (running or terminal), if any. */
+export function getLatestDeployRunForProject(
+  project: string,
+): DeployRunRow | undefined {
+  _stmtGetLatestDeployRunForProject ??= db.prepare<{ project: string }>(
+    `SELECT * FROM deploy_run WHERE project = @project ORDER BY started_at DESC LIMIT 1`,
+  );
+  return _stmtGetLatestDeployRunForProject.get({ project }) as
     | DeployRunRow
     | undefined;
 }

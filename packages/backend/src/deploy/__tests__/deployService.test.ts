@@ -23,6 +23,7 @@ import {
   startDeployRun,
   getDeployRun,
   getActiveDeployRun,
+  getLatestDeployRun,
   advanceDeployRun,
   completeDeployRun,
   appendDeployRunEvent,
@@ -144,6 +145,31 @@ describe('deploy_run: run-state store', () => {
       startedAt: '2026-07-20T00:06:00.000Z',
     });
     expect(getActiveDeployRun('claude-orchestrator')).toEqual(second);
+  });
+
+  it('getLatestDeployRun returns the active run when one is running', () => {
+    const run = startDeployRun({
+      project: 'claude-orchestrator',
+      targetSha: 'sha1',
+      startedAt: '2026-07-20T00:00:00.000Z',
+    });
+    expect(getLatestDeployRun('claude-orchestrator')).toEqual(run);
+  });
+
+  it('getLatestDeployRun falls back to the most recent terminal run when none is active', () => {
+    const run = startDeployRun({
+      project: 'claude-orchestrator',
+      targetSha: 'sha1',
+      startedAt: '2026-07-20T00:00:00.000Z',
+    });
+    completeDeployRun(run.run_id, 'failed', '2026-07-20T00:05:00.000Z');
+    const latest = getLatestDeployRun('claude-orchestrator');
+    expect(latest?.run_id).toBe(run.run_id);
+    expect(latest?.status).toBe('failed');
+  });
+
+  it('getLatestDeployRun returns undefined when the project has never deployed', () => {
+    expect(getLatestDeployRun('never-deployed')).toBeUndefined();
   });
 
   it('scopes active-run tracking independently per project', () => {

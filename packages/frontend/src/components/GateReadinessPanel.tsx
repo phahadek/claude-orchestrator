@@ -236,6 +236,9 @@ export function GateReadinessPanel({
   );
   const [deployRun, setDeployRun] = useState<DeployRun | null>(null);
   const [deployEvents, setDeployEvents] = useState<DeployRunEvent[]>([]);
+  const [dismissedDeployRunId, setDismissedDeployRunId] = useState<
+    string | null
+  >(null);
 
   // Tracks the top-bar milestone selection without forcing a milestone-list
   // refetch whenever it changes (see the resync effect below).
@@ -504,6 +507,7 @@ export function GateReadinessPanel({
       .then((result) => {
         setDeployRun(result.run);
         setDeployEvents([]);
+        setDismissedDeployRunId(null);
       })
       .catch((err) => {
         setDeployLaunchError(err instanceof Error ? err.message : String(err));
@@ -512,6 +516,11 @@ export function GateReadinessPanel({
         setDeployLaunching(false);
       });
   }, [activeProjectId]);
+
+  const dismissDeployRun = useCallback(() => {
+    if (!deployRun) return;
+    setDismissedDeployRunId(deployRun.run_id);
+  }, [deployRun]);
 
   const toggleExpanded = useCallback(
     (id: string) => {
@@ -724,7 +733,7 @@ export function GateReadinessPanel({
             >
               {deployRun?.status === 'running' ? 'Deploying…' : 'Launch Deploy'}
             </button>
-            {deployRun && (
+            {deployRun && deployRun.run_id !== dismissedDeployRunId && (
               <span
                 className={styles.deployRunStatus}
                 data-testid="deploy-run-status"
@@ -733,23 +742,61 @@ export function GateReadinessPanel({
                 {deployRun.current_step ? ` (${deployRun.current_step})` : ''}
               </span>
             )}
+            {deployRun &&
+              deployRun.status !== 'running' &&
+              deployRun.run_id !== dismissedDeployRunId && (
+                <button
+                  type="button"
+                  className={styles.deployButton}
+                  onClick={dismissDeployRun}
+                  data-testid="deploy-run-dismiss-button"
+                >
+                  Dismiss
+                </button>
+              )}
           </div>
           {deployLaunchError && (
             <p className={styles.error}>{deployLaunchError}</p>
           )}
-          {deployEvents.length > 0 && (
-            <ul
-              className={styles.deployEventList}
-              data-testid="deploy-run-events"
-            >
-              {deployEvents.map((ev) => (
-                <li key={ev.id}>
-                  {ev.step}: {ev.event_type}
-                  {ev.disposition ? ` (${ev.disposition})` : ''}
-                </li>
-              ))}
-            </ul>
-          )}
+          {deployRun &&
+            deployRun.status === 'failed' &&
+            deployRun.run_id !== dismissedDeployRunId &&
+            (() => {
+              const failedEvent = [...deployEvents]
+                .reverse()
+                .find((ev) => ev.event_type === 'step_failed');
+              return (
+                <p
+                  className={styles.error}
+                  data-testid="deploy-run-failure-reason"
+                >
+                  Deploy failed
+                  {failedEvent
+                    ? ` at step "${failedEvent.step}"${
+                        failedEvent.detail ? `: ${failedEvent.detail}` : ''
+                      }`
+                    : deployRun.current_step
+                      ? ` at step "${deployRun.current_step}"`
+                      : ''}
+                </p>
+              );
+            })()}
+          {deployRun &&
+            deployRun.run_id !== dismissedDeployRunId &&
+            deployEvents.length > 0 && (
+              <ul
+                className={styles.deployEventList}
+                data-testid="deploy-run-events"
+              >
+                {deployEvents.map((ev) => (
+                  <li key={ev.id}>
+                    {ev.step}: {ev.event_type}
+                    {ev.disposition ? ` (${ev.disposition})` : ''}
+                    {ev.detail ? ` — ${ev.detail}` : ''}
+                  </li>
+                ))}
+              </ul>
+            )}
         </div>
       )}
 
