@@ -27,6 +27,8 @@ import {
   getAnalyzeResult,
   setPreReviewStage,
   enqueueFeedbackItem,
+  hasDispositionReplyBeenPosted,
+  recordDispositionReply,
 } from '../db/queries';
 import { syncToOrigin } from './PRFileReverter';
 import type {
@@ -604,6 +606,20 @@ export class ReviewOrchestrator {
     const shaLabel = headSha ? headSha.slice(0, 7) : 'unknown';
 
     for (const d of dispositions) {
+      const commentIdStr = String(d.comment_id);
+      if (
+        hasDispositionReplyBeenPosted(
+          prNumber,
+          repo,
+          commentIdStr,
+          d.disposition,
+        )
+      ) {
+        logger.debug(
+          `[ReviewOrchestrator] disposition: reply already posted for comment_id ${d.comment_id} (${d.disposition}) — skipping duplicate`,
+        );
+        continue;
+      }
       let threadId: string | null;
       try {
         threadId = await this.github.findThreadByCommentId(
@@ -641,6 +657,7 @@ export class ReviewOrchestrator {
             `Out of scope for this PR: ${d.reason ?? ''}`,
           );
         }
+        recordDispositionReply(prNumber, repo, commentIdStr, d.disposition);
         logger.info(
           `[ReviewOrchestrator] disposition: ${d.disposition} for comment_id ${d.comment_id} → thread ${threadId}`,
         );

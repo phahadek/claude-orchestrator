@@ -2771,10 +2771,15 @@ export async function getMergeCommitForTask(
 // ─── pr_review_comments_routed ────────────────────────────────────────────────
 
 /**
- * Returns comment IDs that have been fully acknowledged (routed_state='acked').
- * Used by ReviewerCommentsWatcher as the dedup filter — acked comments are
- * never re-delivered. Pending comments are NOT included so they can be
- * re-delivered on the next poll if the consuming session died before acking.
+ * Returns comment IDs that should not be re-delivered: those fully
+ * acknowledged (routed_state='acked'), plus 'pending' comments whose owning
+ * session is still alive (not done/error/killed). A pending comment is
+ * excluded from redelivery while the session might still ack it — otherwise
+ * it gets re-buffered and re-flushed every quiescence window, triggering a
+ * fresh (duplicate) disposition from an alive-but-idle session. Pending
+ * comments owned by a crashed/terminal session (or with no resolvable
+ * session) are NOT included, preserving at-least-once delivery for a session
+ * that died before acking.
  */
 export function getRoutedCommentIds(
   prNumber: number,
@@ -2785,7 +2790,23 @@ export function getRoutedCommentIds(
       pr_number: number;
       repo: string;
     }>(
-      `SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'acked'`,
+      `
+    SELECT r.comment_id
+    FROM pr_review_comments_routed r
+    WHERE r.pr_number = @pr_number AND r.repo = @repo
+      AND (
+        r.routed_state = 'acked'
+        OR (
+          r.routed_state = 'pending'
+          AND EXISTS (
+            SELECT 1 FROM pull_requests pr
+            JOIN sessions s ON s.session_id = pr.session_id
+            WHERE pr.pr_number = r.pr_number AND pr.repo = r.repo
+              AND s.status NOT IN ('done', 'error', 'killed')
+          )
+        )
+      )
+  `,
     )
     .all({ pr_number: prNumber, repo }) as { comment_id: string }[];
   return new Set(rows.map((r) => r.comment_id));
@@ -2816,6 +2837,60 @@ export function markCommentsPending(
   for (const comment_id of commentIds) {
     stmt.run({ pr_number: prNumber, repo, comment_id, routed_at: now });
   }
+}
+
+// ─── pr_review_comment_disposition_replies ─────────────────────────────────
+
+/**
+ * Returns true if a GitHub reply has already been posted for this exact
+ * (comment_id, disposition) pair. Used by ReviewOrchestrator.handleDispositions
+ * to guard against re-posting a duplicate reply when a 'pending' comment is
+ * redelivered and re-dispositioned by the session.
+ */
+export function hasDispositionReplyBeenPosted(
+  prNumber: number,
+  repo: string,
+  commentId: string,
+  disposition: string,
+): boolean {
+  const row = db
+    .prepare<{
+      pr_number: number;
+      repo: string;
+      comment_id: string;
+      disposition: string;
+    }>(
+      `SELECT 1 FROM pr_review_comment_disposition_replies
+       WHERE pr_number = @pr_number AND repo = @repo AND comment_id = @comment_id AND disposition = @disposition`,
+    )
+    .get({ pr_number: prNumber, repo, comment_id: commentId, disposition });
+  return row !== undefined;
+}
+
+/** Records that a GitHub reply has been posted for this (comment_id, disposition) pair. */
+export function recordDispositionReply(
+  prNumber: number,
+  repo: string,
+  commentId: string,
+  disposition: string,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    comment_id: string;
+    disposition: string;
+    replied_at: number;
+  }>(
+    `INSERT OR IGNORE INTO pr_review_comment_disposition_replies
+       (pr_number, repo, comment_id, disposition, replied_at)
+     VALUES (@pr_number, @repo, @comment_id, @disposition, @replied_at)`,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    comment_id: commentId,
+    disposition,
+    replied_at: Date.now(),
+  });
 }
 
 /**

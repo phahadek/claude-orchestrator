@@ -1430,4 +1430,19 @@ export function runMigrations(target: Database.Database): void {
       `);
     }
   }
+
+  // pr_review_comment_disposition_replies: idempotency guard for
+  // handleDispositions — records which (comment_id, disposition) replies have
+  // already been posted to GitHub so a redelivered 'pending' comment can't
+  // trigger a duplicate reply.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS pr_review_comment_disposition_replies (
+      pr_number   INTEGER NOT NULL,
+      repo        TEXT    NOT NULL,
+      comment_id  TEXT    NOT NULL,
+      disposition TEXT    NOT NULL,
+      replied_at  INTEGER NOT NULL,
+      PRIMARY KEY (pr_number, repo, comment_id, disposition)
+    );
+  `);
 }

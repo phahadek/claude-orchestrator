@@ -114,10 +114,21 @@ beforeEach(() => {
 // ── Tests for DB helpers ───────────────────────────────────────────────────────
 
 describe('markCommentsPending / getRoutedCommentIds / ackPendingComments', () => {
-  it('getRoutedCommentIds returns only acked IDs (not pending)', () => {
+  it('getRoutedCommentIds includes pending IDs owned by an alive session (suppress redelivery)', () => {
+    // beforeEach seeds SESSION_ID as 'idle' — alive, not terminal.
     markCommentsPending(PR_NUMBER, REPO, ['ic_1', 'ic_2']);
-    const acked = getRoutedCommentIds(PR_NUMBER, REPO);
-    expect(acked.size).toBe(0); // pending, not acked yet
+    const known = getRoutedCommentIds(PR_NUMBER, REPO);
+    expect(known.has('ic_1')).toBe(true);
+    expect(known.has('ic_2')).toBe(true);
+  });
+
+  it('getRoutedCommentIds excludes pending IDs owned by a crashed/terminal session (allow redelivery)', () => {
+    db.prepare(`UPDATE sessions SET status = 'error' WHERE session_id = ?`).run(
+      SESSION_ID,
+    );
+    markCommentsPending(PR_NUMBER, REPO, ['ic_1', 'ic_2']);
+    const known = getRoutedCommentIds(PR_NUMBER, REPO);
+    expect(known.size).toBe(0);
   });
 
   it('ackPendingComments flips pending → acked', () => {
@@ -179,7 +190,7 @@ describe('ReviewerCommentsWatcher quiescence + at-least-once delivery', () => {
     vi.useRealTimers();
   });
 
-  it('comment re-discovered on second poll (pending, not acked) → second inbox item after quiescence', async () => {
+  it('pending comment is NOT redelivered while owning session is alive-but-idle', async () => {
     vi.useFakeTimers();
     const COMMENT_ID = 102;
     const github = makeGitHubClient(COMMENT_ID) as any;
@@ -193,11 +204,45 @@ describe('ReviewerCommentsWatcher quiescence + at-least-once delivery', () => {
     await vi.advanceTimersByTimeAsync(120_001);
     expect(listUndeliveredInboxItems(SESSION_ID)).toHaveLength(1);
 
-    // Simulate session death — no ack fires; comment stays pending
-    // Second poll: comment is pending (not acked) → getRoutedCommentIds returns empty
-    // → re-buffered → re-flush = second inbox item (at-least-once)
+    // No ack fires, but the session (seeded 'idle') is still alive — comment
+    // stays pending and getRoutedCommentIds now excludes it from redelivery.
     const watcher2 = new ReviewerCommentsWatcher(github, makeSessions() as any);
     await (watcher2 as any).pollPR(pr);
+    await vi.advanceTimersByTimeAsync(120_001);
+
+    expect(listUndeliveredInboxItems(SESSION_ID)).toHaveLength(1);
+
+    vi.useRealTimers();
+  });
+
+  it('pending comment IS redelivered once the owning session is crashed/terminal', async () => {
+    vi.useFakeTimers();
+    const COMMENT_ID = 105;
+    const github = makeGitHubClient(COMMENT_ID) as any;
+    const watcher = new ReviewerCommentsWatcher(github, makeSessions() as any);
+    const pr = db
+      .prepare(`SELECT * FROM pull_requests WHERE pr_number = ? AND repo = ?`)
+      .get(PR_NUMBER, REPO) as any;
+
+    // First poll → buffer → flush
+    await (watcher as any).pollPR(pr);
+    await vi.advanceTimersByTimeAsync(120_001);
+    expect(listUndeliveredInboxItems(SESSION_ID)).toHaveLength(1);
+
+    // Session crashes (no ack) — mark it terminal in the DB before the next poll,
+    // so getRoutedCommentIds no longer excludes the still-pending comment.
+    db.prepare(`UPDATE sessions SET status = 'error' WHERE session_id = ?`).run(
+      SESSION_ID,
+    );
+
+    const watcher2 = new ReviewerCommentsWatcher(github, makeSessions() as any);
+    await (watcher2 as any).pollPR(pr);
+
+    // Task is retried and resumes with the same session id before quiescence
+    // flush — flush() independently re-checks liveness at delivery time.
+    db.prepare(`UPDATE sessions SET status = 'running' WHERE session_id = ?`).run(
+      SESSION_ID,
+    );
     await vi.advanceTimersByTimeAsync(120_001);
 
     expect(listUndeliveredInboxItems(SESSION_ID)).toHaveLength(2);
