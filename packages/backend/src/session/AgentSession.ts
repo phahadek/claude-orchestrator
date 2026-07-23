@@ -202,7 +202,7 @@ export function parseVerifiedFlakyDisposition(
  * decision that only downgrade-style reclassifications are permitted from
  * this channel; a verifier can never propose an auto-run tier.
  */
-const VERIFIER_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
+export const VERIFIER_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Human-Observation',
   'needs-triage',
 ]);
@@ -582,6 +582,12 @@ export class AgentSession extends EventEmitter {
     null;
   private readonly processedGateVerifyMessageIds = new Set<string>();
   private pendingGateVerifyDisposition: GateVerifyDisposition | null = null;
+  /** Last-recorded verdict per key, serialized — MCP verdict tools dedup a
+   *  same-content repeat call against these before emitting (see recordReviewDisposition,
+   *  recordVerifiedFlakyDisposition, recordGateVerifyDisposition below). */
+  private readonly recordedDispositions = new Map<number, string>();
+  private recordedVerifiedFlaky: string | null = null;
+  private recordedGateVerify: string | null = null;
   /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
   private readonly warnedEscapeToolUseIds = new Set<string>();
   /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
@@ -2870,6 +2876,91 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         `[AgentSession] injectContextFile: failed to write ${filename}: ${err}`,
       );
     }
+  }
+
+  /** Current worktree HEAD SHA, or null if unavailable — best-effort, non-fatal on failure. */
+  private currentHeadSha(): string | null {
+    if (!this.worktreePath) return null;
+    try {
+      return execSync('git rev-parse HEAD', { cwd: this.worktreePath })
+        .toString()
+        .trim();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Record a review-thread disposition delivered via the review.disposition
+   * MCP tool and emit the same `dispositions_parsed` event the retired
+   * stdout parser (parseDispositionBlock) used to emit, so ReviewOrchestrator
+   * is unaffected. Idempotent per (session, comment_id): an identical repeat
+   * call is a dedup no-op; a changed disposition for the same comment_id is
+   * last-write-wins and re-emits.
+   */
+  recordReviewDisposition(item: ParsedDispositionItem): void {
+    const pr = getPRBySessionId(this.sessionId);
+    if (!pr) return;
+    const serialized = JSON.stringify(item);
+    if (this.recordedDispositions.get(item.comment_id) === serialized) {
+      return;
+    }
+    this.recordedDispositions.set(item.comment_id, serialized);
+    const payload: DispositionsParsedPayload = {
+      sessionId: this.sessionId,
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+      headSha: this.currentHeadSha(),
+      dispositions: [item],
+    };
+    this.emit('dispositions_parsed', payload);
+  }
+
+  /**
+   * Record a verified-flaky disposition delivered via the flaky.confirm MCP
+   * tool and emit the same `verified_flaky_disposition` event the retired
+   * stdout parser (parseVerifiedFlakyDisposition) used to emit, so
+   * PRMergeWatcher is unaffected. Idempotent per session: an identical
+   * repeat call is a dedup no-op; a changed disposition is last-write-wins.
+   */
+  recordVerifiedFlakyDisposition(disposition: VerifiedFlakyDisposition): void {
+    const pr = getPRBySessionId(this.sessionId);
+    if (!pr) return;
+    const serialized = JSON.stringify(disposition);
+    if (this.recordedVerifiedFlaky === serialized) {
+      return;
+    }
+    this.recordedVerifiedFlaky = serialized;
+    const payload: VerifiedFlakyDispositionPayload = {
+      sessionId: this.sessionId,
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+      headSha: this.currentHeadSha(),
+      disposition,
+    };
+    this.emit('verified_flaky_disposition', payload);
+  }
+
+  /**
+   * Record a gate-verify disposition delivered via the gate.verify MCP tool
+   * and emit the same `gate_verify_disposition` event the retired stdout
+   * parser (parseGateVerifyDisposition) used to emit, so GateItemVerifier is
+   * unaffected. Fires unconditionally (no PR gating) — a read-only
+   * gate-verify session has no PR of its own. Idempotent per session: an
+   * identical repeat call is a dedup no-op; a changed disposition is
+   * last-write-wins.
+   */
+  recordGateVerifyDisposition(disposition: GateVerifyDisposition): void {
+    const serialized = JSON.stringify(disposition);
+    if (this.recordedGateVerify === serialized) {
+      return;
+    }
+    this.recordedGateVerify = serialized;
+    const payload: GateVerifyDispositionPayload = {
+      sessionId: this.sessionId,
+      disposition,
+    };
+    this.emit('gate_verify_disposition', payload);
   }
 
   /** No-op — CLI does not support mid-session permission approval. */

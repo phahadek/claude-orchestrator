@@ -165,3 +165,31 @@ export const decisionPickOneOptionSchema = z.object({
   label: z.string(),
   description: z.string(),
 });
+
+/** ParsedDispositionItem's disposition vocabulary — see AgentSession.ts's parseDispositionBlock. */
+export const reviewDispositionSchema = z.enum([
+  'addressed',
+  'wont_fix',
+  'out_of_scope',
+]);
+
+/** VerifiedFlakyDisposition's gate vocabulary — see AgentSession.ts's parseVerifiedFlakyDisposition. */
+export const flakyGateSchema = z.enum(['ci', 'f2']);
+
+/** GateVerifyDisposition's disposition vocabulary — see AgentSession.ts's parseGateVerifyDisposition. */
+export const gateVerifyDispositionSchema = z.enum([
+  'pass',
+  'fail',
+  'needs-setup',
+]);
+
+/** AgentSession.ts's VERIFIER_RECLASSIFY_TARGETS — the only reclassify targets a gate-verify session may propose. */
+export const gateVerifyReclassifyToSchema = z.enum([
+  'Human-Observation',
+  'needs-triage',
+]);
+
+export const gateVerifyReclassifySchema = z.object({
+  to: gateVerifyReclassifyToSchema,
+  reason: z.string(),
+});

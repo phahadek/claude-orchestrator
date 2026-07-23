@@ -174,7 +174,7 @@ app.use('/api', createTaskIntentsRouter());
 // it too is mounted ahead of requireDeviceAuth. Scope is staging + verdict
 // reporting only (never apply) — the tool surface lands in a follow-on
 // task; today this exposes a minimal handshake tool only.
-app.use('/api', createOrchestratorMcpRouter());
+app.use('/api', createOrchestratorMcpRouter(sessionManager));
 // The own-record read (session_events + audit_log, by target session id) an
 // operator-approved session.requestCapability grant materialises — same
 // loopback-only, stage-credential auth as above, plus its own per-request
