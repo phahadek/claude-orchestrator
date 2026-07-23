@@ -237,6 +237,8 @@ describe('assemblePlanningProcedure', () => {
       const output = assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
+        milestoneId: 'm1',
+        projectId: 'p1',
         digest,
       });
 
@@ -259,13 +261,73 @@ describe('assemblePlanningProcedure', () => {
         ops: '## Ops Journal Slice',
       };
       expect(output).toContain(digestTitles[workflow]);
+
+      // Concrete Transport block — the milestone/project ids, the allowed
+      // intent kinds, and at least one concrete client invocation.
+      expect(output).toContain('`m1`');
+      expect(output).toContain('`p1`');
+      expect(output).toContain('ORCHESTRATOR_STAGE_TOKEN');
+      expect(output).toMatch(
+        /node ~\/\.claude\/scripts\/stage-task-intent\.mjs \S+ '/,
+      );
+      const allowedKinds: Record<PlanningDigest['workflow'], string[]> = {
+        groom: [
+          'task.setStatus',
+          'task.setProperties',
+          'task.setDependsOn',
+          'gate.accrete',
+          'seed.stage',
+          'task.create',
+        ],
+        design: [
+          'task.updateBody',
+          'task.setProperties',
+          'task.setStatus',
+          'seed.stage',
+          'task.create',
+        ],
+        ops: [
+          'journal.setState',
+          'task.setStatus',
+          'session.requestCapability',
+          'task.create',
+        ],
+      };
+      for (const kind of allowedKinds[workflow]) {
+        expect(output).toContain(kind);
+      }
+      if (workflow === 'ops') {
+        expect(output).toContain('ORCHESTRATOR_OPS_JOURNAL_TOKEN');
+      }
     });
   }
+
+  it('never leaks a credential value into the assembled text — only the env-var name', () => {
+    for (const { digest } of cases) {
+      const output = assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        milestoneId: 'm1',
+        projectId: 'p1',
+        digest,
+      });
+      // Credentials are referenced by env-var name; this composer never has
+      // an actual token value in scope to leak, but assert the shape stays
+      // name-only (a `$VAR` or `` `VAR` `` reference) rather than anything
+      // resembling a minted token (uuid/random-looking string) next to it.
+      expect(output).toMatch(/ORCHESTRATOR_STAGE_TOKEN/);
+      expect(output).not.toMatch(
+        /ORCHESTRATOR_STAGE_TOKEN[^\n]*[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+      );
+    }
+  });
 
   it('states an up-front capability inventory for the dispatched ops procedure: base tools, how to request more, what is never grantable', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'ops',
         data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
@@ -291,6 +353,8 @@ describe('assemblePlanningProcedure', () => {
       const other = assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
         digest,
       });
       expect(other).not.toContain('## Capabilities');
@@ -301,6 +365,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'ops',
         data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
@@ -318,6 +384,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'ops',
         data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
@@ -333,6 +401,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'ops',
         data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
@@ -354,6 +424,8 @@ describe('assemblePlanningProcedure', () => {
       const other = assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
         digest,
       });
       expect(other).toMatch(/read-only\/stage-only/i);
@@ -365,6 +437,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'ops',
         data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
@@ -380,6 +454,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'groom',
         data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
@@ -395,6 +471,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'groom',
         data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
@@ -409,6 +487,8 @@ describe('assemblePlanningProcedure', () => {
       const other = assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
         digest,
       });
       expect(other).not.toMatch(/discard\/defer/i);
@@ -421,6 +501,8 @@ describe('assemblePlanningProcedure', () => {
       const output = assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
         digest,
       });
       expect(output).not.toContain('Resolve manifest & mode');
@@ -433,6 +515,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'groom',
         data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
@@ -446,6 +530,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'groom',
         data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
@@ -461,6 +547,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'groom',
         data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
@@ -493,6 +581,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'groom',
         data: deriveGroomDigestSlice(result, 'task-1'),
@@ -514,6 +604,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'groom',
         data: deriveGroomDigestSlice(result, 'task-1'),
@@ -537,6 +629,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'groom',
         data: deriveGroomDigestSlice(result, 'task-1'),
@@ -552,6 +646,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'design',
         data: deriveDesignDigestSlice(
@@ -567,6 +663,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'ops',
         data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
@@ -580,6 +678,8 @@ describe('assemblePlanningProcedure', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'design',
         data: deriveDesignDigestSlice(fixtureDesignLoadResult()),
@@ -601,6 +701,8 @@ describe('planning intent kinds', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'groom',
         data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
@@ -620,6 +722,8 @@ describe('planning intent kinds', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'groom',
         data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
@@ -642,6 +746,8 @@ describe('planning intent kinds', () => {
       assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
         digest: {
           workflow: 'groom',
           data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
@@ -650,6 +756,8 @@ describe('planning intent kinds', () => {
       assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
         digest: {
           workflow: 'design',
           data: deriveDesignDigestSlice(fixtureDesignLoadResult()),
@@ -658,6 +766,8 @@ describe('planning intent kinds', () => {
       assemblePlanningProcedure({
         taskName: 'A task',
         taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
         digest: {
           workflow: 'ops',
           data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),
@@ -681,6 +791,8 @@ describe('planning intent kinds', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
       digest: {
         workflow: 'ops',
         data: deriveOpsDigestSlice(fixtureOpsLoadResult(), 'task-3', null),

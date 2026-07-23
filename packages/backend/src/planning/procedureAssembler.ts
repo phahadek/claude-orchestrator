@@ -251,6 +251,50 @@ const PLANNING_INTENT_KINDS: Record<PlanningWorkflow, readonly string[]> = {
 };
 
 /**
+ * One concrete example `stage-task-intent.mjs` payload per known intent
+ * kind — placeholders (`<task-id>`, `<milestone-id>`, ...) stand in for
+ * real values. Rendered next to each allowed kind in the Transport section
+ * so a dispatched session has the exact invocation shape in hand instead of
+ * grepping `KNOWN_INTENT_KINDS` / `staged-intents-client.mjs` usage
+ * comments to reconstruct a payload shape by trial and error.
+ */
+const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
+  'task.setStatus': '{"taskId":"<task-id>","status":"Ready"}',
+  'task.setProperties':
+    '{"taskId":"<task-id>","properties":{"priority":"P1"}}',
+  'task.setDependsOn':
+    '{"taskId":"<task-id>","dependsOn":["<other-task-id>"]}',
+  'gate.accrete':
+    '{"project":"<project-id>","taskId":"<task-id>","title":"<title>",' +
+    '"milestone":"<milestone-id>","classification":"Read-Only",' +
+    '"items":[{"text":"<gate item text>"}]}',
+  'seed.stage':
+    '{"project":"<project-id>","taskId":"<task-id>","title":"<title>",' +
+    '"milestone":"<milestone-id>","decision":"seeds",' +
+    '"seeds":[{"spec":"<config-seed spec>"}]}',
+  'task.create':
+    '{"title":"<title>","type":"💻 Code","milestone":"<milestone-id>",' +
+    '"body":"<task body markdown>"}',
+  'task.updateBody': '{"taskId":"<task-id>","body":"<full markdown>"}',
+  'journal.setState':
+    '{"taskId":"<task-id>","state":"staged-proposal",' +
+    '"fields":{"findingOrProposal":"<finding or proposal>"}}',
+  'session.requestCapability':
+    '{"capability":"<one Bash command prefix or one named MCP write verb>",' +
+    '"reason":"<why this session needs it>"}',
+};
+
+/** Render one `node stage-task-intent.mjs <kind> '<payload>'` line per allowed kind. */
+function renderIntentKindInvocations(kinds: readonly string[]): string[] {
+  return kinds.map((kind) => {
+    const payload = INTENT_KIND_EXAMPLE_PAYLOADS[kind];
+    return payload
+      ? `- \`node ~/.claude/scripts/stage-task-intent.mjs ${kind} '${payload}'\``
+      : `- \`node ~/.claude/scripts/stage-task-intent.mjs ${kind} '<json-payload>'\``;
+  });
+}
+
+/**
  * Up-front capability inventory for a dispatched ops session — what it can do
  * out of the box, how it earns more, and what no grant can ever unlock. Stated
  * before the session does anything, so it stops probing tools by trial-and-
@@ -308,6 +352,8 @@ function renderSkeleton(
   workflow: PlanningWorkflow,
   taskName: string,
   taskUrl: string,
+  milestoneId: string,
+  projectId: string,
 ): string {
   const label = SKILL_LABELS[workflow];
   const kinds = PLANNING_INTENT_KINDS[workflow];
@@ -346,6 +392,30 @@ function renderSkeleton(
       "client (POST /api/task-intents, authenticated by this session's scoped stage " +
       'credential). That endpoint only ever stages — applying a staged intent is a ' +
       'separate human/device-authenticated action this session cannot reach.',
+    '',
+    `- Milestone: \`${milestoneId}\``,
+    `- Project: \`${projectId}\``,
+    '- Credential: the scoped stage-only token in the `ORCHESTRATOR_STAGE_TOKEN` ' +
+      'env var (already set in this process — never printed, never re-derived; ' +
+      'this is the only credential this session holds unless the credential ' +
+      'list below says otherwise).',
+    `- Allowed intent kinds for this session: ${kinds.join(', ')}. Staging any ` +
+      'other kind is rejected server-side — do not grep `KNOWN_INTENT_KINDS` to ' +
+      'check; this list is already the authoritative subset for this session type.',
+    '- Client invocation, one example per allowed kind:',
+    ...renderIntentKindInvocations(kinds),
+    ...(workflow === 'ops'
+      ? [
+          '- Additional ops-only credential: `ORCHESTRATOR_OPS_JOURNAL_TOKEN` — a ' +
+            "second, session-scoped token set only for this session type, distinct " +
+            'from `ORCHESTRATOR_STAGE_TOKEN` above. It authorizes ' +
+            '`POST /api/ops-journal/:taskId/state` directly (loopback-only, ' +
+            "restricted to this session's own task and to the staging transitions " +
+            '— never `-> resolved`), for driving the ops_journal itself while a ' +
+            'change is in progress, separately from staging a `journal.setState` ' +
+            'intent through `stage-task-intent.mjs` above.',
+        ]
+      : []),
     '',
     '## Structured Output Contract',
     '',
@@ -557,6 +627,13 @@ export interface AssemblePlanningProcedureParams {
   taskName: string;
   taskUrl: string;
   digest: PlanningDigest;
+  /** The milestone this dispatched session operates under, surfaced verbatim
+   *  in the Transport section so the session never greps its own prompt file
+   *  for it. */
+  milestoneId: string;
+  /** The project this dispatched session operates under, surfaced verbatim
+   *  in the Transport section for the same reason. */
+  projectId: string;
 }
 
 /**
@@ -567,9 +644,9 @@ export interface AssemblePlanningProcedureParams {
 export function assemblePlanningProcedure(
   params: AssemblePlanningProcedureParams,
 ): string {
-  const { taskName, taskUrl, digest } = params;
+  const { taskName, taskUrl, digest, milestoneId, projectId } = params;
   const sections = [
-    renderSkeleton(digest.workflow, taskName, taskUrl),
+    renderSkeleton(digest.workflow, taskName, taskUrl, milestoneId, projectId),
     renderProcedureCore(digest.workflow),
     renderDigest(digest),
   ];
