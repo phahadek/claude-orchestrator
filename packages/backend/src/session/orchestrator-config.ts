@@ -230,7 +230,7 @@ export function isGrantable(capability: string): boolean {
  * than a tool this session's shell can already invoke. Read-only: there is
  * no write counterpart, and `isGrantable` never denies this prefix.
  */
-export const SESSION_RECORD_READ_PREFIX = 'read:session-record:';
+const SESSION_RECORD_READ_PREFIX = 'read:session-record:';
 
 /** Builds the exact capability string for reading one target session's own record. */
 export function sessionRecordReadCapability(targetSessionId: string): string {
