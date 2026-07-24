@@ -11,13 +11,23 @@ vi.mock('../../db/queries', () => ({
   markSessionDone: vi.fn(),
 }));
 
+vi.mock('../../routes/stagedIntents', () => ({
+  verifyDispatchedGroupsForSession: vi.fn().mockResolvedValue([]),
+}));
+
 import {
   getSession,
   listStagedIntentsBySession,
   markSessionDone,
 } from '../../db/queries';
+import { verifyDispatchedGroupsForSession } from '../../routes/stagedIntents';
 import { PlanningOrchestrator } from '../PlanningOrchestrator';
 import type { StagedIntentRow } from '../../db/types';
+
+/** Flushes the microtask queue past the `await` in onSessionParked. */
+function flush() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 function makeSessionManager() {
   const sm = new EventEmitter();
@@ -67,6 +77,7 @@ function makeIntent(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+  vi.mocked(verifyDispatchedGroupsForSession).mockResolvedValue([]);
 });
 
 // ── handleDisposition — resumes the correct originating session ────────────
@@ -257,7 +268,7 @@ describe('PlanningOrchestrator terminal detection', () => {
     expect(markSessionDone).not.toHaveBeenCalled();
   });
 
-  it('drives terminal automatically off a session_ended(idle) event for a planning session', () => {
+  it('drives terminal automatically off a session_ended(idle) event for a planning session', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
     vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
@@ -268,6 +279,7 @@ describe('PlanningOrchestrator terminal detection', () => {
       sessionId: 'planning-session-1',
       status: 'idle',
     });
+    await flush();
 
     expect(markSessionDone).toHaveBeenCalledWith(
       'planning-session-1',
@@ -277,7 +289,7 @@ describe('PlanningOrchestrator terminal detection', () => {
     );
   });
 
-  it('ignores session_ended(idle) for a non-planning session', () => {
+  it('ignores session_ended(idle) for a non-planning session', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(
       makeSessionRow({ session_type: 'standard' }),
@@ -289,7 +301,88 @@ describe('PlanningOrchestrator terminal detection', () => {
       sessionId: 'planning-session-1',
       status: 'idle',
     });
+    await flush();
 
+    expect(markSessionDone).not.toHaveBeenCalled();
+    expect(verifyDispatchedGroupsForSession).not.toHaveBeenCalled();
+  });
+});
+
+// ── turn-end group verification routing ─────────────────────────────────────
+
+describe('PlanningOrchestrator turn-end group verification', () => {
+  it('routes a blocked, non-escalated group verification failure back to the session and skips the terminal check', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(verifyDispatchedGroupsForSession).mockResolvedValue([
+      {
+        groupId: 'group-1',
+        sessionId: 'planning-session-1',
+        passed: false,
+        escalated: false,
+        errors: ['task.setStatus (task-1): Open Questions section unresolved'],
+      },
+    ]);
+    new PlanningOrchestrator(sm as any);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'planning-session-1',
+      status: 'idle',
+    });
+    await flush();
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'verification-error',
+      expect.stringContaining('Open Questions section unresolved'),
+    );
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('does not feed back an escalated group failure, and falls through to the terminal check', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    vi.mocked(verifyDispatchedGroupsForSession).mockResolvedValue([
+      {
+        groupId: 'group-1',
+        sessionId: 'planning-session-1',
+        passed: false,
+        escalated: true,
+        errors: ['task.setStatus (task-1): still blocked after 2 rounds'],
+      },
+    ]);
+    new PlanningOrchestrator(sm as any);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'planning-session-1',
+      status: 'idle',
+    });
+    await flush();
+
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
+    expect(markSessionDone).toHaveBeenCalled();
+  });
+
+  it('runs the terminal check when verification finds no groups to gate', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ state: 'staged' }),
+    ]);
+    vi.mocked(verifyDispatchedGroupsForSession).mockResolvedValue([]);
+    new PlanningOrchestrator(sm as any);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'planning-session-1',
+      status: 'idle',
+    });
+    await flush();
+
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
     expect(markSessionDone).not.toHaveBeenCalled();
   });
 });

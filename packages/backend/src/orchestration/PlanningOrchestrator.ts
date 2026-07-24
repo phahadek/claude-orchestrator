@@ -8,6 +8,7 @@ import type { StagedIntentRow, StagedIntentAnswer } from '../db/types';
 import { isPlanningSession } from '../session/sessionPredicates';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage } from '../ws/types';
+import { verifyDispatchedGroupsForSession } from '../routes/stagedIntents';
 
 type PlanningDisposition = 'approve' | 'pushback' | 'decline' | 'answer';
 
@@ -50,13 +51,48 @@ export class PlanningOrchestrator {
 
   private onMessage(msg: ServerMessage): void {
     if (msg.type !== 'session_ended' || msg.status !== 'idle') return;
-    this.onSessionParked(msg.sessionId);
+    void this.onSessionParked(msg.sessionId);
   }
 
-  private onSessionParked(sessionId: string): void {
+  /**
+   * Turn-end: the dispatched session's turn completing is the "group
+   * submitted" signal (grooming decision 2026-07-24) — before checking for
+   * terminal state, gate every proposal group the session touched this turn
+   * through verifyDispatchedGroupsForSession. A group blocked (and not yet
+   * escalated) is fed back to the session via enqueueFeedback so it can
+   * self-correct in a resumed turn; the terminal check is skipped in that
+   * case since the session is about to resume anyway.
+   */
+  private async onSessionParked(sessionId: string): Promise<void> {
     const row = getSession(sessionId);
     if (!row || !isPlanningSession(row.session_type ?? '')) return;
+
+    const fedBack = await this.verifyAndRoutePendingGroups(sessionId);
+    if (fedBack) return;
     this.checkTerminal(sessionId);
+  }
+
+  /** Returns true if at least one blocked, non-escalated group's errors were routed back to the session (i.e. it is about to resume). */
+  private async verifyAndRoutePendingGroups(
+    sessionId: string,
+  ): Promise<boolean> {
+    const outcomes = await verifyDispatchedGroupsForSession(sessionId);
+    const blocked = outcomes.filter((o) => !o.passed && !o.escalated);
+
+    for (const outcome of blocked) {
+      try {
+        await this.sessionManager.enqueueFeedback(
+          sessionId,
+          'verification-error',
+          formatVerificationFeedback(outcome.groupId, outcome.errors),
+        );
+      } catch (err) {
+        logger.error(
+          `[PlanningOrchestrator] resume failed for session ${sessionId.slice(0, 8)} after group verification failure: ${err}`,
+        );
+      }
+    }
+    return blocked.length > 0;
   }
 
   /**
@@ -135,6 +171,13 @@ export class PlanningOrchestrator {
       );
     }
   }
+}
+
+function formatVerificationFeedback(groupId: string, errors: string[]): string {
+  return (
+    `Proposal group ${groupId} failed verification and was sent back for revision:\n` +
+    errors.map((e) => `- ${e}`).join('\n')
+  );
 }
 
 function formatDispositionMessage(

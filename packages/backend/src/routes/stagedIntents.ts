@@ -960,6 +960,104 @@ export async function runStageTimeReadyChecks(
   return intent;
 }
 
+/** Bounded auto-revise: the 2nd consecutive verification failure for a group escalates to the operator instead of looping forever. */
+const MAX_AUTO_REVISE_ROUNDS = 2;
+
+/** Consecutive verification-failure count per group — in-memory only (mirrors PlanningOrchestrator's own turn bookkeeping), reset on a pass or an escalation. */
+const groupRevisionRounds = new Map<string, number>();
+
+export interface GroupVerificationOutcome {
+  groupId: string;
+  sessionId: string | null;
+  passed: boolean;
+  /** True once MAX_AUTO_REVISE_ROUNDS was hit — the group surfaced to the operator despite failing, rather than being fed back to the session again. */
+  escalated: boolean;
+  errors: string[];
+}
+
+function describeBlockedAnnotation(
+  annotation: StagedIntent['annotation'],
+): string | null {
+  if (!annotation?.blocked) return null;
+  return 'violations' in annotation
+    ? annotation.violations.map((v) => v.detail).join('; ')
+    : annotation.reasons.join('; ');
+}
+
+async function verifyGroup(
+  groupId: string,
+  sessionId: string | null,
+): Promise<GroupVerificationOutcome> {
+  const members = listStagedIntentsByGroup(groupId).filter(
+    (row) => row.state === 'staged',
+  );
+  for (const row of members) {
+    transitionStagedIntent(row.id, 'pending_verification');
+  }
+
+  const errors: string[] = [];
+  for (const row of members) {
+    const checked = await runStageTimeReadyChecks(rowToApi(row));
+    const detail = describeBlockedAnnotation(checked.annotation);
+    if (detail) {
+      errors.push(`${row.kind} (${row.task_id ?? row.id}): ${detail}`);
+    }
+  }
+
+  if (errors.length === 0) {
+    for (const row of members) {
+      broadcastIntentChange(rowToApi(transitionStagedIntent(row.id, 'staged')));
+    }
+    groupRevisionRounds.delete(groupId);
+    return { groupId, sessionId, passed: true, escalated: false, errors };
+  }
+
+  const round = (groupRevisionRounds.get(groupId) ?? 0) + 1;
+  const escalated = round >= MAX_AUTO_REVISE_ROUNDS;
+  if (escalated) {
+    groupRevisionRounds.delete(groupId);
+  } else {
+    groupRevisionRounds.set(groupId, round);
+  }
+  for (const row of members) {
+    broadcastIntentChange(
+      rowToApi(
+        transitionStagedIntent(row.id, escalated ? 'staged' : 'needs_revision'),
+      ),
+    );
+  }
+  return { groupId, sessionId, passed: false, escalated, errors };
+}
+
+/**
+ * Group-level verify gate run at turn-end (see
+ * PlanningOrchestrator.onSessionParked, the "group submitted" signal): for
+ * every proposal group the session staged something into this turn, re-runs
+ * runStageTimeReadyChecks across the group's live members and gates the
+ * whole group on the result — a clean group is (re)surfaced to the operator,
+ * a blocked one is hidden (moved to `needs_revision`) so its errors can be
+ * routed back to the session instead, bounded to MAX_AUTO_REVISE_ROUNDS
+ * consecutive failures per group before escalating to the operator anyway.
+ */
+export async function verifyDispatchedGroupsForSession(
+  sessionId: string,
+): Promise<GroupVerificationOutcome[]> {
+  const groupIds = [
+    ...new Set(
+      listStagedIntentsBySession(sessionId)
+        .filter((row) => row.state === 'staged')
+        .map((row) => row.group_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+
+  const outcomes: GroupVerificationOutcome[] = [];
+  for (const groupId of groupIds) {
+    outcomes.push(await verifyGroup(groupId, sessionId));
+  }
+  return outcomes;
+}
+
 interface GroupCommitOptions {
   override: boolean;
   reason: string;

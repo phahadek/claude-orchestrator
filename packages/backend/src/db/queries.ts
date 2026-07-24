@@ -4713,7 +4713,15 @@ const STAGED_INTENT_TRANSITIONS: Record<
   StagedIntentState,
   StagedIntentState[]
 > = {
-  staged: ['approved', 'committed', 'rejected', 'superseded'],
+  staged: [
+    'pending_verification',
+    'approved',
+    'committed',
+    'rejected',
+    'superseded',
+  ],
+  pending_verification: ['staged', 'needs_revision'],
+  needs_revision: ['rejected', 'superseded'],
   approved: ['staged', 'committed', 'rejected', 'superseded'],
   committed: [],
   rejected: [],
