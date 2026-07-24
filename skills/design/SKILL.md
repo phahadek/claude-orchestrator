@@ -183,8 +183,26 @@ For the current Design task (in the approved order):
      `open_questions[i].locked_decision` + `signed_off_at`. **Never batch-lock
      multiple questions in one message.**
 
-3. **Once every question for this task is signed off, compose the Implementation
-   notes** for the Design task body:
+3. **Once every question for this task is signed off — run the completeness critic,
+   then compose the Implementation notes.**
+
+   **Completeness critic (once per task, post-acceptance — before Implementation
+   notes).** After every listed open question is debated and locked, ask once:
+   _"what must the implementer of these locked decisions decide that isn't on the
+   question list?"_ Consume the orchestrator's advisory **trace-coverage** signal as
+   an aid — `POST /api/design/:taskId/trace-coverage` maps each follow-on Code task's
+   regions + this task's acceptance criteria against the locked decisions and flags any
+   output that traces back to **no** locked decision as a _possibly-unasked question_.
+   It is **advisory, never a gate**: no error, no promotion block, no question-count
+   threshold. For each candidate the critic raises, either **accept** it (run it through
+   the same per-question cadence — present → debate → lock — or file it as a sibling
+   Design task) or **dismiss** it with a recorded reason. Record every candidate's
+   disposition in the durable completeness-disposition store (`POST
+   /api/design/:taskId/completeness-disposition`, one row per critic run:
+   `{question, disposition: accepted|dismissed, reason}`) — **never** as body prose, and
+   **never** silently dropped. See the disposition-don't-drop and split-don't-trim rules.
+
+   Then compose the Implementation notes for the Design task body:
    - One-paragraph **decision summary** at the top.
    - An **"Open questions resolved"** table if there are ≥2 questions (the
      convention from closed Design tasks in the corpus).
@@ -270,6 +288,21 @@ Edit/Write tool) — canonical source
 - **Investigate before deciding.** Code reads / API calls / arch-page reads come
   before presenting a question. "Decide at implementation time" is a _defer_, not
   a _resolve_ — it becomes an explicit Open Question in the follow-on Code task.
+- **Run the completeness critic once per task, post-acceptance.** After every
+  listed question is locked and before the Implementation notes, sweep for the
+  decisions the implementer needs that no question covered (Step 3.3). The
+  orchestrator's advisory trace-coverage flags feed this pass as an **aid, never a
+  gate**.
+- **Disposition-don't-drop.** A candidate question the critic raises leaves the set
+  **only with a recorded reason** — one of `resolved` / `out-of-scope` /
+  `not-a-decision` / `fold` / `file-sibling` / `sibling-owned` — written to the durable
+  completeness-disposition store (accepted/dismissed + reason). **Never** dropped
+  silently, and **never** recorded only as body prose.
+- **Split-don't-trim.** A too-large decision space is handled by the **`file-sibling`**
+  disposition — file sibling Design tasks and carry the questions there — **never** by
+  trimming questions to shrink the set. Question-count is a **soft diagnostic** (`>~6`
+  is a prompt to consider splitting), **not** a numeric trigger and **not** wired into
+  `size_check`.
 - **The human is the gate** (shared rule) for open-question locks and arch-page
   writes. Even a recommendation that looks obvious waits for explicit sign-off on
   the question. After every question is locked, the skill marks the Design task

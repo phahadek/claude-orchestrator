@@ -68,6 +68,25 @@ licence to stretch the current task's scope. File a sibling Design task at
 🔲 Backlog and let `/groom` handle it on its own pass. Widening silently leaves
 the upstream Notion task body out of sync with what was actually decided.
 
+**Skipping the completeness critic — or dropping a candidate without disposition.**
+The per-question cadence only covers the questions *someone listed*. The
+post-acceptance completeness critic (Step 3.3) is the sweep for the decisions the
+implementer needs that **no** question covered — skipping it ships a locked spec with
+silent holes that surface at implementation time. And when the critic *does* raise a
+candidate, dropping it because it feels out-of-scope — without recording **why** — is
+the same laundering as calling a defer a resolve. Every candidate leaves the set only
+with a recorded reason (`resolved` / `out-of-scope` / `not-a-decision` / `fold` /
+`file-sibling` / `sibling-owned`) in the durable completeness-disposition store, never
+as body prose and never silently. The orchestrator's trace-coverage flags are an aid
+for the sweep, never a gate — a clean signal is not evidence the critic ran.
+
+**Trimming the question set to make it "feel right-sized."** A design task with many
+open questions is not a signal to *drop* questions down to a tidy count — question-count
+is a soft diagnostic (`>~6` is a prompt to look at splitting), not a numeric gate, and it
+is **not** wired into `size_check`. A genuinely too-large decision space is **split**:
+file sibling Design tasks (the `file-sibling` disposition) and carry the questions there.
+Trimming to hit a number silently discards decisions the implementer still has to make.
+
 **Editing a Notion arch page without showing the diff first.** Always present
 the exact added/replaced text in chat and wait for _"okay"_ before calling
 `notion-update-page`. The 7 context pages and the Future Scope page are
