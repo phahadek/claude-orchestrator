@@ -18,6 +18,8 @@
  * definitions. Read that file before editing this one.
  */
 
+import { orchestratorMcpToolName } from '../mcp/toolNaming';
+
 export type SkillId = 'groom' | 'design' | 'ops';
 
 export const SKILL_LABELS: Record<SkillId, string> = {
@@ -130,7 +132,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'DO stage `session.requestCapability` naming the exact capability the moment a ' +
       'read/write the task needs is blocked by the sandbox — nothing beyond the base ' +
       'profile is ever speculatively handed to a dispatched {skillLabel} session. ' +
-      'Concrete invocation: call the `mcp__orchestrator__session.requestCapability` ' +
+      `Concrete invocation: call the \`${orchestratorMcpToolName('session.requestCapability')}\` ` +
       'tool with `{"payload":{"capability":"<capability>","plan":"<plan>",' +
       '"evidence":"<evidence>"}}` ' +
       "— then end the turn and wait to be re-dispatched on the operator's decision. " +

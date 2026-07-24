@@ -1,6 +1,7 @@
 import { getSecret } from './security/secrets';
 import { getOrchestratorConfig } from './config/appConfig';
 import type { NonMilestoneSourceConfig } from './tasks/TaskBackend';
+import { orchestratorMcpToolName } from './mcp/toolNaming';
 
 interface Board {
   /** Milestone row id — used as the milestoneId for WS fetch_tasks. */
@@ -149,9 +150,9 @@ export const ALLOWED_TOOLS = [
   // stdout-scraped `dispositions`/`verified_flaky` JSON blocks (see
   // mcp/tools/verdictTools.ts, AgentSession.recordReviewDisposition /
   // recordVerifiedFlakyDisposition).
-  'mcp__orchestrator__health',
-  'mcp__orchestrator__review.disposition',
-  'mcp__orchestrator__flaky.confirm',
+  orchestratorMcpToolName('health'),
+  orchestratorMcpToolName('review.disposition'),
+  orchestratorMcpToolName('flaky.confirm'),
 ];
 
 // Read-only Bash subset shared by planning sessions (groom/design/ops) — no
@@ -189,7 +190,7 @@ const NOTION_READ_MCP_TOOLS = [
 
 // Orchestrator MCP handshake tool — every session type that holds a stage
 // credential gets this (see mcp/orchestratorMcpServer.ts).
-const ORCHESTRATOR_MCP_HEALTH_TOOL = 'mcp__orchestrator__health';
+const ORCHESTRATOR_MCP_HEALTH_TOOL = orchestratorMcpToolName('health');
 
 // Orchestrator MCP stage-proposal tools, one per staged-intent kind a groom
 // session is allowed to stage (mirrors procedureAssembler.ts's
@@ -197,23 +198,23 @@ const ORCHESTRATOR_MCP_HEALTH_TOOL = 'mcp__orchestrator__health';
 // config.test.ts). Supersedes the retired 'Bash(node:*)' + stage-task-intent.mjs.
 const GROOM_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
-  'mcp__orchestrator__task.setStatus',
-  'mcp__orchestrator__task.setProperties',
-  'mcp__orchestrator__task.setDependsOn',
-  'mcp__orchestrator__gate.accrete',
-  'mcp__orchestrator__seed.stage',
-  'mcp__orchestrator__task.create',
+  orchestratorMcpToolName('task.setStatus'),
+  orchestratorMcpToolName('task.setProperties'),
+  orchestratorMcpToolName('task.setDependsOn'),
+  orchestratorMcpToolName('gate.accrete'),
+  orchestratorMcpToolName('seed.stage'),
+  orchestratorMcpToolName('task.create'),
 ];
 
 // Orchestrator MCP stage-proposal tools a design session is allowed to stage
 // (mirrors procedureAssembler.ts's PLANNING_INTENT_KINDS.design).
 const DESIGN_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
-  'mcp__orchestrator__task.updateBody',
-  'mcp__orchestrator__task.setProperties',
-  'mcp__orchestrator__task.setStatus',
-  'mcp__orchestrator__seed.stage',
-  'mcp__orchestrator__task.create',
+  orchestratorMcpToolName('task.updateBody'),
+  orchestratorMcpToolName('task.setProperties'),
+  orchestratorMcpToolName('task.setStatus'),
+  orchestratorMcpToolName('seed.stage'),
+  orchestratorMcpToolName('task.create'),
 ];
 
 // Orchestrator MCP stage-proposal tools an ops session is allowed to stage
@@ -224,11 +225,11 @@ const DESIGN_MCP_TOOLS = [
 // retired stdout-scraped `gate_verify` JSON block.
 const OPS_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
-  'mcp__orchestrator__journal.setState',
-  'mcp__orchestrator__task.setStatus',
-  'mcp__orchestrator__session.requestCapability',
-  'mcp__orchestrator__task.create',
-  'mcp__orchestrator__gate.verify',
+  orchestratorMcpToolName('journal.setState'),
+  orchestratorMcpToolName('task.setStatus'),
+  orchestratorMcpToolName('session.requestCapability'),
+  orchestratorMcpToolName('task.create'),
+  orchestratorMcpToolName('gate.verify'),
 ];
 
 /**

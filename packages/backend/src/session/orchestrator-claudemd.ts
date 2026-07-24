@@ -223,7 +223,7 @@ Only disposition a failure as flaky after clearing this verification bar, in ord
 2. Run the full test suite once more end-to-end and confirm it passes clean.
 3. Confirm the failure is unrelated to your diff (e.g. infra contention, test-ordering/parallelism interference, a timing race) — not a real regression you introduced.
 
-If all three hold, call the \`mcp__orchestrator__flaky.confirm\` tool instead of pushing a commit, with:
+If all three hold, call the \`mcp__orchestrator__flaky_confirm\` tool instead of pushing a commit, with:
 
 - \`gate\`: \`"ci"\` for a failing GitHub check or \`"f2"\` for the orchestrator-run test gate — whichever gate actually failed.
 - \`reason\`: one line naming what you ran and what you concluded.
@@ -234,7 +234,7 @@ The orchestrator re-runs that gate on the same commit (no new push) and re-drive
 
 ## Responding to Review Comments
 
-When a follow-up message delivers review feedback tied to specific GitHub review comments (each comment has a \`comment_id\`), after you've addressed them — by pushing a commit, or by deciding a comment doesn't need a code change — call the \`mcp__orchestrator__review.disposition\` tool once per \`comment_id\` to report the outcome:
+When a follow-up message delivers review feedback tied to specific GitHub review comments (each comment has a \`comment_id\`), after you've addressed them — by pushing a commit, or by deciding a comment doesn't need a code change — call the \`mcp__orchestrator__review_disposition\` tool once per \`comment_id\` to report the outcome:
 
 - \`comment_id\` is the numeric GitHub review comment ID from the feedback message — not the PR number.
 - \`disposition\` is one of:

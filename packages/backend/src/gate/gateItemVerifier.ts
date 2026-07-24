@@ -7,6 +7,7 @@ import {
   renderOpsCapabilities,
   renderProjectRecordAccess,
 } from '../planning/procedureAssembler';
+import { orchestratorMcpToolName } from '../mcp/toolNaming';
 import type { GateItem } from './gateStore';
 import type {
   GateItemVerifier,
@@ -172,7 +173,7 @@ function buildGateVerifyProcedure(item: GateItem): string {
             'change what you report for `disposition`.',
           '',
         ]),
-    'Report your finding by calling the `mcp__orchestrator__gate.verify` tool ' +
+    `Report your finding by calling the \`${orchestratorMcpToolName('gate.verify')}\` tool ` +
       'exactly once, as your final action — never a chat JSON block, which is ' +
       'not delivered anywhere. `reclassify` is optional — omit it unless you ' +
       'are proposing a self-correction as described above:',

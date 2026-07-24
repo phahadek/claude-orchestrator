@@ -51,6 +51,7 @@ import {
 import { existsSync, readFileSync } from 'fs';
 import { basename, join } from 'path';
 import { getProjectById } from '../config';
+import { orchestratorMcpToolName } from '../mcp/toolNaming';
 import { resolveConfigDir } from '../groom/groomLoad';
 import type { GroomLoadResult } from '../groom/groomLoad';
 import type { TaskRegions } from '../groom/codeWorklist';
@@ -318,13 +319,14 @@ const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
     '"evidence":"<why this session needs it>"}',
 };
 
-/** Render one `mcp__orchestrator__<kind>` tool-call example per allowed kind. */
+/** Render one `mcp__orchestrator__<kind>` (CLI-sanitized) tool-call example per allowed kind. */
 function renderIntentKindInvocations(kinds: readonly string[]): string[] {
   return kinds.map((kind) => {
+    const toolName = orchestratorMcpToolName(kind);
     const payload = INTENT_KIND_EXAMPLE_PAYLOADS[kind];
     return payload
-      ? `- \`mcp__orchestrator__${kind}\` with \`{"payload": ${payload}}\``
-      : `- \`mcp__orchestrator__${kind}\` with \`{"payload": <json-payload>}\``;
+      ? `- \`${toolName}\` with \`{"payload": ${payload}}\``
+      : `- \`${toolName}\` with \`{"payload": <json-payload>}\``;
   });
 }
 
@@ -360,7 +362,7 @@ export function renderOpsCapabilities(): string[] {
       '(one Bash command prefix or one named MCP write verb — never a category) the ' +
       'moment the task genuinely needs a write or a prod-mutating command this ' +
       'session does not have. Concrete invocation — this is the exact call, not just ' +
-      'the grant model: call the `mcp__orchestrator__session.requestCapability` ' +
+      `the grant model: call the \`${orchestratorMcpToolName('session.requestCapability')}\` ` +
       'tool with `{"payload":{"capability":"<one Bash command prefix or one named ' +
       'MCP write verb>","plan":"<what this session will do with it>",' +
       '"evidence":"<why this session needs it>"}}`. An operator reviews it; on ' +
@@ -372,7 +374,7 @@ export function renderOpsCapabilities(): string[] {
     "To verify by value against this orchestrator's own runtime state (e.g. " +
       "confirming a prior session's turn actually ran, or reading its staged/audit " +
       'trail), request the one grantable own-record read instead of a Bash prefix: ' +
-      'call `mcp__orchestrator__session.requestCapability` with ' +
+      `call \`${orchestratorMcpToolName('session.requestCapability')}\` with ` +
       '`{"payload":{"capability":"read:session-record:<target-session-id>",' +
       '"plan":"...","evidence":"..."}}` — never `Bash(sqlite3 ...)` or similar, ' +
       "which cannot reach the orchestrator's DB from this sandbox and cannot " +
@@ -512,7 +514,7 @@ function renderSkeleton(
     'Do not call the task backend, Notion, or any raw HTTP client directly. Every ' +
       'write is a staged intent submitted by calling the matching tool on the ' +
       "`orchestrator` MCP server injected into this session's MCP config, each " +
-      'tool named `mcp__orchestrator__<kind>` (e.g. `mcp__orchestrator__task.create`), ' +
+      `tool named \`mcp__orchestrator__<kind>\` (e.g. \`${orchestratorMcpToolName('task.create')}\`), ` +
       "authenticated transparently by this session's scoped stage credential — " +
       'never presented or re-derived by hand. Every tool only ever stages — ' +
       'applying a staged intent is a separate human/device-authenticated action ' +
@@ -557,7 +559,7 @@ function renderSkeleton(
           'interactive `/groom` skill presents for human sign-off; a dispatched ' +
           'session emits it as data so the reviewing human sees fields, not a prose ' +
           'summary to re-parse. Pass it as the `groomProposal` field alongside ' +
-          '`payload`: call the `mcp__orchestrator__task.setStatus` tool with ' +
+          `\`payload\`: call the \`${orchestratorMcpToolName('task.setStatus')}\` tool with ` +
           '`{"payload":{"taskId":"<task-id>","status":"Ready"},"groupId":"<groupId>",' +
           '"groomProposal":{"achieves":"...","openQuestions":"None.",' +
           '"automatedTests":"...","manualVerification":"None.",' +
@@ -588,7 +590,7 @@ function renderSkeleton(
           'declared Depends On edge — `[]` when there are none). A worked, ' +
           'field-complete example for a 💻 Code task with one binding constraint, ' +
           'one Files/paths entry, and no dependencies: call the ' +
-          '`mcp__orchestrator__task.setStatus` tool with `{"payload":' +
+          `\`${orchestratorMcpToolName('task.setStatus')}\` tool with \`{"payload":` +
           '{"taskId":"<task-id>","status":"Ready","groomingGate":{' +
           '"size_check":{"decision":"no_split"},' +
           '"type_check":{"decision":"none"},' +

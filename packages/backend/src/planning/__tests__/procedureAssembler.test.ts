@@ -1009,7 +1009,7 @@ describe('injected-procedure style standard', () => {
     expect(transportIdx).toBeGreaterThan(capIdx);
     const capabilitiesSection = output.slice(capIdx, transportIdx);
     expect(capabilitiesSection).toMatch(
-      /mcp__orchestrator__session\.requestCapability/,
+      /mcp__orchestrator__session_requestCapability/,
     );
     expect(capabilitiesSection).toMatch(/^DO stage/m);
   });
