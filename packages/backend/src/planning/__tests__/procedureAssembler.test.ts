@@ -166,7 +166,10 @@ describe('deriveGroomDigestSlice', () => {
   });
 
   it('matches a notion:-prefixed dispatched id against a bare-uuid target task id', () => {
-    const slice = deriveGroomDigestSlice(fixtureGroomLoadResult(), 'notion:task-1');
+    const slice = deriveGroomDigestSlice(
+      fixtureGroomLoadResult(),
+      'notion:task-1',
+    );
     expect(slice.task.id).toBe('task-1');
   });
 
