@@ -1006,9 +1006,7 @@ async function verifyGroup(
 
   if (errors.length === 0) {
     for (const row of members) {
-      broadcastIntentChange(
-        rowToApi(transitionStagedIntent(row.id, 'staged')),
-      );
+      broadcastIntentChange(rowToApi(transitionStagedIntent(row.id, 'staged')));
     }
     groupRevisionRounds.delete(groupId);
     return { groupId, sessionId, passed: true, escalated: false, errors };
