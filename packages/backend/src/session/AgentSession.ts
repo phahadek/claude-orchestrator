@@ -170,6 +170,36 @@ export function isPRCloseCommand(toolName: string, toolInput: string): boolean {
   return /\bgh\s+pr\s+(close|reopen)\b/.test(toolInput);
 }
 
+/**
+ * Returns true if the PR is parked in a pre-review gate-failure state
+ * (autofix/verify/analyze blocked, or a failure verdict already recorded)
+ * with no review session yet established. The turn-complete push signal is
+ * normally gated on review_session_id existing; this lets a self-fix push
+ * made while blocked still surface push_detected so PRMergeWatcher's
+ * post-gate-failure recovery can fire instead of stranding the PR.
+ * Exported for unit testing.
+ */
+export function isPreReviewBlocked(pr: {
+  review_session_id?: string | null;
+  pre_review_stage?: string | null;
+  review_result?: string | null;
+}): boolean {
+  if (pr.review_session_id) return false;
+  if (pr.pre_review_stage?.startsWith('blocked_')) return true;
+  if (pr.review_result) {
+    try {
+      const verdict = (JSON.parse(pr.review_result) as { verdict?: string })
+        .verdict;
+      if (typeof verdict === 'string' && /_failed$/.test(verdict)) {
+        return true;
+      }
+    } catch {
+      // malformed review_result — ignore
+    }
+  }
+  return false;
+}
+
 export interface GitHubPRShape {
   number?: number;
   html_url?: string;
@@ -1149,6 +1179,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             if (toolUseId && this.pendingBashCommands.has(toolUseId)) {
               const cmd = this.pendingBashCommands.get(toolUseId)!;
               this.pendingBashCommands.delete(toolUseId);
+              if (isPushCommand('Bash', cmd)) {
+                void this.handlePushDetected();
+              }
               if (isPRCreateCommand('Bash', cmd) && !this.prDetectedLive) {
                 const innerText = extractTextFromToolResultEvent(block);
                 void this.handlePRCreatedFromBashOutput(innerText);
@@ -1167,7 +1200,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     if (rawType === 'result') {
       this._turnInFlight = false;
       const pr = getPRBySessionId(this.sessionId);
-      if (pr?.review_session_id) {
+      if (pr?.review_session_id || (pr && isPreReviewBlocked(pr))) {
         // Gate on actual HEAD SHA advance — skip when no new commits were made.
         let currentHeadSha: string | null = null;
         if (this.worktreePath) {
@@ -1187,13 +1220,13 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         ) {
           sessionLog(
             this.sessionId,
-            `turn complete — PR #${pr.pr_number} has review session, signalling push_detected (head=${currentHeadSha?.slice(0, 7) ?? 'unknown'})`,
+            `turn complete — PR #${pr.pr_number} eligible for push signal, signalling push_detected (head=${currentHeadSha?.slice(0, 7) ?? 'unknown'})`,
           );
           void this.handlePushDetected();
         } else {
           sessionLog(
             this.sessionId,
-            `turn complete — PR #${pr.pr_number} has review session, skipping push_detected (head unchanged at ${currentHeadSha.slice(0, 7)})`,
+            `turn complete — PR #${pr.pr_number} eligible for push signal, skipping push_detected (head unchanged at ${currentHeadSha.slice(0, 7)})`,
           );
         }
       }
