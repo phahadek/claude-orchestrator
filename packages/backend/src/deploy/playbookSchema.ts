@@ -101,8 +101,8 @@ function looksExecutable(command: string): boolean {
   if (firstToken === undefined || !EXECUTABLE_TOKEN_RE.test(firstToken)) {
     return false;
   }
-  const words = trimmed.toLowerCase().match(/[a-z']+/g) ?? [];
-  return !words.some((word) => PROSE_STOPWORDS.has(word));
+  const tokens = trimmed.split(/\s+/);
+  return !tokens.some((token) => PROSE_STOPWORDS.has(token.toLowerCase()));
 }
 
 /** Validates and narrows a raw parsed value to a `StepDescriptor`; returns an error message on failure. */
