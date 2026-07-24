@@ -5,9 +5,14 @@ import request from 'supertest';
 const mockFlipToReady = vi.fn();
 const mockGetTaskBackend = vi.fn();
 const mockResolveMilestoneForProject = vi.fn();
+const mockGetProjectRowById = vi.fn();
 
 vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: (...args: unknown[]) => mockGetTaskBackend(...args),
+}));
+
+vi.mock('../db/queries', () => ({
+  getProjectRowById: (...args: unknown[]) => mockGetProjectRowById(...args),
 }));
 
 vi.mock('../tasks/TaskWriteCommands', async () => {
@@ -36,11 +41,17 @@ vi.mock('../projects/milestoneResolver', async () => {
 import { GroomingGateError } from '../groom/groomGate';
 import { ReadinessGateError } from '../tasks/readinessGate';
 import { createGroomFlipRouter } from '../routes/groomFlip';
+import type { OpsSessionLauncher } from '../orchestration/OpsSessionLauncher';
+
+const mockLaunchSelected = vi.fn();
+const mockLauncher = {
+  launchSelected: (...args: unknown[]) => mockLaunchSelected(...args),
+} as unknown as OpsSessionLauncher;
 
 function makeApp() {
   const app = express();
   app.use(express.json());
-  app.use('/api', createGroomFlipRouter());
+  app.use('/api', createGroomFlipRouter(mockLauncher));
   return app;
 }
 
@@ -70,6 +81,16 @@ beforeEach(() => {
   mockResolveMilestoneForProject.mockReset();
   mockResolveMilestoneForProject.mockReturnValue('M12');
   mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+  mockGetProjectRowById.mockReset();
+  mockGetProjectRowById.mockReturnValue({
+    id: 'polimarket-analyser',
+    context_url: 'https://www.notion.so/proj-context',
+  });
+  mockLaunchSelected.mockReset();
+  mockLaunchSelected.mockResolvedValue({
+    launched: ['notion:abc'],
+    deferred: [],
+  });
 });
 
 describe('POST /api/groom/flip', () => {
@@ -182,5 +203,68 @@ describe('POST /api/groom/flip', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('boom');
+  });
+});
+
+describe('POST /api/groom/flip — split_now routing', () => {
+  const splitBody = {
+    ...validBody,
+    groomingGate: {
+      ...validBody.groomingGate,
+      size_check: { decision: 'split_now' },
+    },
+  };
+
+  it('routes a confirmed split_now nomination (well past the size floor) to a split session instead of promoting', async () => {
+    const res = await request(makeApp())
+      .post('/api/groom/flip')
+      .send({ ...splitBody, sizeCheckSeed: { files: 20 } }); // 20*75=1500 LoC, > 2x the 500 floor
+
+    expect(res.status).toBe(202);
+    expect(res.body.routed).toBe('split');
+    expect(res.body.confirm.confirmed).toBe(true);
+    expect(mockFlipToReady).not.toHaveBeenCalled();
+    expect(mockLaunchSelected).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 'polimarket-analyser',
+        milestoneId: 'M12',
+        sessionType: 'split',
+        tasks: [
+          expect.objectContaining({ id: 'notion:abc', title: 'Add the webhook' }),
+        ],
+      }),
+    );
+  });
+
+  it('does not auto-route an unconfirmed near-floor split_now candidate — needs operator approval', async () => {
+    const res = await request(makeApp())
+      .post('/api/groom/flip')
+      .send({ ...splitBody, sizeCheckSeed: { files: 8 } }); // 8*75=600 LoC, just over the floor
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/not confirmed/);
+    expect(mockLaunchSelected).not.toHaveBeenCalled();
+    expect(mockFlipToReady).not.toHaveBeenCalled();
+  });
+
+  it('routes a near-floor split_now candidate once operatorApproved is set', async () => {
+    const res = await request(makeApp())
+      .post('/api/groom/flip')
+      .send({
+        ...splitBody,
+        sizeCheckSeed: { files: 8 },
+        operatorApproved: true,
+      });
+
+    expect(res.status).toBe(202);
+    expect(mockLaunchSelected).toHaveBeenCalled();
+    expect(mockFlipToReady).not.toHaveBeenCalled();
+  });
+
+  it('400s when sizeCheckSeed is missing for a split_now nomination', async () => {
+    const res = await request(makeApp()).post('/api/groom/flip').send(splitBody);
+
+    expect(res.status).toBe(400);
+    expect(mockLaunchSelected).not.toHaveBeenCalled();
   });
 });

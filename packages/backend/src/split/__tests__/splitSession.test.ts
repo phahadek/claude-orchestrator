@@ -1,6 +1,20 @@
-import { describe, it, expect } from 'vitest';
-import { composeSplitIntents, ORIGINAL_REF } from '../splitSession';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { vi } from 'vitest';
 import type { TaskBodySections } from '../../tasks/bodyRender';
+
+vi.mock('../../db/db', async () => {
+  const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
+});
+
+const { composeSplitIntents, stageSplitIntents, ORIGINAL_REF } = await import(
+  '../splitSession'
+);
+const { db } = await import('../../db/db');
+
+beforeEach(() => {
+  db.prepare('DELETE FROM staged_intent').run();
+});
 
 function sections(summary: string): TaskBodySections {
   return {
@@ -101,5 +115,36 @@ describe('composeSplitIntents', () => {
         ],
       }),
     ).toThrow(/reserved/);
+  });
+});
+
+describe('stageSplitIntents', () => {
+  it('stages the composed updateBody + task.create sibling intents on the shared staged-intent display', () => {
+    const result = stageSplitIntents({
+      projectId: 'proj-1',
+      original: {
+        id: 'notion:original-id',
+        sections: sections('Narrowed to subset A'),
+      },
+      siblings: [
+        { ref: 'sibling-1', fields: { databaseId: 'db-1', title: 'Subset B' } },
+      ],
+    });
+
+    expect(result.staged).toHaveLength(2);
+    const kinds = result.staged.map((s) => s.kind).sort();
+    expect(kinds).toEqual(['task.create', 'task.updateBody']);
+    expect(result.staged.every((s) => s.state === 'staged')).toBe(true);
+    expect(result.sizeCheck).toEqual({
+      decision: 'split_now',
+      splitInto: ['$ref:sibling-1'],
+    });
+
+    const rows = db
+      .prepare('SELECT kind, project_id, group_id FROM staged_intent')
+      .all() as { kind: string; project_id: string; group_id: string }[];
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((r) => r.group_id)).size).toBe(1);
+    expect(rows.every((r) => r.project_id === 'proj-1')).toBe(true);
   });
 });

@@ -22,12 +22,22 @@
  *   grant-on-re-dispatch, never granted in the base profile. Shares the
  *   planning concurrency pool with groom/design rather than a dedicated cap;
  *   target task is mechanically moved to In Progress on start, like design.
+ * - split: the dedicated split session — the "route" half of the split
+ *   detect -> confirm -> route flow (see split/splitCandidate.ts,
+ *   split/splitSession.ts). Dispatched by groomFlip.ts on a confirmed
+ *   split_now nomination; stage-only/read-only, no worktree, no PR, same as
+ *   groom — the target task stays put (it isn't archived/moved, only
+ *   narrowed via a staged task.updateBody) while its siblings are staged as
+ *   new task.create intents for human apply.
  */
 
-/** True for session types that plan (groom/design/ops): stage-only base profile, no worktree, no PR. */
+/** True for session types that plan (groom/design/ops/split): stage-only base profile, no worktree, no PR. */
 export function isPlanningSession(sessionType: string): boolean {
   return (
-    sessionType === 'groom' || sessionType === 'design' || sessionType === 'ops'
+    sessionType === 'groom' ||
+    sessionType === 'design' ||
+    sessionType === 'ops' ||
+    sessionType === 'split'
   );
 }
 

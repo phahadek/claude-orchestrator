@@ -42,7 +42,7 @@ export function setOpsSessionLauncherRefreshFn(
  * Session types dispatched by this launcher — see planningLaunch.ts's
  * workflow -> sessionType resolution.
  */
-export type PlanningSessionType = 'groom' | 'design' | 'ops' | 'standard';
+export type PlanningSessionType = 'groom' | 'design' | 'ops' | 'split' | 'standard';
 
 /**
  * Minimal per-task shape this launcher needs to dispatch a session.
@@ -265,6 +265,18 @@ export class OpsSessionLauncher {
         const milestoneKey = resolveMilestoneForProject(projectId, milestoneId);
         digest = {
           workflow: 'groom',
+          data: await this.loadGroomDigestReconciling(
+            milestoneKey,
+            project.project_dir,
+            task.id,
+          ),
+        };
+      } else if (sessionType === 'split') {
+        const project = getProjectRowById(projectId);
+        if (!project) throw new Error(`unknown project ${projectId}`);
+        const milestoneKey = resolveMilestoneForProject(projectId, milestoneId);
+        digest = {
+          workflow: 'split',
           data: await this.loadGroomDigestReconciling(
             milestoneKey,
             project.project_dir,

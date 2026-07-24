@@ -12,6 +12,13 @@ import {
 import { GroomingGateError, type GroomingGateEntry } from '../groom/groomGate';
 import { ReadinessGateError } from '../tasks/readinessGate';
 import { resolveMilestoneForProject } from '../projects/milestoneResolver';
+import { getProjectRowById } from '../db/queries';
+import {
+  detectSplitCandidate,
+  confirmSplitCandidate,
+  type SizeCheckSeed,
+} from '../split/splitCandidate';
+import type { OpsSessionLauncher } from '../orchestration/OpsSessionLauncher';
 
 /**
  * The consolidated grooming Ready-flip endpoint: replaces the /groom skill's
@@ -22,8 +29,20 @@ import { resolveMilestoneForProject } from '../projects/milestoneResolver';
  * TaskWriteCommands.flipToReady for the atomic accrete + accrete +
  * setDependsOn + setStatus(Ready) sequence and its rollback-on-failure
  * behavior.
+ *
+ * A `size_check.decision: "split_now"` nomination never promotes: this is
+ * the "route" half of the split detect -> confirm -> route flow (see
+ * split/splitCandidate.ts, split/splitSession.ts). The candidate is
+ * re-confirmed here against the caller-supplied `sizeCheckSeed` (either
+ * heuristic auto-confirm well past the size floor, or explicit
+ * `operatorApproved`) — an unconfirmed nomination is rejected rather than
+ * silently promoted or silently dropped, and a confirmed one dispatches a
+ * dedicated 'split' session (via `OpsSessionLauncher`) instead of flipping
+ * the task to Ready.
  */
-export function createGroomFlipRouter(): Router {
+export function createGroomFlipRouter(
+  opsSessionLauncher: OpsSessionLauncher,
+): Router {
   const router = Router();
 
   // POST /api/groom/flip
@@ -41,6 +60,10 @@ export function createGroomFlipRouter(): Router {
       groomingGate?: unknown;
       gateContribution?: unknown;
       seedContribution?: unknown;
+      /** Only consulted when groomingGate.size_check.decision === 'split_now'. */
+      sizeCheckSeed?: unknown;
+      operatorApproved?: unknown;
+      taskUrl?: unknown;
     };
 
     const project = typeof body.project === 'string' ? body.project : null;
@@ -131,6 +154,59 @@ export function createGroomFlipRouter(): Router {
 
     try {
       const canonicalMilestone = resolveMilestoneForProject(project, milestone);
+
+      if (groomingGate.size_check?.decision === 'split_now') {
+        const seedRaw = body.sizeCheckSeed as
+          | { files?: unknown; locEstimate?: unknown }
+          | undefined;
+        if (
+          !seedRaw ||
+          typeof seedRaw !== 'object' ||
+          typeof seedRaw.files !== 'number'
+        ) {
+          res.status(400).json({
+            error:
+              'sizeCheckSeed ({files: number, locEstimate?: number}) is required to route a split_now nomination',
+          });
+          return;
+        }
+        const sizeCheckSeed: SizeCheckSeed = {
+          files: seedRaw.files,
+          ...(typeof seedRaw.locEstimate === 'number' && {
+            locEstimate: seedRaw.locEstimate,
+          }),
+        };
+        const candidate = detectSplitCandidate(sizeCheckSeed);
+        const confirm = confirmSplitCandidate(candidate, {
+          operatorApproved: body.operatorApproved === true,
+        });
+        if (!confirm.confirmed) {
+          res.status(409).json({
+            error: 'split_now nomination is not confirmed',
+            reason: confirm.reason,
+            candidate,
+          });
+          return;
+        }
+
+        const projectRow = getProjectRowById(project);
+        if (!projectRow) {
+          res.status(404).json({ error: `unknown project ${project}` });
+          return;
+        }
+        const taskUrl =
+          typeof body.taskUrl === 'string' ? body.taskUrl : '';
+        const launch = await opsSessionLauncher.launchSelected({
+          projectId: project,
+          projectContextUrl: projectRow.context_url ?? '',
+          milestoneId: canonicalMilestone,
+          sessionType: 'split',
+          tasks: [{ id: taskId, title, url: taskUrl, blockingDepIds: [] }],
+        });
+        res.status(202).json({ routed: 'split', candidate, confirm, launch });
+        return;
+      }
+
       const backend = getTaskBackend(project);
       const commands = new BackendTaskWriteCommands(backend, project);
       const params: FlipReadyParams = {

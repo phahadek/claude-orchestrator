@@ -20,12 +20,13 @@
 
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
 
-export type SkillId = 'groom' | 'design' | 'ops';
+export type SkillId = 'groom' | 'design' | 'ops' | 'split';
 
 export const SKILL_LABELS: Record<SkillId, string> = {
   groom: 'Grooming',
   design: 'Design Execution',
   ops: 'ops',
+  split: 'Split',
 };
 
 /** A cross-cutting rule that would otherwise be restated per-skill. */
@@ -41,7 +42,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'deterministic-load-first',
     title: 'Deterministic load, not hand-fetch',
-    appliesTo: ['groom', 'design', 'ops'],
+    appliesTo: ['groom', 'design', 'ops', 'split'],
     text:
       'Load project and task context through the sanctioned deterministic loader ' +
       '(a backend route, or a vendored script that wraps one) before any judgment ' +
@@ -51,7 +52,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'human-is-gate',
     title: 'The human is the gate',
-    appliesTo: ['groom', 'design', 'ops'],
+    appliesTo: ['groom', 'design', 'ops', 'split'],
     text:
       'Every state-changing decision — a status flip, a locked design decision, an ' +
       'applied operational change — waits for explicit human (operator) sign-off. ' +
@@ -60,7 +61,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'no-silent-writes',
     title: 'No silent writes',
-    appliesTo: ['groom', 'design', 'ops'],
+    appliesTo: ['groom', 'design', 'ops', 'split'],
     text:
       'Every write (a Notion page edit, a status transition, a staged intent) is ' +
       'confirmed in chat before, or at the moment, it is made — never applied and ' +
@@ -326,7 +327,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
   {
     id: 'deterministic-load',
     title: 'Deterministic load',
-    appliesTo: ['groom', 'design', 'ops'],
+    appliesTo: ['groom', 'design', 'ops', 'split'],
     summary:
       'For an injected/dispatched session, the task context and worklist digest are ' +
       'already injected into this prompt — there is no loader to run and no ' +
@@ -338,7 +339,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
   {
     id: 'investigate',
     title: 'Investigate (cached, judgment where needed)',
-    appliesTo: ['groom', 'design', 'ops'],
+    appliesTo: ['groom', 'design', 'ops', 'split'],
     summary:
       'Read the code / live data / architecture pages the open items actually turn ' +
       'on, once per region, keeping the reads in subagents so the main window stays ' +
@@ -350,11 +351,32 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
   {
     id: 'present-for-signoff',
     title: 'Present for sign-off',
-    appliesTo: ['groom', 'design', 'ops'],
+    appliesTo: ['groom', 'design', 'ops', 'split'],
     summary:
       'Present findings and a recommendation in batches (or one task/question at a ' +
       'time), and stop for explicit human sign-off before proceeding.',
     summaryOverrides: {
+      split:
+        '**Directive — staging is the terminal action:**\n' +
+        '- DO stage the full split the moment the cut is decided (which acceptance ' +
+        'criteria / files form each coherent subset) — never a partial or ' +
+        'placeholder cut.\n' +
+        '- DO NOT end the turn on a chat write-up or "here is the proposed split" ' +
+        'summary — that is never a valid stopping point.\n' +
+        '- DO NOT ask for sign-off before staging.\n\n' +
+        'A dispatched split session has no synchronous chat turn to wait within — ' +
+        'end the turn and it parks. So presenting IS staging: once the cut is ' +
+        'decided, stage exactly the `composeSplitIntents` shape — one ' +
+        '`task.updateBody` narrowing the original to the ONE subset it keeps (its ' +
+        'ID never changes), one `task.create` per sibling subset (the N-1 subsets ' +
+        'the original does not keep, landing at 🔲 Backlog), and a ' +
+        '`task.setDependsOn` for any sibling that hard-blocks on another sibling or ' +
+        'on the original — all under one shared `groupId`. Reference a ' +
+        "not-yet-created sibling by its local ref as `$ref:<ref>`; it resolves to " +
+        "that sibling's real task id once its `task.create` is applied. Every " +
+        'sibling (and the narrowed original) must be independently gradeable ' +
+        'against its own acceptance criteria — never stage a cut that leaves an ' +
+        'ambiguous or incomplete subset on either side.',
       ops:
         '**Directive — stage or request is the terminal action, then keep driving:**\n' +
         '- DO stage the next step the moment investigation reaches a decision — ' +
@@ -494,11 +516,18 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
   {
     id: 'apply-on-signoff',
     title: 'Apply on sign-off',
-    appliesTo: ['groom', 'design', 'ops'],
+    appliesTo: ['groom', 'design', 'ops', 'split'],
     summary:
       'Only after explicit sign-off, stage and apply the write through the ' +
       'sanctioned surface, and confirm the result in chat.',
     summaryOverrides: {
+      split:
+        'A dispatched split session never applies a write itself — it only ' +
+        'stages the narrowed-original `task.updateBody`, the sibling ' +
+        '`task.create` intents, and any intra-split `task.setDependsOn`, for the ' +
+        'operator to apply from the shared staged-intent display. DO end the ' +
+        'turn the moment the full split is staged — that is the terminal action, ' +
+        'not a chat confirmation of an applied result.',
       ops:
         'A dispatched ops session drives the change itself once a capability is ' +
         'granted or a staged-proposal is approved: apply the write, reconcile and ' +
