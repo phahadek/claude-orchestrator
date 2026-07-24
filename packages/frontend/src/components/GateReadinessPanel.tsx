@@ -299,9 +299,7 @@ export function GateReadinessPanel({
   const [dispositionMutatingIds, setDispositionMutatingIds] = useState<
     Set<string>
   >(new Set());
-  const [dispositionError, setDispositionError] = useState<string | null>(
-    null,
-  );
+  const [dispositionError, setDispositionError] = useState<string | null>(null);
 
   const [seedMilestones, setSeedMilestones] = useState<
     SeedMilestoneReadiness[]
@@ -767,7 +765,9 @@ export function GateReadinessPanel({
   const applyItemMutation = useCallback(
     (updated: GateItem) => {
       setItems((prev) =>
-        prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)),
+        prev.map((item) =>
+          item.id === updated.id ? { ...item, ...updated } : item,
+        ),
       );
       if (expandedId === updated.id) {
         gateApi

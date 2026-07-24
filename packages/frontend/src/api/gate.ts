@@ -210,10 +210,7 @@ export const gateApi = {
   },
 
   /** Approves a pending-approval (Prod-Mutating) gate item, releasing it to pass. */
-  approveItem(
-    id: string,
-    input: ApproveGateItemInput = {},
-  ): Promise<GateItem> {
+  approveItem(id: string, input: ApproveGateItemInput = {}): Promise<GateItem> {
     return apiRequest<GateItem>(
       `/api/gate/items/${encodeURIComponent(id)}/approve`,
       {
