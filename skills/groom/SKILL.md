@@ -250,7 +250,7 @@ Only after explicit sign-off on the batch (_"looks good"_, _"ship it"_, _"next"_
    (over the threshold but must land atomically), or `{ "decision": "n/a" }` for
    Design/Planning tasks) and `type_check` (the present-and-dispositioned
    type/content-mismatch scan — advisory, never a hard block on its own), determine the
-   **Gate accretion** and **Seed accretion** content below for 💻 Code / 🛠️ Tooling
+   **Gate accretion** and **Seed accretion** content below for 💻 Code
    tasks (write it into the entry as `gate_contribution` / `seed_contribution` —
    these are transient staging fields the flip command below reads and submits;
    the durable record is still the gate/seed DB marker the flip call writes, keyed
@@ -280,7 +280,7 @@ one-shot command does, or when the discrete staged-intent surface is needed for
 something the one-shot command doesn't cover (e.g. reviewing a staged write before
 applying it).
 
-**Gate accretion (💻 Code / 🛠️ Tooling tasks):** Before flipping to Ready, mint the
+**Gate accretion (💻 Code tasks):** Before flipping to Ready, mint the
 task's stripped runtime/launch-and-observe items onto the milestone gate store. Read
 the task body's `### 👁️ Manual verification` section — these are the items the task
 spec says are _"Covered by the Manual Verification Gate."_ Call the accretion route
@@ -303,7 +303,7 @@ the durable record; nothing further needs writing to `grooming-state.json`.
 
 Confirm the accretion in chat before the Ready-flip.
 
-**Seed accretion (💻 Code / 🛠️ Tooling tasks):** The operational twin of Gate accretion.
+**Seed accretion (💻 Code tasks):** The operational twin of Gate accretion.
 Before flipping to Ready, mint the task's operational data/config seed — a prod-data
 row/flag/default deliberately kept **out** of its auto-dispatched PR (e.g. an
 `analyzer_configs` row, config-category defaults, alias/cohort flags) — onto the
@@ -392,7 +392,7 @@ default (visible + veto-able) — you do **not** collect a per-item positive sta
   applies are preserved — the ceremony removed is only the per-item *positive stamp*.
 
 **Gates last**: the milestone's **🚦 Gate** task is the final batch, after all code
-tasks are signed off. Accretion happens incrementally — as each 💻 Code / 🛠️ Tooling
+tasks are signed off. Accretion happens incrementally — as each 💻 Code
 task is promoted (Gate accretion above), its stripped items are minted onto the
 milestone gate store via the accretion route, not appended to the Gate task body. The
 final Gate batch confirms readiness (`node ~/.claude/scripts/gate-state-client.mjs
@@ -426,8 +426,8 @@ Edit/Write tool) — canonical source
   a dependency issue is explicitly identified and the human approves it.
 - **Never** mark a ✅ Done or ⏭️ Deferred task Ready. **Never** retroactively edit any
   **ordinary** task already at 🗂️ Ready or beyond — file a sibling instead. A Ready task
-  may be in-flight: auto-dispatched if 💻 Code, human-run if 🛠️ Tooling / 🧪 Testing —
-  editing it races a live session. This holds for every ordinary type, **without
+  may be in-flight: auto-dispatched if 💻 Code, human-run if 🔧 Operational /
+  🔎 Investigation / 🧪 Testing — editing it races a live session. This holds for every ordinary type, **without
   exception**. The **🚦 Gate** is the lone non-ordinary task: an accumulator that, by its
   type's definition, accretes manual-verification items while sitting at Ready —
   appending to it is its lifecycle, not a modify-a-Ready-task exception.
@@ -460,8 +460,8 @@ Edit/Write tool) — canonical source
   is not reduced rigor** — the investigation posture (arch-page reading, code
   exploration, anchor grounding) is the sole non-server backstop once the per-item
   decision is removed, and stays non-negotiable.
-- **Code / Tooling tasks default to < 500 LoC estimated.** The size check is
-  **load-bearing**, not advisory — every Code/Tooling task carries an explicit
+- **Code tasks default to < 500 LoC estimated.** The size check is
+  **load-bearing**, not advisory — every Code task carries an explicit
   _Size:_ line in its presentation header, and `size_check` is a required field
   in `grooming-state.json` that the promotion gate enforces. The 500-LoC default
   is a **split *threshold*, not a hard ceiling** — a task over it is nominated for

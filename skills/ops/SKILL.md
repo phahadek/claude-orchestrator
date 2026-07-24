@@ -139,6 +139,19 @@ unattended while still keeping a human on every close.
     task carrying the proven cause) when the remaining work is *doing*, not *understanding*. One that
     turns out to be a well-defined change dressed as a question → downgrade to **Operational** and do
     it (within the autonomous ceiling).
+- **The buck stops with *this* run — don't deflect your own work into a deferral ("it's not my
+  problem").** The drill-budget above stops open-ended *building* solo; it does **not** license the
+  opposite and more common failure — *under*-doing: reflexively reaching for "file a task / defer to
+  a next session / satisfied by a future move / record it as deferred" for work that is **this
+  session's to do and executable now**. The judgment-bound *doing* that IS the task — exercising the
+  change, **verifying execution by value** (never "it'll be tested later / in prod"), triaging what
+  you backfilled, closing every AC item — is yours, not a follow-on's. Before you defer or file
+  anything, ask: *is this genuinely blocked (a proven external / access / Code blocker), or am I
+  defaulting to the easy option?* A follow-on is for what's **out of scope or genuinely blocked**,
+  never a place to offload the part of the task you'd rather not do. And when a deferral IS correct,
+  it must be **kept honest by a real forcing function** (a one-time precondition at the point of
+  resumption, a hard dependency) — never a rot-able backlog note, and never a standing per-run check
+  that taxes every future execution to police a finite, shrinking condition.
 
 ### 🔧 Operational
 
@@ -455,6 +468,19 @@ Step 5 is where this skill is most often mishandled. Codified:
   consistently. Don't interchange IDs, ordering numbers, and paraphrased names across turns. An
   ad-hoc grouping label ("cluster", "the sidecar batch") is a device for the review-order overview
   **only** — never refer to it as if it were a task or a unit of work.
+- **Lead with a recommendation, not a menu.** When a decision needs the operator, state **a single
+  proposed change + its rationale, then stop and wait for authorization** — not a menu-style option
+  list ("your options: (a)… (b)… (c)…, which do you want?"). A prose menu pushes the framing and the
+  decision-work back onto the operator and reads as hedging; form a view and state it. Genuinely
+  load-bearing alternatives may be named in prose, but the default shape is *"here's the change I
+  need to make and why — authorize?"*, never *"(a)/(b)/(c), your pick."* This is **separate from**
+  the present-before-apply / authorization stop itself (which stays); it governs **how** the choice
+  is framed, not **whether** you stop.
+- **A harness / permission-guardrail block is not a menu prompt.** When the auto-mode classifier or a
+  permission hook blocks an already-authorized action, **state the single needed action + exactly why
+  it is blocked, then stop** — do **not** enumerate resolution options ("add a permission rule vs.
+  run it yourself"). Surfacing the block is required; turning it into an option list is the same menu
+  anti-pattern above and offloads a call that is the operator's to make however they choose.
 
 ## Status handling
 

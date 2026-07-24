@@ -20,7 +20,7 @@ batch from your summary alone, without re-reading the task page or the code.
 
 ## Dependencies — hard-block vs soft-order
 
-Every Code/Tooling task in a batch is examined for its **dependencies on other
+Every Code task in a batch is examined for its **dependencies on other
 tasks**, and each dependency is classified as one of:
 
 - **Hard-block (prerequisite).** Task B _cannot start_ until Task A is at ✅ Done
@@ -79,17 +79,17 @@ investigation_.
   Always include the _Hard-block:_ line — write _none._ if independent.
   Implicit-by-omission is how the previous failure mode happened.
 
-## Size check (mandatory, per 💻 Code or 🛠️ Tooling task in the batch)
+## Size check (mandatory, per 💻 Code task in the batch)
 
 The size check is **load-bearing**, not advisory. It runs **for every** Code
-or Tooling task in the batch, and the result lands as a required line in that
+task in the batch, and the result lands as a required line in that
 task's header (see below). Skipping it is a procedure violation — the
 promotion gate enforces this (a Ready promotion without a recorded size
 classification is blocked, same as missing `hard_block_deps`).
 
 ### Estimate
 
-Code and Tooling tasks default to **under 500 LoC** estimated diff. Estimate
+Code tasks default to **under 500 LoC** estimated diff. Estimate
 cheaply from the code-map digest: files touched × ~50–100 lines each, or by
 recalling what similar past tasks in this repo landed at (CI / git history is
 the ground truth — `git -C <repo> diff --stat` on the closest prior task is a
@@ -153,13 +153,13 @@ reasons.
 
 ### Per-task header line (required, not optional)
 
-Every Code/Tooling task in the batch carries an explicit _Size:_ line in its
+Every Code task in the batch carries an explicit _Size:_ line in its
 header — alongside _Hard-block:_ — same shape as the dep line, same
 "implicit-by-omission is how it gets skipped" lesson:
 
 > **① 💻 Code — Add HLTV RSS dedupe by GUID** · _Hard-block:_ none. · _Size:_ ~120 LoC.
 > **② 💻 Code — Backfill GUID column on existing raw_queue_files** · _Hard-block:_ ① (this batch). · _Size:_ ~80 LoC.
-> **③ 🛠️ Tooling — Migrate phase-deriver state into Postgres** · _Hard-block:_ none. · _Size:_ ~720 LoC, **unsplittable** (migration + reader rollout must land together — intermediate state leaves resolution_review pointing at a dropped table).
+> **③ 🔧 Operational — Migrate phase-deriver state into Postgres** · _Hard-block:_ none. · _Size:_ ~720 LoC, **unsplittable** (migration + reader rollout must land together — intermediate state leaves resolution_review pointing at a dropped table).
 
 Always write the _Size:_ line. _Skipping it is the failure mode this section
 exists to prevent._
@@ -169,12 +169,12 @@ _Size:_ line is optional on those (or write _Size: n/a (Design/Planning)_).
 
 ## The 4-point summary (per 🔲 Backlog task)
 
-Each task's header line carries its **Type** marker (💻 Code / 📐 Design / 🛠️ Tooling /
-📋 Planning / 🧪 Testing / 🚦 Gate / 📝 Docs / 🎨 Assets) before the title — so the reader sees at
-a glance what kind of work is being groomed. Code and Design tasks need different
-review attention (Design locks specs; Code consumes them; Tooling sits beside both);
-surfacing the type makes that judgment immediate and reduces "wait, is this the one
-that…" friction during sign-off.
+Each task's header line carries its **Type** marker (💻 Code / 📐 Design / 🔧 Operational /
+🔎 Investigation / 📋 Planning / 🧪 Testing / 🚦 Gate / 📝 Docs / 🎨 Assets) before the title —
+so the reader sees at a glance what kind of work is being groomed. Code and Design tasks need
+different review attention (Design locks specs; Code consumes them; Operational /
+Investigation sit beside both); surfacing the type makes that judgment immediate and reduces
+"wait, is this the one that…" friction during sign-off.
 
 Type is not cosmetic here — it determines **what happens when you flip the task to
 🗂️ Ready** (see `procedures.md` § _Task types — what Ready triggers_):
@@ -186,11 +186,12 @@ Type is not cosmetic here — it determines **what happens when you flip the tas
   - size gates exist.
 - **📐 Design / 📋 Planning** Ready → **not** auto-dispatched; it waits for `/design`.
   Do not groom these expecting a worker to pick them up.
-- **🛠️ Tooling / 🧪 Testing** Ready → interactive (a human runs it), not auto-dispatched.
-  Before promoting one, check it isn't smuggling dispatchable code: any pure
+- **🔧 Operational / 🔎 Investigation / 🧪 Testing** Ready → interactive (a human runs it), not
+  auto-dispatched. Before promoting one, check it isn't smuggling dispatchable code: any pure
   code-generation portion with no dependency on implementation-time data should be
   **split out into a separate 💻 Code task** (per the size/split procedure) so it flows
-  through auto-dispatch — the Tooling/Testing task keeps only the interactive remainder.
+  through auto-dispatch — the Operational/Investigation/Testing task keeps only the
+  interactive remainder.
 - **🚦 Gate** Ready → never auto-dispatched; a human runs the Manual Verification Gate
   once, at the end of the milestone. It rests at 🗂️ Ready and **accretes** manual-
   verification items as code tasks are groomed (its type's defined lifecycle), and is
@@ -311,6 +312,6 @@ whole batch for re-presentation?"_
 >
 > **② 📐 Design — …**
 >
-> **Context (no action needed):** ④ 🛠️ Tooling — Wire CI table audit (🗂️ Ready) · ⑤ 📐 Design — … (🔄 In Progress)
+> **Context (no action needed):** ④ 🔧 Operational — Wire CI table audit (🗂️ Ready) · ⑤ 📐 Design — … (🔄 In Progress)
 >
 > Any changes or questions before I mark these Ready and continue?
