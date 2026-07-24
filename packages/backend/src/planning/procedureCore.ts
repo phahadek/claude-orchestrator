@@ -149,6 +149,25 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'abstain, never invent.',
   },
   {
+    id: 'investigate-before-resolving-no-deferral',
+    title: 'Investigate before resolving — a defer is not a resolve',
+    appliesTo: ['groom', 'design'],
+    text:
+      'Reading the code comes before deciding what is resolved. Every open question ' +
+      '{skillLabel} proposes to close is either locked now (cite the finding or the ' +
+      'decision it rests on) or kept as an explicit Open Question — there is no third ' +
+      'state. "Decide at implementation time," "leave it to the implementer," ' +
+      '"implementer\'s call," or any equivalent phrasing that punts a choice to the ' +
+      'implementing session is a _defer_, not a _resolve_ — never stage it as a ' +
+      'resolved question, an Open Questions value of "None," or any other framing ' +
+      'that launders a defer into a resolution. A task carrying that language is not ' +
+      'Ready; either resolve the question now or leave it open and keep the task at ' +
+      '🔲 Backlog. (📋 Planning and 📐 Design tasks are exempt from this check on their ' +
+      'own open-question-space — see `readinessGate.ts`\'s ' +
+      '`OPEN_QUESTIONS_EXEMPT_TYPES` — because for those types the open questions ' +
+      'are the deliverable being scoped, not a precondition being dodged.)',
+  },
+  {
     id: 'decision-pickone-genuine-forks-only',
     title: 'decision.pickOne is for genuine forks only',
     appliesTo: ['groom', 'design', 'ops'],

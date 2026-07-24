@@ -666,6 +666,27 @@ describe('assemblePlanningProcedure', () => {
     }
   });
 
+  it('rejects deferred-decision language as a resolve for the groom and design procedures, but not ops', () => {
+    for (const { workflow, digest } of cases) {
+      const output = assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        milestoneId: 'm1',
+        projectId: 'p1',
+        digest,
+      });
+
+      if (workflow === 'groom' || workflow === 'design') {
+        expect(output).toMatch(/defer.*not.*resolve|is a _?defer_?, not a _?resolve_?/i);
+        // the canonical deferral-phrase list (readinessGate.ts / task-writing.md)
+        expect(output).toMatch(/decide at implementation time/i);
+        expect(output).toMatch(/leave it to the implementer|implementer's call/i);
+      } else {
+        expect(output).not.toMatch(/is a _?defer_?, not a _?resolve_?/i);
+      }
+    }
+  });
+
   it('excludes the skill-mode "Resolve manifest & mode" step for groom and design (context is already injected)', () => {
     for (const { workflow, digest } of cases) {
       if (workflow === 'ops') continue;
