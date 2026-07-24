@@ -110,29 +110,34 @@ One of three outcomes per task:
 - **Split now** (estimate > 500 LoC and splittable) — see procedure below.
 - **Unsplittable** (estimate > 500 LoC and **demonstrably** must land atomically) — proceed with the original task as-is, with explicit reason in the header.
 
-### Split procedure (when "split now")
+### Split procedure (when "split now") — nominate, don't perform
 
-**Keep the original task; edit it down. Create N-1 new siblings.** Do **NOT**
-demote the original to Deferred or mark it "superseded" — Deferred has a
-specific meaning (_"scope superseded by another task"_) and it produces stale
-state where the original carries history, comments, and inbound dep refs but
-isn't usable. The cleaner shape:
+**Splitting is orchestrator-driven. A grooming session *nominates* a split
+candidate; it never edits the task set into N pieces in-session.** Record the
+nomination in `size_check` — `{ …, "decision": "split_now", "split_into":
+[<planned subset ids/labels>] }` — and surface it in the batch. The
+orchestrator's split-candidate detector runs **detect → confirm → route**: it
+confirms the trip (a candidate far over the floor auto-confirms; one near the
+floor waits for operator sign-off) and **routes the split to a dedicated split
+session**, which performs the actual edit. The groomer's job stops at the
+nomination.
 
-1. Pick **one** of the planned N subsets as the original's new scope —
-   typically the one that's foundational (most others depend on it) or the
-   one whose title fits most naturally as a narrowed version of the original
-   title.
-2. **Edit the original task in Notion** to that scope: update title, Summary,
-   Files/paths affected, acceptance criteria, and any sections referencing
-   the wider scope. The original retains its Notion ID, history, and any
-   inbound dep references — which is the point.
-3. **Create N-1 new sibling tasks at 🔲 Backlog** for the remaining subsets,
-   each ≤ 500 LoC, each properly scoped. They go through the same grooming
-   pass — each gets its own 4-point summary and hard-block-vs-soft-order
-   classification.
-4. All N tasks (the now-narrowed original + the N-1 new) appear in the
-   current batch and proceed to Ready together. Hard-block deps among them
-   are classified per the Dependencies section above.
+The shape the **dedicated split session** follows (and the reason a split is
+never a Deferred-and-recreate):
+
+1. **Keep the original task; edit it down to one subset** — typically the
+   foundational one (most others depend on it), or the one whose title fits most
+   naturally as a narrowed version of the original. The original retains its
+   Notion ID, history, and inbound dep references — which is the point.
+2. **Create N-1 new sibling tasks at 🔲 Backlog** for the remaining subsets, each
+   properly scoped. They go through their own grooming pass.
+3. Do **NOT** demote the original to ⏭️ Deferred or mark it "superseded" —
+   Deferred means _"scope superseded by another task,"_ which doesn't fit a
+   split; it strands the original's history, comments, and inbound dep refs.
+
+**Merging** two tasks is the same shape in reverse: nominate the merge candidate;
+the orchestrator confirms and routes it. A grooming session never performs the
+merge itself.
 
 ### Unsplittable test
 
@@ -223,6 +228,49 @@ main entries so the type-at-a-glance reading holds across both blocks.
 Close every batch with exactly this ask:
 
 > Any changes or questions before I mark these Ready and continue?
+
+## Consolidated triage (interactive 📐 Design / 📋 Planning types)
+
+Interactive types don't get a per-task 4-point summary + per-item sign-off. They
+get **one consolidated triage** for the batch — the presentation side of
+approve-by-standard (`../SKILL.md` Step 2 / Step 4 § approve-by-standard).
+Auto-dispatched **💻 Code is unaffected**: it keeps the per-task summary + per-task
+human decision above (a wrong Code Ready launches an unattended worktree, so the
+stakes demand per-item gating). A mixed milestone runs both flows.
+
+**Format — three groups, one message:**
+
+- **Clean** — a **names-only** list. Each is a genuine, decision-shaped,
+  answerable-now, scoped open-question set. These promote **by default (visible +
+  veto-able)**; the human need not stamp each.
+- **Blocked** — one row per task **+ its blocking dep** (an upstream Design/Planning
+  task not yet ✅ Done). Answerable only once the upstream locks.
+- **Needs-attention** — one row per task **+ the reason** (no real questions /
+  already-decided / not-answerable / mis-shaped / missing `## Open Questions`
+  heading / a routed constraint-conflict).
+
+The human engages **only** the blocked + needs-attention rows; silence on the clean
+list is approval. Close with the same sign-off ask.
+
+### The clean-verdict standard
+
+A proposed `clean` verdict is the groomer's judgment call — earned by the
+investigation posture (arch-page reading, code exploration, anchor grounding), **the
+sole non-server backstop** once the per-item decision is removed. The server then
+applies a **deterministic floor** that can only ever **downgrade** a proposed
+`clean`; it never upgrades a judged `blocked` / `needs-attention` back to `clean`:
+
+- **Hard-block dep not ✅ Done → `blocked`.**
+- **Missing `## Open Questions` heading → `needs-attention`.**
+- **A binding constraint dispositioned `conflict→route` → `needs-attention`**
+  (force-downgrade — not clean until the routed Design task resolves).
+
+The floor deliberately does **not** consult the Tier-2 deferral-phrase lexicon: that
+lexicon is **advisory-only for Design** (a legitimate design deferral like _"decide
+during implementation"_ trips the phrase but is normal design scoping, not a
+readiness violation). Taxonomy: `clean` = an answerable-now, decision-shaped
+question; `blocked` = answerable only after an upstream locks; `needs-attention` = no
+real questions / already-decided / not-answerable / mis-shaped / missing heading.
 
 ## Sign-off vs iteration
 

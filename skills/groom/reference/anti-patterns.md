@@ -152,8 +152,16 @@ contaminated. Surface it; don't groom on top of it.
 time" is a _defer_, not a _resolve_. Either lock the answer now or keep it as an
 explicit Open Question. Don't launder a defer into a resolution.
 
-**Promoting unilaterally.** Even when a task looks Ready-clean, the human is the
-gate. Present the batch and wait for sign-off. Never self-grant promotion.
+**Promoting unilaterally.** The human is the gate — but read the *granularity* right.
+For **auto-dispatched 💻 Code**, promotion is a per-task human decision: present the
+batch and wait for the per-task sign-off, and never self-grant it. For **interactive
+📐 Design / 📋 Planning**, promotion is **approve-by-standard** — the clean set promotes
+by default under one consolidated triage (visible + veto-able), so "wait for a per-item
+stamp" is the *wrong* correction there; the gate is the human's engagement with the
+blocked + needs-attention rows and their veto over any clean row, not a positive tick on
+each. Self-granting stays forbidden either way: you never invent a clean verdict, and the
+deterministic floor can only ever downgrade one (see `presentation.md` § Consolidated
+triage).
 
 **Treating batch pushback as sign-off.** The close-out ask is _"Any changes or
 questions before I mark these Ready and continue?"_ — so the human's reply is
@@ -170,6 +178,39 @@ what the human said in reply. Diagnostic: if your next action is to write
 `signoff` to state and the human's prior message contained any unaddressed
 edit, correction, or reframe, you are about to commit this anti-pattern. Stop,
 apply the feedback, re-present.
+
+**Manufactured decision — inventing an architectural answer in-grooming.** An open
+question that is an architectural decision is **not** yours to answer during grooming.
+Clearing it by reasoning to a plausible-sounding answer — instead of **citing a locked
+decision** (arch page / ✅-Done Design task) or **routing to `/design`** (file a Design
+task + a hard-block `Depends On` edge) — manufactures a decision the design process never
+made. It reads as resolved, promotes, and dispatches a worktree built on an answer no one
+owns. Cite or route; never invent. A task whose `Depends On` names a not-yet-✅-Done
+Design/Planning task is not promotable.
+
+**Batch / momentum sign-off — one action standing in for N sign-offs.** For
+auto-dispatched 💻 Code, each task's promotion is its **own** human decision. A single
+_"these all look fine,"_ a momentum _"yes, continue,"_ or a bulk stamp across a batch is
+**not** N per-task sign-offs — it launders the per-task disposition records. Promote
+💻 Code tasks individually. (Distinct from interactive Design/Planning
+approve-by-standard, where a consolidated triage promoting the clean set by default is the
+*documented* flow, not a momentum shortcut — the tell: approve-by-standard still has the
+human engage every blocked + needs-attention row and hold veto over the clean list; a
+momentum stamp engages nothing.)
+
+**Surface-polish substitution — a well-written body treated as evidence of readiness.** A
+crisp Summary, tidy acceptance criteria, and clean prose are **not** evidence the task is
+Ready — only that someone wrote well. Readiness is the *investigation*: constraints
+dispositioned, code read, anchors grounded, open questions genuinely resolved or routed. A
+beautifully-worded body over an un-investigated task is the most dangerous kind, because it
+*looks* done. Judge the investigation, not the polish.
+
+**Treating reduced ceremony as reduced rigor.** Approve-by-standard removes the per-item
+positive stamp for interactive types — it removes **ceremony, not rigor**. The
+investigation posture (arch-page reading, code exploration, anchor grounding) is now the
+**sole non-server backstop** for a clean verdict, and stays non-negotiable. Cutting the
+investigation because _"the clean set just promotes anyway"_ inverts the design: the
+lighter the stamp, the more load-bearing the investigation behind it.
 
 **Editing a Ready/Done task.** Any **ordinary** task at 🗂️ Ready or beyond may already
 be in-flight (auto-dispatched if 💻 Code, human-run if 🛠️ Tooling / 🧪 Testing). If its

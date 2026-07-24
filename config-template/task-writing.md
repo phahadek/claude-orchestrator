@@ -27,8 +27,11 @@
 ## Core principles
 
 1. **A task should be completable in one session.** Code tasks: ~2 hours of
-   focused implementation, ceiling ~500 lines of diff / ~10 files. Design/Planning
-   tasks: a single discussion-and-document session that locks the decision.
+   focused implementation. The **500-LoC default is a split *threshold* — a floor
+   that trips a split nomination, not a hard ceiling**: a task estimated over it is
+   nominated for splitting, but a **sub-500-LoC task may legitimately split too** (a
+   natural seam is reason enough), and there is **no hard file-count ceiling**.
+   Design/Planning tasks: a single discussion-and-document session that locks the decision.
    🔧 Operational / 🔎 Investigation tasks: one coherent change set (Operational) or one
    question/anomaly (Investigation) — if it balloons past a handful of investigation steps
    or uncovers a code gap that blocks its own completion, it stops and files follow-ons
@@ -192,6 +195,28 @@ For the procedure that applies this gate across a milestone's backlog, that is t
 **`/groom` skill** — the single source of truth for the grooming procedure (there is
 no Notion grooming-procedure page).
 
+### Grooming-time promotion artifacts (size_check · type_check · split/merge)
+
+When `/groom` promotes a task, it records structured **promotion-gate artifacts** the
+orchestrator enforces server-side (`groomGate.ts`). Authors don't write these — the groomer
+does — but the standard names them so authoring and grooming stay aligned:
+
+- **`size_check`** — the size classification, shape
+  `{ loc, loc_method, files, decision, split_into?, reason? }`. `decision` is one of
+  `no_split` / `split_now` / `unsplittable` / `n/a` (Design/Planning). `split_into` carries the
+  sibling task ids when `split_now`; `reason` the one-line justification when `unsplittable`.
+  **Present-and-dispositioned, not a correctness gate**: the promotion gate blocks a Ready-flip
+  that omits it, but it enforces that a decision was *recorded* — it does not itself judge the
+  LoC number.
+- **`type_check`** — the type/content-mismatch scan (does the body's shape match its declared
+  Type?). Also **present-and-dispositioned and advisory**: a flagged `type_check` never
+  hard-blocks promotion on its own; the groomer must record a disposition, not clear the scan.
+- **Split / merge are orchestrator-driven — a grooming session *nominates*, never *performs*.**
+  When a task trips the split threshold (or two tasks should merge), the groomer **records a
+  nomination**; the **orchestrator confirms and routes the split/merge to a dedicated session**.
+  A grooming session never itself edits the task set into N pieces. (Detect → confirm → route;
+  a candidate far over the floor may auto-confirm, otherwise it waits for the operator.)
+
 ---
 
 ## Manual Verification Gate
@@ -307,10 +332,19 @@ Verification Gate.
 
 ## 🔧 Operational & 🔎 Investigation tasks
 
-These two Types replace the retired `🛠️ Tooling`. Both are **interactive, judgment-bound,
-and never auto-dispatched** — they are executed by the **`ops` skill** (see `procedures.md`
+These two Types replace the retired `🛠️ Tooling`. Both are **judgment-bound and never
+auto-dispatched** — they are executed by the **`ops` skill** (see `procedures.md`
 § Task types). They are distinguished by their **primary deliverable**, and each carries a
 **Mode declaration** line at the top of its Context.
+
+> **Two run postures, distinct by whether an operator is in the loop** (see `procedures.md`
+> § Task types). An **autonomous** (unattended) ops run **stages only** — provisional
+> findings / staged proposals to the journal, never verdicts, never ✅ Done. A **dispatched /
+> interactive** ops run is **write-capable**: it earns capabilities on request and **drives
+> the `ops_journal` to `applied-pending-confirm`** (change applied, reconciled, evidence
+> captured) via the request → grant → apply → reconcile loop, with the operator making only
+> the final `applied-pending-confirm` → `resolved` confirmation. "Stages only" describes the
+> autonomous posture, not a ceiling on what a dispatched ops session does.
 
 ### 🔧 Operational — change prod/environment state through a sanctioned surface
 The deliverable is a **verified change** to production or the operating environment
