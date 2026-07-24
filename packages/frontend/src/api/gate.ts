@@ -107,6 +107,23 @@ export interface GateVerifyDispatchResult {
   skipped: { itemId: string; reason: string }[];
 }
 
+export interface RecordGateItemEventInput {
+  disposition: string;
+  evidence?: GateItemEvidence;
+  filedFollowon?: string;
+  deploySha?: string;
+  operator?: string;
+}
+
+export interface ReopenGateItemInput {
+  operator?: string;
+  reason?: string;
+}
+
+export interface ApproveGateItemInput {
+  operator?: string;
+}
+
 export interface GateItemVerifySession {
   itemId: string;
   sessionId: string;
@@ -166,5 +183,44 @@ export const gateApi = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ itemIds }),
     });
+  },
+
+  /** Records an operator disposition (pass/fail/deferred/…) against a gate item. */
+  recordEvent(id: string, input: RecordGateItemEventInput): Promise<GateItem> {
+    return apiRequest<GateItem>(
+      `/api/gate/items/${encodeURIComponent(id)}/events`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    );
+  },
+
+  /** Reopens a resolved (pass/fail/deferred) gate item back to `open`. */
+  reopenItem(id: string, input: ReopenGateItemInput = {}): Promise<GateItem> {
+    return apiRequest<GateItem>(
+      `/api/gate/items/${encodeURIComponent(id)}/reopen`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    );
+  },
+
+  /** Approves a pending-approval (Prod-Mutating) gate item, releasing it to pass. */
+  approveItem(
+    id: string,
+    input: ApproveGateItemInput = {},
+  ): Promise<GateItem> {
+    return apiRequest<GateItem>(
+      `/api/gate/items/${encodeURIComponent(id)}/approve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    );
   },
 };

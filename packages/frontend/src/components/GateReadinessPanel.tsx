@@ -55,6 +55,9 @@ const GATE_STATE_ORDER = [
 ];
 const GATE_DONE_STATES = ['pass', 'deferred'];
 
+/** Mirrors the backend's reopenGateItem guard (gateService.ts) — reopen only applies to a resolved item. */
+const REOPEN_BLOCKED_STATES = new Set(['open', 'runnable', 'pending-approval']);
+
 const SEED_STATE_ORDER = ['pending', 'applied', 'confirmed', 'blocked'];
 const SEED_DONE_STATES = ['confirmed'];
 
@@ -291,6 +294,14 @@ export function GateReadinessPanel({
     Record<string, string | undefined>
   >({});
   const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  const [operatorName, setOperatorName] = useState('');
+  const [dispositionMutatingIds, setDispositionMutatingIds] = useState<
+    Set<string>
+  >(new Set());
+  const [dispositionError, setDispositionError] = useState<string | null>(
+    null,
+  );
 
   const [seedMilestones, setSeedMilestones] = useState<
     SeedMilestoneReadiness[]
@@ -749,6 +760,91 @@ export function GateReadinessPanel({
     return () => clearInterval(interval);
   }, [verifyingIds, verifyBaseline]);
 
+  // Reflects a mutated gate item back into the table/expanded-detail and
+  // re-reads the milestone's readiness rollup — the state machine itself
+  // lives entirely server-side (appendGateItemEvent / reopenGateItem); this
+  // only re-syncs the UI to whatever it decided.
+  const applyItemMutation = useCallback(
+    (updated: GateItem) => {
+      setItems((prev) =>
+        prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item)),
+      );
+      if (expandedId === updated.id) {
+        gateApi
+          .getGateItemDetail(updated.id)
+          .then((result) => setDetail(result))
+          .catch(() => {});
+      }
+      if (selectedMilestone) {
+        gateApi
+          .getGateReadiness(selectedMilestone)
+          .then((result) => setReadiness(result))
+          .catch(() => {});
+      }
+    },
+    [expandedId, selectedMilestone],
+  );
+
+  const withDispositionMutation = useCallback(
+    (id: string, run: () => Promise<GateItem>) => {
+      setDispositionError(null);
+      setDispositionMutatingIds((prev) => new Set(prev).add(id));
+      return run()
+        .then((updated) => {
+          applyItemMutation(updated);
+        })
+        .catch((err) => {
+          setDispositionError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => {
+          setDispositionMutatingIds((prev) => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+          });
+        });
+    },
+    [applyItemMutation],
+  );
+
+  const recordDisposition = useCallback(
+    (id: string, disposition: 'pass' | 'fail' | 'deferred') => {
+      withDispositionMutation(id, () =>
+        gateApi.recordEvent(id, {
+          disposition,
+          operator: operatorName || undefined,
+        }),
+      );
+    },
+    [withDispositionMutation, operatorName],
+  );
+
+  const reopenItemHandler = useCallback(
+    (item: GateItem) => {
+      if (
+        item.state === 'pass' &&
+        !window.confirm(
+          `Reopen "${item.text}"? It currently passes — reopening will pull it back to open for re-verification.`,
+        )
+      ) {
+        return;
+      }
+      withDispositionMutation(item.id, () =>
+        gateApi.reopenItem(item.id, { operator: operatorName || undefined }),
+      );
+    },
+    [withDispositionMutation, operatorName],
+  );
+
+  const approveItemHandler = useCallback(
+    (id: string) => {
+      withDispositionMutation(id, () =>
+        gateApi.approveItem(id, { operator: operatorName || undefined }),
+      );
+    },
+    [withDispositionMutation, operatorName],
+  );
+
   const selectGateChip = useCallback((state: string) => {
     setStateFilter(state);
     setRunnableFilter('');
@@ -957,10 +1053,25 @@ export function GateReadinessPanel({
           {itemsLoading && <p className={styles.muted}>Loading items…</p>}
           {itemsError && <p className={styles.error}>{itemsError}</p>}
           {verifyError && <p className={styles.error}>{verifyError}</p>}
+          {dispositionError && (
+            <p className={styles.error} data-testid="gate-disposition-error">
+              {dispositionError}
+            </p>
+          )}
 
           {!itemsLoading && !itemsError && (
             <>
               <div className={styles.filters}>
+                <label className={styles.filterField}>
+                  Operator
+                  <input
+                    type="text"
+                    value={operatorName}
+                    onChange={(e) => setOperatorName(e.target.value)}
+                    placeholder="you@example.com"
+                    data-testid="gate-operator-input"
+                  />
+                </label>
                 <button
                   type="button"
                   onClick={selectAllItems}
@@ -1029,7 +1140,10 @@ export function GateReadinessPanel({
                         <td onClick={() => toggleExpanded(item.id)}>
                           {new Date(item.updatedAt).toLocaleString()}
                         </td>
-                        <td onClick={(e) => e.stopPropagation()}>
+                        <td
+                          onClick={(e) => e.stopPropagation()}
+                          className={styles.itemActions}
+                        >
                           <button
                             type="button"
                             onClick={() => dispatchVerify([item.id])}
@@ -1040,6 +1154,52 @@ export function GateReadinessPanel({
                               ? 'Verifying…'
                               : 'Verify'}
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => recordDisposition(item.id, 'pass')}
+                            disabled={dispositionMutatingIds.has(item.id)}
+                            data-testid={`gate-item-pass-${item.id}`}
+                          >
+                            Pass
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => recordDisposition(item.id, 'fail')}
+                            disabled={dispositionMutatingIds.has(item.id)}
+                            data-testid={`gate-item-fail-${item.id}`}
+                          >
+                            Fail
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              recordDisposition(item.id, 'deferred')
+                            }
+                            disabled={dispositionMutatingIds.has(item.id)}
+                            data-testid={`gate-item-defer-${item.id}`}
+                          >
+                            Defer
+                          </button>
+                          {!REOPEN_BLOCKED_STATES.has(item.state) && (
+                            <button
+                              type="button"
+                              onClick={() => reopenItemHandler(item)}
+                              disabled={dispositionMutatingIds.has(item.id)}
+                              data-testid={`gate-item-reopen-${item.id}`}
+                            >
+                              Reopen
+                            </button>
+                          )}
+                          {item.state === 'pending-approval' && (
+                            <button
+                              type="button"
+                              onClick={() => approveItemHandler(item.id)}
+                              disabled={dispositionMutatingIds.has(item.id)}
+                              data-testid={`gate-item-approve-${item.id}`}
+                            >
+                              Approve
+                            </button>
+                          )}
                         </td>
                       </tr>
                       {expandedId === item.id && (
