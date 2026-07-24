@@ -124,6 +124,25 @@ For every item in the pulled batch:
    excerpt) and, when relevant, `filedFollowon` (a task id if a fix got
    filed instead of fixed in place) and `deploySha`.
 
+   **Disposition semantics — `pass` vs `deferred` (get this right):**
+
+   - **`pass`** — the behavior is verified. Either you observed it directly (ran
+     the check, read the record *by value*), **or** it is already validated by a
+     ✅ Done 🧪 Testing task or a sibling gate item — **covered-elsewhere**.
+     Covered-elsewhere is a **`pass`, not a deferral**: the behavior is done, just
+     done by another task. Record `pass` with `evidence` citing the covering task,
+     e.g. `{"disposition":"pass","evidence":"covered-elsewhere: <taskId> — …"}`.
+   - **`deferred` is rare.** Reserved for a behavior genuinely **too rare to have
+     hit the record _and_ too hard or unsafe to run/stage**, that will be executed
+     and verified in a **later milestone**. It is **never** "I couldn't verify it
+     from history." Deferral is not a dumping ground for un-observed items — used
+     that way it manufactures false-green readiness.
+   - **Run-don't-defer.** If history can't show the behavior, the first move is to
+     make the item **runnable and observe it live** — that is what the runnable
+     tiers exist for (`Read-Only` directly; `Prod-Mutating` with consent) — not to
+     reach for `deferred`. Staging the observation is the fallback; deferral is the
+     last resort, not the first.
+
    For a `Read-Only` / `Opportunistic` item this resolves the item directly.
    For a `Prod-Mutating` item, a `pass` event parks the item at
    `pending-approval` — it does **not** resolve yet.
