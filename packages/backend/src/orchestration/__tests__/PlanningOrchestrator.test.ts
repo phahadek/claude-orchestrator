@@ -196,6 +196,101 @@ describe('PlanningOrchestrator.handleDisposition', () => {
   });
 });
 
+// ── handleGroupDisposition — coalesces a group reject into one message ──────
+
+describe('PlanningOrchestrator.handleGroupDisposition', () => {
+  it('delivers exactly one message for a group of 4 rejected intents', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intents = [
+      makeIntent({ id: 'intent-1', kind: 'task.setDependsOn' }),
+      makeIntent({ id: 'intent-2', kind: 'task.updateBody' }),
+      makeIntent({ id: 'intent-3', kind: 'task.setStatus' }),
+      makeIntent({ id: 'intent-4', kind: 'task.setProperties' }),
+    ];
+
+    await orch.handleGroupDisposition({
+      intents,
+      disposition: 'pushback',
+      reason: 'revise the whole group',
+      groupId: 'group-1',
+    });
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledTimes(1);
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'operator-disposition',
+      expect.any(String),
+    );
+  });
+
+  it('delivers exactly one message for a single-item group (no regression)', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const orch = new PlanningOrchestrator(sm as any);
+
+    await orch.handleGroupDisposition({
+      intents: [makeIntent({ id: 'intent-1' })],
+      disposition: 'decline',
+      reason: 'not needed',
+      groupId: 'group-solo',
+    });
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledTimes(1);
+  });
+
+  it('carries the operator reason and identifies the rejected group', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intents = [
+      makeIntent({ id: 'intent-1', kind: 'task.setDependsOn' }),
+      makeIntent({ id: 'intent-2', kind: 'task.setStatus' }),
+    ];
+
+    await orch.handleGroupDisposition({
+      intents,
+      disposition: 'pushback',
+      reason: 'please reconsider the split',
+      groupId: 'group-42',
+    });
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'operator-disposition',
+      expect.stringContaining('please reconsider the split'),
+    );
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'operator-disposition',
+      expect.stringContaining('group-42'),
+    );
+    const [, , message] = sm.enqueueFeedback.mock.calls[0];
+    expect(message).toContain('intent-1');
+    expect(message).toContain('intent-2');
+  });
+
+  it('no-ops when none of the intents originate from a planning session', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ session_type: 'standard' }),
+    );
+    const orch = new PlanningOrchestrator(sm as any);
+
+    await orch.handleGroupDisposition({
+      intents: [makeIntent({ id: 'intent-1' })],
+      disposition: 'decline',
+      reason: 'no longer needed',
+      groupId: 'group-x',
+    });
+
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
+  });
+});
+
 // ── checkTerminal / session-parked terminal detection ───────────────────────
 
 describe('PlanningOrchestrator terminal detection', () => {

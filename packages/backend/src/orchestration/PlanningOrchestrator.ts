@@ -171,12 +171,81 @@ export class PlanningOrchestrator {
       );
     }
   }
+
+  /**
+   * Group-level twin of `handleDisposition` — routes an operator pushback
+   * or decline on a whole staged-intent group as a single feedback message,
+   * instead of one per intent. Intents are grouped by originating session
+   * (ordinarily all one session, since a group is one structural-change
+   * unit from one planning session) so each session still resumes exactly
+   * once for the group, with the reason and full set of rejected intents.
+   */
+  async handleGroupDisposition(payload: {
+    intents: StagedIntentRow[];
+    disposition: PlanningDisposition;
+    reason?: string | null;
+    groupId: string;
+  }): Promise<void> {
+    const { intents, disposition, reason, groupId } = payload;
+
+    const bySession = new Map<string, StagedIntentRow[]>();
+    for (const intent of intents) {
+      const sessionId = intent.session_id;
+      if (!sessionId) continue;
+      const row = getSession(sessionId);
+      if (!row || !isPlanningSession(row.session_type ?? '')) continue;
+      const list = bySession.get(sessionId) ?? [];
+      list.push(intent);
+      bySession.set(sessionId, list);
+    }
+
+    for (const [sessionId, sessionIntents] of bySession) {
+      this.stagedCountAtResume.set(
+        sessionId,
+        listStagedIntentsBySession(sessionId).length,
+      );
+
+      const message = formatGroupDispositionMessage(
+        groupId,
+        sessionIntents,
+        disposition,
+        reason,
+      );
+      try {
+        await this.sessionManager.enqueueFeedback(
+          sessionId,
+          'operator-disposition',
+          message,
+        );
+      } catch (err) {
+        logger.error(
+          `[PlanningOrchestrator] resume failed for session ${sessionId.slice(0, 8)} after group ${disposition}: ${err}`,
+        );
+      }
+    }
+  }
 }
 
 function formatVerificationFeedback(groupId: string, errors: string[]): string {
   return (
     `Proposal group ${groupId} failed verification and was sent back for revision:\n` +
     errors.map((e) => `- ${e}`).join('\n')
+  );
+}
+
+function formatGroupDispositionMessage(
+  groupId: string,
+  intents: StagedIntentRow[],
+  disposition: PlanningDisposition,
+  reason?: string | null,
+): string {
+  const list = intents.map((i) => `${i.id} (${i.kind})`).join(', ');
+  const verb =
+    disposition === 'decline' ? 'declined' : 'sent back for revision';
+  const label = disposition === 'decline' ? 'Reason' : 'Feedback';
+  return (
+    `Staged intent group ${groupId} (${intents.length} intent${intents.length === 1 ? '' : 's'}: ${list}) ` +
+    `was ${verb}. ${label}: ${reason ?? ''}`
   );
 }
 

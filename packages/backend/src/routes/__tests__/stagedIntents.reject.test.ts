@@ -37,8 +37,10 @@ import type { PlanningOrchestrator } from '../../orchestration/PlanningOrchestra
 function makePlanningOrchestrator() {
   return {
     handleDisposition: vi.fn().mockResolvedValue(undefined),
+    handleGroupDisposition: vi.fn().mockResolvedValue(undefined),
   } as unknown as PlanningOrchestrator & {
     handleDisposition: ReturnType<typeof vi.fn>;
+    handleGroupDisposition: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -183,6 +185,87 @@ describe('POST /api/staged-intents/:id/reject', () => {
     expect(res.status).toBe(200);
     expect(mockRecordEvent).toHaveBeenCalled();
     expect(getStagedIntent(intent.id)!.disposition_reason).toBe('stale');
+  });
+});
+
+describe('POST /api/staged-intents/group/:groupId/reject — coalesced feedback', () => {
+  it('rejects a group of 4 intents and sends exactly one group disposition, not one per intent', async () => {
+    const planningOrchestrator = makePlanningOrchestrator();
+    const app = makeApp(planningOrchestrator);
+    const intents = [
+      stageIntent(
+        'task.setDependsOn',
+        { taskId: 't-1', dependsOn: [] },
+        'proj-1',
+        'group-1',
+        'planning-session-1',
+      ),
+      stageIntent(
+        'task.setStatus',
+        { taskId: 't-2', status: 'Ready' },
+        'proj-1',
+        'group-1',
+        'planning-session-1',
+      ),
+      stageIntent(
+        'task.setStatus',
+        { taskId: 't-3', status: 'Ready' },
+        'proj-1',
+        'group-1',
+        'planning-session-1',
+      ),
+      stageIntent(
+        'task.setStatus',
+        { taskId: 't-4', status: 'Ready' },
+        'proj-1',
+        'group-1',
+        'planning-session-1',
+      ),
+    ];
+
+    const res = await supertest(app)
+      .post('/api/staged-intents/group/group-1/reject')
+      .send({ outcome: 'pushback', reason: 'revise the whole group' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.rejected.sort()).toEqual(intents.map((i) => i.id).sort());
+    intents.forEach((intent) => {
+      expect(getStagedIntent(intent.id)!.state).toBe('rejected');
+    });
+
+    expect(planningOrchestrator.handleDisposition).not.toHaveBeenCalled();
+    expect(planningOrchestrator.handleGroupDisposition).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(planningOrchestrator.handleGroupDisposition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        disposition: 'pushback',
+        reason: 'revise the whole group',
+        groupId: 'group-1',
+      }),
+    );
+  });
+
+  it('rejects a single-item group and still sends exactly one message', async () => {
+    const planningOrchestrator = makePlanningOrchestrator();
+    const app = makeApp(planningOrchestrator);
+    const intent = stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-solo', dependsOn: [] },
+      'proj-1',
+      'group-solo',
+      'planning-session-1',
+    );
+
+    const res = await supertest(app)
+      .post('/api/staged-intents/group/group-solo/reject')
+      .send({ outcome: 'decline', reason: 'no longer needed' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.rejected).toEqual([intent.id]);
+    expect(planningOrchestrator.handleGroupDisposition).toHaveBeenCalledTimes(
+      1,
+    );
   });
 });
 
