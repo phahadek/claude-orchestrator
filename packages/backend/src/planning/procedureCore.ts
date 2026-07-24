@@ -180,6 +180,64 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       '{skillLabel} is equipped to make, and never use it as a general-purpose ' +
       'confirmation prompt.',
   },
+  {
+    id: 'design-no-batch-locking',
+    title: 'No batch-locking — one Open Question at a time',
+    appliesTo: ['design'],
+    text:
+      "DO stage exactly one Open Question's resolution per `decision.pickOne` " +
+      'intent (options = the candidate answers), never a `task.updateBody` edit, and ' +
+      "never more than one question's resolution staged per turn. DO investigate " +
+      'before deciding — cite the code read, arch-page section, or API-call result the ' +
+      'resolution rests on; "decide at implementation time" is a _defer_, never a ' +
+      '_resolve_. DO hold a question whose answer depends on another still-unresolved ' +
+      'question rather than staging both together. DO NOT batch-lock multiple ' +
+      'questions into one pass. `task.updateBody` (the Implementation notes) is staged ' +
+      'exactly once, as the final step, only after every question is settled and the ' +
+      'completeness critic below has run.',
+  },
+  {
+    id: 'design-completeness-critic',
+    title: 'Completeness critic — once per task, before Implementation notes',
+    appliesTo: ['design'],
+    text:
+      'DO run the completeness critic exactly once per Design task, after every ' +
+      'listed Open Question is locked and before staging the final ' +
+      '`task.updateBody` (Implementation notes). DO probe the recurring gap ' +
+      'classes — a decision the implementer needs that no locked question ' +
+      'covers — consuming the advisory trace-coverage signal ' +
+      '(`POST /api/design/:taskId/trace-coverage`) as an aid, never a gate: no ' +
+      'locked-decision-count threshold, no promotion block. DO NOT skip the critic ' +
+      'pass because every listed question already locked cleanly — the pass exists ' +
+      'to surface gaps no question named.',
+  },
+  {
+    id: 'design-disposition-dont-drop',
+    title: "Disposition-don't-drop",
+    appliesTo: ['design'],
+    text:
+      'DO dispose every candidate the completeness critic raises with a recorded ' +
+      'reason — one of `resolved` / `out-of-scope` / `not-a-decision` / `fold` / ' +
+      "`file-sibling` / `sibling-owned` — folded into the API's accepted/dismissed " +
+      'disposition (`resolved` is `accepted`; the rest are `dismissed` carrying that ' +
+      'reason). DO call `POST /api/design/:taskId/completeness-disposition` with ' +
+      '`{questions: [{question, disposition: "accepted"|"dismissed", reason}], ' +
+      'runAt}` for every critic run — this durable store, never body prose, is the ' +
+      'record. DO NOT drop a candidate silently. DO NOT record a disposition only as ' +
+      'Implementation-notes prose; prose may summarize it, but the store call is the ' +
+      'disposition.',
+  },
+  {
+    id: 'design-split-dont-trim',
+    title: "Split-don't-trim",
+    appliesTo: ['design'],
+    text:
+      'DO handle a too-large decision space with the `file-sibling` disposition — ' +
+      'stage a `task.create` intent for a sibling 📐 Design task and carry the ' +
+      'overflow questions there. DO NOT trim or drop questions just to shrink the ' +
+      'set. Question-count (`>~6`) IS a soft diagnostic prompting you to consider ' +
+      'splitting; it IS NOT a numeric trigger and IS NOT wired into `size_check`.',
+  },
 ] as const;
 
 /** Resolve `{skillLabel}` against the given skill and return the finished prose. */
@@ -351,10 +409,14 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'no conclusion at all.',
       design:
         '**Directive — staging is the terminal action:**\n' +
-        '- DO stage the design decision or open-question resolution ' +
-        '(`task.updateBody` / `task.setProperties` / `task.setStatus`, carrying a ' +
-        '`decisionProposal`) as the last action of every turn that reaches a ' +
-        'conclusion.\n' +
+        "- DO stage each Open Question's resolution, the moment it is reached, as " +
+        'its own `decision.pickOne` intent (options = the candidate answers) — ' +
+        'never a `task.updateBody` edit. Independent questions may be staged ' +
+        'together; hold a question whose answer depends on an as-yet-unresolved ' +
+        'one.\n' +
+        '- DO stage `task.updateBody` (the Implementation notes) exactly once, as ' +
+        'the final step, only after every question is settled and the ' +
+        'completeness critic has run.\n' +
         '- DO NOT end the turn on a chat write-up, findings recap, or "here is ' +
         'what I think" summary — none of those is a valid stopping point.\n' +
         '- DO NOT ask for sign-off before staging.\n\n' +
@@ -381,6 +443,16 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     summary:
       'Handle feedback one item at a time — stage the write, confirm in chat, ' +
       'continue. Never batch multiple decisions into one silent pass.',
+    summaryOverrides: {
+      design:
+        'DO handle each Open Question one at a time — stage its resolution as a ' +
+        '`decision.pickOne` intent, then end the turn. DO NOT wait for a chat ' +
+        'confirmation before continuing: a dispatched design session has no ' +
+        'synchronous chat turn to wait within — ' +
+        'the staged intent is the confirmation surface, and the operator (not this ' +
+        "session) disposes it. DO NOT batch multiple questions' resolutions into " +
+        'one pass.',
+    },
   },
   {
     id: 'accrete-gate-and-seed',
@@ -438,6 +510,16 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'secret provisioning). The one transition this session never makes ' +
         'itself is `applied-pending-confirm` → `resolved` — that confirmation is ' +
         'device-auth/operator-only, always.',
+      design:
+        'A dispatched design session never applies a write itself — it only ' +
+        'stages. DO stage `task.updateBody` (the Implementation notes) exactly ' +
+        'once, as the final step, after every Open Question is locked and the ' +
+        'completeness critic has run — carrying a `decisionProposal` summarizing ' +
+        'the locked decisions. DO NOT drive the write to applied or wait in chat ' +
+        'for confirmation of an applied result; the operator applies the staged ' +
+        'intent. DO end the turn ' +
+        'the moment it is staged — that is the terminal action, not a chat ' +
+        'confirmation.',
     },
   },
 ] as const;
