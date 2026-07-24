@@ -165,6 +165,14 @@ describe('deriveGroomDigestSlice', () => {
     expect(err.message).toMatch(/not present on the milestone board/);
   });
 
+  it('matches a notion:-prefixed dispatched id against a bare-uuid target task id', () => {
+    const slice = deriveGroomDigestSlice(
+      fixtureGroomLoadResult(),
+      'notion:task-1',
+    );
+    expect(slice.task.id).toBe('task-1');
+  });
+
   it('gives a distinct reason when the task is present on the board but excluded as Done/Deferred', () => {
     const result = fixtureGroomLoadResult();
     result.board = [

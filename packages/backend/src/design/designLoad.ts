@@ -24,7 +24,7 @@ import { join, resolve, basename } from 'path';
 import { config } from '../config';
 import { NotionClient } from '../notion/NotionClient';
 import { getMilestoneById } from '../db/queries';
-import { formatTaskId } from '../tasks/taskId';
+import { formatTaskId, normalizeBoardId } from '../tasks/taskId';
 
 // ─── manifest resolution (mirrors groomLoad.ts) ────────────────────────────
 
@@ -216,7 +216,7 @@ export interface LoadDesignContextOptions {
   notion?: NotionClient;
 }
 
-const normId = (id: string) => id.replace(/-/g, '').toLowerCase();
+const normId = normalizeBoardId;
 
 /**
  * Assemble the design digest for a single target task: the task + its open

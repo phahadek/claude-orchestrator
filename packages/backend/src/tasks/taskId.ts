@@ -48,3 +48,18 @@ export function normalizeTaskId(id: string): string {
   }
   return formatTaskId('notion', id);
 }
+
+/**
+ * Normalize a task/board-row id for equality comparison, ignoring the
+ * `source:` prefix (if present) and hyphen/case formatting. Board rows carry
+ * bare external ids while dispatched task ids carry the `source:` prefix, so
+ * comparing on this form lets the two line up.
+ */
+export function normalizeBoardId(id: string): string {
+  const colonIndex = id.indexOf(':');
+  const bare =
+    colonIndex >= 0 && VALID_SOURCES.has(id.substring(0, colonIndex))
+      ? id.substring(colonIndex + 1)
+      : id;
+  return bare.replace(/-/g, '').toLowerCase();
+}
