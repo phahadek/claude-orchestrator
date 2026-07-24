@@ -653,6 +653,20 @@ export function GateReadinessPanel({
     });
   }, []);
 
+  // Select All adds every currently-shown (filtered) gate item to the
+  // existing verify selection; Clear empties it.
+  const selectAllItems = useCallback(() => {
+    setSelectedItemIds((prev) => {
+      const next = new Set(prev);
+      for (const item of items) next.add(item.id);
+      return next;
+    });
+  }, [items]);
+
+  const clearItemSelection = useCallback(() => {
+    setSelectedItemIds(new Set());
+  }, []);
+
   // The manual verify-item/verify-batch dispatch — the Verify(N) launcher
   // for the GateItemVerifier, analogous to the Groom(N)/Ops(N) launchers.
   const dispatchVerify = useCallback(
@@ -947,6 +961,22 @@ export function GateReadinessPanel({
           {!itemsLoading && !itemsError && (
             <>
               <div className={styles.filters}>
+                <button
+                  type="button"
+                  onClick={selectAllItems}
+                  disabled={items.length === 0}
+                  data-testid="gate-select-all-button"
+                >
+                  Select All
+                </button>
+                <button
+                  type="button"
+                  onClick={clearItemSelection}
+                  disabled={selectedItemIds.size === 0}
+                  data-testid="gate-clear-selection-button"
+                >
+                  Clear
+                </button>
                 <button
                   type="button"
                   onClick={() => dispatchVerify(Array.from(selectedItemIds))}
