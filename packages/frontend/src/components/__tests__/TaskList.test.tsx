@@ -1342,7 +1342,7 @@ describe('TaskList', () => {
           .querySelector('input[type="checkbox"]'),
       ).toBeNull();
 
-      fireEvent.click(screen.getByTestId('ops-select-all-btn'));
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
       expect(opsBtn.textContent).toContain('Ops (3)');
     });
 
@@ -1383,7 +1383,7 @@ describe('TaskList', () => {
 
       // Select All only picks up the non-blocked task — the blocked one has no
       // checkbox at all, so it can't be selected and then silently dropped server-side.
-      fireEvent.click(screen.getByTestId('ops-select-all-btn'));
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
       const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
       expect(opsBtn.textContent).toContain('Ops (1)');
     });
@@ -1786,7 +1786,7 @@ describe('TaskList', () => {
 
       const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
       // Only the ready + in_progress tasks are ops-eligible; the backlog one is not.
-      fireEvent.click(screen.getByTestId('ops-select-all-btn'));
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
       expect(opsBtn.textContent).toContain('Ops (2)');
 
       const backlogSection = screen.getByTestId('backlog-section');
@@ -1948,7 +1948,7 @@ describe('TaskList', () => {
         { boardId: 'milestone-1' },
       );
 
-      fireEvent.click(screen.getByTestId('design-select-all-btn'));
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
       const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
       expect(designBtn.textContent).toContain('Design (2)');
 
@@ -1997,7 +1997,7 @@ describe('TaskList', () => {
         { boardId: 'milestone-1' },
       );
 
-      fireEvent.click(screen.getByTestId('design-select-all-btn'));
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
       fireEvent.click(screen.getByTestId('design-btn'));
 
       await waitFor(() => {
@@ -2029,7 +2029,7 @@ describe('TaskList', () => {
         { boardId: 'milestone-1' },
       );
 
-      fireEvent.click(screen.getByTestId('design-select-all-btn'));
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
       fireEvent.click(screen.getByTestId('design-btn'));
 
       await waitFor(() => {
@@ -2041,6 +2041,71 @@ describe('TaskList', () => {
       expect(screen.getByTestId('design-error').textContent).not.toContain(
         `notion:${launchedUuid},`,
       );
+    });
+  });
+
+  describe('shared NON-CODE Select All / Clear', () => {
+    function renderMixedNonCode() {
+      renderList(
+        [
+          makeTask({
+            taskId: 'op1',
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+          makeTask({
+            taskId: 'inv1',
+            taskName: 'Investigation Task',
+            displayStatus: 'ready',
+            taskType: '🔎 Investigation',
+          }),
+          makeTask({
+            taskId: 'design1',
+            taskName: 'Design Task',
+            displayStatus: 'ready',
+            taskType: '📐 Design',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+    }
+
+    it('renders exactly one Select All and one Clear control in the NON-CODE panel', () => {
+      renderMixedNonCode();
+      const nonCodeSection = screen.getByTestId('non-code-section');
+      expect(
+        within(nonCodeSection).getAllByText('Select All').length,
+      ).toBe(1);
+      expect(within(nonCodeSection).getAllByText('Clear').length).toBe(1);
+    });
+
+    it('shared Select All selects both Ops-eligible and Design-eligible tasks into their own buckets', () => {
+      renderMixedNonCode();
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
+      expect(opsBtn.textContent).toContain('Ops (0)');
+      expect(designBtn.textContent).toContain('Design (0)');
+
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
+
+      expect(opsBtn.textContent).toContain('Ops (2)');
+      expect(designBtn.textContent).toContain('Design (1)');
+    });
+
+    it('shared Clear resets both Ops and Design selections to zero', () => {
+      renderMixedNonCode();
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
+
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
+      expect(opsBtn.textContent).toContain('Ops (2)');
+      expect(designBtn.textContent).toContain('Design (1)');
+
+      fireEvent.click(screen.getByTestId('non-code-clear-btn'));
+
+      expect(opsBtn.textContent).toContain('Ops (0)');
+      expect(designBtn.textContent).toContain('Design (0)');
     });
   });
 

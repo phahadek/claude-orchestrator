@@ -746,6 +746,19 @@ export function TaskList({
     setDesignCheckedIds(new Set());
   }
 
+  // Shared Select All / Clear for the NON-CODE panel — selects each eligible
+  // task into its own bucket (Ops/Design types never overlap, so there's no
+  // precedence to resolve here); the two launch buttons stay separate.
+  function handleNonCodeSelectAll() {
+    handleOpsSelectAll();
+    handleDesignSelectAll();
+  }
+
+  function handleNonCodeClearSelection() {
+    handleOpsClearSelection();
+    handleDesignClearSelection();
+  }
+
   // Launches one individual design/planning session per checked, design-eligible
   // task via the unified planning-launch route, mirroring handleOpsLaunch.
   async function handleDesignLaunch() {
@@ -896,64 +909,54 @@ export function TaskList({
             <div className={styles.sectionHeading}>
               <span className={styles.groupLabel}>📋 Non-code</span>
               <span className={styles.groupCount}>{nonCodeNotDone.length}</span>
-              {opsEligibleTasks.length > 0 && (
+              {(opsEligibleTasks.length > 0 || designEligibleTasks.length > 0) && (
                 <div className={styles.launchControls}>
                   <button
                     className={styles.selectAllBtn}
-                    onClick={handleOpsSelectAll}
-                    disabled={opsLoading}
-                    data-testid="ops-select-all-btn"
+                    onClick={handleNonCodeSelectAll}
+                    disabled={opsLoading || designLoading}
+                    data-testid="non-code-select-all-btn"
                   >
                     Select All
                   </button>
                   <button
                     className={styles.selectAllBtn}
-                    onClick={handleOpsClearSelection}
-                    disabled={opsLoading || opsSelectedCount === 0}
-                    data-testid="ops-clear-btn"
-                  >
-                    Clear
-                  </button>
-                  <button
-                    className={styles.opsBtn}
-                    onClick={() => void handleOpsLaunch()}
-                    disabled={opsLoading || !boardId || opsSelectedCount === 0}
-                    data-testid="ops-btn"
-                  >
-                    {opsLoading ? 'Loading…' : `Ops (${opsSelectedCount})`}
-                  </button>
-                </div>
-              )}
-              {designEligibleTasks.length > 0 && (
-                <div className={styles.launchControls}>
-                  <button
-                    className={styles.selectAllBtn}
-                    onClick={handleDesignSelectAll}
-                    disabled={designLoading}
-                    data-testid="design-select-all-btn"
-                  >
-                    Select All
-                  </button>
-                  <button
-                    className={styles.selectAllBtn}
-                    onClick={handleDesignClearSelection}
-                    disabled={designLoading || designSelectedCount === 0}
-                    data-testid="design-clear-btn"
-                  >
-                    Clear
-                  </button>
-                  <button
-                    className={styles.opsBtn}
-                    onClick={() => void handleDesignLaunch()}
+                    onClick={handleNonCodeClearSelection}
                     disabled={
-                      designLoading || !boardId || designSelectedCount === 0
+                      opsLoading ||
+                      designLoading ||
+                      (opsSelectedCount === 0 && designSelectedCount === 0)
                     }
-                    data-testid="design-btn"
+                    data-testid="non-code-clear-btn"
                   >
-                    {designLoading
-                      ? 'Loading…'
-                      : `Design (${designSelectedCount})`}
+                    Clear
                   </button>
+                  {opsEligibleTasks.length > 0 && (
+                    <button
+                      className={styles.opsBtn}
+                      onClick={() => void handleOpsLaunch()}
+                      disabled={
+                        opsLoading || !boardId || opsSelectedCount === 0
+                      }
+                      data-testid="ops-btn"
+                    >
+                      {opsLoading ? 'Loading…' : `Ops (${opsSelectedCount})`}
+                    </button>
+                  )}
+                  {designEligibleTasks.length > 0 && (
+                    <button
+                      className={styles.opsBtn}
+                      onClick={() => void handleDesignLaunch()}
+                      disabled={
+                        designLoading || !boardId || designSelectedCount === 0
+                      }
+                      data-testid="design-btn"
+                    >
+                      {designLoading
+                        ? 'Loading…'
+                        : `Design (${designSelectedCount})`}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
