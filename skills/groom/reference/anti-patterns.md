@@ -60,7 +60,7 @@ toward hard-block when the dep names a symbol or migration; lean toward
 soft-order when the dep names a decision or informing investigation.**
 
 **Treating the size check as cosmetic.** The 500-LoC default is **load-bearing**,
-not advisory. Every Code/Tooling task in a batch carries a _Size:_ line in its
+not advisory. Every Code task in a batch carries a _Size:_ line in its
 presentation header, and `size_check` is a required field in `grooming-state.json`
 that the promotion gate enforces — a task without a recorded size classification
 is blocked at promotion, same as a task missing `hard_block_deps`. The most common
@@ -70,7 +70,7 @@ constrains behavior when sessions present and lock the estimate; otherwise it
 silently dilutes.
 
 **Stripping a task's runtime item from the body but never accreting it to the gate
-store (the "stripped-then-dropped" pattern).** Code/Tooling tasks are required to strip
+store (the "stripped-then-dropped" pattern).** Code tasks are required to strip
 their runtime / launch-and-observe manual items and note _"Covered by the Manual
 Verification Gate."_ But stripping is only half the contract — the stripped items must
 **land on the milestone gate store** during grooming (Step 4 — Gate accretion, via the
@@ -80,14 +80,14 @@ gate") and absent from the gate store (never accreted). No coverage audit can fi
 the manual tester never runs it. This already produced a real gap: an M9 PowerShell-5.1
 launch-script check was stripped from a task body but never landed on the Gate —
 discovered only by a 2026-06-29 coverage audit. The promotion gate now blocks this: a
-missing `gate_accretion` marker on a Code/Tooling task prevents the Ready-flip until the
+missing `gate_accretion` marker on a Code task prevents the Ready-flip until the
 groomer either accretes the items (`{"classification": "<tier>", "items": [{"text":
 "…"}]}`) or explicitly accretes `{"classification": "none"}` to confirm the task has no
 standalone runtime item.
 
 **Leaving a task's operational seed in an inline note but never accreting it to the
 seed store (the "seeded-then-dropped" pattern).** The operational twin of
-stripped-then-dropped. A Code/Tooling task frequently ships pure dispatchable code plus a
+stripped-then-dropped. A Code task frequently ships pure dispatchable code plus a
 prod-data/config seed (an `analyzer_configs` row, config defaults, alias/cohort flags)
 that is _correctly_ kept out of the auto-dispatched PR. Left as a free-floating "applied
 operationally on prod" note, that seed is owned by no one: after merge the code sits dark
@@ -95,12 +95,12 @@ until someone hand-seeds it (the "Done ≠ deployed ≠ seeded ≠ working" / si
 The seed must **land on the milestone seed store** during grooming (Step 4 — Seed
 accretion, via the `seed-state-client.mjs accrete` route call). Observed grooming M13
 (~17 scattered inline seed notes, fixed by hand). The promotion gate now blocks this: a
-missing `seed_accretion` marker on a Code/Tooling task prevents the Ready-flip until the
+missing `seed_accretion` marker on a Code task prevents the Ready-flip until the
 groomer either accretes the seeds (`{"decision": "seeds", "seeds": [{"spec": "…"}]}` —
 the array field is `seeds`, **not** the gate's `items`) or explicitly accretes
 `{"decision": "none"}` to confirm the task has no operational seed.
 
-**Promoting oversized Code/Tooling tasks without splitting.** The temptation is
+**Promoting oversized Code tasks without splitting.** The temptation is
 to wave a 1,200-LoC task through because it _"feels coherent"_ — but a Code task
 that big is one no one can review, and the implementation session that picks it
 up will either burn out or silently scope-creep. Split into ≤ 500 LoC subsets
@@ -119,17 +119,17 @@ comment — it surfaces as a broken or runaway session. This is the load-bearing
 reason the Ready flip is gated (sign-off + classified hard-block deps + size check).
 See `procedures.md` § _Task types — what Ready triggers_ for the per-type dispatch map.
 
-**A 🛠️ Tooling / 🧪 Testing task smuggling dispatchable code.** Tooling and
-Testing tasks are run **interactively** by a human session, not auto-dispatched.
-When such a task bundles a chunk of pure code-generation — _"write module/script
-X"_ — that has **no dependency on data only available at implementation time**,
-that chunk belongs in a separate 💻 Code task so the orchestrator can dispatch it
-the normal way. Excise it (use the split procedure in `presentation.md` § Size
-check): narrow the Tooling/Testing task to the interactive remainder (running it,
-wiring it, observing results) and file the code-gen as its own Code task at
-🔲 Backlog. Leaving them fused **strands** the dispatchable work behind an
-interactive task no worker auto-picks-up — and inflates the Tooling task past
-the point a single session can carry it.
+**A 🔧 Operational / 🔎 Investigation / 🧪 Testing task smuggling dispatchable code.**
+Operational, Investigation, and Testing tasks are run **interactively** by a human
+session, not auto-dispatched. When such a task bundles a chunk of pure code-generation —
+_"write module/script X"_ — that has **no dependency on data only available at
+implementation time**, that chunk belongs in a separate 💻 Code task so the orchestrator
+can dispatch it the normal way. Excise it (use the split procedure in `presentation.md`
+§ Size check): narrow the Operational/Investigation/Testing task to the interactive
+remainder (running it, wiring it, observing results) and file the code-gen as its own
+Code task at 🔲 Backlog. Leaving them fused **strands** the dispatchable work behind an
+interactive task no worker auto-picks-up — and inflates the Operational/Investigation
+task past the point a single session can carry it.
 
 **Demoting the original task to ⏭️ Deferred when splitting.** ⏭️ Deferred means
 _"scope superseded by another task"_ and is intended for tasks the project chose
@@ -213,7 +213,8 @@ investigation because _"the clean set just promotes anyway"_ inverts the design:
 lighter the stamp, the more load-bearing the investigation behind it.
 
 **Editing a Ready/Done task.** Any **ordinary** task at 🗂️ Ready or beyond may already
-be in-flight (auto-dispatched if 💻 Code, human-run if 🛠️ Tooling / 🧪 Testing). If its
+be in-flight (auto-dispatched if 💻 Code, human-run if 🔧 Operational / 🔎 Investigation /
+🧪 Testing). If its
 scope was insufficient, file a new sibling task — do not retroactively rewrite it. This is
 exceptionless for ordinary types. The **🚦 Gate** is the one task you *do* keep editing at
 Ready — but that's its type's defined accretion, not an exception (a Gate is an
