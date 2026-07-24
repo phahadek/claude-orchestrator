@@ -56,6 +56,7 @@ import type { GroomLoadResult } from '../groom/groomLoad';
 import type { TaskRegions } from '../groom/codeWorklist';
 import type { TaskDependencyCandidates } from '../orchestration/milestoneDependencyGraph';
 import type { ReadinessViolation } from '../tasks/readinessGate';
+import { normalizeBoardId } from '../tasks/taskId';
 import type { TypeCheckResult } from '../groom/typeCheck';
 import type { DesignLoadResult } from '../design/designLoad';
 import type { OpsLoadResult, OpsTaskEntry } from '../ops/opsLoad';
@@ -147,7 +148,7 @@ export type PlanningDigest =
   | { workflow: 'design'; data: DesignDigestSlice }
   | { workflow: 'ops'; data: OpsDigestSlice };
 
-const normId = (id: string) => id.replace(/-/g, '').toLowerCase();
+const normId = normalizeBoardId;
 
 /**
  * Thrown by `deriveGroomDigestSlice` when the dispatched task isn't in the

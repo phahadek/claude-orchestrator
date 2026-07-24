@@ -257,6 +257,15 @@ describe('loadDesignContext', () => {
     ]);
   });
 
+  it('matches a notion:-prefixed dispatched id against a bare-uuid board row', async () => {
+    const result = await loadDesignContext(MILESTONE, `notion:${TASK_ID}`, {
+      repoRoot: '/tmp/design-load-test-nonexistent-repo',
+      manifest: { context_pages: [] },
+    });
+
+    expect(result.task.id).toBe(TASK_ID);
+  });
+
   it('throws when the task is not on the milestone board', async () => {
     await expect(
       loadDesignContext(MILESTONE, 'unknown-task', {
