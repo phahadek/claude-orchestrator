@@ -123,6 +123,16 @@ Notion context page — the skill reads it from local disk). **This is
 non-negotiable**: resolving a task without the architectural constraints loaded is how
 grooming produces confidently-wrong decisions.
 
+**Disposition the constraints — don't just "read the pages."** The loader surfaces each
+task's **binding constraints** (`targetTasks[].bindingConstraints` — the
+`CONSTRAINT_CATALOG × regions` intersection). Before a task can promote, **disposition
+every one** of its binding constraints as one of `complies` / `n-a` (+ a mandatory
+`why`) / `conflict→route` (naming the routed 📐 Design task) — recorded in
+`grooming-state.json` as `constraints_dispositioned` and re-derived + enforced
+server-side (`groomGate.ts`, FM1). The mandatory architecture read **is** the
+disposition, not a page-turn: a constraint you didn't disposition is a constraint you
+didn't check.
+
 ---
 
 ## Step 1b — Explore the code (cached, judgment where needed)
@@ -189,6 +199,20 @@ Follow `reference/presentation.md`. In short:
 - End the batch with: _"Any changes or questions before I mark these Ready and continue?"_
 - **One batch at a time. Never present the next before the current is signed off.**
 
+**Presentation is type-dependent — a mixed milestone runs both flows:**
+
+- **💻 Code (auto-dispatched)** → the per-batch, per-task flow above: each task gets
+  its 4-point summary and its own human decision (a wrong Ready launches an
+  unattended worktree, so the stakes demand it).
+- **📐 Design / 📋 Planning (interactive, picked up by `/design`)** →
+  **approve-by-standard**: present **ONE consolidated triage**, not per-item asks —
+  a **clean** list (names-only), **blocked** rows (+ the blocking dep), and
+  **needs-attention** rows (+ the reason). The human engages **only** the
+  needs-attention + blocked rows; **the clean set promotes by default (visible +
+  veto-able)** — no per-item or bulk positive stamp. The clean-verdict standard, its
+  taxonomy, and the deterministic floor that can only ever downgrade a proposed
+  clean verdict live in `reference/presentation.md` § Consolidated triage.
+
 ---
 
 ## Step 3 — Incorporate feedback (one item at a time)
@@ -217,12 +241,15 @@ Only after explicit sign-off on the batch (_"looks good"_, _"ship it"_, _"next"_
 1. **First**, record the sign-off in `grooming-state.json` for each task **in that
    batch**: fill `achieves`, `open_questions`, `tests`, `manual`, confirm `regions`,
    fill `hard_block_deps` (see `presentation.md` § Dependencies for the hard-block
-   vs soft-order distinction), fill `size_check` (an object recording the size
-   classification — see `presentation.md` § Size check — one of: `{ "loc": <number>,
-"decision": "no_split" }` for ≤500 LoC tasks, `{ "loc": <number>, "decision":
-"split_now", "split_into": ["<task-id>", …] }` after splitting, `{ "loc":
-<number>, "decision": "unsplittable", "reason": "<one-line>" }` for the atomic
-   case, or `{ "decision": "n/a" }` for Design/Planning tasks), determine the
+   vs soft-order distinction), fill `size_check` (the size classification — see
+   `presentation.md` § Size check — shape `{ loc, loc_method, files, decision,
+   split_into?, reason? }`, where `decision` is one of: `"no_split"` (≤500 LoC —
+   proceed), `"split_now"` with `split_into: ["<task-id>", …]` (over the threshold and
+   splittable — you **nominate** the split; the orchestrator confirms and routes it to
+   a dedicated session, see § Size check), `"unsplittable"` with `reason: "<one-line>"`
+   (over the threshold but must land atomically), or `{ "decision": "n/a" }` for
+   Design/Planning tasks) and `type_check` (the present-and-dispositioned
+   type/content-mismatch scan — advisory, never a hard block on its own), determine the
    **Gate accretion** and **Seed accretion** content below for 💻 Code / 🛠️ Tooling
    tasks (write it into the entry as `gate_contribution` / `seed_contribution` —
    these are transient staging fields the flip command below reads and submits;
@@ -341,6 +368,29 @@ Confirm the accretion in chat before the Ready-flip.
 3. Confirm in chat what was staged (Ready flip **and** `Depends On` value) for
    each task, and that it is now waiting for human apply. Then present the next batch.
 
+### Approve-by-standard (interactive 📐 Design / 📋 Planning types)
+
+The numbered flow above is the per-task **💻 Code** path. **Interactive types promote by
+standard, not per item.** After the consolidated triage (Step 2), the human engages only
+the needs-attention + blocked rows; every task left in the **clean** set promotes by
+default (visible + veto-able) — you do **not** collect a per-item positive stamp.
+
+- **Record a `triage` verdict** per interactive task in `grooming-state.json` — one of
+  `clean` / `blocked` / `needs-attention` — alongside `constraints_dispositioned` (see
+  Step 1 § constraint disposition). The flip client carries `triage` in `groomingGate`;
+  the server re-derives the **deterministic floor** and can only ever **downgrade** a
+  proposed `clean` (a hard-block dep not ✅ Done → `blocked`; no `## Open Questions`
+  heading → `needs-attention`; a routed constraint-conflict → `needs-attention`). It
+  never upgrades a judged `blocked` / `needs-attention` back to `clean`.
+- **The `readiness_override` reason is auto-applied — never hand-typed.** For a 📐 Design
+  task promoted clean, the backend supplies the standard template reason (_"Design task —
+  open questions are the /design worklist, resolved at execution; triaged clean in the
+  `<milestone>` consolidated Design triage"_); you record the clean `triage` verdict, not
+  the reason string.
+- **`size_check` is `{"decision": "n/a"}`** for Design/Planning, and gate/seed accretion
+  does not apply (those are 💻 Code artifacts). Per-task disposition records + audited
+  applies are preserved — the ceremony removed is only the per-item *positive stamp*.
+
 **Gates last**: the milestone's **🚦 Gate** task is the final batch, after all code
 tasks are signed off. Accretion happens incrementally — as each 💻 Code / 🛠️ Tooling
 task is promoted (Gate accretion above), its stripped items are minted onto the
@@ -385,16 +435,43 @@ Edit/Write tool) — canonical source
   staged through `staged-intents-client.mjs` — never a direct `notion-update-page` call.
 - **Investigate before resolving.** Reading the code comes before deciding what's
   resolved. "Decide at implementation time" is a _defer_, not a _resolve_.
-- **The human is the promotion gate** (shared rule). Even a Ready-clean task waits for sign-off.
+- **Cite-or-route, never invent.** An open question that is an **architectural
+  decision** is cleared only by (a) **citing a locked decision** (an arch-page rule or
+  an already-✅-Done Design task) or (b) **routing to `/design`** — file a 📐 Design task
+  and add a hard-block `Depends On` edge to it. **Never invent the answer in-grooming.**
+  A task whose `Depends On` names a not-yet-✅-Done Design/Planning task is **not
+  promotable** (the promotion gate blocks it, FM3; for interactive types the triage
+  floor downgrades it to `blocked`).
+- **Per-task sign-off is an invariant for 💻 Code.** A batched or momentum operator
+  action ("these all look fine") **never** stands in for the per-task disposition
+  records; 💻 Code tasks are always promoted **individually**. (Interactive Design /
+  Planning types promote approve-by-standard — the *documented* batch flow, not a
+  shortcut around this invariant; see Step 4 § approve-by-standard.)
+- **The human is the promotion gate** (shared rule) — but its *granularity* is
+  type-dependent, because the stakes are. For **auto-dispatched 💻 Code**, a wrong
+  Ready launches an unattended worktree, so promotion is a **per-task human
+  decision**, taken individually — a batched/momentum action never stands in for it.
+  For **interactive 📐 Design / 📋 Planning** (which `/design` picks up, so a wrong
+  Ready is a reversible glance, not a launch), promotion is **approve-by-standard**:
+  under one consolidated triage the clean set promotes **by default (visible +
+  veto-able)** — no per-item or bulk positive stamp (see Step 2 § consolidated triage
+  and Step 4 § approve-by-standard). The gate is preserved either way; per-task
+  disposition records + audited applies are preserved either way. **Reduced ceremony
+  is not reduced rigor** — the investigation posture (arch-page reading, code
+  exploration, anchor grounding) is the sole non-server backstop once the per-item
+  decision is removed, and stays non-negotiable.
 - **Code / Tooling tasks default to < 500 LoC estimated.** The size check is
   **load-bearing**, not advisory — every Code/Tooling task carries an explicit
   _Size:_ line in its presentation header, and `size_check` is a required field
-  in `grooming-state.json` that the promotion gate enforces. Larger tasks split
-  unless **demonstrably unsplittable** (see `presentation.md` § Size check).
-  **When splitting: edit the original task down to one of the new subsets and
-  create N-1 new siblings — do NOT demote the original to ⏭️ Deferred** (that
-  loses history, comments, and inbound dep refs; Deferred has a specific
-  meaning that doesn't fit splits). Design and Planning tasks are sized in
+  in `grooming-state.json` that the promotion gate enforces. The 500-LoC default
+  is a **split *threshold*, not a hard ceiling** — a task over it is nominated for
+  splitting (and a sub-500 task may split on a natural seam); there is **no hard
+  file-count ceiling**; a task that must land atomically records `"unsplittable"` +
+  `reason`. **Splitting and merging are orchestrator-driven: a grooming session
+  *nominates* a split/merge candidate (`decision: "split_now"` + `split_into`),
+  never performs it in-session — the orchestrator confirms the nomination and
+  routes the split to a dedicated session** (detect → confirm → route; see
+  `presentation.md` § Size check). Design and Planning tasks are sized in
   open-question count, not LoC; write `{"decision": "n/a"}` for them.
 - **Hard-block dependencies live in the Notion `Depends On` property, never in
   the task body.** Soft-order observations are batch-level conversation only —
