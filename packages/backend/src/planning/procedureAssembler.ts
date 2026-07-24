@@ -150,9 +150,11 @@ export interface OpsDigestSlice {
  * does (the task's resolved regions + verbatim body) to decide the cut — see
  * `split/splitSession.ts`'s ComposeSplitInput, which is built from that same
  * information. Reuses `GroomDigestSlice`'s shape rather than re-deriving an
- * identical one.
+ * identical one. Not exported: nothing outside this module needs the name —
+ * `OpsSessionLauncher` assembles a split digest via `deriveGroomDigestSlice`
+ * directly and wraps it as `{ workflow: 'split', data }`.
  */
-export type SplitDigestSlice = GroomDigestSlice;
+type SplitDigestSlice = GroomDigestSlice;
 
 export type PlanningDigest =
   | { workflow: 'groom'; data: GroomDigestSlice }
@@ -230,13 +232,6 @@ export function deriveGroomDigestSlice(
     orientation,
   };
 }
-
-/**
- * A split session's digest is identical to grooming's — same loader, same
- * per-task slice — since deciding the cut needs the same resolved
- * regions/body a grooming session sees.
- */
-export const deriveSplitDigestSlice = deriveGroomDigestSlice;
 
 /** `loadDesignContext` already resolves a single target task — just narrow the fields carried forward. */
 export function deriveDesignDigestSlice(
