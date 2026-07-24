@@ -325,6 +325,7 @@ describe('assemblePlanningProcedure', () => {
           'task.create',
         ],
         design: [
+          'decision.pickOne',
           'task.updateBody',
           'task.setProperties',
           'task.setStatus',
@@ -401,6 +402,91 @@ describe('assemblePlanningProcedure', () => {
       },
     });
     expect(designOutput).not.toContain('groomProposal');
+  });
+
+  it('carries the completeness critic (gap-class probing + disposition-don\'t-drop) and split-don\'t-trim / one-question-at-a-time guidance for design, and never for groom/ops', () => {
+    const designOutput = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'design',
+        data: deriveDesignDigestSlice(fixtureDesignLoadResult()),
+      },
+    });
+
+    // Completeness critic: probes gap classes via the advisory trace-coverage
+    // signal, before the terminal task.updateBody.
+    expect(designOutput).toMatch(/completeness critic/i);
+    expect(designOutput).toContain('/api/design/:taskId/trace-coverage');
+    expect(designOutput).toMatch(/never a gate/i);
+
+    // Disposition-don't-drop: every candidate lands in the durable store,
+    // never as body prose, never dropped silently.
+    expect(designOutput).toContain(
+      '/api/design/:taskId/completeness-disposition',
+    );
+    expect(designOutput).toMatch(/DO NOT drop a candidate silently/);
+    expect(designOutput).toMatch(/never.+body prose|prose.+never/i);
+
+    // Split-don't-trim.
+    expect(designOutput).toMatch(/split.{0,3}don.t.{0,3}trim/i);
+    expect(designOutput).toContain('file-sibling');
+
+    // One-question-at-a-time / no-batch-locking, staged as decision.pickOne.
+    expect(designOutput).toMatch(/one Open Question/i);
+    expect(designOutput).toContain('decision.pickOne');
+    expect(designOutput).toMatch(/batch-lock/i);
+
+    for (const { workflow, digest } of cases) {
+      if (workflow === 'design') continue;
+      const other = assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        milestoneId: 'm1',
+        projectId: 'p1',
+        digest,
+      });
+      expect(other).not.toMatch(/completeness critic/i);
+      expect(other).not.toContain('/api/design/:taskId/trace-coverage');
+      expect(other).not.toContain(
+        '/api/design/:taskId/completeness-disposition',
+      );
+    }
+  });
+
+  it('never instructs a stage-only design session to "confirm in chat" or "apply the write" in the incorporate-feedback / apply-on-signoff steps — a dispatched session has no synchronous chat turn', () => {
+    const designOutput = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'design',
+        data: deriveDesignDigestSlice(fixtureDesignLoadResult()),
+      },
+    });
+
+    // Isolate the two steps the interactive-only prose used to leak into —
+    // not the whole assembled output, which also carries the generic
+    // (skill-agnostic) "No silent writes" hard rule elsewhere.
+    const incorporateFeedback = designOutput.slice(
+      designOutput.indexOf('### Incorporate feedback'),
+      designOutput.indexOf('### File follow-on tasks'),
+    );
+    const applyOnSignoff = designOutput.slice(
+      designOutput.indexOf('### Apply on sign-off'),
+      designOutput.indexOf('### Hard rules'),
+    );
+
+    for (const section of [incorporateFeedback, applyOnSignoff]) {
+      expect(section).not.toMatch(/confirm in chat/i);
+      expect(section).not.toMatch(/stage and apply the write/i);
+    }
+    expect(applyOnSignoff).toMatch(/never applies a write itself/i);
+    expect(applyOnSignoff).toMatch(/the operator applies the staged intent/i);
+    expect(incorporateFeedback).toContain('decision.pickOne');
   });
 
   it('states an up-front capability inventory for the dispatched ops procedure: base tools, how to request more, what is never grantable', () => {

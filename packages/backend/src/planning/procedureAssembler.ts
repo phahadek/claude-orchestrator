@@ -271,6 +271,7 @@ const PLANNING_INTENT_KINDS: Record<PlanningWorkflow, readonly string[]> = {
     'task.create',
   ],
   design: [
+    'decision.pickOne',
     'task.updateBody',
     'task.setProperties',
     'task.setStatus',
@@ -309,6 +310,11 @@ const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
     '{"title":"<title>","type":"💻 Code","milestone":"<milestone-id>",' +
     '"body":"<task body markdown>"}',
   'task.updateBody': '{"taskId":"<task-id>","body":"<full markdown>"}',
+  'decision.pickOne':
+    '{"prompt":"<the Open Question, verbatim>","options":[' +
+    '{"label":"<candidate answer A>","description":"<pros/cons>"},' +
+    '{"label":"<candidate answer B>","description":"<pros/cons>"}],' +
+    '"allowFreeForm":true}',
   'journal.setState':
     '{"taskId":"<task-id>","state":"staged-proposal",' +
     '"fields":{"findingOrProposal":"<finding or proposal>"}}',
