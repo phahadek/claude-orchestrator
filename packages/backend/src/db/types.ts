@@ -32,7 +32,7 @@ export interface Session {
   worktree_path: string | null;
   archived: number; // 0 | 1 (SQLite boolean)
   favorited: number; // 0 | 1 (SQLite boolean)
-  session_type: string; // 'standard' | 'review' | 'groom' | 'design' | 'ops'
+  session_type: string; // 'standard' | 'review' | 'groom' | 'design' | 'ops' | 'split'
   note: string | null;
   tags: string | null; // JSON array of strings, e.g. '["bugfix","auth"]'
   total_input_tokens: number;

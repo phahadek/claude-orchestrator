@@ -24,19 +24,29 @@ const sharedHardRulesPath = join(
   'hard-rules.md',
 );
 
-const SKILL_MD_PATHS: Record<SkillId, string> = {
+/**
+ * Skills with an interactive SKILL.md a human types `/groom`/`/design`/`/ops`
+ * to run. 'split' has no interactive counterpart — it is only ever a
+ * dispatched session (launched by groomFlip.ts on a confirmed split_now
+ * nomination), so it carries no SKILL.md to link/de-duplicate against.
+ */
+const INTERACTIVE_SKILLS: SkillId[] = ['groom', 'design', 'ops'];
+
+const SKILL_MD_PATHS: Partial<Record<SkillId, string>> = {
   groom: join(repoRoot, 'skills', 'groom', 'SKILL.md'),
   design: join(repoRoot, 'skills', 'design', 'SKILL.md'),
   ops: join(repoRoot, 'skills', 'ops', 'SKILL.md'),
 };
 
 function readSkillMd(skill: SkillId): string {
-  return readFileSync(SKILL_MD_PATHS[skill], 'utf8');
+  const path = SKILL_MD_PATHS[skill];
+  if (!path) throw new Error(`no interactive SKILL.md for skill "${skill}"`);
+  return readFileSync(path, 'utf8');
 }
 
 describe('procedureCore', () => {
   it('has at least one principle and one ordered step applicable to every skill', () => {
-    const skills: SkillId[] = ['groom', 'design', 'ops'];
+    const skills: SkillId[] = ['groom', 'design', 'ops', 'split'];
     for (const skill of skills) {
       expect(principlesFor(skill).length).toBeGreaterThan(0);
       expect(stepsFor(skill).length).toBeGreaterThan(0);
@@ -51,6 +61,7 @@ describe('procedureCore', () => {
   it('every interactive SKILL.md that carries a principle links to the shared core file', () => {
     for (const principle of CORE_PRINCIPLES) {
       for (const skill of principle.appliesTo) {
+        if (!INTERACTIVE_SKILLS.includes(skill)) continue;
         const md = readSkillMd(skill);
         expect(
           md.includes('_shared/reference/hard-rules.md'),

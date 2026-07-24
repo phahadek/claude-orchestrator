@@ -17,6 +17,7 @@
 
 import type { NewTaskFields } from '../tasks/TaskBackend';
 import type { TaskBodySections } from '../tasks/bodyRender';
+import { stageIntent, type StagedIntent } from '../routes/stagedIntents';
 
 export const ORIGINAL_REF = 'original';
 
@@ -138,4 +139,42 @@ export function composeSplitIntents(
   };
 
   return { intents, siblingRefs, sizeCheck };
+}
+
+export interface StageSplitIntentsResult {
+  /** The staged rows, in the same order as `composeSplitIntents`'s `intents`. */
+  staged: StagedIntent[];
+  siblingRefs: Record<string, string>;
+  sizeCheck: SplitSizeCheck;
+  groupId: string;
+}
+
+/**
+ * Invocation glue: the dedicated split session's route from a decided cut to
+ * the shared staged-intent display. Composes the intents (`composeSplitIntents`)
+ * and stages every one of them through the same chokepoint every other
+ * producer stages through (`stageIntent` in `routes/stagedIntents.ts`) — this
+ * module still never calls TaskWriteCommands or applies anything itself.
+ */
+export function stageSplitIntents(
+  input: ComposeSplitInput,
+  sessionId?: string | null,
+): StageSplitIntentsResult {
+  const composed = composeSplitIntents(input);
+  const groupId = `split:${input.original.id}`;
+  const staged = composed.intents.map((intent) =>
+    stageIntent(
+      intent.kind,
+      intent.payload,
+      intent.projectId,
+      intent.groupId,
+      sessionId,
+    ),
+  );
+  return {
+    staged,
+    siblingRefs: composed.siblingRefs,
+    sizeCheck: composed.sizeCheck,
+    groupId,
+  };
 }

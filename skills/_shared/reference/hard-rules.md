@@ -7,18 +7,21 @@ Canonical source: `packages/backend/src/planning/procedureCore.ts` (`CORE_PRINCI
 - **Grooming**: Load project and task context through the sanctioned deterministic loader (a backend route, or a vendored script that wraps one) before any judgment step. Hand-fetching context pages or task bodies yourself is exactly the step that gets skipped under context pressure — never do it.
 - **Design Execution**: Load project and task context through the sanctioned deterministic loader (a backend route, or a vendored script that wraps one) before any judgment step. Hand-fetching context pages or task bodies yourself is exactly the step that gets skipped under context pressure — never do it.
 - **ops**: Load project and task context through the sanctioned deterministic loader (a backend route, or a vendored script that wraps one) before any judgment step. Hand-fetching context pages or task bodies yourself is exactly the step that gets skipped under context pressure — never do it.
+- **Split**: Load project and task context through the sanctioned deterministic loader (a backend route, or a vendored script that wraps one) before any judgment step. Hand-fetching context pages or task bodies yourself is exactly the step that gets skipped under context pressure — never do it.
 
 ## The human is the gate
 
 - **Grooming**: Every state-changing decision — a status flip, a locked design decision, an applied operational change — waits for explicit human (operator) sign-off. Grooming proposes; it never self-authorizes the commit.
 - **Design Execution**: Every state-changing decision — a status flip, a locked design decision, an applied operational change — waits for explicit human (operator) sign-off. Design Execution proposes; it never self-authorizes the commit.
 - **ops**: Every state-changing decision — a status flip, a locked design decision, an applied operational change — waits for explicit human (operator) sign-off. ops proposes; it never self-authorizes the commit.
+- **Split**: Every state-changing decision — a status flip, a locked design decision, an applied operational change — waits for explicit human (operator) sign-off. Split proposes; it never self-authorizes the commit.
 
 ## No silent writes
 
 - **Grooming**: Every write (a Notion page edit, a status transition, a staged intent) is confirmed in chat before, or at the moment, it is made — never applied and reported after the fact.
 - **Design Execution**: Every write (a Notion page edit, a status transition, a staged intent) is confirmed in chat before, or at the moment, it is made — never applied and reported after the fact.
 - **ops**: Every write (a Notion page edit, a status transition, a staged intent) is confirmed in chat before, or at the moment, it is made — never applied and reported after the fact.
+- **Split**: Every write (a Notion page edit, a status transition, a staged intent) is confirmed in chat before, or at the moment, it is made — never applied and reported after the fact.
 
 ## Inspect the repo with `git -C`, never `cd && git`
 

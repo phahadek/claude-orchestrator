@@ -75,6 +75,7 @@ export const WORKFLOW_LOADERS: Record<PlanningWorkflow, string> = {
   groom: 'groom/groomLoad.ts#loadGroomContext',
   design: 'design/designLoad.ts#loadDesignContext',
   ops: 'ops/opsLoad.ts#loadOpsContext',
+  split: 'groom/groomLoad.ts#loadGroomContext',
 };
 
 // ─── per-type digest slices (Q3: a constrained section set, not the loader's
@@ -144,10 +145,22 @@ export interface OpsDigestSlice {
   journalEntry: OpsJournalEntry | null;
 }
 
+/**
+ * A dedicated split session needs exactly the same slice a grooming session
+ * does (the task's resolved regions + verbatim body) to decide the cut — see
+ * `split/splitSession.ts`'s ComposeSplitInput, which is built from that same
+ * information. Reuses `GroomDigestSlice`'s shape rather than re-deriving an
+ * identical one. Not exported: nothing outside this module needs the name —
+ * `OpsSessionLauncher` assembles a split digest via `deriveGroomDigestSlice`
+ * directly and wraps it as `{ workflow: 'split', data }`.
+ */
+type SplitDigestSlice = GroomDigestSlice;
+
 export type PlanningDigest =
   | { workflow: 'groom'; data: GroomDigestSlice }
   | { workflow: 'design'; data: DesignDigestSlice }
-  | { workflow: 'ops'; data: OpsDigestSlice };
+  | { workflow: 'ops'; data: OpsDigestSlice }
+  | { workflow: 'split'; data: SplitDigestSlice };
 
 const normId = normalizeBoardId;
 
@@ -284,6 +297,7 @@ const PLANNING_INTENT_KINDS: Record<PlanningWorkflow, readonly string[]> = {
     'session.requestCapability',
     'task.create',
   ],
+  split: ['task.updateBody', 'task.create', 'task.setDependsOn'],
 };
 
 /**
@@ -620,6 +634,19 @@ function renderSkeleton(
           'operator decision. Staging/requesting is what puts each decision in ' +
           'front of the operator; asking first inverts the flow and leaves them ' +
           'with nothing to act on.'
+        : '') +
+      (workflow === 'split'
+        ? ' A split decision stages exactly the `composeSplitIntents` shape under ' +
+          'one shared `groupId`: one `task.updateBody` narrowing the original task ' +
+          'to the ONE subset it keeps (its id is never changed — never archive or ' +
+          'defer it), one `task.create` per sibling subset (the N-1 subsets the ' +
+          'original does not keep, landing at 🔲 Backlog), and a `task.setDependsOn` ' +
+          'for any sibling that hard-blocks on another sibling or on the original. ' +
+          'Reference a not-yet-created sibling by its local ref as `$ref:<ref>` in ' +
+          "a `dependsOn` array; it resolves to that sibling's real task id once its " +
+          '`task.create` is applied. Every sibling (and the narrowed original) must ' +
+          'be independently gradeable against its own acceptance criteria — never ' +
+          'stage a cut that leaves an ambiguous or incomplete subset on either side.'
         : ''),
   ].join('\n');
 }
@@ -686,9 +713,12 @@ function renderExplorationDirective(orientation: GroomOrientation): string[] {
   return lines;
 }
 
-function renderGroomDigest(data: GroomDigestSlice): string {
+function renderGroomDigest(
+  data: GroomDigestSlice,
+  heading = '## Grooming Validation Slice',
+): string {
   const lines: string[] = [
-    '## Grooming Validation Slice',
+    heading,
     '',
     `- Task: ${data.task.title} (${data.task.type}, ${data.task.status}) — ${data.task.url}`,
     `- size_check seed: ${data.sizeCheckSeed.files} files affected (${data.sizeCheckSeed.loc_method})`,
@@ -785,6 +815,11 @@ function renderOpsDigest(data: OpsDigestSlice): string {
   return lines.join('\n');
 }
 
+/** Same slice/renderer as grooming's, under a heading that names it as the split candidate's slice. */
+function renderSplitDigest(data: SplitDigestSlice): string {
+  return renderGroomDigest(data, '## Split Candidate Slice');
+}
+
 function renderDigest(digest: PlanningDigest): string {
   switch (digest.workflow) {
     case 'groom':
@@ -793,6 +828,8 @@ function renderDigest(digest: PlanningDigest): string {
       return renderDesignDigest(digest.data);
     case 'ops':
       return renderOpsDigest(digest.data);
+    case 'split':
+      return renderSplitDigest(digest.data);
   }
 }
 
