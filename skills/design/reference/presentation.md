@@ -201,11 +201,18 @@ on _"ok"_-without-context, or on a substantive reply paraphrased into a lock.
 
 ### Recording the lock
 
-On explicit sign-off, write to `design-state.json` (the loader-seeded file) **with the
-Edit/Write tool** — Edit it for a single field, or Read + Write the whole file for a
-structural change. **Never** write-and-run a throwaway script (`node _q6lock.cjs` then
-`rm`) and never shell out (`cd … && …`, `echo >`): that route prompts for every token
-(`node`, `rm`, the chain) to do what the Edit tool does in one auto-approved call.
+On explicit sign-off — **immediately, before the next question** — write to
+`design-state.json` (the loader-seeded file) **with the Edit/Write tool**: Edit it for
+a single field, or Read + Write the whole file for a structural change. Deferring the
+write to finalization is a resume-safety anti-pattern (a crash loses every un-persisted
+lock — see `anti-patterns.md`). **Never** write-and-run a throwaway script (`node
+_q6lock.cjs` then `rm`) and never shell out (`cd … && …`, `echo >`): that route prompts
+for every token (`node`, `rm`, the chain) to do what the Edit tool does in one
+auto-approved call.
+
+**After each edit, re-read the file to confirm it is still valid JSON.** A bad edit
+once corrupted `design-state.json`; a quick re-read catches it before the next lock
+compounds the damage.
 
 ```json
 "<task-id>": {
@@ -224,10 +231,32 @@ structural change. **Never** write-and-run a throwaway script (`node _q6lock.cjs
 
 Confirm in chat _"Locked: <one-liner>"_ before moving to the next question.
 
-### After every question is locked
+### After every question is locked — completeness-critic first
 
-Compose the **Implementation notes draft** in chat — do not write to Notion
-yet. Show:
+**Before you compose the Implementation notes, run the completeness-critic pass**
+(SKILL.md Step 3) — this is a hard checkpoint, not an optional polish step. Ask
+_"what would an implementer of this locked spec hit that no open question owns?"_
+and probe the recurring gap classes: durability / failure modes, dual-read /
+consumer-set gaps, interaction bugs with existing components, missing scaffolding
+(loader / trigger / deploy / config-seed), **state-mutation granularity**
+(granularity + atomicity + partial-failure on any write / apply / supersede),
+unstated premises. Present the findings
+and your proposed **disposition per gap** — fold (reopen a question) / note (record
+in Impl notes) / file-sibling (new 📐 Design task at Backlog) / sibling-owned — and
+get the human's sign-off. Run it **even when the task feels complete**; that's when
+the surprises surface. The orchestrator's advisory **trace-coverage** signal
+(`POST /api/design/:taskId/trace-coverage`) feeds this pass as an **aid, never a gate**;
+record each candidate's disposition in the durable **completeness-disposition store**
+(`POST /api/design/:taskId/completeness-disposition` — `{question, disposition:
+accepted|dismissed, reason}`), never as body prose and never silently.
+
+### Then compose the Implementation notes draft
+
+**This in-chat draft is a hard checkpoint — never fold the decision summary straight
+into the `notion-update-page` call.** The drift to guard against: skipping the draft
+and composing the summary directly into the Notion write, so the human never sees the
+closing synthesis before it lands in the task body. Draft it in chat, show it, get the
+_yes_, then write. Do not write to Notion yet. Show:
 
 1. **Decision summary** (one paragraph).
 2. **Open questions resolved** table (only if ≥2 questions; mirror the
@@ -237,13 +266,15 @@ yet. Show:
    | ----------------- | --------------- |
    | <1-line question> | <1-line answer> |
 
-3. **Notion pages updated** (filled in as Step 3.4 progresses, or marked
+3. **Completeness-critic dispositions** (the gaps found + how each was disposed, or
+   _"none — pass run, no gaps"_).
+4. **Notion pages updated** (filled in as Step 3.5 progresses, or marked
    _"pending — see next messages"_).
-4. **Follow-on tasks filed** (same, or _"pending"_).
+5. **Follow-on tasks filed** (same, or _"pending"_).
 
 Ask: _"This is the Implementation notes draft. Apply it, then move on to the
 page edits / follow-on tasks?"_
 
-The human's _yes_ unblocks Step 3.4 and 3.5; the actual write to the Design
+The human's _yes_ unblocks Step 3.5 and 3.6; the actual write to the Design
 task body happens last, after pages and tasks are in place (so the task body
 references the real new Notion IDs, not placeholders).
