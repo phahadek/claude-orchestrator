@@ -404,7 +404,7 @@ describe('assemblePlanningProcedure', () => {
     expect(designOutput).not.toContain('groomProposal');
   });
 
-  it('carries the completeness critic (gap-class probing + disposition-don\'t-drop) and split-don\'t-trim / one-question-at-a-time guidance for design, and never for groom/ops', () => {
+  it("carries the completeness critic (gap-class probing + disposition-don't-drop) and split-don't-trim / one-question-at-a-time guidance for design, and never for groom/ops", () => {
     const designOutput = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',

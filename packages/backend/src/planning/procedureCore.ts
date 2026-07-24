@@ -198,8 +198,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   },
   {
     id: 'design-completeness-critic',
-    title:
-      'Completeness critic — once per task, before Implementation notes',
+    title: 'Completeness critic — once per task, before Implementation notes',
     appliesTo: ['design'],
     text:
       'DO run the completeness critic exactly once per Design task, after every ' +
@@ -452,7 +451,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'synchronous chat turn to wait within — ' +
         'the staged intent is the confirmation surface, and the operator (not this ' +
         "session) disposes it. DO NOT batch multiple questions' resolutions into " +
-        "one pass.",
+        'one pass.',
     },
   },
   {
