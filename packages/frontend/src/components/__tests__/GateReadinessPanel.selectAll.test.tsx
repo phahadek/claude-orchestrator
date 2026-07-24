@@ -7,7 +7,9 @@ const gateApiMock = vi.hoisted(() => ({
   listGateItems: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1 }),
   getGateItemDetail: vi.fn(),
   getVerifySessions: vi.fn().mockResolvedValue([]),
-  dispatchVerification: vi.fn().mockResolvedValue({ dispatched: [], skipped: [] }),
+  dispatchVerification: vi
+    .fn()
+    .mockResolvedValue({ dispatched: [], skipped: [] }),
 }));
 vi.mock('../../api/gate', () => ({ gateApi: gateApiMock }));
 
@@ -131,7 +133,11 @@ describe('GateReadinessPanel — Select All / Clear', () => {
   });
 
   it('disables Select All when the filtered list is empty and Clear when nothing is selected', async () => {
-    gateApiMock.listGateItems.mockResolvedValue({ items: [], total: 0, page: 1 });
+    gateApiMock.listGateItems.mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+    });
     render(<GateReadinessPanel activeProjectId="proj-1" />);
 
     await waitFor(() => {
