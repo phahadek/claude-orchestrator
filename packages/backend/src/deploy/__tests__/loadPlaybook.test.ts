@@ -213,6 +213,44 @@ steps:
     expect(result.ok).toBe(true);
   });
 
+  it('accepts the real rsync -a sync-runtime command despite the bare short flag', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-deploy-playbook.yml'),
+      `
+steps:
+  - id: sync-runtime
+    kind: shell
+    command_or_prompt: "rsync -a --delete --exclude='.git/' --exclude='.claude/' --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' --exclude='.env' ./ /srv/orchestrator/runtime/"
+    is_prod_mutating: true
+`,
+    );
+
+    const result = loadDeployPlaybook(tmpDir);
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts short flags, path segments, and flag values that merely contain a stopword substring', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-deploy-playbook.yml'),
+      `
+steps:
+  - id: archive
+    kind: shell
+    command_or_prompt: "tar -an -f /srv/into/the/archive.tar --exclude=the ./dist/"
+    is_prod_mutating: false
+`,
+    );
+
+    const result = loadDeployPlaybook(tmpDir);
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts the full current .claude-deploy-playbook.yml from this repo checkout', () => {
+    const repoRoot = path.resolve(__dirname, '../../../../..');
+    const result = loadDeployPlaybook(repoRoot);
+    expect(result.ok).toBe(true);
+  });
+
   it('accepts a natural-language prompt for an agentic step', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.claude-deploy-playbook.yml'),
