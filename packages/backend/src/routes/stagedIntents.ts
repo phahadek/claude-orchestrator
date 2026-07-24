@@ -123,6 +123,29 @@ function hasGroupDependsOn(groupId: string, taskId: string): boolean {
 }
 
 /**
+ * True when the group already stages a live gate.accrete/seed.stage intent
+ * for this task — group-commit ordering (`ordered` in commitGroupIntents)
+ * always applies it, for real, before the arming task.setStatus -> Ready
+ * intent, so its durable marker will exist by the time the real
+ * TaskWriteCommands.setStatus gate check runs. Used only to skip the
+ * corresponding accretion check ahead of that real application (in
+ * runStageTimeReadyChecks / precheckGroupCommit) — the real check always
+ * still runs, against the real marker, once the group's non-arming intents
+ * have actually applied.
+ */
+function hasGroupAccretionIntent(
+  groupId: string,
+  taskId: string,
+  kind: 'gate.accrete' | 'seed.stage',
+): boolean {
+  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
+  return listStagedIntentsByGroup(groupId).some((row) => {
+    if (row.kind !== kind || !ACTIVE.includes(row.state)) return false;
+    return extractTaskId(row.kind, JSON.parse(row.payload)) === taskId;
+  });
+}
+
+/**
  * The general staged-intent surface: a single chokepoint producers (Groom(N),
  * Ops(N), and future callers) stage generic { kind, payload } intents through,
  * and a human applies or rejects. Apply always dispatches through
@@ -894,6 +917,20 @@ export async function runStageTimeReadyChecks(
     payload.groomingGate ?? {},
     payload.taskId,
     resolvedType,
+    intent.groupId
+      ? {
+          skipGateContributionCheck: hasGroupAccretionIntent(
+            intent.groupId,
+            payload.taskId,
+            'gate.accrete',
+          ),
+          skipSeedContributionCheck: hasGroupAccretionIntent(
+            intent.groupId,
+            payload.taskId,
+            'seed.stage',
+          ),
+        }
+      : undefined,
   );
   if (!gateResult.allowed) {
     setStagedIntentAnnotation(
@@ -994,6 +1031,18 @@ async function precheckGroupCommit(
       payload.groomingGate ?? {},
       payload.taskId,
       getCachedType(payload.taskId) ?? payload.groomingGate?.type,
+      {
+        skipGateContributionCheck: hasGroupAccretionIntent(
+          groupId,
+          payload.taskId,
+          'gate.accrete',
+        ),
+        skipSeedContributionCheck: hasGroupAccretionIntent(
+          groupId,
+          payload.taskId,
+          'seed.stage',
+        ),
+      },
     );
     if (!gateResult.allowed) {
       setStagedIntentAnnotation(

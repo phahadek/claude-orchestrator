@@ -147,6 +147,22 @@ export interface GroomingGateResult {
   reasons: string[];
 }
 
+/**
+ * Lets a caller that already knows a matching gate.accrete/seed.stage intent
+ * will apply for real (same task, same intent group, ordered ahead of the
+ * arming task.setStatus -> Ready — see stagedIntents.ts's group-commit
+ * ordering) skip re-deriving that specific durable-marker check ahead of
+ * time. This never substitutes a durable marker for the check: the real
+ * commit-time call (TaskWriteCommands.setStatus, reached only after the
+ * group's gate.accrete/seed.stage intents have actually applied and written
+ * their markers) is always made without these flags, so the marker remains
+ * the sole source of truth for whether the flip is actually allowed to land.
+ */
+export interface AccretionCheckOptions {
+  skipGateContributionCheck?: boolean;
+  skipSeedContributionCheck?: boolean;
+}
+
 function isSizeCheckClassified(entry: GroomingGateEntry): boolean {
   const sc = entry.size_check;
   return (
@@ -395,6 +411,7 @@ export function checkGroomingPromotionGate(
   entry: GroomingGateEntry,
   taskId: string,
   authoritativeType?: string,
+  accretionOpts?: AccretionCheckOptions,
 ): GroomingGateResult {
   const reasons: string[] = [];
   const resolvedType = authoritativeType ?? entry.type;
@@ -415,7 +432,8 @@ export function checkGroomingPromotionGate(
   }
 
   reasons.push(
-    ...checkAccretionContributions(entry, taskId, resolvedType).reasons,
+    ...checkAccretionContributions(entry, taskId, resolvedType, accretionOpts)
+      .reasons,
   );
 
   reasons.push(
@@ -444,11 +462,15 @@ export function checkAccretionContributions(
   entry: GroomingGateEntry,
   taskId: string,
   authoritativeType?: string,
+  opts?: AccretionCheckOptions,
 ): GroomingGateResult {
   const reasons: string[] = [];
   const resolvedType = authoritativeType ?? entry.type;
 
-  if (!isGateContributionRecorded(resolvedType, taskId)) {
+  if (
+    !opts?.skipGateContributionCheck &&
+    !isGateContributionRecorded(resolvedType, taskId)
+  ) {
     reasons.push(
       'gate_contribution is not recorded — for 💻 Code tasks, accreteGateContribution ' +
         'must record a gate_accretion marker (items appended to the milestone gate, or an explicit ' +
@@ -456,7 +478,10 @@ export function checkAccretionContributions(
     );
   }
 
-  if (!isSeedContributionRecorded(resolvedType, taskId)) {
+  if (
+    !opts?.skipSeedContributionCheck &&
+    !isSeedContributionRecorded(resolvedType, taskId)
+  ) {
     reasons.push(
       'seed_contribution is not recorded — for 💻 Code tasks, stageSeedContribution ' +
         'must record a seed_accretion marker (config-change seeds minted onto the milestone seed store, ' +
