@@ -240,7 +240,8 @@ function formatGroupDispositionMessage(
   reason?: string | null,
 ): string {
   const list = intents.map((i) => `${i.id} (${i.kind})`).join(', ');
-  const verb = disposition === 'decline' ? 'declined' : 'sent back for revision';
+  const verb =
+    disposition === 'decline' ? 'declined' : 'sent back for revision';
   const label = disposition === 'decline' ? 'Reason' : 'Feedback';
   return (
     `Staged intent group ${groupId} (${intents.length} intent${intents.length === 1 ? '' : 's'}: ${list}) ` +

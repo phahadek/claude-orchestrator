@@ -228,9 +228,7 @@ describe('POST /api/staged-intents/group/:groupId/reject — coalesced feedback'
       .send({ outcome: 'pushback', reason: 'revise the whole group' });
 
     expect(res.status).toBe(200);
-    expect(res.body.rejected.sort()).toEqual(
-      intents.map((i) => i.id).sort(),
-    );
+    expect(res.body.rejected.sort()).toEqual(intents.map((i) => i.id).sort());
     intents.forEach((intent) => {
       expect(getStagedIntent(intent.id)!.state).toBe('rejected');
     });
