@@ -160,6 +160,29 @@ sometimes inexactly:
 
 ---
 
+## Applying via `notion-update-page` — `update_content` mechanics
+
+The diff is approved; applying it exactly is its own small minefield. Two rules
+from real edits:
+
+- **Replace multiple consecutive blocks with one `content_updates` entry _per
+  block_ — never a newline-joined multi-paragraph `old_str`.** Notion serializes
+  each paragraph (and each list item, heading, table row) as a **separate block**;
+  an `old_str` that joins several of them with `\n` / `\n\n` matches nothing and the
+  call fails. Split the replacement into one search/replace per block. (A
+  whole-section rewrite is likewise cleaner as `insert_content` of the new section
+  plus per-block deletes than as one giant `old_str`.)
+- **Anchor on a heading, not on prose.** Matching or prepending relative to a
+  stable heading (`## Write Authority…`) is far more reliable than anchoring on a
+  prose line with em-dashes, italics, inline code, or bare domains — Notion
+  re-serializes those (bare domains auto-linkify, quotes may curl, `~` escapes), so
+  an exact-match `old_str` copied from the markdown export silently fails. When a
+  match fails, either move the anchor to the nearest heading, or re-fetch the page
+  via MCP and copy the exact _serialized_ text. (The design-skill instance of the
+  `update_content` serialization caveat in `procedures.md` § Notion access.)
+
+---
+
 ## What never to do
 
 - **Apply without showing the diff.** Even if the human earlier said _"just
