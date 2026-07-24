@@ -7,9 +7,8 @@ vi.mock('../../db/db', async () => {
   return { db: setupTestDb() };
 });
 
-const { composeSplitIntents, stageSplitIntents, ORIGINAL_REF } = await import(
-  '../splitSession'
-);
+const { composeSplitIntents, stageSplitIntents, ORIGINAL_REF } =
+  await import('../splitSession');
 const { db } = await import('../../db/db');
 
 beforeEach(() => {

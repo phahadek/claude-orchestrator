@@ -477,7 +477,9 @@ export class SessionManager extends EventEmitter {
   private sessions = new Map<string, AgentSession>();
   private pendingStarts = new Map<
     string,
-    { sessionType: 'standard' | 'review' | 'groom' | 'design' | 'ops' | 'split' }
+    {
+      sessionType: 'standard' | 'review' | 'groom' | 'design' | 'ops' | 'split';
+    }
   >();
   /** Concurrency guard: prevents double-spawning when two concurrent sendOrResume calls race. */
   private resumesInFlight = new Map<string, Promise<string | null>>();

@@ -194,8 +194,7 @@ export function createGroomFlipRouter(
           res.status(404).json({ error: `unknown project ${project}` });
           return;
         }
-        const taskUrl =
-          typeof body.taskUrl === 'string' ? body.taskUrl : '';
+        const taskUrl = typeof body.taskUrl === 'string' ? body.taskUrl : '';
         const launch = await opsSessionLauncher.launchSelected({
           projectId: project,
           projectContextUrl: projectRow.context_url ?? '',

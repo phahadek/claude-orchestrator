@@ -42,7 +42,12 @@ export function setOpsSessionLauncherRefreshFn(
  * Session types dispatched by this launcher — see planningLaunch.ts's
  * workflow -> sessionType resolution.
  */
-export type PlanningSessionType = 'groom' | 'design' | 'ops' | 'split' | 'standard';
+export type PlanningSessionType =
+  | 'groom'
+  | 'design'
+  | 'ops'
+  | 'split'
+  | 'standard';
 
 /**
  * Minimal per-task shape this launcher needs to dispatch a session.

@@ -372,7 +372,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'the original does not keep, landing at 🔲 Backlog), and a ' +
         '`task.setDependsOn` for any sibling that hard-blocks on another sibling or ' +
         'on the original — all under one shared `groupId`. Reference a ' +
-        "not-yet-created sibling by its local ref as `$ref:<ref>`; it resolves to " +
+        'not-yet-created sibling by its local ref as `$ref:<ref>`; it resolves to ' +
         "that sibling's real task id once its `task.create` is applied. Every " +
         'sibling (and the narrowed original) must be independently gradeable ' +
         'against its own acceptance criteria — never stage a cut that leaves an ' +

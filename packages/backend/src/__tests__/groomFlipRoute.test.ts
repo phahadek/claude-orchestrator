@@ -230,7 +230,10 @@ describe('POST /api/groom/flip — split_now routing', () => {
         milestoneId: 'M12',
         sessionType: 'split',
         tasks: [
-          expect.objectContaining({ id: 'notion:abc', title: 'Add the webhook' }),
+          expect.objectContaining({
+            id: 'notion:abc',
+            title: 'Add the webhook',
+          }),
         ],
       }),
     );
@@ -262,7 +265,9 @@ describe('POST /api/groom/flip — split_now routing', () => {
   });
 
   it('400s when sizeCheckSeed is missing for a split_now nomination', async () => {
-    const res = await request(makeApp()).post('/api/groom/flip').send(splitBody);
+    const res = await request(makeApp())
+      .post('/api/groom/flip')
+      .send(splitBody);
 
     expect(res.status).toBe(400);
     expect(mockLaunchSelected).not.toHaveBeenCalled();
