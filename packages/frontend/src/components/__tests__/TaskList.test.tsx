@@ -2074,9 +2074,7 @@ describe('TaskList', () => {
     it('renders exactly one Select All and one Clear control in the NON-CODE panel', () => {
       renderMixedNonCode();
       const nonCodeSection = screen.getByTestId('non-code-section');
-      expect(
-        within(nonCodeSection).getAllByText('Select All').length,
-      ).toBe(1);
+      expect(within(nonCodeSection).getAllByText('Select All').length).toBe(1);
       expect(within(nonCodeSection).getAllByText('Clear').length).toBe(1);
     });
 

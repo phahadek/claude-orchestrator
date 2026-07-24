@@ -909,7 +909,8 @@ export function TaskList({
             <div className={styles.sectionHeading}>
               <span className={styles.groupLabel}>📋 Non-code</span>
               <span className={styles.groupCount}>{nonCodeNotDone.length}</span>
-              {(opsEligibleTasks.length > 0 || designEligibleTasks.length > 0) && (
+              {(opsEligibleTasks.length > 0 ||
+                designEligibleTasks.length > 0) && (
                 <div className={styles.launchControls}>
                   <button
                     className={styles.selectAllBtn}
