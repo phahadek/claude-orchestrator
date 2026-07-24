@@ -45,7 +45,13 @@ describe('renderProjectRecordAccess', () => {
 
   function writeGuide(content: string) {
     writeFileSync(
-      join(reposDir, 'config', 'projects', basename(repoDir), 'investigation-guide.md'),
+      join(
+        reposDir,
+        'config',
+        'projects',
+        basename(repoDir),
+        'investigation-guide.md',
+      ),
       content,
     );
   }
@@ -101,7 +107,9 @@ describe('renderProjectRecordAccess', () => {
     writeGuide('Keyed by config-dir, not by registry id.');
 
     const lines = renderProjectRecordAccess('ops', 'claude-dashboard');
-    expect(lines.join('\n')).toContain('Keyed by config-dir, not by registry id.');
+    expect(lines.join('\n')).toContain(
+      'Keyed by config-dir, not by registry id.',
+    );
   });
 
   it('falls back to no section (never throws) for an unknown project', () => {
