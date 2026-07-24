@@ -48,6 +48,10 @@ import {
   stepSummaryFor,
   type SkillId,
 } from './procedureCore';
+import { existsSync, readFileSync } from 'fs';
+import { basename, join } from 'path';
+import { getProjectById } from '../config';
+import { resolveConfigDir } from '../groom/groomLoad';
 import type { GroomLoadResult } from '../groom/groomLoad';
 import type { TaskRegions } from '../groom/codeWorklist';
 import type { TaskDependencyCandidates } from '../orchestration/milestoneDependencyGraph';
@@ -395,6 +399,75 @@ export function renderOpsCapabilities(): string[] {
   ];
 }
 
+const PROJECT_RECORD_ACCESS_GUIDE_FILE = 'investigation-guide.md';
+
+/**
+ * Resolve the registry projectId (e.g. `claude-dashboard`) to the central
+ * config tree's per-project guide artifact path. The assembler is keyed by
+ * the registry projectId, but the config tree is keyed by config-dir (the
+ * repo directory's basename) — the same `basename(repoRoot)` key
+ * `groomLoad.ts`/`designLoad.ts` resolve `config/projects/<key>/` with.
+ * Returns null (never throws) for an unknown project, a project with no
+ * `projectDir`, or a repo with no reachable central config tree.
+ */
+function resolveProjectRecordAccessGuidePath(projectId: string): string | null {
+  try {
+    const project = getProjectById(projectId);
+    if (!project?.projectDir) return null;
+    const configDir = resolveConfigDir(project.projectDir);
+    if (!configDir) return null;
+    return join(
+      configDir,
+      'projects',
+      basename(project.projectDir),
+      PROJECT_RECORD_ACCESS_GUIDE_FILE,
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Render this project's operational-record-access guide: a per-project
+ * artifact authored in the central config tree that tells a dispatched
+ * session what THIS project's operational record is (its audit surface,
+ * live-data MCP tools, dashboards, etc.) and how to reach it from inside
+ * its sandbox. This supplies the project-specific surface + access method
+ * only — the generic grant-request mechanics (`renderOpsCapabilities`,
+ * e.g. `session.requestCapability` / `read:session-record:*`) stay as-is
+ * and this section should reference them rather than restate them.
+ *
+ * Rendered only for investigation-bearing session kinds — `ops` (including
+ * gate-verify, which dispatches as an `ops`-typed session, see
+ * `gate/gateItemVerifier.ts`) and `design`. Never for `groom`.
+ *
+ * Guidance, not enforcement: the guide is prose read from the config tree.
+ * It never changes which read tools/MCP servers/capabilities this session
+ * actually holds — that stays orchestrator-owned (`OrchestratorConfig`'s
+ * `mcp_servers`/`allowed_tools` plus the grant system).
+ *
+ * A project with no guide artifact (or an unresolvable config tree/project)
+ * renders no section at all — the caller's existing `renderOpsCapabilities`
+ * fallback (generic own-record `read:session-record` mechanics) still
+ * applies. Never throws.
+ */
+export function renderProjectRecordAccess(
+  workflow: PlanningWorkflow,
+  projectId: string,
+): string[] {
+  if (workflow !== 'ops' && workflow !== 'design') return [];
+  const guidePath = resolveProjectRecordAccessGuidePath(projectId);
+  if (!guidePath || !existsSync(guidePath)) return [];
+  let guide: string;
+  try {
+    guide = readFileSync(guidePath, 'utf8').trim();
+  } catch {
+    return [];
+  }
+  if (!guide) return [];
+  return ["## This Project's Operational Record", '', guide, ''];
+}
+
 function renderSkeleton(
   workflow: PlanningWorkflow,
   taskName: string,
@@ -431,6 +504,7 @@ function renderSkeleton(
     '',
     lifecycle,
     '',
+    ...renderProjectRecordAccess(workflow, projectId),
     ...(workflow === 'ops' ? renderOpsCapabilities() : []),
     '## Transport',
     '',

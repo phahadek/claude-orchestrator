@@ -3,7 +3,10 @@ import { getProjectById } from '../config';
 import { getSession, markSessionDone } from '../db/queries';
 import type { SessionManager } from '../session/SessionManager';
 import type { GateVerifyDispositionPayload } from '../session/AgentSession';
-import { renderOpsCapabilities } from '../planning/procedureAssembler';
+import {
+  renderOpsCapabilities,
+  renderProjectRecordAccess,
+} from '../planning/procedureAssembler';
 import type { GateItem } from './gateStore';
 import type {
   GateItemVerifier,
@@ -56,6 +59,7 @@ function buildGateVerifyProcedure(item: GateItem): string {
     `- classification: ${item.classification}`,
     `- text: ${item.text}`,
     '',
+    ...renderProjectRecordAccess('ops', item.project),
     ...renderOpsCapabilities(),
     '### Procedure',
     '',
