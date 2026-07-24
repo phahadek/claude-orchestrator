@@ -677,10 +677,14 @@ describe('assemblePlanningProcedure', () => {
       });
 
       if (workflow === 'groom' || workflow === 'design') {
-        expect(output).toMatch(/defer.*not.*resolve|is a _?defer_?, not a _?resolve_?/i);
+        expect(output).toMatch(
+          /defer.*not.*resolve|is a _?defer_?, not a _?resolve_?/i,
+        );
         // the canonical deferral-phrase list (readinessGate.ts / task-writing.md)
         expect(output).toMatch(/decide at implementation time/i);
-        expect(output).toMatch(/leave it to the implementer|implementer's call/i);
+        expect(output).toMatch(
+          /leave it to the implementer|implementer's call/i,
+        );
       } else {
         expect(output).not.toMatch(/is a _?defer_?, not a _?resolve_?/i);
       }

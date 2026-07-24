@@ -163,7 +163,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'that launders a defer into a resolution. A task carrying that language is not ' +
       'Ready; either resolve the question now or leave it open and keep the task at ' +
       '🔲 Backlog. (📋 Planning and 📐 Design tasks are exempt from this check on their ' +
-      'own open-question-space — see `readinessGate.ts`\'s ' +
+      "own open-question-space — see `readinessGate.ts`'s " +
       '`OPEN_QUESTIONS_EXEMPT_TYPES` — because for those types the open questions ' +
       'are the deliverable being scoped, not a precondition being dodged.)',
   },
