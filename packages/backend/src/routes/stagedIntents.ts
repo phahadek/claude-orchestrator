@@ -778,13 +778,17 @@ async function applyIntent(
  * route (the new atomic group-disposition surface), so both dispose through
  * the exact same transition + audit + notify path.
  */
-async function rejectStagedIntentRow(
+/**
+ * Transitions one staged intent row to `rejected` and records the audit
+ * trail — the state-mutation half of a reject, with no session notification.
+ * Split out so the group-reject route can apply this per row while sending a
+ * single coalesced notification for the whole group, instead of one per row.
+ */
+function transitionRejectedIntent(
   row: StagedIntentRow,
   outcome: StagedIntentRejectOutcome,
   reason: string,
-  sessionManager: SessionManager | undefined,
-  planningOrchestrator: PlanningOrchestrator | undefined,
-): Promise<StagedIntent> {
+): { intent: StagedIntent; row: StagedIntentRow } {
   const rejected = transitionStagedIntent(row.id, 'rejected', {
     dispositionReason: reason,
   });
@@ -799,6 +803,22 @@ async function rejectStagedIntentRow(
     task_id: row.task_id,
     payload: { intentId: row.id, disposition: outcome, reason },
   });
+
+  return { intent: rejectedIntent, row: rejected };
+}
+
+async function rejectStagedIntentRow(
+  row: StagedIntentRow,
+  outcome: StagedIntentRejectOutcome,
+  reason: string,
+  sessionManager: SessionManager | undefined,
+  planningOrchestrator: PlanningOrchestrator | undefined,
+): Promise<StagedIntent> {
+  const { intent: rejectedIntent, row: rejected } = transitionRejectedIntent(
+    row,
+    outcome,
+    reason,
+  );
 
   if (rejectedIntent.kind === 'session.requestCapability') {
     await resumeCapabilityRequester(
@@ -1715,15 +1735,30 @@ export function createStagedIntentsRouter(
       }
 
       const rejected: string[] = [];
+      const forGroupDisposition: StagedIntentRow[] = [];
       for (const row of live) {
-        const rejectedIntent = await rejectStagedIntentRow(
-          row,
-          outcome,
-          reason,
-          sessionManager,
-          planningOrchestrator,
-        );
+        const { intent: rejectedIntent, row: rejectedRow } =
+          transitionRejectedIntent(row, outcome, reason);
         rejected.push(rejectedIntent.id);
+
+        if (rejectedIntent.kind === 'session.requestCapability') {
+          await resumeCapabilityRequester(
+            sessionManager,
+            rejectedIntent,
+            outcome,
+            reason,
+          );
+        } else {
+          forGroupDisposition.push(rejectedRow);
+        }
+      }
+      if (forGroupDisposition.length > 0) {
+        await planningOrchestrator?.handleGroupDisposition({
+          intents: forGroupDisposition,
+          disposition: outcome,
+          reason,
+          groupId,
+        });
       }
       res.json({ ok: true, rejected });
     },
