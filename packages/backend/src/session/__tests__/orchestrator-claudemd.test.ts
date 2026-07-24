@@ -107,7 +107,7 @@ describe('buildOrchestratorClaudeMd', () => {
     it('documents the review.disposition tool and the three disposition values', () => {
       const output = buildOrchestratorClaudeMd(BASE_PARAMS);
       expect(output).toContain('## Responding to Review Comments');
-      expect(output).toContain('mcp__orchestrator__review.disposition');
+      expect(output).toContain('mcp__orchestrator__review_disposition');
       expect(output).toContain('comment_id');
       expect(output).toContain('disposition');
       expect(output).toContain('"addressed"');
@@ -141,7 +141,7 @@ describe('assembled session instructions include the review.disposition MCP tool
     // the `buildSessionContext` call inside the non-planning/non-review branch).
     const output = buildSessionContext(contextParams);
     expect(output).toContain('## Responding to Review Comments');
-    expect(output).toContain('mcp__orchestrator__review.disposition');
+    expect(output).toContain('mcp__orchestrator__review_disposition');
   });
 
   it('resume-rebuild path (buildSessionContext rebuilt from a persisted session row)', () => {
@@ -154,6 +154,6 @@ describe('assembled session instructions include the review.disposition MCP tool
       taskContent: 'pre-fetched task spec markdown',
     });
     expect(output).toContain('## Responding to Review Comments');
-    expect(output).toContain('mcp__orchestrator__review.disposition');
+    expect(output).toContain('mcp__orchestrator__review_disposition');
   });
 });
