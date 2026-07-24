@@ -531,9 +531,20 @@ export interface SeedItemEventRow {
 
 // ─── staged_intent ────────────────────────────────────────────────────────
 
-/** Per-intent lifecycle: staged -> approved -> committed | rejected | superseded. */
+/**
+ * Per-intent lifecycle: staged -> approved -> committed | rejected | superseded.
+ * `pending_verification` and `needs_revision` gate a dispatched session's
+ * proposal group between turn-end and operator visibility (see
+ * verifyDispatchedGroupsForSession in routes/stagedIntents.ts): a group's
+ * `staged` members move to `pending_verification` while the group-level
+ * verify pass runs, then either back to `staged` (clean) or to
+ * `needs_revision` (blocked, and not yet escalated to the operator) — both
+ * transient states are excluded from the operator-facing surface.
+ */
 export type StagedIntentState =
   | 'staged'
+  | 'pending_verification'
+  | 'needs_revision'
   | 'approved'
   | 'committed'
   | 'rejected'

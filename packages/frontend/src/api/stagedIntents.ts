@@ -36,6 +36,8 @@ export interface GroomProposalFields {
 
 type StagedIntentState =
   | 'staged'
+  | 'pending_verification'
+  | 'needs_revision'
   | 'approved'
   | 'committed'
   | 'rejected'
