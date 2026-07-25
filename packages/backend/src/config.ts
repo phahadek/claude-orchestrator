@@ -2,6 +2,7 @@ import { getSecret } from './security/secrets';
 import { getOrchestratorConfig } from './config/appConfig';
 import type { NonMilestoneSourceConfig } from './tasks/TaskBackend';
 import { orchestratorMcpToolName } from './mcp/toolNaming';
+import { PLANNING_INTENT_KINDS } from './planning/planningIntentKinds';
 
 interface Board {
   /** Milestone row id — used as the milestoneId for WS fetch_tasks. */
@@ -192,43 +193,33 @@ const NOTION_READ_MCP_TOOLS = [
 // credential gets this (see mcp/orchestratorMcpServer.ts).
 const ORCHESTRATOR_MCP_HEALTH_TOOL = orchestratorMcpToolName('health');
 
-// Orchestrator MCP stage-proposal tools, one per staged-intent kind a groom
-// session is allowed to stage (mirrors procedureAssembler.ts's
-// PLANNING_INTENT_KINDS.groom — kept in sync manually, asserted by
-// config.test.ts). Supersedes the retired 'Bash(node:*)' + stage-task-intent.mjs.
+// Orchestrator MCP stage-proposal tools, one per staged-intent kind each
+// planning workflow is allowed to stage — derived directly from
+// PLANNING_INTENT_KINDS (planning/planningIntentKinds.ts), the single source
+// of truth shared with procedureAssembler.ts's injected prompt, so this
+// allow-list and the prompt's "DO stage as a `<kind>` intent" instructions
+// cannot drift apart (see planningIntentKindsParity.test.ts for the guard).
+// Supersedes the retired 'Bash(node:*)' + stage-task-intent.mjs.
 const GROOM_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
-  orchestratorMcpToolName('task.setStatus'),
-  orchestratorMcpToolName('task.setProperties'),
-  orchestratorMcpToolName('task.setDependsOn'),
-  orchestratorMcpToolName('gate.accrete'),
-  orchestratorMcpToolName('seed.stage'),
-  orchestratorMcpToolName('task.create'),
+  ...PLANNING_INTENT_KINDS.groom.map(orchestratorMcpToolName),
 ];
 
-// Orchestrator MCP stage-proposal tools a design session is allowed to stage
-// (mirrors procedureAssembler.ts's PLANNING_INTENT_KINDS.design).
 const DESIGN_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
-  orchestratorMcpToolName('task.updateBody'),
-  orchestratorMcpToolName('task.setProperties'),
-  orchestratorMcpToolName('task.setStatus'),
-  orchestratorMcpToolName('seed.stage'),
-  orchestratorMcpToolName('task.create'),
+  ...PLANNING_INTENT_KINDS.design.map(orchestratorMcpToolName),
 ];
 
-// Orchestrator MCP stage-proposal tools an ops session is allowed to stage
-// (mirrors procedureAssembler.ts's PLANNING_INTENT_KINDS.ops), plus
-// gate.verify — a gate-item-verification session is sessionType 'ops' (see
-// sessionPredicates.ts#isGateVerifySession) and reports its finding through
-// this same verdict-delivery tool (mcp/tools/verdictTools.ts), replacing the
-// retired stdout-scraped `gate_verify` JSON block.
+// Plus gate.verify — a gate-item-verification session is sessionType 'ops'
+// (see sessionPredicates.ts#isGateVerifySession) and reports its finding
+// through this same verdict-delivery tool (mcp/tools/verdictTools.ts),
+// replacing the retired stdout-scraped `gate_verify` JSON block. gate.verify
+// is not a staged-intent kind (it's a direct verdict call, not something a
+// procedure stages), so it isn't in PLANNING_INTENT_KINDS.ops — it's added
+// here explicitly instead.
 const OPS_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
-  orchestratorMcpToolName('journal.setState'),
-  orchestratorMcpToolName('task.setStatus'),
-  orchestratorMcpToolName('session.requestCapability'),
-  orchestratorMcpToolName('task.create'),
+  ...PLANNING_INTENT_KINDS.ops.map(orchestratorMcpToolName),
   orchestratorMcpToolName('gate.verify'),
 ];
 
