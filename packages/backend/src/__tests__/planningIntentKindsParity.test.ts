@@ -20,7 +20,11 @@ const WORKFLOWS: {
   extraNonStagedTools: string[];
 }[] = [
   { name: 'groom', allowedTools: GROOM_ALLOWED_TOOLS, extraNonStagedTools: [] },
-  { name: 'design', allowedTools: DESIGN_ALLOWED_TOOLS, extraNonStagedTools: [] },
+  {
+    name: 'design',
+    allowedTools: DESIGN_ALLOWED_TOOLS,
+    extraNonStagedTools: [],
+  },
   {
     name: 'ops',
     allowedTools: OPS_ALLOWED_TOOLS,

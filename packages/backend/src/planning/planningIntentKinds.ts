@@ -13,7 +13,10 @@ import type { SkillId } from './procedureCore';
 
 export type PlanningWorkflow = SkillId;
 
-export const PLANNING_INTENT_KINDS: Record<PlanningWorkflow, readonly string[]> = {
+export const PLANNING_INTENT_KINDS: Record<
+  PlanningWorkflow,
+  readonly string[]
+> = {
   groom: [
     'task.setStatus',
     'task.setProperties',
