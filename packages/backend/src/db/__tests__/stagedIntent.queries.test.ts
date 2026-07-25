@@ -23,13 +23,42 @@ import {
   hasActiveCapabilityRequestForSession,
   IllegalStagedIntentTransitionError,
   hashIntentPayload,
+  expireStagedIntentsForSession,
+  sweepStagedIntentsForTerminalSessions,
+  insertSession,
 } from '../queries.js';
 import type { StagedIntentRow } from '../types.js';
 
 beforeEach(() => {
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
+  db.prepare('DELETE FROM sessions').run();
 });
+
+function seedSession(
+  sessionId: string,
+  status: string,
+): void {
+  insertSession({
+    session_id: sessionId,
+    task_id: `task:${sessionId}`,
+    task_url: null,
+    project_context_url: null,
+    status,
+    started_at: 0,
+    session_type: 'standard',
+    task_name: null,
+    metadata: null,
+    review_result: null,
+    pause_reason: null,
+    last_error_detail: null,
+    events_pruned_at: null,
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    compaction_count: 0,
+    context_occupancy_tokens: 0,
+  } as never);
+}
 
 function makeRow(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow {
   const payload = overrides.payload ?? JSON.stringify({ taskId: 't-1' });
@@ -221,5 +250,106 @@ describe('per-group route_back_count', () => {
 
     expect(getStagedIntentGroup('group-a')!.route_back_count).toBe(1);
     expect(getStagedIntentGroup('group-b')!.route_back_count).toBe(2);
+  });
+});
+
+describe('expireStagedIntentsForSession (session-termination reaper)', () => {
+  it('marks a terminated session\'s staged intents superseded and leaves other sessions\' intents untouched', () => {
+    insertStagedIntent(
+      makeRow({ id: 'dead-1', session_id: 'sess-dead', state: 'staged' }),
+    );
+    insertStagedIntent(
+      makeRow({ id: 'dead-2', session_id: 'sess-dead', state: 'approved' }),
+    );
+    insertStagedIntent(
+      makeRow({ id: 'live-1', session_id: 'sess-live', state: 'staged' }),
+    );
+
+    const reaped = expireStagedIntentsForSession(
+      'sess-dead',
+      'session_killed',
+      100,
+    );
+
+    expect(reaped).toBe(2);
+    expect(getStagedIntent('dead-1')!.state).toBe('superseded');
+    expect(getStagedIntent('dead-1')!.disposition_reason).toBe(
+      'session_killed',
+    );
+    expect(getStagedIntent('dead-1')!.updated_at).toBe(100);
+    expect(getStagedIntent('dead-2')!.state).toBe('superseded');
+    expect(getStagedIntent('live-1')!.state).toBe('staged');
+  });
+
+  it('never alters committed intents', () => {
+    insertStagedIntent(
+      makeRow({ id: 'committed-1', session_id: 'sess-dead', state: 'staged' }),
+    );
+    transitionStagedIntent('committed-1', 'committed');
+
+    const reaped = expireStagedIntentsForSession(
+      'sess-dead',
+      'session_killed',
+      100,
+    );
+
+    expect(reaped).toBe(0);
+    expect(getStagedIntent('committed-1')!.state).toBe('committed');
+  });
+
+  it('never alters already-rejected intents', () => {
+    insertStagedIntent(
+      makeRow({ id: 'rejected-1', session_id: 'sess-dead', state: 'staged' }),
+    );
+    transitionStagedIntent('rejected-1', 'rejected');
+
+    expireStagedIntentsForSession('sess-dead', 'session_killed', 100);
+
+    expect(getStagedIntent('rejected-1')!.state).toBe('rejected');
+  });
+});
+
+describe('sweepStagedIntentsForTerminalSessions (backstop sweep)', () => {
+  it('reaps staged intents for sessions that reached a terminal status without a clean stop', () => {
+    seedSession('sess-crashed', 'killed');
+    seedSession('sess-running', 'running');
+    insertStagedIntent(
+      makeRow({
+        id: 'crashed-1',
+        session_id: 'sess-crashed',
+        state: 'staged',
+      }),
+    );
+    insertStagedIntent(
+      makeRow({ id: 'running-1', session_id: 'sess-running', state: 'staged' }),
+    );
+
+    const reaped = sweepStagedIntentsForTerminalSessions(
+      'session_terminal_backstop_sweep',
+      200,
+    );
+
+    expect(reaped).toBe(1);
+    expect(getStagedIntent('crashed-1')!.state).toBe('superseded');
+    expect(getStagedIntent('crashed-1')!.disposition_reason).toBe(
+      'session_terminal_backstop_sweep',
+    );
+    expect(getStagedIntent('running-1')!.state).toBe('staged');
+  });
+
+  it('is a no-op on a second pass (idempotent)', () => {
+    seedSession('sess-crashed', 'error');
+    insertStagedIntent(
+      makeRow({
+        id: 'crashed-1',
+        session_id: 'sess-crashed',
+        state: 'staged',
+      }),
+    );
+
+    sweepStagedIntentsForTerminalSessions('sweep', 200);
+    const secondPass = sweepStagedIntentsForTerminalSessions('sweep', 300);
+
+    expect(secondPass).toBe(0);
   });
 });

@@ -314,6 +314,16 @@ scheduler.register({
     pruneSchedulerAudit(1000);
   },
 });
+// Backstop for the terminal-status reap hook in SessionManager: catches
+// staged intents left behind by sessions that crashed past the hook.
+scheduler.register({
+  name: 'staged_intent_reaper_sweep',
+  intervalMs: 30 * 60_000,
+  runOnBoot: true,
+  run: async () => {
+    sessionManager.reapStagedIntentsBackstopSweep();
+  },
+});
 
 // Broadcast all session events to every connected WS client
 sessionManager.on('message', broadcast);
