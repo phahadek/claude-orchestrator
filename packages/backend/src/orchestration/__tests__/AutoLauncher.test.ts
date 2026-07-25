@@ -374,6 +374,36 @@ describe('AutoLauncher — project-driven polling', () => {
     expect(sessionManager.start).toHaveBeenCalledOnce();
   });
 
+  it('launches a Ready, dependency-free Code task whose only prior session was an idle groom session', async () => {
+    // findLiveSessionIdForTask excludes planning sessions (groom/design/ops)
+    // even when idle/non-terminal — a dispatched groom session parking idle
+    // after flipping the task to Ready must not block the coding launch.
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi
+        .fn()
+        .mockResolvedValue([makeResolvedTask({ id: 'task-groomed' })]),
+    };
+    const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+    const sessionManager = makeSessionManager(0);
+    sessionManager.findLiveSessionIdForTask = vi.fn().mockReturnValue(undefined);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [
+        makeProject({
+          taskSource: 'notion',
+          autoLaunchMilestoneId: 'milestone-1',
+        }),
+      ],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+
   it('does not launch if session already active for task (in-memory check)', async () => {
     const localBackend = {
       type: 'local' as const,

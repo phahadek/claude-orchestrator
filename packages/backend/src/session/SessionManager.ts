@@ -2414,16 +2414,23 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * Returns the live (non-review) session id for the given task id, if any.
-   * Skips entries that are ended/terminal — a stalled or already-exited session
-   * must not block AutoLauncher from relaunching the task. A genuinely
-   * resumable idle session (DB row present, non-terminal status) still counts
-   * as live so a parallel launch can't collide with it.
+   * Returns the live (non-review, non-planning) session id for the given
+   * task id, if any. Skips entries that are ended/terminal — a stalled or
+   * already-exited session must not block AutoLauncher from relaunching the
+   * task. A genuinely resumable idle session (DB row present, non-terminal
+   * status) still counts as live so a parallel launch can't collide with it.
+   * Planning sessions (groom/design/ops/split) are excluded: a dispatched
+   * groom session that flips its task to Ready parks idle rather than
+   * ending, but only a standard/coding session should block a coding
+   * launch — a task's status can only flip to Ready at a groom session's
+   * end, so a still-running groom can't have flipped it yet, and excluding
+   * planning types here is race-safe.
    */
   findLiveSessionIdForTask(taskId: string): string | undefined {
     const norm = taskId.replace(/-/g, '');
     for (const s of this.sessions.values()) {
       if (s.sessionType === 'review') continue;
+      if (isPlanningSession(s.sessionType)) continue;
       if (s.hasEnded) continue;
       const tid = s.taskId?.replace(/-/g, '');
       if (!tid || tid !== norm) continue;
