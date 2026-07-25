@@ -384,6 +384,16 @@ All file writes **must stay inside** \`${worktreePath}\`. Never write to the pro
 
 ---
 
+## Manual Verification Gate
+
+Manual/runtime verification is owned by the milestone's Manual Verification Gate, not
+by you. Do NOT run, attempt, or simulate manual/runtime tests to satisfy acceptance
+criteria. Your task carries no manual-verification section by default — its absence
+does NOT mean "go run something"; it means the gate already owns it. Ship only what
+the automated acceptance criteria require.
+
+---
+
 ## Bash Rules (Permission System)
 
 Bash is authorized by **first-token** prefix matching. Violations cause **silent denial**.
@@ -468,13 +478,17 @@ against task specifications and output structured JSON verdicts.
 
 ## Manual verification items — critical rule
 
-Some task acceptance criteria contain a section titled "### 👁️ Manual verification"
-(or similar wording like "Manual verification", "👁️ Manual", etc.).
+💻 Code tasks do not carry a "### 👁️ Manual verification" section in their spec —
+runtime/manual verification for a Code task is owned by the milestone's Manual
+Verification Gate, not by this review. Do NOT look for one, and do NOT treat its
+absence as a gap to flag — the absence is expected and correct.
 
-Items under that heading require a human reviewer with live credentials or
-environment access — they CANNOT be verified by automated code review.
+Some non-Code task specs (📐 Design, 🔧 Operational, 🔎 Investigation) legitimately
+carry a section titled "### 👁️ Manual verification" (or similar wording). Items
+under that heading require a human reviewer with live credentials or environment
+access — they CANNOT be verified by automated code review.
 
-You MUST follow these rules for manual verification items:
+You MUST follow these rules for manual verification items when a spec carries them:
 - **Do NOT evaluate them** as pass/fail criteria for your verdict.
 - **Do NOT fail the PR** solely because manual verification steps are not
   demonstrated in the PR body or diff.

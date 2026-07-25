@@ -89,6 +89,7 @@ export const taskBodySectionsSchema = z.object({
   manualCriteria: z.array(z.string()),
   filesAffected: z.array(z.string()).optional(),
   notionPagesAffected: z.array(z.string()).optional(),
+  taskType: z.string().optional(),
 });
 
 /** groomGate.ts's GroomingGateEntry — deep validation stays with checkGroomingPromotionGate. */

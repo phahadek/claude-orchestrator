@@ -207,13 +207,15 @@ Then the five points:
    alone. Write **_None._** if genuinely clean. A `# TODO` / `pass` placeholder upstream
    means the chain is contaminated — surface it, don't paper over it.
 3. **Automated tests** — what the task's `### 🤖 Automated tests` section will verify.
-4. **Manual verification** — enumerate the stripped runtime / launch-and-observe items
-   this task contributes to the milestone gate. These are the items removed from the
-   task body with _"Covered by the Manual Verification Gate."_ If the task has no
-   standalone runtime item, write _None._ The groomer accretes these items onto the
-   milestone gate store via the gate-accretion route before the Ready-flip (see Step 4
-   — Gate accretion). Omitting accretion loses the test permanently: the item is
-   stripped from the body and never lands on the gate store.
+4. **Manual verification** — enumerate the runtime / launch-and-observe items this
+   task contributes to the milestone gate, read from the task body's pre-groom
+   `### 👁️ Manual verification` section when present. If the task has no such
+   section, or no standalone runtime item, write _None._ The groomer accretes these
+   items onto the milestone gate store via the gate-accretion route before the
+   Ready-flip (see Step 4 — Gate accretion), then removes the section from the task
+   body entirely — it is not replaced with boilerplate. Omitting accretion loses the
+   test permanently: the item is stripped from the body and never lands on the gate
+   store.
 5. **Operational seed** — the operational data/config seed this task contributes to the
    milestone config-seed run: a prod-data row/flag/default deliberately kept out of its
    auto-dispatched PR (e.g. an `analyzer_configs` row, config defaults, alias/cohort flags).
@@ -308,7 +310,7 @@ whole batch for re-presentation?"_
 >   don't reprocess. Matters because the raw queue is single-writer and append-only.
 > - _Open questions:_ None. (Verified `RawPayload.guid` exists in `ingestion/rss`.)
 > - _Automated tests:_ dedupe drops a duplicate GUID; distinct GUIDs pass through.
-> - _Manual verification:_ Covered by gate only.
+> - _Manual verification:_ None (task body carried no manual-verification section).
 >
 > **② 📐 Design — …**
 >
