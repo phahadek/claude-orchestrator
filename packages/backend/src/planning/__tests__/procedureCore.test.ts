@@ -171,7 +171,9 @@ describe('procedureCore', () => {
     const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
     const text = stepSummaryFor(step, 'groom');
     expect(text).toContain('task.setDependsOn` (always');
-    expect(text).not.toContain('task.setDependsOn` (when dependencies were found)');
+    expect(text).not.toContain(
+      'task.setDependsOn` (when dependencies were found)',
+    );
   });
 
   it('instructs surfacing a digest-contradicting spot-check as a blocker, not resolving around it', () => {
