@@ -386,7 +386,9 @@ describe('AutoLauncher — project-driven polling', () => {
     };
     const resolveBackend = vi.fn().mockReturnValue(notionBackend);
     const sessionManager = makeSessionManager(0);
-    sessionManager.findLiveSessionIdForTask = vi.fn().mockReturnValue(undefined);
+    sessionManager.findLiveSessionIdForTask = vi
+      .fn()
+      .mockReturnValue(undefined);
 
     const launcher = new AutoLauncher(sessionManager as never, undefined, {
       listProjects: () => [
