@@ -79,11 +79,15 @@ describe('buildOrchestratorClaudeMd', () => {
         ...BASE_PARAMS,
         verify: ['npx tsc --noEmit', 'npm run build'],
       });
-      const gateSection = output.split('## Pre-PR Gate')[1].split('## Forbidden Actions')[0];
+      const gateSection = output
+        .split('## Pre-PR Gate')[1]
+        .split('## Forbidden Actions')[0];
       expect(gateSection).toContain('1. Rebase onto `dev`');
       expect(gateSection).toContain('2. `npx tsc --noEmit` — must pass.');
       expect(gateSection).toContain('3. `npm run build` — must pass.');
-      expect(gateSection).toContain('4. Stage only your implementation files for commit.');
+      expect(gateSection).toContain(
+        '4. Stage only your implementation files for commit.',
+      );
     });
   });
 
