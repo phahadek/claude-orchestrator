@@ -4969,6 +4969,72 @@ export function transitionStagedIntent(
   };
 }
 
+let _stmtExpireStagedIntentsForSession: Database.Statement | null = null;
+
+/**
+ * Reap a session's uncommitted staged intents when the session terminates
+ * (see SessionManager's terminal-status hook): bulk-transitions its
+ * `staged`/`approved` rows to `superseded` with a disposition reason,
+ * preserving the audit trail. Committed, rejected, already-superseded, and
+ * in-flight-verification (`pending_verification`/`needs_revision`) rows are
+ * left untouched — the latter resolve through their own verify loop.
+ * Returns the number of rows reaped.
+ */
+export function expireStagedIntentsForSession(
+  sessionId: string,
+  reason: string,
+  now: number,
+): number {
+  _stmtExpireStagedIntentsForSession ??= db.prepare<{
+    session_id: string;
+    reason: string;
+    now: number;
+  }>(`
+    UPDATE staged_intent
+    SET state = 'superseded', disposition_reason = @reason, updated_at = @now
+    WHERE session_id = @session_id AND state IN ('staged', 'approved')
+  `);
+  const result = _stmtExpireStagedIntentsForSession.run({
+    session_id: sessionId,
+    reason,
+    now,
+  });
+  return result.changes;
+}
+
+let _stmtSweepStagedIntentsForTerminalSessions: Database.Statement | null =
+  null;
+
+/**
+ * Backstop sweep for expireStagedIntentsForSession: reaps `staged`/`approved`
+ * intents whose owning session already sits at a terminal DB status
+ * (done/error/killed) but never went through the terminal-transition hook —
+ * e.g. a process crash, or a write path that predates this reaper. Safe to
+ * run repeatedly (idempotent: nothing left to reap after the first pass).
+ * Returns the number of rows reaped.
+ */
+export function sweepStagedIntentsForTerminalSessions(
+  reason: string,
+  now: number,
+): number {
+  _stmtSweepStagedIntentsForTerminalSessions ??= db.prepare<{
+    reason: string;
+    now: number;
+  }>(`
+    UPDATE staged_intent
+    SET state = 'superseded', disposition_reason = @reason, updated_at = @now
+    WHERE state IN ('staged', 'approved')
+      AND session_id IN (
+        SELECT session_id FROM sessions WHERE status IN ('done', 'error', 'killed')
+      )
+  `);
+  const result = _stmtSweepStagedIntentsForTerminalSessions.run({
+    reason,
+    now,
+  });
+  return result.changes;
+}
+
 /**
  * Supersedes `oldId` (tombstones it, retained for audit, hidden from the
  * active surface) and inserts `newRow` pointing back at it via `supersedes`.

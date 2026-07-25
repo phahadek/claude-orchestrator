@@ -72,6 +72,8 @@ import {
   markInboxItemsDelivered,
   enqueueFeedbackItem,
   addGrantedCapability,
+  expireStagedIntentsForSession,
+  sweepStagedIntentsForTerminalSessions,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import {
@@ -615,6 +617,16 @@ export class SessionManager extends EventEmitter {
 
     // 1. Update DB status and ended_at
     updateSessionStatus(sessionId, status, endedAt);
+
+    // Reap any uncommitted staged intents this session left behind — a dead
+    // session can never resolve them, and a parked proposal (e.g. a
+    // task.setStatus -> Ready) would otherwise sit forever on the decision
+    // surface as if still live. See expireStagedIntentsForSession.
+    try {
+      expireStagedIntentsForSession(sessionId, `session_${status}`, endedAt);
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
 
     // Persist a concise reason so failures are diagnosable from the dashboard/DB
     // without reading raw session_events.
@@ -2496,6 +2508,14 @@ export class SessionManager extends EventEmitter {
     // Pre-mark as killed immediately — prevents orphan-resume on server restart.
     updateSessionStatus(sessionId, 'killed', endedAt);
 
+    // Reap this session's uncommitted staged intents — abortSession bypasses
+    // markSessionErrored, so it needs its own call (see that method for why).
+    try {
+      expireStagedIntentsForSession(sessionId, 'session_killed', endedAt);
+    } catch {
+      // Best-effort — DB may be unavailable or mocked without this function.
+    }
+
     // Set hasEnded on the in-memory session to prevent markSessionErrored from
     // double-updating DB and task status when kill() fires.
     const liveSession = this.sessions.get(sessionId);
@@ -3291,6 +3311,19 @@ export class SessionManager extends EventEmitter {
   async shutdownAll(): Promise<void> {
     const pauses = [...this.sessions.values()].map((s) => s.gracefulPause());
     await Promise.allSettled(pauses);
+  }
+
+  /**
+   * Backstop for expireStagedIntentsForSession: reaps staged/approved intents
+   * left behind by sessions that reached a terminal status (done/error/killed)
+   * without going through the terminal-transition hook — e.g. a process crash.
+   * Safe to call repeatedly (a scheduled job, or at boot).
+   */
+  reapStagedIntentsBackstopSweep(): number {
+    return sweepStagedIntentsForTerminalSessions(
+      'session_terminal_backstop_sweep',
+      Date.now(),
+    );
   }
 
   /**
