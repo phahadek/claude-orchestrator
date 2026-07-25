@@ -346,7 +346,12 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'small. The injected digest (resolved regions + verbatim task body) is ' +
       'authoritative for a dispatched session — verify scope by spot-checking the ' +
       'specific claims the decision actually turns on, not by re-deriving findings ' +
-      'the digest already traced from git history or from scratch.',
+      'the digest already traced from git history or from scratch. When a ' +
+      'spot-check contradicts the digest, that contradiction is itself a blocker ' +
+      'to surface, never to wave away or quietly resolve around: keep the task at ' +
+      'Backlog, or stage it Deferred with a decisionProposal naming the ' +
+      'contradicting finding, rather than proceeding on either the digest or the ' +
+      'spot-check as if the conflict did not happen.',
   },
   {
     id: 'present-for-signoff',
@@ -420,7 +425,9 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'no matter how correct its analysis was. The terminal intent set is ' +
         'exactly one of two paths, by intent kind: the Ready path stages ' +
         '`task.setStatus` (status: "Ready", carrying every `groomingGate` field) ' +
-        '+ `task.setDependsOn` (when dependencies were found) + `gate.accrete` + ' +
+        '+ `task.setDependsOn` (always — the promotion gate requires it even ' +
+        'when there are no dependencies, staged as an empty array) + ' +
+        '`gate.accrete` + ' +
         '`seed.stage` (both required for every 💻 Code task — an explicit ' +
         '`{"decision":"none"}` when there is genuinely nothing to accrete, never ' +
         'a field left unstaged); the Deferred path stages a single ' +
@@ -521,6 +528,14 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'Only after explicit sign-off, stage and apply the write through the ' +
       'sanctioned surface, and confirm the result in chat.',
     summaryOverrides: {
+      groom:
+        'A dispatched groom session never applies a write itself — it only ' +
+        'stages. The staged intent set (task.setStatus / setProperties / ' +
+        'setDependsOn for the Ready path, or task.setStatus for the Deferred ' +
+        'path) is the terminal action; the operator applies it from the shared ' +
+        'staged-intent display. DO NOT drive the write to applied or wait in ' +
+        'chat for confirmation of an applied result. DO end the turn the ' +
+        'moment it is staged.',
       split:
         'A dispatched split session never applies a write itself — it only ' +
         'stages the narrowed-original `task.updateBody`, the sibling ' +
