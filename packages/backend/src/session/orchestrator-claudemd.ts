@@ -330,19 +330,17 @@ ${(() => {
   const verifyItems = verify && verify.length > 0 ? verify : null;
   const verifySteps = verifyItems
     ? verifyItems
-        .map((cmd, i) => `${i + 4}. \`${cmd}\` — must pass.`)
+        .map((cmd, i) => `${i + 2}. \`${cmd}\` — must pass.`)
         .join('\n')
-    : `4. No local verify step configured — CI is the gate.`;
-  const stageNum = verifyItems ? verifyItems.length + 4 : 5;
+    : `2. No local verify step configured — CI is the gate.`;
+  const stageNum = verifyItems ? verifyItems.length + 2 : 3;
   return `## Pre-PR Gate
 
 Run in order — all must pass before opening the PR:
 
-1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
-2. Rebase onto \`${targetBranch}\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
-3. Restore CLAUDE.md: \`git stash pop\`
+1. Rebase onto \`${targetBranch}\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
 ${verifySteps}
-${stageNum}. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.`;
+${stageNum}. Stage only your implementation files for commit.`;
 })()}
 
 ---
@@ -356,7 +354,7 @@ ${stageNum}. Stage only your implementation files for commit — never stage \`C
 - Never delete branches that live outside this worktree
 - Never run \`git reset --hard\` on the main repository directory
 - Never skip pre-commit hooks (\`--no-verify\`)
-- Never stage or commit \`CLAUDE.md\` — it contains orchestrator-injected content that must not appear in PRs. Use \`git add <specific files>\` instead of \`git add .\`.
+- Use \`git add <specific files>\` instead of \`git add .\` — review staged files before committing.
 ${
   gitMode === 'local-only'
     ? ''
