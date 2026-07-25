@@ -464,15 +464,18 @@ export class ReviewOrchestrator {
   /**
    * Enqueue a review for the given PR via the same path as pr_opened.
    * Skips when the orchestrator is disabled or the job has no taskId.
+   * Returns whether the job was actually queued, so callers can tell a real
+   * dispatch apart from a silent no-op.
    */
-  enqueueReview(job: ReviewJob): void {
-    if (!this.enabled) return;
-    if (!job.taskId) return;
+  enqueueReview(job: ReviewJob): boolean {
+    if (!this.enabled) return false;
+    if (!job.taskId) return false;
     logger.info(
       `[ReviewOrchestrator] enqueueReview for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
     );
     this.queue.push(job);
     void this.drain();
+    return true;
   }
 
   /**

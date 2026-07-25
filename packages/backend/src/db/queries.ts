@@ -1498,6 +1498,28 @@ export function lookupSessionByBranch(
   return null;
 }
 
+/**
+ * Link a previously-orphaned PR row (task_id/session_id null) to a task and
+ * session re-derived from its head_branch. Used by StalledPRReconciler to
+ * recover PRs that PRBootSweep inserted with no session match.
+ */
+export function linkPRTaskAndSession(
+  prNumber: number,
+  repo: string,
+  taskId: string,
+  sessionId: string | null,
+): void {
+  db.prepare<{
+    task_id: string;
+    session_id: string | null;
+    pr_number: number;
+    repo: string;
+  }>(
+    `UPDATE pull_requests SET task_id = @task_id, session_id = COALESCE(@session_id, session_id)
+     WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ task_id: taskId, session_id: sessionId, pr_number: prNumber, repo });
+}
+
 // ─── settings ────────────────────────────────────────────────────────────────
 
 export function getSetting(key: string): string | undefined {
