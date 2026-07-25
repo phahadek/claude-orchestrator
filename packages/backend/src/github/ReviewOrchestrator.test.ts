@@ -3710,9 +3710,10 @@ describe('ReviewOrchestrator — enqueueReview and isReviewInFlight', () => {
     const rs = makeMockReviewService();
     const orch = new ReviewOrchestrator(rs, sm as any, false);
 
-    orch.enqueueReview({ ...baseJob });
+    const queued = orch.enqueueReview({ ...baseJob });
     await new Promise((r) => setTimeout(r, 20));
 
+    expect(queued).toBe(false);
     expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
   });
 
@@ -3721,13 +3722,14 @@ describe('ReviewOrchestrator — enqueueReview and isReviewInFlight', () => {
     const rs = makeMockReviewService();
     const orch = new ReviewOrchestrator(rs, sm as any, true);
 
-    orch.enqueueReview({ ...baseJob, taskId: '' });
+    const queued = orch.enqueueReview({ ...baseJob, taskId: '' });
     await new Promise((r) => setTimeout(r, 20));
 
+    expect(queued).toBe(false);
     expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
   });
 
-  it('enqueueReview queues and drains → reviewPR called', async () => {
+  it('enqueueReview queues and drains → reviewPR called, and reports the job was queued', async () => {
     // Reset mocks that prior tests in the full suite may have left in a non-default state
     vi.mocked(loadAutofixCommands).mockReturnValue([]);
     vi.mocked(runAutofix).mockResolvedValue({
@@ -3741,7 +3743,9 @@ describe('ReviewOrchestrator — enqueueReview and isReviewInFlight', () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const orch = new ReviewOrchestrator(rs, sm as any, true);
-    orch.enqueueReview({ ...baseJob });
+    const queued = orch.enqueueReview({ ...baseJob });
+
+    expect(queued).toBe(true);
 
     await new Promise((r) => setTimeout(r, 50));
 

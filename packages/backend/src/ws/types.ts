@@ -447,7 +447,8 @@ export type ServerMessage =
         | 'analyze_failing'
         | 'pre_review_interrupted'
         | 'conflict_dead_session'
-        | 'undelivered_review_feedback';
+        | 'undelivered_review_feedback'
+        | 'orphaned_no_task_link';
     };
 
 // ── Client → Server ──────────────────────────────────────────────
