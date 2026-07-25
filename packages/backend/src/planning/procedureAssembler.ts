@@ -62,8 +62,12 @@ import type { TypeCheckResult } from '../groom/typeCheck';
 import type { DesignLoadResult } from '../design/designLoad';
 import type { OpsLoadResult, OpsTaskEntry } from '../ops/opsLoad';
 import type { OpsJournalEntry } from '../ops/opsJournal';
+import {
+  PLANNING_INTENT_KINDS,
+  type PlanningWorkflow,
+} from './planningIntentKinds';
 
-export type PlanningWorkflow = SkillId;
+export type { PlanningWorkflow };
 
 /**
  * Maps workflow → the loader that produces its digest, for reference by
@@ -269,36 +273,6 @@ export function deriveOpsDigestSlice(
 }
 
 // ─── skeleton (written once) ───────────────────────────────────────────────
-
-/** Staged-intent kinds relevant to an injected planning session, mirrored from
- *  `routes/stagedIntents.ts`'s `KNOWN_INTENT_KINDS` (not imported directly —
- *  that module pulls in Express/DB wiring this composer has no business
- *  depending on). `procedureAssembler.test.ts` asserts this stays a subset. */
-const PLANNING_INTENT_KINDS: Record<PlanningWorkflow, readonly string[]> = {
-  groom: [
-    'task.setStatus',
-    'task.setProperties',
-    'task.setDependsOn',
-    'gate.accrete',
-    'seed.stage',
-    'task.create',
-  ],
-  design: [
-    'decision.pickOne',
-    'task.updateBody',
-    'task.setProperties',
-    'task.setStatus',
-    'seed.stage',
-    'task.create',
-  ],
-  ops: [
-    'journal.setState',
-    'task.setStatus',
-    'session.requestCapability',
-    'task.create',
-  ],
-  split: ['task.updateBody', 'task.create', 'task.setDependsOn'],
-};
 
 /**
  * One concrete example payload per known intent kind — placeholders
