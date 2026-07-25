@@ -203,4 +203,36 @@ describe('procedureCore', () => {
     );
     expect(coreSource).toContain('INJECTED_PROCEDURE_STYLE.md');
   });
+
+  it('instructs staging each listed Open Question as a decision.pickOne with no competing "stage the concrete write when confident" routing', () => {
+    const batchLockingText = renderPrinciple(
+      CORE_PRINCIPLES.find((p) => p.id === 'design-no-batch-locking')!,
+      'design',
+    );
+    expect(batchLockingText).toMatch(/decision\.pickOne/);
+    expect(batchLockingText).toMatch(/never a `task\.updateBody` edit/);
+
+    const genuineForksPrinciple = CORE_PRINCIPLES.find(
+      (p) => p.id === 'decision-pickone-genuine-forks-only',
+    )!;
+    expect(genuineForksPrinciple.appliesTo).not.toContain('design');
+
+    const designScopeText = renderPrinciple(
+      CORE_PRINCIPLES.find(
+        (p) => p.id === 'decision-pickone-genuine-forks-only-design-scope',
+      )!,
+      'design',
+    );
+    expect(designScopeText).toMatch(
+      /NEVER applies to a 📐 Design task's listed Open Questions/,
+    );
+    expect(designScopeText).not.toMatch(
+      /stage that proposal normally \(its concrete write/,
+    );
+
+    const rendered = renderHardRulesMarkdown();
+    expect(rendered).not.toMatch(
+      /listed Open Question[\s\S]{0,200}stage that proposal normally \(its concrete write/,
+    );
+  });
 });

@@ -414,9 +414,9 @@ function validateDecisionPickOnePayload(
   if (!p || typeof p.prompt !== 'string' || !p.prompt.trim()) {
     throw new DecisionPickOneValidationError('payload.prompt is required');
   }
-  if (!Array.isArray(p.options) || p.options.length < 2) {
+  if (!Array.isArray(p.options) || p.options.length < 1) {
     throw new DecisionPickOneValidationError(
-      'payload.options must list at least two candidate options',
+      'payload.options must list at least one candidate option',
     );
   }
   for (const opt of p.options) {

@@ -118,13 +118,13 @@ describe('decision.pickOne staging validation', () => {
     ).toThrow(/substantive description/);
   });
 
-  it('rejects staging with fewer than two options', () => {
+  it('rejects staging with zero options', () => {
     expect(() =>
       stageIntent(
         'decision.pickOne',
         {
           prompt: 'Which approach?',
-          options: [{ label: 'Option A', description: 'Only one.' }],
+          options: [],
           allowFreeForm: true,
         },
         'proj-1',
@@ -132,7 +132,23 @@ describe('decision.pickOne staging validation', () => {
         'sess-1',
         'A genuine fork the session cannot resolve confidently.',
       ),
-    ).toThrow(/at least two/);
+    ).toThrow(/at least one/);
+  });
+
+  it('accepts staging with a single option — a confident recommendation, not just a genuine fork', () => {
+    const intent = stageIntent(
+      'decision.pickOne',
+      {
+        prompt: 'Which approach?',
+        options: [{ label: 'Option A', description: 'Batch it, streaming.' }],
+        allowFreeForm: true,
+      },
+      'proj-1',
+      null,
+      'sess-1',
+      'A confident recommendation the operator can accept or push back on.',
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('staged');
   });
 });
 
@@ -291,6 +307,55 @@ describe('POST /api/staged-intents/:id/answer', () => {
     expect(JSON.parse(getStagedIntent(intent.id)!.answer!).chosenLabel).toBe(
       'Option A',
     );
+  });
+
+  it('a single-option pickOne: picking the one option (accept) resolves it', async () => {
+    const planningOrchestrator = makePlanningOrchestrator();
+    const app = makeApp(planningOrchestrator);
+    const intent = stageIntent(
+      'decision.pickOne',
+      {
+        prompt: 'Which approach?',
+        options: [{ label: 'Option A', description: 'Batch it, streaming.' }],
+        allowFreeForm: true,
+      },
+      'proj-1',
+      null,
+      'sess-1',
+      'A confident recommendation the operator can accept or push back on.',
+    );
+
+    const res = await supertest(app)
+      .post(`/api/staged-intents/${intent.id}/answer`)
+      .send({ chosenLabel: 'Option A' });
+
+    expect(res.status).toBe(200);
+    const row = getStagedIntent(intent.id)!;
+    expect(row.state).toBe('committed');
+    expect(JSON.parse(row.answer!).chosenLabel).toBe('Option A');
+  });
+
+  it('a single-option pickOne: reject/pushback works via the generic reject route', async () => {
+    const app = makeApp();
+    const intent = stageIntent(
+      'decision.pickOne',
+      {
+        prompt: 'Which approach?',
+        options: [{ label: 'Option A', description: 'Batch it, streaming.' }],
+        allowFreeForm: true,
+      },
+      'proj-1',
+      null,
+      'sess-1',
+      'A confident recommendation the operator can accept or push back on.',
+    );
+
+    const res = await supertest(app)
+      .post(`/api/staged-intents/${intent.id}/reject`)
+      .send({ outcome: 'decline', reason: 'Use polling instead.' });
+
+    expect(res.status).toBe(200);
+    expect(getStagedIntent(intent.id)!.state).toBe('rejected');
   });
 
   it('cannot be applied or approved through the generic apply/approve routes', async () => {

@@ -171,7 +171,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'decision-pickone-genuine-forks-only',
     title: 'decision.pickOne is for genuine forks only',
-    appliesTo: ['groom', 'design', 'ops'],
+    appliesTo: ['groom', 'ops'],
     text:
       'Reserve `decision.pickOne` for a genuine fork {skillLabel} cannot resolve ' +
       'confidently — a question only the operator can decide. When {skillLabel} is ' +
@@ -182,12 +182,30 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'confirmation prompt.',
   },
   {
+    id: 'decision-pickone-genuine-forks-only-design-scope',
+    title: 'decision.pickOne is for genuine forks only — Design scope',
+    appliesTo: ['design'],
+    text:
+      'Reserve `decision.pickOne` for a genuine fork {skillLabel} cannot resolve ' +
+      'confidently — a question only the operator can decide — but ONLY for an ' +
+      'incidental sub-decision made along the way. This confidence routing NEVER ' +
+      "applies to a 📐 Design task's listed Open Questions: every listed Open " +
+      'Question stages as its own `decision.pickOne` regardless of confidence (one ' +
+      'option when the answer is a confident recommendation, two-or-more for a real ' +
+      "fork) — see 'No batch-locking' below. A listed Open Question is never routed " +
+      'to a concrete write to "lock it in" — `task.updateBody` (Implementation ' +
+      'notes) only consolidates decisions already accepted by the operator; it is ' +
+      'never the vehicle for making one.',
+  },
+  {
     id: 'design-no-batch-locking',
     title: 'No batch-locking — one Open Question at a time',
     appliesTo: ['design'],
     text:
       "DO stage exactly one Open Question's resolution per `decision.pickOne` " +
-      'intent (options = the candidate answers), never a `task.updateBody` edit, and ' +
+      'intent (options = the candidate answers — a single option is a confident ' +
+      'recommendation the operator accepts or pushes back on, not just a genuine ' +
+      'fork), never a `task.updateBody` edit, and ' +
       "never more than one question's resolution staged per turn. DO investigate " +
       'before deciding — cite the code read, arch-page section, or API-call result the ' +
       'resolution rests on; "decide at implementation time" is a _defer_, never a ' +

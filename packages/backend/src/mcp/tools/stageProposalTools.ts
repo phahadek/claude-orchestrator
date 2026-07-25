@@ -236,7 +236,7 @@ export function registerStageProposalTools(
         'Stages a decision.pickOne question-intent — writes no task store, only a question the operator resolves via an answer. Requires a substantive decisionProposal and cannot belong to a group.',
       inputSchema: envelope({
         prompt: z.string(),
-        options: z.array(decisionPickOneOptionSchema).min(2),
+        options: z.array(decisionPickOneOptionSchema).min(1),
         allowFreeForm: z.boolean(),
       }),
     },
