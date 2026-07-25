@@ -271,3 +271,79 @@ describe('CliSessionRunner --disallowed-tools', () => {
     expect(capturedSpawnArgs).not.toContain('--disallowed-tools');
   });
 });
+
+describe('CliSessionRunner --add-dir (directory sandbox lift)', () => {
+  it.each(['groom', 'design', 'ops'] as const)(
+    'includes --add-dir / for a %s (planning) session — no project-dir confinement',
+    async (sessionType) => {
+      const runner = new CliSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      const idx = capturedSpawnArgs.indexOf('--add-dir');
+      expect(idx).not.toBe(-1);
+      expect(capturedSpawnArgs[idx + 1]).toBe('/');
+    },
+  );
+
+  it('gate-verify sessions (dispatched with sessionType "ops") get the same lift', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, sessionType: 'ops' },
+      () => {},
+    );
+
+    expect(capturedSpawnArgs).toContain('--add-dir');
+  });
+
+  it.each(['standard', 'review'] as const)(
+    'omits --add-dir for a %s (non-planning) session — stays confined to its worktree',
+    async (sessionType) => {
+      const runner = new CliSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      expect(capturedSpawnArgs).not.toContain('--add-dir');
+    },
+  );
+
+  it('omits --add-dir when sessionType is absent', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    expect(capturedSpawnArgs).not.toContain('--add-dir');
+  });
+
+  it('a granted capability naming an out-of-tree host path is executable for an ops session (allowlisted + not dir-confined)', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const grantedTool = 'Bash(find /srv/orchestrator/data:*)';
+    await runner.run(
+      'hello',
+      undefined,
+      {
+        ...defaultOptions,
+        sessionType: 'ops',
+        allowedTools: ['Bash', grantedTool],
+      },
+      () => {},
+    );
+
+    const allowedIdx = capturedSpawnArgs.indexOf('--allowed-tools');
+    expect(allowedIdx).not.toBe(-1);
+    expect(capturedSpawnArgs).toContain(grantedTool);
+    expect(capturedSpawnArgs).toContain('--add-dir');
+    expect(capturedSpawnArgs[capturedSpawnArgs.indexOf('--add-dir') + 1]).toBe(
+      '/',
+    );
+  });
+});
