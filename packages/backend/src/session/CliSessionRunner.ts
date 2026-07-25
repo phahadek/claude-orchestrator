@@ -69,6 +69,16 @@ export class CliSessionRunner implements ISessionRunner {
     // the capability on re-dispatch — see GRANT_DENYLIST_PATTERNS.
     const isPlanning = Boolean(sessionType && isPlanningSession(sessionType));
 
+    // Planning/ops/gate-verify sessions have no worktree of their own (they
+    // run with cwd === projectDir) and, per the settled design, are not
+    // meant to be filesystem-jailed to the project checkout: the gate read
+    // model needs host/DB/audit-log reach, and the ops write model needs to
+    // execute granted commands against out-of-tree host paths. The
+    // capability-grant allowlist (--allowed-tools) plus the Write/Edit/Skill
+    // denylist above are the write-safety boundary for these session
+    // types — not the CLI's directory sandbox — so it's lifted here via
+    // `--add-dir /`. Coding/review sessions keep the default worktree-only
+    // sandbox.
     const spawnArgs = [
       ...(resumeSessionId
         ? ['--resume', resumeSessionId]
@@ -95,6 +105,7 @@ export class CliSessionRunner implements ISessionRunner {
       '--allowed-tools',
       ...allowedTools,
       ...(isPlanning ? ['--disallowed-tools', 'Skill', 'Write', 'Edit'] : []),
+      ...(isPlanning ? ['--add-dir', '/'] : []),
     ];
 
     const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR', 'DB_PATH'] as const;
