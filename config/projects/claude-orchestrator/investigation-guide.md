@@ -46,7 +46,7 @@ These four are the ones worth knowing by name; the schema has others
 matter less often for investigation. Don't restate the generic
 `session.requestCapability` / grant mechanics here — see "Capabilities" in
 your injected prompt (`renderOpsCapabilities`) for those; this section is
-just what the record *is*.
+just what the record _is_.
 
 ## 2. Sandbox-reachable access method
 
