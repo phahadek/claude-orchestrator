@@ -46,7 +46,6 @@ import {
   renderPrinciple,
   stepsFor,
   stepSummaryFor,
-  type SkillId,
 } from './procedureCore';
 import { existsSync, readFileSync } from 'fs';
 import { basename, join } from 'path';
