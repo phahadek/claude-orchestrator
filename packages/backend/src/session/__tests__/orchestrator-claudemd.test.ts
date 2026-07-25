@@ -64,6 +64,29 @@ describe('buildOrchestratorClaudeMd', () => {
     });
   });
 
+  describe('Pre-PR Gate section (no CLAUDE.md stash step)', () => {
+    it('does not instruct stashing or restoring CLAUDE.md', () => {
+      const output = buildOrchestratorClaudeMd(BASE_PARAMS);
+      expect(output).not.toContain('Stash CLAUDE.md');
+      expect(output).not.toContain('git stash push CLAUDE.md');
+      expect(output).not.toContain('git stash pop');
+      expect(output).not.toContain('Restore CLAUDE.md');
+      expect(output).not.toContain('never stage `CLAUDE.md`');
+    });
+
+    it('renumbers the remaining Pre-PR Gate steps starting from the rebase step', () => {
+      const output = buildOrchestratorClaudeMd({
+        ...BASE_PARAMS,
+        verify: ['npx tsc --noEmit', 'npm run build'],
+      });
+      const gateSection = output.split('## Pre-PR Gate')[1].split('## Forbidden Actions')[0];
+      expect(gateSection).toContain('1. Rebase onto `dev`');
+      expect(gateSection).toContain('2. `npx tsc --noEmit` — must pass.');
+      expect(gateSection).toContain('3. `npm run build` — must pass.');
+      expect(gateSection).toContain('4. Stage only your implementation files for commit.');
+    });
+  });
+
   describe('PR body marker (no scratch-file instructions)', () => {
     it('instructs sessions to emit a <pr-body> marker, not write a file', () => {
       const output = buildOrchestratorClaudeMd(BASE_PARAMS);
