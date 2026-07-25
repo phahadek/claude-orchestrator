@@ -160,6 +160,28 @@ describe('procedureCore', () => {
     expect(rendered).toMatch(/DO NOT fabricate/);
   });
 
+  it('states that a dispatched groom session only stages on apply-on-signoff, never applies', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'apply-on-signoff')!;
+    const text = stepSummaryFor(step, 'groom');
+    expect(text).toMatch(/never applies a write itself/);
+    expect(text).not.toMatch(/stage and apply/i);
+  });
+
+  it('requires task.setDependsOn unconditionally in the groom present-for-signoff Ready path', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+    const text = stepSummaryFor(step, 'groom');
+    expect(text).toContain('task.setDependsOn` (always');
+    expect(text).not.toContain('task.setDependsOn` (when dependencies were found)');
+  });
+
+  it('instructs surfacing a digest-contradicting spot-check as a blocker, not resolving around it', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'investigate')!;
+    const text = stepSummaryFor(step, 'groom');
+    expect(text).toMatch(/contradicts the digest/);
+    expect(text).toMatch(/blocker to surface/);
+    expect(text).toMatch(/never to wave away/);
+  });
+
   it('anchors the injected-instruction style standard and references it from procedureCore', () => {
     const styleDocPath = join(
       repoRoot,
