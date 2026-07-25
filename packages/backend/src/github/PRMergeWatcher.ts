@@ -73,6 +73,12 @@ export interface MergeCompletedPayload {
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const PUSH_REVIEW_TIMEOUT_MS = 240_000;
 const PENDING_REREVIEW_TTL_MS = 5 * 60 * 1000;
+/**
+ * Cadence for the escalated-open stale sweep — deliberately slower than the
+ * 5-minute merge poll, since a stale escalated row is cosmetic-but-misleading
+ * (dashboard "needs attention" noise), not urgent.
+ */
+const STALE_OPEN_SWEEP_INTERVAL_MS = 20 * 60 * 1000; // 20 minutes
 
 /**
  * Pause reasons where mergeability polling is pointless — AutoMerger has given
@@ -187,6 +193,87 @@ export class PRMergeWatcher extends EventEmitter {
       onError: (err: unknown) =>
         logger.warn('[PRMergeWatcher] poll error:', (err as Error).message),
     });
+    scheduler.register({
+      name: 'pr_merge_watcher_stale_open_sweep',
+      intervalMs: () => STALE_OPEN_SWEEP_INTERVAL_MS,
+      runOnBoot: true,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.sweepEscalatedStalePRs();
+      },
+      onError: (err: unknown) =>
+        logger.warn(
+          '[PRMergeWatcher] stale-open sweep error:',
+          (err as Error).message,
+        ),
+    });
+  }
+
+  /**
+   * Targeted sweep over rows every scheduled loop otherwise skips forever:
+   * state='open' with pause_reason.reason='stalled_reconcile_cap'. Both
+   * poll() (via isTerminalStalePR) and StalledPRReconciler deliberately skip
+   * these rows to stop per-PR GitHub churn on parked PRs, but that means
+   * nothing ever re-queries GitHub for them — so a PR that reaches merged or
+   * closed on GitHub after escalation stays stuck at state='open' with a
+   * stale pause_reason forever, showing as a false "needs attention" entry.
+   *
+   * Filters the escalated set in-code from getAllOpenPRs() rather than a
+   * dedicated query, and calls getPRState() per-row — O(this orchestrator's
+   * escalated-open rows), never listOpenPRs(repo) (O(the repo's total open
+   * PRs), which would paginate thousands of unrelated PRs on a busy repo).
+   * A row still open on GitHub (e.g. a PR that's genuinely stuck) is left
+   * untouched by reconcileTerminalState.
+   */
+  async sweepEscalatedStalePRs(): Promise<void> {
+    const escalated = getAllOpenPRs().filter(
+      (pr) =>
+        parsePauseReason(pr.pause_reason)?.reason === 'stalled_reconcile_cap',
+    );
+    for (const pr of escalated) {
+      if (!getProjectByGithubRepo(pr.repo)) {
+        logger.warn(
+          `[PRMergeWatcher] stale-open sweep: PR #${pr.pr_number}: no project for repo ${pr.repo} — skipping`,
+        );
+        continue;
+      }
+      await this.reconcileTerminalState(pr);
+    }
+  }
+
+  /**
+   * Shared terminal-transition handler: queries GitHub for a PR's live state
+   * and, if it has reached merged or closed, applies the transition
+   * (handleMerged / updatePRState + clearTerminalPRFlags). Used by both the
+   * escalated-open sweep above and the /api/prs panel-load reconciliation so
+   * the two paths can't drift. A GitHub error is logged and the row is left
+   * unchanged — never silently swallowed. Returns the observed state, or
+   * null on error.
+   */
+  async reconcileTerminalState(pr: PullRequestRow): Promise<string | null> {
+    let prStateResult: { state: string; headSha: string | null };
+    try {
+      prStateResult = await this.github.getPRState(pr.pr_number, pr.repo);
+    } catch (err) {
+      if (err instanceof GitHubRateLimitError) {
+        this.handleRateLimit(err);
+        return null;
+      }
+      logger.warn(
+        `[PRMergeWatcher] reconcileTerminalState: getPRState failed for PR #${pr.pr_number}:`,
+        (err as Error).message,
+      );
+      return null;
+    }
+
+    const { state } = prStateResult;
+    if (state === 'merged') {
+      await this.handleMerged(pr, null);
+    } else if (state === 'closed') {
+      updatePRState(pr.pr_number, pr.repo, 'closed');
+      clearTerminalPRFlags(pr.pr_number, pr.repo, 'closed');
+    }
+    return state;
   }
 
   private handleRateLimit(err: GitHubRateLimitError): void {
