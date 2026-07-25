@@ -292,7 +292,8 @@ function renderAcceptanceCriteria(
   blocks.push(heading3('🤖 Automated tests'));
   blocks.push(...automatedCriteria.map((c) => todo(c)));
 
-  const omitSection = taskType === CODE_TASK_TYPE && manualCriteria.length === 0;
+  const omitSection =
+    taskType === CODE_TASK_TYPE && manualCriteria.length === 0;
   if (!omitSection) {
     blocks.push(heading3('👁️ Manual verification'));
     if (manualCriteria.length === 0) {
@@ -456,7 +457,8 @@ export function renderTaskBodyMarkdown(sections: TaskBodySections): string {
   lines.push('', '## Acceptance criteria', '### 🤖 Automated tests');
   lines.push(...sections.automatedCriteria.map((c) => `- ${c}`));
   const omitManualSection =
-    sections.taskType === CODE_TASK_TYPE && sections.manualCriteria.length === 0;
+    sections.taskType === CODE_TASK_TYPE &&
+    sections.manualCriteria.length === 0;
   if (!omitManualSection) {
     lines.push('### 👁️ Manual verification');
     if (sections.manualCriteria.length === 0) {
