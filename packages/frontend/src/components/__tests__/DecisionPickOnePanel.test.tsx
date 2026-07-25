@@ -32,14 +32,10 @@ describe('DecisionPickOnePanel', () => {
   }
 
   it('renders a 1-option pickOne (recommendation + accept + free-form pushback) without error', () => {
-    render(
-      <DecisionPickOnePanel intent={singleOptionIntent()} />,
-    );
+    render(<DecisionPickOnePanel intent={singleOptionIntent()} />);
 
     expect(screen.getByTestId('decision-pick-one-panel')).toBeTruthy();
-    expect(
-      screen.getByText('Should we cap the reader at 10MB?'),
-    ).toBeTruthy();
+    expect(screen.getByText('Should we cap the reader at 10MB?')).toBeTruthy();
     expect(
       screen.getByText('A confident recommendation — the simplest safe bound.'),
     ).toBeTruthy();

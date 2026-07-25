@@ -140,9 +140,7 @@ describe('decision.pickOne staging validation', () => {
       'decision.pickOne',
       {
         prompt: 'Which approach?',
-        options: [
-          { label: 'Option A', description: 'Batch it, streaming.' },
-        ],
+        options: [{ label: 'Option A', description: 'Batch it, streaming.' }],
         allowFreeForm: true,
       },
       'proj-1',
@@ -318,9 +316,7 @@ describe('POST /api/staged-intents/:id/answer', () => {
       'decision.pickOne',
       {
         prompt: 'Which approach?',
-        options: [
-          { label: 'Option A', description: 'Batch it, streaming.' },
-        ],
+        options: [{ label: 'Option A', description: 'Batch it, streaming.' }],
         allowFreeForm: true,
       },
       'proj-1',
@@ -345,9 +341,7 @@ describe('POST /api/staged-intents/:id/answer', () => {
       'decision.pickOne',
       {
         prompt: 'Which approach?',
-        options: [
-          { label: 'Option A', description: 'Batch it, streaming.' },
-        ],
+        options: [{ label: 'Option A', description: 'Batch it, streaming.' }],
         allowFreeForm: true,
       },
       'proj-1',

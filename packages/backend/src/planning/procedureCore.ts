@@ -188,7 +188,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     text:
       'Reserve `decision.pickOne` for a genuine fork {skillLabel} cannot resolve ' +
       'confidently — a question only the operator can decide — but ONLY for an ' +
-      "incidental sub-decision made along the way. This confidence routing NEVER " +
+      'incidental sub-decision made along the way. This confidence routing NEVER ' +
       "applies to a 📐 Design task's listed Open Questions: every listed Open " +
       'Question stages as its own `decision.pickOne` regardless of confidence (one ' +
       'option when the answer is a confident recommendation, two-or-more for a real ' +

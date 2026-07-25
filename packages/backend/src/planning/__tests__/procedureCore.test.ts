@@ -223,7 +223,9 @@ describe('procedureCore', () => {
       )!,
       'design',
     );
-    expect(designScopeText).toMatch(/NEVER applies to a 📐 Design task's listed Open Questions/);
+    expect(designScopeText).toMatch(
+      /NEVER applies to a 📐 Design task's listed Open Questions/,
+    );
     expect(designScopeText).not.toMatch(
       /stage that proposal normally \(its concrete write/,
     );
