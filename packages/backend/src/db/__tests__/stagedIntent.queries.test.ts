@@ -35,10 +35,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM sessions').run();
 });
 
-function seedSession(
-  sessionId: string,
-  status: string,
-): void {
+function seedSession(sessionId: string, status: string): void {
   insertSession({
     session_id: sessionId,
     task_id: `task:${sessionId}`,
@@ -254,7 +251,7 @@ describe('per-group route_back_count', () => {
 });
 
 describe('expireStagedIntentsForSession (session-termination reaper)', () => {
-  it('marks a terminated session\'s staged intents superseded and leaves other sessions\' intents untouched', () => {
+  it("marks a terminated session's staged intents superseded and leaves other sessions' intents untouched", () => {
     insertStagedIntent(
       makeRow({ id: 'dead-1', session_id: 'sess-dead', state: 'staged' }),
     );
