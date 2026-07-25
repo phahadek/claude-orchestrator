@@ -1758,3 +1758,51 @@ describe('start() — planning/ops prompt assembly (gate-verify hardening)', () 
     expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
   });
 });
+
+// ── findLiveSessionIdForTask — planning session exclusion ──────────────────
+
+describe('findLiveSessionIdForTask — planning session exclusion', () => {
+  let sm: SessionManager;
+  const TASK_ID = 'task-groom-1';
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+  });
+
+  function registerInMemorySession(
+    sessionId: string,
+    sessionType: string,
+    taskId: string,
+  ): void {
+    const session = makeMockSession();
+    session.sessionType = sessionType;
+    session.taskId = taskId;
+    (session as any).sessionId = sessionId;
+    (sm as any).sessions.set(sessionId, session);
+  }
+
+  it.each(['groom', 'design', 'ops'])(
+    'returns undefined for a parked idle %s session — does not block a coding launch',
+    (sessionType) => {
+      registerInMemorySession('planning-session-1', sessionType, TASK_ID);
+      vi.mocked(getSession).mockReturnValue({
+        session_id: 'planning-session-1',
+        status: 'idle',
+      } as any);
+
+      expect(sm.findLiveSessionIdForTask(TASK_ID)).toBeUndefined();
+    },
+  );
+
+  it('still returns a live standard/coding session for the task (no regression to the double-launch guard)', () => {
+    registerInMemorySession('coding-session-1', 'standard', TASK_ID);
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'coding-session-1',
+      status: 'running',
+    } as any);
+
+    expect(sm.findLiveSessionIdForTask(TASK_ID)).toBe('coding-session-1');
+  });
+});
