@@ -281,10 +281,12 @@ something the one-shot command doesn't cover (e.g. reviewing a staged write befo
 applying it).
 
 **Gate accretion (💻 Code tasks):** Before flipping to Ready, mint the
-task's stripped runtime/launch-and-observe items onto the milestone gate store. Read
-the task body's `### 👁️ Manual verification` section — these are the items the task
-spec says are _"Covered by the Manual Verification Gate."_ Call the accretion route
-through the vendored client, **never** a `task.updateBody` body-append:
+task's stripped runtime/launch-and-observe items onto the milestone gate store. The
+accretion source is the task body's pre-groom `### 👁️ Manual verification` section,
+when present — a Code task author writes it only when there are real runtime items to
+list, so read whatever the section actually contains (never boilerplate — that
+convention is retired). Call the accretion route through the vendored client, **never**
+a `task.updateBody` body-append for the accretion itself:
 
 ```bash
 node ~/.claude/scripts/gate-state-client.mjs accrete \
@@ -302,6 +304,13 @@ milestone gate store and records the `gate_accretion` marker
 the durable record; nothing further needs writing to `grooming-state.json`.
 
 Confirm the accretion in chat before the Ready-flip.
+
+Once accreted, if the task body still carries a `### 👁️ Manual verification`
+section, stage a `task.updateBody` that **removes it from the body entirely** —
+never leave it behind and never replace it with boilerplate (`Covered by the
+Manual Verification Gate.`). A post-groom 💻 Code task carries no manual-verification
+section at all; runtime/manual verification for it is owned by the gate from that
+point on, and its absence in the body is the correct post-groom state, not a gap.
 
 **Seed accretion (💻 Code tasks):** The operational twin of Gate accretion.
 Before flipping to Ready, mint the task's operational data/config seed — a prod-data

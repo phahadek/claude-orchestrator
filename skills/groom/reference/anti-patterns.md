@@ -70,20 +70,22 @@ constrains behavior when sessions present and lock the estimate; otherwise it
 silently dilutes.
 
 **Stripping a task's runtime item from the body but never accreting it to the gate
-store (the "stripped-then-dropped" pattern).** Code tasks are required to strip
-their runtime / launch-and-observe manual items and note _"Covered by the Manual
-Verification Gate."_ But stripping is only half the contract — the stripped items must
+store (the "stripped-then-dropped" pattern).** A Code task's pre-groom
+`### 👁️ Manual verification` section (when the author listed real runtime items) must
 **land on the milestone gate store** during grooming (Step 4 — Gate accretion, via the
-`gate-state-client.mjs accrete` route call). When the groomer strips without accreting,
-the item vanishes entirely: absent from the task body (which now says "Covered by
-gate") and absent from the gate store (never accreted). No coverage audit can find it;
-the manual tester never runs it. This already produced a real gap: an M9 PowerShell-5.1
-launch-script check was stripped from a task body but never landed on the Gate —
-discovered only by a 2026-06-29 coverage audit. The promotion gate now blocks this: a
-missing `gate_accretion` marker on a Code task prevents the Ready-flip until the
-groomer either accretes the items (`{"classification": "<tier>", "items": [{"text":
-"…"}]}`) or explicitly accretes `{"classification": "none"}` to confirm the task has no
-standalone runtime item.
+`gate-state-client.mjs accrete` route call) before the section is removed from the
+body. When the groomer removes the section without accreting, the item vanishes
+entirely: absent from the task body and absent from the gate store (never accreted).
+No coverage audit can find it; the manual tester never runs it. This already produced a
+real gap: an M9 PowerShell-5.1 launch-script check was stripped from a task body but
+never landed on the Gate — discovered only by a 2026-06-29 coverage audit. The
+promotion gate now blocks this: a missing `gate_accretion` marker on a Code task
+prevents the Ready-flip until the groomer either accretes the items
+(`{"classification": "<tier>", "items": [{"text": "…"}]}`) or explicitly accretes
+`{"classification": "none"}` to confirm the task has no standalone runtime item. Either
+way, the groomer is inclined toward **removing** the section post-accretion — never
+leaving it in place, and never replacing it with boilerplate ("Covered by the Manual
+Verification Gate."); a post-groom Code task carries no manual-verification section.
 
 **Leaving a task's operational seed in an inline note but never accreting it to the
 seed store (the "seeded-then-dropped" pattern).** The operational twin of

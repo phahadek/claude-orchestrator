@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   renderTaskBody,
+  renderTaskBodyMarkdown,
   markdownToBlocks,
   isShellCommandLine,
   type TaskBodySections,
@@ -162,6 +163,86 @@ describe('renderTaskBody — acceptance criteria 🤖/👁️ split', () => {
         ],
       },
     });
+  });
+});
+
+describe('renderTaskBody / renderTaskBodyMarkdown — Code-task manual section retirement', () => {
+  it('omits the 👁️ Manual verification heading and boilerplate for a post-groom Code task (Notion blocks)', () => {
+    const blocks = renderTaskBody(
+      baseSections({
+        automatedCriteria: ['tsc passes'],
+        manualCriteria: [],
+        taskType: '💻 Code',
+      }),
+    );
+    const manualHeading = blocks.find(
+      (b) =>
+        b.type === 'heading_3' &&
+        JSON.stringify(b.heading_3).includes('👁️ Manual verification'),
+    );
+    expect(manualHeading).toBeUndefined();
+    const boilerplate = blocks.find(
+      (b) =>
+        b.type === 'paragraph' &&
+        JSON.stringify(b.paragraph).includes(
+          'Covered by the Manual Verification Gate',
+        ),
+    );
+    expect(boilerplate).toBeUndefined();
+  });
+
+  it('omits the 👁️ Manual verification heading and boilerplate for a post-groom Code task (markdown)', () => {
+    const markdown = renderTaskBodyMarkdown(
+      baseSections({
+        automatedCriteria: ['tsc passes'],
+        manualCriteria: [],
+        taskType: '💻 Code',
+      }),
+    );
+    expect(markdown).not.toContain('👁️ Manual verification');
+    expect(markdown).not.toContain('Covered by the Manual Verification Gate');
+  });
+
+  it('still renders the manual-verification section for a Code task carrying real pre-groom content', () => {
+    const blocks = renderTaskBody(
+      baseSections({
+        automatedCriteria: ['tsc passes'],
+        manualCriteria: ['Launch the app and click the widget'],
+        taskType: '💻 Code',
+      }),
+    );
+    const manualHeading = blocks.find(
+      (b) =>
+        b.type === 'heading_3' &&
+        JSON.stringify(b.heading_3).includes('👁️ Manual verification'),
+    );
+    expect(manualHeading).toBeDefined();
+  });
+
+  it('still renders the manual-verification section (with gate-note fallback) for a non-Code type', () => {
+    const blocks = renderTaskBody(
+      baseSections({
+        automatedCriteria: ['N/A — design task only.'],
+        manualCriteria: [],
+        taskType: '📐 Design',
+      }),
+    );
+    const manualHeading = blocks.find(
+      (b) =>
+        b.type === 'heading_3' &&
+        JSON.stringify(b.heading_3).includes('👁️ Manual verification'),
+    );
+    expect(manualHeading).toBeDefined();
+
+    const markdown = renderTaskBodyMarkdown(
+      baseSections({
+        automatedCriteria: ['N/A — design task only.'],
+        manualCriteria: ['Reviewed the updated architecture page'],
+        taskType: '📐 Design',
+      }),
+    );
+    expect(markdown).toContain('👁️ Manual verification');
+    expect(markdown).toContain('Reviewed the updated architecture page');
   });
 });
 

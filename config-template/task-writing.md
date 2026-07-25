@@ -109,14 +109,16 @@ Guidelines / Technical Architecture pages — link them; don't paraphrase. If a 
 disagrees with one of those constraints, the task is wrong, not the constraint.
 
 ### Acceptance criteria
-Checkboxes split into two mandatory subsections — **every task uses both**:
+Checkboxes split into two subsections:
 - `### 🤖 Automated tests` — items verifiable by the type checker, linter, unit
   tests, or a script, with **no human in the loop**. Use the project's verify
   commands (from its `context.md` / `.claude-orchestrator.yml`). For Design tasks,
-  write `*N/A — design task only.*`.
+  write `*N/A — design task only.*`. Mandatory for every task.
 - `### 👁️ Manual verification` — items requiring a running app/pipeline, a browser,
   observed runtime behaviour, or a human read-through of an updated Notion page (for
-  Design tasks).
+  Design tasks). Mandatory for every non-Code type. **For 💻 Code tasks it is
+  authoring-time-optional** (real runtime items only, see below) and grooming removes
+  it post-accretion — a post-groom Code task carries no manual-verification section.
 
 Each item must be independently verifiable — pass/fail obvious without judgment.
 Aim for **5–10 items total** across both subsections.
@@ -127,10 +129,15 @@ Aim for **5–10 items total** across both subsections.
 
 **Code tasks must not put runtime/launch-and-observe items in their own
 acceptance criteria** — those belong to the milestone's **Manual Verification Gate**
-(below; orchestrator-tracked state, not a task). A Code task's manual-verification subsection reads:
-`Covered by the **Manual Verification Gate**.` *(🔧 Operational / 🔎 Investigation
-tasks are the exception — they verify in-session and do NOT accrete to the gate; see
-their section below.)*
+(below; orchestrator-tracked state, not a task). A Code task's `### 👁️ Manual
+verification` subsection is **authoring-time-optional**: write it only when there are
+real runtime items to list (author judgment, not boilerplate). Grooming strips those
+items to the gate and then **removes the section entirely** — it is not replaced with
+`Covered by the Manual Verification Gate.` boilerplate. A post-groom (🗂️ Ready or
+later) Code task therefore carries **no** manual-verification section at all; its
+absence *is* the signal that verification is gate-owned. *(🔧 Operational /
+🔎 Investigation tasks are the exception — they verify in-session, always carry the
+section, and do NOT accrete to the gate; see their section below.)*
 
 ### Notion pages affected *(Design/Planning tasks only)*
 Bulleted list of every Notion page this task creates or edits, with `*(new)*` or
@@ -231,8 +238,12 @@ record — there is no dated run-note written back into a task body).
   context-switching and re-launching. One focused gate keeps the automated/manual
   split clean inside every code task.
 - **In code tasks:** include only what's verifiable without a running app (type
-  check, lint, unit tests, build). Strip every "launch and observe" item; the code task's
-  manual-verification subsection reads `Covered by the **Manual Verification Gate**.`
+  check, lint, unit tests, build). Strip every "launch and observe" item; after
+  accretion, the groomer **removes** the code task's manual-verification section from
+  the body — it does not leave a boilerplate line behind. A Code task's manual/runtime
+  verification is owned by the gate at that point; sessions must not try to run or
+  evaluate it (this default lives in the coding and review session prompts, not in the
+  task body).
 - **The gate items:** each `gate_item` row carries a **classification** (e.g. `Prod-Mutating`
   vs read-only) and a **state machine** — `open` → `runnable` → `pass` / `fail` / `deferred`,
   with `Prod-Mutating` passes parked at `pending-approval` until a human consents. Items become

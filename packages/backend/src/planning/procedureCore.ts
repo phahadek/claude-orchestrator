@@ -494,7 +494,15 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'explicit `{"decision":"none"}` when it has none. Both are durable markers ' +
       'checkGroomingPromotionGate requires for every 💻 Code task; a Ready flip ' +
       'staged without them is blocked at commit time and surfaced back at stage ' +
-      'time — never stage the Ready flip first and leave accretion for later.',
+      'time — never stage the Ready flip first and leave accretion for later. ' +
+      'The accretion source is the task body\'s pre-groom "### 👁️ Manual ' +
+      'verification" section, when present — its items are the runtime/' +
+      'launch-and-observe candidates for `gate.accrete`. Once accreted, stage a ' +
+      '`task.updateBody` that removes the section from the body entirely — never ' +
+      'leave it behind, and never replace it with boilerplate ("Covered by the ' +
+      'Manual Verification Gate."). A post-groom 💻 Code task carries no manual-' +
+      'verification section at all; that absence is the intended post-groom ' +
+      'state, not a gap to fill back in.',
   },
   {
     id: 'file-follow-on-tasks',

@@ -22,6 +22,15 @@ export interface TaskBodySections {
   manualCriteria: string[];
   filesAffected?: string[];
   notionPagesAffected?: string[];
+  /**
+   * Display-format Type (e.g. '💻 Code'). When '💻 Code' and manualCriteria is
+   * empty, the manual-verification section is omitted entirely rather than
+   * rendered with "Covered by the Manual Verification Gate" boilerplate — a
+   * Code task's manual/runtime verification is gate-owned, and the section's
+   * absence is the signal (see task-writing.md § Manual Verification Gate).
+   * Omitted/any other type preserves the boilerplate-fallback behavior.
+   */
+  taskType?: string;
 }
 
 interface NotionRichTextAnnotations {
@@ -272,18 +281,26 @@ function renderDependencies(dependencies: string[]): RenderedBlock[] {
   return dependencies.map((dep) => bulletedListItem(dep));
 }
 
+const CODE_TASK_TYPE = '💻 Code';
+
 function renderAcceptanceCriteria(
   automatedCriteria: string[],
   manualCriteria: string[],
+  taskType?: string,
 ): RenderedBlock[] {
   const blocks: RenderedBlock[] = [heading2('Acceptance criteria')];
   blocks.push(heading3('🤖 Automated tests'));
   blocks.push(...automatedCriteria.map((c) => todo(c)));
-  blocks.push(heading3('👁️ Manual verification'));
-  if (manualCriteria.length === 0) {
-    blocks.push(paragraph('Covered by the Manual Verification Gate task.'));
-  } else {
-    blocks.push(...manualCriteria.map((c) => todo(c)));
+
+  const omitSection =
+    taskType === CODE_TASK_TYPE && manualCriteria.length === 0;
+  if (!omitSection) {
+    blocks.push(heading3('👁️ Manual verification'));
+    if (manualCriteria.length === 0) {
+      blocks.push(paragraph('Covered by the Manual Verification Gate task.'));
+    } else {
+      blocks.push(...manualCriteria.map((c) => todo(c)));
+    }
   }
   return blocks;
 }
@@ -305,6 +322,7 @@ export function renderTaskBody(sections: TaskBodySections): RenderedBlock[] {
     ...renderAcceptanceCriteria(
       sections.automatedCriteria,
       sections.manualCriteria,
+      sections.taskType,
     ),
   );
 
@@ -438,11 +456,16 @@ export function renderTaskBodyMarkdown(sections: TaskBodySections): string {
 
   lines.push('', '## Acceptance criteria', '### 🤖 Automated tests');
   lines.push(...sections.automatedCriteria.map((c) => `- ${c}`));
-  lines.push('### 👁️ Manual verification');
-  if (sections.manualCriteria.length === 0) {
-    lines.push('Covered by the Manual Verification Gate task.');
-  } else {
-    lines.push(...sections.manualCriteria.map((c) => `- ${c}`));
+  const omitManualSection =
+    sections.taskType === CODE_TASK_TYPE &&
+    sections.manualCriteria.length === 0;
+  if (!omitManualSection) {
+    lines.push('### 👁️ Manual verification');
+    if (sections.manualCriteria.length === 0) {
+      lines.push('Covered by the Manual Verification Gate task.');
+    } else {
+      lines.push(...sections.manualCriteria.map((c) => `- ${c}`));
+    }
   }
 
   if (sections.filesAffected?.length) {
