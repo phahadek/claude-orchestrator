@@ -11,9 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../db/db', async () => {
-  const { setupTestDb } = await import(
-    '../../test/helpers/setupTestDb.js'
-  );
+  const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
 });
 
@@ -209,21 +207,17 @@ describe('capability grant denylist stays skill-agnostic', () => {
   it.each(denylisted)(
     'a groom session never gets "%s" merged into its allowlist even if granted',
     (capability) => {
-      const merged = getSessionAllowedTools(
-        'groom',
-        { allowed_tools: [] },
-        [capability],
-      );
+      const merged = getSessionAllowedTools('groom', { allowed_tools: [] }, [
+        capability,
+      ]);
       expect(merged).not.toContain(capability);
     },
   );
 
   it('a groom session does get a grantable Bash capability merged in', () => {
-    const merged = getSessionAllowedTools(
-      'groom',
-      { allowed_tools: [] },
-      ['Bash(psql:*)'],
-    );
+    const merged = getSessionAllowedTools('groom', { allowed_tools: [] }, [
+      'Bash(psql:*)',
+    ]);
     expect(merged).toContain('Bash(psql:*)');
   });
 });
