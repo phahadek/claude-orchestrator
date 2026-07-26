@@ -170,4 +170,74 @@ describe('POST /api/planning/launch', () => {
 
     expect(res.status).toBe(400);
   });
+
+  it('responds 202 with failed[] present when a dispatch fails, rather than reporting a clean launch', async () => {
+    const launchSelected = vi.fn().mockResolvedValue({
+      launched: [],
+      deferred: [],
+      failed: [
+        {
+          taskId: 'task-a',
+          reason: 'Max concurrent planning sessions (5) reached',
+        },
+      ],
+    });
+    const launcher = { launchSelected } as unknown as OpsSessionLauncher;
+
+    const res = await request(makeApp(launcher))
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'groom',
+        projectId: 'p1',
+        milestone: 'm1',
+        taskIds: ['notion:task-a'],
+      });
+
+    expect(res.status).toBe(202);
+    expect(res.body.launched).toEqual([]);
+    expect(res.body.failed).toEqual([
+      {
+        taskId: 'task-a',
+        reason: 'Max concurrent planning sessions (5) reached',
+      },
+    ]);
+  });
+
+  it('does not report a 202 dispatch for an unknown milestone', async () => {
+    mockGetMilestoneById.mockReturnValue(undefined);
+    const launcher = {
+      launchSelected: vi.fn(),
+    } as unknown as OpsSessionLauncher;
+
+    const res = await request(makeApp(launcher))
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'groom',
+        projectId: 'p1',
+        milestone: 'unknown-milestone',
+        taskIds: ['notion:task-a'],
+      });
+
+    expect(res.status).toBe(404);
+    expect(launcher.launchSelected).not.toHaveBeenCalled();
+  });
+
+  it('still responds 500 for a genuine request-level fault, distinct from a per-task dispatch failure', async () => {
+    mockLoadOpsContext.mockRejectedValue(new Error('board load failed'));
+    const launcher = {
+      launchSelected: vi.fn(),
+    } as unknown as OpsSessionLauncher;
+
+    const res = await request(makeApp(launcher))
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'ops',
+        projectId: 'p1',
+        milestone: 'm1',
+        taskIds: ['notion:bare-uuid-1'],
+      });
+
+    expect(res.status).toBe(500);
+    expect(launcher.launchSelected).not.toHaveBeenCalled();
+  });
 });

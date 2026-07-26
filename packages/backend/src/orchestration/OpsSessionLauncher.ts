@@ -81,7 +81,13 @@ export interface OpsLaunchParams {
 export interface OpsLaunchResult {
   launched: string[];
   deferred: string[];
+  failed: { taskId: string; reason: string }[];
 }
+
+export type LaunchOutcome =
+  | { status: 'launched'; taskId: string; sessionId: string }
+  | { status: 'deferred'; taskId: string; blockedBy: string[] }
+  | { status: 'failed'; taskId: string; reason: string };
 
 interface DeferredOpsTask {
   projectId: string;
@@ -118,6 +124,7 @@ export class OpsSessionLauncher {
   async launchSelected(params: OpsLaunchParams): Promise<OpsLaunchResult> {
     const launched: string[] = [];
     const deferredIds: string[] = [];
+    const failed: { taskId: string; reason: string }[] = [];
     const sessionType = params.sessionType ?? 'standard';
 
     for (const task of params.tasks) {
@@ -138,7 +145,7 @@ export class OpsSessionLauncher {
         );
         continue;
       }
-      await this.launchOne(
+      const outcome = await this.launchOne(
         params.projectId,
         params.projectContextUrl,
         params.milestoneId,
@@ -148,10 +155,14 @@ export class OpsSessionLauncher {
         params.model,
         params.effort,
       );
-      launched.push(task.id);
+      if (outcome.status === 'launched') {
+        launched.push(outcome.taskId);
+      } else if (outcome.status === 'failed') {
+        failed.push({ taskId: outcome.taskId, reason: outcome.reason });
+      }
     }
 
-    return { launched, deferred: deferredIds };
+    return { launched, deferred: deferredIds, failed };
   }
 
   hasDeferred(taskId: string): boolean {
@@ -334,7 +345,7 @@ export class OpsSessionLauncher {
     task: PlanningTaskEntry,
     model?: string,
     effort?: string,
-  ): Promise<void> {
+  ): Promise<LaunchOutcome> {
     const taskUrl =
       task.url || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
     let injectedProcedure: { content: string; title?: string } | undefined;
@@ -356,7 +367,7 @@ export class OpsSessionLauncher {
           logger.warn(
             `[OpsSessionLauncher] skipping ${sessionType} dispatch for task ${task.id}: ${err.message}`,
           );
-          return;
+          return { status: 'failed', taskId: task.id, reason: err.message };
         }
         throw err;
       }
@@ -395,10 +406,13 @@ export class OpsSessionLauncher {
           );
         });
       }
+      return { status: 'launched', taskId: task.id, sessionId };
     } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
       logger.warn(
-        `[OpsSessionLauncher] failed to launch ops task ${task.id}: ${err instanceof Error ? err.message : err}`,
+        `[OpsSessionLauncher] failed to launch ops task ${task.id}: ${reason}`,
       );
+      return { status: 'failed', taskId: task.id, reason };
     }
   }
 }

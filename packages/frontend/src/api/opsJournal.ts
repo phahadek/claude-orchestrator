@@ -29,6 +29,7 @@ export interface OpsJournalEntry {
 export interface OpsLaunchResult {
   launched: string[];
   deferred: string[];
+  failed: { taskId: string; reason: string }[];
 }
 
 /** Workflow the Groom(N) / Ops(N) launcher buttons dispatch — resolved to a sessionType server-side. */
