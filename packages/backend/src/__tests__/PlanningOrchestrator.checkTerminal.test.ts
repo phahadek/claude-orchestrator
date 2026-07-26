@@ -30,10 +30,10 @@ function makeSessionManager() {
   const emitter = new EventEmitter();
   return Object.assign(emitter, {
     enqueueFeedback: vi.fn().mockResolvedValue(undefined),
-    evictSession: vi.fn(),
+    endSession: vi.fn(),
   }) as unknown as SessionManager & {
     enqueueFeedback: ReturnType<typeof vi.fn>;
-    evictSession: ReturnType<typeof vi.fn>;
+    endSession: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -166,6 +166,9 @@ describe('PlanningOrchestrator.checkTerminal', () => {
     stageIntent();
     expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
     expect(getSession(SESSION_ID)?.status).toBe('running');
+    // A session parked idle awaiting an operator disposition is genuinely
+    // resumable by design — it must not be ended just because it's idle.
+    expect(sessionManager.endSession).not.toHaveBeenCalled();
   });
 
   it('does not terminate a session awaiting a capability grant', () => {
@@ -193,6 +196,6 @@ describe('PlanningOrchestrator.checkTerminal', () => {
     transitionStagedIntent(intent.id, 'committed');
 
     expect(orchestrator.checkTerminal(SESSION_ID)).toBe(true);
-    expect(sessionManager.evictSession).toHaveBeenCalledWith(SESSION_ID);
+    expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
   });
 });

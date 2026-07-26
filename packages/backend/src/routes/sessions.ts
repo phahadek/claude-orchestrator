@@ -124,6 +124,10 @@ sessionsRouter.patch('/:id/archive', (req: Request, res: Response) => {
     return;
   }
   archiveSession(sessionId);
+  // Archiving is an explicit operator signal the session is done — reap any
+  // live subprocess so it doesn't keep holding a concurrency slot under an
+  // archived (dashboard-invisible) row.
+  _sessionManager?.endSession(sessionId);
   res.json({ ok: true });
 });
 
