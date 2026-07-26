@@ -1456,4 +1456,22 @@ export function runMigrations(target: Database.Database): void {
       PRIMARY KEY (pr_number, repo, comment_id, disposition)
     );
   `);
+
+  // planning_checkout_locks: one row per active planning session (groom/
+  // design/ops/split) currently holding the read-only-checkout lockdown on
+  // its project's shared cwd. Ref count for a project_dir is COUNT(*) over
+  // this table — persisted so an orchestrator restart can recompute and
+  // restore the correct read-only/scratch filesystem state instead of
+  // stranding the checkout (see checkoutLockdown.ts).
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS planning_checkout_locks (
+      session_id   TEXT    PRIMARY KEY,
+      project_dir  TEXT    NOT NULL,
+      scratch_dir  TEXT    NOT NULL,
+      created_at   INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_planning_checkout_locks_project_dir
+      ON planning_checkout_locks(project_dir);
+  `);
 }
