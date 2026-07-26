@@ -242,28 +242,34 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       "applies to a 📐 Design task's listed Open Questions: every listed Open " +
       'Question stages as its own `decision.pickOne` regardless of confidence (one ' +
       'option when the answer is a confident recommendation, two-or-more for a real ' +
-      "fork) — see 'No batch-locking' below. A listed Open Question is never routed " +
+      "fork) — see 'No question-bundling' below. A listed Open Question is never routed " +
       'to a concrete write to "lock it in" — `task.updateBody` (Implementation ' +
       'notes) only consolidates decisions already accepted by the operator; it is ' +
       'never the vehicle for making one.',
   },
   {
-    id: 'design-no-batch-locking',
-    title: 'No batch-locking — one Open Question at a time',
+    id: 'design-no-question-bundling',
+    title: 'No question-bundling — one Open Question per decision.pickOne intent',
     appliesTo: ['design'],
     text:
       "DO stage exactly one Open Question's resolution per `decision.pickOne` " +
       'intent (options = the candidate answers — a single option is a confident ' +
       'recommendation the operator accepts or pushes back on, not just a genuine ' +
-      'fork), never a `task.updateBody` edit, and ' +
-      "never more than one question's resolution staged per turn. DO investigate " +
-      'before deciding — cite the code read, arch-page section, or API-call result the ' +
-      'resolution rests on; "decide at implementation time" is a _defer_, never a ' +
-      '_resolve_. DO hold a question whose answer depends on another still-unresolved ' +
-      'question rather than staging both together. DO NOT batch-lock multiple ' +
-      'questions into one pass. `task.updateBody` (the Implementation notes) is staged ' +
-      'exactly once, as the final step, only after every question is settled and the ' +
-      'completeness critic below has run.',
+      'fork), never a `task.updateBody` edit, and never two questions bundled into ' +
+      'one intent. DO investigate before deciding — cite the code read, arch-page ' +
+      'section, or API-call result the resolution rests on; "decide at ' +
+      'implementation time" is a _defer_, never a _resolve_. DO stage every Open ' +
+      'Question whose answer is independent of the others in the same turn, each as ' +
+      'its own `decision.pickOne` intent — independent questions do not need to wait ' +
+      'for separate round-trips. DO hold a question whose answer depends on another ' +
+      'still-unresolved question, staging it once that answer lands, rather than ' +
+      'staging both together — and DO treat independence conservatively: when unsure ' +
+      "whether one answer constrains another, hold the dependent question rather " +
+      'than stage both; an operator dispositioning two questions whose answers turn ' +
+      'out coupled is worse than one extra round-trip. DO NOT bundle multiple ' +
+      'questions into one `decision.pickOne` intent. `task.updateBody` (the ' +
+      'Implementation notes) is staged exactly once, as the final step, only after ' +
+      'every question is settled and the completeness critic below has run.',
   },
   {
     id: 'design-decision-pickone-payload-shape',
@@ -291,7 +297,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'field. DO name the preferred solution and its load-bearing reason explicitly in ' +
       '`decisionProposal`, alongside that investigation summary. A single `options` ' +
       'entry stays valid — a confident recommendation the operator accepts or pushes ' +
-      'back on (see ‘No batch-locking’ above) — this shape governs how it, or each ' +
+      'back on (see ‘No question-bundling’ above) — this shape governs how it, or each ' +
       'of several, is written, never whether more than one is required.',
   },
   {
@@ -572,13 +578,14 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'continue. Never batch multiple decisions into one silent pass.',
     summaryOverrides: {
       design:
-        'DO handle each Open Question one at a time — stage its resolution as a ' +
-        '`decision.pickOne` intent, then end the turn. DO NOT wait for a chat ' +
-        'confirmation before continuing: a dispatched design session has no ' +
-        'synchronous chat turn to wait within — ' +
-        'the staged intent is the confirmation surface, and the operator (not this ' +
-        "session) disposes it. DO NOT batch multiple questions' resolutions into " +
-        'one pass.',
+        'DO stage each Open Question’s resolution as its own `decision.pickOne` ' +
+        'intent — never bundle two questions into one intent. DO stage every ' +
+        'independent Open Question in the same turn, each as its own intent; hold ' +
+        'a question whose answer depends on another still-unresolved question ' +
+        'until that answer lands. DO NOT wait for a chat confirmation before ' +
+        'continuing: a dispatched design session has no synchronous chat turn to ' +
+        'wait within — the staged intent is the confirmation surface, and the ' +
+        'operator (not this session) disposes it.',
     },
   },
   {

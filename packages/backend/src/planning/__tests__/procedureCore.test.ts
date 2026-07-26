@@ -206,7 +206,7 @@ describe('procedureCore', () => {
 
   it('instructs staging each listed Open Question as a decision.pickOne with no competing "stage the concrete write when confident" routing', () => {
     const batchLockingText = renderPrinciple(
-      CORE_PRINCIPLES.find((p) => p.id === 'design-no-batch-locking')!,
+      CORE_PRINCIPLES.find((p) => p.id === 'design-no-question-bundling')!,
       'design',
     );
     expect(batchLockingText).toMatch(/decision\.pickOne/);

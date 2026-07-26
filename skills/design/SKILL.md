@@ -424,7 +424,10 @@ Edit/Write tool) — canonical source
   any directory-change-before-git as a hook-execution risk, regardless of allowlist).
   `git -C <repo> show/log/diff …` is allowlisted and silent. Use path flags for other repo
   tools too (`npm --prefix`, `uv --project`), not `cd`.
-- **No batch-locking.** One open question per message; one sign-off per question.
+- **No question-bundling.** One open question per `decision.pickOne` intent, one
+  sign-off per question — but independent questions can each be staged as their own
+  intent in the same turn; only a question that depends on another still-unresolved
+  one waits.
 - **Investigate before deciding.** Code reads / API calls / arch-page reads come
   before presenting a question. "Decide at implementation time" is a _defer_, not
   a _resolve_ — it becomes an explicit Open Question in the follow-on Code task.

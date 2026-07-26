@@ -94,10 +94,10 @@ describe('design decision.pickOne payload-shape contract', () => {
       /A single `options` entry stays valid.*confident recommendation/i,
     );
 
-    // The pre-existing batch-locking principle also carries this — keep both
+    // The pre-existing question-bundling principle also carries this — keep both
     // in sync rather than dropping the guarantee when one is edited.
     const batchLocking = CORE_PRINCIPLES.find(
-      (p) => p.id === 'design-no-batch-locking',
+      (p) => p.id === 'design-no-question-bundling',
     );
     expect(renderPrinciple(batchLocking!, 'design')).toMatch(
       /a single option is a confident recommendation/i,
