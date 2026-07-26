@@ -74,6 +74,7 @@ import {
   addGrantedCapability,
   expireStagedIntentsForSession,
   sweepStagedIntentsForTerminalSessions,
+  TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import {
@@ -341,7 +342,7 @@ export interface StartOptions {
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
 const LAST_MESSAGE_THROTTLE_MS = 3_000;
 
-const TERMINAL_STATUSES = new Set(['done', 'error', 'killed', 'superseded']);
+const TERMINAL_STATUSES = new Set([...TERMINAL_SESSION_STATUSES, 'superseded']);
 const ALWAYS_GUARDED_BRANCHES = new Set(['dev', 'main']);
 
 /**

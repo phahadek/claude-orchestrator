@@ -34,6 +34,7 @@ type EventType =
   | 'auto_launch_done_update_stuck'
   | 'auto_launch_paused'
   | 'session_marked_done_while_running'
+  | 'session_idle_write_skipped_terminal'
   | 'conflict_nudge_delivery_failed'
   | 'worktree_remove_failed'
   | 'worktree_teardown_refused'

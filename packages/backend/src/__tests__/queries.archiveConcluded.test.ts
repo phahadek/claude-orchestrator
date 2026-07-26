@@ -6,7 +6,7 @@ vi.mock('../db/db.js', async () => {
 });
 
 import { db } from '../db/db.js';
-import { archiveConcludedSessionsOlderThan } from '../db/queries.js';
+import { archiveConcludedSessionsOlderThan, markSessionIdle } from '../db/queries.js';
 
 function insertSession(opts: {
   session_id: string;
@@ -129,6 +129,31 @@ describe('archiveConcludedSessionsOlderThan', () => {
   it('returns empty array when nothing qualifies', () => {
     const ids = archiveConcludedSessionsOlderThan(CUTOFF);
     expect(ids).toEqual([]);
+  });
+
+  it('archives a session marked done by _concludeSessions that then clean-exits, once past the grace window', () => {
+    // Simulates the merge race: PRMergeWatcher/_concludeSessions marks the row
+    // done, then the CLI subprocess exits on its own schedule and its
+    // clean-exit handler calls markSessionIdle — which must not revert the
+    // terminal status back to idle (see the terminal guard in markSessionIdle).
+    insertSession({
+      session_id: 'concluded-then-clean-exit',
+      status: 'done',
+      ended_at: CUTOFF - 1,
+    });
+
+    markSessionIdle('concluded-then-clean-exit', CUTOFF - 1, null);
+
+    const ids = archiveConcludedSessionsOlderThan(CUTOFF);
+    expect(ids).toEqual(['concluded-then-clean-exit']);
+
+    const row = db
+      .prepare(
+        `SELECT status, archived FROM sessions WHERE session_id = 'concluded-then-clean-exit'`,
+      )
+      .get() as { status: string; archived: number };
+    expect(row.status).toBe('done');
+    expect(row.archived).toBe(1);
   });
 
   it('integration: 10 sessions, 5 within grace, 5 older', () => {

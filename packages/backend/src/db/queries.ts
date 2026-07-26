@@ -268,15 +268,58 @@ export function markSessionDone(
 }
 
 /**
+ * Terminal session statuses shared across the codebase. A session in one of
+ * these states has concluded and must never be reverted by a stale write
+ * from an in-flight subprocess (e.g. a clean-exit that races a merge).
+ * SessionManager's own TERMINAL_STATUSES additionally includes 'superseded'
+ * for its branch-deletion gate — that's a distinct, wider vocabulary and is
+ * derived from this one rather than duplicated.
+ */
+export const TERMINAL_SESSION_STATUSES = new Set(['done', 'error', 'killed']);
+
+const stmtBackfillPrUrlIfNull = db.prepare<{
+  session_id: string;
+  pr_url: string | null;
+}>(`
+  UPDATE sessions
+  SET pr_url = COALESCE(pr_url, @pr_url)
+  WHERE session_id = @session_id
+`);
+
+/**
  * Atomically mark a session as idle (process exited, PR open, waiting for
  * review/merge). Sets ended_at and pr_url in a single write. The session
  * remains resumable via sendOrResume; it becomes done only when the PR merges.
+ *
+ * Terminal guard: if the session has already concluded (done/error/killed —
+ * e.g. its PR merged and PRMergeWatcher/_concludeSessions already marked it
+ * done), a subsequent clean-exit write must not revert that terminal status
+ * back to idle. The write is skipped and a session_idle_write_skipped_terminal
+ * audit event is recorded. Any scraped pr_url is still backfilled onto the
+ * row when it currently has none, so recoverSession/SessionAuditor can still
+ * find it.
  */
 export function markSessionIdle(
   sessionId: string,
   endedAt: number,
   prUrl?: string | null,
 ): void {
+  const current = stmtGetSession.get({ session_id: sessionId }) as
+    | { status: string; task_id: string | null }
+    | undefined;
+  if (current && TERMINAL_SESSION_STATUSES.has(current.status)) {
+    recordEvent({
+      event_type: 'session_idle_write_skipped_terminal',
+      actor_type: 'system',
+      actor_id: sessionId,
+      task_id: current.task_id ?? null,
+      payload: { status_before: current.status },
+    });
+    if (prUrl) {
+      stmtBackfillPrUrlIfNull.run({ session_id: sessionId, pr_url: prUrl });
+    }
+    return;
+  }
   stmtMarkSessionIdle.run({
     session_id: sessionId,
     ended_at: endedAt,
