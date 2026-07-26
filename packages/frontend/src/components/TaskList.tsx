@@ -71,59 +71,6 @@ const OPS_TASK_TYPES = ['🔧 Operational', '🔎 Investigation', '🧪 Testing'
 const DESIGN_TASK_TYPES = ['📐 Design', '📋 Planning'];
 
 /**
- * Surfaces the tasks a Groom(N)/Ops(N)/Design(N) batch launch just started.
- * Each launched task now renders its planning session inline (collapsible)
- * in TaskDetail, so this banner is just a navigational shortcut back to the
- * task rather than staging a fake Apply/Reject intent for something that
- * was never actually staged.
- */
-function LaunchedSessionsBanner({
-  label,
-  taskIds,
-  tasks,
-  onSelectTask,
-  onDismiss,
-  testId,
-}: {
-  label: string;
-  taskIds: string[];
-  tasks: TaskView[];
-  onSelectTask: (taskId: string) => void;
-  onDismiss: () => void;
-  testId: string;
-}) {
-  if (taskIds.length === 0) return null;
-  return (
-    <div className={styles.launchedSessionsPanel} data-testid={testId}>
-      <div className={styles.launchedSessionsHeader}>
-        <span>{label}</span>
-        <button
-          className={styles.launchedSessionsDismiss}
-          onClick={onDismiss}
-          aria-label="Dismiss"
-        >
-          ×
-        </button>
-      </div>
-      <div className={styles.launchedSessionsList}>
-        {taskIds.map((taskId) => {
-          const task = tasks.find((t) => t.taskId === taskId);
-          return (
-            <button
-              key={taskId}
-              className={styles.launchedSessionLink}
-              onClick={() => onSelectTask(taskId)}
-            >
-              {task?.taskName ?? taskId}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/**
  * Reconciles a Groom(N)/Ops(N)/Design(N) launch response against the tasks the
  * operator selected, producing operator-facing messages:
  * - deferred: waiting on dependencies (unchanged from before failed[] existed).
@@ -380,21 +327,15 @@ export function TaskList({
   const [groomCheckedIds, setGroomCheckedIds] = useState<Set<string>>(
     new Set(),
   );
-  // Task ids for sessions the Groom(N)/Ops(N)/Design(N) buttons just
-  // launched, surfaced via LaunchedSessionsBanner — each is already a live
-  // session in the session grid, so this just links to it.
-  const [groomLaunchedIds, setGroomLaunchedIds] = useState<string[]>([]);
   const [groomLoading, setGroomLoading] = useState(false);
   const [groomError, setGroomError] = useState<string | null>(null);
   // Ops(N): launches one individual, dependency-ordered session per selected
   // task (mirrors the manual-UI launch path).
-  const [opsLaunchedIds, setOpsLaunchedIds] = useState<string[]>([]);
   const [opsLoading, setOpsLoading] = useState(false);
   const [opsError, setOpsError] = useState<string | null>(null);
   const [opsCheckedIds, setOpsCheckedIds] = useState<Set<string>>(new Set());
   // Design(N): mirrors Ops(N) — launches one individual design/planning session
   // per selected task via the same unified planning-launch route.
-  const [designLaunchedIds, setDesignLaunchedIds] = useState<string[]>([]);
   const [designLoading, setDesignLoading] = useState(false);
   const [designError, setDesignError] = useState<string | null>(null);
   const [designCheckedIds, setDesignCheckedIds] = useState<Set<string>>(
@@ -407,12 +348,9 @@ export function TaskList({
   // Reset the shared staged-intent display when the active milestone/project
   // changes so a stale intent from the previous board never carries over.
   useEffect(() => {
-    setGroomLaunchedIds([]);
     setGroomError(null);
-    setOpsLaunchedIds([]);
     setOpsError(null);
     setOpsCheckedIds(new Set());
-    setDesignLaunchedIds([]);
     setDesignError(null);
     setDesignCheckedIds(new Set());
     setMoveIntent(null);
@@ -641,10 +579,6 @@ export function TaskList({
         boardId,
         selectedIds,
       );
-      const launchedIds = new Set(result.launched.map(bareTaskId));
-      setGroomLaunchedIds(
-        selectedIds.filter((id) => launchedIds.has(bareTaskId(id))),
-      );
       setGroomError(formatLaunchMessages(selectedIds, result, 'not groomable'));
       setGroomCheckedIds(new Set());
     } catch (err) {
@@ -725,10 +659,6 @@ export function TaskList({
         boardId,
         selectedIds,
       );
-      const launchedIds = new Set(result.launched.map(bareTaskId));
-      setOpsLaunchedIds(
-        selectedIds.filter((id) => launchedIds.has(bareTaskId(id))),
-      );
       setOpsError(
         formatLaunchMessages(selectedIds, result, 'not ops-executable'),
       );
@@ -801,10 +731,6 @@ export function TaskList({
         activeProjectId,
         boardId,
         selectedIds,
-      );
-      const launchedIds = new Set(result.launched.map(bareTaskId));
-      setDesignLaunchedIds(
-        selectedIds.filter((id) => launchedIds.has(bareTaskId(id))),
       );
       setDesignError(
         formatLaunchMessages(selectedIds, result, 'not design-executable'),
@@ -996,33 +922,6 @@ export function TaskList({
             />
           </div>
         )}
-
-        <LaunchedSessionsBanner
-          label={`${groomLaunchedIds.length} grooming session${groomLaunchedIds.length === 1 ? '' : 's'} launched`}
-          taskIds={groomLaunchedIds}
-          tasks={tasks}
-          onSelectTask={onSelectTask}
-          onDismiss={() => setGroomLaunchedIds([])}
-          testId="groom-launched-panel"
-        />
-
-        <LaunchedSessionsBanner
-          label={`${opsLaunchedIds.length} ops session${opsLaunchedIds.length === 1 ? '' : 's'} launched`}
-          taskIds={opsLaunchedIds}
-          tasks={tasks}
-          onSelectTask={onSelectTask}
-          onDismiss={() => setOpsLaunchedIds([])}
-          testId="ops-launched-panel"
-        />
-
-        <LaunchedSessionsBanner
-          label={`${designLaunchedIds.length} design session${designLaunchedIds.length === 1 ? '' : 's'} launched`}
-          taskIds={designLaunchedIds}
-          tasks={tasks}
-          onSelectTask={onSelectTask}
-          onDismiss={() => setDesignLaunchedIds([])}
-          testId="design-launched-panel"
-        />
 
         {moveIntent && (
           <div className={styles.opsPlaceholderPanel} data-testid="move-panel">

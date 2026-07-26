@@ -1043,12 +1043,80 @@ describe('TaskList', () => {
           .querySelector('input[type="checkbox"]') as HTMLInputElement,
       );
 
-      const groomBtn = within(backlogSection).getByTestId('groom-btn');
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
       fireEvent.click(groomBtn);
 
       await waitFor(() => {
-        expect(screen.getByTestId('groom-launched-panel')).toBeDefined();
+        expect(groomBtn.textContent).toContain('Groom (0)');
       });
+      expect(screen.queryByTestId('groom-error')).toBeNull();
+    });
+
+    it('renders no launched-sessions banner after a successful batch launch', async () => {
+      const bareUuid = 'no-banner-uuid';
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched: [bareUuid], deferred: [] }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({}),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'bc-companion-no-banner',
+            taskName: 'Backlog Code Task',
+            displayStatus: 'backlog',
+            taskType: '💻 Code',
+          }),
+          makeTask({
+            taskId: bareUuid,
+            taskName: 'Backlog Design Task',
+            displayStatus: 'backlog',
+            taskType: '📐 Design',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      const nonCodeSection = screen.getByTestId('non-code-section');
+      fireEvent.click(
+        within(nonCodeSection).getByTestId('type-card-header-design'),
+      );
+      fireEvent.click(
+        within(nonCodeSection)
+          .getByTestId('type-card-design')
+          .querySelector('input[type="checkbox"]') as HTMLInputElement,
+      );
+
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      fireEvent.click(groomBtn);
+
+      await waitFor(() => {
+        expect(groomBtn.textContent).toContain('Groom (0)');
+      });
+
+      // Acceptance criterion: a successful batch launch renders no
+      // launched-sessions banner anywhere in the task list.
+      expect(screen.queryByTestId('groom-launched-panel')).toBeNull();
       expect(screen.queryByTestId('groom-error')).toBeNull();
     });
 
@@ -1106,11 +1174,13 @@ describe('TaskList', () => {
           .querySelector('input[type="checkbox"]') as HTMLInputElement,
       );
 
-      const groomBtn = within(backlogSection).getByTestId('groom-btn');
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
       fireEvent.click(groomBtn);
 
       await waitFor(() => {
-        expect(screen.getByTestId('groom-launched-panel')).toBeDefined();
+        expect(groomBtn.textContent).toContain('Groom (0)');
       });
       expect(screen.queryByTestId('groom-error')).toBeNull();
     });
@@ -1461,7 +1531,7 @@ describe('TaskList', () => {
       fireEvent.click(opsBtn);
 
       await waitFor(() => {
-        expect(screen.getByTestId('ops-launched-panel')).toBeDefined();
+        expect(opsBtn.textContent).toContain('Ops (0)');
       });
 
       const launchCall = (
@@ -1472,40 +1542,6 @@ describe('TaskList', () => {
       expect(launchCall).toBeDefined();
       const body = JSON.parse((launchCall![1] as RequestInit).body as string);
       expect(body.taskIds.sort()).toEqual(['op1', 'test1']);
-    });
-
-    it('surfaces the launched session (no dead stub) — clicking it selects the task', async () => {
-      mockOpsEndpoints(['op1'], []);
-      const onSelectTask = vi.fn();
-
-      renderList(
-        [
-          makeTask({
-            taskId: 'op1',
-            taskName: 'Op Task',
-            displayStatus: 'in_progress',
-            taskType: '🔧 Operational',
-          }),
-        ],
-        { boardId: 'milestone-1', onSelectTask },
-      );
-
-      fireEvent.click(screen.getByTestId('type-card-header-operational'));
-      const checkbox = screen
-        .getByTestId('type-card-operational')
-        .querySelector('input[type="checkbox"]') as HTMLInputElement;
-      fireEvent.click(checkbox);
-      fireEvent.click(screen.getByTestId('ops-btn'));
-
-      const panel = await waitFor(() =>
-        screen.getByTestId('ops-launched-panel'),
-      );
-      // The launched task is surfaced as a link, not a fake Apply/Reject intent.
-      expect(within(panel).queryByText(/apply/i)).toBeNull();
-      expect(within(panel).queryByText(/reject/i)).toBeNull();
-
-      fireEvent.click(within(panel).getByText('Op Task'));
-      expect(onSelectTask).toHaveBeenCalledWith('op1');
     });
 
     it('does not render an ops panel when nothing launched (empty taskIds)', async () => {
@@ -1583,10 +1619,11 @@ describe('TaskList', () => {
         .getByTestId('type-card-operational')
         .querySelector('input[type="checkbox"]') as HTMLInputElement;
       fireEvent.click(checkbox);
-      fireEvent.click(screen.getByTestId('ops-btn'));
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      fireEvent.click(opsBtn);
 
       await waitFor(() => {
-        expect(screen.getByTestId('ops-launched-panel')).toBeDefined();
+        expect(opsBtn.textContent).toContain('Ops (0)');
       });
       expect(screen.queryByTestId('ops-error')).toBeNull();
     });
@@ -1640,10 +1677,11 @@ describe('TaskList', () => {
         .getByTestId('type-card-operational')
         .querySelector('input[type="checkbox"]') as HTMLInputElement;
       fireEvent.click(checkbox);
-      fireEvent.click(screen.getByTestId('ops-btn'));
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      fireEvent.click(opsBtn);
 
       await waitFor(() => {
-        expect(screen.getByTestId('ops-launched-panel')).toBeDefined();
+        expect(opsBtn.textContent).toContain('Ops (0)');
       });
       expect(screen.queryByTestId('ops-error')).toBeNull();
     });
@@ -1691,10 +1729,11 @@ describe('TaskList', () => {
       expect(screen.queryByTestId('groom-model-select')).toBeNull();
       expect(screen.queryByTestId('groom-effort-select')).toBeNull();
 
-      fireEvent.click(screen.getByTestId('ops-btn'));
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      fireEvent.click(opsBtn);
 
       await waitFor(() => {
-        expect(screen.getByTestId('ops-launched-panel')).toBeDefined();
+        expect(opsBtn.textContent).toContain('Ops (0)');
       });
 
       const launchCall = (
@@ -1748,10 +1787,11 @@ describe('TaskList', () => {
         .getByTestId('type-card-operational')
         .querySelector('input[type="checkbox"]') as HTMLInputElement;
       fireEvent.click(checkbox);
-      fireEvent.click(screen.getByTestId('ops-btn'));
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      fireEvent.click(opsBtn);
 
       await waitFor(() => {
-        expect(screen.getByTestId('ops-launched-panel')).toBeDefined();
+        expect(opsBtn.textContent).toContain('Ops (0)');
       });
 
       rerender(
@@ -1768,7 +1808,9 @@ describe('TaskList', () => {
         />,
       );
 
-      expect(screen.queryByTestId('ops-launched-panel')).toBeNull();
+      // With no tasks on the new board, the Ops(N) button (and any staged
+      // launch state from the previous board) doesn't render at all.
+      expect(screen.queryByTestId('ops-btn')).toBeNull();
     });
 
     it('excludes a 🔲 Backlog ops-type task from Ops eligibility, routing it to Groom instead', () => {
@@ -1968,7 +2010,7 @@ describe('TaskList', () => {
       fireEvent.click(designBtn);
 
       await waitFor(() => {
-        expect(screen.getByTestId('design-launched-panel')).toBeDefined();
+        expect(designBtn.textContent).toContain('Design (0)');
       });
       expect(screen.queryByTestId('design-error')).toBeNull();
 
@@ -2011,10 +2053,11 @@ describe('TaskList', () => {
       );
 
       fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
-      fireEvent.click(screen.getByTestId('design-btn'));
+      const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
+      fireEvent.click(designBtn);
 
       await waitFor(() => {
-        expect(screen.getByTestId('design-launched-panel')).toBeDefined();
+        expect(designBtn.textContent).toContain('Design (0)');
       });
       expect(screen.queryByTestId('design-error')).toBeNull();
     });
