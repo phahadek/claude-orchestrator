@@ -11,7 +11,11 @@ import { markSessionIdle } from '../db/queries';
 function insertSession(
   sessionId: string,
   status: string,
-  opts: { taskId?: string; endedAt?: number | null; prUrl?: string | null } = {},
+  opts: {
+    taskId?: string;
+    endedAt?: number | null;
+    prUrl?: string | null;
+  } = {},
 ): void {
   db.prepare(
     `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
@@ -29,7 +33,9 @@ function insertSession(
 
 function getRow(
   sessionId: string,
-): { status: string; ended_at: number | null; pr_url: string | null } | undefined {
+):
+  | { status: string; ended_at: number | null; pr_url: string | null }
+  | undefined {
   return db
     .prepare(
       'SELECT status, ended_at, pr_url FROM sessions WHERE session_id = ?',
@@ -110,7 +116,11 @@ describe('markSessionIdle terminal guard', () => {
       prUrl: 'https://github.com/o/r/pull/1',
     });
 
-    markSessionIdle('sess-done-pr', Date.now(), 'https://github.com/o/r/pull/2');
+    markSessionIdle(
+      'sess-done-pr',
+      Date.now(),
+      'https://github.com/o/r/pull/2',
+    );
 
     const row = getRow('sess-done-pr');
     expect(row?.pr_url).toBe('https://github.com/o/r/pull/1');

@@ -6,7 +6,10 @@ vi.mock('../db/db.js', async () => {
 });
 
 import { db } from '../db/db.js';
-import { archiveConcludedSessionsOlderThan, markSessionIdle } from '../db/queries.js';
+import {
+  archiveConcludedSessionsOlderThan,
+  markSessionIdle,
+} from '../db/queries.js';
 
 function insertSession(opts: {
   session_id: string;
