@@ -290,6 +290,20 @@ describe('procedureCore', () => {
     }
   });
 
+  it('stages the Manual-verification strip as a task.patchBodySection remove, grouped with the Ready-flip, never a whole-body task.updateBody', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'accrete-gate-and-seed')!;
+    const text = stepSummaryFor(step, 'groom');
+    expect(text).toContain('`task.patchBodySection`');
+    expect(text).toMatch(/operation:?\s*"remove"/);
+    expect(text).toMatch(/👁️ Manual verification/);
+    expect(text).toMatch(/same `?groupId`?/);
+    expect(text).toMatch(/removed entirely/);
+    expect(text).toContain('Covered by the Manual Verification Gate.');
+    expect(text).toMatch(/no strip intent at all/);
+    expect(text).toMatch(/whole body|whole-body/);
+    expect(text).toContain('task.updateBody` as');
+  });
+
   describe('design terminal-artifacts ordering', () => {
     /** Every rendered snippet from the assembled design procedure. */
     function assembledDesignProcedureText(): string {

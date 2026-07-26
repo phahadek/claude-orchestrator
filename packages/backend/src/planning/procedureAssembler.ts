@@ -299,6 +299,9 @@ const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
     '{"title":"<title>","type":"💻 Code","milestone":"<milestone-id>",' +
     '"body":"<task body markdown>"}',
   'task.updateBody': '{"taskId":"<task-id>","body":"<full markdown>"}',
+  'task.patchBodySection':
+    '{"taskId":"<task-id>","section":"<section heading text>",' +
+    '"operation":"remove"}',
   'arch.updateUnit':
     '{"unitId":"<arch-unit-id>","baseVersion":<current-version-number>,' +
     '"title":"<updated title>","body":"<updated markdown body>"}',
@@ -650,7 +653,22 @@ function renderSkeleton(
           '"dependsOnTasks":[]}}}` — omitting any one of these six `groomingGate` ' +
           'fields (even as an empty array/object where genuinely empty) is what ' +
           'blocks the Ready flip; fill every field from the digest above rather ' +
-          'than carrying only `type`.'
+          'than carrying only `type`.\n\n' +
+          'When the pre-groom body carries a "### 👁️ Manual verification" ' +
+          'section, its accreted/relocated content is stripped from the body as ' +
+          'a `task.patchBodySection` (`operation: "remove"`) — never a ' +
+          '`task.updateBody` full-body replace — staged under the SAME ' +
+          '`groupId` as this `task.setStatus`, so the strip commits atomically ' +
+          'with the rest of the grooming decision instead of landing as a ' +
+          'standalone, ungrouped write the operator dispositions on its own. A ' +
+          'worked example: call the ' +
+          `\`${orchestratorMcpToolName('task.patchBodySection')}\` tool with ` +
+          '`{"payload":{"taskId":"<task-id>","section":"👁️ Manual verification",' +
+          '"operation":"remove"},"groupId":"<groupId>"}` — the same `groupId` ' +
+          'value passed to `task.setStatus` / `task.setDependsOn` / ' +
+          '`gate.accrete` / `seed.stage` above. When the pre-groom body carries ' +
+          'no such section, stage no strip intent at all — there is nothing to ' +
+          'remove.'
         : '') +
       (workflow === 'ops'
         ? ' Stage the next step, then keep driving: once investigation reaches a ' +

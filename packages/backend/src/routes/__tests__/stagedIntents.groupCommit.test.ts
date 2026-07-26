@@ -614,6 +614,81 @@ describe('POST /api/staged-intents/group/:groupId/commit', () => {
     );
   });
 
+  it('commits a group containing a task.patchBodySection member atomically alongside setDependsOn/setStatus', async () => {
+    const calls: string[] = [];
+    const patchBodySection = vi.fn().mockImplementation(async () => {
+      calls.push('patchBodySection');
+    });
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn().mockImplementation(async () => {
+        calls.push('setStatus');
+      }),
+      setDependsOn: vi.fn().mockImplementation(async () => {
+        calls.push('setDependsOn');
+      }),
+      patchBodySection,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const taskId = 't-strip';
+    const groupId = 'g-strip';
+
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-strip',
+      groupId,
+      payload: { taskId, dependsOn: [] },
+    });
+    const patch = await agent.post('/api/staged-intents').send({
+      kind: 'task.patchBodySection',
+      projectId: 'proj-strip',
+      groupId,
+      payload: {
+        taskId,
+        section: '👁️ Manual verification',
+        operation: 'remove',
+      },
+    });
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-strip',
+      groupId,
+      payload: {
+        taskId,
+        status: 'Ready',
+        groomingGate: { size_check: { decision: 'n/a' }, type_check: { decision: 'none' } },
+      },
+    });
+
+    await agent.post(`/api/staged-intents/${dependsOn.body.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${patch.body.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.body.id}/approve`).send({});
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.committed.sort()).toEqual(
+      [dependsOn.body.id, patch.body.id, setStatus.body.id].sort(),
+    );
+    expect(patchBodySection).toHaveBeenCalledWith(
+      taskId,
+      '👁️ Manual verification',
+      expect.objectContaining({ operation: 'remove' }),
+      expect.objectContaining({ source: 'human' }),
+    );
+    // setStatus->Ready commits last, after every sibling in the group.
+    expect(calls[calls.length - 1]).toBe('setStatus');
+
+    const list = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-strip' });
+    expect(list.body.intents).toHaveLength(0);
+  });
+
   it('requires a reason when override is true', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
