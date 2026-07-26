@@ -83,6 +83,7 @@ import {
 import { recoverSession } from './sessionRecovery';
 import {
   countsAgainstConcurrency,
+  isGateVerifySession,
   isPlanningSession,
   movesTargetInProgress,
 } from './sessionPredicates';
@@ -1351,7 +1352,11 @@ export class SessionManager extends EventEmitter {
           : new CliSessionRunner(sessionId);
 
     let taskContent: string | undefined;
-    if (countsAgainstConcurrency(sessionType) && sessionTaskId) {
+    if (
+      countsAgainstConcurrency(sessionType) &&
+      sessionTaskId &&
+      !isGateVerifySession(sessionTaskId)
+    ) {
       try {
         taskContent =
           await getTaskBackend(projectId).fetchTaskPage(sessionTaskId);
@@ -1536,7 +1541,7 @@ export class SessionManager extends EventEmitter {
     this.wireSession(sessionId, session, projectDir, worktreePath);
 
     // Update task status to In Progress (fire-and-forget; failures logged, not thrown).
-    if (movesTargetInProgress(sessionType)) {
+    if (movesTargetInProgress(sessionType) && !isGateVerifySession(sessionTaskId)) {
       getTaskBackend(projectId)
         .updateStatus(sessionTaskId, '🔄 In Progress', {
           source: 'orchestrator',
