@@ -124,7 +124,7 @@ vi.mock('child_process', () => ({
 const writtenFiles = new Map<string, string>();
 
 vi.mock('fs', () => {
-  const existsSync = vi.fn().mockImplementation((p: string) => true);
+  const existsSync = vi.fn().mockReturnValue(true);
   const mkdirSync = vi.fn();
   const writeFileSync = vi
     .fn()
