@@ -39,6 +39,12 @@ describe('planning workflow --allowed-tools parity with PLANNING_INTENT_KINDS', 
     );
   });
 
+  it('groom and design session allow-lists grant the capability-request tool', () => {
+    const tool = orchestratorMcpToolName('session.requestCapability');
+    expect(GROOM_ALLOWED_TOOLS).toContain(tool);
+    expect(DESIGN_ALLOWED_TOOLS).toContain(tool);
+  });
+
   it.each(WORKFLOWS)(
     '$name allow-list staged-intent MCP entries equal PLANNING_INTENT_KINDS.$name mapped through orchestratorMcpToolName',
     ({ name, allowedTools, extraNonStagedTools }) => {
