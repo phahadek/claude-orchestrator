@@ -8,6 +8,7 @@ vi.mock('../db/db.js', async () => {
 import { db } from '../db/db.js';
 import {
   archiveConcludedSessionsOlderThan,
+  markSessionDone,
   markSessionIdle,
 } from '../db/queries.js';
 
@@ -108,6 +109,34 @@ describe('archiveConcludedSessionsOlderThan', () => {
       .prepare(`SELECT archived FROM sessions WHERE session_id = 'old-idle'`)
       .get() as { archived: number };
     expect(row.archived).toBe(0);
+  });
+
+  it('sweeps a groom session driven from idle to done on the applied terminal grooming disposition (no regression to the existing status set)', () => {
+    insertSession({
+      session_id: 'groom-terminal-on-apply',
+      status: 'idle',
+      ended_at: CUTOFF - 5000,
+    });
+
+    // Mirrors PlanningOrchestrator.markTerminal, invoked directly from the
+    // apply path (stagedIntents.ts) rather than via a re-park.
+    markSessionDone(
+      'groom-terminal-on-apply',
+      CUTOFF - 1,
+      null,
+      'planning_no_pending_dispositions',
+    );
+
+    const ids = archiveConcludedSessionsOlderThan(CUTOFF);
+    expect(ids).toEqual(['groom-terminal-on-apply']);
+
+    const row = db
+      .prepare(
+        `SELECT status, archived FROM sessions WHERE session_id = 'groom-terminal-on-apply'`,
+      )
+      .get() as { status: string; archived: number };
+    expect(row.status).toBe('done');
+    expect(row.archived).toBe(1);
   });
 
   it('does not touch active (running) sessions', () => {

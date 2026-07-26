@@ -39,7 +39,12 @@ export interface PlanningDispositionPayload {
  *  2. Terminal detection — once a planning session parks again, if no
  *     un-dispositioned (state='staged') intents remain for it and the turn
  *     that just ended staged nothing new, the session is driven to a
- *     terminal (done) state rather than left idle forever.
+ *     terminal (done) state rather than left idle forever. checkTerminal is
+ *     public so the apply path (stagedIntents.ts, on the applied terminal
+ *     grooming disposition — group fully disposed, target task promoted)
+ *     can also invoke it directly: nothing re-dispatches the session after
+ *     its final disposition, so it never re-parks and onSessionParked alone
+ *     would never fire for that case.
  */
 export class PlanningOrchestrator {
   /** Total intent count (any state) observed for a session at its last resume — lets the next park detect whether that turn staged anything new. */
