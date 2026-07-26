@@ -33,7 +33,7 @@ function makeSessionManager() {
   const sm = new EventEmitter();
   return Object.assign(sm, {
     enqueueFeedback: vi.fn().mockResolvedValue(undefined),
-    evictSession: vi.fn(),
+    endSession: vi.fn(),
   });
 }
 
@@ -502,6 +502,9 @@ describe('PlanningOrchestrator.endSession', () => {
       null,
       expect.stringContaining('operator_end'),
     );
+    // Writing done is not enough on its own — the CLI subprocess must be
+    // asked to exit too, or it keeps holding a planning-concurrency slot.
+    expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
   });
 
   it('is a no-op for an already-done session', () => {
@@ -512,5 +515,6 @@ describe('PlanningOrchestrator.endSession', () => {
     orch.endSession('planning-session-1');
 
     expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sm.endSession).not.toHaveBeenCalled();
   });
 });

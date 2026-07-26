@@ -6,7 +6,7 @@ vi.mock('../db/db.js', async () => {
 });
 
 import { db } from '../db/db.js';
-import { markSessionIdle } from '../db/queries';
+import { markSessionDone, markSessionIdle } from '../db/queries';
 
 function insertSession(
   sessionId: string,
@@ -109,6 +109,19 @@ describe('markSessionIdle terminal guard', () => {
     const row = getRow('sess-killed');
     expect(row?.status).toBe('killed');
     expect(row?.pr_url).toBe('https://github.com/o/r/pull/1');
+  });
+
+  it('mirrors PlanningOrchestrator.markTerminal\'s ordering: a markSessionDone write sticks even when the ended subprocess\'s clean-exit chain calls markSessionIdle afterward', () => {
+    insertSession('sess-planning', 'running', { taskId: 'task-plan' });
+
+    markSessionDone('sess-planning', Date.now(), null, 'planning_no_pending_dispositions');
+    // Ending the session's subprocess drives a clean exit; AgentSession's
+    // clean-exit chain calls markSessionIdle for a planning session
+    // regardless — the terminal guard must keep 'done' from being clobbered.
+    markSessionIdle('sess-planning', Date.now(), null);
+
+    const row = getRow('sess-planning');
+    expect(row?.status).toBe('done');
   });
 
   it('does not overwrite an existing pr_url when the guard fires', () => {

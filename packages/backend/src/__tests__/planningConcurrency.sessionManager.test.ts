@@ -58,6 +58,7 @@ vi.mock('../db/queries', () => ({
   getPRByNumber: vi.fn().mockReturnValue(null),
   hasActiveSessionForTask: vi.fn().mockReturnValue(false),
   getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+  TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
 }));
 
 vi.mock('../tasks/TaskBackend', () => ({
@@ -262,5 +263,42 @@ describe('SessionManager.start() — shared planning concurrency cap', () => {
     seedLiveSession(sm, 'live-standard-1', 'standard');
 
     expect(sm.getLiveCodeSessionCount()).toBe(1);
+  });
+});
+
+describe('SessionManager.endSession() — releasing a terminal planning session\'s slot', () => {
+  it('with the cap (2) full of terminal-but-unreaped sessions, ending them frees the slot for a new launch', async () => {
+    const sm = new SessionManager();
+    const sessions = sm as unknown as {
+      sessions: Map<string, { sessionType: string; endSession: () => void }>;
+    };
+    const ids = ['term-1', 'term-2'];
+    for (const id of ids) {
+      // Models a session PlanningOrchestrator.markTerminal has already
+      // written 'done' for, but whose subprocess hasn't exited yet — the
+      // exact leak this task fixes. endSession() here stands in for the
+      // real clean-exit -> cleanupWorktree chain that deletes the map entry.
+      sessions.sessions.set(id, {
+        sessionType: 'groom',
+        endSession: () => sessions.sessions.delete(id),
+      });
+    }
+
+    await expect(
+      sm.start(TASK_URL, CTX_URL, {
+        sessionType: 'design',
+        projectId: PROJECT_ID,
+        taskKind: 'milestone',
+      }),
+    ).rejects.toThrow(/Max concurrent planning sessions/);
+
+    for (const id of ids) sm.endSession(id);
+
+    const id = await sm.start(TASK_URL, CTX_URL, {
+      sessionType: 'design',
+      projectId: PROJECT_ID,
+      taskKind: 'milestone',
+    });
+    expect(typeof id).toBe('string');
   });
 });

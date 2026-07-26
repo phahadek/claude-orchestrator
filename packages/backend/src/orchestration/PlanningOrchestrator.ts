@@ -141,12 +141,16 @@ export class PlanningOrchestrator {
     markSessionDone(sessionId, Date.now(), null, reason);
     this.stagedCountAtResume.delete(sessionId);
     // The normal run().then() cleanup that frees a session's in-memory
-    // planning-concurrency slot only fires when its subprocess exits on its
-    // own — a session marked terminal here (from the apply path, or from a
-    // park whose turn staged nothing new) may still be registered live, so
-    // force the eviction rather than leaving the slot held until an
-    // operator kills it by hand.
-    this.sessionManager.evictSession(sessionId);
+    // planning-concurrency slot only fires when its subprocess exits — a
+    // session marked terminal here (from the apply path, which can fire
+    // mid-turn, or from a park whose turn staged nothing new) may still be
+    // live, so end it via the same mechanism PRMergeWatcher uses: closing
+    // stdin drives the CLI to a clean exit, which resolves run() and lets
+    // cleanupWorktree delete the map entry and free the slot. markSessionDone
+    // above has already landed, so the clean-exit chain's markSessionIdle
+    // call (AgentSession.handleCleanExit) hits the terminal guard in
+    // markSessionIdle and is a no-op rather than clobbering done back to idle.
+    this.sessionManager.endSession(sessionId);
     this.sessionManager.emit('message', {
       type: 'session_status',
       sessionId,
