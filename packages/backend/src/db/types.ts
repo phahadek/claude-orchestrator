@@ -603,9 +603,9 @@ export interface DecisionPickOnePayload {
   allowFreeForm: boolean;
 }
 
-/** The operator's response to a decision.pickOne question-intent. */
+/** The operator's response to a decision.pickOne question-intent. At least one of chosenLabel or freeForm is present. */
 export interface StagedIntentAnswer {
-  chosenLabel: string;
+  chosenLabel: string | null;
   freeForm: string | null;
 }
 

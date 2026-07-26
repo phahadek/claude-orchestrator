@@ -98,9 +98,9 @@ export interface DecisionPickOnePayload {
   allowFreeForm: boolean;
 }
 
-/** The operator's response to a decision.pickOne question-intent. */
+/** The operator's response to a decision.pickOne question-intent. At least one of chosenLabel or freeForm is present. */
 interface StagedIntentAnswer {
-  chosenLabel: string;
+  chosenLabel: string | null;
   freeForm: string | null;
 }
 
@@ -273,7 +273,7 @@ export const stagedIntentsApi = {
   /** Resolves a decision.pickOne question-intent with the operator's choice. */
   answer(
     id: string,
-    response: { chosenLabel: string; freeForm?: string },
+    response: { chosenLabel: string | null; freeForm?: string },
   ): Promise<{ ok: boolean; intent: StagedIntent }> {
     return apiRequest<{ ok: boolean; intent: StagedIntent }>(
       `/api/staged-intents/${encodeURIComponent(id)}/answer`,
