@@ -104,6 +104,18 @@ export class PlanningOrchestrator {
    * True when no un-dispositioned intents remain for the session AND its
    * latest resumed turn staged nothing new. Drives the session to a
    * terminal (done) state as a side effect when true.
+   *
+   * stagedCountAtResume is refreshed here — to the current total — on every
+   * non-terminal call, not just from a disposition. checkTerminal already
+   * runs on every park (onSessionParked fires on every session_ended/idle
+   * message), so anchoring the snapshot to "count as of the last park"
+   * rather than "count as of the last disposition" makes the comparison
+   * self-correcting: a resume that isn't routed through handleDisposition/
+   * handleGroupDisposition (e.g. a capability-grant resume) can no longer
+   * leave the snapshot stale, and a park whose turn staged nothing new is
+   * detected the very next time checkTerminal runs — including the park
+   * that follows a session's final disposition, with no further apply
+   * required.
    */
   checkTerminal(sessionId: string): boolean {
     const all = listStagedIntentsBySession(sessionId);
@@ -111,8 +123,11 @@ export class PlanningOrchestrator {
     const priorCount = this.stagedCountAtResume.get(sessionId) ?? 0;
     const stagedNothingNew = all.length <= priorCount;
     const terminal = !stillPending && stagedNothingNew;
-    if (terminal)
+    if (terminal) {
       this.markTerminal(sessionId, 'planning_no_pending_dispositions');
+    } else {
+      this.stagedCountAtResume.set(sessionId, all.length);
+    }
     return terminal;
   }
 
@@ -121,6 +136,13 @@ export class PlanningOrchestrator {
     if (!row || row.status === 'done') return;
     markSessionDone(sessionId, Date.now(), null, reason);
     this.stagedCountAtResume.delete(sessionId);
+    // The normal run().then() cleanup that frees a session's in-memory
+    // planning-concurrency slot only fires when its subprocess exits on its
+    // own — a session marked terminal here (from the apply path, or from a
+    // park whose turn staged nothing new) may still be registered live, so
+    // force the eviction rather than leaving the slot held until an
+    // operator kills it by hand.
+    this.sessionManager.evictSession(sessionId);
     this.sessionManager.emit('message', {
       type: 'session_status',
       sessionId,
