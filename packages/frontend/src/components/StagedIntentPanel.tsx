@@ -6,7 +6,7 @@ import type {
   GroomProposalFields,
 } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
-import { diffTaskBody, type SectionDiff } from './bodyDiff';
+import { diffTaskBody, splitSections, type SectionDiff } from './bodyDiff';
 import styles from './StagedIntentPanel.module.css';
 
 interface Props {
@@ -157,6 +157,110 @@ function BodySectionDiff({ intent }: { intent: StagedIntent }) {
           ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+/** task.patchBodySection's payload — schemas.ts's patchBodySectionPayloadSchema. */
+type PatchBodySectionPayload =
+  | { taskId: string; section: string; operation: 'append'; content: string }
+  | {
+      taskId: string;
+      section: string;
+      operation: 'replace';
+      find: string;
+      replaceWith: string;
+    }
+  | { taskId: string; section: string; operation: 'remove' };
+
+function isPatchBodySectionPayload(
+  payload: unknown,
+): payload is PatchBodySectionPayload {
+  if (!payload || typeof payload !== 'object') return false;
+  const operation = (payload as { operation?: unknown }).operation;
+  return operation === 'append' || operation === 'replace' || operation === 'remove';
+}
+
+/**
+ * task.patchBodySection's preview — forked from BodySectionDiff rather than
+ * routed through it, since a section patch operates on one named section
+ * with an operation-specific shape (append/replace/remove) instead of the
+ * full structured-sections diff that task.updateBody produces.
+ */
+function PatchBodySectionDiff({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as PatchBodySectionPayload;
+  const [currentContent, setCurrentContent] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (payload.operation !== 'remove') return;
+    let cancelled = false;
+    setCurrentContent(null);
+    setError(null);
+    stagedIntentsApi
+      .fetchTaskPage(payload.taskId, intent.projectId)
+      .then((stored) => {
+        if (cancelled) return;
+        const sections = splitSections(stored);
+        const lines = (sections.get(payload.section) ?? []).filter(
+          (l) => l.trim() !== '',
+        );
+        setCurrentContent(lines);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Failed to load body');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [payload.operation, payload.taskId, payload.section, intent.projectId]);
+
+  return (
+    <div
+      data-testid="staged-intent-patch-body-section"
+      className={styles.bodyDiff}
+    >
+      <div className={styles.diffSection}>
+        <div className={styles.diffSectionHeading}>## {payload.section}</div>
+        {payload.operation === 'replace' && (
+          <div data-testid="staged-intent-patch-replace">
+            <div className={styles.diffRemoved}>- {payload.find}</div>
+            <div className={styles.diffAdded}>+ {payload.replaceWith}</div>
+          </div>
+        )}
+        {payload.operation === 'append' && (
+          <div data-testid="staged-intent-patch-append">
+            <div className={styles.diffAdded}>+ {payload.content}</div>
+          </div>
+        )}
+        {payload.operation === 'remove' && (
+          <div data-testid="staged-intent-patch-remove">
+            <p className={styles.text}>
+              ⚠️ This will remove the entire <strong>{payload.section}</strong>{' '}
+              section:
+            </p>
+            {error && <p className={styles.error}>{error}</p>}
+            {!error && currentContent === null && (
+              <p className={styles.text}>Loading current content…</p>
+            )}
+            {!error && currentContent !== null && (
+              <>
+                {currentContent.length === 0 ? (
+                  <p className={styles.text}>(section is already empty)</p>
+                ) : (
+                  currentContent.map((line, idx) => (
+                    <div key={idx} className={styles.diffRemoved}>
+                      - {line}
+                    </div>
+                  ))
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -453,6 +557,12 @@ function renderHeadline(intent: StagedIntent): ReactNode {
   switch (intent.kind) {
     case 'task.updateBody':
       return <BodySectionDiff intent={intent} />;
+    case 'task.patchBodySection':
+      return isPatchBodySectionPayload(intent.payload) ? (
+        <PatchBodySectionDiff intent={intent} />
+      ) : (
+        renderFallback(intent.payload)
+      );
     case 'task.setStatus':
       return <SetStatusHeadline intent={intent} />;
     case 'task.setDependsOn':

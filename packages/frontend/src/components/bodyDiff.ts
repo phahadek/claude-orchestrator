@@ -18,7 +18,7 @@ export interface SectionDiff {
   lines: DiffLine[];
 }
 
-function splitSections(markdown: string): Map<string, string[]> {
+export function splitSections(markdown: string): Map<string, string[]> {
   const sections = new Map<string, string[]>();
   let current = 'Preamble';
   sections.set(current, []);
