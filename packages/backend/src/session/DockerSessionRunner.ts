@@ -1,12 +1,13 @@
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { createInterface } from 'readline';
-import { config } from '../config';
+import { config, PLANNING_DISALLOWED_TOOLS } from '../config';
 import type {
   ISessionRunner,
   RawSessionEvent,
   SessionRunnerOptions,
 } from './SessionRunner';
 import { logger } from '../logger';
+import { isPlanningSession } from './sessionPredicates';
 
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[DockerSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
@@ -67,7 +68,14 @@ export class DockerSessionRunner implements ISessionRunner {
     options: SessionRunnerOptions,
     onEvent: (event: RawSessionEvent) => void,
   ): Promise<number | null> {
-    const { worktreePath, model, allowedTools } = options;
+    const {
+      worktreePath,
+      model,
+      allowedTools,
+      mcpConfigPath,
+      systemPromptFilePath,
+      sessionType,
+    } = options;
 
     const claudeBin = config.claudePath;
     const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? '/root';
@@ -146,6 +154,10 @@ export class DockerSessionRunner implements ISessionRunner {
     }
 
     // Build claude command arguments (same as CliSessionRunner)
+    const permissionMode =
+      sessionType && isPlanningSession(sessionType) ? 'default' : 'acceptEdits';
+    const isPlanning = Boolean(sessionType && isPlanningSession(sessionType));
+
     const claudeArgs = [
       ...(resumeSessionId
         ? ['--resume', resumeSessionId]
@@ -157,10 +169,20 @@ export class DockerSessionRunner implements ISessionRunner {
       'stream-json',
       '--verbose',
       '--permission-mode',
-      'acceptEdits',
+      permissionMode,
       ...(model ? ['--model', model] : []),
+      ...(mcpConfigPath
+        ? ['--mcp-config', mcpConfigPath, '--strict-mcp-config']
+        : []),
+      ...(systemPromptFilePath
+        ? ['--append-system-prompt-file', systemPromptFilePath]
+        : []),
       '--allowed-tools',
       ...allowedTools,
+      ...(isPlanning
+        ? ['--disallowed-tools', ...PLANNING_DISALLOWED_TOOLS]
+        : []),
+      ...(isPlanning ? ['--add-dir', '/'] : []),
     ];
 
     log(this.sessionId, `exec claude in container: ${claudeArgs.join(' ')}`);
