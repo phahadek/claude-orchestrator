@@ -261,7 +261,7 @@ export function parseSessionRecordReadCapability(
  * `getGrantedCapabilities`, not merged into the CLI tool allowlist, since it
  * names no tool the CLI resolves.
  */
-function isToolShapedCapability(capability: string): boolean {
+export function isToolShapedCapability(capability: string): boolean {
   return capability.startsWith('Bash(') || capability.startsWith('mcp__');
 }
 

@@ -1089,7 +1089,7 @@ async function resumeCapabilityRequester(
   const payload = intent.payload as CapabilityRequestPayload;
 
   if (outcome === 'approved') {
-    sessionManager.grantCapability(intent.sessionId, payload.capability);
+    await sessionManager.grantCapability(intent.sessionId, payload.capability);
   }
 
   const message =
