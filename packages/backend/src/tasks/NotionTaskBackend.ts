@@ -184,6 +184,9 @@ export class NotionTaskBackend implements TaskBackend {
       prefixedId,
       JSON.stringify({ ...task, id: prefixedId, dependsOn: prefixedDependsOn }),
     );
+    if (fields.body) {
+      await this.updateBodyRaw(prefixedId, fields.body);
+    }
     return prefixedId;
   }
 

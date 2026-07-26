@@ -228,6 +228,32 @@ describe('stage-proposal MCP tools — schema validation', () => {
     await close();
   });
 
+  it('task.create accepts an optional body and stages it verbatim in the payload', async () => {
+    const { client, close } = await connectedClient();
+    const body = '## Summary\nDo the thing.';
+    const result = await client.callTool({
+      name: 'task.create',
+      arguments: { payload: { title: 'New task', body } },
+    });
+    const intent = parseIntentResult(
+      result as { content: Array<{ type: string; text?: string }> },
+    );
+    expect(intent.kind).toBe('task.create');
+    expect((intent.payload as { body?: string }).body).toBe(body);
+    await close();
+  });
+
+  it('task.create tool description no longer directs callers to task.updateBody for a new task', async () => {
+    const { client, close } = await connectedClient();
+    const { tools } = await client.listTools();
+    const createTool = tools.find((t) => t.name === 'task.create');
+    expect(createTool?.description).toBeDefined();
+    expect(createTool!.description).not.toMatch(
+      /set separately via task\.updateBody/i,
+    );
+    await close();
+  });
+
   it('gate.accrete rejects an invalid classification enum value', async () => {
     const { client, close } = await connectedClient();
     const result = await client.callTool({
