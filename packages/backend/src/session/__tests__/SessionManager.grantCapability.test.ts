@@ -144,8 +144,9 @@ vi.mock('../../db/queries', () => ({
   setSessionLastErrorDetail: vi.fn(),
   setTaskPauseReason: vi.fn(),
   TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
-  getGrantedCapabilities: vi.fn((sessionId: string) =>
-    grantedCapabilitiesStore.get(sessionId)?.slice() ?? [],
+  getGrantedCapabilities: vi.fn(
+    (sessionId: string) =>
+      grantedCapabilitiesStore.get(sessionId)?.slice() ?? [],
   ),
   addGrantedCapability: vi.fn((sessionId: string, capability: string) => {
     const existing = grantedCapabilitiesStore.get(sessionId) ?? [];
@@ -307,14 +308,16 @@ describe('grantCapability — takes effect on a live session', () => {
 
     await sm.grantCapability(SESSION_ID, 'Bash(sudo install:*)');
 
-    const persistOrder = vi.mocked(addGrantedCapability).mock
-      .invocationCallOrder[0];
+    const persistOrder =
+      vi.mocked(addGrantedCapability).mock.invocationCallOrder[0];
     const respawnOrder = vi.mocked(AgentSession).mock.invocationCallOrder[0];
     expect(persistOrder).toBeLessThan(respawnOrder);
 
     // By the time the new AgentSession is constructed, the DB-backed capability
     // read (what AgentSession.run() itself calls) already reflects the grant.
-    expect(getGrantedCapabilities(SESSION_ID)).toContain('Bash(sudo install:*)');
+    expect(getGrantedCapabilities(SESSION_ID)).toContain(
+      'Bash(sudo install:*)',
+    );
   });
 
   it('reuses the session id and resumes, preserving the same worktree', async () => {
