@@ -13,6 +13,7 @@ vi.mock('../db/queries', () => ({
   getCacheAge: vi.fn(() => Infinity),
   getTaskCache: vi.fn(() => null),
   updateTaskCacheStatus: vi.fn(),
+  deleteTaskCacheRow: vi.fn(),
 }));
 
 import {
@@ -379,6 +380,194 @@ describe('NotionClient — prefix stripping in public methods', () => {
     expect(options.method).toBe('PATCH');
     const body = JSON.parse(options.body as string);
     expect(body).toEqual({ archived: true });
+  });
+});
+
+// ─── NotionClient.patchBodySection() — heading-bounded block engine ────────
+
+describe('NotionClient.patchBodySection()', () => {
+  let client: NotionClient;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  // Fixture page: Summary -> Context (two paragraphs) -> Files (one paragraph).
+  function fixtureChildren() {
+    return [
+      {
+        id: 'h-summary',
+        type: 'heading_2',
+        heading_2: { rich_text: [{ plain_text: 'Summary' }] },
+      },
+      {
+        id: 'p-summary',
+        type: 'paragraph',
+        paragraph: { rich_text: [{ plain_text: 'Summary text' }] },
+      },
+      {
+        id: 'h-context',
+        type: 'heading_2',
+        heading_2: { rich_text: [{ plain_text: 'Context' }] },
+      },
+      {
+        id: 'p-context-1',
+        type: 'paragraph',
+        paragraph: { rich_text: [{ plain_text: 'Context line 1' }] },
+      },
+      {
+        id: 'p-context-2',
+        type: 'paragraph',
+        paragraph: { rich_text: [{ plain_text: 'Context line 2' }] },
+      },
+      {
+        id: 'h-files',
+        type: 'heading_2',
+        heading_2: { rich_text: [{ plain_text: 'Files' }] },
+      },
+      {
+        id: 'p-files',
+        type: 'paragraph',
+        paragraph: { rich_text: [{ plain_text: 'file a' }] },
+      },
+    ];
+  }
+
+  function mockChildrenFetch() {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        results: fixtureChildren(),
+        has_more: false,
+        next_cursor: null,
+      }),
+    });
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    client = new NotionClient();
+  });
+
+  it("append inserts new blocks right after the section's last block", async () => {
+    mockChildrenFetch();
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ results: [{ id: 'new-1' }] }),
+    });
+
+    await client.patchBodySection('notion:abc', 'Context', {
+      operation: 'append',
+      content: 'A new context line',
+    });
+
+    const [url, options] = fetchSpy.mock.calls[1] as [string, RequestInit];
+    expect(url).toContain('/blocks/abc/children');
+    const body = JSON.parse(options.body as string);
+    expect(body.after).toBe('p-context-2');
+    expect(body.children[0].paragraph.rich_text[0].text.content).toBe(
+      'A new context line',
+    );
+  });
+
+  it('append auto-creates an absent section (heading + content) at the page end', async () => {
+    mockChildrenFetch();
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ results: [{ id: 'new-heading' }, { id: 'new-1' }] }),
+    });
+
+    await client.patchBodySection('notion:abc', 'Open Questions', {
+      operation: 'append',
+      content: 'None.',
+    });
+
+    const [, options] = fetchSpy.mock.calls[1] as [string, RequestInit];
+    const body = JSON.parse(options.body as string);
+    expect(body.after).toBeUndefined();
+    expect(body.children[0].type).toBe('heading_2');
+    expect(body.children[0].heading_2.rich_text[0].text.content).toBe(
+      'Open Questions',
+    );
+  });
+
+  it('replace substitutes find/replaceWith against the section text, inserts before deleting', async () => {
+    mockChildrenFetch();
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ results: [{ id: 'new-1' }, { id: 'new-2' }] }),
+    });
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete p-context-1
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete p-context-2
+
+    await client.patchBodySection('notion:abc', 'Context', {
+      operation: 'replace',
+      find: 'line 1',
+      replaceWith: 'LINE ONE',
+    });
+
+    const insertCall = fetchSpy.mock.calls[1] as [string, RequestInit];
+    const insertBody = JSON.parse(insertCall[1].body as string);
+    expect(insertBody.after).toBe('p-context-2');
+    const renderedText = insertBody.children
+      .map(
+        (b: { paragraph: { rich_text: { text: { content: string } }[] } }) =>
+          b.paragraph.rich_text[0].text.content,
+      )
+      .join('\n');
+    expect(renderedText).toContain('LINE ONE');
+    expect(renderedText).not.toContain('line 1');
+
+    const deleteCalls = fetchSpy.mock.calls.slice(2);
+    expect(deleteCalls).toHaveLength(2);
+    expect(deleteCalls[0][0]).toContain('/blocks/p-context-1');
+    expect(deleteCalls[1][0]).toContain('/blocks/p-context-2');
+  });
+
+  it('replace fails explicitly when the section does not exist', async () => {
+    mockChildrenFetch();
+
+    await expect(
+      client.patchBodySection('notion:abc', 'Nonexistent', {
+        operation: 'replace',
+        find: 'x',
+        replaceWith: 'y',
+      }),
+    ).rejects.toThrow(/section "Nonexistent" not found/);
+  });
+
+  it('replace fails explicitly when the find text is not present in the section', async () => {
+    mockChildrenFetch();
+
+    await expect(
+      client.patchBodySection('notion:abc', 'Context', {
+        operation: 'replace',
+        find: 'no such text',
+        replaceWith: 'y',
+      }),
+    ).rejects.toThrow(/text to replace not found/);
+  });
+
+  it('remove deletes every block in the section plus the heading', async () => {
+    mockChildrenFetch();
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete p-files
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete h-files
+
+    await client.patchBodySection('notion:abc', 'Files', {
+      operation: 'remove',
+    });
+
+    expect(fetchSpy.mock.calls[1][0]).toContain('/blocks/p-files');
+    expect(fetchSpy.mock.calls[2][0]).toContain('/blocks/h-files');
+  });
+
+  it('remove on an already-absent section is a no-op', async () => {
+    mockChildrenFetch();
+
+    await client.patchBodySection('notion:abc', 'Nonexistent', {
+      operation: 'remove',
+    });
+
+    // Only the initial children fetch — no delete calls issued.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
 
