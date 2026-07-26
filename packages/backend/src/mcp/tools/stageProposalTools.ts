@@ -27,6 +27,12 @@ import {
 export interface StageProposalToolContext {
   sessionId: string;
   projectId: string;
+  /**
+   * Restricts registration to this set of staged-intent kinds (e.g. a
+   * planning workflow's PLANNING_INTENT_KINDS entry). Undefined registers
+   * every kind — the code/review session behavior, unchanged.
+   */
+  kinds?: readonly string[];
 }
 
 /** Shape of the { payload, groupId?, decisionProposal?, groomProposal? } envelope every tool accepts. */
@@ -73,7 +79,13 @@ export function registerStageProposalTools(
   server: McpServer,
   ctx: StageProposalToolContext,
 ): void {
-  server.registerTool(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function registerTool(kind: string, meta: any, handler: any): void {
+    if (ctx.kinds && !ctx.kinds.includes(kind)) return;
+    server.registerTool(kind, meta, handler);
+  }
+
+  registerTool(
     'task.create',
     {
       title: 'Stage a new task',
@@ -88,10 +100,10 @@ export function registerStageProposalTools(
         milestone: z.string().optional(),
       }),
     },
-    async (args) => stage('task.create', args.payload, ctx, args),
+    async (args: any) => stage('task.create', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'task.setStatus',
     {
       title: 'Stage a task status change',
@@ -103,10 +115,10 @@ export function registerStageProposalTools(
         groomingGate: groomingGateEntrySchema,
       }),
     },
-    async (args) => stage('task.setStatus', args.payload, ctx, args),
+    async (args: any) => stage('task.setStatus', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'task.setDependsOn',
     {
       title: 'Stage a task Depends On change',
@@ -117,10 +129,10 @@ export function registerStageProposalTools(
         dependsOn: z.array(z.string()),
       }),
     },
-    async (args) => stage('task.setDependsOn', args.payload, ctx, args),
+    async (args: any) => stage('task.setDependsOn', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'task.updateBody',
     {
       title: 'Stage a task body rewrite',
@@ -131,10 +143,10 @@ export function registerStageProposalTools(
         sections: taskBodySectionsSchema,
       }),
     },
-    async (args) => stage('task.updateBody', args.payload, ctx, args),
+    async (args: any) => stage('task.updateBody', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'task.setProperties',
     {
       title: 'Stage a cosmetic task property change',
@@ -148,10 +160,10 @@ export function registerStageProposalTools(
         }),
       }),
     },
-    async (args) => stage('task.setProperties', args.payload, ctx, args),
+    async (args: any) => stage('task.setProperties', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'gate.accrete',
     {
       title: 'Stage a runtime-item gate contribution',
@@ -163,10 +175,10 @@ export function registerStageProposalTools(
         classification: gateContributionDecisionSchema,
       }),
     },
-    async (args) => stage('gate.accrete', args.payload, ctx, args),
+    async (args: any) => stage('gate.accrete', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'seed.stage',
     {
       title: 'Stage a config-change seed contribution',
@@ -178,10 +190,10 @@ export function registerStageProposalTools(
         decision: seedContributionDecisionSchema,
       }),
     },
-    async (args) => stage('seed.stage', args.payload, ctx, args),
+    async (args: any) => stage('seed.stage', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'arch.createUnit',
     {
       title: 'Stage a new architecture unit',
@@ -193,10 +205,10 @@ export function registerStageProposalTools(
         body: z.string(),
       }),
     },
-    async (args) => stage('arch.createUnit', args.payload, ctx, args),
+    async (args: any) => stage('arch.createUnit', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'arch.updateUnit',
     {
       title: 'Stage an architecture unit edit',
@@ -210,10 +222,10 @@ export function registerStageProposalTools(
         body: z.string().optional(),
       }),
     },
-    async (args) => stage('arch.updateUnit', args.payload, ctx, args),
+    async (args: any) => stage('arch.updateUnit', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'arch.supersedeUnit',
     {
       title: 'Stage an architecture unit supersede',
@@ -225,10 +237,10 @@ export function registerStageProposalTools(
         replacement: archCreateUnitPayloadSchema,
       }),
     },
-    async (args) => stage('arch.supersedeUnit', args.payload, ctx, args),
+    async (args: any) => stage('arch.supersedeUnit', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'decision.pickOne',
     {
       title: 'Stage an operator decision question',
@@ -240,10 +252,10 @@ export function registerStageProposalTools(
         allowFreeForm: z.boolean(),
       }),
     },
-    async (args) => stage('decision.pickOne', args.payload, ctx, args),
+    async (args: any) => stage('decision.pickOne', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'journal.setState',
     {
       title: 'Stage an ops journal state change',
@@ -255,10 +267,10 @@ export function registerStageProposalTools(
         fields: z.record(z.string(), z.unknown()).optional(),
       }),
     },
-    async (args) => stage('journal.setState', args.payload, ctx, args),
+    async (args: any) => stage('journal.setState', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'session.requestCapability',
     {
       title: 'Request a capability grant for this session',
@@ -270,6 +282,6 @@ export function registerStageProposalTools(
         evidence: z.string(),
       }),
     },
-    async (args) => stage('session.requestCapability', args.payload, ctx, args),
+    async (args: any) => stage('session.requestCapability', args.payload, ctx, args),
   );
 }

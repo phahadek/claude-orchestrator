@@ -22,7 +22,7 @@ import { getStagedIntent, listStagedIntentsByGroup } from '../../db/queries';
 const SESSION_ID = 'session-1';
 const PROJECT_ID = 'proj-1';
 
-async function connectedClient(): Promise<{
+async function connectedClient(kinds?: readonly string[]): Promise<{
   client: Client;
   close: () => Promise<void>;
 }> {
@@ -30,6 +30,7 @@ async function connectedClient(): Promise<{
   registerStageProposalTools(server, {
     sessionId: SESSION_ID,
     projectId: PROJECT_ID,
+    kinds,
   });
   const [serverTransport, clientTransport] =
     InMemoryTransport.createLinkedPair();
@@ -81,6 +82,18 @@ describe('stage-proposal MCP tools — registration', () => {
         'task.setStatus',
         'task.updateBody',
       ].sort(),
+    );
+    await close();
+  });
+
+  it('registers only the kinds passed in the optional kinds filter', async () => {
+    const { client, close } = await connectedClient([
+      'task.setStatus',
+      'task.create',
+    ]);
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual(
+      ['task.create', 'task.setStatus'].sort(),
     );
     await close();
   });

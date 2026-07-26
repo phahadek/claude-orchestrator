@@ -13,6 +13,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerVerdictTools } from './verdictTools';
 import type { AgentSession } from '../../session/AgentSession';
+import type { PlanningWorkflow } from '../../planning/planningIntentKinds';
 
 function fakeSession() {
   return {
@@ -26,9 +27,12 @@ function fakeSession() {
   };
 }
 
-async function connectedClient(getSession: () => AgentSession | undefined) {
+async function connectedClient(
+  getSession: () => AgentSession | undefined,
+  workflow: PlanningWorkflow | null = null,
+) {
   const server = new McpServer({ name: 'test', version: '1.0.0' });
-  registerVerdictTools(server, { sessionId: 'session-1', getSession });
+  registerVerdictTools(server, { sessionId: 'session-1', getSession, workflow });
   const [serverTransport, clientTransport] =
     InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test-client', version: '1.0.0' });
@@ -52,12 +56,19 @@ function resultOf(result: { content: Array<{ type: string; text?: string }> }) {
 }
 
 describe('verdict-delivery MCP tools — registration', () => {
-  it('registers exactly the 3 verdict tool names', async () => {
-    const { client, close } = await connectedClient(() => fakeSession());
+  it('registers review.disposition and flaky.confirm for a non-planning session', async () => {
+    const { client, close } = await connectedClient(() => fakeSession(), null);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(
-      ['flaky.confirm', 'gate.verify', 'review.disposition'].sort(),
+      ['flaky.confirm', 'review.disposition'].sort(),
     );
+    await close();
+  });
+
+  it('registers only gate.verify for an ops session', async () => {
+    const { client, close } = await connectedClient(() => fakeSession(), 'ops');
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual(['gate.verify']);
     await close();
   });
 });
@@ -138,7 +149,7 @@ describe('flaky.confirm', () => {
 describe('gate.verify', () => {
   it('delegates to session.recordGateVerifyDisposition', async () => {
     const session = fakeSession();
-    const { client, close } = await connectedClient(() => session);
+    const { client, close } = await connectedClient(() => session, 'ops');
     const result = await client.callTool({
       name: 'gate.verify',
       arguments: {
@@ -159,7 +170,7 @@ describe('gate.verify', () => {
 
   it('accepts a reclassify proposal to Human-Observation', async () => {
     const session = fakeSession();
-    const { client, close } = await connectedClient(() => session);
+    const { client, close } = await connectedClient(() => session, 'ops');
     await client.callTool({
       name: 'gate.verify',
       arguments: {
@@ -179,7 +190,7 @@ describe('gate.verify', () => {
 
   it('rejects a reclassify target outside Human-Observation/needs-triage', async () => {
     const session = fakeSession();
-    const { client, close } = await connectedClient(() => session);
+    const { client, close } = await connectedClient(() => session, 'ops');
     const result = await client.callTool({
       name: 'gate.verify',
       arguments: {

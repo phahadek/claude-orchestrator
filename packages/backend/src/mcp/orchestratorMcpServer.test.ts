@@ -1,18 +1,28 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
 import http from 'http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+
+vi.mock('../db/db.js', async () => {
+  const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
+});
+
 import {
   createOrchestratorMcpRouter,
   buildOrchestratorMcpServerEntry,
+  buildMcpServer,
 } from './orchestratorMcpServer';
 import {
   mintStageCredential,
   _resetStageCredentialsForTesting,
 } from '../auth/SessionStageAuth';
 import { SessionManager } from '../session/SessionManager';
+import { insertSession } from '../db/queries';
+import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 
 function buildApp() {
   const app = express();
@@ -97,6 +107,95 @@ describe('orchestratorMcpServer — end-to-end MCP handshake', () => {
     );
     const client = new Client({ name: 'test-client', version: '1.0.0' });
     await expect(client.connect(transport)).rejects.toThrow();
+  });
+});
+
+async function toolNamesFor(sessionId: string): Promise<string[]> {
+  const server = buildMcpServer(sessionId, new SessionManager());
+  const [serverTransport, clientTransport] =
+    InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'test-client', version: '1.0.0' });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  const { tools } = await client.listTools();
+  await client.close();
+  await server.close();
+  return tools.map((t) => t.name).sort();
+}
+
+describe('buildMcpServer — tool surface per session type', () => {
+  it('a groom session exposes exactly health plus PLANNING_INTENT_KINDS.groom', async () => {
+    insertSession({
+      session_id: 'mcp-groom-1',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'groom',
+    });
+    const names = await toolNamesFor('mcp-groom-1');
+    expect(names).toEqual(
+      ['health', ...PLANNING_INTENT_KINDS.groom].sort(),
+    );
+  });
+
+  it('a design session exposes decision.pickOne and task.updateBody, not journal.setState', async () => {
+    insertSession({
+      session_id: 'mcp-design-1',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'design',
+    });
+    const names = await toolNamesFor('mcp-design-1');
+    expect(names).toEqual(
+      ['health', ...PLANNING_INTENT_KINDS.design].sort(),
+    );
+    expect(names).toContain('decision.pickOne');
+    expect(names).toContain('task.updateBody');
+    expect(names).not.toContain('journal.setState');
+  });
+
+  it('an ops session exposes session.requestCapability and gate.verify', async () => {
+    insertSession({
+      session_id: 'mcp-ops-1',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'ops',
+    });
+    const names = await toolNamesFor('mcp-ops-1');
+    expect(names).toContain('session.requestCapability');
+    expect(names).toContain('gate.verify');
+    expect(names).not.toContain('review.disposition');
+    expect(names).not.toContain('flaky.confirm');
+  });
+
+  it('a standard session still exposes review.disposition and flaky.confirm', async () => {
+    insertSession({
+      session_id: 'mcp-standard-1',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'standard',
+    });
+    const names = await toolNamesFor('mcp-standard-1');
+    expect(names).toContain('review.disposition');
+    expect(names).toContain('flaky.confirm');
+    expect(names).not.toContain('gate.verify');
   });
 });
 

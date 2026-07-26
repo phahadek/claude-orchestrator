@@ -7,6 +7,24 @@ import { getSession } from '../db/queries';
 import { registerStageProposalTools } from './tools/stageProposalTools';
 import { registerVerdictTools } from './tools/verdictTools';
 import type { SessionManager } from '../session/SessionManager';
+import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
+import type { PlanningWorkflow } from '../planning/planningIntentKinds';
+
+/**
+ * Maps a session's `session_type` to its planning workflow, or null for a
+ * session that isn't a planning workflow (standard/review) — the case that
+ * keeps the unfiltered stage-proposal surface and the full verdict surface.
+ */
+function toPlanningWorkflow(
+  sessionType: string | undefined,
+): PlanningWorkflow | null {
+  return sessionType === 'groom' ||
+    sessionType === 'design' ||
+    sessionType === 'ops' ||
+    sessionType === 'split'
+    ? sessionType
+    : null;
+}
 
 /** Path the router registers, relative to where it's mounted (see server.ts: app.use('/api', ...)). */
 const ORCHESTRATOR_MCP_PATH = '/mcp';
@@ -42,7 +60,7 @@ export function buildOrchestratorMcpServerEntry(
  * (gate.verify / review.disposition / flaky.confirm, see
  * mcp/tools/verdictTools.ts) scoped to this session's live AgentSession.
  */
-function buildMcpServer(
+export function buildMcpServer(
   sessionId: string,
   sessionManager: SessionManager,
 ): McpServer {
@@ -64,16 +82,21 @@ function buildMcpServer(
   );
 
   const session = getSession(sessionId);
+  const workflow = toPlanningWorkflow(session?.session_type);
+
   if (session?.project_id) {
     registerStageProposalTools(server, {
       sessionId,
       projectId: session.project_id,
+      // undefined = register every kind (code/review sessions).
+      kinds: workflow ? PLANNING_INTENT_KINDS[workflow] : undefined,
     });
   }
 
   registerVerdictTools(server, {
     sessionId,
     getSession: () => sessionManager.getLiveSession(sessionId),
+    workflow,
   });
 
   return server;
