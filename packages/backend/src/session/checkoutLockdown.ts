@@ -78,9 +78,12 @@ function walkAndChmod(
 /**
  * Strips all write bits (owner/group/other) from every file and directory
  * under `projectDir`, excluding `.claude/worktrees` and `.claude/scratch`.
- * Verified (see task notes) that read-only `.git` does not break any of the
- * planning read-only Bash allowlist (log/diff/show/status/blame/ls-files/
- * rev-parse) — none of them require a durable write to function.
+ * `.git` is included in the walk — verified (see
+ * checkoutLockdown.test.ts's "read-only .git allowlist verification" suite,
+ * which runs each command for real against a fully read-only repo) that
+ * none of the planning read-only Bash allowlist (log/diff/show/status/
+ * blame/ls-files/rev-parse) requires a durable write to function, so no
+ * path under `.git` needs a carve-out.
  */
 function stripWriteRecursive(projectDir: string): void {
   walkAndChmod(

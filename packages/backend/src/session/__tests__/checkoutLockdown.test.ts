@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 vi.mock('../../db/db', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -135,5 +136,67 @@ describe('checkoutLockdown', () => {
 
     expect(canWrite(path.join(projectDir, 'README.md'))).toBe(false);
     fs.chmodSync(projectDir, 0o755);
+  });
+});
+
+describe('checkoutLockdown — read-only .git allowlist verification', () => {
+  // The acceptance criteria explicitly call out that .git becomes part of
+  // the read-only tree, and require verifying none of the planning
+  // read-only Bash allowlist commands depend on a transient write (index
+  // refresh, lock files) that a fully read-only .git would break. This runs
+  // each allowlisted command for real against a real read-only git repo,
+  // rather than asserting the claim in a comment.
+  let repoDir: string;
+
+  beforeEach(() => {
+    repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'checkout-lockdown-git-'));
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: repoDir, encoding: 'utf8' });
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'Test');
+    fs.writeFileSync(path.join(repoDir, 'a.txt'), 'hello\n');
+    git('add', 'a.txt');
+    git('commit', '-q', '-m', 'init');
+    // Dirty the working tree so `git status`/`git diff` have something to
+    // (opportunistically) refresh the index over, which is the scenario
+    // that could break under a read-only .git.
+    fs.appendFileSync(path.join(repoDir, 'a.txt'), 'changed\n');
+  });
+
+  afterEach(() => {
+    fs.chmodSync(repoDir, 0o755);
+    for (const entry of fs.readdirSync(repoDir)) {
+      try {
+        fs.chmodSync(path.join(repoDir, entry), 0o755);
+      } catch {
+        // best-effort
+      }
+    }
+    fs.rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  it('every read-only Bash allowlist git command succeeds against a fully read-only checkout (including .git)', () => {
+    acquireCheckoutLockdown(repoDir, 'git-session', {
+      applyFsLockdown: true,
+    });
+
+    const allowlistCommands: string[][] = [
+      ['status'],
+      ['log', '--oneline'],
+      ['diff'],
+      ['show', 'HEAD'],
+      ['blame', 'a.txt'],
+      ['ls-files'],
+      ['rev-parse', 'HEAD'],
+    ];
+
+    for (const args of allowlistCommands) {
+      expect(() =>
+        execFileSync('git', args, { cwd: repoDir, encoding: 'utf8' }),
+      ).not.toThrow();
+    }
+
+    releaseCheckoutLockdown('git-session', { applyFsLockdown: true });
   });
 });
