@@ -45,7 +45,11 @@ import {
   createGatedEnrollmentRouter,
   setEnrollmentBroadcast,
 } from './auth/Enrollment';
-import { getActiveDeviceCount, pruneSchedulerAudit } from './db/queries';
+import {
+  getActiveDeviceCount,
+  pruneSchedulerAudit,
+  listProjectRows,
+} from './db/queries';
 import { importProjectsFromEnv } from './projects/projectImport';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
@@ -77,7 +81,11 @@ import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
 import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
-import { createDeployRouter, setDeployScheduler } from './routes/deploy';
+import {
+  createDeployRouter,
+  setDeployScheduler,
+  resumeActiveDeployRuns,
+} from './routes/deploy';
 import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
 import {
   createStagedIntentsRouter,
@@ -112,6 +120,19 @@ runMigrations(db);
 loadRuntimeSettingsFromDb();
 setupSessionCgroup();
 importProjectsFromEnv(process.env.PROJECTS);
+
+// Resume-at-boot: a project's deploy_run left `running` by a self-deploy
+// restart (the restart step reboots this very backend) never finalizes on
+// its own — verify/report-in/record-sha only run if something re-drives
+// it. Guarded and non-blocking so one project's resume failure can't stall
+// the rest of boot.
+try {
+  resumeActiveDeployRuns(listProjectRows());
+} catch (err) {
+  logger.error(
+    `[server] boot deploy-run resume failed: ${err instanceof Error ? err.message : String(err)}`,
+  );
+}
 
 const _cm = getCorporateMode();
 logger.info(
