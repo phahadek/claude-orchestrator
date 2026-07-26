@@ -189,10 +189,20 @@ describe('writeMcpConfig — per-session collision fix', () => {
 
     expect(pathA).not.toBe(pathB);
     expect(pathA).toBe(
-      path.join(PROJECT_DIR, '.claude', 'session-prompts', 'session-aaaa.mcp.json'),
+      path.join(
+        PROJECT_DIR,
+        '.claude',
+        'session-prompts',
+        'session-aaaa.mcp.json',
+      ),
     );
     expect(pathB).toBe(
-      path.join(PROJECT_DIR, '.claude', 'session-prompts', 'session-bbbb.mcp.json'),
+      path.join(
+        PROJECT_DIR,
+        '.claude',
+        'session-prompts',
+        'session-bbbb.mcp.json',
+      ),
     );
   });
 
@@ -259,7 +269,12 @@ describe('cleanupWorktree — removes the per-session MCP config for the correct
     const sessionB = 'session-still-running';
     const worktreePathA = `${PROJECT_DIR}/.claude/worktrees/${sessionA}`;
 
-    (sm as any).cleanupWorktree(sessionA, worktreePathA, undefined, PROJECT_DIR);
+    (sm as any).cleanupWorktree(
+      sessionA,
+      worktreePathA,
+      undefined,
+      PROJECT_DIR,
+    );
 
     const expectedFileA = path.join(
       PROJECT_DIR,
@@ -267,12 +282,10 @@ describe('cleanupWorktree — removes the per-session MCP config for the correct
       'session-prompts',
       `${sessionA}.mcp.json`,
     );
-    const unlinkCalls = vi.mocked(fsModule.unlinkSync).mock.calls.map(
-      (call) => call[0],
-    );
+    const unlinkCalls = vi
+      .mocked(fsModule.unlinkSync)
+      .mock.calls.map((call) => call[0]);
     expect(unlinkCalls).toContain(expectedFileA);
-    expect(
-      unlinkCalls.some((p) => String(p).includes(sessionB)),
-    ).toBe(false);
+    expect(unlinkCalls.some((p) => String(p).includes(sessionB))).toBe(false);
   });
 });
