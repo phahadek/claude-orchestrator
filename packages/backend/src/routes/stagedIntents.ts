@@ -886,6 +886,37 @@ function isArmingReadyIntent(row: StagedIntentRow): boolean {
 }
 
 /**
+ * A task.setStatus intent that promotes its target task to Ready or Done —
+ * the "applied terminal grooming outcome" (grooming decision 2026-07-26):
+ * once one of these has actually committed, the originating groom session
+ * has nothing further to groom and is a candidate for the terminal check
+ * below, rather than waiting on a re-park that may never come.
+ */
+function isTerminalGroomingPromotion(row: StagedIntentRow): boolean {
+  if (row.kind !== 'task.setStatus') return false;
+  const payload = JSON.parse(row.payload) as SetStatusPayload;
+  return payload.status === 'Ready' || payload.status === 'Done';
+}
+
+/**
+ * Backstop for the no-re-park-after-final-apply gap: PlanningOrchestrator's
+ * checkTerminal is normally driven by the session re-parking after an
+ * operator disposition, but nothing re-dispatches the session once its last
+ * intent is disposed, so it never re-parks. Invoking checkTerminal directly
+ * from the apply path closes that gap without duplicating it — checkTerminal
+ * itself still guards on no un-dispositioned intents remaining, so a session
+ * mid-disposition is untouched.
+ */
+function checkPlanningTerminalIfPromoted(
+  row: StagedIntentRow,
+  planningOrchestrator: PlanningOrchestrator | undefined,
+): void {
+  if (!planningOrchestrator || !row.session_id) return;
+  if (!isTerminalGroomingPromotion(row)) return;
+  planningOrchestrator.checkTerminal(row.session_id);
+}
+
+/**
  * Composes the proposed body a Ready readiness check should see: the stored
  * page body with any live (staged/approved) task.updateBody for this task in
  * the same group applied over it — used by both the eager approve-time check
@@ -1364,6 +1395,13 @@ async function commitGroupIntents(
     }
   }
 
+  const promoted = ordered.find(
+    (row) => committed.includes(row.id) && isTerminalGroomingPromotion(row),
+  );
+  if (promoted) {
+    checkPlanningTerminalIfPromoted(promoted, planningOrchestrator);
+  }
+
   return { status: 200, body: { ok: true, committed } };
 }
 
@@ -1494,6 +1532,7 @@ export function createStagedIntentsRouter(
           intent: committed,
           disposition: 'approve',
         });
+        checkPlanningTerminalIfPromoted(committed, planningOrchestrator);
         res.json({ ok: true, result });
       } catch (err) {
         if (err instanceof ReadinessGateError) {
