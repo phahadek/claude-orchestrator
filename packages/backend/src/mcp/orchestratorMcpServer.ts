@@ -90,6 +90,7 @@ export function buildMcpServer(
       projectId: session.project_id,
       // undefined = register every kind (code/review sessions).
       kinds: workflow ? PLANNING_INTENT_KINDS[workflow] : undefined,
+      sessionManager,
     });
   }
 
