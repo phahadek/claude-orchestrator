@@ -608,6 +608,27 @@ function renderSkeleton(
           'front of the operator; asking first inverts the flow and leaves them ' +
           'with nothing to act on.'
         : '') +
+      (workflow === 'design'
+        ? ' An Open Question’s `decision.pickOne` follows that same field mapping: ' +
+          '`prompt` is the question alone, `options` has one entry per candidate ' +
+          'solution considered — including one recommended against — each ' +
+          '`description` self-contained and architecture-level (no other option’s ' +
+          'rationale inside it), and `decisionProposal` names the pick plus carries ' +
+          'the investigation summary (the evidence, since the payload has no ' +
+          'separate Investigation field). A worked example for a two-candidate ' +
+          `question: call the \`${orchestratorMcpToolName('decision.pickOne')}\` tool with ` +
+          '`{"payload":{"prompt":"Should the retry queue be per-worker or shared?",' +
+          '"options":[{"label":"Per-worker queue","description":"Each worker owns its ' +
+          'own retry queue, so a stuck worker never blocks another worker’s throughput; ' +
+          'trade-off: no global retry ordering."},{"label":"Shared queue","description":' +
+          '"One retry queue serves every worker, preserving a single global retry order; ' +
+          'trade-off: one slow worker starves the others’ retries."}],' +
+          '"allowFreeForm":true},"decisionProposal":"Per-worker queue: worker.ts:140 ' +
+          'already partitions state per-worker, and the arch page \'Retry Semantics\' ' +
+          'says throughput isolation outweighs global ordering for this queue."}` — ' +
+          'note the rejected \'Shared queue\' candidate gets its own option, never a ' +
+          'clause folded into \'Per-worker queue\'’s description.'
+        : '') +
       (workflow === 'split'
         ? ' A split decision stages exactly the `composeSplitIntents` shape under ' +
           'one shared `groupId`: one `task.updateBody` narrowing the original task ' +
