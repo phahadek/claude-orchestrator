@@ -249,7 +249,8 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   },
   {
     id: 'design-no-question-bundling',
-    title: 'No question-bundling — one Open Question per decision.pickOne intent',
+    title:
+      'No question-bundling — one Open Question per decision.pickOne intent',
     appliesTo: ['design'],
     text:
       "DO stage exactly one Open Question's resolution per `decision.pickOne` " +
@@ -264,7 +265,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'for separate round-trips. DO hold a question whose answer depends on another ' +
       'still-unresolved question, staging it once that answer lands, rather than ' +
       'staging both together — and DO treat independence conservatively: when unsure ' +
-      "whether one answer constrains another, hold the dependent question rather " +
+      'whether one answer constrains another, hold the dependent question rather ' +
       'than stage both; an operator dispositioning two questions whose answers turn ' +
       'out coupled is worse than one extra round-trip. DO NOT bundle multiple ' +
       'questions into one `decision.pickOne` intent. `task.updateBody` (the ' +
