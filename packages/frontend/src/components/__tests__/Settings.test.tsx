@@ -17,6 +17,7 @@ vi.mock('../../hooks/useWebSocket', () => ({
 
 const defaultSettings = {
   max_concurrent_code_sessions: '4',
+  max_concurrent_planning_sessions: '6',
   auto_review_concurrency: '2',
   auto_review: 'false',
   card_preview_lines: '5',
@@ -232,6 +233,76 @@ describe('validateField — non-numeric keys', () => {
 
   it('still returns minimum error for auto_launch_concurrency set to 0', () => {
     expect(validateField('auto_launch_concurrency', '0')).toBe('Minimum is 1');
+  });
+
+  it('returns "Must be a whole number" for max_concurrent_planning_sessions given a non-integer', () => {
+    expect(validateField('max_concurrent_planning_sessions', 'abc')).toBe(
+      'Must be a whole number',
+    );
+  });
+
+  it('has no minimum-value check for max_concurrent_planning_sessions', () => {
+    expect(validateField('max_concurrent_planning_sessions', '0')).toBeNull();
+  });
+});
+
+describe('Settings — max_concurrent_planning_sessions', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', makeFetch());
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn().mockReturnValue(null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+  });
+
+  it('renders max_concurrent_planning_sessions input with the value from the API', async () => {
+    render(<Settings />);
+    const input = await screen.findByDisplayValue('6');
+    expect(input).toBeDefined();
+  });
+
+  it('fires PATCH with max_concurrent_planning_sessions when a valid value is entered', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByDisplayValue('6');
+
+    const inputs = screen.getAllByRole('spinbutton');
+    const planningInput = inputs.find(
+      (el) => (el as HTMLInputElement).value === '6',
+    )!;
+    fireEvent.change(planningInput, { target: { value: '8' } });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).max_concurrent_planning_sessions ===
+            '8',
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
+
+  it('leaves the code-session cap field rendering, value, and validation unaffected', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    const codeInput = await screen.findByDisplayValue('4');
+    expect(codeInput).toBeDefined();
+
+    fireEvent.change(codeInput, { target: { value: '7' } });
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).max_concurrent_code_sessions === '7',
+      );
+      expect(patchCall).toBeDefined();
+    });
   });
 });
 
