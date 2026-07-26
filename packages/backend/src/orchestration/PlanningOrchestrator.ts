@@ -161,7 +161,10 @@ export class PlanningOrchestrator {
     // never stages its own Done (that is not a session's to propose); this
     // is the one place that promotes it, on the same deterministic-signal
     // model as a merged PR closing a Code task.
-    if (row.session_type === 'design' && reason === 'planning_no_pending_dispositions') {
+    if (
+      row.session_type === 'design' &&
+      reason === 'planning_no_pending_dispositions'
+    ) {
       this.completeDesignTask(sessionId, row);
     }
   }

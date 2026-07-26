@@ -177,7 +177,11 @@ describe('PlanningOrchestrator — design task completion', () => {
       makeSessionRow({ session_type: 'groom' }),
     );
     vi.mocked(listStagedIntentsBySession).mockReturnValue([
-      makeIntent({ id: 'intent-1', kind: 'task.setStatus', state: 'committed' }),
+      makeIntent({
+        id: 'intent-1',
+        kind: 'task.setStatus',
+        state: 'committed',
+      }),
     ]);
     const orch = new PlanningOrchestrator(sm as any);
 
