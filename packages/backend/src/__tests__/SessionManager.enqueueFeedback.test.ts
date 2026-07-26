@@ -321,9 +321,7 @@ describe('SessionManager.enqueueFeedback()', () => {
     } as never);
 
     const sm = new SessionManager();
-    const sendSpy = vi
-      .spyOn(sm, 'sendOrResume')
-      .mockResolvedValue('sess-done');
+    const sendSpy = vi.spyOn(sm, 'sendOrResume').mockResolvedValue('sess-done');
 
     await sm.enqueueFeedback('sess-done', 'ci-failure', 'stale failure');
 
@@ -352,7 +350,11 @@ describe('SessionManager.enqueueFeedback()', () => {
     const emitSpy = vi.spyOn(sm, 'emit');
     vi.spyOn(sm, 'sendOrResume').mockResolvedValue(null);
 
-    await sm.enqueueFeedback('sess-dead', 'operator-disposition', 'pushback reason');
+    await sm.enqueueFeedback(
+      'sess-dead',
+      'operator-disposition',
+      'pushback reason',
+    );
 
     expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
       'sess-dead',
