@@ -670,7 +670,41 @@ function renderSkeleton(
           "already partitions state per-worker, and the arch page 'Retry Semantics' " +
           'says throughput isolation outweighs global ordering for this queue."}` — ' +
           "note the rejected 'Shared queue' candidate gets its own option, never a " +
-          "clause folded into 'Per-worker queue'’s description."
+          "clause folded into 'Per-worker queue'’s description.\n\n" +
+          'The terminal `task.updateBody` intent (Implementation notes) is staged ' +
+          'exactly once, after every Open Question is locked and the completeness ' +
+          'critic has run, and it carries the exact five-part closing synthesis as ' +
+          'its `decisionProposal` — the operator approves that synthesis; the body ' +
+          'write is its consequence, never a separate diff to validate. All five ' +
+          'parts are required every time:\n' +
+          '1. **Decision summary** — one paragraph stating what was decided and why.\n' +
+          '2. **Open questions resolved** — a table, one row per listed Open ' +
+          'Question (include only if there are ≥2 questions):\n\n' +
+          '   | Question          | Locked answer   |\n' +
+          '   | ----------------- | --------------- |\n' +
+          '   | <1-line question> | <1-line answer> |\n\n' +
+          '3. **Completeness-critic dispositions** — every gap the pass raised, ' +
+          'its disposition, and the run date; "none — pass run, no gaps" when ' +
+          'clean.\n' +
+          '4. **Notion pages updated** — each architecture page and the section ' +
+          'changed (or "pending — see next messages").\n' +
+          '5. **Follow-on tasks filed** — each with Type and one-line scope (or ' +
+          '"pending").\n\n' +
+          'Every completeness-critic gap and its proposed disposition (from the ' +
+          '`POST /api/design/:taskId/completeness-disposition` store, written ' +
+          '`approvalStatus: "proposed"` at critic time) must appear in part 3 for ' +
+          'operator sign-off — the store call records it durably so nothing is ' +
+          'silently dropped, but recorded is not approved, and presenting it here ' +
+          'is what asks for that approval. A worked example: call the ' +
+          `\`${orchestratorMcpToolName('task.updateBody')}\` tool with ` +
+          '`{"payload":{"taskId":"<task-id>","body":"<full markdown with the ' +
+          'Implementation notes section updated>"},"decisionProposal":"1. ' +
+          'Decision summary: ...\\n\\n2. Open questions resolved: |Question|Locked ' +
+          'answer|\\n|-|-|\\n|...|...|\\n\\n3. Completeness-critic dispositions: ' +
+          'none — pass run, no gaps.\\n\\n4. Notion pages updated: pending — see ' +
+          'next messages.\\n\\n5. Follow-on tasks filed: pending."}` — never omit ' +
+          'a part, and never fold the decision summary straight into the write ' +
+          'without the other four.'
         : '') +
       (workflow === 'split'
         ? ' A split decision stages exactly the `composeSplitIntents` shape under ' +

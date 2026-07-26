@@ -43,11 +43,16 @@ export function createDesignRouter(): Router {
           !['accepted', 'dismissed'].includes(
             (q as { disposition?: unknown }).disposition as string,
           ) ||
-          typeof (q as { reason?: unknown }).reason !== 'string'
+          typeof (q as { reason?: unknown }).reason !== 'string' ||
+          ((q as { approvalStatus?: unknown }).approvalStatus !== undefined &&
+            !['proposed', 'approved'].includes(
+              (q as { approvalStatus?: unknown }).approvalStatus as string,
+            ))
         ) {
           res.status(400).json({
             error:
-              'each question requires {question, disposition: "accepted"|"dismissed", reason}',
+              'each question requires {question, disposition: "accepted"|"dismissed", reason, ' +
+              'approvalStatus?: "proposed"|"approved"}',
           });
           return;
         }
@@ -56,13 +61,17 @@ export function createDesignRouter(): Router {
         res.status(400).json({ error: 'runAt is required' });
         return;
       }
+      // Recorded is not approved — the critic pass writes every disposition
+      // as `proposed` unless the caller says otherwise; only an operator
+      // sign-off on the closing synthesis flips a question to `approved`.
+      const questions = (
+        body.questions as CompletenessDispositionQuestion[]
+      ).map((q) => ({ approvalStatus: 'proposed' as const, ...q }));
       const row = insertCompletenessDisposition({
         source_task_id: taskId,
         project: typeof body.project === 'string' ? body.project : null,
         milestone: typeof body.milestone === 'string' ? body.milestone : null,
-        questions: JSON.stringify(
-          body.questions as CompletenessDispositionQuestion[],
-        ),
+        questions: JSON.stringify(questions),
         run_at: body.runAt,
       });
       res.status(201).json({
