@@ -144,7 +144,7 @@ describe('POST /api/staged-intents/group/:groupId/commit — dispatched-groom Re
     expect(getSeedAccretionMarker(taskId)).toBeDefined();
   });
 
-  it('still blocks a Ready-flip with no accretion staged in the group and none persisted', async () => {
+  it('does not annotate at stage time, but still blocks at commit time, a Ready-flip with no accretion staged in the group and none persisted', async () => {
     const app = buildApp();
     const taskId = 'notion:code-task-2';
     const groupId = 'group-no-accretion';
@@ -177,18 +177,10 @@ describe('POST /api/staged-intents/group/:groupId/commit — dispatched-groom Re
       groupId,
     });
 
-    expect(statusIntent.annotation).toBeTruthy();
-    expect(statusIntent.annotation.blocked).toBe(true);
-    expect(
-      statusIntent.annotation.reasons.some((r: string) =>
-        r.includes('gate_contribution'),
-      ),
-    ).toBe(true);
-    expect(
-      statusIntent.annotation.reasons.some((r: string) =>
-        r.includes('seed_contribution'),
-      ),
-    ).toBe(true);
+    // Grouped flips defer the gate/seed contribution check to commit time —
+    // the stage-time check never annotates a grouped flip as blocked on
+    // missing contribution markers alone.
+    expect(statusIntent.annotation).toBeNull();
 
     await approve(app, dependsOnIntent.id);
     await approve(app, statusIntent.id);

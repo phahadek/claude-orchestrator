@@ -228,6 +228,238 @@ describe('POST /api/staged-intents/:id/approve', () => {
   });
 });
 
+describe('stage-time gate/seed contribution check — grouped Ready-flips', () => {
+  function codeGroomingGate(overrides: Record<string, unknown> = {}) {
+    return {
+      size_check: { decision: 'n/a' },
+      type_check: { decision: 'none' },
+      type: '💻 Code',
+      filesPathsEntries: [
+        {
+          raw: 'packages/backend/src/foo.ts',
+          isNew: true,
+          existsInRepo: false,
+        },
+      ],
+      ...overrides,
+    };
+  }
+
+  it('does not attach a missing-contribution blocked annotation when task.setStatus -> Ready is staged FIRST, before its gate.accrete/seed.stage siblings, in the same group', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const taskId = 't-first';
+    const groupId = 'g-first';
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-first',
+      groupId,
+      payload: { taskId, status: 'Ready', groomingGate: codeGroomingGate() },
+    });
+    expect(setStatus.status).toBe(201);
+    expect(setStatus.body.annotation).toBeNull();
+
+    const gateAccrete = await agent.post('/api/staged-intents').send({
+      kind: 'gate.accrete',
+      projectId: 'proj-first',
+      groupId,
+      payload: {
+        sourceTask: {
+          id: taskId,
+          title: 'Some Code task',
+          project: 'proj-first',
+          milestone: 'M12',
+        },
+        items: [],
+        classification: 'n/a',
+      },
+    });
+    const seedStage = await agent.post('/api/staged-intents').send({
+      kind: 'seed.stage',
+      projectId: 'proj-first',
+      groupId,
+      payload: {
+        sourceTask: {
+          id: taskId,
+          title: 'Some Code task',
+          project: 'proj-first',
+          milestone: 'M12',
+        },
+        seeds: [],
+        decision: 'n/a',
+      },
+    });
+    expect(gateAccrete.status).toBe(201);
+    expect(seedStage.status).toBe(201);
+  });
+
+  it('still attaches a missing-contribution blocked annotation to an ungrouped Ready-flip with no applied gate/seed markers', async () => {
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-ungrouped',
+      payload: {
+        taskId: 't-ungrouped',
+        status: 'Ready',
+        groomingGate: codeGroomingGate(),
+      },
+    });
+
+    expect(setStatus.status).toBe(201);
+    expect(setStatus.body.annotation).toEqual({
+      blocked: true,
+      reasons: expect.arrayContaining([
+        expect.stringContaining('gate_contribution'),
+        expect.stringContaining('seed_contribution'),
+      ]),
+    });
+  });
+
+  it('is order-insensitive — staging setStatus before or after its group accretions yields the same clean stage-time result', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const appBefore = makeApp();
+    const agentBefore = supertest(appBefore);
+    const taskBefore = 't-order-before';
+    const groupBefore = 'g-order-before';
+
+    const setStatusBefore = await agentBefore.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-order',
+      groupId: groupBefore,
+      payload: {
+        taskId: taskBefore,
+        status: 'Ready',
+        groomingGate: codeGroomingGate(),
+      },
+    });
+    await agentBefore.post('/api/staged-intents').send({
+      kind: 'gate.accrete',
+      projectId: 'proj-order',
+      groupId: groupBefore,
+      payload: {
+        sourceTask: {
+          id: taskBefore,
+          title: 'Task',
+          project: 'proj-order',
+          milestone: 'M12',
+        },
+        items: [],
+        classification: 'n/a',
+      },
+    });
+    await agentBefore.post('/api/staged-intents').send({
+      kind: 'seed.stage',
+      projectId: 'proj-order',
+      groupId: groupBefore,
+      payload: {
+        sourceTask: {
+          id: taskBefore,
+          title: 'Task',
+          project: 'proj-order',
+          milestone: 'M12',
+        },
+        seeds: [],
+        decision: 'n/a',
+      },
+    });
+
+    const appAfter = makeApp();
+    const agentAfter = supertest(appAfter);
+    const taskAfter = 't-order-after';
+    const groupAfter = 'g-order-after';
+
+    await agentAfter.post('/api/staged-intents').send({
+      kind: 'gate.accrete',
+      projectId: 'proj-order',
+      groupId: groupAfter,
+      payload: {
+        sourceTask: {
+          id: taskAfter,
+          title: 'Task',
+          project: 'proj-order',
+          milestone: 'M12',
+        },
+        items: [],
+        classification: 'n/a',
+      },
+    });
+    await agentAfter.post('/api/staged-intents').send({
+      kind: 'seed.stage',
+      projectId: 'proj-order',
+      groupId: groupAfter,
+      payload: {
+        sourceTask: {
+          id: taskAfter,
+          title: 'Task',
+          project: 'proj-order',
+          milestone: 'M12',
+        },
+        seeds: [],
+        decision: 'n/a',
+      },
+    });
+    const setStatusAfter = await agentAfter.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-order',
+      groupId: groupAfter,
+      payload: {
+        taskId: taskAfter,
+        status: 'Ready',
+        groomingGate: codeGroomingGate(),
+      },
+    });
+
+    expect(setStatusBefore.body.annotation).toBeNull();
+    expect(setStatusAfter.body.annotation).toBeNull();
+  });
+
+  it('still blocks a grouped Ready-flip on the readiness (Open Questions) portion of the stage-time check — only the contribution-marker portion is deferred', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('## Open Questions\n- Still unresolved?\n'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-readiness',
+      groupId: 'g-readiness',
+      payload: {
+        taskId: 't-readiness',
+        status: 'Ready',
+        groomingGate: codeGroomingGate(),
+      },
+    });
+
+    expect(setStatus.status).toBe(201);
+    expect(setStatus.body.annotation).toEqual({
+      blocked: true,
+      violations: expect.arrayContaining([
+        expect.objectContaining({ tier: 'structural' }),
+      ]),
+    });
+  });
+});
+
 describe('POST /api/staged-intents/group/:groupId/commit', () => {
   it('refuses to commit while any live intent in the group is still staged', async () => {
     mockGetTaskBackend.mockReturnValue({
