@@ -1,5 +1,8 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type {
+  McpServer,
+  ToolCallback,
+} from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   stageIntent,
   runStageTimeReadyChecks,
@@ -79,8 +82,11 @@ export function registerStageProposalTools(
   server: McpServer,
   ctx: StageProposalToolContext,
 ): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function registerTool(kind: string, meta: any, handler: any): void {
+  function registerTool<Args extends z.ZodRawShape>(
+    kind: string,
+    meta: { title: string; description: string; inputSchema: Args },
+    handler: ToolCallback<Args>,
+  ): void {
     if (ctx.kinds && !ctx.kinds.includes(kind)) return;
     server.registerTool(kind, meta, handler);
   }
@@ -100,7 +106,7 @@ export function registerStageProposalTools(
         milestone: z.string().optional(),
       }),
     },
-    async (args: any) => stage('task.create', args.payload, ctx, args),
+    async (args) => stage('task.create', args.payload, ctx, args),
   );
 
   registerTool(
@@ -115,7 +121,7 @@ export function registerStageProposalTools(
         groomingGate: groomingGateEntrySchema,
       }),
     },
-    async (args: any) => stage('task.setStatus', args.payload, ctx, args),
+    async (args) => stage('task.setStatus', args.payload, ctx, args),
   );
 
   registerTool(
@@ -129,7 +135,7 @@ export function registerStageProposalTools(
         dependsOn: z.array(z.string()),
       }),
     },
-    async (args: any) => stage('task.setDependsOn', args.payload, ctx, args),
+    async (args) => stage('task.setDependsOn', args.payload, ctx, args),
   );
 
   registerTool(
@@ -143,7 +149,7 @@ export function registerStageProposalTools(
         sections: taskBodySectionsSchema,
       }),
     },
-    async (args: any) => stage('task.updateBody', args.payload, ctx, args),
+    async (args) => stage('task.updateBody', args.payload, ctx, args),
   );
 
   registerTool(
@@ -160,7 +166,7 @@ export function registerStageProposalTools(
         }),
       }),
     },
-    async (args: any) => stage('task.setProperties', args.payload, ctx, args),
+    async (args) => stage('task.setProperties', args.payload, ctx, args),
   );
 
   registerTool(
@@ -175,7 +181,7 @@ export function registerStageProposalTools(
         classification: gateContributionDecisionSchema,
       }),
     },
-    async (args: any) => stage('gate.accrete', args.payload, ctx, args),
+    async (args) => stage('gate.accrete', args.payload, ctx, args),
   );
 
   registerTool(
@@ -190,7 +196,7 @@ export function registerStageProposalTools(
         decision: seedContributionDecisionSchema,
       }),
     },
-    async (args: any) => stage('seed.stage', args.payload, ctx, args),
+    async (args) => stage('seed.stage', args.payload, ctx, args),
   );
 
   registerTool(
@@ -205,7 +211,7 @@ export function registerStageProposalTools(
         body: z.string(),
       }),
     },
-    async (args: any) => stage('arch.createUnit', args.payload, ctx, args),
+    async (args) => stage('arch.createUnit', args.payload, ctx, args),
   );
 
   registerTool(
@@ -222,7 +228,7 @@ export function registerStageProposalTools(
         body: z.string().optional(),
       }),
     },
-    async (args: any) => stage('arch.updateUnit', args.payload, ctx, args),
+    async (args) => stage('arch.updateUnit', args.payload, ctx, args),
   );
 
   registerTool(
@@ -237,7 +243,7 @@ export function registerStageProposalTools(
         replacement: archCreateUnitPayloadSchema,
       }),
     },
-    async (args: any) => stage('arch.supersedeUnit', args.payload, ctx, args),
+    async (args) => stage('arch.supersedeUnit', args.payload, ctx, args),
   );
 
   registerTool(
@@ -252,7 +258,7 @@ export function registerStageProposalTools(
         allowFreeForm: z.boolean(),
       }),
     },
-    async (args: any) => stage('decision.pickOne', args.payload, ctx, args),
+    async (args) => stage('decision.pickOne', args.payload, ctx, args),
   );
 
   registerTool(
@@ -267,7 +273,7 @@ export function registerStageProposalTools(
         fields: z.record(z.string(), z.unknown()).optional(),
       }),
     },
-    async (args: any) => stage('journal.setState', args.payload, ctx, args),
+    async (args) => stage('journal.setState', args.payload, ctx, args),
   );
 
   registerTool(
@@ -282,7 +288,7 @@ export function registerStageProposalTools(
         evidence: z.string(),
       }),
     },
-    async (args: any) =>
+    async (args) =>
       stage('session.requestCapability', args.payload, ctx, args),
   );
 }
