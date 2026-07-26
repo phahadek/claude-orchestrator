@@ -20,7 +20,11 @@ import {
   ensureMilestoneBranch,
   deriveBranchSlug,
 } from './branchModel';
-import { loadOrchestratorConfig } from './orchestrator-config';
+import {
+  loadOrchestratorConfig,
+  isGrantable,
+  isToolShapedCapability,
+} from './orchestrator-config';
 import { WorktreeSetupError } from './WorktreeSetupError';
 import { CliSessionRunner } from './CliSessionRunner';
 import {
@@ -2519,16 +2523,127 @@ export class SessionManager extends EventEmitter {
   /**
    * Durably grant a capability (a Bash command prefix or named MCP write
    * verb — never a category) to a session. Sticky for the session's life,
-   * discarded at session end. Takes effect at the next (re)spawn: AgentSession
-   * reads the granted set fresh from the DB on every spawn/resume, so this
-   * does not require the session to be running in-memory right now, and a
-   * server restart before the next spawn does not lose the grant.
+   * discarded at session end. AgentSession reads the granted set fresh from
+   * the DB on every spawn/resume (getSessionAllowedTools), so a grant is
+   * always visible to a future respawn even if the server restarts before
+   * one happens.
    *
-   * This is the mechanism only — approving a capability-request and calling
-   * this method is the sibling decision-surface task's responsibility.
+   * That is not enough on its own: a *live* session's --allowed-tools was
+   * baked into argv at its last spawn, and the normal mid-session delivery
+   * path (sendOrResume's live-session branch) only writes to stdin — it
+   * never rebuilds argv. Without forcing a respawn here, a grant to a
+   * currently-running session would sit recorded but inert until the
+   * process happened to die and get resumed some other way. So: persist
+   * first, then — only for a capability that could actually widen
+   * --allowed-tools (isGrantable, isToolShapedCapability) and only when the
+   * session is currently live — kill and respawn it in place via
+   * respawnForCapabilityGrant, reusing the session id and --resume so the
+   * transcript and staged intents survive.
    */
-  grantCapability(sessionId: string, capability: string): string[] {
-    return addGrantedCapability(sessionId, capability);
+  async grantCapability(
+    sessionId: string,
+    capability: string,
+  ): Promise<string[]> {
+    const granted = addGrantedCapability(sessionId, capability);
+
+    if (
+      isGrantable(capability) &&
+      isToolShapedCapability(capability) &&
+      this.sessions.has(sessionId)
+    ) {
+      try {
+        await this.respawnForCapabilityGrant(sessionId);
+      } catch (err) {
+        logger.error(
+          `[SessionManager] grantCapability: respawn failed for ${sessionId.slice(0, 8)}: ${err}`,
+        );
+      }
+    }
+
+    return granted;
+  }
+
+  /**
+   * Kill (if live) and respawn a session in place so a just-persisted
+   * capability grant takes effect: AgentSession.run() recomputes
+   * --allowed-tools from the DB's granted set on every spawn (see
+   * AgentSession.ts's getSessionAllowedTools call), so a fresh spawn is
+   * what actually delivers the grant. Reuses the session's existing
+   * worktree and session id with --resume, mirroring the fast path in
+   * _doSendOrResume, so conversation history and staged intents survive.
+   * Returns false without killing anything if the worktree can't be found —
+   * in that case the grant still lands on whatever later resume path
+   * (sendOrResume, resumeSession) eventually revives the session.
+   */
+  private async respawnForCapabilityGrant(sessionId: string): Promise<boolean> {
+    const row = getSession(sessionId);
+    if (!row) return false;
+
+    const project = getProjectById(row.project_id ?? '');
+    if (!project) return false;
+    const projectDir = normalizePath(project.projectDir);
+    const defaultWorktreePath = path.join(
+      projectDir,
+      '.claude',
+      'worktrees',
+      sessionId,
+    );
+    const recordedPath = isPlanningSession(row.session_type)
+      ? (row.worktree_path ?? projectDir)
+      : (row.worktree_path ?? defaultWorktreePath);
+
+    if (
+      !recordedPath ||
+      !fs.existsSync(recordedPath) ||
+      !fs.existsSync(path.join(recordedPath, '.git'))
+    ) {
+      logger.warn(
+        `[SessionManager] respawnForCapabilityGrant: worktree missing for ${sessionId.slice(0, 8)} — grant will take effect on next resume instead`,
+      );
+      return false;
+    }
+
+    const liveSession = this.sessions.get(sessionId);
+    if (liveSession) {
+      await liveSession.kill();
+    }
+    this.evictDeadSessionEntry(sessionId);
+
+    const orchConfig = loadOrchestratorConfig(projectDir);
+    const mode = runtimeSettings.session_mode;
+    const runner =
+      mode === 'api'
+        ? new ApiSessionRunner(sessionId)
+        : getCorporateMode().gates.dockerMandatory
+          ? new DockerSessionRunner(sessionId)
+          : new CliSessionRunner(sessionId);
+    const mcpConfigPath = writeMcpConfig(
+      projectDir,
+      sessionId,
+      orchConfig.mcp_servers,
+      project.taskSource,
+    );
+    const systemPromptFilePath =
+      mode === 'cli' && row.task_url
+        ? await this._buildAndWriteResumeSystemPrompt(
+            row,
+            project,
+            orchConfig,
+            projectDir,
+            recordedPath,
+          )
+        : undefined;
+
+    const session = this.respawnSession(
+      row,
+      recordedPath,
+      orchConfig,
+      runner,
+      mcpConfigPath,
+      systemPromptFilePath,
+    );
+    this.wireSession(sessionId, session, projectDir, recordedPath);
+    return true;
   }
 
   /**
