@@ -336,9 +336,9 @@ describe('procedureCore', () => {
       )!;
 
       expect(noBundling.text).toContain(DESIGN_TERMINAL_ARTIFACTS_ORDERING);
-      expect(
-        stepSummaryFor(presentForSignoff, 'design'),
-      ).toContain(DESIGN_TERMINAL_ARTIFACTS_ORDERING);
+      expect(stepSummaryFor(presentForSignoff, 'design')).toContain(
+        DESIGN_TERMINAL_ARTIFACTS_ORDERING,
+      );
       expect(stepSummaryFor(applyOnSignoff, 'design')).toContain(
         DESIGN_TERMINAL_ARTIFACTS_ORDERING,
       );
@@ -351,7 +351,9 @@ describe('procedureCore', () => {
         'utf8',
       );
       const declarationCount = (
-        coreSource.match(/export const DESIGN_TERMINAL_ARTIFACTS_ORDERING =/g) ?? []
+        coreSource.match(
+          /export const DESIGN_TERMINAL_ARTIFACTS_ORDERING =/g,
+        ) ?? []
       ).length;
       expect(declarationCount).toBe(1);
     });
@@ -383,9 +385,7 @@ describe('procedureCore', () => {
       expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
         /file-sibling.*task\.create/,
       );
-      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
-        /Split-don't-trim/,
-      );
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(/Split-don't-trim/);
       expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
         /may be staged\s+before Open Questions resolve/,
       );

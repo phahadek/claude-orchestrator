@@ -64,7 +64,7 @@ export const DESIGN_TERMINAL_ARTIFACTS_ORDERING =
   'completeness critic has run. This orders artifacts behind answers, never ' +
   'questions behind each other: independent Open Questions still stage in ' +
   'the same turn (see "No question-bundling" above). EXEMPT: a file-sibling ' +
-  '`task.create` (the Split-don\'t-trim overflow disposition) scopes the ' +
+  "`task.create` (the Split-don't-trim overflow disposition) scopes the " +
   'work rather than following from a locked decision, and may be staged ' +
   'before Open Questions resolve.';
 
