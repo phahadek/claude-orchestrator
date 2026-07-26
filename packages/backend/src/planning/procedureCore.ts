@@ -36,6 +36,14 @@ export interface ProcedurePrinciple {
   appliesTo: readonly SkillId[];
   /** Canonical prose. May contain `{skillLabel}` — resolved per-skill by `renderPrinciple`. */
   text: string;
+  /**
+   * Per-skill override of `text` for a skill whose terminal move differs from
+   * the shared prose — e.g. `ask-permission-not-speculative`'s ops wording
+   * abstains into a `needs-setup` journal state that groom/design have no
+   * equivalent of; their terminal move is ending the turn with the blocker
+   * named instead. Still resolved through `{skillLabel}` substitution.
+   */
+  textOverrides?: Partial<Record<SkillId, string>>;
 }
 
 export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
@@ -128,7 +136,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'ask-permission-not-speculative',
     title: 'Ask for what you need — never fabricate',
-    appliesTo: ['ops'],
+    appliesTo: ['groom', 'design', 'ops'],
     text:
       'DO stage `session.requestCapability` naming the exact capability the moment a ' +
       'read/write the task needs is blocked by the sandbox — nothing beyond the base ' +
@@ -148,6 +156,48 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       "capability when staging isn't possible or the need is a one-off read-only " +
       'investigation. DO NOT fabricate a result to route around a denial — ask or ' +
       'abstain, never invent.',
+    textOverrides: {
+      groom:
+        'DO stage `session.requestCapability` naming the exact capability the moment a ' +
+        'read/write the task needs is blocked by the sandbox — nothing beyond the base ' +
+        'profile is ever speculatively handed to a dispatched {skillLabel} session. ' +
+        `Concrete invocation: call the \`${orchestratorMcpToolName('session.requestCapability')}\` ` +
+        'tool with `{"payload":{"capability":"<capability>","plan":"<plan>",' +
+        '"evidence":"<evidence>"}}` ' +
+        "— then end the turn and wait to be re-dispatched on the operator's decision. " +
+        'DO request `read:session-record:<target-session-id>` as the capability value, ' +
+        "specifically, when the blocked read is this orchestrator's own runtime record " +
+        '(session_events/audit_log for a session by id) rather than project/prod data — ' +
+        'never request a Bash command prefix for that read: a Bash prefix can neither ' +
+        "reach this orchestrator's own DB (outside the sandbox) nor authenticate to its " +
+        'device-authed API, so it never materialises the read even once granted. DO NOT ' +
+        'end the turn on the blocker alone when the capability can be requested instead ' +
+        '— request it first. DO end the turn naming the blocker explicitly when staging ' +
+        "the request isn't possible or the need is a one-off read-only investigation: " +
+        '{skillLabel} has no journal state to abstain into — ending the turn with the ' +
+        'blocker named is its terminal move. DO NOT fabricate a result to route around ' +
+        'a denial — ask or abstain, never invent.',
+      design:
+        'DO stage `session.requestCapability` naming the exact capability the moment a ' +
+        'read/write the task needs is blocked by the sandbox — nothing beyond the base ' +
+        'profile is ever speculatively handed to a dispatched {skillLabel} session. ' +
+        `Concrete invocation: call the \`${orchestratorMcpToolName('session.requestCapability')}\` ` +
+        'tool with `{"payload":{"capability":"<capability>","plan":"<plan>",' +
+        '"evidence":"<evidence>"}}` ' +
+        "— then end the turn and wait to be re-dispatched on the operator's decision. " +
+        'DO request `read:session-record:<target-session-id>` as the capability value, ' +
+        "specifically, when the blocked read is this orchestrator's own runtime record " +
+        '(session_events/audit_log for a session by id) rather than project/prod data — ' +
+        'never request a Bash command prefix for that read: a Bash prefix can neither ' +
+        "reach this orchestrator's own DB (outside the sandbox) nor authenticate to its " +
+        'device-authed API, so it never materialises the read even once granted. DO NOT ' +
+        'end the turn on the blocker alone when the capability can be requested instead ' +
+        '— request it first. DO end the turn naming the blocker explicitly when staging ' +
+        "the request isn't possible or the need is a one-off read-only investigation: " +
+        '{skillLabel} has no journal state to abstain into — ending the turn with the ' +
+        'blocker named is its terminal move. DO NOT fabricate a result to route around ' +
+        'a denial — ask or abstain, never invent.',
+    },
   },
   {
     id: 'investigate-before-resolving-no-deferral',
@@ -261,7 +311,8 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
 
 /** Resolve `{skillLabel}` against the given skill and return the finished prose. */
 export function renderPrinciple(p: ProcedurePrinciple, skill: SkillId): string {
-  return p.text.replace(/\{skillLabel\}/g, SKILL_LABELS[skill]);
+  const text = p.textOverrides?.[skill] ?? p.text;
+  return text.replace(/\{skillLabel\}/g, SKILL_LABELS[skill]);
 }
 
 export function principlesFor(skill: SkillId): ProcedurePrinciple[] {

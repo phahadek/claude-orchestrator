@@ -24,6 +24,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'gate.accrete',
     'seed.stage',
     'task.create',
+    'session.requestCapability',
   ],
   design: [
     'decision.pickOne',
@@ -32,6 +33,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'task.setStatus',
     'seed.stage',
     'task.create',
+    'session.requestCapability',
   ],
   ops: [
     'journal.setState',
