@@ -8,6 +8,10 @@ import type {
 } from './SessionRunner';
 import { logger } from '../logger';
 import { isPlanningSession } from './sessionPredicates';
+import {
+  acquireCheckoutLockdown,
+  releaseCheckoutLockdown,
+} from './checkoutLockdown';
 
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[DockerSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
@@ -51,6 +55,7 @@ export class DockerSessionRunner implements ISessionRunner {
   private networkName: string;
   private execProc: ChildProcess | null = null;
   private _killed = false;
+  private _isPlanning = false;
 
   constructor(private readonly sessionId: string) {
     this.containerName = `${SESSION_CONTAINER_PREFIX}${sessionId}`;
@@ -76,6 +81,21 @@ export class DockerSessionRunner implements ISessionRunner {
       systemPromptFilePath,
       sessionType,
     } = options;
+    const isPlanning = Boolean(sessionType && isPlanningSession(sessionType));
+    this._isPlanning = isPlanning;
+
+    // Planning sessions share `cwd` === the project checkout (worktreePath
+    // here) across concurrent sessions. Ref-count the lockdown (DB-backed,
+    // see checkoutLockdown.ts) so the checkout mount only flips read-only
+    // while at least one planning session is running, and carve out a
+    // writable scratch-dir bind mount as the exception. Unlike
+    // CliSessionRunner, no host-level chmod is needed — the `:ro` bind
+    // mount below is what enforces read-only inside the container.
+    const scratchDir = isPlanning
+      ? acquireCheckoutLockdown(worktreePath, this.sessionId, {
+          applyFsLockdown: false,
+        })
+      : undefined;
 
     const claudeBin = config.claudePath;
     const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? '/root';
@@ -125,8 +145,16 @@ export class DockerSessionRunner implements ISessionRunner {
           'docker run -d',
           `--name ${this.containerName}`,
           `--network ${this.networkName}`,
-          // Mount worktree (read-write — claude needs to modify files)
-          `-v "${worktreePath}:${worktreePath}"`,
+          // Planning sessions get a read-only checkout mount (no OS-level
+          // sandbox of their own) plus a writable scratch-dir mount as the
+          // carved-out exception. Coding/review sessions keep the
+          // read-write worktree mount — claude needs to modify files there.
+          ...(isPlanning
+            ? [
+                `-v "${worktreePath}:${worktreePath}:ro"`,
+                `-v "${scratchDir}:${scratchDir}"`,
+              ]
+            : [`-v "${worktreePath}:${worktreePath}"`]),
           // Mount claude binary (read-only)
           `-v "${claudeBin}:${claudeBin}:ro"`,
           // Mount claude credentials and config (read-only)
@@ -154,9 +182,7 @@ export class DockerSessionRunner implements ISessionRunner {
     }
 
     // Build claude command arguments (same as CliSessionRunner)
-    const permissionMode =
-      sessionType && isPlanningSession(sessionType) ? 'default' : 'acceptEdits';
-    const isPlanning = Boolean(sessionType && isPlanningSession(sessionType));
+    const permissionMode = isPlanning ? 'default' : 'acceptEdits';
 
     const claudeArgs = [
       ...(resumeSessionId
@@ -318,6 +344,9 @@ export class DockerSessionRunner implements ISessionRunner {
   }
 
   private async _teardown(): Promise<void> {
+    if (this._isPlanning) {
+      releaseCheckoutLockdown(this.sessionId, { applyFsLockdown: false });
+    }
     for (const name of [this.containerName, this.proxyContainerName]) {
       try {
         execSync(`docker rm -f ${name}`, { stdio: 'pipe' });

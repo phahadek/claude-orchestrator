@@ -14,6 +14,10 @@ import type {
 import { logger } from '../logger';
 import { placeSessionPid } from './sessionCgroup';
 import { isPlanningSession } from './sessionPredicates';
+import {
+  acquireCheckoutLockdown,
+  releaseCheckoutLockdown,
+} from './checkoutLockdown';
 
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
@@ -69,6 +73,19 @@ export class CliSessionRunner implements ISessionRunner {
     // allowlist) so a denial can never be resolved by an operator granting
     // the capability on re-dispatch — see GRANT_DENYLIST_PATTERNS.
     const isPlanning = Boolean(sessionType && isPlanningSession(sessionType));
+
+    // Planning sessions share `cwd` === the project checkout across
+    // concurrent sessions (no worktree of their own — see below), and that
+    // checkout has no sandbox other than this lockdown: strip write
+    // permission from it (ref-counted, since concurrent planning sessions
+    // must not lift each other's lock) and carve out a writable per-session
+    // scratch dir as the exception. `worktreePath` is the project dir for
+    // planning sessions.
+    if (isPlanning) {
+      acquireCheckoutLockdown(worktreePath, this.sessionId, {
+        applyFsLockdown: true,
+      });
+    }
 
     // Planning/ops/gate-verify sessions have no worktree of their own (they
     // run with cwd === projectDir) and, per the settled design, are not
@@ -209,6 +226,10 @@ export class CliSessionRunner implements ISessionRunner {
         }, 5_000),
       ),
     ]);
+
+    if (isPlanning) {
+      releaseCheckoutLockdown(this.sessionId, { applyFsLockdown: true });
+    }
 
     return exitCode;
   }
