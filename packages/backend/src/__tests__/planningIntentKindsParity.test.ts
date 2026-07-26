@@ -163,9 +163,7 @@ describe('planning workflow --allowed-tools parity with PLANNING_INTENT_KINDS', 
       { taskId: 't1', section: 'Context', operation: 'remove' },
     ];
     for (const sample of samples) {
-      expect(() =>
-        patchBodySectionPayloadSchema.parse(sample),
-      ).not.toThrow();
+      expect(() => patchBodySectionPayloadSchema.parse(sample)).not.toThrow();
     }
   });
 });
