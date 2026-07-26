@@ -138,9 +138,7 @@ describe('buildMcpServer — tool surface per session type', () => {
       session_type: 'groom',
     });
     const names = await toolNamesFor('mcp-groom-1');
-    expect(names).toEqual(
-      ['health', ...PLANNING_INTENT_KINDS.groom].sort(),
-    );
+    expect(names).toEqual(['health', ...PLANNING_INTENT_KINDS.groom].sort());
   });
 
   it('a design session exposes decision.pickOne and task.updateBody, not journal.setState', async () => {
@@ -155,9 +153,7 @@ describe('buildMcpServer — tool surface per session type', () => {
       session_type: 'design',
     });
     const names = await toolNamesFor('mcp-design-1');
-    expect(names).toEqual(
-      ['health', ...PLANNING_INTENT_KINDS.design].sort(),
-    );
+    expect(names).toEqual(['health', ...PLANNING_INTENT_KINDS.design].sort());
     expect(names).toContain('decision.pickOne');
     expect(names).toContain('task.updateBody');
     expect(names).not.toContain('journal.setState');

@@ -32,7 +32,11 @@ async function connectedClient(
   workflow: PlanningWorkflow | null = null,
 ) {
   const server = new McpServer({ name: 'test', version: '1.0.0' });
-  registerVerdictTools(server, { sessionId: 'session-1', getSession, workflow });
+  registerVerdictTools(server, {
+    sessionId: 'session-1',
+    getSession,
+    workflow,
+  });
   const [serverTransport, clientTransport] =
     InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test-client', version: '1.0.0' });

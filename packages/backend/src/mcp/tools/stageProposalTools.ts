@@ -282,6 +282,7 @@ export function registerStageProposalTools(
         evidence: z.string(),
       }),
     },
-    async (args: any) => stage('session.requestCapability', args.payload, ctx, args),
+    async (args: any) =>
+      stage('session.requestCapability', args.payload, ctx, args),
   );
 }
