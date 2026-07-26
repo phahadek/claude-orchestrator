@@ -1115,7 +1115,7 @@ describe('TaskList', () => {
       expect(screen.queryByTestId('groom-error')).toBeNull();
     });
 
-    it('reports a genuinely-not-launched task as "did not launch" even when launched[] holds prefixed ids', async () => {
+    it('reports a genuinely-failed task with its failure reason even when launched[] holds prefixed ids', async () => {
       const launchedUuid = 'launched-uuid';
       const notLaunchedUuid = 'not-launched-uuid';
       (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
@@ -1127,6 +1127,12 @@ describe('TaskList', () => {
               json: async () => ({
                 launched: [`notion:${launchedUuid}`],
                 deferred: [],
+                failed: [
+                  {
+                    taskId: `notion:${notLaunchedUuid}`,
+                    reason: 'Max concurrent planning sessions (5) reached',
+                  },
+                ],
               }),
             });
           }
@@ -1183,6 +1189,9 @@ describe('TaskList', () => {
       });
       expect(screen.getByTestId('groom-error').textContent).toContain(
         `notion:${notLaunchedUuid}`,
+      );
+      expect(screen.getByTestId('groom-error').textContent).toContain(
+        'Max concurrent planning sessions (5) reached',
       );
       expect(screen.getByTestId('groom-error').textContent).not.toContain(
         `notion:${launchedUuid},`,
@@ -1849,14 +1858,18 @@ describe('TaskList', () => {
   });
 
   describe('Design(N) button', () => {
-    function mockPlanningEndpoint(launched: string[], entries: unknown[]) {
+    function mockPlanningEndpoint(
+      launched: string[],
+      entries: unknown[],
+      failed: { taskId: string; reason: string }[] = [],
+    ) {
       (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
         (url: string) => {
           if (url.includes('/api/planning/launch')) {
             return Promise.resolve({
               ok: true,
               status: 200,
-              json: async () => ({ launched, deferred: [] }),
+              json: async () => ({ launched, deferred: [], failed }),
             });
           }
           return Promise.resolve({
@@ -2006,10 +2019,19 @@ describe('TaskList', () => {
       expect(screen.queryByTestId('design-error')).toBeNull();
     });
 
-    it('reports a genuinely-not-launched task as "did not launch" even when launched[] holds prefixed ids', async () => {
+    it('reports a genuinely-failed task with its failure reason even when launched[] holds prefixed ids', async () => {
       const launchedUuid = 'design-launched-uuid';
       const notLaunchedUuid = 'design-not-launched-uuid';
-      mockPlanningEndpoint([`notion:${launchedUuid}`], []);
+      mockPlanningEndpoint(
+        [`notion:${launchedUuid}`],
+        [],
+        [
+          {
+            taskId: `notion:${notLaunchedUuid}`,
+            reason: 'Max concurrent planning sessions (5) reached',
+          },
+        ],
+      );
 
       renderList(
         [
@@ -2037,6 +2059,9 @@ describe('TaskList', () => {
       });
       expect(screen.getByTestId('design-error').textContent).toContain(
         `notion:${notLaunchedUuid}`,
+      );
+      expect(screen.getByTestId('design-error').textContent).toContain(
+        'Max concurrent planning sessions (5) reached',
       );
       expect(screen.getByTestId('design-error').textContent).not.toContain(
         `notion:${launchedUuid},`,

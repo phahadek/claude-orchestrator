@@ -482,7 +482,7 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     const launcher = new OpsSessionLauncher(sessionManager as never);
     const task = { id: 'task-1', title: 'task-1', url: '', blockingDepIds: [] };
 
-    await launcher.launchSelected({
+    const result = await launcher.launchSelected({
       projectId: 'proj-1',
       projectContextUrl: 'https://www.notion.so/context',
       milestoneId: 'milestone-1',
@@ -495,6 +495,91 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     // on the generic no-injectedProcedureContent fail-loud.
     expect(loadGroomContext).toHaveBeenCalledTimes(2);
     expect(start).not.toHaveBeenCalled();
+    expect(result.launched).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]).toMatchObject({ taskId: 'task-1' });
+    expect(result.failed[0].reason).toBeTruthy();
+  });
+
+  it('puts a task in failed[] with the rejection message when sessionManager.start rejects, not in launched[]', async () => {
+    start.mockRejectedValue(
+      new Error('Max concurrent planning sessions (5) reached'),
+    );
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = makeTask({ id: 'task-1' });
+
+    const result = await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      opsContext: makeOpsContext([task]),
+      tasks: [task],
+    });
+
+    expect(result.launched).toEqual([]);
+    expect(result.failed).toEqual([
+      {
+        taskId: 'task-1',
+        reason: 'Max concurrent planning sessions (5) reached',
+      },
+    ]);
+  });
+
+  it('puts the task in launched[] and leaves failed[] empty when start resolves', async () => {
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = makeTask({ id: 'task-1' });
+
+    const result = await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      opsContext: makeOpsContext([task]),
+      tasks: [task],
+    });
+
+    expect(result.launched).toEqual(['task-1']);
+    expect(result.failed).toEqual([]);
+  });
+
+  it('partitions a mixed batch into launched, deferred, and failed, still dispatching the non-failing tasks', async () => {
+    start.mockImplementation(
+      (_url: string, _ctxUrl: string, opts: { taskId: string }) => {
+        if (opts.taskId === 'task-fail') {
+          return Promise.reject(
+            new Error('Max concurrent planning sessions (5) reached'),
+          );
+        }
+        return Promise.resolve(`session-${opts.taskId}`);
+      },
+    );
+
+    const launchTask = makeTask({ id: 'task-launch' });
+    const deferTask = makeTask({
+      id: 'task-defer',
+      dependsOn: ['task-dep'],
+      blockingDepIds: ['task-dep'],
+      depStatus: 'blocked',
+    });
+    const failTask = makeTask({ id: 'task-fail' });
+
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const result = await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      opsContext: makeOpsContext([launchTask, failTask]),
+      tasks: [launchTask, deferTask, failTask],
+    });
+
+    expect(result.launched).toEqual(['task-launch']);
+    expect(result.deferred).toEqual(['task-defer']);
+    expect(result.failed).toEqual([
+      {
+        taskId: 'task-fail',
+        reason: 'Max concurrent planning sessions (5) reached',
+      },
+    ]);
+    expect(start).toHaveBeenCalledTimes(2);
   });
 
   it('does not pass injectedProcedureContent for a standard (code) dispatch', async () => {

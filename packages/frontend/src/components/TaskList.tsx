@@ -123,6 +123,57 @@ function LaunchedSessionsBanner({
   );
 }
 
+/**
+ * Reconciles a Groom(N)/Ops(N)/Design(N) launch response against the tasks the
+ * operator selected, producing operator-facing messages:
+ * - deferred: waiting on dependencies (unchanged from before failed[] existed).
+ * - failed: the launcher attempted dispatch and it failed — names the reason
+ *   (e.g. a saturated planning pool) rather than a generic "did not launch".
+ * - not accounted for at all (e.g. dropped by a server-side eligibility
+ *   filter before the launcher ever saw them) — falls back to a generic
+ *   "not executable" message, since the API has no reason to report here.
+ */
+function formatLaunchMessages(
+  selectedIds: string[],
+  result: {
+    launched: string[];
+    deferred: string[];
+    failed?: { taskId: string; reason: string }[];
+  },
+  notExecutableLabel: string,
+): string | null {
+  const launchedIds = new Set(result.launched.map(bareTaskId));
+  const deferredIds = new Set(result.deferred.map(bareTaskId));
+  const failed = result.failed ?? [];
+  const failedIds = new Set(failed.map((f) => bareTaskId(f.taskId)));
+  const deferred = selectedIds.filter((id) => deferredIds.has(bareTaskId(id)));
+  const notAccountedFor = selectedIds.filter(
+    (id) =>
+      !launchedIds.has(bareTaskId(id)) &&
+      !deferredIds.has(bareTaskId(id)) &&
+      !failedIds.has(bareTaskId(id)),
+  );
+
+  const messages: string[] = [];
+  if (deferred.length > 0) {
+    messages.push(
+      `${deferred.length} selected task${deferred.length === 1 ? '' : 's'} waiting on dependencies — will launch when unblocked: ${deferred.join(', ')}`,
+    );
+  }
+  if (failed.length > 0) {
+    const details = failed.map((f) => `${f.taskId} (${f.reason})`).join(', ');
+    messages.push(
+      `${failed.length} selected task${failed.length === 1 ? '' : 's'} failed to launch: ${details}`,
+    );
+  }
+  if (notAccountedFor.length > 0) {
+    messages.push(
+      `${notAccountedFor.length} selected task${notAccountedFor.length === 1 ? '' : 's'} did not launch (${notExecutableLabel}): ${notAccountedFor.join(', ')}`,
+    );
+  }
+  return messages.length > 0 ? messages.join(' ') : null;
+}
+
 /** Group tasks by wave number, returning a map of wave → sorted tasks. */
 function groupByWave(tasks: TaskView[]): Map<number, TaskView[]> {
   const map = new Map<number, TaskView[]>();
@@ -594,14 +645,7 @@ export function TaskList({
       setGroomLaunchedIds(
         selectedIds.filter((id) => launchedIds.has(bareTaskId(id))),
       );
-      const notLaunched = selectedIds.filter(
-        (id) => !launchedIds.has(bareTaskId(id)),
-      );
-      setGroomError(
-        notLaunched.length > 0
-          ? `${notLaunched.length} selected task${notLaunched.length === 1 ? '' : 's'} did not launch: ${notLaunched.join(', ')}`
-          : null,
-      );
+      setGroomError(formatLaunchMessages(selectedIds, result, 'not groomable'));
       setGroomCheckedIds(new Set());
     } catch (err) {
       setGroomError(
@@ -682,29 +726,12 @@ export function TaskList({
         selectedIds,
       );
       const launchedIds = new Set(result.launched.map(bareTaskId));
-      const deferredIds = new Set(result.deferred.map(bareTaskId));
       setOpsLaunchedIds(
         selectedIds.filter((id) => launchedIds.has(bareTaskId(id))),
       );
-      const deferred = selectedIds.filter((id) =>
-        deferredIds.has(bareTaskId(id)),
+      setOpsError(
+        formatLaunchMessages(selectedIds, result, 'not ops-executable'),
       );
-      const notLaunched = selectedIds.filter(
-        (id) =>
-          !launchedIds.has(bareTaskId(id)) && !deferredIds.has(bareTaskId(id)),
-      );
-      const messages: string[] = [];
-      if (deferred.length > 0) {
-        messages.push(
-          `${deferred.length} selected task${deferred.length === 1 ? '' : 's'} waiting on dependencies — will launch when unblocked: ${deferred.join(', ')}`,
-        );
-      }
-      if (notLaunched.length > 0) {
-        messages.push(
-          `${notLaunched.length} selected task${notLaunched.length === 1 ? '' : 's'} did not launch (not ops-executable): ${notLaunched.join(', ')}`,
-        );
-      }
-      setOpsError(messages.length > 0 ? messages.join(' ') : null);
       setOpsCheckedIds(new Set());
     } catch (err) {
       setOpsError(
@@ -776,29 +803,12 @@ export function TaskList({
         selectedIds,
       );
       const launchedIds = new Set(result.launched.map(bareTaskId));
-      const deferredIds = new Set(result.deferred.map(bareTaskId));
       setDesignLaunchedIds(
         selectedIds.filter((id) => launchedIds.has(bareTaskId(id))),
       );
-      const deferred = selectedIds.filter((id) =>
-        deferredIds.has(bareTaskId(id)),
+      setDesignError(
+        formatLaunchMessages(selectedIds, result, 'not design-executable'),
       );
-      const notLaunched = selectedIds.filter(
-        (id) =>
-          !launchedIds.has(bareTaskId(id)) && !deferredIds.has(bareTaskId(id)),
-      );
-      const messages: string[] = [];
-      if (deferred.length > 0) {
-        messages.push(
-          `${deferred.length} selected task${deferred.length === 1 ? '' : 's'} waiting on dependencies — will launch when unblocked: ${deferred.join(', ')}`,
-        );
-      }
-      if (notLaunched.length > 0) {
-        messages.push(
-          `${notLaunched.length} selected task${notLaunched.length === 1 ? '' : 's'} did not launch (not design-executable): ${notLaunched.join(', ')}`,
-        );
-      }
-      setDesignError(messages.length > 0 ? messages.join(' ') : null);
       setDesignCheckedIds(new Set());
     } catch (err) {
       setDesignError(
