@@ -15,7 +15,6 @@ const GATE_ENV_VARS = [
   'ORCHESTRATOR_GATE_REQUIRE_HUMAN_APPROVAL',
   'ORCHESTRATOR_GATE_REQUIRE_ZDR',
   'ORCHESTRATOR_GATE_VALIDATE_PR_BODY',
-  'ORCHESTRATOR_GATE_SECRETS_VIA_SEAM',
 ];
 
 beforeEach(() => {
@@ -56,23 +55,21 @@ describe('getCorporateMode', () => {
     expect(getSetting).not.toHaveBeenCalled();
   });
 
-  it('when enabled=true, all 5 gates are true', () => {
+  it('when enabled=true, all 4 gates are true', () => {
     process.env.ORCHESTRATOR_MODE = 'corporate';
     const { gates } = getCorporateMode();
     expect(gates.dockerMandatory).toBe(true);
     expect(gates.requireHumanApproval).toBe(true);
     expect(gates.requireZDR).toBe(true);
     expect(gates.validatePRBody).toBe(true);
-    expect(gates.secretsViaSeam).toBe(true);
   });
 
-  it('when enabled=false, all 5 gates are false', () => {
+  it('when enabled=false, all 4 gates are false', () => {
     const { gates } = getCorporateMode();
     expect(gates.dockerMandatory).toBe(false);
     expect(gates.requireHumanApproval).toBe(false);
     expect(gates.requireZDR).toBe(false);
     expect(gates.validatePRBody).toBe(false);
-    expect(gates.secretsViaSeam).toBe(false);
   });
 
   it('per-gate override flips one gate while others follow mode default (personal + requireZDR=true)', () => {
@@ -82,7 +79,6 @@ describe('getCorporateMode', () => {
     expect(gates.dockerMandatory).toBe(false);
     expect(gates.requireHumanApproval).toBe(false);
     expect(gates.validatePRBody).toBe(false);
-    expect(gates.secretsViaSeam).toBe(false);
   });
 
   it('per-gate override flips one gate while others follow mode default (corporate + dockerMandatory=false)', () => {
@@ -93,7 +89,6 @@ describe('getCorporateMode', () => {
     expect(gates.requireHumanApproval).toBe(true);
     expect(gates.requireZDR).toBe(true);
     expect(gates.validatePRBody).toBe(true);
-    expect(gates.secretsViaSeam).toBe(true);
   });
 
   it('multiple per-gate overrides are applied independently', () => {
@@ -104,15 +99,6 @@ describe('getCorporateMode', () => {
     expect(gates.validatePRBody).toBe(true);
     expect(gates.dockerMandatory).toBe(false);
     expect(gates.requireZDR).toBe(false);
-    expect(gates.secretsViaSeam).toBe(false);
-  });
-
-  it('override wins over mode: personal mode + secretsViaSeam=true', () => {
-    process.env.ORCHESTRATOR_MODE = 'personal';
-    process.env.ORCHESTRATOR_GATE_SECRETS_VIA_SEAM = 'true';
-    const { gates } = getCorporateMode();
-    expect(gates.secretsViaSeam).toBe(true);
-    expect(gates.dockerMandatory).toBe(false);
   });
 
   it('with no overrides, behavior is identical to today: corporate = all on', () => {

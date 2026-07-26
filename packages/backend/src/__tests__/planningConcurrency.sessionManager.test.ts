@@ -143,7 +143,6 @@ vi.mock('../config/corporateMode', () => ({
       requireHumanApproval: false,
       requireZDR: false,
       validatePRBody: false,
-      secretsViaSeam: false,
     },
   }),
 }));
