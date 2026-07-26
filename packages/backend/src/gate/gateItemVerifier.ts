@@ -123,7 +123,7 @@ function buildGateVerifyProcedure(item: GateItem): string {
       'it holds no allow-listed client for the live SQLite file and no device ' +
       "auth for the orchestrator's API — so session_events/audit_log for a " +
       'specific session stay reachable only through the brokered read, not a ' +
-      'direct file or DB path. For any other read your base tools don\'t ' +
+      "direct file or DB path. For any other read your base tools don't " +
       'cover, stage a `session.requestCapability` intent naming that exact read ' +
       'and end the turn — an operator grant resumes you with it. If that is not ' +
       'practical for a bounded one-shot investigation, report `needs-setup` and ' +
@@ -414,7 +414,12 @@ export function admitsLiveRecordUnreachable(evidence: unknown): boolean {
  * session id, a record id) — paired with a negation token, this signals a
  * `needs-setup` blaming "I don't have an ID to look up."
  */
-const MISSING_IDENTIFIER_TOKENS = new Set(['id', 'identifier', 'sessionid', 'target']);
+const MISSING_IDENTIFIER_TOKENS = new Set([
+  'id',
+  'identifier',
+  'sessionid',
+  'target',
+]);
 
 /**
  * Tokens showing the session actually looked somewhere locally before
@@ -445,7 +450,9 @@ const SEARCH_EVIDENCE_TOKENS = new Set([
  * "I have no ID" without ever having looked locally for one. Exported for
  * testing.
  */
-export function citesMissingIdentifierWithoutSearch(evidence: unknown): boolean {
+export function citesMissingIdentifierWithoutSearch(
+  evidence: unknown,
+): boolean {
   const text = evidenceText(evidence);
   if (!text) return false;
   const tokens = tokenize(text);

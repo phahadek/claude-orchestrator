@@ -600,9 +600,7 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
 
     expect(injectedProcedureContent).toMatch(/before abstaining/i);
     expect(injectedProcedureContent).toContain('.claude/session-prompts/');
-    expect(injectedProcedureContent).toMatch(
-      /must say what you\s+searched/i,
-    );
+    expect(injectedProcedureContent).toMatch(/must say what you\s+searched/i);
   });
 });
 
@@ -680,16 +678,18 @@ describe('enforceAbstentionEvidenceContract', () => {
     const result = enforceAbstentionEvidenceContract({
       disposition: 'needs-setup',
       evidence: {
-        reason: 'no target session ID, no read surface for the live setting value',
+        reason:
+          'no target session ID, no read surface for the live setting value',
       },
     });
     expect(result.disposition).toBe('needs-setup');
     expect(result.evidence).toMatchObject({
-      reason: 'no target session ID, no read surface for the live setting value',
+      reason:
+        'no target session ID, no read surface for the live setting value',
       abstentionIncomplete: true,
     });
-    expect((result.evidence as { abstentionNote: string }).abstentionNote).toMatch(
-      /session-prompts/,
-    );
+    expect(
+      (result.evidence as { abstentionNote: string }).abstentionNote,
+    ).toMatch(/session-prompts/);
   });
 });

@@ -162,9 +162,7 @@ describe('renderProjectRecordAccess', () => {
       projectDir: repoDir,
     });
 
-    expect(renderProjectRecordAccess('design', 'claude-dashboard')).toEqual(
-      [],
-    );
+    expect(renderProjectRecordAccess('design', 'claude-dashboard')).toEqual([]);
     expect(mockRecordEvent).toHaveBeenCalledTimes(1);
     expect(mockRecordEvent.mock.calls[0][0].payload).toMatchObject({
       workflow: 'design',
