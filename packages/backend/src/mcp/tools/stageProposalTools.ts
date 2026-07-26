@@ -6,6 +6,7 @@ import type {
 import {
   stageIntent,
   routeStageTimeBlock,
+  validateAndNormalizeTaskReferences,
   type StagedIntent,
 } from '../../routes/stagedIntents';
 import type { SessionManager } from '../../session/SessionManager';
@@ -61,9 +62,14 @@ async function stage(
     supersedes?: string;
   },
 ): Promise<{ content: { type: 'text'; text: string }[] }> {
-  const intent: StagedIntent = stageIntent(
+  const normalizedPayload = await validateAndNormalizeTaskReferences(
     kind,
     payload,
+    ctx.projectId,
+  );
+  const intent: StagedIntent = stageIntent(
+    kind,
+    normalizedPayload,
     ctx.projectId,
     envelopeArgs.groupId ?? null,
     ctx.sessionId,

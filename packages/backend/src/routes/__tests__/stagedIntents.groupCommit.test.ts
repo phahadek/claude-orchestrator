@@ -301,6 +301,12 @@ describe('stage-time gate/seed contribution check — grouped Ready-flips', () =
   });
 
   it('still attaches a missing-contribution blocked annotation to an ungrouped Ready-flip with no applied gate/seed markers', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
     const app = makeApp();
     const agent = supertest(app);
 

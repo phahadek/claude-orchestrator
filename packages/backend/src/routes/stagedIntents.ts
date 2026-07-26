@@ -51,7 +51,9 @@ import {
   supersedeStagedIntent,
   setStagedIntentAnnotation,
   setStagedIntentGroup,
+  getTaskCache,
 } from '../db/queries';
+import { parseTaskId, normalizeTaskId } from '../tasks/taskId';
 import { recordEvent } from '../audit/AuditLog';
 import type {
   GateContributionSourceTask,
@@ -492,6 +494,139 @@ function validateDecisionPickOnePayload(
       'payload.allowFreeForm must be a boolean',
     );
   }
+}
+
+/**
+ * Thrown by validateAndNormalizeTaskReferences when a staged intent's task
+ * reference (taskId or a dependsOn entry) is malformed or does not resolve
+ * to an existing task — surfaced at stage time so a corrupted or unprefixed
+ * id never reaches apply, where it would otherwise fail as a raw provider
+ * 404 or a parser exception (see taskId.ts's parseTaskId) days later, after
+ * an operator has already spent the staged/apply review window on it.
+ */
+class TaskReferenceValidationError extends Error {
+  constructor(message: string) {
+    super(`[stagedIntents] ${message}`);
+    this.name = 'TaskReferenceValidationError';
+  }
+}
+
+/**
+ * Parses/normalizes one raw task-reference id. A bare id (no `source:`
+ * prefix) is unambiguous — every unprefixed id surfacing in this system
+ * originates from Notion (board rows, groom-context bundles) — so it is
+ * normalized to `notion:<id>` rather than rejected. A prefixed id must parse
+ * cleanly via taskId.ts's parseTaskId or is rejected outright: guessing at a
+ * malformed prefixed id risks resolving a near-miss uuid to a real but wrong
+ * task, the exact failure class the full-id matching rule exists to prevent.
+ */
+function normalizeOrRejectTaskId(raw: unknown, fieldLabel: string): string {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    throw new TaskReferenceValidationError(
+      `${fieldLabel} must be a non-empty task id string, got ${JSON.stringify(raw)}`,
+    );
+  }
+  if (raw.includes(':')) {
+    try {
+      parseTaskId(raw);
+    } catch (err) {
+      throw new TaskReferenceValidationError(
+        `${fieldLabel} "${raw}" is not a recognized task id — expected ` +
+          `"source:externalId" (source one of notion/yaml/jira/github): ${(err as Error).message}`,
+      );
+    }
+    return raw;
+  }
+  return normalizeTaskId(raw);
+}
+
+/**
+ * Live-existence check for a normalized task id. The task cache (cheap,
+ * synchronous, populated by TaskCacheRefresher) is checked first; a miss
+ * falls back to a live backend fetch before rejecting, so a cold or
+ * never-populated cache never spuriously rejects a real task id.
+ */
+async function assertTaskIdResolves(
+  taskId: string,
+  projectId: string,
+): Promise<void> {
+  if (getTaskCache(taskId)) return;
+  try {
+    const page = await getTaskBackend(projectId).fetchTaskPage(taskId);
+    if (page !== null && page !== undefined) return;
+  } catch {
+    // falls through to the rejection below
+  }
+  throw new TaskReferenceValidationError(
+    `task id "${taskId}" does not resolve to an existing task`,
+  );
+}
+
+/** Kinds whose payload.taskId is a subject reference that must resolve to an existing task. */
+const SUBJECT_TASK_ID_KINDS: ReadonlySet<string> = new Set([
+  'task.setStatus',
+  'task.updateBody',
+  'task.patchBodySection',
+  'task.setProperties',
+  'task.setDependsOn',
+]);
+
+/**
+ * Stage-time validation + normalization of every task reference a staged
+ * intent's payload carries: the taskId subject (skipped for task.create,
+ * which names no pre-existing task) and every dependsOn entry
+ * (task.setDependsOn's subject dependencies, task.create's proposed
+ * dependencies). Mirrors the existing-source-task check gate/seed
+ * accretion already run before accepting a contribution — a mis-keyed or
+ * unprefixed id is caught here, before the intent is ever staged, instead
+ * of surfacing as an apply-time provider error after an operator's review
+ * window has already been spent. Returns the payload with dependsOn
+ * normalized to prefixed form — the shape apply time requires, since
+ * NotionClient.setDependsOn parses each entry with no bare-id fallback
+ * (taskId.ts's toExternalId, unlike normalizeTaskId, throws on a bare id).
+ * The taskId subject is validated (existence + shape) but left as the
+ * caller supplied it: every backend already normalizes its own taskId
+ * argument internally (see NotionTaskBackend), so rewriting it here would
+ * only risk diverging from what downstream code expects verbatim. Throws
+ * TaskReferenceValidationError on anything unparseable or unresolvable. A
+ * no-op for kinds that carry no task reference in scope (gate.accrete/
+ * seed.stage key off sourceTask, arch.* off unitId — neither is a board
+ * task reference).
+ */
+export async function validateAndNormalizeTaskReferences(
+  kind: string,
+  payload: unknown,
+  projectId: string,
+): Promise<unknown> {
+  if (!SUBJECT_TASK_ID_KINDS.has(kind) && kind !== 'task.create') {
+    return payload;
+  }
+  const p = { ...(payload as Record<string, unknown>) };
+
+  if (SUBJECT_TASK_ID_KINDS.has(kind)) {
+    const normalized = normalizeOrRejectTaskId(p.taskId, 'taskId');
+    await assertTaskIdResolves(normalized, projectId);
+  }
+
+  if (kind === 'task.setDependsOn' || kind === 'task.create') {
+    const rawDependsOn = p.dependsOn;
+    if (rawDependsOn !== undefined) {
+      if (!Array.isArray(rawDependsOn)) {
+        throw new TaskReferenceValidationError(
+          'dependsOn must be an array of task ids',
+        );
+      }
+      const normalizedDependsOn: string[] = [];
+      for (const [i, dep] of rawDependsOn.entries()) {
+        const normalized = normalizeOrRejectTaskId(dep, `dependsOn[${i}]`);
+        await assertTaskIdResolves(normalized, projectId);
+        normalizedDependsOn.push(normalized);
+      }
+      p.dependsOn = normalizedDependsOn;
+    }
+  }
+
+  return p;
 }
 
 /** Intent kinds accepted by POST /staged-intents. */
@@ -1690,9 +1825,24 @@ export function createStagedIntentsRouter(
       return;
     }
 
+    let normalizedPayload: unknown;
+    try {
+      normalizedPayload = await validateAndNormalizeTaskReferences(
+        kind,
+        body.payload,
+        projectId,
+      );
+    } catch (err) {
+      if (err instanceof TaskReferenceValidationError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
+
     const intent = stageIntent(
       kind,
-      body.payload,
+      normalizedPayload,
       projectId,
       groupId,
       null,

@@ -12,6 +12,16 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+// Every taskId referenced across these tests is a fixture, not a real board
+// task — stub the backend so stage-time task-reference validation (see
+// validateAndNormalizeTaskReferences) resolves it rather than rejecting.
+vi.mock('../../tasks/TaskBackend', () => ({
+  getTaskBackend: vi.fn(() => ({
+    type: 'notion',
+    fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nok'),
+  })),
+}));
+
 import { db } from '../../db/db';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
