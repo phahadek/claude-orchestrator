@@ -178,7 +178,9 @@ function isPatchBodySectionPayload(
 ): payload is PatchBodySectionPayload {
   if (!payload || typeof payload !== 'object') return false;
   const operation = (payload as { operation?: unknown }).operation;
-  return operation === 'append' || operation === 'replace' || operation === 'remove';
+  return (
+    operation === 'append' || operation === 'replace' || operation === 'remove'
+  );
 }
 
 /**

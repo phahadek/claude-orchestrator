@@ -102,9 +102,7 @@ describe('StagedIntentPanel — task.patchBodySection', () => {
       />,
     );
 
-    expect(
-      screen.queryByTestId('staged-intent-patch-body-section'),
-    ).toBeNull();
+    expect(screen.queryByTestId('staged-intent-patch-body-section')).toBeNull();
     expect(screen.getByText(/rewrite-everything/)).toBeTruthy();
   });
 });
