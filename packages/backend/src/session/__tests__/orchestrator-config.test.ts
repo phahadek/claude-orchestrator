@@ -308,9 +308,7 @@ describe('getSessionAllowedTools', () => {
             [],
             taskSource,
           );
-          expect(tools.some((t) => t.startsWith('mcp__notion__'))).toBe(
-            false,
-          );
+          expect(tools.some((t) => t.startsWith('mcp__notion__'))).toBe(false);
         }
       },
     );
@@ -327,9 +325,7 @@ describe('getSessionAllowedTools', () => {
       );
       expect(notionEntries.length).toBeGreaterThan(0);
       for (const entry of notionEntries) {
-        expect(entry.startsWith(`mcp__${NOTION_MCP_SERVER_NAME}__`)).toBe(
-          true,
-        );
+        expect(entry.startsWith(`mcp__${NOTION_MCP_SERVER_NAME}__`)).toBe(true);
       }
     });
 

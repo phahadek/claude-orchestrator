@@ -151,7 +151,11 @@ describe('NOTION_READ_MCP_TOOLS', () => {
   });
 
   it('is not unconditionally present in the task-source-agnostic base groom/design/ops allow-lists', () => {
-    for (const list of [GROOM_ALLOWED_TOOLS, DESIGN_ALLOWED_TOOLS, OPS_ALLOWED_TOOLS]) {
+    for (const list of [
+      GROOM_ALLOWED_TOOLS,
+      DESIGN_ALLOWED_TOOLS,
+      OPS_ALLOWED_TOOLS,
+    ]) {
       for (const notionTool of NOTION_READ_MCP_TOOLS) {
         expect(list).not.toContain(notionTool);
       }

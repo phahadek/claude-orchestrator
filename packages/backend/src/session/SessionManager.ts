@@ -250,11 +250,10 @@ export function writeMcpConfig(
   const dir = path.join(projectDir, '.claude', 'session-prompts');
   fs.mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, `${sessionId}.mcp.json`);
-  fs.writeFileSync(
-    filePath,
-    JSON.stringify({ mcpServers: merged }, null, 2),
-    { encoding: 'utf-8', mode: 0o600 },
-  );
+  fs.writeFileSync(filePath, JSON.stringify({ mcpServers: merged }, null, 2), {
+    encoding: 'utf-8',
+    mode: 0o600,
+  });
   return filePath;
 }
 

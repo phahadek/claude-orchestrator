@@ -289,8 +289,13 @@ describe('writeMcpConfig — per-session collision fix', () => {
     expect(written.mcpServers.orchestrator).toBeDefined();
   });
 
-  it("does not inline a plaintext Notion API key and writes the config file mode 600", () => {
-    const p = writeMcpConfig(PROJECT_DIR, 'notion-session-secret', undefined, 'notion');
+  it('does not inline a plaintext Notion API key and writes the config file mode 600', () => {
+    const p = writeMcpConfig(
+      PROJECT_DIR,
+      'notion-session-secret',
+      undefined,
+      'notion',
+    );
     const rawContent = writtenFiles.get(p)!;
     expect(rawContent).not.toMatch(/ntn_[A-Za-z0-9]+/);
     expect(rawContent).toContain('${NOTION_API_KEY}');
@@ -300,9 +305,7 @@ describe('writeMcpConfig — per-session collision fix', () => {
       .mock.calls.find(([calledPath]) => calledPath === p);
     expect(call).toBeDefined();
     const options = call![2] as { mode?: number } | string | undefined;
-    expect(typeof options === 'object' ? options?.mode : undefined).toBe(
-      0o600,
-    );
+    expect(typeof options === 'object' ? options?.mode : undefined).toBe(0o600);
   });
 });
 
