@@ -5,8 +5,13 @@ import {
   DESIGN_ALLOWED_TOOLS,
   OPS_ALLOWED_TOOLS,
   PLANNING_DISALLOWED_TOOLS,
+  NOTION_READ_MCP_TOOLS,
 } from '../config';
-import { orchestratorMcpToolName } from '../mcp/toolNaming';
+import {
+  orchestratorMcpToolName,
+  notionMcpToolName,
+  NOTION_MCP_SERVER_NAME,
+} from '../mcp/toolNaming';
 
 // Every kind registered as an orchestrator MCP server tool (see
 // mcp/tools/stageProposalTools.ts, mcp/tools/verdictTools.ts,
@@ -120,5 +125,40 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
     expect(OPS_ALLOWED_TOOLS).toContain(
       'mcp__orchestrator__session_requestCapability',
     );
+  });
+});
+
+describe('NOTION_READ_MCP_TOOLS', () => {
+  it('carries the prefix derived from the registered server key (mcp__notion__), never the unresolvable claude.ai connector namespace', () => {
+    for (const tool of NOTION_READ_MCP_TOOLS) {
+      expect(tool.startsWith(`mcp__${NOTION_MCP_SERVER_NAME}__`)).toBe(true);
+      expect(tool.startsWith('mcp__claude_ai_Notion__')).toBe(false);
+    }
+  });
+
+  it('every entry is derivable via notionMcpToolName — no hand-written entry can drift from the server key', () => {
+    for (const tool of NOTION_READ_MCP_TOOLS) {
+      const rawName = tool.slice(`mcp__${NOTION_MCP_SERVER_NAME}__`.length);
+      expect(notionMcpToolName(rawName)).toBe(tool);
+    }
+  });
+
+  it('contains no create, update, move, or delete verb — a Notion integration token grants write, but this allow-list must stay read-only', () => {
+    const writeVerbPattern = /create|update|move|delete/i;
+    for (const tool of NOTION_READ_MCP_TOOLS) {
+      expect(tool).not.toMatch(writeVerbPattern);
+    }
+  });
+
+  it('is not unconditionally present in the task-source-agnostic base groom/design/ops allow-lists', () => {
+    for (const list of [
+      GROOM_ALLOWED_TOOLS,
+      DESIGN_ALLOWED_TOOLS,
+      OPS_ALLOWED_TOOLS,
+    ]) {
+      for (const notionTool of NOTION_READ_MCP_TOOLS) {
+        expect(list).not.toContain(notionTool);
+      }
+    }
   });
 });

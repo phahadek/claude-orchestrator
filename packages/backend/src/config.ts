@@ -1,7 +1,7 @@
 import { getSecret } from './security/secrets';
 import { getOrchestratorConfig } from './config/appConfig';
 import type { NonMilestoneSourceConfig } from './tasks/TaskBackend';
-import { orchestratorMcpToolName } from './mcp/toolNaming';
+import { orchestratorMcpToolName, notionMcpToolName } from './mcp/toolNaming';
 import { PLANNING_INTENT_KINDS } from './planning/planningIntentKinds';
 
 interface Board {
@@ -175,19 +175,23 @@ const PLANNING_READONLY_BASH_TOOLS = [
   'Bash(pwd:*)',
 ];
 
-// Read-only Notion MCP tools — search/fetch/query/get, never create/update/move.
-const NOTION_READ_MCP_TOOLS = [
-  'mcp__claude_ai_Notion__notion-search',
-  'mcp__claude_ai_Notion__notion-fetch',
-  'mcp__claude_ai_Notion__notion-get-comments',
-  'mcp__claude_ai_Notion__notion-get-teams',
-  'mcp__claude_ai_Notion__notion-get-users',
-  'mcp__claude_ai_Notion__notion-get-async-task',
-  'mcp__claude_ai_Notion__notion-query-data-sources',
-  'mcp__claude_ai_Notion__notion-query-database-view',
-  'mcp__claude_ai_Notion__notion-query-meeting-notes',
-  'mcp__claude_ai_Notion__notion-download-attachment',
-];
+// Read-only Notion MCP tool names, exactly as the registered `notion` server
+// (mcp/notionMcpServer.ts) exposes them — search/fetch/get/query verbs only,
+// never create/update/move/delete (a Notion integration token grants write;
+// the allow-list boundary here is a permission boundary, not a credential
+// boundary). Derived through notionMcpToolName so the exposed prefix can
+// never drift from the server key it's registered under (see toolNaming.ts).
+// Only merged into a session's allow-list for Notion-task-source projects
+// (see orchestrator-config.ts#getSessionAllowedTools) — a Jira/GitHub/YAML
+// project gets no Notion server and no Notion entries here.
+export const NOTION_READ_MCP_TOOLS = [
+  'search',
+  'fetch',
+  'get-comments',
+  'get-users',
+  'get-user',
+  'get-self',
+].map(notionMcpToolName);
 
 // Orchestrator MCP handshake tool — every session type that holds a stage
 // credential gets this (see mcp/orchestratorMcpServer.ts).
@@ -243,13 +247,14 @@ export const PLANNING_DISALLOWED_TOOLS = [
 
 /**
  * groom session tool set: deterministic backlog grooming — stage-only/read-only.
- * Notion-read MCP + the orchestrator MCP stage-proposal tools + light
- * read-only code tools. Excludes Write/Edit, git-mutation, PR/github MCP,
- * and Notion-write MCP.
+ * The orchestrator MCP stage-proposal tools + light read-only code tools.
+ * Excludes Write/Edit, git-mutation, PR/github MCP, and Notion-write MCP.
+ * NOTION_READ_MCP_TOOLS is merged in separately, only for Notion-task-source
+ * projects (see orchestrator-config.ts#getSessionAllowedTools) — this base
+ * constant stays task-source-agnostic.
  */
 export const GROOM_ALLOWED_TOOLS = [
   ...PLANNING_READONLY_BASH_TOOLS,
-  ...NOTION_READ_MCP_TOOLS,
   ...GROOM_MCP_TOOLS,
 ];
 
@@ -260,7 +265,6 @@ export const GROOM_ALLOWED_TOOLS = [
  */
 export const DESIGN_ALLOWED_TOOLS = [
   ...PLANNING_READONLY_BASH_TOOLS,
-  ...NOTION_READ_MCP_TOOLS,
   ...DESIGN_MCP_TOOLS,
   'Bash(git log:*)',
   'Bash(git diff:*)',
@@ -287,7 +291,6 @@ export const DESIGN_ALLOWED_TOOLS = [
  */
 export const OPS_ALLOWED_TOOLS = [
   ...PLANNING_READONLY_BASH_TOOLS,
-  ...NOTION_READ_MCP_TOOLS,
   ...OPS_MCP_TOOLS,
   'Bash(node ~/.claude/scripts/read-session-record.mjs:*)',
   'Bash(git log:*)',

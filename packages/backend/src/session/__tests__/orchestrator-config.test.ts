@@ -9,6 +9,8 @@ import {
   sessionRecordReadCapability,
   parseSessionRecordReadCapability,
 } from '../orchestrator-config';
+import { NOTION_READ_MCP_TOOLS } from '../../config';
+import { NOTION_MCP_SERVER_NAME } from '../../mcp/toolNaming';
 
 describe('loadOrchestratorConfig', () => {
   let tmpDir: string;
@@ -278,6 +280,64 @@ describe('getSessionAllowedTools', () => {
     expect(groom).toContain('mcp__orchestrator__task_setDependsOn');
     expect(groom).not.toContain('mcp__orchestrator__journal_setState');
     expect(groom).not.toContain('mcp__orchestrator__gate_verify');
+  });
+
+  describe('task-source-gated Notion read tools', () => {
+    it.each(['groom', 'design', 'ops'] as const)(
+      "merges NOTION_READ_MCP_TOOLS into a %s session's allow-list for a Notion-task-source project",
+      (sessionType) => {
+        const tools = getSessionAllowedTools(
+          sessionType,
+          { allowed_tools: [] },
+          [],
+          'notion',
+        );
+        for (const notionTool of NOTION_READ_MCP_TOOLS) {
+          expect(tools).toContain(notionTool);
+        }
+      },
+    );
+
+    it.each(['jira', 'yaml', 'github', undefined] as const)(
+      'grants no Notion tool to a %s-task-source planning session',
+      (taskSource) => {
+        for (const sessionType of ['groom', 'design', 'ops'] as const) {
+          const tools = getSessionAllowedTools(
+            sessionType,
+            { allowed_tools: [] },
+            [],
+            taskSource,
+          );
+          expect(tools.some((t) => t.startsWith('mcp__notion__'))).toBe(false);
+        }
+      },
+    );
+
+    it('every Notion entry composed into a Notion-sourced allow-list carries the prefix derived from the registered server key', () => {
+      const tools = getSessionAllowedTools(
+        'groom',
+        { allowed_tools: [] },
+        [],
+        'notion',
+      );
+      const notionEntries = tools.filter((t) =>
+        NOTION_READ_MCP_TOOLS.includes(t),
+      );
+      expect(notionEntries.length).toBeGreaterThan(0);
+      for (const entry of notionEntries) {
+        expect(entry.startsWith(`mcp__${NOTION_MCP_SERVER_NAME}__`)).toBe(true);
+      }
+    });
+
+    it('never merges Notion tools into a standard/code session, even for a Notion-task-source project', () => {
+      const tools = getSessionAllowedTools(
+        'standard',
+        { allowed_tools: [] },
+        [],
+        'notion',
+      );
+      expect(tools.some((t) => t.startsWith('mcp__notion__'))).toBe(false);
+    });
   });
 
   describe('granted-capability composition', () => {

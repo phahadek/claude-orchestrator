@@ -7,6 +7,7 @@ import {
   GROOM_ALLOWED_TOOLS,
   DESIGN_ALLOWED_TOOLS,
   OPS_ALLOWED_TOOLS,
+  NOTION_READ_MCP_TOOLS,
 } from '../config';
 
 export interface OrchestratorConfig {
@@ -282,20 +283,30 @@ function isToolShapedCapability(capability: string): boolean {
  * into every (re)spawn's allowlist as base ∪ granted, deduplicated. A grant
  * matching GRANT_DENYLIST_PATTERNS is dropped rather than merged in: the
  * mechanism widens tool access, never the resolved/apply/Done boundary.
+ *
+ * `taskSource` gates NOTION_READ_MCP_TOOLS into a planning session's
+ * allow-list: only a Notion-task-source project's groom/design/ops sessions
+ * get those entries, matching the notion MCP server only being registered
+ * for Notion-sourced projects in SessionManager.ts#writeMcpConfig. A
+ * Jira/GitHub/YAML project gets no Notion entries — granting them here
+ * without the server being registered would be permissions for tools that
+ * are structurally absent, the exact bug this gating fixes.
  */
 export function getSessionAllowedTools(
   sessionType: string,
   orchConfig: Pick<OrchestratorConfig, 'allowed_tools'>,
   granted: string[] = [],
+  taskSource?: 'notion' | 'yaml' | 'jira' | 'github',
 ): string[] {
   const grantable = granted.filter(isGrantable).filter(isToolShapedCapability);
+  const notionExtras = taskSource === 'notion' ? NOTION_READ_MCP_TOOLS : [];
   const base =
     sessionType === 'groom'
-      ? [...GROOM_ALLOWED_TOOLS]
+      ? [...GROOM_ALLOWED_TOOLS, ...notionExtras]
       : sessionType === 'design'
-        ? [...DESIGN_ALLOWED_TOOLS]
+        ? [...DESIGN_ALLOWED_TOOLS, ...notionExtras]
         : sessionType === 'ops'
-          ? [...OPS_ALLOWED_TOOLS, ...orchConfig.allowed_tools]
+          ? [...OPS_ALLOWED_TOOLS, ...notionExtras, ...orchConfig.allowed_tools]
           : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
   return [...new Set([...base, ...grantable])];
 }

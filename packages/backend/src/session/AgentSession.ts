@@ -337,6 +337,22 @@ function extractPRNumberFromError(msg: string): number | null {
 }
 
 /**
+ * Resolves a project's task source for gating Notion read tools into a
+ * spawned session's allow-list (see getSessionAllowedTools). getProjectById
+ * lazily requires ProjectService — this runs on every session spawn/resume,
+ * so a transient resolution failure must not take the whole spawn down.
+ */
+function resolveProjectTaskSource(
+  projectId: string,
+): 'notion' | 'yaml' | 'jira' | 'github' | undefined {
+  try {
+    return getProjectById(projectId)?.taskSource;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Merge assistant message content blocks so that text blocks emitted in earlier
  * streaming events are not lost when later streaming events contain only tool_use
  * blocks. The Claude CLI can stream multiple `assistant` events for the same message
@@ -704,6 +720,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             this.sessionType,
             { allowed_tools: this.extraAllowedTools },
             getGrantedCapabilities(this.sessionId),
+            resolveProjectTaskSource(this.projectId),
           ),
           sessionType: this.sessionType,
           systemPrompt: this.systemPromptContent,
