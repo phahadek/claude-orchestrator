@@ -283,9 +283,15 @@ function formatDispositionMessage(
     case 'pushback':
       return `Staged intent ${intent.id} (${intent.kind}) was sent back for revision. Feedback: ${reason ?? ''}`;
     case 'answer':
+      if (answer?.chosenLabel) {
+        return (
+          `Decision ${intent.id} (${intent.kind}) was answered: "${answer.chosenLabel}".` +
+          (answer.freeForm ? ` Additional context: ${answer.freeForm}` : '')
+        );
+      }
       return (
-        `Decision ${intent.id} (${intent.kind}) was answered: "${answer?.chosenLabel ?? ''}".` +
-        (answer?.freeForm ? ` Additional context: ${answer.freeForm}` : '')
+        `Decision ${intent.id} (${intent.kind}) was answered: no listed option was selected. ` +
+        `The operator's answer: "${answer?.freeForm ?? ''}"`
       );
   }
 }

@@ -42,7 +42,7 @@ describe('DecisionPickOnePanel', () => {
     expect(screen.getByText('Cap at 10MB')).toBeTruthy();
     expect(screen.getAllByRole('radio')).toHaveLength(1);
     expect(
-      screen.getByPlaceholderText('Or write in your own answer…'),
+      screen.getByPlaceholderText('Write in your own answer…'),
     ).toBeTruthy();
   });
 
@@ -61,7 +61,7 @@ describe('DecisionPickOnePanel', () => {
 
     fireEvent.click(screen.getByRole('radio'));
     fireEvent.change(
-      screen.getByPlaceholderText('Or write in your own answer…'),
+      screen.getByPlaceholderText('Write in your own answer…'),
       { target: { value: 'Agreed, but log when the cap is hit.' } },
     );
     fireEvent.click(screen.getByText('✓ Submit'));
@@ -73,5 +73,57 @@ describe('DecisionPickOnePanel', () => {
       });
     });
     await waitFor(() => expect(onAnswered).toHaveBeenCalled());
+  });
+
+  it('disables Submit until a radio is picked or free-form text is entered', () => {
+    render(<DecisionPickOnePanel intent={singleOptionIntent()} />);
+
+    const submit = screen.getByText('✓ Submit') as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+
+    fireEvent.change(
+      screen.getByPlaceholderText('Write in your own answer…'),
+      { target: { value: 'None of these — do something else.' } },
+    );
+    expect(submit.disabled).toBe(false);
+  });
+
+  it('submits a free-form-only answer with no option selected', async () => {
+    const answer = vi
+      .spyOn(stagedIntentsApi, 'answer')
+      .mockResolvedValue({ ok: true, intent: singleOptionIntent() });
+    const onAnswered = vi.fn();
+
+    render(
+      <DecisionPickOnePanel
+        intent={singleOptionIntent()}
+        onAnswered={onAnswered}
+      />,
+    );
+
+    fireEvent.change(
+      screen.getByPlaceholderText('Write in your own answer…'),
+      { target: { value: 'None of these — do something else.' } },
+    );
+    fireEvent.click(screen.getByText('✓ Submit'));
+
+    await waitFor(() => {
+      expect(answer).toHaveBeenCalledWith('intent-1', {
+        chosenLabel: null,
+        freeForm: 'None of these — do something else.',
+      });
+    });
+    await waitFor(() => expect(onAnswered).toHaveBeenCalled());
+  });
+
+  it('clicking a selected radio again deselects it', () => {
+    render(<DecisionPickOnePanel intent={singleOptionIntent()} />);
+
+    const radio = screen.getByRole('radio') as HTMLInputElement;
+    fireEvent.click(radio);
+    expect(radio.checked).toBe(true);
+
+    fireEvent.click(radio);
+    expect(radio.checked).toBe(false);
   });
 });

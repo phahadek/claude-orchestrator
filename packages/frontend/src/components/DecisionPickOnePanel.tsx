@@ -32,8 +32,10 @@ export function DecisionPickOnePanel({ intent, onAnswered, onDismiss }: Props) {
   const [inFlight, setInFlight] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const canSubmit = Boolean(chosenLabel) || freeForm.trim().length > 0;
+
   const handleSubmit = async () => {
-    if (!chosenLabel) return;
+    if (!canSubmit) return;
     setInFlight(true);
     setError(null);
     try {
@@ -78,6 +80,11 @@ export function DecisionPickOnePanel({ intent, onAnswered, onDismiss }: Props) {
               type="radio"
               name={`pick-one-${intent.id}`}
               checked={chosenLabel === option.label}
+              onClick={() =>
+                setChosenLabel((prev) =>
+                  prev === option.label ? null : option.label,
+                )
+              }
               onChange={() => setChosenLabel(option.label)}
             />
             <span>
@@ -93,7 +100,7 @@ export function DecisionPickOnePanel({ intent, onAnswered, onDismiss }: Props) {
       {payload.allowFreeForm && (
         <textarea
           className={styles.feedbackInput}
-          placeholder="Or write in your own answer…"
+          placeholder="Write in your own answer…"
           value={freeForm}
           onChange={(e) => setFreeForm(e.target.value)}
         />
@@ -105,7 +112,7 @@ export function DecisionPickOnePanel({ intent, onAnswered, onDismiss }: Props) {
         <button
           type="button"
           className={styles.approveButton}
-          disabled={inFlight || !chosenLabel}
+          disabled={inFlight || !canSubmit}
           onClick={() => void handleSubmit()}
         >
           {inFlight ? 'Submitting...' : '✓ Submit'}

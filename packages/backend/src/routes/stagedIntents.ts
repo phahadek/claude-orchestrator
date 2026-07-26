@@ -2151,13 +2151,23 @@ export function createStagedIntentsRouter(
         typeof body?.freeForm === 'string' && body.freeForm.trim()
           ? body.freeForm
           : null;
-      if (
-        !chosenLabel ||
-        !payload.options.some((o) => o.label === chosenLabel)
-      ) {
+
+      if (chosenLabel && !payload.options.some((o) => o.label === chosenLabel)) {
         res
           .status(400)
           .json({ error: 'chosenLabel must match one of the staged options' });
+        return;
+      }
+      if (!chosenLabel && !payload.allowFreeForm) {
+        res
+          .status(400)
+          .json({ error: 'chosenLabel must match one of the staged options' });
+        return;
+      }
+      if (!chosenLabel && !freeForm) {
+        res
+          .status(400)
+          .json({ error: 'either chosenLabel or freeForm is required' });
         return;
       }
 
