@@ -3,6 +3,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
   CORE_PRINCIPLES,
+  DESIGN_TERMINAL_ARTIFACTS_ORDERING,
   ORDERED_STEPS,
   READINESS_BAR,
   SIZE_TYPE_CHECK,
@@ -287,5 +288,121 @@ describe('procedureCore', () => {
         `config-template/task-writing.md should reference "${phrase}"`,
       ).toBe(true);
     }
+  });
+
+  describe('design terminal-artifacts ordering', () => {
+    /** Every rendered snippet from the assembled design procedure. */
+    function assembledDesignProcedureText(): string {
+      const principleText = principlesFor('design')
+        .map((p) => renderPrinciple(p, 'design'))
+        .join('\n');
+      const stepText = stepsFor('design')
+        .map((s) => stepSummaryFor(s, 'design'))
+        .join('\n');
+      return `${principleText}\n${stepText}`;
+    }
+
+    it('names arch.* writes and follow-on task.create alongside task.updateBody as artifacts staged only after every Open Question is answered', () => {
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toContain('task.updateBody');
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toContain('arch.createUnit');
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toContain('arch.updateUnit');
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toContain(
+        'arch.supersedeUnit',
+      );
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toContain('task.create');
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /staged only once every listed Open Question is answered/,
+      );
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /completeness critic has run/,
+      );
+
+      const assembled = assembledDesignProcedureText();
+      expect(assembled).toContain('arch.createUnit');
+      expect(assembled).toContain(
+        'staged only once every listed Open Question is answered',
+      );
+    });
+
+    it('states the ordering requirement once and references it, not duplicating it across the three existing sites', () => {
+      const noBundling = CORE_PRINCIPLES.find(
+        (p) => p.id === 'design-no-question-bundling',
+      )!;
+      const presentForSignoff = ORDERED_STEPS.find(
+        (s) => s.id === 'present-for-signoff',
+      )!;
+      const applyOnSignoff = ORDERED_STEPS.find(
+        (s) => s.id === 'apply-on-signoff',
+      )!;
+
+      expect(noBundling.text).toContain(DESIGN_TERMINAL_ARTIFACTS_ORDERING);
+      expect(
+        stepSummaryFor(presentForSignoff, 'design'),
+      ).toContain(DESIGN_TERMINAL_ARTIFACTS_ORDERING);
+      expect(stepSummaryFor(applyOnSignoff, 'design')).toContain(
+        DESIGN_TERMINAL_ARTIFACTS_ORDERING,
+      );
+
+      // The distinctive ordering sentence is authored exactly once in source —
+      // as the DESIGN_TERMINAL_ARTIFACTS_ORDERING constant — not hand-typed
+      // separately at each site.
+      const coreSource = readFileSync(
+        join(__dirname, '..', 'procedureCore.ts'),
+        'utf8',
+      );
+      const declarationCount = (
+        coreSource.match(/export const DESIGN_TERMINAL_ARTIFACTS_ORDERING =/g) ?? []
+      ).length;
+      expect(declarationCount).toBe(1);
+    });
+
+    it('still requires the completeness critic to run before the Implementation notes', () => {
+      const critic = CORE_PRINCIPLES.find(
+        (p) => p.id === 'design-completeness-critic',
+      )!;
+      expect(critic.text).toMatch(
+        /after every.*listed Open Question is locked and before staging the/,
+      );
+      expect(critic.text).toContain('task.updateBody');
+    });
+
+    it('still permits independent Open Questions to be staged in the same turn', () => {
+      const noBundling = CORE_PRINCIPLES.find(
+        (p) => p.id === 'design-no-question-bundling',
+      )!;
+      expect(noBundling.text).toMatch(
+        /DO stage every Open\s+Question whose answer is independent of the others in the same turn/,
+      );
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /independent Open Questions still stage in\s+the same turn/,
+      );
+    });
+
+    it('exempts a file-sibling split task.create from the ordering rule', () => {
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(/EXEMPT/);
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /file-sibling.*task\.create/,
+      );
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /Split-don't-trim/,
+      );
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /may be staged\s+before Open Questions resolve/,
+      );
+    });
+
+    it('leaves the groom and ops procedures unchanged by the ordering rule', () => {
+      for (const skill of ['groom', 'ops'] as SkillId[]) {
+        const principleText = principlesFor(skill)
+          .map((p) => renderPrinciple(p, skill))
+          .join('\n');
+        const stepText = stepsFor(skill)
+          .map((s) => stepSummaryFor(s, skill))
+          .join('\n');
+        expect(`${principleText}\n${stepText}`).not.toContain(
+          DESIGN_TERMINAL_ARTIFACTS_ORDERING,
+        );
+      }
+    });
   });
 });
