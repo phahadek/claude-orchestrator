@@ -39,7 +39,9 @@ function fixtureGroomLoadResult(): GroomLoadResult {
 
 function fixtureDesignLoadResult(): DesignLoadResult {
   return {
-    contextPages: [{ id: 'ctx-2', title: 'Design Master Context', markdown: '...' }],
+    contextPages: [
+      { id: 'ctx-2', title: 'Design Master Context', markdown: '...' },
+    ],
     board: [],
     neighbourBoards: [],
     targetTasks: [
@@ -152,7 +154,9 @@ describe('assembled ops procedure — incidental tooling-gap triage', () => {
     expect(output).toMatch(
       /DO NOT re-stage `journal\.setState` about the same incidental gap more than once/,
     );
-    expect(output).toMatch(/DO NOT end the turn, stall, or wait on operator input/);
+    expect(output).toMatch(
+      /DO NOT end the turn, stall, or wait on operator input/,
+    );
   });
 
   it('still requires session.requestCapability for a genuinely required capability', () => {
@@ -168,9 +172,7 @@ describe('assembled ops procedure — incidental tooling-gap triage', () => {
 
   it('states the injected digest is authoritative, so a task-store read failure is not itself a stop condition', () => {
     const output = assembleOps();
-    expect(output).toMatch(
-      /injected digest is the authoritative task content/,
-    );
+    expect(output).toMatch(/injected digest is the authoritative task content/);
     expect(output).toMatch(
       /failure to reach the task store .* is not by itself a reason to stop/,
     );
