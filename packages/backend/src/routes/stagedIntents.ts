@@ -45,6 +45,7 @@ import {
   listStagedIntentsByGroup,
   listStagedIntentsBySession,
   findActiveStagedIntentForTask,
+  findActiveStagedIntentByTitleForSession,
   findActiveDecisionPickOneForSession,
   transitionStagedIntent,
   supersedeStagedIntent,
@@ -248,8 +249,9 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
 
 /**
  * Kinds carry their target task at `payload.taskId`, except task.create — a
- * new task has no pre-existing id, so it never participates in dedup — and
- * gate.accrete/seed.stage, whose source task lives at `payload.sourceTask.id`.
+ * new task has no pre-existing id, so it dedups on title instead (see
+ * extractTitleKey) — and gate.accrete/seed.stage, whose source task lives at
+ * `payload.sourceTask.id`.
  */
 function extractTaskId(kind: string, payload: unknown): string | null {
   if (kind === 'task.create' || kind === 'arch.createUnit') return null;
@@ -275,6 +277,22 @@ function extractTaskId(kind: string, payload: unknown): string | null {
   }
   const taskId = (payload as { taskId?: unknown } | null)?.taskId;
   return typeof taskId === 'string' ? taskId : null;
+}
+
+/**
+ * task.create/arch.createUnit's dedup identity: a not-yet-created task has no
+ * id, but within one session a re-stage of the same proposed task is
+ * identifiable by its (normalized) title — see
+ * findActiveStagedIntentByTitleForSession. Narrower than decision.pickOne's
+ * per-session rule, which would wrongly collapse distinct same-session tasks
+ * that just happen to share no title.
+ */
+function extractTitleKey(kind: string, payload: unknown): string | null {
+  if (kind !== 'task.create' && kind !== 'arch.createUnit') return null;
+  const title = (payload as { title?: unknown } | null)?.title;
+  if (typeof title !== 'string') return null;
+  const normalized = title.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
 }
 
 type CreateTaskPayload = CreateTaskCommandFields;
@@ -498,6 +516,15 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
  * (tombstoning it) and re-enters `staged`, requiring fresh approval. decision.pickOne carries
  * no taskId (it is a question, not a task write), so it dedups instead on
  * (sessionId, payload_hash) — see findActiveDecisionPickOneForSession.
+ * task.create/arch.createUnit carry no taskId either (nothing exists yet to
+ * key on), so they dedup on (sessionId, normalized title) instead — see
+ * extractTitleKey / findActiveStagedIntentByTitleForSession. A caller can
+ * also pass `explicitSupersedes` to retire a specific prior intent by id —
+ * the only way to supersede a draft whose title is also changing, since
+ * title-keying alone can't identify it. Superseding (either path) is a
+ * bookkeeping tombstone, not an operator decision: it never emits a
+ * staged_intent_disposition audit event and never calls
+ * PlanningOrchestrator.handleDisposition.
  */
 const GROOM_PROPOSAL_FIELDS = [
   'achieves',
@@ -531,23 +558,47 @@ export function stageIntent(
   sessionId?: string | null,
   decisionProposal?: string | null,
   groomProposal?: GroomProposalFields | null,
+  explicitSupersedes?: string | null,
 ): StagedIntent {
   if (kind === 'decision.pickOne') {
     validateDecisionPickOnePayload(payload, groupId, decisionProposal);
   }
 
   const taskId = extractTaskId(kind, payload);
+  const titleKey = extractTitleKey(kind, payload);
   const payloadHash = hashIntentPayload(payload);
   const now = Date.now();
   const groomProposalJson = groomProposal
     ? JSON.stringify(groomProposal)
     : null;
 
-  const existing = taskId
-    ? findActiveStagedIntentForTask(projectId, kind, taskId)
-    : kind === 'decision.pickOne' && sessionId
-      ? findActiveDecisionPickOneForSession(sessionId)
+  const explicit =
+    explicitSupersedes && sessionId
+      ? getStagedIntentRow(explicitSupersedes)
       : undefined;
+  const explicitValid =
+    explicit &&
+    explicit.kind === kind &&
+    explicit.project_id === projectId &&
+    explicit.session_id === sessionId &&
+    ACTIVE_STATES.includes(explicit.state)
+      ? explicit
+      : undefined;
+
+  const existing = explicitValid
+    ? explicitValid
+    : taskId
+      ? findActiveStagedIntentForTask(projectId, kind, taskId)
+      : kind === 'decision.pickOne' && sessionId
+        ? findActiveDecisionPickOneForSession(sessionId)
+        : titleKey && sessionId
+          ? findActiveStagedIntentByTitleForSession(
+              projectId,
+              kind,
+              sessionId,
+              titleKey,
+            )
+          : undefined;
 
   if (existing) {
     if (existing.payload_hash === payloadHash) {
@@ -1631,6 +1682,7 @@ export function createStagedIntentsRouter(
       groupId?: unknown;
       decisionProposal?: unknown;
       groomProposal?: unknown;
+      supersedes?: unknown;
     };
     const kind = typeof body.kind === 'string' ? body.kind : null;
     const projectId =
@@ -1639,6 +1691,8 @@ export function createStagedIntentsRouter(
     const decisionProposal =
       typeof body.decisionProposal === 'string' ? body.decisionProposal : null;
     const groomProposal = parseGroomProposal(body.groomProposal);
+    const supersedes =
+      typeof body.supersedes === 'string' ? body.supersedes : null;
 
     if (!kind) {
       res.status(400).json({ error: 'kind is required' });
@@ -1661,6 +1715,7 @@ export function createStagedIntentsRouter(
       null,
       decisionProposal,
       groomProposal,
+      supersedes,
     );
 
     const checked = await runStageTimeReadyChecks(intent);

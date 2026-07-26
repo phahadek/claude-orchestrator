@@ -58,6 +58,7 @@ async function stage(
     groupId?: string;
     decisionProposal?: string;
     groomProposal?: z.infer<typeof intentEnvelopeShape.groomProposal>;
+    supersedes?: string;
   },
 ): Promise<{ content: { type: 'text'; text: string }[] }> {
   const intent: StagedIntent = stageIntent(
@@ -68,6 +69,7 @@ async function stage(
     ctx.sessionId,
     envelopeArgs.decisionProposal ?? null,
     envelopeArgs.groomProposal ?? null,
+    envelopeArgs.supersedes ?? null,
   );
   const checked = await routeStageTimeBlock(intent, ctx.sessionManager);
   return { content: [{ type: 'text', text: JSON.stringify(checked) }] };

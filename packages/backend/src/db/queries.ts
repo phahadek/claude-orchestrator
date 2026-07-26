@@ -4946,6 +4946,44 @@ export function findActiveStagedIntentForTask(
   }) as StagedIntentRow | undefined;
 }
 
+let _stmtFindActiveStagedIntentByTitleForSession: Database.Statement | null =
+  null;
+
+/**
+ * The standing staged/approved intent (if any) for this project+kind+session
+ * whose payload title normalizes to the same value — the dedup slot for
+ * kinds with no pre-existing task to key on (task.create, arch.createUnit).
+ * Scoped to session_id, not just project_id: two different sessions
+ * proposing similarly-titled tasks are not duplicates (see
+ * findActiveStagedIntentForTask for the task-scoped counterpart).
+ */
+export function findActiveStagedIntentByTitleForSession(
+  projectId: string,
+  kind: string,
+  sessionId: string,
+  normalizedTitle: string,
+): StagedIntentRow | undefined {
+  _stmtFindActiveStagedIntentByTitleForSession ??= db.prepare<{
+    project_id: string;
+    kind: string;
+    session_id: string;
+    normalized_title: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE project_id = @project_id AND kind = @kind AND session_id = @session_id
+       AND state IN ('staged', 'approved')
+       AND lower(trim(json_extract(payload, '$.title'))) = @normalized_title
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  );
+  return _stmtFindActiveStagedIntentByTitleForSession.get({
+    project_id: projectId,
+    kind,
+    session_id: sessionId,
+    normalized_title: normalizedTitle,
+  }) as StagedIntentRow | undefined;
+}
+
 let _stmtFindActiveDecisionPickOneForSession: Database.Statement | null = null;
 
 /**

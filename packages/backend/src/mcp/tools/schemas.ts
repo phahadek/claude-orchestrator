@@ -152,6 +152,12 @@ export const intentEnvelopeShape = {
   groupId: z.string().optional(),
   decisionProposal: z.string().optional(),
   groomProposal: groomProposalSchema.optional(),
+  /**
+   * Explicitly retires a prior intent this one replaces — the only way to
+   * supersede a task.create/arch.createUnit draft whose title is also
+   * changing, since title-based dedup alone can't identify it.
+   */
+  supersedes: z.string().optional(),
 };
 
 export const gateContributionSourceTaskSchema = z.object({
