@@ -15,7 +15,12 @@
  * durable marker (gate_accretion / seed_accretion, written by
  * accreteGateContribution / stageSeedContribution) rather than a field on the
  * grooming-state entry, since it must survive independent of whatever cache
- * produced the Ready-flip intent.
+ * produced the Ready-flip intent. gate_contribution's per-candidate triage
+ * (`entry.gateContributionCandidates` — runtime-observable /
+ * config-or-code-determined / needs-triage, see procedureCore.ts's
+ * accrete-gate-and-seed principle) is the one present-and-dispositioned check
+ * that *is* a plain entry field rather than a durable marker: it fails open
+ * when absent, same as the marker check does for a non-Code type.
  *
  * bindingConstraints (FM1), Files/paths resolution (FM2), and the
  * Design/Planning Depends On + cite-or-route signals (FM3) are re-derived
@@ -109,6 +114,19 @@ type ConstraintDisposition =
   | { disposition: 'n/a'; why: string }
   | { disposition: 'conflict_route'; routedTaskId: string };
 
+/**
+ * One line from the task body's pre-groom "### 👁️ Manual verification"
+ * section, triaged before it is either accreted to the gate or relocated to
+ * "### 🤖 Automated tests" — see procedureCore.ts's accrete-gate-and-seed
+ * principle, which states the same three outcomes and the same deciding
+ * question (behavioural trace vs code-only) as config-template/task-writing.md
+ * § Manual Verification Gate.
+ */
+export interface GateContributionCandidate {
+  text: string;
+  classification?: 'runtime-observable' | 'config-or-code-determined' | 'needs-triage';
+}
+
 export interface GroomingGateEntry {
   size_check?: { decision?: unknown; [key: string]: unknown } | null;
   type_check?: {
@@ -140,6 +158,15 @@ export interface GroomingGateEntry {
     proposedVerdict: TriageVerdict;
     hasOpenQuestionsHeading: boolean;
   };
+  /**
+   * The per-line triage of the pre-groom "### 👁️ Manual verification"
+   * section's candidates for gate_contribution, when the groomer recorded
+   * one. Absent entirely, this check fails open (mirrors gate_contribution's
+   * own durable-marker check) — a task with no Manual verification section
+   * (or a caller that hasn't started passing this yet) records nothing here
+   * and is unaffected.
+   */
+  gateContributionCandidates?: GateContributionCandidate[];
 }
 
 export interface GroomingGateResult {
@@ -217,6 +244,28 @@ function isSeedContributionRecorded(
 ): boolean {
   if (!type || !SEED_CONTRIBUTION_TYPES.has(type)) return true;
   return getSeedAccretionMarker(taskId) !== undefined;
+}
+
+/**
+ * Present-and-dispositioned, same posture as size_check/type_check: every
+ * gate_contribution candidate must carry a non-empty classification string,
+ * but the content of that classification is never judged — a groomer's
+ * "needs-triage" call is accepted exactly as readily as "runtime-observable".
+ * Absent an `entry.gateContributionCandidates` array entirely, this check
+ * fails open (nothing to disposition).
+ */
+function isGateContributionCandidatesClassified(
+  candidates: GateContributionCandidate[] | undefined,
+): { ok: boolean; reasons: string[] } {
+  if (!candidates || candidates.length === 0) return { ok: true, reasons: [] };
+  const reasons = candidates
+    .filter((c) => !c.classification || !`${c.classification}`.trim())
+    .map(
+      (c) =>
+        `gate_contribution candidate "${c.text}" has no recorded classification — every candidate ` +
+        'must be triaged runtime-observable / config-or-code-determined / needs-triage before promotion.',
+    );
+  return { ok: reasons.length === 0, reasons };
 }
 
 function filesPathsHedgeTokens(raw: string): string[] {
@@ -488,6 +537,11 @@ export function checkAccretionContributions(
         'or an explicit "none"/"n/a" decision) for this task before promotion.',
     );
   }
+
+  reasons.push(
+    ...isGateContributionCandidatesClassified(entry.gateContributionCandidates)
+      .reasons,
+  );
 
   return { allowed: reasons.length === 0, reasons };
 }

@@ -676,21 +676,36 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     title: 'Accrete gate & seed contribution',
     appliesTo: ['groom'],
     summary:
-      'Before staging `task.setStatus` → Ready for a 💻 Code task, stage its ' +
-      'gate_contribution (`gate.accrete`) and seed_contribution (`seed.stage`) — ' +
-      "either the task's real runtime-gate items / config-change seeds, or an " +
-      'explicit `{"decision":"none"}` when it has none. Both are durable markers ' +
-      'checkGroomingPromotionGate requires for every 💻 Code task; a Ready flip ' +
-      'staged without them is blocked at commit time and surfaced back at stage ' +
-      'time — never stage the Ready flip first and leave accretion for later. ' +
       'The accretion source is the task body\'s pre-groom "### 👁️ Manual ' +
-      'verification" section, when present — its items are the runtime/' +
-      'launch-and-observe candidates for `gate.accrete`. Once accreted, stage a ' +
-      '`task.updateBody` that removes the section from the body entirely — never ' +
-      'leave it behind, and never replace it with boilerplate ("Covered by the ' +
-      'Manual Verification Gate."). A post-groom 💻 Code task carries no manual-' +
-      'verification section at all; that absence is the intended post-groom ' +
-      'state, not a gap to fill back in.',
+      'verification" section, when present — its lines are candidates for ' +
+      '`gate.accrete`, never a wholesale transcription target. Before staging ' +
+      'anything, triage every candidate line and classify it as one of three ' +
+      'outcomes: `runtime-observable` (only knowable by running the system and ' +
+      'looking — accrete it as a gate item), `config-or-code-determined` ' +
+      '(answerable from source, settings, or a unit test — never accrete it; ' +
+      'relocate the line to the task\'s "### 🤖 Automated tests" section instead ' +
+      'of dropping it), or `needs-triage` (genuinely unclear — accrete it ' +
+      'flagged, as today). The deciding question: would a headless verifier be ' +
+      'able to cite a behavioural trace for this, or only cite the code? If only ' +
+      'the code, it is a test, not a gate item. Record every candidate\'s ' +
+      'classification in the `gate_contribution` artifact — the check enforced ' +
+      'is that a classification was recorded for each candidate, never a ' +
+      'judgment on which classification was chosen. The count of candidates in ' +
+      'must equal the count accreted plus the count relocated — disposition ' +
+      'every candidate, never silently drop one. ' +
+      'Then stage its gate_contribution (`gate.accrete`) and seed_contribution ' +
+      '(`seed.stage`) — either the task\'s real runtime-gate items / ' +
+      "config-change seeds, or an explicit `{\"decision\":\"none\"}` when it has " +
+      'none. Both are durable markers checkGroomingPromotionGate requires for ' +
+      'every 💻 Code task; a Ready flip staged without them is blocked at commit ' +
+      'time and surfaced back at stage time — never stage the Ready flip first ' +
+      'and leave accretion for later. Once accreted (and any ' +
+      'config-or-code-determined lines relocated to "### 🤖 Automated tests"), ' +
+      'stage a `task.updateBody` that removes the "### 👁️ Manual verification" ' +
+      'section from the body entirely — never leave it behind, and never ' +
+      'replace it with boilerplate ("Covered by the Manual Verification Gate."). ' +
+      'A post-groom 💻 Code task carries no manual-verification section at all; ' +
+      'that absence is the intended post-groom state, not a gap to fill back in.',
   },
   {
     id: 'file-follow-on-tasks',

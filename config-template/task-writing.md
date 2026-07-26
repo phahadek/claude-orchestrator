@@ -253,6 +253,21 @@ record — there is no dated run-note written back into a task body).
   loop over the gate-state API (`readiness` → pull runnable items by tier → human disposition →
   record the `gate_item_event`). `readiness` reports `green` when every item is `pass` or
   `deferred`, `blocked` otherwise (the blocking items are the worklist). Nothing is auto-dispatched.
+- **Triage each candidate before transcribing it — accretion is not a wholesale copy.**
+  The pre-groom `### 👁️ Manual verification` section's lines are *candidates* for the gate,
+  not automatic gate items. Before accreting, the groomer classifies every candidate line as
+  one of three outcomes: `runtime-observable` (only knowable by running the system and
+  looking — accrete it as a gate item), `config-or-code-determined` (answerable from source,
+  settings, or a unit test — never accrete it; relocate the line to the task's
+  `### 🤖 Automated tests` section instead of dropping it), or `needs-triage` (genuinely
+  unclear — accrete it flagged, as today). **The deciding question:** would a headless
+  verifier be able to cite a behavioural trace for this, or only cite the code? If only the
+  code, it is a test, not a gate item. **Disposition, don't drop:** the count of candidates in
+  must equal the count accreted plus the count relocated to `### 🤖 Automated tests` — this is
+  what prevents re-opening the exact silent-coverage leak (below) the mandatory-accretion rule
+  exists to close. **Present-and-dispositioned, not a correctness gate:** the promotion gate
+  requires a classification to be recorded for every candidate; it never re-judges which
+  classification the groomer chose — same posture as `size_check` / `type_check`.
 - **Accretion is mandatory and promotion-gated — not best-effort.** Because a
   💻 Code task's body is *required* to strip its runtime items (above),
   those items live nowhere else — if the groomer doesn't accrete them to the gate, they
@@ -264,7 +279,8 @@ record — there is no dated run-note written back into a task body).
   (which writes the `gate_item` rows, keyed by milestone display name, grouped by source task),
   or (b) confirm it has none — and record the outcome as a `gate_contribution`
   artifact in `grooming-state.json`: `{ "items": [...], "accreted_at": "…" }`
-  or `{ "decision": "none" }`. This is symmetric with `size_check` / `hard_block_deps` /
+  or `{ "decision": "none" }`, with each item in `items` carrying its recorded classification.
+  This is symmetric with `size_check` / `hard_block_deps` /
   `signoff` — same shape, same load-bearing weight. A Ready-flip that strips manual items
   from the body without accreting them to the gate is the same class of failure as locking
   sequencing in the task body instead of the `Depends On` property: the downstream artifact
