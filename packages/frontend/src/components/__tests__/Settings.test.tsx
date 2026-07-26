@@ -299,8 +299,7 @@ describe('Settings — max_concurrent_planning_sessions', () => {
         ([, opts]) =>
           opts &&
           opts.method === 'PATCH' &&
-          JSON.parse(opts.body as string).max_concurrent_code_sessions ===
-            '7',
+          JSON.parse(opts.body as string).max_concurrent_code_sessions === '7',
       );
       expect(patchCall).toBeDefined();
     });
