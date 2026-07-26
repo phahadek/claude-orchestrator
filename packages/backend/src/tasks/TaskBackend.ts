@@ -80,6 +80,15 @@ export interface NewTaskFields {
   priority?: string;
   /** Task IDs (prefixed, e.g. 'notion:abc123') this task depends on. */
   dependsOn?: string[];
+  /**
+   * Full page body as raw markdown, written verbatim (no reformatting or
+   * truncation) in the same call that creates the page. Optional — an
+   * omitted body creates a task with empty content, matching prior
+   * behavior. This is the sole way to give a task its spec at birth;
+   * task.updateBody remains the tool for revising a task that already
+   * exists.
+   */
+  body?: string;
 }
 
 /**

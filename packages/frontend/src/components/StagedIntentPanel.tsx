@@ -319,6 +319,7 @@ interface CreatePayload {
   type?: string;
   priority?: string;
   dependsOn?: string[];
+  body?: string;
 }
 
 function CreateHeadline({ intent }: { intent: StagedIntent }) {
@@ -332,6 +333,11 @@ function CreateHeadline({ intent }: { intent: StagedIntent }) {
       {payload.priority && <p>Priority: {payload.priority}</p>}
       {payload.dependsOn && payload.dependsOn.length > 0 && (
         <p>Depends on: {payload.dependsOn.join(', ')}</p>
+      )}
+      {payload.body ? (
+        <pre className={styles.payload}>{payload.body}</pre>
+      ) : (
+        <p>No body supplied.</p>
       )}
     </div>
   );
