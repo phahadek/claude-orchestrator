@@ -60,7 +60,9 @@ describe('PATCH /api/sessions/:id/archive', () => {
     const endSession = vi.fn();
     setSessionManager({ endSession } as unknown as SessionManager);
 
-    const res = await supertest(buildApp()).patch('/api/sessions/sess-1/archive');
+    const res = await supertest(buildApp()).patch(
+      '/api/sessions/sess-1/archive',
+    );
 
     expect(res.status).toBe(200);
     expect(mockArchiveSession).toHaveBeenCalledWith('sess-1');
@@ -72,7 +74,9 @@ describe('PATCH /api/sessions/:id/archive', () => {
     const endSession = vi.fn();
     setSessionManager({ endSession } as unknown as SessionManager);
 
-    const res = await supertest(buildApp()).patch('/api/sessions/missing/archive');
+    const res = await supertest(buildApp()).patch(
+      '/api/sessions/missing/archive',
+    );
 
     expect(res.status).toBe(404);
     expect(mockArchiveSession).not.toHaveBeenCalled();

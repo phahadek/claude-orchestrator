@@ -266,7 +266,7 @@ describe('SessionManager.start() — shared planning concurrency cap', () => {
   });
 });
 
-describe('SessionManager.endSession() — releasing a terminal planning session\'s slot', () => {
+describe("SessionManager.endSession() — releasing a terminal planning session's slot", () => {
   it('with the cap (2) full of terminal-but-unreaped sessions, ending them frees the slot for a new launch', async () => {
     const sm = new SessionManager();
     const sessions = sm as unknown as {
