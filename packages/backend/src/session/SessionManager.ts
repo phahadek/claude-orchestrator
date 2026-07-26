@@ -2698,8 +2698,14 @@ export class SessionManager extends EventEmitter {
    * immediately via the same delivery path used for idle/exited sessions
    * (sendOrResume — a direct send() for a live session, a clean respawn
    * otherwise), never a raw stdin write into a possibly mid-teardown process.
-   * Terminal sessions (done/error/killed) are left undelivered — marked
-   * delivered without resending, matching reconcileInboxAtBoot.
+   * Terminal sessions (done/error/killed) are never silently record-only: a
+   * resume is attempted (bypassing the normal terminal refusal, mirroring
+   * relaunchFixerForPR's recovery path); only if that resume attempt itself
+   * fails is the item marked delivered-without-resend, and even then a
+   * needs-attention signal is surfaced (pause reason + session_action_failed)
+   * instead of dropping it silently. reconcileInboxAtBoot/
+   * redeliverUndeliveredFeedback do not opt into this — a boot sweep across
+   * every terminal session with stale items should not mass-relaunch them.
    */
   async enqueueFeedback(
     sessionId: string,
@@ -2712,14 +2718,19 @@ export class SessionManager extends EventEmitter {
     const liveSession = this.sessions.get(sessionId);
     if (liveSession && liveSession.hasActiveTurn()) return;
 
-    await this.deliverUndeliveredInboxItems(sessionId, 'enqueueFeedback');
+    await this.deliverUndeliveredInboxItems(sessionId, 'enqueueFeedback', {
+      attemptTerminalResume: true,
+    });
   }
 
   /**
    * Deliver all currently-undelivered inbox items for a session right now.
    * Shared by enqueueFeedback (live-but-idle / respawn case) and
    * reconcileInboxAtBoot so the two never diverge:
-   *  - terminal sessions (done/error/killed): mark delivered without resending.
+   *  - terminal sessions (done/error/killed): by default marked delivered
+   *    without resending. When `attemptTerminalResume` is set (enqueueFeedback
+   *    only), a resume is attempted first via sendOrResume({allowTerminal}) —
+   *    on failure, a needs-attention signal is surfaced instead of a silent drop.
    *  - otherwise: coalesce undelivered items into one message and deliver via
    *    sendOrResume (direct send() for a live session, a clean --resume
    *    respawn otherwise), then mark delivered only after a successful send.
@@ -2727,28 +2738,52 @@ export class SessionManager extends EventEmitter {
   private async deliverUndeliveredInboxItems(
     sessionId: string,
     logContext: string,
+    opts: { attemptTerminalResume?: boolean } = {},
   ): Promise<void> {
     const row = getSession(sessionId);
-    if (
-      !row ||
+    if (!row) return;
+
+    const isTerminal =
       row.status === 'done' ||
       row.status === 'error' ||
-      row.status === 'killed'
-    ) {
-      if (row) {
-        const items = listUndeliveredInboxItems(sessionId);
-        if (items.length > 0) {
-          markInboxItemsDelivered(items.map((i) => i.id));
-        }
-      }
-      return;
-    }
+      row.status === 'killed';
 
     const items = listUndeliveredInboxItems(sessionId);
     if (items.length === 0) return;
     const combined = items
       .map((item) => `[${item.source}]\n${item.payload}`)
       .join('\n\n');
+
+    if (isTerminal && !opts.attemptTerminalResume) {
+      markInboxItemsDelivered(items.map((i) => i.id));
+      return;
+    }
+
+    if (isTerminal) {
+      let resumed: string | null = null;
+      try {
+        resumed = await this.sendOrResume(sessionId, combined, {
+          allowTerminal: true,
+        });
+      } catch (err) {
+        logger.warn(
+          `[SessionManager] ${logContext}: resume of terminal session ${sessionId.slice(0, 8)} failed: ${err}`,
+        );
+      }
+      if (!resumed) {
+        setSessionPauseReason(sessionId, 'feedback_undelivered_terminal');
+        this.emit('message', {
+          type: 'session_action_failed',
+          sessionId,
+          action: 'enqueue_feedback',
+          reason: 'terminal_session_unresumable',
+          detail:
+            'Session ended and could not be resumed to deliver pending feedback — needs operator attention.',
+        } satisfies ServerMessage);
+      }
+      markInboxItemsDelivered(items.map((i) => i.id));
+      return;
+    }
 
     try {
       await this.sendOrResume(sessionId, combined);

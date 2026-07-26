@@ -1034,6 +1034,73 @@ function describeBlockedAnnotation(
     : annotation.reasons.join('; ');
 }
 
+function formatStageTimeBlockFeedback(
+  intent: StagedIntent,
+  detail: string,
+): string {
+  return (
+    `Staged intent ${intent.id} (${intent.kind}) failed stage-time validation ` +
+    `and was sent back for revision:\n- ${detail}`
+  );
+}
+
+/**
+ * Stage-time twin of verifyGroup's hide-and-route: runs
+ * runStageTimeReadyChecks and, on a block, immediately routes the reasons to
+ * the intent's originating session via enqueueFeedback (rather than waiting
+ * for turn-park) and hides the intent from the operator's staged/approved
+ * list by moving it to `needs_revision` — bounded by the same
+ * MAX_AUTO_REVISE_ROUNDS budget verifyGroup enforces, keyed by the intent's
+ * group (or its own id, when ungrouped, since there is nothing to correlate
+ * rounds against). Once the cap is hit the intent is left in `staged` (and
+ * no further feedback is sent) so it surfaces to the operator instead of
+ * looping forever, mirroring PlanningOrchestrator.verifyAndRoutePendingGroups
+ * only feeding back non-escalated outcomes.
+ */
+export async function routeStageTimeBlock(
+  intent: StagedIntent,
+  sessionManager: SessionManager | undefined,
+): Promise<StagedIntent> {
+  const checked = await runStageTimeReadyChecks(intent);
+  const detail = describeBlockedAnnotation(checked.annotation);
+  // No originating session — nothing to auto-correct and re-verify this via
+  // a later turn-park, so hiding it would strand it in needs_revision
+  // forever. Leave the human-staged surface's existing behavior untouched.
+  if (!detail || !checked.sessionId) return checked;
+
+  const key = checked.groupId ?? checked.id;
+  const round = (groupRevisionRounds.get(key) ?? 0) + 1;
+  const escalated = round >= MAX_AUTO_REVISE_ROUNDS;
+  if (escalated) {
+    groupRevisionRounds.delete(key);
+    return checked;
+  }
+  groupRevisionRounds.set(key, round);
+
+  // 'staged' -> 'needs_revision' isn't a direct transition (mirrors
+  // verifyGroup's own pending_verification hop at turn-park).
+  transitionStagedIntent(checked.id, 'pending_verification');
+  const hidden = transitionStagedIntent(checked.id, 'needs_revision');
+  const hiddenIntent = rowToApi(hidden);
+  broadcastIntentChange(hiddenIntent);
+
+  if (checked.sessionId && sessionManager) {
+    try {
+      await sessionManager.enqueueFeedback(
+        checked.sessionId,
+        'verification-error',
+        formatStageTimeBlockFeedback(hiddenIntent, detail),
+      );
+    } catch (err) {
+      logger.error(
+        `[stagedIntents] resume failed for session ${checked.sessionId.slice(0, 8)} after stage-time block: ${err}`,
+      );
+    }
+  }
+
+  return hiddenIntent;
+}
+
 async function verifyGroup(
   groupId: string,
   sessionId: string | null,

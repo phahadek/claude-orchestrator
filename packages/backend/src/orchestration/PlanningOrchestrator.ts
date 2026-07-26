@@ -138,18 +138,33 @@ export class PlanningOrchestrator {
 
   /**
    * Route an operator disposition on a staged intent back to its
-   * originating planning session: resumes the idle session by id via
+   * originating planning session: resumes the session by id via
    * SessionManager.enqueueFeedback (the existing CLI --resume path),
-   * delivering the outcome as the next turn's input. No-ops for intents with
-   * no originating session, or whose session isn't a planning session.
+   * delivering the outcome as the next turn's input. enqueueFeedback itself
+   * handles a session that has already reached a terminal state (done/error/
+   * killed) — it attempts a resume and, failing that, surfaces a
+   * needs-attention signal rather than silently dropping the pushback (see
+   * SessionManager.deliverUndeliveredInboxItems). No-ops (recorded-only) only
+   * for intents with no originating session at all, or whose session isn't a
+   * planning session — there is no session to route feedback to in either case.
    */
   async handleDisposition(payload: PlanningDispositionPayload): Promise<void> {
     const { intent, disposition, reason, answer } = payload;
     const sessionId = intent.session_id;
-    if (!sessionId) return;
+    if (!sessionId) {
+      logger.warn(
+        `[PlanningOrchestrator] ${disposition} on intent ${intent.id} has no originating session — recorded only`,
+      );
+      return;
+    }
 
     const row = getSession(sessionId);
-    if (!row || !isPlanningSession(row.session_type ?? '')) return;
+    if (!row || !isPlanningSession(row.session_type ?? '')) {
+      logger.warn(
+        `[PlanningOrchestrator] ${disposition} on intent ${intent.id}: session ${sessionId.slice(0, 8)} is not a planning session — recorded only`,
+      );
+      return;
+    }
 
     // Snapshot the current intent count so the next park's terminal check
     // can tell whether the turn this disposition triggers stages anything new.

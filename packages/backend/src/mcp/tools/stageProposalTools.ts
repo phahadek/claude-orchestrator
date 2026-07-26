@@ -5,9 +5,10 @@ import type {
 } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   stageIntent,
-  runStageTimeReadyChecks,
+  routeStageTimeBlock,
   type StagedIntent,
 } from '../../routes/stagedIntents';
+import type { SessionManager } from '../../session/SessionManager';
 import {
   taskTypeSchema,
   taskStatusSchema,
@@ -36,6 +37,8 @@ export interface StageProposalToolContext {
    * every kind — the code/review session behavior, unchanged.
    */
   kinds?: readonly string[];
+  /** Used to route a stage-time validation block back to this session in-turn, via enqueueFeedback. */
+  sessionManager?: SessionManager;
 }
 
 /** Shape of the { payload, groupId?, decisionProposal?, groomProposal? } envelope every tool accepts. */
@@ -65,7 +68,7 @@ async function stage(
     envelopeArgs.decisionProposal ?? null,
     envelopeArgs.groomProposal ?? null,
   );
-  const checked = await runStageTimeReadyChecks(intent);
+  const checked = await routeStageTimeBlock(intent, ctx.sessionManager);
   return { content: [{ type: 'text', text: JSON.stringify(checked) }] };
 }
 
