@@ -890,7 +890,7 @@ describe('OrphanedTaskSweeper', () => {
 
   // ── Type filter (non-Code tasks must be skipped) ──────────────────────────
 
-  it.each(['📋 Planning', '🧪 Testing', '🛠️ Tooling', '🚦 Gate'])(
+  it.each(['📋 Planning', '🧪 Testing', '🛠️ Tooling', '🚦 Gate', '📐 Design'])(
     'does not revert or nudge a non-Code In-Progress task with no session (type: %s)',
     async (taskType) => {
       const backend = makeBackend([

@@ -4,11 +4,15 @@ import {
   listStagedIntentsBySession,
   markSessionDone,
 } from '../db/queries';
-import type { StagedIntentRow, StagedIntentAnswer } from '../db/types';
+import type { Session, StagedIntentRow, StagedIntentAnswer } from '../db/types';
 import { isPlanningSession } from '../session/sessionPredicates';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage } from '../ws/types';
 import { verifyDispatchedGroupsForSession } from '../routes/stagedIntents';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import { emitTaskUpdated } from '../routes/tasks';
+
+const DESIGN_DONE_STATUS = '✅ Done';
 
 type PlanningDisposition = 'approve' | 'pushback' | 'decline' | 'answer';
 
@@ -151,6 +155,54 @@ export class PlanningOrchestrator {
     logger.info(
       `[PlanningOrchestrator] ${sessionId.slice(0, 8)} -> terminal (${reason})`,
     );
+
+    // A design session's natural (not operator-killed) terminal is the
+    // orchestrator's own signal to close its target task — a design session
+    // never stages its own Done (that is not a session's to propose); this
+    // is the one place that promotes it, on the same deterministic-signal
+    // model as a merged PR closing a Code task.
+    if (
+      row.session_type === 'design' &&
+      reason === 'planning_no_pending_dispositions'
+    ) {
+      this.completeDesignTask(sessionId, row);
+    }
+  }
+
+  /**
+   * Close a design session's target task once its closing set of staged
+   * intents has actually been applied. A declined or pushed-back intent
+   * transitions to 'rejected' regardless of whether the session later reaches
+   * terminal with nothing left pending — so an abandoned proposal in the
+   * session's history blocks the close rather than being silently treated as
+   * a completed design.
+   */
+  private completeDesignTask(sessionId: string, row: Session): void {
+    const taskId = row.task_id;
+    const projectId = row.project_id;
+    if (!taskId || !projectId) return;
+
+    const intents = listStagedIntentsBySession(sessionId);
+    if (intents.some((i) => i.state === 'rejected')) return;
+
+    getTaskBackend(projectId)
+      .updateStatus(taskId, DESIGN_DONE_STATUS, {
+        source: 'orchestrator',
+        sessionId,
+      })
+      .then(() => {
+        this.sessionManager.emit('message', {
+          type: 'task_status_changed',
+          notionTaskId: taskId,
+          newStatus: DESIGN_DONE_STATUS,
+        } satisfies ServerMessage);
+        emitTaskUpdated(taskId);
+      })
+      .catch((err) => {
+        logger.error(
+          `[PlanningOrchestrator] failed to close design task ${taskId} for session ${sessionId.slice(0, 8)}: ${err}`,
+        );
+      });
   }
 
   /** Operator explicitly ends a planning session — an early terminal, regardless of un-dispositioned intents. */
