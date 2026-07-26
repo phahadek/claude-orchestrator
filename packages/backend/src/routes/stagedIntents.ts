@@ -972,16 +972,23 @@ function isArmingReadyIntent(row: StagedIntentRow): boolean {
 }
 
 /**
- * A task.setStatus intent that promotes its target task to Ready or Done —
- * the "applied terminal grooming outcome" (grooming decision 2026-07-26):
- * once one of these has actually committed, the originating groom session
- * has nothing further to groom and is a candidate for the terminal check
- * below, rather than waiting on a re-park that may never come.
+ * A task.setStatus intent that settles its target task's grooming outcome —
+ * Ready, Done, or Deferred — the "applied terminal grooming decision"
+ * (grooming decision 2026-07-26): once one of these has actually committed,
+ * the originating groom session has nothing further to groom and is a
+ * candidate for the terminal check below, rather than waiting on a re-park
+ * that may never come. Deferred is included alongside Ready/Done because a
+ * session's final act can just as easily be deferring a task as promoting
+ * it — either way the grooming decision is settled.
  */
 function isTerminalGroomingPromotion(row: StagedIntentRow): boolean {
   if (row.kind !== 'task.setStatus') return false;
   const payload = JSON.parse(row.payload) as SetStatusPayload;
-  return payload.status === 'Ready' || payload.status === 'Done';
+  return (
+    payload.status === 'Ready' ||
+    payload.status === 'Done' ||
+    payload.status === 'Deferred'
+  );
 }
 
 /**
