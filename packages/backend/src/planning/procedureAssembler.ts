@@ -624,10 +624,10 @@ function renderSkeleton(
           '"One retry queue serves every worker, preserving a single global retry order; ' +
           'trade-off: one slow worker starves the others’ retries."}],' +
           '"allowFreeForm":true},"decisionProposal":"Per-worker queue: worker.ts:140 ' +
-          'already partitions state per-worker, and the arch page \'Retry Semantics\' ' +
+          "already partitions state per-worker, and the arch page 'Retry Semantics' " +
           'says throughput isolation outweighs global ordering for this queue."}` — ' +
-          'note the rejected \'Shared queue\' candidate gets its own option, never a ' +
-          'clause folded into \'Per-worker queue\'’s description.'
+          "note the rejected 'Shared queue' candidate gets its own option, never a " +
+          "clause folded into 'Per-worker queue'’s description."
         : '') +
       (workflow === 'split'
         ? ' A split decision stages exactly the `composeSplitIntents` shape under ' +

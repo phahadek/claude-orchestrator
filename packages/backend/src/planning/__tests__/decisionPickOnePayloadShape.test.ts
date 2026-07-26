@@ -115,6 +115,8 @@ describe('design decision.pickOne payload-shape contract', () => {
     const output = renderedDesignOutput();
     expect(output).toContain('Per-worker queue');
     expect(output).toContain('Shared queue');
-    expect(output).toMatch(/rejected 'Shared queue' candidate gets its own option/);
+    expect(output).toMatch(
+      /rejected 'Shared queue' candidate gets its own option/,
+    );
   });
 });

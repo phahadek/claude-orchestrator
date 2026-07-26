@@ -267,7 +267,8 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   },
   {
     id: 'design-decision-pickone-payload-shape',
-    title: 'decision.pickOne payload shape mirrors the skill’s 5-part presentation',
+    title:
+      'decision.pickOne payload shape mirrors the skill’s 5-part presentation',
     appliesTo: ['design'],
     text:
       'DO shape every Open Question’s `decision.pickOne` payload to carry the ' +
