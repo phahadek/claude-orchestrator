@@ -257,9 +257,9 @@ describe('gate-verify session launch — skips task-backend calls', () => {
     const allLogCalls = [...errorSpy.mock.calls, ...warnSpy.mock.calls].map(
       (call) => String(call[0]),
     );
-    expect(
-      allLogCalls.some((msg) => msg.includes('NotionApiError')),
-    ).toBe(false);
+    expect(allLogCalls.some((msg) => msg.includes('NotionApiError'))).toBe(
+      false,
+    );
   });
 
   it('an ordinary ops session with a notion:<uuid> task id still performs the pre-fetch and the In Progress transition (no regression)', async () => {

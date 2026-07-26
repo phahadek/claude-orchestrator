@@ -1541,7 +1541,10 @@ export class SessionManager extends EventEmitter {
     this.wireSession(sessionId, session, projectDir, worktreePath);
 
     // Update task status to In Progress (fire-and-forget; failures logged, not thrown).
-    if (movesTargetInProgress(sessionType) && !isGateVerifySession(sessionTaskId)) {
+    if (
+      movesTargetInProgress(sessionType) &&
+      !isGateVerifySession(sessionTaskId)
+    ) {
       getTaskBackend(projectId)
         .updateStatus(sessionTaskId, '🔄 In Progress', {
           source: 'orchestrator',
