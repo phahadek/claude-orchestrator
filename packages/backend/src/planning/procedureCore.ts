@@ -523,9 +523,11 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'the digest already traced from git history or from scratch. When a ' +
       'spot-check contradicts the digest, that contradiction is itself a blocker ' +
       'to surface, never to wave away or quietly resolve around: keep the task at ' +
-      'Backlog, or stage it Deferred with a decisionProposal naming the ' +
-      'contradicting finding, rather than proceeding on either the digest or the ' +
-      'spot-check as if the conflict did not happen.',
+      'Backlog with a decisionProposal naming the contradicting finding, rather ' +
+      'than proceeding on either the digest or the spot-check as if the conflict ' +
+      'did not happen. This is a premise that needs re-investigation, not scope ' +
+      'superseded by another task — Backlog, never Deferred, keeps it in the ' +
+      'grooming queue instead of skipping it forever.',
   },
   {
     id: 'present-for-signoff',
