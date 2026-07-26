@@ -504,7 +504,7 @@ function validateDecisionPickOnePayload(
  * 404 or a parser exception (see taskId.ts's parseTaskId) days later, after
  * an operator has already spent the staged/apply review window on it.
  */
-export class TaskReferenceValidationError extends Error {
+class TaskReferenceValidationError extends Error {
   constructor(message: string) {
     super(`[stagedIntents] ${message}`);
     this.name = 'TaskReferenceValidationError';
