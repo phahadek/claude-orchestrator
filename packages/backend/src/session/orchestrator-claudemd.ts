@@ -378,7 +378,7 @@ ${
 
 > ⚠️ **No sandbox** — isolation is prompt-level only. Writes outside the worktree corrupt the developer's environment.
 
-All file writes **must stay inside** \`${worktreePath}\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/\` in your worktree.
+All file writes **must stay inside** \`${worktreePath}\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/scratch/\` in your worktree.
 
 ---
 
