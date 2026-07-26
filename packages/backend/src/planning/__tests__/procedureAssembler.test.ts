@@ -738,7 +738,9 @@ describe('assemblePlanningProcedure', () => {
     });
 
     expect(output).toMatch(/removed entirely/);
-    expect(output).toMatch(/never (?:be )?replace(?:d)? (?:it )?with boilerplate/);
+    expect(output).toMatch(
+      /never (?:be )?replace(?:d)? (?:it )?with boilerplate/,
+    );
     expect(output).toContain('Covered by the Manual Verification Gate.');
   });
 

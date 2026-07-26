@@ -658,13 +658,20 @@ describe('POST /api/staged-intents/group/:groupId/commit', () => {
       payload: {
         taskId,
         status: 'Ready',
-        groomingGate: { size_check: { decision: 'n/a' }, type_check: { decision: 'none' } },
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+        },
       },
     });
 
-    await agent.post(`/api/staged-intents/${dependsOn.body.id}/approve`).send({});
+    await agent
+      .post(`/api/staged-intents/${dependsOn.body.id}/approve`)
+      .send({});
     await agent.post(`/api/staged-intents/${patch.body.id}/approve`).send({});
-    await agent.post(`/api/staged-intents/${setStatus.body.id}/approve`).send({});
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
 
     const commit = await agent
       .post(`/api/staged-intents/group/${groupId}/commit`)

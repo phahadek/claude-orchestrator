@@ -737,7 +737,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'stage a `task.patchBodySection` with `operation: "remove"` targeting the ' +
       '"### 👁️ Manual verification" heading — never a whole-body ' +
       '`task.updateBody` for this strip: removing one section is exactly what ' +
-      '`task.patchBodySection`\'s remove operation exists for, and re-rendering ' +
+      "`task.patchBodySection`'s remove operation exists for, and re-rendering " +
       'the entire body to delete one section is both needless collision surface ' +
       'and a diff the operator cannot review at a glance. The section must still ' +
       'be removed entirely — never left behind, and never replaced with ' +
@@ -747,12 +747,12 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'whose pre-groom body carries no "### 👁️ Manual verification" section ' +
       'stages no strip intent at all — an absent section needs no removal, and ' +
       'never stage an empty/no-op patch to manufacture one. DO stage this ' +
-      '`task.patchBodySection` under the same `groupId` as the Ready path\'s ' +
+      "`task.patchBodySection` under the same `groupId` as the Ready path's " +
       '`gate.accrete` / `seed.stage` / `task.setDependsOn` / `task.setStatus` ' +
       'intents — the strip is part of the same grooming decision those carry, ' +
       'never a standalone ungrouped write the operator must disposition on its ' +
       'own, disconnected from the proposal that explains it. This targets the ' +
-      'accretion strip specifically: a groom that genuinely rewrites a task\'s ' +
+      "accretion strip specifically: a groom that genuinely rewrites a task's " +
       'whole body (restructuring its spec) still uses `task.updateBody` as ' +
       'usual — that primitive is not disallowed, only wrong for a single-' +
       'section removal.',
