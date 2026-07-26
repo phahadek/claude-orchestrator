@@ -46,6 +46,28 @@ export interface ProcedurePrinciple {
   textOverrides?: Partial<Record<SkillId, string>>;
 }
 
+/**
+ * The single statement of the design terminal-artifacts ordering rule —
+ * referenced (never restated) at every site below that governs one of the
+ * ordered artifacts: `design-no-question-bundling`, the `present-for-signoff`
+ * design override, and the `apply-on-signoff` design override, plus the
+ * `design-architecture-and-followon-required` principle and the
+ * `file-follow-on-tasks` design override. Generalizes what used to be a
+ * `task.updateBody`-only rule to the whole class of terminal artifacts an
+ * approved decision produces.
+ */
+export const DESIGN_TERMINAL_ARTIFACTS_ORDERING =
+  'Every terminal artifact a Design task produces — the Implementation-notes ' +
+  '`task.updateBody`, any `arch.createUnit` / `arch.updateUnit` / ' +
+  '`arch.supersedeUnit` write, and the follow-on `task.create` set — is ' +
+  'staged only once every listed Open Question is answered and the ' +
+  'completeness critic has run. This orders artifacts behind answers, never ' +
+  'questions behind each other: independent Open Questions still stage in ' +
+  'the same turn (see "No question-bundling" above). EXEMPT: a file-sibling ' +
+  "`task.create` (the Split-don't-trim overflow disposition) scopes the " +
+  'work rather than following from a locked decision, and may be staged ' +
+  'before Open Questions resolve.';
+
 export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'deterministic-load-first',
@@ -270,10 +292,11 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'out coupled is worse than one extra round-trip. DO NOT bundle multiple ' +
       'questions into one `decision.pickOne` intent. `task.updateBody` (the ' +
       'Implementation notes) is staged exactly once, the last of the ' +
-      'decision-recording steps, only after every question is settled and the ' +
-      'completeness critic below has run. It is not the end of the design pass — ' +
-      "see 'Architecture and follow-on tasks are required deliverables' below for " +
-      'what still follows it in the same session.',
+      'decision-recording steps. ' +
+      DESIGN_TERMINAL_ARTIFACTS_ORDERING +
+      " It is not the end of the design pass — see 'Architecture and follow-on " +
+      "tasks are required deliverables' below for what still follows it in the " +
+      'same session.',
   },
   {
     id: 'design-decision-pickone-payload-shape',
@@ -384,7 +407,9 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'themselves — updated architecture pages and filed follow-on 🔲 Backlog Code ' +
       'tasks (see config/procedures.md § Task types) — and both are staged in the ' +
       'same pass as the decisions that imply them, never left for the operator to ' +
-      'request afterward. DO stage the architecture-unit change(s) each locked ' +
+      'request afterward. ' +
+      DESIGN_TERMINAL_ARTIFACTS_ORDERING +
+      ' DO stage the architecture-unit change(s) each locked ' +
       'decision implies (`arch.createUnit` / `arch.updateUnit` / ' +
       '`arch.supersedeUnit`) once the decisions touching that unit are locked, ' +
       'rather than only describing the change in chat. DO stage the implementation ' +
@@ -619,13 +644,14 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'never a `task.updateBody` edit. Independent questions may be staged ' +
         'together; hold a question whose answer depends on an as-yet-unresolved ' +
         'one.\n' +
-        '- DO stage `task.updateBody` (the Implementation notes) exactly once, the ' +
-        'last of the decision-recording steps, only after every question is ' +
-        'settled and the completeness critic has run — carrying the five-part ' +
+        '- DO stage `task.updateBody` (the Implementation notes) exactly once, ' +
+        'the last of the decision-recording steps — carrying the five-part ' +
         'closing synthesis (decision summary, open questions resolved, ' +
         'completeness-critic dispositions, architecture pages updated, follow-on ' +
         'Code tasks filed) as its `decisionProposal`, presented for the operator ' +
-        'to approve, never a bare body-write diff to validate.\n' +
+        'to approve, never a bare body-write diff to validate. ' +
+        DESIGN_TERMINAL_ARTIFACTS_ORDERING +
+        '\n' +
         '- DO stage the architecture-unit change(s) each locked decision implies, ' +
         'or an explicit "none" statement when genuinely no page applies, and the ' +
         'follow-on `task.create` intents a locked design implies, or an explicit ' +
@@ -731,7 +757,8 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'explicitly ("none — no implementation work beyond the locked decisions") ' +
         'rather than leaving the deliverable unaddressed. The operator disposes ' +
         'each staged task like any other intent; never treat handing a task spec ' +
-        'back in chat as an acceptable substitute for staging it.',
+        'back in chat as an acceptable substitute for staging it. ' +
+        DESIGN_TERMINAL_ARTIFACTS_ORDERING,
       ops:
         'When the mandate calls for follow-on work — including an operational ' +
         'change that turns out to need a code change — stage it as a ' +
@@ -781,8 +808,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       design:
         'A dispatched design session never applies a write itself — it only ' +
         'stages. DO stage `task.updateBody` (the Implementation notes) exactly ' +
-        'once, the last of the decision-recording steps, after every Open ' +
-        'Question is locked and the completeness critic has run — carrying the ' +
+        'once, the last of the decision-recording steps — carrying the ' +
         'five-part closing synthesis as its `decisionProposal` (see "Closing ' +
         'synthesis" below). The operator is approving that synthesis, not ' +
         'diffing the body write — presenting IS staging, so the synthesis rides ' +
@@ -790,7 +816,9 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         "validation step. This write is not the pass's terminal action: the " +
         'architecture-unit updates and follow-on `task.create` intents the ' +
         'locked decisions imply (or an explicit "none" for either) are staged in ' +
-        'this same pass and reported in that synthesis. DO NOT drive any of ' +
+        'this same pass and reported in that synthesis. ' +
+        DESIGN_TERMINAL_ARTIFACTS_ORDERING +
+        ' DO NOT drive any of ' +
         'these writes to applied or wait in chat for confirmation of an applied ' +
         'result; the operator applies the staged intents. DO end the turn ' +
         'once every deliverable — decisions, architecture pages, follow-on ' +
