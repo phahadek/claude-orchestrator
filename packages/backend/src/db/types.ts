@@ -644,6 +644,15 @@ export interface CompletenessDispositionQuestion {
   question: string;
   disposition: 'accepted' | 'dismissed';
   reason: string;
+  /**
+   * Recorded (`proposed`, the default at critic-run time) is not approved —
+   * the same disposition is carried into the closing synthesis for operator
+   * sign-off, and only flips to `approved` once that sign-off lands. An
+   * operator pushback re-POSTs the affected question with a revised
+   * `reason`/`disposition`, still `proposed`, rather than editing history in
+   * place.
+   */
+  approvalStatus?: 'proposed' | 'approved';
 }
 
 /**

@@ -49,6 +49,7 @@ describe('POST /api/design/:taskId/completeness-disposition', () => {
         question: 'Should X be configurable?',
         disposition: 'dismissed',
         reason: 'Out of scope.',
+        approvalStatus: 'proposed',
       },
     ]);
   });
@@ -62,6 +63,33 @@ describe('POST /api/design/:taskId/completeness-disposition', () => {
       });
 
     expect(res.status).toBe(400);
+  });
+
+  it('recorded is not approved: defaults a fresh disposition to approvalStatus "proposed", and honors an explicit "approved" override', async () => {
+    const defaulted = await request(app)
+      .post('/api/design/notion:design2/completeness-disposition')
+      .send({
+        questions: [
+          { question: 'Q?', disposition: 'accepted', reason: 'Resolved.' },
+        ],
+        runAt: '2026-07-20T00:00:00.000Z',
+      });
+    expect(defaulted.body.questions[0].approvalStatus).toBe('proposed');
+
+    const overridden = await request(app)
+      .post('/api/design/notion:design2/completeness-disposition')
+      .send({
+        questions: [
+          {
+            question: 'Q?',
+            disposition: 'accepted',
+            reason: 'Resolved.',
+            approvalStatus: 'approved',
+          },
+        ],
+        runAt: '2026-07-20T00:00:00.000Z',
+      });
+    expect(overridden.body.questions[0].approvalStatus).toBe('approved');
   });
 });
 

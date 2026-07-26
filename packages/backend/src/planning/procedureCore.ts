@@ -303,18 +303,21 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   },
   {
     id: 'design-completeness-critic',
-    title: 'Completeness critic — once per task, before Implementation notes',
+    title: 'Completeness critic — once per task, before the closing synthesis',
     appliesTo: ['design'],
     text:
       'DO run the completeness critic exactly once per Design task, after every ' +
       'listed Open Question is locked and before staging the final ' +
-      '`task.updateBody` (Implementation notes). DO probe the recurring gap ' +
+      '`task.updateBody` closing synthesis. DO probe the recurring gap ' +
       'classes — a decision the implementer needs that no locked question ' +
       'covers — consuming the advisory trace-coverage signal ' +
       '(`POST /api/design/:taskId/trace-coverage`) as an aid, never a gate: no ' +
       'locked-decision-count threshold, no promotion block. DO NOT skip the critic ' +
       'pass because every listed question already locked cleanly — the pass exists ' +
-      'to surface gaps no question named.',
+      'to surface gaps no question named. DO carry every gap the pass raises, and ' +
+      'its proposed disposition, into the closing synthesis’s "Completeness-critic ' +
+      'dispositions" section for operator sign-off — DO NOT treat the pass as ' +
+      'finished once it has run and been recorded; recording is not presenting.',
   },
   {
     id: 'design-disposition-dont-drop',
@@ -326,11 +329,39 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       "`file-sibling` / `sibling-owned` — folded into the API's accepted/dismissed " +
       'disposition (`resolved` is `accepted`; the rest are `dismissed` carrying that ' +
       'reason). DO call `POST /api/design/:taskId/completeness-disposition` with ' +
-      '`{questions: [{question, disposition: "accepted"|"dismissed", reason}], ' +
-      'runAt}` for every critic run — this durable store, never body prose, is the ' +
-      'record. DO NOT drop a candidate silently. DO NOT record a disposition only as ' +
-      'Implementation-notes prose; prose may summarize it, but the store call is the ' +
-      'disposition.',
+      '`{questions: [{question, disposition: "accepted"|"dismissed", reason, ' +
+      'approvalStatus: "proposed"}], runAt}` at critic time, for every critic run — ' +
+      'this durable store, never body prose, is the record, and it is written ' +
+      'immediately so nothing is silently lost even before the operator has seen ' +
+      'it. DO NOT drop a candidate silently. DO NOT record a disposition only as ' +
+      'Implementation-notes prose; prose may summarize it, but the store call is ' +
+      'the disposition. DO NOT confuse "recorded" with "approved": a `proposed` ' +
+      'disposition is provisional until the operator signs off on the closing ' +
+      'synthesis carrying it — a pushback there re-POSTs the affected question ' +
+      'with a revised disposition/reason rather than treating the first write as ' +
+      'final.',
+  },
+  {
+    id: 'design-closing-synthesis',
+    title: 'Closing synthesis — the terminal decisionProposal, not a body diff',
+    appliesTo: ['design'],
+    text:
+      'DO carry the exact five-part closing synthesis `skills/design/reference/' +
+      'presentation.md` specifies as the `decisionProposal` of the terminal ' +
+      '`task.updateBody` intent: (1) Decision summary — one paragraph on what was ' +
+      'decided and why; (2) Open questions resolved — a table, one row per listed ' +
+      'Open Question, included only when there are ≥2 questions; (3) Completeness-' +
+      'critic dispositions — every gap the pass raised, its disposition, and the ' +
+      'run date, or "none — pass run, no gaps" when clean; (4) Notion pages ' +
+      'updated — each architecture page and the section changed, or "pending — ' +
+      'see next messages"; (5) Follow-on tasks filed — each with Type and a ' +
+      'one-line scope, or "pending". DO frame the operator’s decision as approving ' +
+      'this synthesis — the body write is its consequence, not a separate thing to ' +
+      'diff. DO NOT ask the operator to validate the `task.updateBody` payload’s ' +
+      'prose as if reviewing a diff; the synthesis is the reviewable artifact, ' +
+      'carried in `decisionProposal`, not the body text itself. DO NOT fold the ' +
+      'decision summary straight into the write without the other four parts — all ' +
+      'five sections are required every time, per the skill’s hard checkpoint.',
   },
   {
     id: 'design-split-dont-trim',
@@ -550,7 +581,11 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'one.\n' +
         '- DO stage `task.updateBody` (the Implementation notes) exactly once, as ' +
         'the final step, only after every question is settled and the ' +
-        'completeness critic has run.\n' +
+        'completeness critic has run — carrying the five-part closing synthesis ' +
+        '(decision summary, open questions resolved, completeness-critic ' +
+        'dispositions, Notion pages updated, follow-on tasks filed) as its ' +
+        '`decisionProposal`, presented for the operator to approve, never a bare ' +
+        'body-write diff to validate.\n' +
         '- DO NOT end the turn on a chat write-up, findings recap, or "here is ' +
         'what I think" summary — none of those is a valid stopping point.\n' +
         '- DO NOT ask for sign-off before staging.\n\n' +
@@ -672,10 +707,13 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'A dispatched design session never applies a write itself — it only ' +
         'stages. DO stage `task.updateBody` (the Implementation notes) exactly ' +
         'once, as the final step, after every Open Question is locked and the ' +
-        'completeness critic has run — carrying a `decisionProposal` summarizing ' +
-        'the locked decisions. DO NOT drive the write to applied or wait in chat ' +
-        'for confirmation of an applied result; the operator applies the staged ' +
-        'intent. DO end the turn ' +
+        'completeness critic has run — carrying the five-part closing synthesis ' +
+        'as its `decisionProposal` (see "Closing synthesis" below). The operator ' +
+        'is approving that synthesis, not diffing the body write — presenting IS ' +
+        'staging, so the synthesis rides on the same intent the body write does, ' +
+        'rather than a separate validation step. DO NOT drive the write to ' +
+        'applied or wait in chat for confirmation of an applied result; the ' +
+        'operator applies the staged intent. DO end the turn ' +
         'the moment it is staged — that is the terminal action, not a chat ' +
         'confirmation.',
     },
