@@ -235,7 +235,11 @@ describe('stage-time gate/seed contribution check — grouped Ready-flips', () =
       type_check: { decision: 'none' },
       type: '💻 Code',
       filesPathsEntries: [
-        { raw: 'packages/backend/src/foo.ts', isNew: true, existsInRepo: false },
+        {
+          raw: 'packages/backend/src/foo.ts',
+          isNew: true,
+          existsInRepo: false,
+        },
       ],
       ...overrides,
     };
