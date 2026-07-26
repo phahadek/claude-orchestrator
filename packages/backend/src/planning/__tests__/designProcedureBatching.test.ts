@@ -70,6 +70,8 @@ describe('design procedure — independent Open Questions can stage in the same 
   it('the assembled hard-rules markdown carries no per-turn staging limit anywhere', () => {
     const rendered = renderHardRulesMarkdown();
     expect(rendered).not.toMatch(/staged per turn/i);
-    expect(rendered).not.toMatch(/batch-lock multiple questions into one pass/i);
+    expect(rendered).not.toMatch(
+      /batch-lock multiple questions into one pass/i,
+    );
   });
 });
