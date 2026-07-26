@@ -1011,7 +1011,7 @@ export async function runStageTimeReadyChecks(
 }
 
 /** Bounded auto-revise: the 2nd consecutive verification failure for a group escalates to the operator instead of looping forever. */
-export const MAX_AUTO_REVISE_ROUNDS = 2;
+const MAX_AUTO_REVISE_ROUNDS = 2;
 
 /** Consecutive verification-failure count per group — in-memory only (mirrors PlanningOrchestrator's own turn bookkeeping), reset on a pass or an escalation. */
 const groupRevisionRounds = new Map<string, number>();
