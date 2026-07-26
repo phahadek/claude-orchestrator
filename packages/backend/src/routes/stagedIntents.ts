@@ -701,9 +701,14 @@ async function applyIntent(
     }
     case 'task.patchBodySection': {
       const payload = intent.payload as PatchBodySectionPayload;
-      await commands.patchBodySection(payload.taskId, payload.section, payload, {
-        source: 'human',
-      });
+      await commands.patchBodySection(
+        payload.taskId,
+        payload.section,
+        payload,
+        {
+          source: 'human',
+        },
+      );
       return { ok: true };
     }
     case 'task.setProperties': {

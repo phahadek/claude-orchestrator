@@ -333,9 +333,7 @@ function locateHeadingSection(
     const type = block.type as string;
     if (type.startsWith('heading_')) {
       if (inSection) break;
-      const inner = block[type] as
-        | { rich_text?: NotionRichText[] }
-        | undefined;
+      const inner = block[type] as { rich_text?: NotionRichText[] } | undefined;
       const text = inner?.rich_text ? richTextToString(inner.rich_text) : '';
       if (text.trim().toLowerCase() === target) {
         inSection = true;

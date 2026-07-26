@@ -81,29 +81,26 @@ const blockModelSchema = z.discriminatedUnion('type', [
  * append carries `content`; replace carries `find`/`replaceWith`; remove
  * carries neither.
  */
-export const patchBodySectionPayloadSchema = z.discriminatedUnion(
-  'operation',
-  [
-    z.object({
-      taskId: z.string(),
-      section: z.string(),
-      operation: z.literal('append'),
-      content: z.string(),
-    }),
-    z.object({
-      taskId: z.string(),
-      section: z.string(),
-      operation: z.literal('replace'),
-      find: z.string(),
-      replaceWith: z.string(),
-    }),
-    z.object({
-      taskId: z.string(),
-      section: z.string(),
-      operation: z.literal('remove'),
-    }),
-  ],
-);
+export const patchBodySectionPayloadSchema = z.discriminatedUnion('operation', [
+  z.object({
+    taskId: z.string(),
+    section: z.string(),
+    operation: z.literal('append'),
+    content: z.string(),
+  }),
+  z.object({
+    taskId: z.string(),
+    section: z.string(),
+    operation: z.literal('replace'),
+    find: z.string(),
+    replaceWith: z.string(),
+  }),
+  z.object({
+    taskId: z.string(),
+    section: z.string(),
+    operation: z.literal('remove'),
+  }),
+]);
 
 /**
  * bodyRender.ts's TaskBodySections — the full required section set (Summary,

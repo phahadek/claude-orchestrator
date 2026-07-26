@@ -392,13 +392,41 @@ describe('NotionClient.patchBodySection()', () => {
   // Fixture page: Summary -> Context (two paragraphs) -> Files (one paragraph).
   function fixtureChildren() {
     return [
-      { id: 'h-summary', type: 'heading_2', heading_2: { rich_text: [{ plain_text: 'Summary' }] } },
-      { id: 'p-summary', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Summary text' }] } },
-      { id: 'h-context', type: 'heading_2', heading_2: { rich_text: [{ plain_text: 'Context' }] } },
-      { id: 'p-context-1', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Context line 1' }] } },
-      { id: 'p-context-2', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'Context line 2' }] } },
-      { id: 'h-files', type: 'heading_2', heading_2: { rich_text: [{ plain_text: 'Files' }] } },
-      { id: 'p-files', type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'file a' }] } },
+      {
+        id: 'h-summary',
+        type: 'heading_2',
+        heading_2: { rich_text: [{ plain_text: 'Summary' }] },
+      },
+      {
+        id: 'p-summary',
+        type: 'paragraph',
+        paragraph: { rich_text: [{ plain_text: 'Summary text' }] },
+      },
+      {
+        id: 'h-context',
+        type: 'heading_2',
+        heading_2: { rich_text: [{ plain_text: 'Context' }] },
+      },
+      {
+        id: 'p-context-1',
+        type: 'paragraph',
+        paragraph: { rich_text: [{ plain_text: 'Context line 1' }] },
+      },
+      {
+        id: 'p-context-2',
+        type: 'paragraph',
+        paragraph: { rich_text: [{ plain_text: 'Context line 2' }] },
+      },
+      {
+        id: 'h-files',
+        type: 'heading_2',
+        heading_2: { rich_text: [{ plain_text: 'Files' }] },
+      },
+      {
+        id: 'p-files',
+        type: 'paragraph',
+        paragraph: { rich_text: [{ plain_text: 'file a' }] },
+      },
     ];
   }
 
@@ -419,7 +447,7 @@ describe('NotionClient.patchBodySection()', () => {
     client = new NotionClient();
   });
 
-  it('append inserts new blocks right after the section\'s last block', async () => {
+  it("append inserts new blocks right after the section's last block", async () => {
     mockChildrenFetch();
     fetchSpy.mockResolvedValueOnce({
       ok: true,
@@ -480,8 +508,9 @@ describe('NotionClient.patchBodySection()', () => {
     const insertBody = JSON.parse(insertCall[1].body as string);
     expect(insertBody.after).toBe('p-context-2');
     const renderedText = insertBody.children
-      .map((b: { paragraph: { rich_text: { text: { content: string } }[] } }) =>
-        b.paragraph.rich_text[0].text.content,
+      .map(
+        (b: { paragraph: { rich_text: { text: { content: string } }[] } }) =>
+          b.paragraph.rich_text[0].text.content,
       )
       .join('\n');
     expect(renderedText).toContain('LINE ONE');
@@ -522,7 +551,9 @@ describe('NotionClient.patchBodySection()', () => {
     fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete p-files
     fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete h-files
 
-    await client.patchBodySection('notion:abc', 'Files', { operation: 'remove' });
+    await client.patchBodySection('notion:abc', 'Files', {
+      operation: 'remove',
+    });
 
     expect(fetchSpy.mock.calls[1][0]).toContain('/blocks/p-files');
     expect(fetchSpy.mock.calls[2][0]).toContain('/blocks/h-files');

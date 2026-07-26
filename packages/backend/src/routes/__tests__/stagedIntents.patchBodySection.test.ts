@@ -214,7 +214,13 @@ describe('task.patchBodySection — human-apply-only + apply dispatch', () => {
     expect(patchBodySection).toHaveBeenCalledWith(
       't-1',
       'Context',
-      { taskId: 't-1', section: 'Context', operation: 'replace', find: 'old', replaceWith: 'new' },
+      {
+        taskId: 't-1',
+        section: 'Context',
+        operation: 'replace',
+        find: 'old',
+        replaceWith: 'new',
+      },
       { source: 'human' },
     );
   });
