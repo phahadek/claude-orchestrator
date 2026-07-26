@@ -52,7 +52,9 @@ function seedSession(sessionId = SESSION_ID, sessionType = 'groom'): void {
 }
 
 let counter = 0;
-function stageIntent(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow {
+function stageIntent(
+  overrides: Partial<StagedIntentRow> = {},
+): StagedIntentRow {
   counter += 1;
   const now = Date.now();
   const row: StagedIntentRow = {
