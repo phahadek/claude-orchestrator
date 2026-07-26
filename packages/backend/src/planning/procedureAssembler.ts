@@ -51,6 +51,8 @@ import { existsSync, readFileSync } from 'fs';
 import { basename, join } from 'path';
 import { getProjectById } from '../config';
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
+import { logger } from '../logger';
+import { recordEvent } from '../audit/AuditLog';
 import { resolveConfigDir } from '../groom/groomLoad';
 import type { GroomLoadResult } from '../groom/groomLoad';
 import type { TaskRegions } from '../groom/codeWorklist';
@@ -369,9 +371,13 @@ export function renderOpsCapabilities(): string[] {
       'trail), request the one grantable own-record read instead of a Bash prefix: ' +
       `call \`${orchestratorMcpToolName('session.requestCapability')}\` with ` +
       '`{"payload":{"capability":"read:session-record:<target-session-id>",' +
-      '"plan":"...","evidence":"..."}}` — never `Bash(sqlite3 ...)` or similar, ' +
-      "which cannot reach the orchestrator's DB from this sandbox and cannot " +
-      'authenticate to its device-authed API. On approval, read the result with ' +
+      '"plan":"...","evidence":"..."}}` — never `Bash(sqlite3 ...)` or similar. ' +
+      'This is a tool-set boundary, not a location one: this session spawns with ' +
+      'filesystem access broad enough to reach the orchestrator checkout and its ' +
+      'data directory, but it holds no allow-listed client for the live SQLite ' +
+      "file and no device auth for the orchestrator's API — so session_events/" +
+      'audit_log for a specific session stay reachable only through the brokered ' +
+      'read, not a direct file or DB path. On approval, read the result with ' +
       '`node ~/.claude/scripts/read-session-record.mjs <target-session-id>` — it ' +
       "returns that session's session_events and audit_log, brokered by the " +
       'orchestrator itself since this session holds no device auth. Read-only: ' +
@@ -446,6 +452,13 @@ function resolveProjectRecordAccessGuidePath(projectId: string): string | null {
  * renders no section at all — the caller's existing `renderOpsCapabilities`
  * fallback (generic own-record `read:session-record` mechanics) still
  * applies. Never throws.
+ *
+ * A resolvable path with no file at it is otherwise silent — the fallback
+ * above is indistinguishable from "this project legitimately has no guide".
+ * To make that visible, this logs a warning and records a
+ * `project_record_access_guide_missing` audit event naming the project and
+ * the resolved path it looked for. This is a signal only: the fallback
+ * itself (returning `[]`, never throwing) is unchanged.
  */
 export function renderProjectRecordAccess(
   workflow: PlanningWorkflow,
@@ -453,7 +466,11 @@ export function renderProjectRecordAccess(
 ): string[] {
   if (workflow !== 'ops' && workflow !== 'design') return [];
   const guidePath = resolveProjectRecordAccessGuidePath(projectId);
-  if (!guidePath || !existsSync(guidePath)) return [];
+  if (!guidePath) return [];
+  if (!existsSync(guidePath)) {
+    reportMissingProjectRecordAccessGuide(workflow, projectId, guidePath);
+    return [];
+  }
   let guide: string;
   try {
     guide = readFileSync(guidePath, 'utf8').trim();
@@ -462,6 +479,32 @@ export function renderProjectRecordAccess(
   }
   if (!guide) return [];
   return ["## This Project's Operational Record", '', guide, ''];
+}
+
+function reportMissingProjectRecordAccessGuide(
+  workflow: PlanningWorkflow,
+  projectId: string,
+  resolvedPath: string,
+): void {
+  logger.warn(
+    `[procedureAssembler] no operational-record-access guide found for ` +
+      `project=${projectId} workflow=${workflow} at ${resolvedPath} — ` +
+      'this project is indistinguishable from one with no guide; author ' +
+      `${PROJECT_RECORD_ACCESS_GUIDE_FILE} for it if one is needed`,
+  );
+  try {
+    recordEvent({
+      event_type: 'project_record_access_guide_missing',
+      actor_type: 'system',
+      project_id: projectId,
+      payload: { workflow, resolvedPath },
+    });
+  } catch (err) {
+    logger.warn(
+      `[procedureAssembler] failed to record project_record_access_guide_missing: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 function renderSkeleton(

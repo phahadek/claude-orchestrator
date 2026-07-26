@@ -14,6 +14,8 @@ vi.mock('../../config', () => ({
 
 import {
   admitsLiveRecordUnreachable,
+  citesMissingIdentifierWithoutSearch,
+  enforceAbstentionEvidenceContract,
   enforcePassEvidenceContract,
   hasConcreteRuntimeRecordEvidence,
   hasOperationalEvidence,
@@ -548,5 +550,146 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     // needs-setup ("no gate_verify report on conclusion").
     expect(result.disposition).toBe('pass');
     expect(result.evidence).toMatchObject({ basis: 'operational' });
+  });
+
+  it('states no claim that the orchestrator DB/filesystem sits outside the session sandbox', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-1',
+      disposition: { disposition: 'needs-setup' },
+    });
+    await resultPromise;
+
+    const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
+    const injectedProcedureContent = (
+      dispatchOpts as { injectedProcedureContent: string }
+    ).injectedProcedureContent;
+
+    expect(injectedProcedureContent).not.toMatch(/outside this sandbox/i);
+    expect(injectedProcedureContent).not.toMatch(
+      /sandbox and (cannot|neither)/i,
+    );
+    // The boundary is stated as tool-shaped instead — no allow-listed
+    // client for the live SQLite file, no device auth for the API.
+    expect(injectedProcedureContent).toMatch(/no allow-listed client/i);
+    expect(injectedProcedureContent).toMatch(/no device\s*auth/i);
+  });
+
+  it('directs research before abstaining and names the session-prompts directory as a base-tool-reachable surface', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-1',
+      disposition: { disposition: 'needs-setup' },
+    });
+    await resultPromise;
+
+    const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
+    const injectedProcedureContent = (
+      dispatchOpts as { injectedProcedureContent: string }
+    ).injectedProcedureContent;
+
+    expect(injectedProcedureContent).toMatch(/before abstaining/i);
+    expect(injectedProcedureContent).toContain('.claude/session-prompts/');
+    expect(injectedProcedureContent).toMatch(
+      /must say what you\s+searched/i,
+    );
+  });
+});
+
+describe('citesMissingIdentifierWithoutSearch', () => {
+  it('is true for a bare "no target session ID" abstention', () => {
+    expect(
+      citesMissingIdentifierWithoutSearch({
+        reason:
+          'no accessible session_events/audit_log for an actual groom/design ' +
+          'dispatch (no target session ID, no read surface for the live setting value)',
+      }),
+    ).toBe(true);
+  });
+
+  it('is false once the evidence records a local search', () => {
+    expect(
+      citesMissingIdentifierWithoutSearch({
+        reason:
+          'no target session ID up front, but checked .claude/session-prompts/ ' +
+          'and found no matching groom/design dispatch',
+      }),
+    ).toBe(false);
+  });
+
+  it('is false when nothing about a missing identifier is mentioned', () => {
+    expect(
+      citesMissingIdentifierWithoutSearch({
+        reason: 'verification budget exceeded',
+      }),
+    ).toBe(false);
+  });
+
+  it('is false for empty/non-object evidence', () => {
+    expect(citesMissingIdentifierWithoutSearch(undefined)).toBe(false);
+    expect(citesMissingIdentifierWithoutSearch('a string')).toBe(false);
+  });
+});
+
+describe('enforceAbstentionEvidenceContract', () => {
+  it('leaves pass/fail dispositions untouched', () => {
+    const pass = enforceAbstentionEvidenceContract({
+      disposition: 'pass',
+      evidence: { basis: 'operational' },
+    });
+    expect(pass.evidence).toEqual({ basis: 'operational' });
+
+    const fail = enforceAbstentionEvidenceContract({
+      disposition: 'fail',
+      evidence: { basis: 'operational' },
+    });
+    expect(fail.evidence).toEqual({ basis: 'operational' });
+  });
+
+  it('leaves a needs-setup with no missing-identifier citation untouched', () => {
+    const result = enforceAbstentionEvidenceContract({
+      disposition: 'needs-setup',
+      evidence: { reason: 'verification budget exceeded' },
+    });
+    expect(result.evidence).toEqual({ reason: 'verification budget exceeded' });
+  });
+
+  it('leaves a needs-setup untouched when it records what was searched', () => {
+    const evidence = {
+      reason:
+        'no target session ID; checked .claude/session-prompts/ and found none',
+    };
+    const result = enforceAbstentionEvidenceContract({
+      disposition: 'needs-setup',
+      evidence,
+    });
+    expect(result.evidence).toEqual(evidence);
+  });
+
+  it('flags a needs-setup citing a missing identifier with no recorded search', () => {
+    const result = enforceAbstentionEvidenceContract({
+      disposition: 'needs-setup',
+      evidence: {
+        reason: 'no target session ID, no read surface for the live setting value',
+      },
+    });
+    expect(result.disposition).toBe('needs-setup');
+    expect(result.evidence).toMatchObject({
+      reason: 'no target session ID, no read surface for the live setting value',
+      abstentionIncomplete: true,
+    });
+    expect((result.evidence as { abstentionNote: string }).abstentionNote).toMatch(
+      /session-prompts/,
+    );
   });
 });

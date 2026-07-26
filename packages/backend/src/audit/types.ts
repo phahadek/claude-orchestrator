@@ -81,7 +81,8 @@ type EventType =
   | 'flake_recovery_f2_rerun'
   | 'arch_unit_created'
   | 'arch_unit_updated'
-  | 'arch_unit_superseded';
+  | 'arch_unit_superseded'
+  | 'project_record_access_guide_missing';
 
 type ActorType = 'ai' | 'human' | 'system';
 

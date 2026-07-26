@@ -117,14 +117,36 @@ function buildGateVerifyProcedure(item: GateItem): string {
       "runtime record (session_events/audit_log for a session you're verifying), " +
       'request the own-record read (see "Capabilities" above — ' +
       '`read:session-record:<target-session-id>`), not a Bash prefix like ' +
-      '`sqlite3` or a direct filesystem/DB path: the live DB sits outside this ' +
-      "sandbox and neither reaches it. For any other read your base tools don't " +
+      '`sqlite3` or a direct filesystem/DB path. This is a tool-set boundary, ' +
+      'not a location one: this session spawns with broad filesystem access ' +
+      "(it can read the orchestrator checkout and the box's local files), but " +
+      'it holds no allow-listed client for the live SQLite file and no device ' +
+      "auth for the orchestrator's API — so session_events/audit_log for a " +
+      'specific session stay reachable only through the brokered read, not a ' +
+      'direct file or DB path. For any other read your base tools don\'t ' +
       'cover, stage a `session.requestCapability` intent naming that exact read ' +
       'and end the turn — an operator grant resumes you with it. If that is not ' +
       'practical for a bounded one-shot investigation, report `needs-setup` and ' +
       'name the missing capability. Never fabricate a pass/fail to route around ' +
       'a permission denial — a blocked read is grounds for needs-setup, not for ' +
       'guessing.',
+    '',
+    '**Before abstaining for a missing identifier** (e.g. "no target session ' +
+      'ID to read"): exhaust the record surfaces your base tools already ' +
+      'reach — do not jump straight to needs-setup just because you lack a ' +
+      "specific ID up front. A known one is this box's dispatched-session " +
+      'prompt corpus, `.claude/session-prompts/<sessionId>.md` inside a ' +
+      "project's checkout — the filenames are session ids and the contents " +
+      'name the workflow they were dispatched for, so `ls`/`grep`/`find` over ' +
+      'that directory (all in your base Bash set) can surface the very ' +
+      'session id(s) you need without any capability grant. Also check ' +
+      "`git log`, this project's other local session-prompt/journal " +
+      'artifacts, and any other base-tool-reachable surface that might name ' +
+      'the identifier before concluding none exists. A `needs-setup` ' +
+      'disposition that cites a missing identifier must say what you ' +
+      'searched (e.g. "checked .claude/session-prompts/, found no matching ' +
+      'dispatch") — an abstention with no record of a local search is ' +
+      'incomplete, not a valid bounded-effort result.',
     '',
     'Source is, at most, a brief orient — a quick, targeted look to confirm ' +
       'you are reading the right code path once the operational record has ' +
@@ -387,6 +409,53 @@ export function admitsLiveRecordUnreachable(evidence: unknown): boolean {
   return hasNegation && hasLiveRecordMention;
 }
 
+/**
+ * Tokens naming an identifier the session might be missing (a target
+ * session id, a record id) — paired with a negation token, this signals a
+ * `needs-setup` blaming "I don't have an ID to look up."
+ */
+const MISSING_IDENTIFIER_TOKENS = new Set(['id', 'identifier', 'sessionid', 'target']);
+
+/**
+ * Tokens showing the session actually looked somewhere locally before
+ * abstaining — either a generic search verb or the name of a known
+ * base-tool-reachable surface (the dispatched-session prompt corpus).
+ */
+const SEARCH_EVIDENCE_TOKENS = new Set([
+  'searched',
+  'search',
+  'checked',
+  'looked',
+  'grep',
+  'grepped',
+  'ls',
+  'find',
+  'listed',
+  'scanned',
+  'prompts',
+  'session-prompts',
+  'sessionprompts',
+]);
+
+/**
+ * True when `needs-setup` evidence blames a missing identifier (e.g. "no
+ * target session ID") without recording that any base-tool-reachable local
+ * surface (e.g. `.claude/session-prompts/`) was actually searched for one —
+ * the abstention this task exists to close off, where a session gives up on
+ * "I have no ID" without ever having looked locally for one. Exported for
+ * testing.
+ */
+export function citesMissingIdentifierWithoutSearch(evidence: unknown): boolean {
+  const text = evidenceText(evidence);
+  if (!text) return false;
+  const tokens = tokenize(text);
+  const citesMissingIdentifier =
+    tokens.some((t) => NEGATION_TOKENS.has(t)) &&
+    tokens.some((t) => MISSING_IDENTIFIER_TOKENS.has(t));
+  if (!citesMissingIdentifier) return false;
+  return !tokens.some((t) => SEARCH_EVIDENCE_TOKENS.has(t));
+}
+
 function downgrade(
   reason: string,
   reportedEvidence: unknown,
@@ -445,6 +514,40 @@ export function enforcePassEvidenceContract(
     );
   }
   return result;
+}
+
+/**
+ * The disposition contract's abstention half: a `needs-setup` that blames a
+ * missing identifier must record that a local, base-tool-reachable surface
+ * (e.g. `.claude/session-prompts/`) was actually searched for one before
+ * abstaining — an abstention with no record of a local search is
+ * incomplete, not a valid bounded-effort result (see the "Before
+ * abstaining for a missing identifier" guidance in
+ * `buildGateVerifyProcedure`). There is no disposition below `needs-setup`
+ * to downgrade to, so this annotates the evidence instead of changing the
+ * disposition, leaving the incompleteness visible to whoever reconciles or
+ * re-dispatches the item next. Exported for testing.
+ */
+export function enforceAbstentionEvidenceContract(
+  result: GateVerificationResult,
+): GateVerificationResult {
+  if (result.disposition !== 'needs-setup') return result;
+  if (!citesMissingIdentifierWithoutSearch(result.evidence)) return result;
+  const baseEvidence =
+    result.evidence && typeof result.evidence === 'object'
+      ? (result.evidence as Record<string, unknown>)
+      : { reportedEvidence: result.evidence };
+  return {
+    ...result,
+    evidence: {
+      ...baseEvidence,
+      abstentionIncomplete: true,
+      abstentionNote:
+        'needs-setup cites a missing identifier but does not record what ' +
+        'local, base-tool-reachable record surfaces (e.g. ' +
+        '.claude/session-prompts/) were searched for it before abstaining',
+    },
+  };
 }
 
 /**
@@ -515,7 +618,9 @@ export class SessionGateItemVerifier implements GateItemVerifier {
     const preCaptured = captured.find((p) => p.sessionId === sessionId);
 
     const result = await this.awaitDisposition(sessionId, preCaptured);
-    return enforcePassEvidenceContract(result);
+    return enforceAbstentionEvidenceContract(
+      enforcePassEvidenceContract(result),
+    );
   }
 
   private awaitDisposition(
