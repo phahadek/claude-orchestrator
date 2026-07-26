@@ -30,7 +30,7 @@ const orchestrators = new Map<string, DeployOrchestrator>();
  * wired up yet, so a playbook step of that kind stalls rather than
  * silently passing.
  */
-export function getOrchestrator(
+function getOrchestrator(
   project: string,
   projectDir: string,
 ): DeployOrchestrator {
