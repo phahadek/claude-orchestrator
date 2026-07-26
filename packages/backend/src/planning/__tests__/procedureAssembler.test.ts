@@ -707,6 +707,74 @@ describe('assemblePlanningProcedure', () => {
     expect(output).toContain('seed.stage');
   });
 
+  it('instructs the Manual-verification strip as a task.patchBodySection with operation "remove", staged in the grooming group', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+
+    expect(output).toContain('task.patchBodySection');
+    expect(output).toMatch(/operation:?\s*"remove"/);
+    expect(output).toMatch(/👁️ Manual verification/);
+    expect(output).toMatch(/same (?:shared )?`?groupId`?/i);
+  });
+
+  it('still requires the Manual-verification section be removed entirely, with no boilerplate replacement', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+
+    expect(output).toMatch(/removed entirely/);
+    expect(output).toMatch(
+      /never (?:be )?replace(?:d)? (?:it )?with boilerplate/,
+    );
+    expect(output).toContain('Covered by the Manual Verification Gate.');
+  });
+
+  it('still permits task.updateBody for a genuine whole-body rewrite', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+
+    expect(output).toMatch(/whole body|whole-body/);
+    expect(output).toContain('task.updateBody` as');
+  });
+
+  it('instructs no strip intent when the pre-groom body carries no Manual verification section', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+
+    expect(output).toMatch(/no such section, stage no strip/);
+  });
+
   it('gives the field-level format of a Ready groomingGate intent with a filled worked example', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',

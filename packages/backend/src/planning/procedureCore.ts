@@ -631,7 +631,12 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         '`gate.accrete` + ' +
         '`seed.stage` (both required for every 💻 Code task — an explicit ' +
         '`{"decision":"none"}` when there is genuinely nothing to accrete, never ' +
-        'a field left unstaged); the Deferred path stages a single ' +
+        'a field left unstaged) + a `task.patchBodySection` (`operation: ' +
+        '"remove"`) stripping the "### 👁️ Manual verification" section when the ' +
+        'pre-groom body carries one (omitted entirely when it does not) — all ' +
+        'under the same shared `groupId` as one grooming decision, never the ' +
+        'body strip staged separately or ungrouped; the Deferred path stages a ' +
+        'single ' +
         '`task.setStatus` (status: "Deferred") carrying a `decisionProposal` ' +
         'naming why. See the Structured Output Contract below for the ' +
         'field-level format of every field in each — reaching the right ' +
@@ -729,11 +734,28 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'time and surfaced back at stage time — never stage the Ready flip first ' +
       'and leave accretion for later. Once accreted (and any ' +
       'config-or-code-determined lines relocated to "### 🤖 Automated tests"), ' +
-      'stage a `task.updateBody` that removes the "### 👁️ Manual verification" ' +
-      'section from the body entirely — never leave it behind, and never ' +
-      'replace it with boilerplate ("Covered by the Manual Verification Gate."). ' +
-      'A post-groom 💻 Code task carries no manual-verification section at all; ' +
-      'that absence is the intended post-groom state, not a gap to fill back in.',
+      'stage a `task.patchBodySection` with `operation: "remove"` targeting the ' +
+      '"### 👁️ Manual verification" heading — never a whole-body ' +
+      '`task.updateBody` for this strip: removing one section is exactly what ' +
+      "`task.patchBodySection`'s remove operation exists for, and re-rendering " +
+      'the entire body to delete one section is both needless collision surface ' +
+      'and a diff the operator cannot review at a glance. The section must still ' +
+      'be removed entirely — never left behind, and never replaced with ' +
+      'boilerplate ("Covered by the Manual Verification Gate."). A post-groom ' +
+      '💻 Code task carries no manual-verification section at all; that absence ' +
+      'is the intended post-groom state, not a gap to fill back in. A task ' +
+      'whose pre-groom body carries no "### 👁️ Manual verification" section ' +
+      'stages no strip intent at all — an absent section needs no removal, and ' +
+      'never stage an empty/no-op patch to manufacture one. DO stage this ' +
+      "`task.patchBodySection` under the same `groupId` as the Ready path's " +
+      '`gate.accrete` / `seed.stage` / `task.setDependsOn` / `task.setStatus` ' +
+      'intents — the strip is part of the same grooming decision those carry, ' +
+      'never a standalone ungrouped write the operator must disposition on its ' +
+      'own, disconnected from the proposal that explains it. This targets the ' +
+      "accretion strip specifically: a groom that genuinely rewrites a task's " +
+      'whole body (restructuring its spec) still uses `task.updateBody` as ' +
+      'usual — that primitive is not disallowed, only wrong for a single-' +
+      'section removal.',
   },
   {
     id: 'file-follow-on-tasks',
