@@ -645,9 +645,7 @@ export function TaskList({
       setGroomLaunchedIds(
         selectedIds.filter((id) => launchedIds.has(bareTaskId(id))),
       );
-      setGroomError(
-        formatLaunchMessages(selectedIds, result, 'not groomable'),
-      );
+      setGroomError(formatLaunchMessages(selectedIds, result, 'not groomable'));
       setGroomCheckedIds(new Set());
     } catch (err) {
       setGroomError(

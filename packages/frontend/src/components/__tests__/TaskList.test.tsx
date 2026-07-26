@@ -2022,12 +2022,16 @@ describe('TaskList', () => {
     it('reports a genuinely-failed task with its failure reason even when launched[] holds prefixed ids', async () => {
       const launchedUuid = 'design-launched-uuid';
       const notLaunchedUuid = 'design-not-launched-uuid';
-      mockPlanningEndpoint([`notion:${launchedUuid}`], [], [
-        {
-          taskId: `notion:${notLaunchedUuid}`,
-          reason: 'Max concurrent planning sessions (5) reached',
-        },
-      ]);
+      mockPlanningEndpoint(
+        [`notion:${launchedUuid}`],
+        [],
+        [
+          {
+            taskId: `notion:${notLaunchedUuid}`,
+            reason: 'Max concurrent planning sessions (5) reached',
+          },
+        ],
+      );
 
       renderList(
         [

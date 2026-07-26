@@ -542,12 +542,16 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
   });
 
   it('partitions a mixed batch into launched, deferred, and failed, still dispatching the non-failing tasks', async () => {
-    start.mockImplementation((_url: string, _ctxUrl: string, opts: { taskId: string }) => {
-      if (opts.taskId === 'task-fail') {
-        return Promise.reject(new Error('Max concurrent planning sessions (5) reached'));
-      }
-      return Promise.resolve(`session-${opts.taskId}`);
-    });
+    start.mockImplementation(
+      (_url: string, _ctxUrl: string, opts: { taskId: string }) => {
+        if (opts.taskId === 'task-fail') {
+          return Promise.reject(
+            new Error('Max concurrent planning sessions (5) reached'),
+          );
+        }
+        return Promise.resolve(`session-${opts.taskId}`);
+      },
+    );
 
     const launchTask = makeTask({ id: 'task-launch' });
     const deferTask = makeTask({
