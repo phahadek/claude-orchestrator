@@ -28,6 +28,7 @@ vi.mock('../db/queries.js', () => ({
   updateMergeState: vi.fn(),
   lookupSessionByBranch: vi.fn(() => null),
   linkPRTaskAndSession: vi.fn(),
+  setPendingPush: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -55,6 +56,7 @@ import {
   updateMergeState,
   lookupSessionByBranch,
   linkPRTaskAndSession,
+  setPendingPush,
 } from '../db/queries.js';
 import { recordEvent } from '../audit/AuditLog.js';
 import { typedGetSetting } from '../config/settings.js';
@@ -525,15 +527,16 @@ describe('StalledPRReconciler', () => {
     expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
   });
 
-  it('skips gate-failed PR with pending_push (normal push flow handles it)', async () => {
-    const pr = makePR({
+  it('consumes a stuck pending_push and re-drives via enqueueReview for a gate-failed PR, bounded by the retry cap', async () => {
+    const prBelowCap = makePR({
       review_result: JSON.stringify({ verdict: 'autofix_failed' }),
       head_sha: 'sha1',
       last_reviewed_sha: 'sha1',
       review_session_id: null,
-      pending_push: 1, // push is pending
+      pending_push: 1, // stuck push — no live session to notify it
+      stalled_pr_retry_count: 1,
     });
-    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getAllOpenPRs).mockReturnValue([prBelowCap] as any);
 
     const { fn: broadcast } = makeBroadcast();
     const ro = makeReviewOrchestrator();
@@ -542,7 +545,36 @@ describe('StalledPRReconciler', () => {
 
     await reconciler.reconcileOnce();
 
+    expect(setPendingPush).toHaveBeenCalledWith(42, 'org/repo', 0);
+    expect(ro.enqueueReview).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42, repo: 'org/repo' }),
+    );
+    expect(incrementStalledPRRetryCount).toHaveBeenCalledWith(42, 'org/repo');
+    expect(setPauseReason).not.toHaveBeenCalled();
+
+    // Once the retry cap is reached, the same stuck-pending_push state
+    // escalates instead of looping.
+    vi.clearAllMocks();
+    const prAtCap = makePR({
+      review_result: JSON.stringify({ verdict: 'autofix_failed' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 1,
+      stalled_pr_retry_count: 2,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([prAtCap] as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(setPendingPush).not.toHaveBeenCalled();
     expect(ro.enqueueReview).not.toHaveBeenCalled();
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      'stalled_reconcile_cap',
+      expect.stringContaining('gate_failed'),
+    );
   });
 
   it('does nothing when reviewOrchestrator is not set', async () => {
