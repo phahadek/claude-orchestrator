@@ -6,6 +6,15 @@ vi.mock('../../config', () => ({
   config: { claudePath: '/fake/claude' },
   BASH_MAX_OUTPUT_LENGTH: 30000,
   BASH_DEFAULT_TIMEOUT_MS: 300000,
+  PLANNING_DISALLOWED_TOOLS: [
+    'Skill',
+    'Write',
+    'Edit',
+    'ScheduleWakeup',
+    'CronCreate',
+    'CronDelete',
+    'CronList',
+  ],
 }));
 
 // We capture the args and options passed to spawn so we can assert on them.
@@ -231,7 +240,7 @@ describe('CliSessionRunner --permission-mode', () => {
 
 describe('CliSessionRunner --disallowed-tools', () => {
   it.each(['groom', 'design', 'ops'] as const)(
-    'includes --disallowed-tools Skill, Write, Edit for a %s (planning) session',
+    'includes --disallowed-tools Skill, Write, Edit, ScheduleWakeup, CronCreate, CronDelete, CronList for a %s (planning) session',
     async (sessionType) => {
       const runner = new CliSessionRunner(SESSION_ID);
       await runner.run(
@@ -246,6 +255,10 @@ describe('CliSessionRunner --disallowed-tools', () => {
       expect(capturedSpawnArgs[idx + 1]).toBe('Skill');
       expect(capturedSpawnArgs[idx + 2]).toBe('Write');
       expect(capturedSpawnArgs[idx + 3]).toBe('Edit');
+      expect(capturedSpawnArgs[idx + 4]).toBe('ScheduleWakeup');
+      expect(capturedSpawnArgs[idx + 5]).toBe('CronCreate');
+      expect(capturedSpawnArgs[idx + 6]).toBe('CronDelete');
+      expect(capturedSpawnArgs[idx + 7]).toBe('CronList');
     },
   );
 

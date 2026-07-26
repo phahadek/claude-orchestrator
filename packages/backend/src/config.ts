@@ -224,6 +224,24 @@ const OPS_MCP_TOOLS = [
 ];
 
 /**
+ * Dispatched planning sessions (groom/design/ops) are one-shot turns that end
+ * and park idle, re-driven only by an operator disposition. Any built-in
+ * that grants a scheduling or re-entry path the orchestrator doesn't own —
+ * self-scheduled wakeups, cron management — must be explicitly disallowed
+ * here (--allowed-tools omission alone doesn't gate CLI built-ins), same as
+ * Skill/Write/Edit.
+ */
+export const PLANNING_DISALLOWED_TOOLS = [
+  'Skill',
+  'Write',
+  'Edit',
+  'ScheduleWakeup',
+  'CronCreate',
+  'CronDelete',
+  'CronList',
+];
+
+/**
  * groom session tool set: deterministic backlog grooming — stage-only/read-only.
  * Notion-read MCP + the orchestrator MCP stage-proposal tools + light
  * read-only code tools. Excludes Write/Edit, git-mutation, PR/github MCP,
