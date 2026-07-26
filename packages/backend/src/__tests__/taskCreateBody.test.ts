@@ -49,7 +49,10 @@ function stubNotionFetch(pageId: string) {
       };
     }
     if (method === 'GET' && url.includes(`/blocks/${pageId}/children`)) {
-      return { ok: true, json: async () => ({ results: [], has_more: false, next_cursor: null }) };
+      return {
+        ok: true,
+        json: async () => ({ results: [], has_more: false, next_cursor: null }),
+      };
     }
     if (method === 'PATCH' && url.includes(`/blocks/${pageId}/children`)) {
       return { ok: true, json: async () => ({}) };
@@ -94,8 +97,11 @@ describe('NotionTaskBackend.createTask — body at create', () => {
       (c) => c.method === 'POST' && c.url.endsWith('/pages'),
     );
     expect(
-      (createCall!.body as { properties: { Status: { select: { name: string } } } })
-        .properties.Status.select.name,
+      (
+        createCall!.body as {
+          properties: { Status: { select: { name: string } } };
+        }
+      ).properties.Status.select.name,
     ).toBe('🔲 Backlog');
   });
 
@@ -117,8 +123,11 @@ describe('NotionTaskBackend.createTask — body at create', () => {
       (c) => c.method === 'POST' && c.url.endsWith('/pages'),
     );
     expect(
-      (createCall!.body as { properties: { Status: { select: { name: string } } } })
-        .properties.Status.select.name,
+      (
+        createCall!.body as {
+          properties: { Status: { select: { name: string } } };
+        }
+      ).properties.Status.select.name,
     ).toBe('🔲 Backlog');
   });
 });

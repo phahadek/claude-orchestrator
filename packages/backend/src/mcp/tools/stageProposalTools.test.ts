@@ -239,9 +239,7 @@ describe('stage-proposal MCP tools — schema validation', () => {
       result as { content: Array<{ type: string; text?: string }> },
     );
     expect(intent.kind).toBe('task.create');
-    expect(
-      (intent.payload as { body?: string }).body,
-    ).toBe(body);
+    expect((intent.payload as { body?: string }).body).toBe(body);
     await close();
   });
 
