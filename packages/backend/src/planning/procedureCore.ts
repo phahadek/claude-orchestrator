@@ -222,6 +222,28 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     },
   },
   {
+    id: 'incidental-tooling-gap-not-a-blocker',
+    title: 'An incidental tooling gap is not a blocker',
+    appliesTo: ['ops'],
+    text:
+      'The injected digest is the authoritative task content — a failure to reach the ' +
+      'task store (Notion or otherwise) for supplementary reads is not by itself a ' +
+      "reason to stop. IS incidental: a tool or read path that fails and isn't named in " +
+      "the task's own acceptance criteria — {skillLabel} has everything it needs from " +
+      'the digest and the repo without it. IS required: a capability the task cannot be ' +
+      'completed without (a write surface, a credential, a read the acceptance criteria ' +
+      'depend on) — that stays governed by "Ask for what you need" above: request it ' +
+      'with `session.requestCapability`, or report `needs-setup` when a real blocker ' +
+      'remains. DO, on an incidental gap, file it as a follow-on `task.create` once, ' +
+      'record it in the journal in a single line, and continue executing the ' +
+      "mandate's remaining steps with the tools that do work. DO NOT re-stage " +
+      '`journal.setState` about the same incidental gap more than once — the follow-on ' +
+      'task is the durable record, not an evolving journal narrative. DO NOT end the ' +
+      'turn, stall, or wait on operator input over an incidental gap alone. DO NOT ' +
+      'fabricate or guess at what the missing read would have returned — proceed only ' +
+      'on what the digest and the parts of the task reachable without it actually show.',
+  },
+  {
     id: 'investigate-before-resolving-no-deferral',
     title: 'Investigate before resolving — a defer is not a resolve',
     appliesTo: ['groom', 'design'],
