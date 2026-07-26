@@ -511,7 +511,12 @@ export class StalledPRReconciler {
       actor_id: null,
       project_id: project?.id ?? null,
       task_id: pr.task_id ?? null,
-      payload: { pr_number: prNumber, repo, kind: 'gate_failed_pending_push', attempt: newCount },
+      payload: {
+        pr_number: prNumber,
+        repo,
+        kind: 'gate_failed_pending_push',
+        attempt: newCount,
+      },
     });
 
     setPendingPush(prNumber, repo, 0);
