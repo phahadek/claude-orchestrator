@@ -158,7 +158,9 @@ function hasGroupAccretionIntent(
 const MANUAL_VERIFICATION_SECTION = '👁️ Manual verification';
 
 function isManualVerificationSection(section: string): boolean {
-  return section.trim().toLowerCase() === MANUAL_VERIFICATION_SECTION.toLowerCase();
+  return (
+    section.trim().toLowerCase() === MANUAL_VERIFICATION_SECTION.toLowerCase()
+  );
 }
 
 /**
@@ -1609,9 +1611,7 @@ async function precheckGroupCommit(
       payload.groomingGate?.hasManualVerificationSection &&
       !hasGroupManualVerificationStrip(groupId, payload.taskId)
     ) {
-      const err = new ManualVerificationStripCompletenessError(
-        payload.taskId,
-      );
+      const err = new ManualVerificationStripCompletenessError(payload.taskId);
       return { status: 409, body: { error: err.message, precheck: true } };
     }
 
