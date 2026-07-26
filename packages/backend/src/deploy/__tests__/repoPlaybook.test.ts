@@ -53,4 +53,63 @@ describe('the repo-committed deploy playbook', () => {
       expect(step.run_as).toBeUndefined();
     }
   });
+
+  it('has no step of kind agentic — the agentic spawner does not exist yet, so every agentic step stalls a run', () => {
+    const result = loadDeployPlaybook(REPO_ROOT);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const agenticSteps = result.playbook.steps.filter(
+      (step) => step.kind === 'agentic',
+    );
+    expect(agenticSteps).toEqual([]);
+  });
+
+  it('report-in is a shell step that posts to the deploy report-in route with the registry project id, not the config-dir name', () => {
+    const result = loadDeployPlaybook(REPO_ROOT);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const reportIn = result.playbook.steps.find((s) => s.id === 'report-in');
+    expect(reportIn).toBeDefined();
+    expect(reportIn?.kind).toBe('shell');
+    expect(reportIn?.command_or_prompt).toMatch(/\/api\/deploy\/report-in\b/);
+    expect(reportIn?.command_or_prompt).toContain(
+      '\\"projectId\\":\\"claude-dashboard\\"',
+    );
+    expect(reportIn?.command_or_prompt).not.toContain('claude-orchestrator');
+  });
+
+  it('record-deployed-sha is unchanged and still ordered after report-in', () => {
+    const result = loadDeployPlaybook(REPO_ROOT);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const ids = result.playbook.steps.map((s) => s.id);
+    const reportInIndex = ids.indexOf('report-in');
+    const recordShaIndex = ids.indexOf('record-deployed-sha');
+    expect(reportInIndex).toBeGreaterThanOrEqual(0);
+    expect(recordShaIndex).toBeGreaterThan(reportInIndex);
+
+    const recordSha = result.playbook.steps.find(
+      (s) => s.id === 'record-deployed-sha',
+    );
+    expect(recordSha?.kind).toBe('shell');
+    expect(recordSha?.command_or_prompt).toBe(
+      'git rev-parse HEAD > config/projects/claude-orchestrator/DEPLOYED_SHA',
+    );
+    expect(recordSha?.is_prod_mutating).toBe(true);
+    expect(recordSha?.rollback_ref).toBe('verify');
+  });
+
+  it('carries no device-token credential literal — the report-in step references it indirectly via env', () => {
+    const raw = fs.readFileSync(
+      path.join(REPO_ROOT, '.claude-deploy-playbook.yml'),
+      'utf-8',
+    );
+    expect(raw).toContain('$ORCHESTRATOR_DEVICE_TOKEN');
+    // A device token is a long opaque string; guard against anything that
+    // looks like one having been pasted in literally alongside the env ref.
+    expect(raw).not.toMatch(/Bearer\s+[A-Za-z0-9_-]{20,}/);
+  });
 });

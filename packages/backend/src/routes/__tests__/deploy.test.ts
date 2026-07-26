@@ -35,6 +35,7 @@ const queriesMock = vi.hoisted(() => ({
 vi.mock('../../db/queries.js', () => queriesMock);
 
 import { createDeployRouter, setDeployScheduler } from '../deploy.js';
+import { DeployOrchestrator } from '../../deploy/DeployOrchestrator.js';
 
 function makeApp() {
   const app = express();
@@ -235,5 +236,46 @@ describe('GET /api/deploy/status', () => {
     const res = await request(makeApp()).get('/api/deploy/status');
 
     expect(res.status).toBe(400);
+  });
+});
+
+describe('the wired-up spawnAgenticStep stub', () => {
+  it('still stalls rather than advancing an agentic step — no spawner exists yet', async () => {
+    // A fresh, never-before-launched projectId: DeployOrchestrator instances
+    // are cached per-project across the router's lifetime, so reusing an
+    // earlier test's projectId here would hit the cache instead of
+    // constructing (and capturing the deps of) a new instance.
+    const projectId = 'agentic-stub-stall-test-project';
+    queriesMock.getProjectRowById.mockReturnValue({
+      id: projectId,
+      project_dir: '/repo/agentic-stub-stall-test-project',
+    });
+    deployOrchestratorMock.startDeploy.mockResolvedValue({
+      run_id: 'run-1',
+      project: projectId,
+      target_sha: 'sha',
+      current_step: null,
+      status: 'running',
+      started_at: '2026-07-20T00:00:00.000Z',
+      completed_at: null,
+    });
+
+    await request(makeApp())
+      .post('/api/deploy/launch')
+      .send({ projectId });
+
+    const constructorCalls = (
+      DeployOrchestrator as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls;
+    const deps = constructorCalls[constructorCalls.length - 1][2];
+    const result = deps.spawnAgenticStep({
+      runId: 'run-1',
+      project: projectId,
+      step: { id: 'report-in', kind: 'agentic' },
+    });
+
+    // Fire-and-forget with no return value: it never reports a verdict, so
+    // the run is left waiting at this step rather than advancing past it.
+    expect(result).toBeUndefined();
   });
 });
