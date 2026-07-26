@@ -585,13 +585,13 @@ function renderSkeleton(
         ? ' Promoting to Ready is not the only outcome available. `Deferred` and ' +
           '`Backlog` are NOT interchangeable "not now" outcomes — they differ in ' +
           'what happens next, and picking the wrong one is a real failure mode:\n' +
-          '- `Deferred` IS: this task\'s scope is fully covered by another task, or ' +
+          "- `Deferred` IS: this task's scope is fully covered by another task, or " +
           'it should not be done at all — propose a discard/defer by staging ' +
           '`task.setStatus` → `Deferred`, with a `decisionProposal` naming the ' +
           'superseding task or why the work should never happen. This is a first-class alternative outcome, ' +
           'not a fallback for a session that got stuck. It is terminal: future ' +
           'grooming passes skip a Deferred task entirely, and a Deferred task in ' +
-          'another task\'s Depends On blocks that task forever — only Done ' +
+          "another task's Depends On blocks that task forever — only Done " +
           'satisfies a dependency.\n' +
           '- `Deferred` IS NOT the disposition for a task that is merely blocked on ' +
           'a dependency, has a premise that needs re-investigation, or has a body ' +

@@ -72,7 +72,9 @@ describe('groom procedure Deferred-vs-Backlog grounds', () => {
       /scope is fully covered by another task, or.*should not be done at all/i,
     );
     expect(output).toMatch(/blocked on a dependency/i);
-    expect(output).toMatch(/premise that needs re-investigation|needs re-investigation/i);
+    expect(output).toMatch(
+      /premise that needs re-investigation|needs re-investigation/i,
+    );
     expect(output).toMatch(/needs rewriting/i);
     expect(output).toContain('Backlog');
   });
@@ -80,7 +82,9 @@ describe('groom procedure Deferred-vs-Backlog grounds', () => {
   it('states both Deferred consequences: skipped by future grooming, and blocks dependents', () => {
     const output = groomOutput();
     expect(output).toMatch(/future grooming passes skip/i);
-    expect(output).toMatch(/blocks that task forever|only Done\s*satisfies a dependency/i);
+    expect(output).toMatch(
+      /blocks that task forever|only Done\s*satisfies a dependency/i,
+    );
   });
 
   it('presents Deferred as a first-class outcome, not a fallback', () => {
@@ -94,7 +98,9 @@ describe('groom procedure Deferred-vs-Backlog grounds', () => {
 describe('procedureCore contradiction rule no longer presents Backlog and Deferred as interchangeable', () => {
   it('directs a digest/spot-check contradiction to Backlog, not an "or Deferred" choice', () => {
     const output = groomOutput();
-    expect(output).toMatch(/keep the task at\s*Backlog with a decisionProposal/i);
+    expect(output).toMatch(
+      /keep the task at\s*Backlog with a decisionProposal/i,
+    );
     expect(output).not.toMatch(/Backlog, or stage it Deferred/i);
   });
 });
