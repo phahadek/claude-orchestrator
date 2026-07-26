@@ -13,3 +13,19 @@
 export function orchestratorMcpToolName(kind: string): string {
   return `mcp__orchestrator__${kind.replace(/\./g, '_')}`;
 }
+
+/**
+ * Server key the Notion read MCP server is registered under (see
+ * mcp/notionMcpServer.ts#buildNotionMcpServerEntry, merged in
+ * SessionManager.ts#writeMcpConfig). The CLI derives a tool's exposed prefix
+ * from this key — `mcp__<key>__<toolName>` — so every Notion allow-list entry
+ * (config.ts#NOTION_READ_MCP_TOOLS) must be derived through
+ * `notionMcpToolName` rather than hand-written, or the allow-list silently
+ * fails to match what the CLI actually exposes.
+ */
+export const NOTION_MCP_SERVER_NAME = 'notion';
+
+/** Single source of truth for the model-facing Notion MCP tool name — see NOTION_MCP_SERVER_NAME. */
+export function notionMcpToolName(name: string): string {
+  return `mcp__${NOTION_MCP_SERVER_NAME}__${name}`;
+}

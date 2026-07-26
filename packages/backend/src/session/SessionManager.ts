@@ -31,6 +31,10 @@ import {
   buildOrchestratorMcpServerEntry,
   ORCHESTRATOR_MCP_SERVER_NAME,
 } from '../mcp/orchestratorMcpServer';
+import {
+  buildNotionMcpServerEntry,
+  NOTION_MCP_SERVER_NAME,
+} from '../mcp/notionMcpServer';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { ApiSessionRunner } from './ApiSessionRunner';
 import type { ISessionRunner } from './SessionRunner';
@@ -212,17 +216,32 @@ function resolveBackendPort(): number {
  * sessions and the last writer's stage credential would win for all of them.
  * Coding/review sessions have an isolated worktreePath but this file lives
  * alongside the (already per-session) session-prompt file instead.
+ *
+ * `taskSource` gates in the Notion read MCP server (mcp/notionMcpServer.ts):
+ * only Notion-task-source projects get it registered, matching the
+ * NOTION_READ_MCP_TOOLS allow-list gating in
+ * orchestrator-config.ts#getSessionAllowedTools — a Jira/GitHub/YAML project
+ * gets no notion entry here and no Notion tools in its allow-list.
+ *
+ * Written with mode 600: the notion server entry references
+ * `${NOTION_API_KEY}` for CLI-side env expansion rather than an inline
+ * literal, but the file may still carry the orchestrator stage credential,
+ * so it's kept unreadable to other users regardless.
  * Exported for unit testing.
  */
 export function writeMcpConfig(
   projectDir: string,
   sessionId: string,
   mcpServers: Record<string, unknown> | undefined,
+  taskSource?: 'notion' | 'yaml' | 'jira' | 'github',
 ): string {
   const stageToken = mintStageCredential(sessionId);
   const port = resolveBackendPort();
   const merged = {
     ...mcpServers,
+    ...(taskSource === 'notion'
+      ? { [NOTION_MCP_SERVER_NAME]: buildNotionMcpServerEntry() }
+      : {}),
     [ORCHESTRATOR_MCP_SERVER_NAME]: buildOrchestratorMcpServerEntry(
       port,
       stageToken,
@@ -234,7 +253,7 @@ export function writeMcpConfig(
   fs.writeFileSync(
     filePath,
     JSON.stringify({ mcpServers: merged }, null, 2),
-    'utf-8',
+    { encoding: 'utf-8', mode: 0o600 },
   );
   return filePath;
 }
@@ -1438,6 +1457,7 @@ export class SessionManager extends EventEmitter {
       projectDir,
       sessionId,
       orchConfig.mcp_servers,
+      project.taskSource,
     );
     if (mcpConfigPath) {
       logger.info(
@@ -1946,6 +1966,7 @@ export class SessionManager extends EventEmitter {
       projectDir,
       row.session_id,
       orchConfig.mcp_servers,
+      project.taskSource,
     );
 
     // Re-pin: refresh the system-prompt file outside the worktree so the
@@ -2895,6 +2916,7 @@ export class SessionManager extends EventEmitter {
         projectDir,
         sessionId,
         orchConfig.mcp_servers,
+        project.taskSource,
       );
       const fastPathSystemPromptPath =
         mode === 'cli' && row.task_url
@@ -3145,6 +3167,7 @@ export class SessionManager extends EventEmitter {
       projectDir,
       sessionId,
       orchConfig.mcp_servers,
+      project.taskSource,
     );
 
     const slowPathSystemPromptPath =

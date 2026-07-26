@@ -248,6 +248,62 @@ describe('writeMcpConfig — per-session collision fix', () => {
     expect(written.mcpServers.github).toBeDefined();
     expect(written.mcpServers.orchestrator).toBeDefined();
   });
+
+  it("registers both the orchestrator and notion servers for a Notion-task-source project's session", () => {
+    const notionPath = writeMcpConfig(
+      PROJECT_DIR,
+      'notion-session-1',
+      undefined,
+      'notion',
+    );
+    const written = JSON.parse(writtenFiles.get(notionPath)!);
+    expect(written.mcpServers.orchestrator).toBeDefined();
+    expect(written.mcpServers.notion).toBeDefined();
+  });
+
+  it.each(['jira', 'yaml', 'github', undefined] as const)(
+    'registers only the orchestrator server for a %s-task-source session (no notion entry)',
+    (taskSource) => {
+      const p = writeMcpConfig(
+        PROJECT_DIR,
+        `non-notion-session-${String(taskSource)}`,
+        undefined,
+        taskSource,
+      );
+      const written = JSON.parse(writtenFiles.get(p)!);
+      expect(written.mcpServers.orchestrator).toBeDefined();
+      expect(written.mcpServers.notion).toBeUndefined();
+    },
+  );
+
+  it('still merges per-project mcp_servers extras for a Notion-task-source project (no regression)', () => {
+    const p = writeMcpConfig(
+      PROJECT_DIR,
+      'notion-session-with-extras',
+      { github: { type: 'http', url: 'https://api.githubcopilot.com/mcp/' } },
+      'notion',
+    );
+    const written = JSON.parse(writtenFiles.get(p)!);
+    expect(written.mcpServers.github).toBeDefined();
+    expect(written.mcpServers.notion).toBeDefined();
+    expect(written.mcpServers.orchestrator).toBeDefined();
+  });
+
+  it("does not inline a plaintext Notion API key and writes the config file mode 600", () => {
+    const p = writeMcpConfig(PROJECT_DIR, 'notion-session-secret', undefined, 'notion');
+    const rawContent = writtenFiles.get(p)!;
+    expect(rawContent).not.toMatch(/ntn_[A-Za-z0-9]+/);
+    expect(rawContent).toContain('${NOTION_API_KEY}');
+
+    const call = vi
+      .mocked(fsModule.writeFileSync)
+      .mock.calls.find(([calledPath]) => calledPath === p);
+    expect(call).toBeDefined();
+    const options = call![2] as { mode?: number } | string | undefined;
+    expect(typeof options === 'object' ? options?.mode : undefined).toBe(
+      0o600,
+    );
+  });
 });
 
 describe('cleanupWorktree — removes the per-session MCP config for the correct session only', () => {
