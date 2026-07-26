@@ -242,6 +242,14 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                   100,
                 )}
                 {numInput(
+                  'max_concurrent_planning_sessions',
+                  'Max concurrent planning sessions',
+                  1,
+                  100,
+                  1,
+                  'Shared pool for groom, design, ops and gate-verify sessions',
+                )}
+                {numInput(
                   'auto_review_concurrency',
                   'Max concurrent review sessions',
                   1,

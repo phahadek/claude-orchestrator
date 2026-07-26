@@ -1,5 +1,6 @@
 export interface SettingsValues {
   max_concurrent_code_sessions: string;
+  max_concurrent_planning_sessions: string;
   auto_review_concurrency: string;
   auto_review: string;
   card_preview_lines: string;
