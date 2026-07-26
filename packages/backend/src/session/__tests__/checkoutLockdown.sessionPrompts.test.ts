@@ -140,9 +140,9 @@ describe('checkoutLockdown — session-prompts carve-out', () => {
     acquireCheckoutLockdown(projectDir, 'session-a', { applyFsLockdown: true });
 
     expect(canWrite(path.join(projectDir, 'README.md'))).toBe(false);
-    expect(
-      canWrite(path.join(projectDir, '.claude', 'session-prompts')),
-    ).toBe(true);
+    expect(canWrite(path.join(projectDir, '.claude', 'session-prompts'))).toBe(
+      true,
+    );
 
     releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
   });
@@ -194,7 +194,11 @@ describe('checkoutLockdown — session-prompts carve-out', () => {
 
   it('restores owner-write on session-prompts left read-only by a pre-fix lock, on the last release', () => {
     acquireCheckoutLockdown(projectDir, 'session-a', { applyFsLockdown: true });
-    const sessionPromptsDir = path.join(projectDir, '.claude', 'session-prompts');
+    const sessionPromptsDir = path.join(
+      projectDir,
+      '.claude',
+      'session-prompts',
+    );
     // Simulate a lock acquired by pre-fix code, before session-prompts was
     // excluded from the strip walk.
     fs.chmodSync(sessionPromptsDir, 0o444);

@@ -124,7 +124,11 @@ describe('checkoutLockdown', () => {
   });
 
   it('leaves .claude/session-prompts writable after stripWriteRecursive, unlike other subdirectories', () => {
-    const sessionPromptsDir = path.join(projectDir, '.claude', 'session-prompts');
+    const sessionPromptsDir = path.join(
+      projectDir,
+      '.claude',
+      'session-prompts',
+    );
     fs.mkdirSync(sessionPromptsDir, { recursive: true });
 
     acquireCheckoutLockdown(projectDir, 'session-a', { applyFsLockdown: true });
@@ -149,7 +153,11 @@ describe('checkoutLockdown', () => {
   });
 
   it('restores owner-write on session-prompts left read-only by a lock acquired before the carve-out existed', () => {
-    const sessionPromptsDir = path.join(projectDir, '.claude', 'session-prompts');
+    const sessionPromptsDir = path.join(
+      projectDir,
+      '.claude',
+      'session-prompts',
+    );
     fs.mkdirSync(sessionPromptsDir, { recursive: true });
 
     acquireCheckoutLockdown(projectDir, 'session-a', { applyFsLockdown: true });

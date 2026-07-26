@@ -47,7 +47,11 @@ function sessionPromptsRoot(projectDir: string): string {
  * cannot drift apart. Exported for the checkoutLockdown.test.ts drift guard.
  */
 export function lockdownExcludes(projectDir: string): string[] {
-  return [scratchRoot(projectDir), worktreesRoot(projectDir), sessionPromptsRoot(projectDir)];
+  return [
+    scratchRoot(projectDir),
+    worktreesRoot(projectDir),
+    sessionPromptsRoot(projectDir),
+  ];
 }
 
 export function getScratchDir(projectDir: string, sessionId: string): string {
@@ -102,7 +106,11 @@ function walkAndChmod(
  * path under `.git` needs a carve-out.
  */
 function stripWriteRecursive(projectDir: string): void {
-  walkAndChmod(projectDir, lockdownExcludes(projectDir), (mode) => mode & ~0o222);
+  walkAndChmod(
+    projectDir,
+    lockdownExcludes(projectDir),
+    (mode) => mode & ~0o222,
+  );
   logger.info(`[checkoutLockdown] locked down checkout: ${projectDir}`);
 }
 
