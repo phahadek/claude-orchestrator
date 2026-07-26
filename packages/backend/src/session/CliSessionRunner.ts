@@ -4,6 +4,7 @@ import {
   config,
   BASH_MAX_OUTPUT_LENGTH,
   BASH_DEFAULT_TIMEOUT_MS,
+  PLANNING_DISALLOWED_TOOLS,
 } from '../config';
 import type {
   ISessionRunner,
@@ -104,7 +105,9 @@ export class CliSessionRunner implements ISessionRunner {
         : []),
       '--allowed-tools',
       ...allowedTools,
-      ...(isPlanning ? ['--disallowed-tools', 'Skill', 'Write', 'Edit'] : []),
+      ...(isPlanning
+        ? ['--disallowed-tools', ...PLANNING_DISALLOWED_TOOLS]
+        : []),
       ...(isPlanning ? ['--add-dir', '/'] : []),
     ];
 

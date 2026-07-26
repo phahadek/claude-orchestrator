@@ -4,6 +4,7 @@ import {
   GROOM_ALLOWED_TOOLS,
   DESIGN_ALLOWED_TOOLS,
   OPS_ALLOWED_TOOLS,
+  PLANNING_DISALLOWED_TOOLS,
 } from '../config';
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
 
@@ -34,6 +35,23 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
 const REGISTERED_TOOL_NAMES = new Set(
   REGISTERED_ORCHESTRATOR_MCP_KINDS.map(orchestratorMcpToolName),
 );
+
+describe('PLANNING_DISALLOWED_TOOLS', () => {
+  it('blocks self-scheduling/re-entry built-ins alongside the prior Skill/Write/Edit denylist', () => {
+    expect(PLANNING_DISALLOWED_TOOLS).toEqual(
+      expect.arrayContaining([
+        'Skill',
+        'Write',
+        'Edit',
+        'ScheduleWakeup',
+        'CronCreate',
+        'CronDelete',
+        'CronList',
+      ]),
+    );
+    expect(PLANNING_DISALLOWED_TOOLS).toHaveLength(7);
+  });
+});
 
 describe('ALLOWED_TOOLS — backend-owned PR operations are excluded', () => {
   it('does not contain the mcp__github__* wildcard', () => {
