@@ -15,6 +15,7 @@ import {
   releaseCheckoutLockdown,
   reconcileCheckoutLockdownAtBoot,
   getScratchDir,
+  lockdownExcludes,
 } from '../checkoutLockdown';
 
 function canWrite(p: string): boolean {
@@ -120,6 +121,46 @@ describe('checkoutLockdown', () => {
     expect(fs.existsSync(getScratchDir(projectDir, 'dead-session'))).toBe(
       false,
     );
+  });
+
+  it('leaves .claude/session-prompts writable after stripWriteRecursive, unlike other subdirectories', () => {
+    const sessionPromptsDir = path.join(projectDir, '.claude', 'session-prompts');
+    fs.mkdirSync(sessionPromptsDir, { recursive: true });
+
+    acquireCheckoutLockdown(projectDir, 'session-a', { applyFsLockdown: true });
+
+    expect(canWrite(sessionPromptsDir)).toBe(true);
+
+    releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
+  });
+
+  it('strips and restores the checkout against the exact same exclude list (no drift between call sites)', () => {
+    // stripWriteRecursive and restoreWriteRecursive both call
+    // lockdownExcludes(projectDir) directly — this pins that shared list's
+    // contents so a future hardcoded literal at either call site would be
+    // caught by this test failing to match reality.
+    expect(lockdownExcludes(projectDir).sort()).toEqual(
+      [
+        path.join(projectDir, '.claude', 'scratch'),
+        path.join(projectDir, '.claude', 'worktrees'),
+        path.join(projectDir, '.claude', 'session-prompts'),
+      ].sort(),
+    );
+  });
+
+  it('restores owner-write on session-prompts left read-only by a lock acquired before the carve-out existed', () => {
+    const sessionPromptsDir = path.join(projectDir, '.claude', 'session-prompts');
+    fs.mkdirSync(sessionPromptsDir, { recursive: true });
+
+    acquireCheckoutLockdown(projectDir, 'session-a', { applyFsLockdown: true });
+    // Simulate a lock acquired by pre-fix code, which stripped this
+    // directory before it was excluded from the walk.
+    fs.chmodSync(sessionPromptsDir, 0o444);
+    expect(canWrite(sessionPromptsDir)).toBe(false);
+
+    releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
+
+    expect(canWrite(sessionPromptsDir)).toBe(true);
   });
 
   it('boot reconciliation re-applies the lockdown for a still-active session (mid-crash restore)', () => {

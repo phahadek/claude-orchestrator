@@ -17,11 +17,14 @@ import {
  * the first concurrent planning session locks it and only the last one to
  * end unlocks it — with a carved-out writable scratch dir per session.
  *
- * Two subdirectories of the checkout are never touched by the lockdown walk:
- * `.claude/worktrees` (independent per-session coding worktrees, which need
- * their own write access regardless of any planning session sharing the
- * project's root cwd) and `.claude/scratch` (this module's own writable
- * exception area).
+ * Three subdirectories of the checkout are never touched by the lockdown
+ * walk: `.claude/worktrees` (independent per-session coding worktrees, which
+ * need their own write access regardless of any planning session sharing the
+ * project's root cwd), `.claude/scratch` (this module's own writable
+ * exception area), and `.claude/session-prompts` (the launcher's own
+ * per-session control-plane files — writeMcpConfig/writeSystemPromptFile —
+ * which every session, not just planning ones, must be able to write in
+ * order to even start).
  */
 
 const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
@@ -32,6 +35,19 @@ function scratchRoot(projectDir: string): string {
 
 function worktreesRoot(projectDir: string): string {
   return path.join(projectDir, '.claude', 'worktrees');
+}
+
+function sessionPromptsRoot(projectDir: string): string {
+  return path.join(projectDir, '.claude', 'session-prompts');
+}
+
+/**
+ * Paths excluded from the lockdown walk in both directions (strip and
+ * restore) — the single source of truth both call sites share, so they
+ * cannot drift apart. Exported for the checkoutLockdown.test.ts drift guard.
+ */
+export function lockdownExcludes(projectDir: string): string[] {
+  return [scratchRoot(projectDir), worktreesRoot(projectDir), sessionPromptsRoot(projectDir)];
 }
 
 export function getScratchDir(projectDir: string, sessionId: string): string {
@@ -86,11 +102,7 @@ function walkAndChmod(
  * path under `.git` needs a carve-out.
  */
 function stripWriteRecursive(projectDir: string): void {
-  walkAndChmod(
-    projectDir,
-    [scratchRoot(projectDir), worktreesRoot(projectDir)],
-    (mode) => mode & ~0o222,
-  );
+  walkAndChmod(projectDir, lockdownExcludes(projectDir), (mode) => mode & ~0o222);
   logger.info(`[checkoutLockdown] locked down checkout: ${projectDir}`);
 }
 
@@ -98,13 +110,25 @@ function stripWriteRecursive(projectDir: string): void {
  * Restores owner write access under `projectDir`. Only the owner-write bit
  * is restored (group/other write bits, if a checkout somehow had any, are
  * not) — a solo-owned orchestrator checkout never had them to begin with.
+ *
+ * The excluded roots themselves are also given a shallow, idempotent
+ * owner-write restore (not a recursive walk of their contents). In steady
+ * state this is a no-op: the launcher always creates/writes under them
+ * before any strip ever walks the tree. Its only real effect is defensive —
+ * repairing an excluded root that was left read-only by a lock acquired
+ * before this exclusion existed.
  */
 function restoreWriteRecursive(projectDir: string): void {
-  walkAndChmod(
-    projectDir,
-    [scratchRoot(projectDir), worktreesRoot(projectDir)],
-    (mode) => mode | 0o200,
-  );
+  const excludes = lockdownExcludes(projectDir);
+  walkAndChmod(projectDir, excludes, (mode) => mode | 0o200);
+  for (const dir of excludes) {
+    try {
+      const st = fs.lstatSync(dir);
+      fs.chmodSync(dir, st.mode | 0o200);
+    } catch {
+      // Doesn't exist yet — nothing to restore.
+    }
+  }
   logger.info(`[checkoutLockdown] lifted checkout lockdown: ${projectDir}`);
 }
 
