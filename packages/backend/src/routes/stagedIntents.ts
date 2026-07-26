@@ -127,11 +127,14 @@ function hasGroupDependsOn(groupId: string, taskId: string): boolean {
  * for this task — group-commit ordering (`ordered` in commitGroupIntents)
  * always applies it, for real, before the arming task.setStatus -> Ready
  * intent, so its durable marker will exist by the time the real
- * TaskWriteCommands.setStatus gate check runs. Used only to skip the
- * corresponding accretion check ahead of that real application (in
- * runStageTimeReadyChecks / precheckGroupCommit) — the real check always
- * still runs, against the real marker, once the group's non-arming intents
- * have actually applied.
+ * TaskWriteCommands.setStatus gate check runs. Used only by
+ * precheckGroupCommit, at commit time, to skip the corresponding accretion
+ * check ahead of that real application — the real check always still runs,
+ * against the real marker, once the group's non-arming intents have
+ * actually applied. runStageTimeReadyChecks does NOT use this: at stage
+ * time a setStatus-first ordering means the accretions may not be staged
+ * yet, so it defers the contribution check entirely for any grouped flip
+ * rather than relying on this staged-order-sensitive lookup.
  */
 function hasGroupAccretionIntent(
   groupId: string,
@@ -937,19 +940,15 @@ export async function runStageTimeReadyChecks(
     payload.groomingGate ?? {},
     payload.taskId,
     resolvedType,
+    // A grouped Ready-flip defers gate/seed contribution enforcement to the
+    // commit-time precheck (precheckGroupCommit) and turn-end group
+    // re-verify: at stage time the group's gate.accrete/seed.stage intents
+    // may not have been staged yet (a setStatus-first ordering), so checking
+    // applied markers here would spuriously block a flip whose accretions
+    // are about to land in the same group. Only an ungrouped flip is checked
+    // strictly at stage time.
     intent.groupId
-      ? {
-          skipGateContributionCheck: hasGroupAccretionIntent(
-            intent.groupId,
-            payload.taskId,
-            'gate.accrete',
-          ),
-          skipSeedContributionCheck: hasGroupAccretionIntent(
-            intent.groupId,
-            payload.taskId,
-            'seed.stage',
-          ),
-        }
+      ? { skipGateContributionCheck: true, skipSeedContributionCheck: true }
       : undefined,
   );
   if (!gateResult.allowed) {
