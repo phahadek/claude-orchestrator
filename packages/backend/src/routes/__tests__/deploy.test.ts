@@ -260,9 +260,7 @@ describe('the wired-up spawnAgenticStep stub', () => {
       completed_at: null,
     });
 
-    await request(makeApp())
-      .post('/api/deploy/launch')
-      .send({ projectId });
+    await request(makeApp()).post('/api/deploy/launch').send({ projectId });
 
     const constructorCalls = (
       DeployOrchestrator as unknown as ReturnType<typeof vi.fn>
