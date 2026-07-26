@@ -7,6 +7,7 @@ vi.mock('../../logger', () => ({
 
 vi.mock('../../db/queries', () => ({
   getSession: vi.fn(),
+  listStagedIntentsByGroup: vi.fn().mockReturnValue([]),
   listStagedIntentsBySession: vi.fn().mockReturnValue([]),
   markSessionDone: vi.fn(),
 }));
@@ -17,6 +18,7 @@ vi.mock('../../routes/stagedIntents', () => ({
 
 import {
   getSession,
+  listStagedIntentsByGroup,
   listStagedIntentsBySession,
   markSessionDone,
 } from '../../db/queries';
@@ -78,15 +80,17 @@ function makeIntent(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+  vi.mocked(listStagedIntentsByGroup).mockReturnValue([]);
   vi.mocked(verifyDispatchedGroupsForSession).mockResolvedValue([]);
 });
 
 // ── handleDisposition — resumes the correct originating session ────────────
 
 describe('PlanningOrchestrator.handleDisposition', () => {
-  it('resumes the originating idle planning session with an approve outcome', async () => {
+  it('an approve that completes the mandate drives the session terminal without resuming', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
     const orch = new PlanningOrchestrator(sm as any);
 
     const intent = makeIntent({
@@ -95,11 +99,56 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     });
     await orch.handleDisposition({ intent, disposition: 'approve' });
 
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'planning-session-1',
+      expect.any(Number),
+      null,
+      expect.any(String),
+    );
+  });
+
+  it('an approve that leaves other staged work resumes the session exactly once', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ id: 'other-intent', state: 'staged' }),
+    ]);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'committed',
+    });
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledTimes(1);
     expect(sm.enqueueFeedback).toHaveBeenCalledWith(
       'planning-session-1',
       'operator-disposition',
       expect.stringContaining('approved'),
     );
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('does not resume when the intent is still part of a not-fully-disposed group', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'committed',
+      group_id: 'group-1',
+    });
+    vi.mocked(listStagedIntentsByGroup).mockReturnValue([
+      intent,
+      makeIntent({ id: 'sibling', group_id: 'group-1', state: 'approved' }),
+    ]);
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
+    expect(markSessionDone).not.toHaveBeenCalled();
   });
 
   it('resumes with a pushback message including operator feedback', async () => {
@@ -159,7 +208,11 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     const orch = new PlanningOrchestrator(sm as any);
 
     const intent = makeIntent({ session_id: 'other-session-42' });
-    await orch.handleDisposition({ intent, disposition: 'approve' });
+    await orch.handleDisposition({
+      intent,
+      disposition: 'pushback',
+      reason: 'revise',
+    });
 
     expect(sm.enqueueFeedback).toHaveBeenCalledWith(
       'other-session-42',
