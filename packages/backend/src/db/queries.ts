@@ -5450,7 +5450,9 @@ export function countPlanningCheckoutLocks(projectDir: string): number {
   const row = db
     .prepare<{
       project_dir: string;
-    }>(`SELECT COUNT(*) AS n FROM planning_checkout_locks WHERE project_dir = @project_dir`)
+    }>(
+      `SELECT COUNT(*) AS n FROM planning_checkout_locks WHERE project_dir = @project_dir`,
+    )
     .get({ project_dir: projectDir }) as { n: number };
   return row.n;
 }
