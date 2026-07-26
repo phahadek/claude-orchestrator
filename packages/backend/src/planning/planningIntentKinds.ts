@@ -25,6 +25,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'seed.stage',
     'task.create',
     'session.requestCapability',
+    'task.updateBody',
   ],
   design: [
     'decision.pickOne',
@@ -40,6 +41,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'task.setStatus',
     'session.requestCapability',
     'task.create',
+    'task.updateBody',
   ],
   split: ['task.updateBody', 'task.create', 'task.setDependsOn'],
 };
