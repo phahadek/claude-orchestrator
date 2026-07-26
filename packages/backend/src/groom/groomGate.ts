@@ -124,7 +124,10 @@ type ConstraintDisposition =
  */
 export interface GateContributionCandidate {
   text: string;
-  classification?: 'runtime-observable' | 'config-or-code-determined' | 'needs-triage';
+  classification?:
+    | 'runtime-observable'
+    | 'config-or-code-determined'
+    | 'needs-triage';
 }
 
 export interface GroomingGateEntry {

@@ -687,15 +687,15 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'of dropping it), or `needs-triage` (genuinely unclear — accrete it ' +
       'flagged, as today). The deciding question: would a headless verifier be ' +
       'able to cite a behavioural trace for this, or only cite the code? If only ' +
-      'the code, it is a test, not a gate item. Record every candidate\'s ' +
+      "the code, it is a test, not a gate item. Record every candidate's " +
       'classification in the `gate_contribution` artifact — the check enforced ' +
       'is that a classification was recorded for each candidate, never a ' +
       'judgment on which classification was chosen. The count of candidates in ' +
       'must equal the count accreted plus the count relocated — disposition ' +
       'every candidate, never silently drop one. ' +
       'Then stage its gate_contribution (`gate.accrete`) and seed_contribution ' +
-      '(`seed.stage`) — either the task\'s real runtime-gate items / ' +
-      "config-change seeds, or an explicit `{\"decision\":\"none\"}` when it has " +
+      "(`seed.stage`) — either the task's real runtime-gate items / " +
+      'config-change seeds, or an explicit `{"decision":"none"}` when it has ' +
       'none. Both are durable markers checkGroomingPromotionGate requires for ' +
       'every 💻 Code task; a Ready flip staged without them is blocked at commit ' +
       'time and surfaced back at stage time — never stage the Ready flip first ' +

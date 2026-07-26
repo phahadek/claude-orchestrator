@@ -679,7 +679,10 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
           { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
         ],
         gateContributionCandidates: [
-          { text: 'launched session has read-only tool set', classification: 'runtime-observable' },
+          {
+            text: 'launched session has read-only tool set',
+            classification: 'runtime-observable',
+          },
           { text: 'session runs on the planning model' },
         ],
       },
