@@ -299,6 +299,9 @@ const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
     '{"title":"<title>","type":"💻 Code","milestone":"<milestone-id>",' +
     '"body":"<task body markdown>"}',
   'task.updateBody': '{"taskId":"<task-id>","body":"<full markdown>"}',
+  'arch.updateUnit':
+    '{"unitId":"<arch-unit-id>","baseVersion":<current-version-number>,' +
+    '"title":"<updated title>","body":"<updated markdown body>"}',
   'decision.pickOne':
     '{"prompt":"<the Open Question, verbatim>","options":[' +
     '{"label":"<candidate answer A>","description":"<pros/cons>"},' +

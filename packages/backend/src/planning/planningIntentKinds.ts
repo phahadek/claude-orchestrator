@@ -37,6 +37,9 @@ export const PLANNING_INTENT_KINDS: Record<
     'task.create',
     'session.requestCapability',
     'task.patchBodySection',
+    'arch.createUnit',
+    'arch.updateUnit',
+    'arch.supersedeUnit',
   ],
   ops: [
     'journal.setState',
