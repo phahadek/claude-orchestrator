@@ -295,6 +295,23 @@ function extractTitleKey(kind: string, payload: unknown): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+/**
+ * decision.pickOne's dedup identity: a question carries no taskId, so — like
+ * task.create's title-keying above — it dedups on its own content within the
+ * session, here the full normalized prompt rather than a truncation, so that
+ * two distinct questions sharing a prefix never collide. A reworded question
+ * is not caught by this key and instead relies on the caller passing
+ * `explicitSupersedes` to retire its prior draft, the same escape a retitled
+ * task.create uses.
+ */
+function extractPromptKey(kind: string, payload: unknown): string | null {
+  if (kind !== 'decision.pickOne') return null;
+  const prompt = (payload as { prompt?: unknown } | null)?.prompt;
+  if (typeof prompt !== 'string') return null;
+  const normalized = prompt.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
 type CreateTaskPayload = CreateTaskCommandFields;
 interface SetStatusPayload {
   taskId: string;
@@ -513,12 +530,15 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
  * differs from) is applied to the existing row in place — groupId is settable
  * grouping metadata, not part of the content-idempotent identity. A
  * re-emission that differs on payload supersedes the standing intent
- * (tombstoning it) and re-enters `staged`, requiring fresh approval. decision.pickOne carries
- * no taskId (it is a question, not a task write), so it dedups instead on
- * (sessionId, payload_hash) — see findActiveDecisionPickOneForSession.
- * task.create/arch.createUnit carry no taskId either (nothing exists yet to
- * key on), so they dedup on (sessionId, normalized title) instead — see
- * extractTitleKey / findActiveStagedIntentByTitleForSession. A caller can
+ * (tombstoning it) and re-enters `staged`, requiring fresh approval.
+ * decision.pickOne carries no taskId (it is a question, not a task write),
+ * so it dedups instead on (sessionId, normalized prompt) — see
+ * extractPromptKey / findActiveDecisionPickOneForSession — the same shape as
+ * task.create/arch.createUnit below, so several independent questions can
+ * stay live in one session while a re-staged one still retires its own
+ * prior draft. task.create/arch.createUnit carry no taskId either (nothing
+ * exists yet to key on), so they dedup on (sessionId, normalized title)
+ * instead — see extractTitleKey / findActiveStagedIntentByTitleForSession. A caller can
  * also pass `explicitSupersedes` to retire a specific prior intent by id —
  * the only way to supersede a draft whose title is also changing, since
  * title-keying alone can't identify it. Superseding (either path) is a
@@ -566,6 +586,7 @@ export function stageIntent(
 
   const taskId = extractTaskId(kind, payload);
   const titleKey = extractTitleKey(kind, payload);
+  const promptKey = extractPromptKey(kind, payload);
   const payloadHash = hashIntentPayload(payload);
   const now = Date.now();
   const groomProposalJson = groomProposal
@@ -589,8 +610,8 @@ export function stageIntent(
     ? explicitValid
     : taskId
       ? findActiveStagedIntentForTask(projectId, kind, taskId)
-      : kind === 'decision.pickOne' && sessionId
-        ? findActiveDecisionPickOneForSession(sessionId)
+      : promptKey && sessionId
+        ? findActiveDecisionPickOneForSession(sessionId, promptKey)
         : titleKey && sessionId
           ? findActiveStagedIntentByTitleForSession(
               projectId,
