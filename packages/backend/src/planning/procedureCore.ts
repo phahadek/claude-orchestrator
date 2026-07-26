@@ -266,6 +266,35 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'completeness critic below has run.',
   },
   {
+    id: 'design-decision-pickone-payload-shape',
+    title:
+      'decision.pickOne payload shape mirrors the skill’s 5-part presentation',
+    appliesTo: ['design'],
+    text:
+      'DO shape every Open Question’s `decision.pickOne` payload to carry the ' +
+      'same contract `skills/design/reference/presentation.md`’s 5-part question ' +
+      'message specifies for the interactive skill, mapped onto the payload’s ' +
+      'fields (`prompt`, `options[]`, `decisionProposal`) rather than a second, ' +
+      'drifting restatement of that contract. `prompt` carries the question alone ' +
+      '— quote it concisely; DO NOT restate the candidate answers inline, those ' +
+      'belong in `options`. DO stage one `options[]` entry per candidate solution ' +
+      'considered, including a candidate {skillLabel} recommends against — DO NOT ' +
+      'omit a rejected candidate because it lost, and DO NOT fold its rationale into ' +
+      'a competing option’s description. DO write each option’s `description` as ' +
+      'a self-contained, architecture-level statement of that one candidate plus its ' +
+      'own trade-offs — DO NOT let it carry another option’s rationale, and DO NOT ' +
+      'concatenate every candidate’s analysis into a single option’s field. DO carry ' +
+      'evidence — file:line citations, arch-page section names, API-result specifics ' +
+      '— in `decisionProposal`’s investigation summary rather than inside an option ' +
+      'description; presentation.md’s evidence requirement still applies, this only ' +
+      'relocates where it is carried, since the payload has no separate Investigation ' +
+      'field. DO name the preferred solution and its load-bearing reason explicitly in ' +
+      '`decisionProposal`, alongside that investigation summary. A single `options` ' +
+      'entry stays valid — a confident recommendation the operator accepts or pushes ' +
+      'back on (see ‘No batch-locking’ above) — this shape governs how it, or each ' +
+      'of several, is written, never whether more than one is required.',
+  },
+  {
     id: 'design-completeness-critic',
     title: 'Completeness critic — once per task, before Implementation notes',
     appliesTo: ['design'],
