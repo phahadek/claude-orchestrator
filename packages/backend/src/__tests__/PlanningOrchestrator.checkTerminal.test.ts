@@ -105,7 +105,7 @@ describe('PlanningOrchestrator.checkTerminal', () => {
     expect(getSession(SESSION_ID)?.status).toBe('done');
   });
 
-  it('reaches terminal after a pushback, a single re-stage, and an approval — with no further apply-path call', async () => {
+  it('reaches terminal directly on the approval that completes the mandate — no resume', async () => {
     seedSession();
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
@@ -129,18 +129,19 @@ describe('PlanningOrchestrator.checkTerminal', () => {
     expect(orchestrator.checkTerminal(SESSION_ID)).toBe(false);
 
     // Operator approves the corrected intent — this is the group/single apply
-    // route's job in production (transition then handleDisposition); no code
-    // here calls checkTerminal directly the way the apply-path backstop does.
+    // route's job in production (transition then handleDisposition). Since
+    // nothing else is staged for the session, the approval itself drives the
+    // session terminal directly — no further resume, no separate park needed.
     const committed2 = transitionStagedIntent(intent2.id, 'committed');
     await orchestrator.handleDisposition({
       intent: committed2,
       disposition: 'approve',
     });
 
-    // Turn 3: session stages nothing further and parks. Only the park path
-    // (checkTerminal, mirroring onSessionParked) drives this to terminal.
-    expect(orchestrator.checkTerminal(SESSION_ID)).toBe(true);
     expect(getSession(SESSION_ID)?.status).toBe('done');
+    // Only the earlier pushback resumed the session — the completing
+    // approval did not.
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
   });
 
   it('the Ready path still reaches terminal (unregressed)', () => {

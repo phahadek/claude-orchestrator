@@ -168,6 +168,10 @@ describe('group commit drives a groom session terminal on the applied terminal g
       'g-final',
       'task-1',
     );
+    // Simulate the turn that staged these intents parking (idle) before any
+    // operator disposition — priming checkTerminal's snapshot, exactly as
+    // onSessionParked would in production.
+    planningOrchestrator.checkTerminal('groom-session-final');
 
     const app = makeApp(planningOrchestrator);
     const agent = supertest(app);
@@ -227,6 +231,10 @@ describe('group commit drives a groom session terminal on the applied terminal g
       created_at: 1,
       updated_at: 1,
     });
+    // Simulate the turn that staged these intents parking (idle) before any
+    // operator disposition — priming checkTerminal's snapshot, exactly as
+    // onSessionParked would in production.
+    planningOrchestrator.checkTerminal('groom-session-mid');
 
     const app = makeApp(planningOrchestrator);
     const agent = supertest(app);

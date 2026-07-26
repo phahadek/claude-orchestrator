@@ -972,44 +972,6 @@ function isArmingReadyIntent(row: StagedIntentRow): boolean {
 }
 
 /**
- * A task.setStatus intent that settles its target task's grooming outcome —
- * Ready, Done, or Deferred — the "applied terminal grooming decision"
- * (grooming decision 2026-07-26): once one of these has actually committed,
- * the originating groom session has nothing further to groom and is a
- * candidate for the terminal check below, rather than waiting on a re-park
- * that may never come. Deferred is included alongside Ready/Done because a
- * session's final act can just as easily be deferring a task as promoting
- * it — either way the grooming decision is settled.
- */
-function isTerminalGroomingPromotion(row: StagedIntentRow): boolean {
-  if (row.kind !== 'task.setStatus') return false;
-  const payload = JSON.parse(row.payload) as SetStatusPayload;
-  return (
-    payload.status === 'Ready' ||
-    payload.status === 'Done' ||
-    payload.status === 'Deferred'
-  );
-}
-
-/**
- * Backstop for the no-re-park-after-final-apply gap: PlanningOrchestrator's
- * checkTerminal is normally driven by the session re-parking after an
- * operator disposition, but nothing re-dispatches the session once its last
- * intent is disposed, so it never re-parks. Invoking checkTerminal directly
- * from the apply path closes that gap without duplicating it — checkTerminal
- * itself still guards on no un-dispositioned intents remaining, so a session
- * mid-disposition is untouched.
- */
-function checkPlanningTerminalIfPromoted(
-  row: StagedIntentRow,
-  planningOrchestrator: PlanningOrchestrator | undefined,
-): void {
-  if (!planningOrchestrator || !row.session_id) return;
-  if (!isTerminalGroomingPromotion(row)) return;
-  planningOrchestrator.checkTerminal(row.session_id);
-}
-
-/**
  * Locates the heading-bounded range of `section` in a flattened markdown
  * body: the heading line's index and the exclusive index of the next
  * heading (or the end of the body). Case/whitespace-insensitive match on
@@ -1646,13 +1608,6 @@ async function commitGroupIntents(
     }
   }
 
-  const promoted = ordered.find(
-    (row) => committed.includes(row.id) && isTerminalGroomingPromotion(row),
-  );
-  if (promoted) {
-    checkPlanningTerminalIfPromoted(promoted, planningOrchestrator);
-  }
-
   return { status: 200, body: { ok: true, committed } };
 }
 
@@ -1787,7 +1742,6 @@ export function createStagedIntentsRouter(
           intent: committed,
           disposition: 'approve',
         });
-        checkPlanningTerminalIfPromoted(committed, planningOrchestrator);
         res.json({ ok: true, result });
       } catch (err) {
         if (err instanceof ReadinessGateError) {

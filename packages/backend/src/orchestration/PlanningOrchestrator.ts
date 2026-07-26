@@ -1,10 +1,16 @@
 import { logger } from '../logger';
 import {
   getSession,
+  listStagedIntentsByGroup,
   listStagedIntentsBySession,
   markSessionDone,
 } from '../db/queries';
-import type { Session, StagedIntentRow, StagedIntentAnswer } from '../db/types';
+import type {
+  Session,
+  StagedIntentRow,
+  StagedIntentAnswer,
+  StagedIntentState,
+} from '../db/types';
 import { isPlanningSession } from '../session/sessionPredicates';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage } from '../ws/types';
@@ -37,18 +43,21 @@ export interface PlanningDispositionPayload {
  *  - boot redrive of a still-running turn is resumeOrphanSessions, unchanged.
  *
  * What this class actually adds:
- *  1. Disposition routing — an operator approve/pushback/reject on a staged
+ *  1. Disposition routing — an operator pushback/decline/answer on a staged
  *     intent resumes the intent's originating session with the outcome as
- *     the next turn's input.
+ *     the next turn's input, since those are decisions the session's next
+ *     turn is waiting on. An approve is acknowledgment, not a decision, so
+ *     it never resumes per intent (grooming decision 2026-07-26) — see
+ *     handleApproveDisposition, which instead drives the session terminal
+ *     once its group's approvals complete the mandate, or resumes it once,
+ *     coalesced, if other staged work remains.
  *  2. Terminal detection — once a planning session parks again, if no
  *     un-dispositioned (state='staged') intents remain for it and the turn
  *     that just ended staged nothing new, the session is driven to a
  *     terminal (done) state rather than left idle forever. checkTerminal is
- *     public so the apply path (stagedIntents.ts, on the applied terminal
- *     grooming disposition — group fully disposed, target task promoted)
- *     can also invoke it directly: nothing re-dispatches the session after
- *     its final disposition, so it never re-parks and onSessionParked alone
- *     would never fire for that case.
+ *     public so handleApproveDisposition (nothing re-dispatches the session
+ *     after its final disposition, so it never re-parks and onSessionParked
+ *     alone would never fire for that case) can also invoke it directly.
  */
 export class PlanningOrchestrator {
   /** Total intent count (any state) observed for a session at its last resume — lets the next park detect whether that turn staged anything new. */
@@ -216,15 +225,22 @@ export class PlanningOrchestrator {
 
   /**
    * Route an operator disposition on a staged intent back to its
-   * originating planning session: resumes the session by id via
-   * SessionManager.enqueueFeedback (the existing CLI --resume path),
-   * delivering the outcome as the next turn's input. enqueueFeedback itself
+   * originating planning session. pushback/decline/answer resume the session
+   * by id via SessionManager.enqueueFeedback (the existing CLI --resume
+   * path), delivering the outcome as the next turn's input — those are
+   * decisions the session's next turn is waiting on. enqueueFeedback itself
    * handles a session that has already reached a terminal state (done/error/
    * killed) — it attempts a resume and, failing that, surfaces a
    * needs-attention signal rather than silently dropping the pushback (see
-   * SessionManager.deliverUndeliveredInboxItems). No-ops (recorded-only) only
-   * for intents with no originating session at all, or whose session isn't a
-   * planning session — there is no session to route feedback to in either case.
+   * SessionManager.deliverUndeliveredInboxItems).
+   *
+   * approve is different (grooming decision 2026-07-26): an approval is
+   * acknowledgment, not a decision the session needs to act on, so it never
+   * resumes per intent — see handleApproveDisposition.
+   *
+   * No-ops (recorded-only) only for intents with no originating session at
+   * all, or whose session isn't a planning session — there is no session to
+   * route feedback to in either case.
    */
   async handleDisposition(payload: PlanningDispositionPayload): Promise<void> {
     const { intent, disposition, reason, answer } = payload;
@@ -241,6 +257,11 @@ export class PlanningOrchestrator {
       logger.warn(
         `[PlanningOrchestrator] ${disposition} on intent ${intent.id}: session ${sessionId.slice(0, 8)} is not a planning session — recorded only`,
       );
+      return;
+    }
+
+    if (disposition === 'approve') {
+      await this.handleApproveDisposition(sessionId, intent);
       return;
     }
 
@@ -266,6 +287,37 @@ export class PlanningOrchestrator {
     } catch (err) {
       logger.error(
         `[PlanningOrchestrator] resume failed for session ${sessionId.slice(0, 8)} after ${disposition}: ${err}`,
+      );
+    }
+  }
+
+  /**
+   * An approval only matters to the session once every sibling in its group
+   * has also settled (or it was never grouped) — an intermediate approval
+   * within a still-disposing group produces no narration and no resume at
+   * all. Once the group settles, checkTerminal decides what happens next:
+   * nothing left staged anywhere for the session drives it terminal directly
+   * (no resume needed — the mandate is complete); otherwise the session
+   * still has other staged work waiting, so it gets exactly one coalesced
+   * resume rather than one per approved intent.
+   */
+  private async handleApproveDisposition(
+    sessionId: string,
+    intent: StagedIntentRow,
+  ): Promise<void> {
+    if (!isGroupFullyDisposed(intent)) return;
+    if (this.checkTerminal(sessionId)) return;
+
+    const message = formatApprovalCompletionMessage(intent);
+    try {
+      await this.sessionManager.enqueueFeedback(
+        sessionId,
+        'operator-disposition',
+        message,
+      );
+    } catch (err) {
+      logger.error(
+        `[PlanningOrchestrator] resume failed for session ${sessionId.slice(0, 8)} after approve: ${err}`,
       );
     }
   }
@@ -324,6 +376,29 @@ export class PlanningOrchestrator {
   }
 }
 
+/** True once every live intent in the group has settled (committed/rejected/superseded) — trivially true for an ungrouped intent. */
+function isGroupFullyDisposed(intent: StagedIntentRow): boolean {
+  if (!intent.group_id) return true;
+  const PENDING: StagedIntentState[] = ['staged', 'approved'];
+  return !listStagedIntentsByGroup(intent.group_id).some((row) =>
+    PENDING.includes(row.state),
+  );
+}
+
+function formatApprovalCompletionMessage(intent: StagedIntentRow): string {
+  if (!intent.group_id) {
+    return `Staged intent ${intent.id} (${intent.kind}) was approved and applied.`;
+  }
+  const committed = listStagedIntentsByGroup(intent.group_id).filter(
+    (row) => row.state === 'committed',
+  );
+  const list = committed.map((i) => `${i.id} (${i.kind})`).join(', ');
+  return (
+    `Staged intent group ${intent.group_id} (${committed.length} intent${committed.length === 1 ? '' : 's'}: ${list}) ` +
+    'was approved and applied.'
+  );
+}
+
 function formatVerificationFeedback(groupId: string, errors: string[]): string {
   return (
     `Proposal group ${groupId} failed verification and was sent back for revision:\n` +
@@ -349,13 +424,11 @@ function formatGroupDispositionMessage(
 
 function formatDispositionMessage(
   intent: StagedIntentRow,
-  disposition: PlanningDisposition,
+  disposition: Exclude<PlanningDisposition, 'approve'>,
   reason?: string | null,
   answer?: StagedIntentAnswer | null,
 ): string {
   switch (disposition) {
-    case 'approve':
-      return `Staged intent ${intent.id} (${intent.kind}) was approved and applied.`;
     case 'decline':
       return `Staged intent ${intent.id} (${intent.kind}) was declined. Reason: ${reason ?? ''}`;
     case 'pushback':
