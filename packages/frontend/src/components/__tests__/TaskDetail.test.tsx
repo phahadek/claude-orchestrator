@@ -473,12 +473,16 @@ describe('TaskDetail', () => {
     );
 
     const header = screen.getByTestId('planning-session-header');
+    const section = screen.getByTestId('planning-session-section');
     expect(header.getAttribute('aria-expanded')).toBe('true');
+    expect(section.getAttribute('data-expanded')).toBe('true');
     // Rendered as a live SessionPanel (transcript area), not just a banner.
     expect(screen.getByText('No events yet.')).toBeTruthy();
+    expect(screen.getByTestId('planning-session-body')).toBeTruthy();
 
     fireEvent.click(header);
     expect(header.getAttribute('aria-expanded')).toBe('false');
+    expect(section.getAttribute('data-expanded')).toBe('false');
     expect(screen.queryByTestId('planning-session-body')).toBeNull();
   });
 
@@ -701,6 +705,25 @@ describe('TaskDetail', () => {
     );
     // ReviewDetailView renders "No result" when there are no events
     expect(screen.getByText('No result')).toBeTruthy();
+  });
+
+  it('review section carries a data-expanded hook matching aria-expanded', () => {
+    const review = makeReview({ verdict: 'approved' });
+    render(
+      <TaskDetail
+        task={makeTask({ review })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const section = screen.getByTestId('review-session-section');
+    const header = screen.getByRole('button', { name: /^review/i });
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+    expect(section.getAttribute('data-expanded')).toBe('true');
+
+    fireEvent.click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    expect(section.getAttribute('data-expanded')).toBe('false');
   });
 
   // ── Merge button ──
@@ -1037,6 +1060,19 @@ describe('TaskDetail', () => {
   });
 
   // ── Review dead-space: CSS cap applied ──
+
+  it('TaskDetail.module.css planningSection only claims flex:1 when expanded', () => {
+    const cssPath = path.join(__dirname, '../TaskDetail.module.css');
+    const css = fs.readFileSync(cssPath, 'utf-8');
+    const baseMatch = css.match(/\.planningSection\s*\{([^}]+)\}/);
+    expect(baseMatch).toBeTruthy();
+    expect(baseMatch![1]).not.toContain('flex: 1');
+    const expandedMatch = css.match(
+      /\.planningSection\[data-expanded='true'\]\s*\{([^}]+)\}/,
+    );
+    expect(expandedMatch).toBeTruthy();
+    expect(expandedMatch![1]).toContain('flex: 1');
+  });
 
   it('TaskDetail.module.css reviewBody uses max-height cap (no flex:1 dead space)', () => {
     const cssPath = path.join(__dirname, '../TaskDetail.module.css');

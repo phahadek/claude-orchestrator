@@ -531,7 +531,11 @@ export function TaskDetail({
 
         {/* ── Planning SessionPanel — collapsible ── */}
         {task.planningSession && (
-          <div className={styles.planningSection}>
+          <div
+            className={styles.planningSection}
+            data-expanded={showPlanningSection}
+            data-testid="planning-session-section"
+          >
             <div
               className={styles.planningSectionHeader}
               onClick={() => setShowPlanningSection((v) => !v)}
@@ -636,7 +640,11 @@ export function TaskDetail({
 
         {/* ── Review SessionPanel — collapsible ── */}
         {task.review && (
-          <div className={styles.reviewSection}>
+          <div
+            className={styles.reviewSection}
+            data-expanded={isReviewExpanded}
+            data-testid="review-session-section"
+          >
             <div
               className={styles.reviewSectionHeader}
               onClick={handleReviewToggle}
