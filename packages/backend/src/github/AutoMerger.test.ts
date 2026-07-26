@@ -87,7 +87,6 @@ vi.mock('../config/corporateMode.js', () => ({
       requireHumanApproval: false,
       requireZDR: false,
       validatePRBody: false,
-      secretsViaSeam: false,
     },
   })),
 }));
@@ -1023,7 +1022,6 @@ function makeCorporateMode(requireHumanApproval: boolean) {
       requireHumanApproval,
       requireZDR: requireHumanApproval,
       validatePRBody: requireHumanApproval,
-      secretsViaSeam: requireHumanApproval,
     },
   };
 }

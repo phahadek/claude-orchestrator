@@ -5,7 +5,6 @@ interface CorporateModeGates {
   requireHumanApproval: boolean;
   requireZDR: boolean;
   validatePRBody: boolean;
-  secretsViaSeam: boolean;
 }
 
 export interface CorporateModeConfig {
@@ -23,7 +22,6 @@ const GATE_ENV_VARS: Record<keyof CorporateModeGates, string> = {
   requireHumanApproval: 'ORCHESTRATOR_GATE_REQUIRE_HUMAN_APPROVAL',
   requireZDR: 'ORCHESTRATOR_GATE_REQUIRE_ZDR',
   validatePRBody: 'ORCHESTRATOR_GATE_VALIDATE_PR_BODY',
-  secretsViaSeam: 'ORCHESTRATOR_GATE_SECRETS_VIA_SEAM',
 };
 
 function resolveGate(
@@ -42,7 +40,6 @@ function buildGates(modeDefault: boolean): CorporateModeGates {
     requireHumanApproval: resolveGate('requireHumanApproval', modeDefault),
     requireZDR: resolveGate('requireZDR', modeDefault),
     validatePRBody: resolveGate('validatePRBody', modeDefault),
-    secretsViaSeam: resolveGate('secretsViaSeam', modeDefault),
   };
 }
 

@@ -195,7 +195,6 @@ function corporateModeOn() {
       requireHumanApproval: true,
       requireZDR: true,
       validatePRBody: true,
-      secretsViaSeam: true,
     },
   };
 }
@@ -209,7 +208,6 @@ function corporateModeOff() {
       requireHumanApproval: false,
       requireZDR: false,
       validatePRBody: false,
-      secretsViaSeam: false,
     },
   };
 }
