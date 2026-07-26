@@ -45,7 +45,10 @@ describe('checkoutLockdown', () => {
     projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'checkout-lockdown-'));
     fs.writeFileSync(path.join(projectDir, 'README.md'), 'hello\n');
     fs.mkdirSync(path.join(projectDir, '.git'));
-    fs.writeFileSync(path.join(projectDir, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+    fs.writeFileSync(
+      path.join(projectDir, '.git', 'HEAD'),
+      'ref: refs/heads/main\n',
+    );
   });
 
   afterEach(() => {

@@ -5439,18 +5439,18 @@ export function getPlanningCheckoutLock(
   sessionId: string,
 ): PlanningCheckoutLockRow | undefined {
   return db
-    .prepare<{ session_id: string }>(
-      `SELECT * FROM planning_checkout_locks WHERE session_id = @session_id`,
-    )
+    .prepare<{
+      session_id: string;
+    }>(`SELECT * FROM planning_checkout_locks WHERE session_id = @session_id`)
     .get({ session_id: sessionId }) as PlanningCheckoutLockRow | undefined;
 }
 
 /** Number of planning sessions currently holding the lockdown for a project checkout. */
 export function countPlanningCheckoutLocks(projectDir: string): number {
   const row = db
-    .prepare<{ project_dir: string }>(
-      `SELECT COUNT(*) AS n FROM planning_checkout_locks WHERE project_dir = @project_dir`,
-    )
+    .prepare<{
+      project_dir: string;
+    }>(`SELECT COUNT(*) AS n FROM planning_checkout_locks WHERE project_dir = @project_dir`)
     .get({ project_dir: projectDir }) as { n: number };
   return row.n;
 }

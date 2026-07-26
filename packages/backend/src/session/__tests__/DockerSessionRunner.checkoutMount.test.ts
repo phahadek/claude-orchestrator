@@ -75,7 +75,11 @@ describe('DockerSessionRunner checkout mount', () => {
     await runner.run(
       'hello',
       undefined,
-      { worktreePath: '/fake/worktree', model: undefined, allowedTools: ['Bash'] },
+      {
+        worktreePath: '/fake/worktree',
+        model: undefined,
+        allowedTools: ['Bash'],
+      },
       () => {},
     );
 
@@ -100,11 +104,9 @@ describe('DockerSessionRunner checkout mount', () => {
       () => {},
     );
 
-    expect(mockAcquire).toHaveBeenCalledWith(
-      '/fake/project',
-      SESSION_ID,
-      { applyFsLockdown: false },
-    );
+    expect(mockAcquire).toHaveBeenCalledWith('/fake/project', SESSION_ID, {
+      applyFsLockdown: false,
+    });
     const cmd = sessionRunCmd();
     expect(cmd).toContain('-v "/fake/project:/fake/project:ro"');
     expect(cmd).toContain(
