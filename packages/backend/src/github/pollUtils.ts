@@ -123,11 +123,13 @@ export function classifyStalledPR(
     return { kind: 'analyze_failing' };
   }
 
-  // Gate-failed: verdict is autofix_failed/verify_failed, no pending push
-  if (
-    (verdict === 'autofix_failed' || verdict === 'verify_failed') &&
-    !pr.pending_push
-  ) {
+  // Gate-failed: verdict is autofix_failed/verify_failed. A pending push here
+  // means content the gate never saw arrived before the initial review session
+  // was established (db.ts:278) and consumePendingPushIfSet no-ops without a
+  // live session to notify — the reconciler still re-drives it (consuming the
+  // pending push itself) rather than treating it as recoverable via the normal
+  // push-detected path.
+  if (verdict === 'autofix_failed' || verdict === 'verify_failed') {
     return { kind: 'gate_failed' };
   }
 
