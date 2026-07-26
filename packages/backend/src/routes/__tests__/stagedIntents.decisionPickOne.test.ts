@@ -180,7 +180,35 @@ describe('decision.pickOne dedup', () => {
     expect(getStagedIntent(first.id)!.state).toBe('staged');
   });
 
-  it('a changed payload supersedes the standing question', () => {
+  it('a changed payload for the same prompt supersedes the standing question', () => {
+    const first = stageIntent(
+      'decision.pickOne',
+      { prompt: 'Which approach?', options: OPTIONS, allowFreeForm: true },
+      'proj-1',
+      null,
+      'sess-1',
+      'A genuine fork the session cannot resolve confidently.',
+    );
+    const second = stageIntent(
+      'decision.pickOne',
+      {
+        prompt: 'Which approach?',
+        options: OPTIONS,
+        allowFreeForm: false,
+      },
+      'proj-1',
+      null,
+      'sess-1',
+      'A genuine fork the session cannot resolve confidently.',
+    );
+
+    expect(second.id).not.toBe(first.id);
+    expect(getStagedIntent(first.id)!.state).toBe('superseded');
+    expect(getStagedIntent(second.id)!.supersedes).toBe(first.id);
+    expect(getStagedIntent(second.id)!.state).toBe('staged');
+  });
+
+  it('a different prompt leaves the existing question live — several open questions stay staged at once', () => {
     const first = stageIntent(
       'decision.pickOne',
       { prompt: 'Which approach?', options: OPTIONS, allowFreeForm: true },
@@ -203,9 +231,126 @@ describe('decision.pickOne dedup', () => {
     );
 
     expect(second.id).not.toBe(first.id);
-    expect(getStagedIntent(first.id)!.state).toBe('superseded');
-    expect(getStagedIntent(second.id)!.supersedes).toBe(first.id);
+    expect(second.supersedes).toBeNull();
+    expect(getStagedIntent(first.id)!.state).toBe('staged');
     expect(getStagedIntent(second.id)!.state).toBe('staged');
+  });
+
+  it('three independent questions staged in one turn are all answerable independently', () => {
+    const a = stageIntent(
+      'decision.pickOne',
+      { prompt: 'Question A?', options: OPTIONS, allowFreeForm: true },
+      'proj-1',
+      null,
+      'sess-1',
+      'Fork A.',
+    );
+    const b = stageIntent(
+      'decision.pickOne',
+      { prompt: 'Question B?', options: OPTIONS, allowFreeForm: true },
+      'proj-1',
+      null,
+      'sess-1',
+      'Fork B.',
+    );
+    const c = stageIntent(
+      'decision.pickOne',
+      { prompt: 'Question C?', options: OPTIONS, allowFreeForm: true },
+      'proj-1',
+      null,
+      'sess-1',
+      'Fork C.',
+    );
+
+    expect(getStagedIntent(a.id)!.state).toBe('staged');
+    expect(getStagedIntent(b.id)!.state).toBe('staged');
+    expect(getStagedIntent(c.id)!.state).toBe('staged');
+  });
+
+  it('two sessions staging identical prompts each keep their own live intent', () => {
+    const payload = {
+      prompt: 'Which approach?',
+      options: OPTIONS,
+      allowFreeForm: true,
+    };
+    const first = stageIntent(
+      'decision.pickOne',
+      payload,
+      'proj-1',
+      null,
+      'sess-1',
+      'A genuine fork the session cannot resolve confidently.',
+    );
+    const second = stageIntent(
+      'decision.pickOne',
+      payload,
+      'proj-1',
+      null,
+      'sess-2',
+      'A genuine fork the session cannot resolve confidently.',
+    );
+
+    expect(second.id).not.toBe(first.id);
+    expect(getStagedIntent(first.id)!.state).toBe('staged');
+    expect(getStagedIntent(second.id)!.state).toBe('staged');
+  });
+
+  it('an explicitSupersedes id retires a prior question whose prompt has changed', () => {
+    const first = stageIntent(
+      'decision.pickOne',
+      { prompt: 'Original question?', options: OPTIONS, allowFreeForm: true },
+      'proj-1',
+      null,
+      'sess-1',
+      'A genuine fork the session cannot resolve confidently.',
+    );
+
+    const second = stageIntent(
+      'decision.pickOne',
+      { prompt: 'Reworded question?', options: OPTIONS, allowFreeForm: true },
+      'proj-1',
+      null,
+      'sess-1',
+      'A genuine fork the session cannot resolve confidently.',
+      null,
+      first.id,
+    );
+
+    expect(second.id).not.toBe(first.id);
+    expect(second.supersedes).toBe(first.id);
+    expect(getStagedIntent(first.id)!.state).toBe('superseded');
+    expect(getStagedIntent(second.id)!.state).toBe('staged');
+  });
+
+  it('a supersede emits no staged_intent_disposition and does not call handleDisposition', () => {
+    const planningOrchestrator = makePlanningOrchestrator();
+    // stageIntent itself never touches planningOrchestrator — it's a pure
+    // bookkeeping helper — but assert both signals to nail down the
+    // constraint that a supersede is a silent tombstone.
+    stageIntent(
+      'decision.pickOne',
+      { prompt: 'Which approach?', options: OPTIONS, allowFreeForm: true },
+      'proj-1',
+      null,
+      'sess-1',
+      'A genuine fork the session cannot resolve confidently.',
+    );
+
+    mockRecordEvent.mockClear();
+
+    stageIntent(
+      'decision.pickOne',
+      { prompt: 'Which approach?', options: OPTIONS, allowFreeForm: false },
+      'proj-1',
+      null,
+      'sess-1',
+      'A genuine fork the session cannot resolve confidently.',
+    );
+
+    expect(mockRecordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'staged_intent_disposition' }),
+    );
+    expect(planningOrchestrator.handleDisposition).not.toHaveBeenCalled();
   });
 });
 

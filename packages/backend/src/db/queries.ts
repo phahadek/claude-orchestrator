@@ -4987,24 +4987,33 @@ export function findActiveStagedIntentByTitleForSession(
 let _stmtFindActiveDecisionPickOneForSession: Database.Statement | null = null;
 
 /**
- * The standing staged/approved decision.pickOne (if any) for this session —
- * the dedup slot for question-intents, which carry no taskId to dedup on
- * (see findActiveStagedIntentForTask for the task-scoped counterpart).
+ * The standing staged/approved decision.pickOne (if any) for this session
+ * whose payload prompt normalizes to the same value — the dedup slot for
+ * question-intents, which carry no taskId to dedup on. Keyed on
+ * (sessionId, normalized prompt) rather than session alone, mirroring
+ * findActiveStagedIntentByTitleForSession's title-keying for task.create:
+ * a session staging several independent open questions must keep them all
+ * live, while re-staging the same question still retires its own prior
+ * draft (see findActiveStagedIntentForTask for the task-scoped counterpart).
  */
 export function findActiveDecisionPickOneForSession(
   sessionId: string,
+  normalizedPrompt: string,
 ): StagedIntentRow | undefined {
   _stmtFindActiveDecisionPickOneForSession ??= db.prepare<{
     session_id: string;
+    normalized_prompt: string;
   }>(
     `SELECT * FROM staged_intent
      WHERE session_id = @session_id AND kind = 'decision.pickOne'
        AND state IN ('staged', 'approved')
+       AND lower(trim(json_extract(payload, '$.prompt'))) = @normalized_prompt
      ORDER BY created_at DESC
      LIMIT 1`,
   );
   return _stmtFindActiveDecisionPickOneForSession.get({
     session_id: sessionId,
+    normalized_prompt: normalizedPrompt,
   }) as StagedIntentRow | undefined;
 }
 
