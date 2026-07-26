@@ -154,6 +154,60 @@ function hasGroupAccretionIntent(
   });
 }
 
+/** The exact heading text bodyRender.ts writes for the section (see bodyRender.ts:298,463). */
+const MANUAL_VERIFICATION_SECTION = '👁️ Manual verification';
+
+function isManualVerificationSection(section: string): boolean {
+  return (
+    section.trim().toLowerCase() === MANUAL_VERIFICATION_SECTION.toLowerCase()
+  );
+}
+
+/**
+ * The Manual-verification-strip twin of DependsOnCompletenessError: a
+ * task.setStatus->Ready apply is only allowed when, for a task whose
+ * pre-groom body carried a "### 👁️ Manual verification" section
+ * (`groomingGate.hasManualVerificationSection`), its intent group also
+ * carries a live task.patchBodySection remove targeting that heading —
+ * forcing the strip to actually be staged rather than silently left in the
+ * body post-promotion.
+ */
+class ManualVerificationStripCompletenessError extends Error {
+  constructor(taskId: string) {
+    super(
+      `[stagedIntents] task.setStatus -> Ready for task "${taskId}" is blocked: ` +
+        'its pre-groom body carries a "### 👁️ Manual verification" section and its intent group has no ' +
+        'task.patchBodySection removing it. Stage a grouped remove patch for that section before promoting.',
+    );
+    this.name = 'ManualVerificationStripCompletenessError';
+  }
+}
+
+/**
+ * True when the group already stages a live task.patchBodySection remove
+ * targeting the Manual verification heading for this task — same shape as
+ * hasGroupDependsOn, checked against the durable store so a sibling
+ * committed in an earlier apply in the same group still satisfies the
+ * invariant for a later apply.
+ */
+function hasGroupManualVerificationStrip(
+  groupId: string,
+  taskId: string,
+): boolean {
+  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
+  return listStagedIntentsByGroup(groupId).some((row) => {
+    if (row.kind !== 'task.patchBodySection' || !ACTIVE.includes(row.state)) {
+      return false;
+    }
+    const payload = JSON.parse(row.payload) as PatchBodySectionPayload;
+    return (
+      payload.taskId === taskId &&
+      payload.operation === 'remove' &&
+      isManualVerificationSection(payload.section)
+    );
+  });
+}
+
 /**
  * The general staged-intent surface: a single chokepoint producers (Groom(N),
  * Ops(N), and future callers) stage generic { kind, payload } intents through,
@@ -875,6 +929,14 @@ async function applyIntent(
       ) {
         throw new DependsOnCompletenessError(payload.taskId);
       }
+      if (
+        payload.status === 'Ready' &&
+        payload.groomingGate?.hasManualVerificationSection &&
+        (!intent.groupId ||
+          !hasGroupManualVerificationStrip(intent.groupId, payload.taskId))
+      ) {
+        throw new ManualVerificationStripCompletenessError(payload.taskId);
+      }
       // approve-by-standard (planning/triage.ts): a task.setStatus intent
       // carrying a recorded triage verdict is eligible for the standard
       // readiness_override reason instead of an operator-authored one — see
@@ -1545,6 +1607,14 @@ async function precheckGroupCommit(
       return { status: 409, body: { error: err.message, precheck: true } };
     }
 
+    if (
+      payload.groomingGate?.hasManualVerificationSection &&
+      !hasGroupManualVerificationStrip(groupId, payload.taskId)
+    ) {
+      const err = new ManualVerificationStripCompletenessError(payload.taskId);
+      return { status: 409, body: { error: err.message, precheck: true } };
+    }
+
     const gateResult = checkGroomingPromotionGate(
       payload.groomingGate ?? {},
       payload.taskId,
@@ -1723,7 +1793,10 @@ async function commitGroupIntents(
           },
         };
       }
-      if (err instanceof DependsOnCompletenessError) {
+      if (
+        err instanceof DependsOnCompletenessError ||
+        err instanceof ManualVerificationStripCompletenessError
+      ) {
         return {
           status: 409,
           body: {
@@ -1943,7 +2016,10 @@ export function createStagedIntentsRouter(
           res.status(403).json({ error: err.message });
           return;
         }
-        if (err instanceof DependsOnCompletenessError) {
+        if (
+          err instanceof DependsOnCompletenessError ||
+          err instanceof ManualVerificationStripCompletenessError
+        ) {
           res.status(409).json({ error: err.message });
           return;
         }

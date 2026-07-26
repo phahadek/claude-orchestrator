@@ -904,6 +904,122 @@ describe('group commit — whole-group precheck (all-or-nothing)', () => {
   });
 });
 
+describe('Manual-verification-strip grouping — commit-time hard enforcement', () => {
+  it('blocks a grouped Ready-flip whose group has no Manual-verification-strip patch when the pre-groom body carried that section', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-mv-missing',
+      't-mv-missing',
+      'g-mv-missing',
+      undefined,
+      { hasManualVerificationSection: true },
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-mv-missing/commit')
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.error).toContain('Manual verification');
+  });
+
+  it('commits cleanly when the group carries a task.patchBodySection remove targeting the Manual verification heading', async () => {
+    const patchBodySection = vi.fn().mockResolvedValue(undefined);
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      patchBodySection,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const projectId = 'proj-mv-strip';
+    const taskId = 't-mv-strip';
+    const groupId = 'g-mv-strip';
+
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId,
+      groupId,
+      payload: { taskId, dependsOn: [] },
+    });
+    const patch = await agent.post('/api/staged-intents').send({
+      kind: 'task.patchBodySection',
+      projectId,
+      groupId,
+      payload: {
+        taskId,
+        section: '👁️ Manual verification',
+        operation: 'remove',
+      },
+    });
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId,
+      groupId,
+      payload: {
+        taskId,
+        status: 'Ready',
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+          hasManualVerificationSection: true,
+        },
+      },
+    });
+
+    await agent
+      .post(`/api/staged-intents/${dependsOn.body.id}/approve`)
+      .send({});
+    await agent.post(`/api/staged-intents/${patch.body.id}/approve`).send({});
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+  });
+
+  it('never blocks a grouped Ready-flip missing the strip when the pre-groom body carried no Manual verification section', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-mv-none',
+      't-mv-none',
+      'g-mv-none',
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-mv-none/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+  });
+});
+
 describe('group-level atomic disposition (approve / pushback / decline the whole groom)', () => {
   it('POST /group/:groupId/approve commits all members in dependency order without a prior per-item approve', async () => {
     const calls: string[] = [];
