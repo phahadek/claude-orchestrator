@@ -1,5 +1,8 @@
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type {
+  McpServer,
+  ToolCallback,
+} from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   stageIntent,
   runStageTimeReadyChecks,
@@ -27,6 +30,12 @@ import {
 export interface StageProposalToolContext {
   sessionId: string;
   projectId: string;
+  /**
+   * Restricts registration to this set of staged-intent kinds (e.g. a
+   * planning workflow's PLANNING_INTENT_KINDS entry). Undefined registers
+   * every kind — the code/review session behavior, unchanged.
+   */
+  kinds?: readonly string[];
 }
 
 /** Shape of the { payload, groupId?, decisionProposal?, groomProposal? } envelope every tool accepts. */
@@ -73,7 +82,16 @@ export function registerStageProposalTools(
   server: McpServer,
   ctx: StageProposalToolContext,
 ): void {
-  server.registerTool(
+  function registerTool<Args extends z.ZodRawShape>(
+    kind: string,
+    meta: { title: string; description: string; inputSchema: Args },
+    handler: ToolCallback<Args>,
+  ): void {
+    if (ctx.kinds && !ctx.kinds.includes(kind)) return;
+    server.registerTool(kind, meta, handler);
+  }
+
+  registerTool(
     'task.create',
     {
       title: 'Stage a new task',
@@ -91,7 +109,7 @@ export function registerStageProposalTools(
     async (args) => stage('task.create', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'task.setStatus',
     {
       title: 'Stage a task status change',
@@ -106,7 +124,7 @@ export function registerStageProposalTools(
     async (args) => stage('task.setStatus', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'task.setDependsOn',
     {
       title: 'Stage a task Depends On change',
@@ -120,7 +138,7 @@ export function registerStageProposalTools(
     async (args) => stage('task.setDependsOn', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'task.updateBody',
     {
       title: 'Stage a task body rewrite',
@@ -134,7 +152,7 @@ export function registerStageProposalTools(
     async (args) => stage('task.updateBody', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'task.setProperties',
     {
       title: 'Stage a cosmetic task property change',
@@ -151,7 +169,7 @@ export function registerStageProposalTools(
     async (args) => stage('task.setProperties', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'gate.accrete',
     {
       title: 'Stage a runtime-item gate contribution',
@@ -166,7 +184,7 @@ export function registerStageProposalTools(
     async (args) => stage('gate.accrete', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'seed.stage',
     {
       title: 'Stage a config-change seed contribution',
@@ -181,7 +199,7 @@ export function registerStageProposalTools(
     async (args) => stage('seed.stage', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'arch.createUnit',
     {
       title: 'Stage a new architecture unit',
@@ -196,7 +214,7 @@ export function registerStageProposalTools(
     async (args) => stage('arch.createUnit', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'arch.updateUnit',
     {
       title: 'Stage an architecture unit edit',
@@ -213,7 +231,7 @@ export function registerStageProposalTools(
     async (args) => stage('arch.updateUnit', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'arch.supersedeUnit',
     {
       title: 'Stage an architecture unit supersede',
@@ -228,7 +246,7 @@ export function registerStageProposalTools(
     async (args) => stage('arch.supersedeUnit', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'decision.pickOne',
     {
       title: 'Stage an operator decision question',
@@ -243,7 +261,7 @@ export function registerStageProposalTools(
     async (args) => stage('decision.pickOne', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'journal.setState',
     {
       title: 'Stage an ops journal state change',
@@ -258,7 +276,7 @@ export function registerStageProposalTools(
     async (args) => stage('journal.setState', args.payload, ctx, args),
   );
 
-  server.registerTool(
+  registerTool(
     'session.requestCapability',
     {
       title: 'Request a capability grant for this session',

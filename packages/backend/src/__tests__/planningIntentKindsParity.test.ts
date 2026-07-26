@@ -1,10 +1,21 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+vi.mock('../db/db.js', async () => {
+  const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
+});
+
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import {
   GROOM_ALLOWED_TOOLS,
   DESIGN_ALLOWED_TOOLS,
   OPS_ALLOWED_TOOLS,
 } from '../config';
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
+import { buildMcpServer } from '../mcp/orchestratorMcpServer';
+import { SessionManager } from '../session/SessionManager';
+import { insertSession } from '../db/queries';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 
 const ORCHESTRATOR_MCP_PREFIX = 'mcp__orchestrator__';
@@ -56,6 +67,43 @@ describe('planning workflow --allowed-tools parity with PLANNING_INTENT_KINDS', 
       const expected = PLANNING_INTENT_KINDS[name].map(orchestratorMcpToolName);
 
       expect(new Set(stagedIntentTools)).toEqual(new Set(expected));
+    },
+  );
+
+  it.each(WORKFLOWS)(
+    '$name MCP server registers exactly its allow-list mcp__orchestrator__ entries',
+    async ({ name, allowedTools }) => {
+      const sessionId = `parity-${name}`;
+      insertSession({
+        session_id: sessionId,
+        task_id: null,
+        task_url: null,
+        project_context_url: null,
+        project_id: 'proj-1',
+        status: 'running',
+        started_at: Date.now(),
+        session_type: name,
+      });
+
+      const server = buildMcpServer(sessionId, new SessionManager());
+      const [serverTransport, clientTransport] =
+        InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: 'test-client', version: '1.0.0' });
+      await Promise.all([
+        server.connect(serverTransport),
+        client.connect(clientTransport),
+      ]);
+      const { tools } = await client.listTools();
+      await client.close();
+      await server.close();
+
+      const registered = new Set(
+        tools.map((t) => orchestratorMcpToolName(t.name)),
+      );
+      const expected = new Set(
+        allowedTools.filter((t) => t.startsWith(ORCHESTRATOR_MCP_PREFIX)),
+      );
+      expect(registered).toEqual(expected);
     },
   );
 });
