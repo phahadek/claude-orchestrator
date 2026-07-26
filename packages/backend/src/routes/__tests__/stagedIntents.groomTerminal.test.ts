@@ -43,6 +43,7 @@ function makeSessionManager() {
   const sm = new EventEmitter();
   return Object.assign(sm, {
     enqueueFeedback: vi.fn().mockResolvedValue(undefined),
+    evictSession: vi.fn(),
   });
 }
 
