@@ -86,7 +86,9 @@ describe('DockerSessionRunner egress isolation', () => {
         c.includes(`--name claude-session-${SESSION_ID}`),
     );
     expect(sessionRunCmd).toBeDefined();
-    expect(sessionRunCmd).toContain(`--network claude-session-net-${SESSION_ID}`);
+    expect(sessionRunCmd).toContain(
+      `--network claude-session-net-${SESSION_ID}`,
+    );
     expect(sessionRunCmd).not.toContain('--network bridge');
     expect(sessionRunCmd).not.toContain('--network host');
 
@@ -137,7 +139,8 @@ describe('DockerSessionRunner egress isolation', () => {
   });
 
   it('extends the allowlist with DOCKER_EGRESS_EXTRA_HOSTS when configured', async () => {
-    process.env.DOCKER_EGRESS_EXTRA_HOSTS = 'extra.example.com, another.example.com';
+    process.env.DOCKER_EGRESS_EXTRA_HOSTS =
+      'extra.example.com, another.example.com';
     const runner = new DockerSessionRunner(SESSION_ID);
     await runner.run('hello', undefined, defaultOptions, () => {});
 
@@ -145,7 +148,11 @@ describe('DockerSessionRunner egress isolation', () => {
       (c) => c.startsWith('docker run -d') && c.includes('proxy'),
     );
     expect(proxyRunCmd).toBeDefined();
-    expect(proxyRunCmd).toContain('acl allowed_dst dstdomain .extra.example.com');
-    expect(proxyRunCmd).toContain('acl allowed_dst dstdomain .another.example.com');
+    expect(proxyRunCmd).toContain(
+      'acl allowed_dst dstdomain .extra.example.com',
+    );
+    expect(proxyRunCmd).toContain(
+      'acl allowed_dst dstdomain .another.example.com',
+    );
   });
 });
