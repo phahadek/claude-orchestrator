@@ -971,7 +971,6 @@ function isArmingReadyIntent(row: StagedIntentRow): boolean {
   return payload.status === 'Ready';
 }
 
-
 /**
  * Locates the heading-bounded range of `section` in a flattened markdown
  * body: the heading line's index and the exclusive index of the next
