@@ -63,8 +63,12 @@ describe('design procedure — independent Open Questions can stage in the same 
 
   it('task.updateBody is still described as staged exactly once, after the completeness critic', () => {
     expect(questionBundlingText).toMatch(
-      /`task\.updateBody` \(the Implementation notes\) is staged exactly once, as the final step, only after every question is settled and the completeness critic below has run/i,
+      /`task\.updateBody` \(the Implementation notes\) is staged exactly once, the last of the decision-recording steps, only after every question is settled and the completeness critic below has run/i,
     );
+  });
+
+  it('does not describe task.updateBody as the session-ending final step', () => {
+    expect(questionBundlingText).not.toMatch(/as the final step/i);
   });
 
   it('the assembled hard-rules markdown carries no per-turn staging limit anywhere', () => {

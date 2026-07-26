@@ -269,8 +269,11 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'than stage both; an operator dispositioning two questions whose answers turn ' +
       'out coupled is worse than one extra round-trip. DO NOT bundle multiple ' +
       'questions into one `decision.pickOne` intent. `task.updateBody` (the ' +
-      'Implementation notes) is staged exactly once, as the final step, only after ' +
-      'every question is settled and the completeness critic below has run.',
+      'Implementation notes) is staged exactly once, the last of the ' +
+      'decision-recording steps, only after every question is settled and the ' +
+      'completeness critic below has run. It is not the end of the design pass — ' +
+      "see 'Architecture and follow-on tasks are required deliverables' below for " +
+      'what still follows it in the same session.',
   },
   {
     id: 'design-decision-pickone-payload-shape',
@@ -307,7 +310,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     appliesTo: ['design'],
     text:
       'DO run the completeness critic exactly once per Design task, after every ' +
-      'listed Open Question is locked and before staging the final ' +
+      'listed Open Question is locked and before staging the ' +
       '`task.updateBody` closing synthesis. DO probe the recurring gap ' +
       'classes — a decision the implementer needs that no locked question ' +
       'covers — consuming the advisory trace-coverage signal ' +
@@ -347,21 +350,55 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     appliesTo: ['design'],
     text:
       'DO carry the exact five-part closing synthesis `skills/design/reference/' +
-      'presentation.md` specifies as the `decisionProposal` of the terminal ' +
+      'presentation.md` specifies as the `decisionProposal` of the ' +
       '`task.updateBody` intent: (1) Decision summary — one paragraph on what was ' +
       'decided and why; (2) Open questions resolved — a table, one row per listed ' +
       'Open Question, included only when there are ≥2 questions; (3) Completeness-' +
       'critic dispositions — every gap the pass raised, its disposition, and the ' +
-      'run date, or "none — pass run, no gaps" when clean; (4) Notion pages ' +
-      'updated — each architecture page and the section changed, or "pending — ' +
-      'see next messages"; (5) Follow-on tasks filed — each with Type and a ' +
-      'one-line scope, or "pending". DO frame the operator’s decision as approving ' +
+      'run date, or "none — pass run, no gaps" when clean; (4) Architecture pages ' +
+      'updated — each architecture unit and the section changed in this same pass, ' +
+      'or "none — these decisions change no architecture page" when genuinely ' +
+      'nothing applies; (5) Follow-on Code tasks filed — each staged as a ' +
+      '`task.create` intent in this same pass, with Type and a one-line scope, or ' +
+      '"none — no implementation work beyond the locked decisions" when nothing ' +
+      'further is implied. DO frame the operator’s decision as approving ' +
       'this synthesis — the body write is its consequence, not a separate thing to ' +
       'diff. DO NOT ask the operator to validate the `task.updateBody` payload’s ' +
       'prose as if reviewing a diff; the synthesis is the reviewable artifact, ' +
       'carried in `decisionProposal`, not the body text itself. DO NOT fold the ' +
       'decision summary straight into the write without the other four parts — all ' +
-      'five sections are required every time, per the skill’s hard checkpoint.',
+      'five sections are required every time, per the skill’s hard checkpoint. DO ' +
+      'NOT report parts 4 or 5 as "pending" or "see next messages" — by the time ' +
+      'the closing synthesis stages, the architecture-unit intents and follow-on ' +
+      '`task.create` intents it reports are already staged (or the "none" ' +
+      'disposition is genuine); the synthesis reports what was done in this pass, ' +
+      'never a promise of what comes next.',
+  },
+  {
+    id: 'design-architecture-and-followon-required',
+    title: 'Architecture pages and follow-on Code tasks are required deliverables',
+    appliesTo: ['design'],
+    text:
+      'A 📐 Design task exists to produce two things beyond the locked decisions ' +
+      "themselves — updated architecture pages and filed follow-on 🔲 Backlog Code " +
+      'tasks (see config/procedures.md § Task types) — and both are staged in the ' +
+      'same pass as the decisions that imply them, never left for the operator to ' +
+      'request afterward. DO stage the architecture-unit change(s) each locked ' +
+      'decision implies (`arch.createUnit` / `arch.updateUnit` / ' +
+      '`arch.supersedeUnit`) once the decisions touching that unit are locked, ' +
+      'rather than only describing the change in chat. DO stage the implementation ' +
+      'work a locked design implies as `task.create` intents (landing at 🔲 ' +
+      'Backlog, typed 💻 Code) in this same pass — this is not limited to the ' +
+      "'Split-don't-trim' overflow case below; any locked design that implies code " +
+      'work files that work now. DO state explicitly, for either deliverable, when ' +
+      'the locked decisions genuinely touch no architecture page or spawn no ' +
+      'follow-on task — silence is never an acceptable substitute for that ' +
+      'statement, mirroring the disposition-don’t-drop rule the completeness ' +
+      'critic follows above. DO NOT treat either statement as a numeric gate: there ' +
+      'is no minimum count of architecture units or follow-on tasks, and neither is ' +
+      'wired into a promotion block — this is an advisory-but-required reporting ' +
+      'obligation, the same posture the trace-coverage signal already takes, not a ' +
+      'size or count threshold.',
   },
   {
     id: 'design-split-dont-trim',
@@ -579,15 +616,24 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'never a `task.updateBody` edit. Independent questions may be staged ' +
         'together; hold a question whose answer depends on an as-yet-unresolved ' +
         'one.\n' +
-        '- DO stage `task.updateBody` (the Implementation notes) exactly once, as ' +
-        'the final step, only after every question is settled and the ' +
-        'completeness critic has run — carrying the five-part closing synthesis ' +
-        '(decision summary, open questions resolved, completeness-critic ' +
-        'dispositions, Notion pages updated, follow-on tasks filed) as its ' +
-        '`decisionProposal`, presented for the operator to approve, never a bare ' +
-        'body-write diff to validate.\n' +
+        '- DO stage `task.updateBody` (the Implementation notes) exactly once, the ' +
+        'last of the decision-recording steps, only after every question is ' +
+        'settled and the completeness critic has run — carrying the five-part ' +
+        'closing synthesis (decision summary, open questions resolved, ' +
+        'completeness-critic dispositions, architecture pages updated, follow-on ' +
+        'Code tasks filed) as its `decisionProposal`, presented for the operator ' +
+        'to approve, never a bare body-write diff to validate.\n' +
+        '- DO stage the architecture-unit change(s) each locked decision implies, ' +
+        'or an explicit "none" statement when genuinely no page applies, and the ' +
+        'follow-on `task.create` intents a locked design implies, or an explicit ' +
+        '"none" statement when nothing further is implied — both in this same ' +
+        'pass, reported in the closing synthesis, never left for the operator to ' +
+        'request afterward.\n' +
         '- DO NOT end the turn on a chat write-up, findings recap, or "here is ' +
-        'what I think" summary — none of those is a valid stopping point.\n' +
+        'what I think" summary — none of those is a valid stopping point. Staging ' +
+        'the Implementation-notes write is not the end of the session either: it ' +
+        'is not complete until the architecture and follow-on-task deliverables ' +
+        'above are also staged or explicitly dispositioned as not applicable.\n' +
         '- DO NOT ask for sign-off before staging.\n\n' +
         'A dispatched design session has no synchronous chat turn to wait ' +
         'within — end the turn and it parks. So presenting IS staging: once ' +
@@ -657,6 +703,17 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'operator disposes the staged task like any other intent; never treat handing ' +
       'a task spec back in chat as an acceptable substitute for staging it.',
     summaryOverrides: {
+      design:
+        'A locked design implies follow-on work far more often than it implies a ' +
+        'split — stage the implementation work every locked design implies as ' +
+        '`task.create` intents (landing at 🔲 Backlog, typed 💻 Code) in the same ' +
+        "pass, not only in the '🔲 Backlog' split-overflow case. Do this for every " +
+        'Design task, not just one that overflows into a sibling: when the locked ' +
+        'decisions imply no implementation work beyond themselves, state that ' +
+        'explicitly ("none — no implementation work beyond the locked decisions") ' +
+        'rather than leaving the deliverable unaddressed. The operator disposes ' +
+        'each staged task like any other intent; never treat handing a task spec ' +
+        'back in chat as an acceptable substitute for staging it.',
       ops:
         'When the mandate calls for follow-on work — including an operational ' +
         'change that turns out to need a code change — stage it as a ' +
@@ -706,16 +763,21 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       design:
         'A dispatched design session never applies a write itself — it only ' +
         'stages. DO stage `task.updateBody` (the Implementation notes) exactly ' +
-        'once, as the final step, after every Open Question is locked and the ' +
-        'completeness critic has run — carrying the five-part closing synthesis ' +
-        'as its `decisionProposal` (see "Closing synthesis" below). The operator ' +
-        'is approving that synthesis, not diffing the body write — presenting IS ' +
-        'staging, so the synthesis rides on the same intent the body write does, ' +
-        'rather than a separate validation step. DO NOT drive the write to ' +
-        'applied or wait in chat for confirmation of an applied result; the ' +
-        'operator applies the staged intent. DO end the turn ' +
-        'the moment it is staged — that is the terminal action, not a chat ' +
-        'confirmation.',
+        'once, the last of the decision-recording steps, after every Open ' +
+        'Question is locked and the completeness critic has run — carrying the ' +
+        'five-part closing synthesis as its `decisionProposal` (see "Closing ' +
+        'synthesis" below). The operator is approving that synthesis, not ' +
+        'diffing the body write — presenting IS staging, so the synthesis rides ' +
+        'on the same intent the body write does, rather than a separate ' +
+        'validation step. This write is not the pass\'s terminal action: the ' +
+        'architecture-unit updates and follow-on `task.create` intents the ' +
+        'locked decisions imply (or an explicit "none" for either) are staged in ' +
+        'this same pass and reported in that synthesis. DO NOT drive any of ' +
+        'these writes to applied or wait in chat for confirmation of an applied ' +
+        'result; the operator applies the staged intents. DO end the turn ' +
+        'once every deliverable — decisions, architecture pages, follow-on ' +
+        'tasks — is staged or explicitly dispositioned as not applicable, not at ' +
+        'the Implementation-notes write alone.',
     },
   },
 ] as const;

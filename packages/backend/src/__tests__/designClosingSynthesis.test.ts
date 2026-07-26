@@ -53,8 +53,8 @@ describe('assembled design procedure — closing synthesis for approval', () => 
     expect(output).toMatch(/\*\*Decision summary\*\*/);
     expect(output).toMatch(/\*\*Open questions resolved\*\*/);
     expect(output).toMatch(/\*\*Completeness-critic dispositions\*\*/);
-    expect(output).toMatch(/\*\*Notion pages updated\*\*/);
-    expect(output).toMatch(/\*\*Follow-on tasks filed\*\*/);
+    expect(output).toMatch(/\*\*Architecture pages updated\*\*/);
+    expect(output).toMatch(/\*\*Follow-on Code tasks filed\*\*/);
   });
 
   it('instructs that completeness-critic gaps and dispositions be presented for approval, not only recorded', () => {
