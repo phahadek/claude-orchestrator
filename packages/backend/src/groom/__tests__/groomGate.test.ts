@@ -653,3 +653,109 @@ describe('checkAccretionContributions', () => {
     expect(result.allowed).toBe(true);
   });
 });
+
+describe('checkGroomingPromotionGate — gate_contribution per-candidate triage', () => {
+  it('blocks a Ready flip whose gate_contribution omits a classification for a candidate', () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:candidate-unclassified',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'items',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:candidate-unclassified',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+    const result = checkGroomingPromotionGate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+        type: '💻 Code',
+        filesPathsEntries: [
+          { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
+        ],
+        gateContributionCandidates: [
+          {
+            text: 'launched session has read-only tool set',
+            classification: 'runtime-observable',
+          },
+          { text: 'session runs on the planning model' },
+        ],
+      },
+      'notion:candidate-unclassified',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some((r) => r.includes('has no recorded classification')),
+    ).toBe(true);
+  });
+
+  it('accepts any recorded classification without judging its content', () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:candidate-classified',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'items',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:candidate-classified',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+    const result = checkGroomingPromotionGate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+        type: '💻 Code',
+        filesPathsEntries: [
+          { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
+        ],
+        gateContributionCandidates: [
+          { text: 'a', classification: 'runtime-observable' },
+          { text: 'b', classification: 'config-or-code-determined' },
+          { text: 'c', classification: 'needs-triage' },
+        ],
+      },
+      'notion:candidate-classified',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('a {"decision":"none"} contribution for a task with no Manual verification section still passes (unregressed)', () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:candidate-none-section',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'none',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:candidate-none-section',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+    const result = checkGroomingPromotionGate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+        type: '💻 Code',
+        filesPathsEntries: [
+          { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
+        ],
+        // No gateContributionCandidates recorded at all — there was no
+        // Manual verification section to triage.
+      },
+      'notion:candidate-none-section',
+    );
+    expect(result.allowed).toBe(true);
+  });
+});

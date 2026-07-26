@@ -235,4 +235,57 @@ describe('procedureCore', () => {
       /listed Open Question[\s\S]{0,200}stage that proposal normally \(its concrete write/,
     );
   });
+
+  it('instructs a per-candidate triage of the Manual verification section before accretion, naming the three outcomes', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'accrete-gate-and-seed')!;
+    const text = stepSummaryFor(step, 'groom');
+    expect(text).toMatch(/triage every candidate line/);
+    expect(text).toContain('`runtime-observable`');
+    expect(text).toContain('`config-or-code-determined`');
+    expect(text).toContain('`needs-triage`');
+  });
+
+  it('states the deciding question in terms a groomer can apply', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'accrete-gate-and-seed')!;
+    const text = stepSummaryFor(step, 'groom');
+    expect(text).toMatch(
+      /would a headless verifier be\s+able to cite a behavioural trace for this, or only cite\s+the code\? If only\s+the code, it is a test/,
+    );
+  });
+
+  it('requires a config-or-code-determined candidate to be relocated to 🤖 Automated tests, not dropped', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'accrete-gate-and-seed')!;
+    const text = stepSummaryFor(step, 'groom');
+    expect(text).toMatch(
+      /relocate the line to the task's\s+"### 🤖 Automated tests" section instead\s+of dropping it/,
+    );
+    expect(text).toMatch(
+      /count of candidates in\s+must equal the count accreted plus the count relocated/,
+    );
+  });
+
+  it('keeps the injected rule and the vendored standard stating the same triage criterion', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'accrete-gate-and-seed')!;
+    const text = stepSummaryFor(step, 'groom');
+    const taskWritingMd = readFileSync(
+      join(repoRoot, 'config-template', 'task-writing.md'),
+      'utf8',
+    );
+    const sharedPhrases = [
+      'runtime-observable',
+      'config-or-code-determined',
+      'needs-triage',
+      'behavioural trace',
+    ];
+    for (const phrase of sharedPhrases) {
+      expect(
+        text.includes(phrase),
+        `procedureCore step should reference "${phrase}"`,
+      ).toBe(true);
+      expect(
+        taskWritingMd.includes(phrase),
+        `config-template/task-writing.md should reference "${phrase}"`,
+      ).toBe(true);
+    }
+  });
 });
