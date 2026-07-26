@@ -199,15 +199,23 @@ function resolveBackendPort(): number {
 }
 
 /**
- * Write a per-session MCP config file to `<worktreePath>/.claude/orchestrator-mcp.json`
- * and return its absolute path. Always includes the loopback-only orchestrator
- * MCP server entry (authed with this session's stage credential), merged
- * with any per-project mcp_servers — under the CLI's strict-mcp-config flag
- * a session sees exactly the configured servers, so both must be present.
+ * Write a per-session MCP config file to
+ * `<projectDir>/.claude/session-prompts/<sessionId>.mcp.json` and return its
+ * absolute path. Always includes the loopback-only orchestrator MCP server
+ * entry (authed with this session's stage credential), merged with any
+ * per-project mcp_servers — under the CLI's strict-mcp-config flag a session
+ * sees exactly the configured servers, so both must be present.
+ *
+ * Sited by sessionId under projectDir rather than under worktreePath: planning
+ * sessions (groom/design/ops) share worktreePath === projectDir, so a
+ * worktree-relative path would collide across concurrently dispatched
+ * sessions and the last writer's stage credential would win for all of them.
+ * Coding/review sessions have an isolated worktreePath but this file lives
+ * alongside the (already per-session) session-prompt file instead.
  * Exported for unit testing.
  */
 export function writeMcpConfig(
-  worktreePath: string,
+  projectDir: string,
   sessionId: string,
   mcpServers: Record<string, unknown> | undefined,
 ): string {
@@ -220,9 +228,9 @@ export function writeMcpConfig(
       stageToken,
     ),
   };
-  const dir = path.join(worktreePath, '.claude');
+  const dir = path.join(projectDir, '.claude', 'session-prompts');
   fs.mkdirSync(dir, { recursive: true });
-  const filePath = path.join(dir, 'orchestrator-mcp.json');
+  const filePath = path.join(dir, `${sessionId}.mcp.json`);
   fs.writeFileSync(
     filePath,
     JSON.stringify({ mcpServers: merged }, null, 2),
@@ -1427,7 +1435,7 @@ export class SessionManager extends EventEmitter {
     }
 
     const mcpConfigPath = writeMcpConfig(
-      worktreePath,
+      projectDir,
       sessionId,
       orchConfig.mcp_servers,
     );
@@ -1935,7 +1943,7 @@ export class SessionManager extends EventEmitter {
           : new CliSessionRunner(row.session_id);
 
     const resumeMcpConfigPath = writeMcpConfig(
-      worktreePath,
+      projectDir,
       row.session_id,
       orchConfig.mcp_servers,
     );
@@ -2267,11 +2275,13 @@ export class SessionManager extends EventEmitter {
       );
     }
 
-    // Remove the per-session MCP config before removing the worktree.
+    // Remove the per-session MCP config (written outside the worktree,
+    // alongside the system-prompt file) before removing the worktree.
     const mcpConfigFile = path.join(
-      worktreePath,
+      projectDir,
       '.claude',
-      'orchestrator-mcp.json',
+      'session-prompts',
+      `${sessionId}.mcp.json`,
     );
     try {
       if (fs.existsSync(mcpConfigFile)) {
@@ -2279,7 +2289,7 @@ export class SessionManager extends EventEmitter {
       }
     } catch (err) {
       logger.warn(
-        `[SessionManager] failed to remove orchestrator-mcp.json for ${sessionId.slice(0, 8)}: ${err}`,
+        `[SessionManager] failed to remove per-session MCP config for ${sessionId.slice(0, 8)}: ${err}`,
       );
     }
 
@@ -2882,7 +2892,7 @@ export class SessionManager extends EventEmitter {
             ? new DockerSessionRunner(sessionId)
             : new CliSessionRunner(sessionId);
       const mcpConfigPath = writeMcpConfig(
-        recordedPath,
+        projectDir,
         sessionId,
         orchConfig.mcp_servers,
       );
@@ -3132,7 +3142,7 @@ export class SessionManager extends EventEmitter {
           : new CliSessionRunner(sessionId);
 
     const mcpConfigPath = writeMcpConfig(
-      worktreePath,
+      projectDir,
       sessionId,
       orchConfig.mcp_servers,
     );
