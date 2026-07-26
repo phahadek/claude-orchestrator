@@ -269,11 +269,15 @@
 
 /* ── Planning session section — collapsible ────────────────────────── */
 .planningSection {
-  flex: 1;
-  min-height: 0;
+  flex: 0 0 auto;
   border-bottom: 1px solid var(--border);
   display: flex;
   flex-direction: column;
+}
+
+.planningSection[data-expanded='true'] {
+  flex: 1;
+  min-height: 0;
 }
 
 .planningSectionHeader {
@@ -309,7 +313,7 @@
 
 /* ── Review section — collapsible ────────────────────────────────── */
 .reviewSection {
-  flex-shrink: 0;
+  flex: 0 0 auto;
   border-bottom: 1px solid var(--border);
   display: flex;
   flex-direction: column;
