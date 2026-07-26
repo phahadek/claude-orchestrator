@@ -6,7 +6,10 @@ const REPO_ROOT = join(__dirname, '../../../..');
 
 describe('backup.env.example parity', () => {
   it('lists exactly the env vars scripts/backup-database.mjs reads', () => {
-    const script = readFileSync(join(REPO_ROOT, 'scripts/backup-database.mjs'), 'utf8');
+    const script = readFileSync(
+      join(REPO_ROOT, 'scripts/backup-database.mjs'),
+      'utf8',
+    );
     const scriptVars = new Set(
       [...script.matchAll(/process\.env\.([A-Z_]+)/g)].map((m) => m[1]),
     );
