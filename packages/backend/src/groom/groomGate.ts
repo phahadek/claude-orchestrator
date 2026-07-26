@@ -122,7 +122,7 @@ type ConstraintDisposition =
  * question (behavioural trace vs code-only) as config-template/task-writing.md
  * § Manual Verification Gate.
  */
-export interface GateContributionCandidate {
+interface GateContributionCandidate {
   text: string;
   classification?:
     | 'runtime-observable'
