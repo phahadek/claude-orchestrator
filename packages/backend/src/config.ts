@@ -185,12 +185,12 @@ const PLANNING_READONLY_BASH_TOOLS = [
 // (see orchestrator-config.ts#getSessionAllowedTools) — a Jira/GitHub/YAML
 // project gets no Notion server and no Notion entries here.
 export const NOTION_READ_MCP_TOOLS = [
-  'search',
-  'fetch',
-  'get-comments',
-  'get-users',
-  'get-user',
-  'get-self',
+  'API-post-search',
+  'API-retrieve-page-markdown',
+  'API-retrieve-a-comment',
+  'API-get-users',
+  'API-get-user',
+  'API-get-self',
 ].map(notionMcpToolName);
 
 // Orchestrator MCP handshake tool — every session type that holds a stage

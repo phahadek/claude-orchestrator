@@ -143,6 +143,19 @@ describe('NOTION_READ_MCP_TOOLS', () => {
     }
   });
 
+  it('matches the real tool names exposed by the pinned @notionhq/notion-mcp-server@2.5.1 (verified live against the connected server), never the simplified search/fetch/get-comments names it does not expose', () => {
+    expect(NOTION_READ_MCP_TOOLS).toEqual(
+      [
+        'API-post-search',
+        'API-retrieve-page-markdown',
+        'API-retrieve-a-comment',
+        'API-get-users',
+        'API-get-user',
+        'API-get-self',
+      ].map(notionMcpToolName),
+    );
+  });
+
   it('contains no create, update, move, or delete verb — a Notion integration token grants write, but this allow-list must stay read-only', () => {
     const writeVerbPattern = /create|update|move|delete/i;
     for (const tool of NOTION_READ_MCP_TOOLS) {
