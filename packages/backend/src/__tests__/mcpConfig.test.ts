@@ -58,6 +58,7 @@ vi.mock('../db/queries', () => ({
   setPauseReason: vi.fn(),
   getProjectRowById: vi.fn(() => null),
   insertLocalBranch: vi.fn(),
+  TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
 }));
 
 vi.mock('../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
@@ -97,7 +98,7 @@ describe('writeMcpConfig', () => {
     };
     const filePath = writeMcpConfig(tmpDir, 'session-1', mcpServers);
     expect(filePath).toBe(
-      path.join(tmpDir, '.claude', 'orchestrator-mcp.json'),
+      path.join(tmpDir, '.claude', 'session-prompts', 'session-1.mcp.json'),
     );
     const written = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     expect(written.mcpServers.github).toEqual(mcpServers.github);
@@ -120,11 +121,13 @@ describe('writeMcpConfig', () => {
     expect(Object.keys(written.mcpServers)).toEqual(['orchestrator']);
   });
 
-  it('creates the .claude directory if it does not exist', () => {
+  it('creates the .claude/session-prompts directory if it does not exist', () => {
     const mcpServers = { notion: { type: 'stdio', command: 'npx' } };
     writeMcpConfig(tmpDir, 'session-4', mcpServers);
     expect(
-      fs.existsSync(path.join(tmpDir, '.claude', 'orchestrator-mcp.json')),
+      fs.existsSync(
+        path.join(tmpDir, '.claude', 'session-prompts', 'session-4.mcp.json'),
+      ),
     ).toBe(true);
   });
 
@@ -159,7 +162,12 @@ describe('CliSessionRunner — MCP config spawn args', () => {
   });
 
   it('includes --mcp-config and --strict-mcp-config when mcpConfigPath is set', async () => {
-    const mcpConfigPath = path.join(tmpDir, '.claude', 'orchestrator-mcp.json');
+    const mcpConfigPath = path.join(
+      tmpDir,
+      '.claude',
+      'session-prompts',
+      'mcp-with-config.mcp.json',
+    );
     fs.mkdirSync(path.dirname(mcpConfigPath), { recursive: true });
     fs.writeFileSync(
       mcpConfigPath,
@@ -224,15 +232,15 @@ describe('CliSessionRunner — MCP config spawn args', () => {
   });
 });
 
-// ── orchestrator-mcp.json cleanup integration test ───────────────────────────
+// ── per-session MCP config cleanup integration test ──────────────────────────
 
-describe('cleanupWorktree — orchestrator-mcp.json removal', () => {
-  it('removes orchestrator-mcp.json before the git worktree remove call', () => {
+describe('cleanupWorktree — per-session MCP config removal', () => {
+  it('removes the per-session MCP config before the git worktree remove call', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '..', 'session', 'SessionManager.ts'),
       'utf-8',
     );
-    expect(source).toContain('orchestrator-mcp.json');
+    expect(source).toContain('.mcp.json');
     expect(source).toContain('unlinkSync');
     // Scope the ordering check to the cleanupWorktree method body — an
     // unrelated earlier `git worktree remove --force` call exists elsewhere
