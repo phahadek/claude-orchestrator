@@ -25,7 +25,7 @@ export function buildNotionMcpServerEntry(): Record<string, unknown> {
   return {
     type: 'stdio',
     command: 'npx',
-    args: ['-y', '@notionhq/notion-mcp-server'],
+    args: ['-y', '@notionhq/notion-mcp-server@2.5.1'],
     env: { NOTION_API_KEY: '${NOTION_API_KEY}' },
   };
 }
