@@ -16,6 +16,7 @@ import {
   seedContributionDecisionSchema,
   opsStateSchema,
   taskBodySectionsSchema,
+  patchBodySectionPayloadSchema,
   groomingGateEntrySchema,
   intentEnvelopeShape,
   gateContributionSourceTaskSchema,
@@ -154,6 +155,20 @@ export function registerStageProposalTools(
       }),
     },
     async (args) => stage('task.updateBody', args.payload, ctx, args),
+  );
+
+  registerTool(
+    'task.patchBodySection',
+    {
+      title: 'Stage a targeted task body-section patch',
+      description:
+        'Stages a task.patchBodySection intent — append/replace/remove against one heading-bounded section of a task body, without rewriting the rest of the page. append auto-creates the section; replace requires the section and the exact find text to already exist; remove on an absent section is a no-op.',
+      inputSchema: {
+        payload: patchBodySectionPayloadSchema,
+        ...intentEnvelopeShape,
+      },
+    },
+    async (args) => stage('task.patchBodySection', args.payload, ctx, args),
   );
 
   registerTool(

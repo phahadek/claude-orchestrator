@@ -104,6 +104,17 @@ export interface TaskPropertiesPatch {
 }
 
 /**
+ * task.patchBodySection's targeted operation against a single heading-bounded
+ * section of a task page body. `section` is the heading's plain text — the
+ * section is created (append) or must already exist (replace/remove), never
+ * guessed at.
+ */
+export type PatchBodySectionOperation =
+  | { operation: 'append'; content: string }
+  | { operation: 'replace'; find: string; replaceWith: string }
+  | { operation: 'remove' };
+
+/**
  * Project-scoped task tracker. An instance is bound to a single project via the
  * factory `getTaskBackend(projectId)` — callers do not pass projectId to methods.
  */
@@ -198,6 +209,18 @@ export interface TaskBackend {
   updateBodyRaw?(
     taskId: string,
     markdown: string,
+    options?: TaskWriteOptions,
+  ): Promise<void>;
+
+  /**
+   * Apply a heading-bounded append/replace/remove patch to one named section
+   * of a task page body, without touching the rest of the page. Optional for
+   * the same reason as createTask.
+   */
+  patchBodySection?(
+    taskId: string,
+    section: string,
+    operation: PatchBodySectionOperation,
     options?: TaskWriteOptions,
   ): Promise<void>;
 
@@ -398,6 +421,29 @@ export class AuditingTaskBackend implements TaskBackend {
       project_id: this.projectId,
       task_id: taskId,
       payload: { source, raw: true },
+    });
+  }
+
+  async patchBodySection(
+    taskId: string,
+    section: string,
+    operation: PatchBodySectionOperation,
+    options?: TaskWriteOptions,
+  ): Promise<void> {
+    if (!this.inner.patchBodySection) {
+      throw new Error(
+        `[AuditingTaskBackend] patchBodySection is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    await this.inner.patchBodySection(taskId, section, operation);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_body_updated',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { source, section, operation: operation.operation },
     });
   }
 

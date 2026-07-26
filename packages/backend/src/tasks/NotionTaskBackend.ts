@@ -3,6 +3,7 @@ import type {
   NonMilestoneSourceConfig,
   NewTaskFields,
   TaskPropertiesPatch,
+  PatchBodySectionOperation,
 } from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
@@ -212,6 +213,18 @@ export class NotionTaskBackend implements TaskBackend {
   async updateBodyRaw(taskId: string, markdown: string): Promise<void> {
     const blocks = markdownToBlocks(markdown);
     await this.client.updateBody(normalizeTaskId(taskId), blocks);
+  }
+
+  async patchBodySection(
+    taskId: string,
+    section: string,
+    operation: PatchBodySectionOperation,
+  ): Promise<void> {
+    await this.client.patchBodySection(
+      normalizeTaskId(taskId),
+      section,
+      operation,
+    );
   }
 
   async setType(taskId: string, type: string): Promise<void> {

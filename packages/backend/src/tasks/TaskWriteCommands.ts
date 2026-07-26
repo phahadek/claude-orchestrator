@@ -3,6 +3,7 @@ import type {
   NewTaskFields,
   TaskWriteOptions,
   TaskPropertiesPatch,
+  PatchBodySectionOperation,
 } from './TaskBackend';
 import type { TaskBodySections } from './bodyRender';
 import {
@@ -370,6 +371,12 @@ interface TaskWriteCommands {
     sections: TaskBodySections,
     options?: TaskWriteOptions,
   ): Promise<void>;
+  patchBodySection(
+    taskId: string,
+    section: string,
+    operation: PatchBodySectionOperation,
+    options?: TaskWriteOptions,
+  ): Promise<void>;
   setType(
     taskId: string,
     type: TaskType,
@@ -541,6 +548,20 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       );
     }
     await this.backend.updateBody(taskId, sections, options);
+  }
+
+  async patchBodySection(
+    taskId: string,
+    section: string,
+    operation: PatchBodySectionOperation,
+    options?: TaskWriteOptions,
+  ): Promise<void> {
+    if (!this.backend.patchBodySection) {
+      throw new Error(
+        `[TaskWriteCommands] patchBodySection is not supported by backend type "${this.backend.type}"`,
+      );
+    }
+    await this.backend.patchBodySection(taskId, section, operation, options);
   }
 
   async setType(

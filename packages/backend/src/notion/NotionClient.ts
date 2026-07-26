@@ -9,6 +9,8 @@ import {
 import { NotionTask, NotionApiError, ResolvedTask } from './types';
 import { DependencyResolver } from './DependencyResolver';
 import { toExternalId } from '../tasks/taskId';
+import { markdownToBlocks } from '../tasks/bodyRender';
+import type { PatchBodySectionOperation } from '../tasks/TaskBackend';
 
 // ─── Board validation types ─────────────────────────────────────────────────
 
@@ -282,6 +284,92 @@ export function blockToLine(block: NotionBlock): string {
       return '---';
     default:
       return text;
+  }
+}
+
+// ─── Heading-bounded section engine (patchBodySection) ─────────────────────
+// Generalizes appendImplementationNote's "find heading, walk until the next
+// heading" scan into a reusable range locator, shared by append/replace/
+// remove. Unlike TaskBackend's fetchTaskPage (a flattened markdown string
+// with no block IDs), this fetches children directly so blocks can be
+// targeted for insertion/deletion.
+
+/** Fetch a page's direct children, block IDs intact (paginated). */
+async function fetchBlockChildren(externalId: string): Promise<NotionBlock[]> {
+  const blocks: NotionBlock[] = [];
+  let startCursor: string | undefined;
+  do {
+    const path = `/blocks/${externalId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
+    const resp = await notionRequest<NotionBlocksResponse>('GET', path);
+    blocks.push(...resp.results);
+    startCursor =
+      resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
+  } while (startCursor);
+  return blocks;
+}
+
+interface HeadingSectionRange {
+  /** The block ID of the heading itself. */
+  headingId: string;
+  /** Every block between the heading and the next heading (or page end), in order. */
+  bodyBlocks: NotionBlock[];
+}
+
+/**
+ * Locates the range of blocks belonging to the named section: the heading
+ * block matching `section` (case/whitespace-insensitive), plus every
+ * following block up to (not including) the next heading or the end of the
+ * page. Returns null when no heading matches.
+ */
+function locateHeadingSection(
+  blocks: NotionBlock[],
+  section: string,
+): HeadingSectionRange | null {
+  const target = section.trim().toLowerCase();
+  let headingId: string | null = null;
+  const bodyBlocks: NotionBlock[] = [];
+  let inSection = false;
+  for (const block of blocks) {
+    const type = block.type as string;
+    if (type.startsWith('heading_')) {
+      if (inSection) break;
+      const inner = block[type] as
+        | { rich_text?: NotionRichText[] }
+        | undefined;
+      const text = inner?.rich_text ? richTextToString(inner.rich_text) : '';
+      if (text.trim().toLowerCase() === target) {
+        inSection = true;
+        headingId = block.id as string;
+      }
+      continue;
+    }
+    if (inSection) bodyBlocks.push(block);
+  }
+  if (!headingId) return null;
+  return { headingId, bodyBlocks };
+}
+
+/**
+ * Inserts `blocks` as children of `externalId`, positioned right after
+ * `afterId` (or at the page end when omitted), chunked to Notion's
+ * 100-block-per-request limit. Each chunk is inserted after the previous
+ * chunk's last created block so ordering survives across chunk boundaries.
+ */
+async function insertChildBlocks(
+  externalId: string,
+  blocks: NotionBlockPayload[],
+  afterId?: string,
+): Promise<void> {
+  let after = afterId;
+  for (let i = 0; i < blocks.length; i += 100) {
+    const chunk = blocks.slice(i, i + 100);
+    const resp = await notionRequest<NotionBlocksResponse>(
+      'PATCH',
+      `/blocks/${externalId}/children`,
+      { children: chunk, ...(after ? { after } : {}) },
+    );
+    const ids = resp.results.map((b) => b.id as string);
+    if (ids.length) after = ids[ids.length - 1];
   }
 }
 
@@ -714,17 +802,7 @@ export class NotionClient {
    */
   async appendImplementationNote(taskId: string, note: string): Promise<void> {
     const externalId = toExternalId(taskId);
-
-    // Fetch all page blocks to find the Implementation Notes section.
-    const blocks: NotionBlock[] = [];
-    let startCursor: string | undefined;
-    do {
-      const path = `/blocks/${externalId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
-      const resp = await notionRequest<NotionBlocksResponse>('GET', path);
-      blocks.push(...resp.results);
-      startCursor =
-        resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
-    } while (startCursor);
+    const blocks = await fetchBlockChildren(externalId);
 
     // Find the "Implementation Notes" heading block.
     let afterBlockId: string | undefined;
@@ -800,6 +878,74 @@ export class NotionClient {
       });
     }
 
+    deleteTaskCacheRow(taskPageCacheKey(taskId));
+  }
+
+  /**
+   * Applies a task.patchBodySection append/replace/remove to the
+   * heading-bounded range of `section` in the page body — never touches
+   * blocks outside that range. Missing-section semantics: append
+   * auto-creates the section (heading + content); remove on an
+   * already-absent section is a no-op; replace requires the section and the
+   * exact find text to already exist and fails explicitly otherwise — it
+   * never guesses.
+   */
+  async patchBodySection(
+    taskId: string,
+    section: string,
+    patch: PatchBodySectionOperation,
+  ): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const blocks = await fetchBlockChildren(externalId);
+    const range = locateHeadingSection(blocks, section);
+
+    if (patch.operation === 'remove') {
+      if (!range) return;
+      for (const block of range.bodyBlocks) {
+        await notionRequest('DELETE', `/blocks/${block.id as string}`);
+      }
+      await notionRequest('DELETE', `/blocks/${range.headingId}`);
+      deleteTaskCacheRow(taskPageCacheKey(taskId));
+      return;
+    }
+
+    if (patch.operation === 'append') {
+      if (!range) {
+        const newBlocks = markdownToBlocks(`## ${section}\n\n${patch.content}`);
+        await insertChildBlocks(externalId, newBlocks);
+      } else {
+        const newBlocks = markdownToBlocks(patch.content);
+        const afterId =
+          (range.bodyBlocks.at(-1)?.id as string | undefined) ??
+          range.headingId;
+        await insertChildBlocks(externalId, newBlocks, afterId);
+      }
+      deleteTaskCacheRow(taskPageCacheKey(taskId));
+      return;
+    }
+
+    // replace — the section and the find text must already exist; never guess.
+    if (!range) {
+      throw new Error(
+        `[NotionClient] patchBodySection: section "${section}" not found on task ${taskId}`,
+      );
+    }
+    const sectionText = range.bodyBlocks.map(blockToLine).join('\n');
+    if (!sectionText.includes(patch.find)) {
+      throw new Error(
+        `[NotionClient] patchBodySection: text to replace not found in section "${section}" of task ${taskId}`,
+      );
+    }
+    const mutated = sectionText.replace(patch.find, patch.replaceWith);
+    const newBlocks = markdownToBlocks(mutated);
+    const afterId =
+      (range.bodyBlocks.at(-1)?.id as string | undefined) ?? range.headingId;
+    // Insert-before-delete: the new content lands before the stale blocks
+    // are torn down, so a crash mid-patch never leaves the section empty.
+    await insertChildBlocks(externalId, newBlocks, afterId);
+    for (const block of range.bodyBlocks) {
+      await notionRequest('DELETE', `/blocks/${block.id as string}`);
+    }
     deleteTaskCacheRow(taskPageCacheKey(taskId));
   }
 }

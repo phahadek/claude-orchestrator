@@ -12,7 +12,10 @@ import {
   type MoveTaskTargetMilestone,
   type CreateTaskCommandFields,
 } from '../tasks/TaskWriteCommands';
-import type { TaskPropertiesPatch } from '../tasks/TaskBackend';
+import type {
+  TaskPropertiesPatch,
+  PatchBodySectionOperation,
+} from '../tasks/TaskBackend';
 import type { TaskBodySections } from '../tasks/bodyRender';
 import {
   checkReadiness,
@@ -259,6 +262,17 @@ function extractTaskId(kind: string, payload: unknown): string | null {
     const unitId = (payload as { unitId?: unknown } | null)?.unitId;
     return typeof unitId === 'string' ? unitId : null;
   }
+  if (kind === 'task.patchBodySection') {
+    const p = payload as { taskId?: unknown; section?: unknown } | null;
+    if (typeof p?.taskId !== 'string' || typeof p?.section !== 'string') {
+      return null;
+    }
+    // Scoped to (taskId, section) rather than just taskId: two patches on
+    // different sections of the same task must both stay active rather than
+    // one superseding the other, while same-section patches still supersede
+    // via the existing tombstone mechanism above.
+    return `${p.taskId}::${p.section.trim()}`;
+  }
   const taskId = (payload as { taskId?: unknown } | null)?.taskId;
   return typeof taskId === 'string' ? taskId : null;
 }
@@ -278,6 +292,10 @@ interface UpdateBodyPayload {
   taskId: string;
   sections: TaskBodySections;
 }
+type PatchBodySectionPayload = {
+  taskId: string;
+  section: string;
+} & PatchBodySectionOperation;
 interface SetPropertiesPayload {
   taskId: string;
   patch: TaskPropertiesPatch;
@@ -447,6 +465,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'task.setStatus',
   'task.setDependsOn',
   'task.updateBody',
+  'task.patchBodySection',
   'task.setProperties',
   'task.setType',
   'task.archive',
@@ -597,6 +616,7 @@ export function stageIntent(
  */
 const HUMAN_APPLY_ONLY_KINDS: ReadonlySet<string> = new Set([
   'task.updateBody',
+  'task.patchBodySection',
   'task.setProperties',
   'task.setType',
   'task.archive',
@@ -675,6 +695,13 @@ async function applyIntent(
     case 'task.updateBody': {
       const payload = intent.payload as UpdateBodyPayload;
       await commands.updateBody(payload.taskId, payload.sections, {
+        source: 'human',
+      });
+      return { ok: true };
+    }
+    case 'task.patchBodySection': {
+      const payload = intent.payload as PatchBodySectionPayload;
+      await commands.patchBodySection(payload.taskId, payload.section, payload, {
         source: 'human',
       });
       return { ok: true };
@@ -920,10 +947,93 @@ function checkPlanningTerminalIfPromoted(
 }
 
 /**
+ * Locates the heading-bounded range of `section` in a flattened markdown
+ * body: the heading line's index and the exclusive index of the next
+ * heading (or the end of the body). Case/whitespace-insensitive match on
+ * the heading text, mirroring NotionClient's locateHeadingSection but
+ * against plain text rather than live blocks — modeled on (not a reuse of)
+ * readinessGate's own heading walk and the frontend's BodySectionDiff
+ * splitter, since neither is a shared section-splitter this can call into.
+ */
+function findMarkdownSectionRange(
+  lines: string[],
+  section: string,
+): { start: number; end: number } | null {
+  const target = section.trim().toLowerCase();
+  let start = -1;
+  let end = lines.length;
+  for (let i = 0; i < lines.length; i++) {
+    const heading = lines[i].match(/^#{1,6}\s*(.+)$/);
+    if (!heading) continue;
+    if (start === -1) {
+      if (heading[1].trim().toLowerCase() === target) start = i;
+      continue;
+    }
+    end = i;
+    break;
+  }
+  return start === -1 ? null : { start, end };
+}
+
+/**
+ * Staging-time preview of a task.patchBodySection apply: splices the
+ * patch's result into the stored body at the target heading's boundaries,
+ * without ever touching Notion. Best-effort — when the patch can't be
+ * simulated (section/find text absent for replace, section absent for
+ * remove) the stored body is returned unchanged, since apply time remains
+ * the sole authority that fails explicitly.
+ */
+function composePatchBodySectionPreview(
+  storedBody: string,
+  section: string,
+  patch: PatchBodySectionOperation,
+): string {
+  const lines = storedBody.split('\n');
+  const range = findMarkdownSectionRange(lines, section);
+
+  if (patch.operation === 'remove') {
+    if (!range) return storedBody;
+    return [...lines.slice(0, range.start), ...lines.slice(range.end)].join(
+      '\n',
+    );
+  }
+
+  if (patch.operation === 'append') {
+    if (!range) {
+      return [
+        storedBody.trimEnd(),
+        '',
+        `## ${section}`,
+        '',
+        patch.content,
+      ].join('\n');
+    }
+    return [
+      ...lines.slice(0, range.end),
+      patch.content,
+      ...lines.slice(range.end),
+    ].join('\n');
+  }
+
+  // replace
+  if (!range) return storedBody;
+  const sectionText = lines.slice(range.start + 1, range.end).join('\n');
+  if (!sectionText.includes(patch.find)) return storedBody;
+  const mutated = sectionText.replace(patch.find, patch.replaceWith);
+  return [
+    ...lines.slice(0, range.start + 1),
+    mutated,
+    ...lines.slice(range.end),
+  ].join('\n');
+}
+
+/**
  * Composes the proposed body a Ready readiness check should see: the stored
  * page body with any live (staged/approved) task.updateBody for this task in
- * the same group applied over it — used by both the eager approve-time check
- * and (implicitly, via commit ordering) authoritative at commit time.
+ * the same group applied over it, or else every live task.patchBodySection
+ * for this task spliced in at their target headings — used by both the
+ * eager approve-time check and (implicitly, via commit ordering)
+ * authoritative at commit time.
  */
 async function computeProposedBody(
   backend: ReturnType<typeof getTaskBackend>,
@@ -932,15 +1042,27 @@ async function computeProposedBody(
 ): Promise<string> {
   const stored = (await backend.fetchTaskPage(taskId)) ?? '';
   if (!groupId) return stored;
-  const updateBodyRow = listStagedIntentsByGroup(groupId).find(
+  const groupIntents = listStagedIntentsByGroup(groupId);
+  const updateBodyRow = groupIntents.find(
     (row) =>
       row.kind === 'task.updateBody' &&
       ACTIVE_STATES.includes(row.state) &&
       (JSON.parse(row.payload) as UpdateBodyPayload).taskId === taskId,
   );
-  if (!updateBodyRow) return stored;
-  const payload = JSON.parse(updateBodyRow.payload) as UpdateBodyPayload;
-  return composeProposedBody(stored, payload.sections);
+  if (updateBodyRow) {
+    const payload = JSON.parse(updateBodyRow.payload) as UpdateBodyPayload;
+    return composeProposedBody(stored, payload.sections);
+  }
+  const patchRows = groupIntents.filter(
+    (row) =>
+      row.kind === 'task.patchBodySection' &&
+      ACTIVE_STATES.includes(row.state) &&
+      (JSON.parse(row.payload) as PatchBodySectionPayload).taskId === taskId,
+  );
+  return patchRows.reduce((body, row) => {
+    const payload = JSON.parse(row.payload) as PatchBodySectionPayload;
+    return composePatchBodySectionPreview(body, payload.section, payload);
+  }, stored);
 }
 
 /**
