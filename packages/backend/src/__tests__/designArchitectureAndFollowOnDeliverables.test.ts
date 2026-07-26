@@ -77,15 +77,15 @@ describe('assembled design procedure — architecture and follow-on task deliver
     expect(output).toMatch(
       /stage the implementation work a locked design implies as `task\.create` intents.*in this same pass/is,
     );
-    expect(output).toMatch(/not limited to the 'Split-don't-trim' overflow case/i);
+    expect(output).toMatch(
+      /not limited to the 'Split-don't-trim' overflow case/i,
+    );
 
     const followOnPrinciple = ORDERED_STEPS.find(
       (s) => s.id === 'file-follow-on-tasks',
     )!;
     const designText = stepSummaryFor(followOnPrinciple, 'design');
-    expect(designText).toMatch(
-      /far more often than it implies a split/i,
-    );
+    expect(designText).toMatch(/far more often than it implies a split/i);
     expect(designText).toMatch(
       /not only in the '🔲 Backlog' split-overflow case/i,
     );

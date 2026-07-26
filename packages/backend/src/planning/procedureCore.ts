@@ -376,11 +376,12 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   },
   {
     id: 'design-architecture-and-followon-required',
-    title: 'Architecture pages and follow-on Code tasks are required deliverables',
+    title:
+      'Architecture pages and follow-on Code tasks are required deliverables',
     appliesTo: ['design'],
     text:
       'A 📐 Design task exists to produce two things beyond the locked decisions ' +
-      "themselves — updated architecture pages and filed follow-on 🔲 Backlog Code " +
+      'themselves — updated architecture pages and filed follow-on 🔲 Backlog Code ' +
       'tasks (see config/procedures.md § Task types) — and both are staged in the ' +
       'same pass as the decisions that imply them, never left for the operator to ' +
       'request afterward. DO stage the architecture-unit change(s) each locked ' +
@@ -769,7 +770,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'synthesis" below). The operator is approving that synthesis, not ' +
         'diffing the body write — presenting IS staging, so the synthesis rides ' +
         'on the same intent the body write does, rather than a separate ' +
-        'validation step. This write is not the pass\'s terminal action: the ' +
+        "validation step. This write is not the pass's terminal action: the " +
         'architecture-unit updates and follow-on `task.create` intents the ' +
         'locked decisions imply (or an explicit "none" for either) are staged in ' +
         'this same pass and reported in that synthesis. DO NOT drive any of ' +
