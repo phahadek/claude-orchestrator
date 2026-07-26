@@ -180,7 +180,10 @@ describe('stage-time task reference validation', () => {
   });
 
   it('leaves a valid intent unaffected — no extra rejection on the happy path', async () => {
-    upsertTaskCache('notion:known-task-1', JSON.stringify({ status: 'Backlog' }));
+    upsertTaskCache(
+      'notion:known-task-1',
+      JSON.stringify({ status: 'Backlog' }),
+    );
 
     const res = await stagePost(app(), {
       kind: 'task.setStatus',
