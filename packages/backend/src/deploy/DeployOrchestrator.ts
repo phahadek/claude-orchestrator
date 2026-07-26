@@ -18,6 +18,15 @@ import {
 } from './deployService';
 import type { DeployRunRow } from '../db/types';
 
+/**
+ * Conventional step id for the step that restarts this project's own backend
+ * service (a self-deploy) — the shell command kills the very process
+ * driving the deploy before it returns, so this step is special-cased both
+ * on the way forward (marked succeeded and current_step advanced past it
+ * before the restart is issued) and on resume (never re-issued).
+ */
+export const RESTART_STEP_ID = 'restart';
+
 export type AgenticVerdict = 'approved' | 'rejected';
 
 export interface ShellResult {
@@ -362,6 +371,20 @@ export class DeployOrchestrator {
         continue;
       }
 
+      // Resuming right at the restart step means it already ran (that's
+      // what killed the process that was driving this run) — never
+      // re-issue it, just record it done and move on to verify/report-in.
+      if (step.id === RESTART_STEP_ID && resumeAtStep === step.id) {
+        appendDeployRunEvent({
+          runId,
+          step: step.id,
+          eventType: 'step_succeeded',
+          detail: 'resumed after self-restart; not re-issued',
+          at: this.now(),
+        });
+        continue;
+      }
+
       advanceDeployRun(runId, step.id);
       appendDeployRunEvent({
         runId,
@@ -369,6 +392,34 @@ export class DeployOrchestrator {
         eventType: 'step_started',
         at: this.now(),
       });
+
+      if (step.id === RESTART_STEP_ID) {
+        // Record success and advance current_step past this step BEFORE
+        // the restart is issued — the shell command may kill this very
+        // process before it returns, so the resuming backend must already
+        // see this step as done rather than re-driving it.
+        appendDeployRunEvent({
+          runId,
+          step: step.id,
+          eventType: 'step_succeeded',
+          at: this.now(),
+        });
+        const next = playbook.steps[i + 1];
+        if (next) advanceDeployRun(runId, next.id);
+        try {
+          const outcome = await this.executeStep(runId, step);
+          if (!outcome.ok) {
+            logger.error(
+              `[DeployOrchestrator] run ${runId} (${this.project}) restart step "${step.id}" reported failure after being marked succeeded: ${outcome.detail ?? ''}`,
+            );
+          }
+        } catch (err) {
+          logger.error(
+            `[DeployOrchestrator] run ${runId} (${this.project}) restart step "${step.id}" threw after being marked succeeded: ${err}`,
+          );
+        }
+        continue;
+      }
 
       let outcome: StepOutcome;
       try {

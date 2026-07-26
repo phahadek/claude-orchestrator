@@ -19,10 +19,15 @@ import {
   DeployOrchestrator,
   buildDeployStepEnv,
   spawnShell,
+  RESTART_STEP_ID,
   type DeployOrchestratorDeps,
   type ShellResult,
 } from '../DeployOrchestrator';
-import { getDeployRun, listDeployRunEvents } from '../deployService';
+import {
+  getDeployRun,
+  listDeployRunEvents,
+  getProjectDeployedSha,
+} from '../deployService';
 import type { DeployPlaybook, StepDescriptor } from '../playbookSchema';
 import type { LoadPlaybookResult } from '../loadPlaybook';
 
@@ -316,6 +321,78 @@ describe('DeployOrchestrator: resume after a restart', () => {
     const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
     await orchestrator.resume();
     expect(deps.runShell).not.toHaveBeenCalled();
+  });
+
+  it('resumes at current_step=restart on boot without re-issuing the service restart, finalizing verify → report-in → record-sha', async () => {
+    const playbook = playbookWith([
+      step({ id: RESTART_STEP_ID, kind: 'shell' }),
+      step({ id: 'verify', kind: 'validation' }),
+    ]);
+
+    const { startDeployRun, advanceDeployRun } =
+      await import('../deployService');
+    const priorRun = startDeployRun({
+      project: 'proj',
+      targetSha: 'sha-target',
+      startedAt: now(),
+    });
+    advanceDeployRun(priorRun.run_id, RESTART_STEP_ID);
+
+    const shellCommands: string[] = [];
+    const deps = makeDeps(playbook, {
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        shellCommands.push(command);
+        return { ok: true, output: '' };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    await orchestrator.resume();
+    await flush();
+
+    // The restart step's shell command (which would restart the service
+    // again) is never re-issued — only the post-restart steps run.
+    expect(shellCommands).toEqual([`run ${'verify'}`]);
+    expect(getDeployRun(priorRun.run_id)?.status).toBe('succeeded');
+    const events = listDeployRunEvents(priorRun.run_id).map(
+      (e) => e.event_type,
+    );
+    expect(events).toEqual([
+      'step_succeeded',
+      'step_started',
+      'step_succeeded',
+    ]);
+    expect(getProjectDeployedSha('proj')).toBe('sha-target');
+  });
+
+  it('marks the run failed (not left running) when resume cannot complete', async () => {
+    const playbook = playbookWith([
+      step({ id: RESTART_STEP_ID, kind: 'shell' }),
+      step({ id: 'verify', kind: 'validation' }),
+    ]);
+
+    const { startDeployRun, advanceDeployRun } =
+      await import('../deployService');
+    const priorRun = startDeployRun({
+      project: 'proj',
+      targetSha: 'sha-target',
+      startedAt: now(),
+    });
+    advanceDeployRun(priorRun.run_id, RESTART_STEP_ID);
+
+    const deps = makeDeps(playbook, {
+      runShell: vi.fn(
+        async (): Promise<ShellResult> => ({
+          ok: false,
+          output: 'health check failed',
+        }),
+      ),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    await orchestrator.resume();
+    await flush();
+
+    expect(getDeployRun(priorRun.run_id)?.status).toBe('failed');
+    expect(getProjectDeployedSha('proj')).toBeNull();
   });
 });
 

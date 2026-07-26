@@ -9,6 +9,7 @@ import {
 } from '../deploy/deployService';
 import { DeployOrchestrator } from '../deploy/DeployOrchestrator';
 import { getProjectRowById } from '../db/queries';
+import type { ProjectRow } from '../db/types';
 import { logger } from '../logger';
 
 const GATE_RECONCILER_JOB = 'gate_verification_reconciler';
@@ -29,7 +30,7 @@ const orchestrators = new Map<string, DeployOrchestrator>();
  * wired up yet, so a playbook step of that kind stalls rather than
  * silently passing.
  */
-function getOrchestrator(
+export function getOrchestrator(
   project: string,
   projectDir: string,
 ): DeployOrchestrator {
@@ -46,6 +47,26 @@ function getOrchestrator(
     orchestrators.set(project, orchestrator);
   }
   return orchestrator;
+}
+
+/**
+ * Boot-time reconciliation: resumes each project's in-progress deploy_run
+ * (if any) at its current_step. This is what finalizes a self-deploy after
+ * the restart step reboots the very backend driving the run — without it,
+ * the run is left `running` forever, blocking any later deploy for that
+ * project (startDeployRun's at-most-one-active-run-per-project constraint).
+ * Non-blocking and per-project isolated: one project's resume failing
+ * doesn't stop the others from resuming.
+ */
+export function resumeActiveDeployRuns(projects: ProjectRow[]): void {
+  for (const project of projects) {
+    const orchestrator = getOrchestrator(project.id, project.project_dir);
+    void orchestrator.resume().catch((err) => {
+      logger.error(
+        `[deploy] boot resume failed for project ${project.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
 }
 
 /**
