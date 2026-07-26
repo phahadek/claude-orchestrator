@@ -65,9 +65,7 @@ async function stageDecision(
     decisionProposal: 'A confident recommendation.',
     payload: {
       prompt: 'Should we cap the reader at 10MB?',
-      options: [
-        { label: 'Cap at 10MB', description: 'Error above the cap.' },
-      ],
+      options: [{ label: 'Cap at 10MB', description: 'Error above the cap.' }],
       allowFreeForm: overrides.allowFreeForm ?? true,
     },
   });

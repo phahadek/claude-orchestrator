@@ -60,10 +60,9 @@ describe('DecisionPickOnePanel', () => {
     );
 
     fireEvent.click(screen.getByRole('radio'));
-    fireEvent.change(
-      screen.getByPlaceholderText('Write in your own answer…'),
-      { target: { value: 'Agreed, but log when the cap is hit.' } },
-    );
+    fireEvent.change(screen.getByPlaceholderText('Write in your own answer…'), {
+      target: { value: 'Agreed, but log when the cap is hit.' },
+    });
     fireEvent.click(screen.getByText('✓ Submit'));
 
     await waitFor(() => {
@@ -81,10 +80,9 @@ describe('DecisionPickOnePanel', () => {
     const submit = screen.getByText('✓ Submit') as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
 
-    fireEvent.change(
-      screen.getByPlaceholderText('Write in your own answer…'),
-      { target: { value: 'None of these — do something else.' } },
-    );
+    fireEvent.change(screen.getByPlaceholderText('Write in your own answer…'), {
+      target: { value: 'None of these — do something else.' },
+    });
     expect(submit.disabled).toBe(false);
   });
 
@@ -101,10 +99,9 @@ describe('DecisionPickOnePanel', () => {
       />,
     );
 
-    fireEvent.change(
-      screen.getByPlaceholderText('Write in your own answer…'),
-      { target: { value: 'None of these — do something else.' } },
-    );
+    fireEvent.change(screen.getByPlaceholderText('Write in your own answer…'), {
+      target: { value: 'None of these — do something else.' },
+    });
     fireEvent.click(screen.getByText('✓ Submit'));
 
     await waitFor(() => {

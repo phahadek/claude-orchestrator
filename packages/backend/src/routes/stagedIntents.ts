@@ -2152,7 +2152,10 @@ export function createStagedIntentsRouter(
           ? body.freeForm
           : null;
 
-      if (chosenLabel && !payload.options.some((o) => o.label === chosenLabel)) {
+      if (
+        chosenLabel &&
+        !payload.options.some((o) => o.label === chosenLabel)
+      ) {
         res
           .status(400)
           .json({ error: 'chosenLabel must match one of the staged options' });
