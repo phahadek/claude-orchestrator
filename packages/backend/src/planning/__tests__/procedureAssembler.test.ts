@@ -323,6 +323,7 @@ describe('assemblePlanningProcedure', () => {
           'gate.accrete',
           'seed.stage',
           'task.create',
+          'task.updateBody',
         ],
         design: [
           'decision.pickOne',
@@ -337,6 +338,7 @@ describe('assemblePlanningProcedure', () => {
           'task.setStatus',
           'session.requestCapability',
           'task.create',
+          'task.updateBody',
         ],
       };
       for (const kind of allowedKinds[workflow]) {
@@ -344,6 +346,22 @@ describe('assemblePlanningProcedure', () => {
       }
     });
   }
+
+  it('renders a task.updateBody invocation example for groom and ops', () => {
+    for (const { workflow, digest } of cases) {
+      if (workflow !== 'groom' && workflow !== 'ops') continue;
+      const output = assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        milestoneId: 'm1',
+        projectId: 'p1',
+        digest,
+      });
+      expect(output).toMatch(
+        /`mcp__orchestrator__task_updateBody` with `\{"payload":/,
+      );
+    }
+  });
 
   it('never leaks a credential value into the assembled text — only the env-var name', () => {
     for (const { digest } of cases) {
