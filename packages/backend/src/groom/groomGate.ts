@@ -170,6 +170,19 @@ export interface GroomingGateEntry {
    * and is unaffected.
    */
   gateContributionCandidates?: GateContributionCandidate[];
+  /**
+   * True when this task's pre-groom body (at Ready-flip staging time) still
+   * carried a "### 👁️ Manual verification" section — a structural fact
+   * groomLoad.ts computes from the body, same posture as
+   * `triage.hasOpenQuestionsHeading`. Used by stagedIntents.ts's
+   * group-liveness check (mirroring `hasGroupDependsOn` /
+   * `DependsOnCompletenessError`) to require the intent group also carry a
+   * live `task.patchBodySection` remove targeting that heading before the
+   * Ready flip may commit — this field only signals the fact is worth
+   * checking; the group-liveness check itself lives in stagedIntents.ts,
+   * which alone knows about sibling staged intents.
+   */
+  hasManualVerificationSection?: boolean;
 }
 
 export interface GroomingGateResult {
