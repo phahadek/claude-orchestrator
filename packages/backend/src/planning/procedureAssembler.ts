@@ -582,12 +582,22 @@ function renderSkeleton(
       'findings under a shared `groupId` when they were derived together; never ' +
       "silently apply — staging is the full extent of this session's authority." +
       (workflow === 'groom'
-        ? ' Promoting to Ready is not the only outcome available: if the task should ' +
-          'not move forward — it is out of scope, superseded, no longer worth doing, ' +
-          'or better revisited later — propose a discard/defer instead by staging ' +
-          '`task.setStatus` → `Deferred`, with a `decisionProposal` naming why ' +
-          'discard/defer is recommended over grooming it to Ready. This is a ' +
-          'first-class alternative outcome, not a fallback for a session that got stuck.\n\n' +
+        ? ' Promoting to Ready is not the only outcome available. `Deferred` and ' +
+          '`Backlog` are NOT interchangeable "not now" outcomes — they differ in ' +
+          'what happens next, and picking the wrong one is a real failure mode:\n' +
+          '- `Deferred` IS: this task\'s scope is fully covered by another task, or ' +
+          'it should not be done at all — propose a discard/defer by staging ' +
+          '`task.setStatus` → `Deferred`, with a `decisionProposal` naming the ' +
+          'superseding task or why the work should never happen. This is a first-class alternative outcome, ' +
+          'not a fallback for a session that got stuck. It is terminal: future ' +
+          'grooming passes skip a Deferred task entirely, and a Deferred task in ' +
+          'another task\'s Depends On blocks that task forever — only Done ' +
+          'satisfies a dependency.\n' +
+          '- `Deferred` IS NOT the disposition for a task that is merely blocked on ' +
+          'a dependency, has a premise that needs re-investigation, or has a body ' +
+          'that needs rewriting before it can be groomed. Leave the task at `Backlog` instead ' +
+          '(optionally with a `decisionProposal` explaining what is blocking it): ' +
+          'it stays in the grooming queue and future passes will reconsider it.\n\n' +
           'A `task.setStatus` → `Ready` proposal is structured, not free prose: carry ' +
           "the `/groom` skill's defined proposal format (`skills/groom/reference/" +
           'presentation.md` § "The 4-point summary") as a `groomProposal` object — ' +
