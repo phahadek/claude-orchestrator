@@ -145,5 +145,56 @@ describe('POST /api/design/:taskId/trace-coverage', () => {
     expect(res.status).toBe(200);
     expect(res.body.advisory).toBe(true);
     expect(res.body.flags.length).toBeGreaterThan(0);
+    expect(
+      res.body.flags.some((f: { kind: string }) => f.kind === 'region'),
+    ).toBe(true);
+  });
+
+  it('returns an advisory flag for an unlocked acceptance criterion with no follow-on tasks', async () => {
+    const res = await request(app)
+      .post('/api/design/notion:design1/trace-coverage')
+      .send({
+        acceptanceCriteria: ['Invoices export as CSV'],
+        lockedDecisions: [],
+        followOnTasks: [],
+        worklistOptions,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.advisory).toBe(true);
+    expect(
+      res.body.flags.some(
+        (f: { kind: string }) => f.kind === 'acceptance_criterion',
+      ),
+    ).toBe(true);
+  });
+
+  it('returns 400 when worklistOptions omits trackedFiles', async () => {
+    const { trackedFiles: _trackedFiles, ...rest } = worklistOptions;
+    const res = await request(app)
+      .post('/api/design/notion:design1/trace-coverage')
+      .send({
+        acceptanceCriteria: [],
+        lockedDecisions: [],
+        followOnTasks: [],
+        worklistOptions: rest,
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/trackedFiles/);
+  });
+
+  it('returns 400 when worklistOptions.trackedFiles is not an array of strings', async () => {
+    const res = await request(app)
+      .post('/api/design/notion:design1/trace-coverage')
+      .send({
+        acceptanceCriteria: [],
+        lockedDecisions: [],
+        followOnTasks: [],
+        worklistOptions: { ...worklistOptions, trackedFiles: 'not-an-array' },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/trackedFiles/);
   });
 });

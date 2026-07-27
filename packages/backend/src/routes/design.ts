@@ -9,6 +9,7 @@ import {
   computeTraceCoverage,
   type TraceCoverageInput,
 } from '../design/completenessSignal';
+import type { CodeWorklistOptions } from '../groom/codeWorklist';
 
 /**
  * Thin /design surface: durable write-through + audit read for the
@@ -117,6 +118,18 @@ export function createDesignRouter(): Router {
         res.status(400).json({
           error:
             'acceptanceCriteria, lockedDecisions, followOnTasks (arrays) and worklistOptions (object) are required',
+        });
+        return;
+      }
+      const trackedFiles = (body.worklistOptions as CodeWorklistOptions)
+        .trackedFiles;
+      if (
+        !Array.isArray(trackedFiles) ||
+        !trackedFiles.every((f) => typeof f === 'string')
+      ) {
+        res.status(400).json({
+          error:
+            'worklistOptions.trackedFiles (array of repo-relative paths) is required',
         });
         return;
       }
