@@ -67,7 +67,10 @@ export function normalizeTaskId(id: string): string {
     const source = id.substring(0, colonIndex);
     if (VALID_SOURCES.has(source) && id.length > colonIndex + 1) {
       const externalId = id.substring(colonIndex + 1);
-      return formatTaskId(source as TaskSource, canonicalizeExternalId(externalId));
+      return formatTaskId(
+        source as TaskSource,
+        canonicalizeExternalId(externalId),
+      );
     }
   }
   return formatTaskId('notion', canonicalizeExternalId(id));

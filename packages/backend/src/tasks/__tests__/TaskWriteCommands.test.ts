@@ -279,18 +279,15 @@ describe('getCachedType / getCachedStatus — task ID normalization', () => {
     ['hyphenated, no prefix', hyphenated],
     ['hyphenless, notion:-prefixed', `notion:${hyphenless}`],
     ['hyphenated, notion:-prefixed', `notion:${hyphenated}`],
-  ])(
-    'getCachedType resolves the same cached type for %s',
-    (_label, id) => {
-      mockGetTaskCache.mockImplementation((key: string) =>
-        key === `notion:${hyphenated}`
-          ? cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '📐 Design')
-          : undefined,
-      );
+  ])('getCachedType resolves the same cached type for %s', (_label, id) => {
+    mockGetTaskCache.mockImplementation((key: string) =>
+      key === `notion:${hyphenated}`
+        ? cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '📐 Design')
+        : undefined,
+    );
 
-      expect(getCachedType(id)).toBe('📐 Design');
-    },
-  );
+    expect(getCachedType(id)).toBe('📐 Design');
+  });
 
   it('getCachedType returns null when there is no matching task_cache row', () => {
     mockGetTaskCache.mockReturnValue(undefined);
