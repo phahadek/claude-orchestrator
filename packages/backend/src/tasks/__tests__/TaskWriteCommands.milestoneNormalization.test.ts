@@ -21,9 +21,7 @@ vi.mock('../../projects/ProjectService', () => ({
       if (id !== 'polimarket-analyser') return undefined;
       return {
         id,
-        milestones: [
-          { id: M12_UUID, name: 'M12', canonicalShortId: 'M12' },
-        ],
+        milestones: [{ id: M12_UUID, name: 'M12', canonicalShortId: 'M12' }],
       };
     },
   },
@@ -56,7 +54,8 @@ function makeBackend(): TaskBackend {
   };
 }
 
-const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_SHAPE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 beforeEach(() => {
   db.prepare('DELETE FROM gate_item_event').run();
@@ -82,9 +81,9 @@ describe('accreteGateContribution — milestone key-space normalization', () => 
       'Read-Only',
     );
 
-    const row = db
-      .prepare('SELECT milestone FROM gate_item')
-      .get() as { milestone: string } | undefined;
+    const row = db.prepare('SELECT milestone FROM gate_item').get() as
+      | { milestone: string }
+      | undefined;
     expect(row?.milestone).toBe('M12');
     expect(row?.milestone).not.toMatch(UUID_SHAPE);
 
@@ -107,9 +106,9 @@ describe('accreteGateContribution — milestone key-space normalization', () => 
       'Read-Only',
     );
 
-    const row = db
-      .prepare('SELECT milestone FROM gate_item')
-      .get() as { milestone: string } | undefined;
+    const row = db.prepare('SELECT milestone FROM gate_item').get() as
+      | { milestone: string }
+      | undefined;
     expect(row?.milestone).toBe('M12');
   });
 
@@ -127,9 +126,9 @@ describe('accreteGateContribution — milestone key-space normalization', () => 
       'Read-Only',
     );
 
-    const rows = db
-      .prepare('SELECT milestone FROM gate_item')
-      .all() as { milestone: string }[];
+    const rows = db.prepare('SELECT milestone FROM gate_item').all() as {
+      milestone: string;
+    }[];
     expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) {
       expect(row.milestone).not.toMatch(UUID_SHAPE);
@@ -152,9 +151,9 @@ describe('stageSeedContribution — milestone key-space normalization', () => {
       'seeds',
     );
 
-    const row = db
-      .prepare('SELECT milestone FROM seed_item')
-      .get() as { milestone: string } | undefined;
+    const row = db.prepare('SELECT milestone FROM seed_item').get() as
+      | { milestone: string }
+      | undefined;
     expect(row?.milestone).toBe('M12');
     expect(row?.milestone).not.toMatch(UUID_SHAPE);
 
@@ -177,9 +176,9 @@ describe('stageSeedContribution — milestone key-space normalization', () => {
       'seeds',
     );
 
-    const row = db
-      .prepare('SELECT milestone FROM seed_item')
-      .get() as { milestone: string } | undefined;
+    const row = db.prepare('SELECT milestone FROM seed_item').get() as
+      | { milestone: string }
+      | undefined;
     expect(row?.milestone).toBe('M12');
   });
 });

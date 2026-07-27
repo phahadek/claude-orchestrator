@@ -127,9 +127,7 @@ beforeEach(() => {
     if (id !== 'polimarket-analyser') return undefined;
     return {
       id,
-      milestones: [
-        { id: M12_UUID, name: 'M12', canonicalShortId: 'M12' },
-      ],
+      milestones: [{ id: M12_UUID, name: 'M12', canonicalShortId: 'M12' }],
     };
   });
 });
