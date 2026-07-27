@@ -106,9 +106,47 @@ describe('PlanningOrchestrator.handleDisposition', () => {
       null,
       expect.any(String),
     );
+    // Must go through markTerminal (which calls endSession to reap the
+    // subprocess), not write done via some other path.
+    expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
   });
 
-  it('an approve that leaves other staged work resumes the session exactly once', async () => {
+  it('an approve completing a session that staged everything in its first turn (unseeded stagedCountAtResume) still terminates with zero feedback', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const orch = new PlanningOrchestrator(sm as any);
+
+    // No prior disposition has ever run for this session, so
+    // stagedCountAtResume was never seeded — the old checkTerminal-based
+    // approve path would have misread this as "staged something new" and
+    // resumed. All five intents from the session's single clean turn are
+    // already committed/non-staged.
+    const group = Array.from({ length: 5 }, (_, i) =>
+      makeIntent({
+        id: `intent-${i}`,
+        group_id: 'group-1',
+        state: 'committed',
+      }),
+    );
+    vi.mocked(listStagedIntentsByGroup).mockReturnValue(group);
+    vi.mocked(listStagedIntentsBySession).mockReturnValue(group);
+
+    await orch.handleDisposition({
+      intent: group[0],
+      disposition: 'approve',
+    });
+
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'planning-session-1',
+      expect.any(Number),
+      null,
+      expect.any(String),
+    );
+    expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
+  });
+
+  it('an approve of one group while another group for the same session still has staged intents produces no feedback and no termination — session stays parked', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
     vi.mocked(listStagedIntentsBySession).mockReturnValue([
@@ -122,13 +160,9 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     });
     await orch.handleDisposition({ intent, disposition: 'approve' });
 
-    expect(sm.enqueueFeedback).toHaveBeenCalledTimes(1);
-    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
-      'planning-session-1',
-      'operator-disposition',
-      expect.stringContaining('approved'),
-    );
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
     expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sm.endSession).not.toHaveBeenCalled();
   });
 
   it('does not resume when the intent is still part of a not-fully-disposed group', async () => {
@@ -327,6 +361,35 @@ describe('PlanningOrchestrator.handleGroupDisposition', () => {
     expect(message).toContain('intent-2');
   });
 
+  it('cannot route an approve disposition into a resume, even if forced past the type check', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      id: 'intent-1',
+      session_id: 'planning-session-1',
+      state: 'committed',
+    });
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+
+    await orch.handleGroupDisposition({
+      intents: [intent],
+      disposition: 'approve' as any,
+      reason: null,
+      groupId: 'group-1',
+    });
+
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'planning-session-1',
+      expect.any(Number),
+      null,
+      expect.any(String),
+    );
+    expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
+  });
+
   it('no-ops when none of the intents originate from a planning session', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(
@@ -358,8 +421,9 @@ describe('PlanningOrchestrator terminal detection', () => {
       makeIntent({ state: 'committed' }),
     ]);
     await orch.handleDisposition({
-      intent: makeIntent({ state: 'committed' }),
-      disposition: 'approve',
+      intent: makeIntent({ state: 'rejected' }),
+      disposition: 'pushback',
+      reason: 'revise',
     });
 
     // The resumed turn stages nothing new and leaves no 'staged' intents.
@@ -401,8 +465,9 @@ describe('PlanningOrchestrator terminal detection', () => {
       makeIntent({ id: 'intent-1', state: 'committed' }),
     ]);
     await orch.handleDisposition({
-      intent: makeIntent({ id: 'intent-1', state: 'committed' }),
-      disposition: 'approve',
+      intent: makeIntent({ id: 'intent-1', state: 'rejected' }),
+      disposition: 'pushback',
+      reason: 'revise',
     });
 
     // The next turn stages a brand-new intent — count grew since resume.

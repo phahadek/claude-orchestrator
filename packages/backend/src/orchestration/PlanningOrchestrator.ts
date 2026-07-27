@@ -301,34 +301,28 @@ export class PlanningOrchestrator {
   }
 
   /**
-   * An approval only matters to the session once every sibling in its group
-   * has also settled (or it was never grouped) — an intermediate approval
-   * within a still-disposing group produces no narration and no resume at
-   * all. Once the group settles, checkTerminal decides what happens next:
-   * nothing left staged anywhere for the session drives it terminal directly
-   * (no resume needed — the mandate is complete); otherwise the session
-   * still has other staged work waiting, so it gets exactly one coalesced
-   * resume rather than one per approved intent.
+   * An approval carries no information the session can act on — its mandate
+   * ends at staging, so approval is the operator consuming the deliverable,
+   * not a message back to the producer. It therefore never resumes the
+   * session, unconditionally: once its group has settled and no other staged
+   * intents remain for the session, the session goes straight to terminal
+   * with no feedback message. This deliberately does not consult
+   * checkTerminal — that heuristic exists to detect a turn that staged
+   * nothing new, which is a different question from "does this approval
+   * itself warrant a resume" (it never does).
    */
   private async handleApproveDisposition(
     sessionId: string,
     intent: StagedIntentRow,
   ): Promise<void> {
     if (!isGroupFullyDisposed(intent)) return;
-    if (this.checkTerminal(sessionId)) return;
 
-    const message = formatApprovalCompletionMessage(intent);
-    try {
-      await this.sessionManager.enqueueFeedback(
-        sessionId,
-        'operator-disposition',
-        message,
-      );
-    } catch (err) {
-      logger.error(
-        `[PlanningOrchestrator] resume failed for session ${sessionId.slice(0, 8)} after approve: ${err}`,
-      );
-    }
+    const stillPending = listStagedIntentsBySession(sessionId).some(
+      (i) => i.state === 'staged',
+    );
+    if (stillPending) return;
+
+    this.markTerminal(sessionId, 'planning_approved');
   }
 
   /**
@@ -341,11 +335,24 @@ export class PlanningOrchestrator {
    */
   async handleGroupDisposition(payload: {
     intents: StagedIntentRow[];
-    disposition: PlanningDisposition;
+    disposition: Exclude<PlanningDisposition, 'approve'>;
     reason?: string | null;
     groupId: string;
   }): Promise<void> {
     const { intents, disposition, reason, groupId } = payload;
+
+    // The type excludes 'approve', but this is reachable from a caller that
+    // narrows less strictly than the compiler enforces — an approve must
+    // never be coalesced into a group resume, so fall through to the same
+    // no-resume approve path used for a single intent rather than trusting
+    // the type alone.
+    if ((disposition as PlanningDisposition) === 'approve') {
+      for (const intent of intents) {
+        if (!intent.session_id) continue;
+        await this.handleApproveDisposition(intent.session_id, intent);
+      }
+      return;
+    }
 
     const bySession = new Map<string, StagedIntentRow[]>();
     for (const intent of intents) {
@@ -391,20 +398,6 @@ function isGroupFullyDisposed(intent: StagedIntentRow): boolean {
   const PENDING: StagedIntentState[] = ['staged', 'approved'];
   return !listStagedIntentsByGroup(intent.group_id).some((row) =>
     PENDING.includes(row.state),
-  );
-}
-
-function formatApprovalCompletionMessage(intent: StagedIntentRow): string {
-  if (!intent.group_id) {
-    return `Staged intent ${intent.id} (${intent.kind}) was approved and applied.`;
-  }
-  const committed = listStagedIntentsByGroup(intent.group_id).filter(
-    (row) => row.state === 'committed',
-  );
-  const list = committed.map((i) => `${i.id} (${i.kind})`).join(', ');
-  return (
-    `Staged intent group ${intent.group_id} (${committed.length} intent${committed.length === 1 ? '' : 's'}: ${list}) ` +
-    'was approved and applied.'
   );
 }
 
