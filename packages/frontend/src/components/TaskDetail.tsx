@@ -163,7 +163,7 @@ function useResolvedSession(
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [sessionId, liveSession]);
 
   if (liveSession) return { session: liveSession, fetchState: 'idle' };

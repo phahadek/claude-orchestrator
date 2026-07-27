@@ -682,9 +682,7 @@ describe('TaskDetail', () => {
       />,
     );
     // Expanded by default, shows placeholder
-    expect(
-      screen.getByText(/Review transcript not available/),
-    ).toBeTruthy();
+    expect(screen.getByText(/Review transcript not available/)).toBeTruthy();
   });
 
   it('renders review SessionPanel when review session is in store', () => {

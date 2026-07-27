@@ -146,9 +146,7 @@ describe('TaskDetail — archived session resolution', () => {
     );
 
     // Not yet resolved — loading placeholder, distinct from the "not found" wording.
-    expect(
-      screen.getByText(/Transcript not available.*loading/i),
-    ).toBeTruthy();
+    expect(screen.getByText(/Transcript not available.*loading/i)).toBeTruthy();
 
     await waitFor(() => {
       expect(getByIdSpy).toHaveBeenCalledWith('plan-sess-1');

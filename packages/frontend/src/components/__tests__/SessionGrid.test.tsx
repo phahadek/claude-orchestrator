@@ -27,7 +27,11 @@ function makeSession(
 describe('SessionGrid', () => {
   it('excludes archived sessions from the grid', () => {
     const sessions = [
-      makeSession({ sessionId: 's1', taskName: 'Active Task', status: 'running' }),
+      makeSession({
+        sessionId: 's1',
+        taskName: 'Active Task',
+        status: 'running',
+      }),
       makeSession({
         sessionId: 's2',
         taskName: 'Archived Task',
