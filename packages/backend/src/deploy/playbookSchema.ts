@@ -36,6 +36,14 @@ export interface StepDescriptor {
   supports_dry_run?: boolean;
   /** A condition description/command to poll until satisfied (e.g. health check settling). */
   poll_until?: string;
+  /**
+   * A shell command whose output identifies the running process (e.g. a
+   * systemd unit's MainPID) — run by the engine immediately before this
+   * step's own command executes, so a later validation step (conventionally
+   * `verify`) can require the post-restart value to differ from this
+   * pre-restart baseline rather than greening against the outgoing process.
+   */
+  identity_capture?: string;
   /** The step `id` to roll back to / reference on failure. */
   rollback_ref?: string;
 }
@@ -172,6 +180,13 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
   if (step.rollback_ref !== undefined && !isString(step.rollback_ref)) {
     return `steps[${index}].rollback_ref must be a string`;
   }
+  if (
+    step.identity_capture !== undefined &&
+    (!isString(step.identity_capture) ||
+      !looksExecutable(step.identity_capture))
+  ) {
+    return `steps[${index}].identity_capture must be an executable command, not prose`;
+  }
   return {
     id: step.id,
     kind: step.kind as StepKind,
@@ -181,6 +196,7 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
     is_prod_mutating: step.is_prod_mutating,
     supports_dry_run: step.supports_dry_run as boolean | undefined,
     poll_until: step.poll_until as string | undefined,
+    identity_capture: step.identity_capture as string | undefined,
     rollback_ref: step.rollback_ref as string | undefined,
   };
 }
