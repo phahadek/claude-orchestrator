@@ -92,7 +92,7 @@ export class DockerSessionRunner implements ISessionRunner {
     // CliSessionRunner, no host-level chmod is needed — the `:ro` bind
     // mount below is what enforces read-only inside the container.
     const scratchDir = isPlanning
-      ? acquireCheckoutLockdown(worktreePath, this.sessionId, {
+      ? await acquireCheckoutLockdown(worktreePath, this.sessionId, {
           applyFsLockdown: false,
         })
       : undefined;
@@ -345,7 +345,9 @@ export class DockerSessionRunner implements ISessionRunner {
 
   private async _teardown(): Promise<void> {
     if (this._isPlanning) {
-      releaseCheckoutLockdown(this.sessionId, { applyFsLockdown: false });
+      await releaseCheckoutLockdown(this.sessionId, {
+        applyFsLockdown: false,
+      });
     }
     for (const name of [this.containerName, this.proxyContainerName]) {
       try {
