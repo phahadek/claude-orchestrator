@@ -66,12 +66,11 @@ describe('groom procedure Deferred-vs-Backlog grounds', () => {
     expect(output).not.toMatch(/revisit(ed)? later/i);
   });
 
-  it('states Deferred is for superseded / not-to-be-done scope, and names blocked-on-dependency / needs-rewrite as Backlog cases', () => {
+  it('states Deferred is for superseded / not-to-be-done scope, and names needs-re-investigation / needs-rewrite as Backlog cases', () => {
     const output = groomOutput();
     expect(output).toMatch(
       /scope is fully covered by another task, or.*should not be done at all/i,
     );
-    expect(output).toMatch(/blocked on a dependency/i);
     expect(output).toMatch(
       /premise that needs re-investigation|needs re-investigation/i,
     );

@@ -606,6 +606,22 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
     );
     expect(result.allowed).toBe(true);
   });
+
+  it('still enforces the rest of the readiness bar for a task with an unsatisfied non-design dependency', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        type: '💻 Code',
+        size_check: undefined,
+        dependsOnTasks: [
+          { id: 'dep-3', type: '💻 Code', status: '🔲 Backlog' },
+        ],
+      },
+      'notion:fm3-unaffected-but-not-ready',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('size_check'))).toBe(true);
+  });
 });
 
 describe('checkAccretionContributions', () => {
