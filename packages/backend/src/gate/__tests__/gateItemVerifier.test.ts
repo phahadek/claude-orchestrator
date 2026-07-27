@@ -46,6 +46,18 @@ describe('hasOperationalEvidence', () => {
     expect(hasOperationalEvidence('some string')).toBe(false);
     expect(hasOperationalEvidence({})).toBe(false);
   });
+
+  it('is true for a JSON string with basis "operational"', () => {
+    expect(
+      hasOperationalEvidence(JSON.stringify({ basis: 'operational' })),
+    ).toBe(true);
+  });
+
+  it('is false for a JSON string with basis "source"', () => {
+    expect(hasOperationalEvidence(JSON.stringify({ basis: 'source' }))).toBe(
+      false,
+    );
+  });
 });
 
 describe('isPreconditionOnlyEvidence', () => {
@@ -262,6 +274,47 @@ describe('enforcePassEvidenceContract', () => {
       disposition: 'needs-setup',
     });
     expect(needsSetup.disposition).toBe('needs-setup');
+  });
+
+  it('keeps a pass whose evidence is a JSON string declaring operational basis with a captured runtime record', () => {
+    const result = enforcePassEvidenceContract({
+      disposition: 'pass',
+      evidence: JSON.stringify({
+        basis: 'operational',
+        summary:
+          'session_events shows the gate-verify session reported pass after reading audit_log entries for the run',
+      }),
+    });
+    expect(result.disposition).toBe('pass');
+  });
+
+  it('downgrades a pass whose evidence is a JSON string declaring source basis, same as the object form', () => {
+    const result = enforcePassEvidenceContract({
+      disposition: 'pass',
+      evidence: JSON.stringify({
+        basis: 'source',
+        summary: 'read the component, looks right',
+      }),
+    });
+    expect(result.disposition).toBe('needs-setup');
+    expect(result.evidence).toMatchObject({
+      reason: expect.stringContaining('operational'),
+    });
+  });
+
+  it('downgrades a pass whose evidence is an unparseable string, naming the shape problem distinctly from source-only wording', () => {
+    const result = enforcePassEvidenceContract({
+      disposition: 'pass',
+      evidence: '{"basis": "operational", "summary": ',
+    });
+    expect(result.disposition).toBe('needs-setup');
+    expect(result.evidence).toMatchObject({
+      reason:
+        "pass disposition's evidence could not be interpreted as an evidence object (it was a string that could not be parsed as JSON) — this is a shape problem, not a judgment that the evidence was source-only, and no operational/source determination could be made",
+    });
+    expect((result.evidence as { reason: string }).reason).not.toBe(
+      'pass disposition lacked operational/runtime evidence — a source-only verdict cannot pass',
+    );
   });
 });
 
@@ -712,6 +765,22 @@ describe('enforceAbstentionEvidenceContract', () => {
       evidence,
     });
     expect(result.evidence).toEqual(evidence);
+  });
+
+  it('flags a needs-setup whose evidence is a JSON string citing a missing identifier with no recorded search', () => {
+    const result = enforceAbstentionEvidenceContract({
+      disposition: 'needs-setup',
+      evidence: JSON.stringify({
+        reason:
+          'no target session ID, no read surface for the live setting value',
+      }),
+    });
+    expect(result.disposition).toBe('needs-setup');
+    expect(result.evidence).toMatchObject({
+      reason:
+        'no target session ID, no read surface for the live setting value',
+      abstentionIncomplete: true,
+    });
   });
 
   it('flags a needs-setup citing a missing identifier with no recorded search', () => {
