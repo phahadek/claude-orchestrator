@@ -810,13 +810,13 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     summary:
       'Accretion is author-proposes, groomer-validates — never relocation. The ' +
       'task body\'s pre-groom "### 👁️ Manual verification" section, when ' +
-      'present, carries the author\'s advisory candidates — a hypothesis about ' +
+      "present, carries the author's advisory candidates — a hypothesis about " +
       'what will need observing, not an instruction, and not the input this ' +
       'step transcribes. Do the independent work first: read the code regions ' +
       "this task touches and assess the change's own runtime-observable " +
-      "behaviour from that reading — what would only be knowable by running " +
+      'behaviour from that reading — what would only be knowable by running ' +
       'the system and looking, that the author may not have foreseen. Then ' +
-      "engage with each author candidate on its substance, not on whether a " +
+      'engage with each author candidate on its substance, not on whether a ' +
       'line exists: accept it, correct it, or reject it with a reason, since ' +
       'the author may simply be wrong. Also add runtime verifications of its ' +
       'own that the change requires and the author did not foresee — the ' +

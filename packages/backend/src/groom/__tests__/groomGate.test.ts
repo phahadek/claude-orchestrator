@@ -697,9 +697,9 @@ describe('checkAccretionContributions', () => {
       'notion:accretion-bare-na',
     );
     expect(result.allowed).toBe(false);
-    expect(
-      result.reasons.some((r) => r.includes('substantive reason')),
-    ).toBe(true);
+    expect(result.reasons.some((r) => r.includes('substantive reason'))).toBe(
+      true,
+    );
   });
 
   it('fails open for a retired 🛠️ Tooling task with no markers', () => {
@@ -847,9 +847,9 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
       'notion:candidate-none-no-reason',
     );
     expect(result.allowed).toBe(false);
-    expect(
-      result.reasons.some((r) => r.includes('substantive reason')),
-    ).toBe(true);
+    expect(result.reasons.some((r) => r.includes('substantive reason'))).toBe(
+      true,
+    );
   });
 
   it('a Code promotion carrying accreted items succeeds regardless of pre-groom body content', () => {

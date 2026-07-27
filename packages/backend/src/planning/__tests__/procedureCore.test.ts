@@ -300,7 +300,7 @@ describe('procedureCore', () => {
     expect(text).toContain('`needs-triage`');
   });
 
-  it('describes accretion as independently assessing the change\'s behaviour and validating author candidates, not triaging pre-authored lines', () => {
+  it("describes accretion as independently assessing the change's behaviour and validating author candidates, not triaging pre-authored lines", () => {
     const step = ORDERED_STEPS.find((s) => s.id === 'accrete-gate-and-seed')!;
     const text = stepSummaryFor(step, 'groom');
     expect(text).toMatch(/author-proposes, groomer-validates/i);

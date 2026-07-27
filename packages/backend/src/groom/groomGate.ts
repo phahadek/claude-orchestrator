@@ -248,7 +248,8 @@ function isGateContributionRecorded(
   type: string | undefined,
   taskId: string,
 ): { ok: boolean; reasons: string[] } {
-  if (!type || !GATE_CONTRIBUTION_TYPES.has(type)) return { ok: true, reasons: [] };
+  if (!type || !GATE_CONTRIBUTION_TYPES.has(type))
+    return { ok: true, reasons: [] };
   const marker = getGateAccretionMarker(taskId);
   if (!marker) return { ok: false, reasons: [] };
   if (

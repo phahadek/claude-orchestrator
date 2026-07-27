@@ -417,7 +417,9 @@ describe('gate_accretion marker', () => {
       accretedAt: new Date(0).toISOString(),
     });
 
-    expect(getAccretionMarker('notion:items-no-reason')?.reason).toBeUndefined();
+    expect(
+      getAccretionMarker('notion:items-no-reason')?.reason,
+    ).toBeUndefined();
   });
 
   it('replaces an existing marker for the same source task', () => {
