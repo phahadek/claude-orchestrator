@@ -13,6 +13,7 @@ import {
   principlesFor,
   stepsFor,
   stepSummaryFor,
+  stepTitleFor,
   type SkillId,
 } from '../procedureCore';
 
@@ -108,6 +109,49 @@ describe('procedureCore', () => {
     for (const step of ORDERED_STEPS) {
       expect(step.summary.length).toBeGreaterThan(0);
     }
+  });
+
+  it('drops the interactive-only "No silent writes" chat-confirmation rule for a dispatched session, but keeps it for interactive rendering', () => {
+    const skills: SkillId[] = ['groom', 'design', 'ops'];
+    for (const skill of skills) {
+      const interactive = principlesFor(skill).find(
+        (p) => p.id === 'no-silent-writes',
+      );
+      expect(interactive, `${skill} interactive`).toBeDefined();
+      expect(renderPrinciple(interactive!, skill)).toMatch(
+        /confirmed in chat/i,
+      );
+
+      const dispatched = principlesFor(skill, { dispatched: true }).find(
+        (p) => p.id === 'no-silent-writes',
+      );
+      expect(dispatched, `${skill} dispatched`).toBeUndefined();
+    }
+    // The shared vendored reference file (interactive-only) still carries it.
+    expect(renderHardRulesMarkdown()).toMatch(/confirmed in chat/i);
+  });
+
+  it('gives the present-for-signoff and apply-on-signoff steps dispatched-mode headings distinct from the interactive ones', () => {
+    const presentForSignoff = ORDERED_STEPS.find(
+      (s) => s.id === 'present-for-signoff',
+    )!;
+    const applyOnSignoff = ORDERED_STEPS.find(
+      (s) => s.id === 'apply-on-signoff',
+    )!;
+
+    expect(stepTitleFor(presentForSignoff, 'interactive')).toBe(
+      'Present for sign-off',
+    );
+    expect(stepTitleFor(applyOnSignoff, 'interactive')).toBe(
+      'Apply on sign-off',
+    );
+
+    const dispatchedPresent = stepTitleFor(presentForSignoff, 'dispatched');
+    const dispatchedApply = stepTitleFor(applyOnSignoff, 'dispatched');
+    expect(dispatchedPresent).not.toBe('Present for sign-off');
+    expect(dispatchedApply).not.toBe('Apply on sign-off');
+    expect(dispatchedPresent).not.toMatch(/sign-off/i);
+    expect(dispatchedApply).not.toMatch(/sign-off/i);
   });
 
   it('renderPrinciple resolves the {skillLabel} placeholder per skill', () => {

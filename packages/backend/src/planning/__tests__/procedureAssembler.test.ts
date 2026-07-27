@@ -347,6 +347,44 @@ describe('assemblePlanningProcedure', () => {
     });
   }
 
+  it('never carries the interactive-only chat-confirmation directive in the injected rendering, for groom, design, or ops', () => {
+    for (const { workflow, digest } of cases) {
+      const output = assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        milestoneId: 'm1',
+        projectId: 'p1',
+        digest,
+      });
+      expect(output, `${workflow} output`).not.toMatch(/confirmed in chat/i);
+      expect(output, `${workflow} output`).not.toMatch(/No silent writes/i);
+    }
+  });
+
+  it("gives the injected rendering's sign-off section headings dispatched wording, not the interactive ones", () => {
+    for (const { workflow, digest } of cases) {
+      const output = assemblePlanningProcedure({
+        taskName: 'A task',
+        taskUrl: 'https://notion.so/x',
+        milestoneId: 'm1',
+        projectId: 'p1',
+        digest,
+      });
+      expect(output, `${workflow} output`).not.toContain(
+        '### Present for sign-off',
+      );
+      expect(output, `${workflow} output`).not.toContain(
+        '### Apply on sign-off',
+      );
+      expect(output, `${workflow} output`).toContain(
+        '### Present (stage — the terminal action)',
+      );
+      expect(output, `${workflow} output`).toContain(
+        '### Apply (operator/device-auth only)',
+      );
+    }
+  });
+
   it('renders a task.updateBody invocation example for groom and ops', () => {
     for (const { workflow, digest } of cases) {
       if (workflow !== 'groom' && workflow !== 'ops') continue;
@@ -486,15 +524,13 @@ describe('assemblePlanningProcedure', () => {
       },
     });
 
-    // Isolate the two steps the interactive-only prose used to leak into —
-    // not the whole assembled output, which also carries the generic
-    // (skill-agnostic) "No silent writes" hard rule elsewhere.
+    // Isolate the two steps the interactive-only prose used to leak into.
     const incorporateFeedback = designOutput.slice(
       designOutput.indexOf('### Incorporate feedback'),
       designOutput.indexOf('### File follow-on tasks'),
     );
     const applyOnSignoff = designOutput.slice(
-      designOutput.indexOf('### Apply on sign-off'),
+      designOutput.indexOf('### Apply (operator/device-auth only)'),
       designOutput.indexOf('### Hard rules'),
     );
 

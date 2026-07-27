@@ -46,6 +46,7 @@ import {
   renderPrinciple,
   stepsFor,
   stepSummaryFor,
+  stepTitleFor,
 } from './procedureCore';
 import { existsSync, readFileSync } from 'fs';
 import { basename, join } from 'path';
@@ -816,10 +817,15 @@ function renderProcedureCore(workflow: PlanningWorkflow): string {
   const label = SKILL_LABELS[workflow];
   const lines: string[] = [`## ${label} Procedure`, ''];
   for (const step of stepsFor(workflow, { dispatched: true })) {
-    lines.push(`### ${step.title}`, '', stepSummaryFor(step, workflow), '');
+    lines.push(
+      `### ${stepTitleFor(step, 'dispatched')}`,
+      '',
+      stepSummaryFor(step, workflow),
+      '',
+    );
   }
   lines.push('### Hard rules', '');
-  for (const principle of principlesFor(workflow)) {
+  for (const principle of principlesFor(workflow, { dispatched: true })) {
     lines.push(
       `- **${principle.title}**: ${renderPrinciple(principle, workflow)}`,
     );
