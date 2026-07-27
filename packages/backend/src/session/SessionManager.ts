@@ -231,8 +231,12 @@ function resolveBackendPort(): number {
  *
  * Written with mode 600: the notion server entry references
  * `${NOTION_API_KEY}` for CLI-side env expansion rather than an inline
- * literal, but the file may still carry the orchestrator stage credential,
- * so it's kept unreadable to other users regardless.
+ * literal — confirmed against the installed CLI (see
+ * mcp/notionMcpServer.ts#buildNotionMcpServerEntry) that `--mcp-config
+ * --strict-mcp-config` does expand it from the subprocess's own env, so this
+ * is not a source of credential-delivery failures. The file may still carry
+ * the orchestrator stage credential regardless, so it's kept unreadable to
+ * other users.
  * Exported for unit testing.
  */
 export function writeMcpConfig(
