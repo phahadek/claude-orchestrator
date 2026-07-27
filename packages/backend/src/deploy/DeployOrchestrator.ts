@@ -419,7 +419,7 @@ export class DeployOrchestrator {
         const next = playbook.steps[i + 1];
         if (next) advanceDeployRun(runId, next.id);
         try {
-          const outcome = await this.executeStep(runId, step);
+          const outcome = await this.executeStep(runId, step, targetSha);
           if (!outcome.ok) {
             logger.error(
               `[DeployOrchestrator] run ${runId} (${this.project}) restart step "${step.id}" reported failure after being marked succeeded: ${outcome.detail ?? ''}`,
@@ -435,7 +435,7 @@ export class DeployOrchestrator {
 
       let outcome: StepOutcome;
       try {
-        outcome = await this.executeStep(runId, step);
+        outcome = await this.executeStep(runId, step, targetSha);
       } catch (err) {
         outcome = { ok: false, detail: String(err) };
       }
@@ -448,7 +448,7 @@ export class DeployOrchestrator {
           detail: outcome.detail ?? null,
           at: this.now(),
         });
-        await this.runRollback(runId, playbook, step);
+        await this.runRollback(runId, playbook, step, targetSha);
         completeDeployRun(runId, 'failed', this.now());
         logger.error(
           `[DeployOrchestrator] run ${runId} (${this.project}) halted at step "${step.id}": ${outcome.detail ?? 'step failed'}`,
@@ -489,6 +489,7 @@ export class DeployOrchestrator {
     runId: string,
     playbook: DeployPlaybook,
     failedStep: StepDescriptor,
+    targetSha: string,
   ): Promise<void> {
     if (!failedStep.rollback_ref) return;
     const rollbackStep = playbook.steps.find(
@@ -501,7 +502,7 @@ export class DeployOrchestrator {
       return;
     }
     try {
-      const result = await this.executeStep(runId, rollbackStep);
+      const result = await this.executeStep(runId, rollbackStep, targetSha);
       appendDeployRunEvent({
         runId,
         step: rollbackStep.id,
@@ -523,10 +524,11 @@ export class DeployOrchestrator {
   private async executeStep(
     runId: string,
     step: StepDescriptor,
+    targetSha: string,
   ): Promise<StepOutcome> {
     switch (step.kind) {
       case 'shell': {
-        const result = await this.runShell(step.command_or_prompt, {
+        const result = await this.runShell(step.command_or_prompt as string, {
           runAs: step.run_as,
           cwd: this.projectDir,
         });
@@ -537,8 +539,13 @@ export class DeployOrchestrator {
       }
 
       case 'validation': {
-        const command = step.poll_until ?? step.command_or_prompt;
+        const command = step.poll_until ?? (step.command_or_prompt as string);
         return this.pollUntil(step.id, command, step.run_as);
+      }
+
+      case 'report-in': {
+        reportProjectDeploy(this.project, targetSha);
+        return { ok: true };
       }
 
       case 'agentic': {

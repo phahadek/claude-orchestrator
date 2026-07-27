@@ -65,19 +65,15 @@ describe('the repo-committed deploy playbook', () => {
     expect(agenticSteps).toEqual([]);
   });
 
-  it('report-in is a shell step that posts to the deploy report-in route with the registry project id, not the config-dir name', () => {
+  it('report-in is an engine-handled step that carries no command — no credential, no curl, no loopback hop', () => {
     const result = loadDeployPlaybook(REPO_ROOT);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
     const reportIn = result.playbook.steps.find((s) => s.id === 'report-in');
     expect(reportIn).toBeDefined();
-    expect(reportIn?.kind).toBe('shell');
-    expect(reportIn?.command_or_prompt).toMatch(/\/api\/deploy\/report-in\b/);
-    expect(reportIn?.command_or_prompt).toContain(
-      '\\"projectId\\":\\"claude-dashboard\\"',
-    );
-    expect(reportIn?.command_or_prompt).not.toContain('claude-orchestrator');
+    expect(reportIn?.kind).toBe('report-in');
+    expect(reportIn?.command_or_prompt).toBeUndefined();
   });
 
   it('record-deployed-sha is still ordered after report-in and targets a directory that exists', () => {
@@ -97,7 +93,7 @@ describe('the repo-committed deploy playbook', () => {
     expect(recordSha?.kind).toBe('shell');
     expect(recordSha?.is_prod_mutating).toBe(true);
 
-    const match = recordSha?.command_or_prompt.match(/>\s*(\S+)/);
+    const match = recordSha?.command_or_prompt?.match(/>\s*(\S+)/);
     expect(match).toBeTruthy();
     const targetPath = match![1];
     expect(path.isAbsolute(targetPath)).toBe(true);
@@ -117,14 +113,14 @@ describe('the repo-committed deploy playbook', () => {
     expect(recordSha?.rollback_ref).toBeUndefined();
   });
 
-  it('carries no device-token credential literal — the report-in step references it indirectly via env', () => {
+  it('carries no device-token credential literal — report-in no longer references it at all', () => {
     const raw = fs.readFileSync(
       path.join(REPO_ROOT, '.claude-deploy-playbook.yml'),
       'utf-8',
     );
-    expect(raw).toContain('$ORCHESTRATOR_DEVICE_TOKEN');
+    expect(raw).not.toContain('ORCHESTRATOR_DEVICE_TOKEN');
     // A device token is a long opaque string; guard against anything that
-    // looks like one having been pasted in literally alongside the env ref.
+    // looks like one having been pasted in literally.
     expect(raw).not.toMatch(/Bearer\s+[A-Za-z0-9_-]{20,}/);
   });
 });

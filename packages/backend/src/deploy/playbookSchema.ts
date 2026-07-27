@@ -9,14 +9,23 @@
 /** A glob matched against repo-relative diff paths (e.g. `packages/frontend/**`). */
 export type PathGlob = string;
 
-export type StepKind = 'shell' | 'agentic' | 'validation' | 'confirm-gate';
+export type StepKind =
+  | 'shell'
+  | 'agentic'
+  | 'validation'
+  | 'confirm-gate'
+  | 'report-in';
 
 export interface StepDescriptor {
   /** Stable identifier for the step, referenced by `rollback_ref`. */
   id: string;
   kind: StepKind;
-  /** The exact shell command (kind `shell`/`validation`/`confirm-gate`) or agent prompt (kind `agentic`). */
-  command_or_prompt: string;
+  /**
+   * The exact shell command (kind `shell`/`validation`/`confirm-gate`) or
+   * agent prompt (kind `agentic`). Absent for kind `report-in` — the engine
+   * records the deployed SHA itself, with no command to run.
+   */
+  command_or_prompt?: string;
   /** The runtime user the step must run as, if constrained. */
   run_as?: string;
   /** When set, the step is conditional — only runs if these globs match the deployed→target diff. */
@@ -67,6 +76,7 @@ const STEP_KINDS: StepKind[] = [
   'agentic',
   'validation',
   'confirm-gate',
+  'report-in',
 ];
 
 /** Kinds whose `command_or_prompt` (and `poll_until`) run verbatim in a shell — must be executable, not prose. */
@@ -117,7 +127,11 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
   if (!isString(step.kind) || !STEP_KINDS.includes(step.kind as StepKind)) {
     return `steps[${index}].kind must be one of ${STEP_KINDS.join(', ')}`;
   }
-  if (
+  if (step.kind === 'report-in') {
+    if (step.command_or_prompt !== undefined) {
+      return `steps[${index}].command_or_prompt must be absent for a report-in step`;
+    }
+  } else if (
     !isString(step.command_or_prompt) ||
     step.command_or_prompt.length === 0
   ) {
@@ -125,6 +139,7 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
   }
   if (
     EXECUTABLE_KINDS.includes(step.kind as StepKind) &&
+    isString(step.command_or_prompt) &&
     !looksExecutable(step.command_or_prompt)
   ) {
     return `steps[${index}].command_or_prompt for a ${step.kind} step must be an executable command, not prose`;
@@ -160,7 +175,7 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
   return {
     id: step.id,
     kind: step.kind as StepKind,
-    command_or_prompt: step.command_or_prompt,
+    command_or_prompt: step.command_or_prompt as string | undefined,
     run_as: step.run_as as string | undefined,
     changed_paths: step.changed_paths as string[] | undefined,
     is_prod_mutating: step.is_prod_mutating,

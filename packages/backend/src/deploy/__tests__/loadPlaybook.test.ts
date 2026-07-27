@@ -266,4 +266,42 @@ steps:
     const result = loadDeployPlaybook(tmpDir);
     expect(result.ok).toBe(true);
   });
+
+  it('accepts a report-in step with no command_or_prompt', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-deploy-playbook.yml'),
+      `
+steps:
+  - id: report-in
+    kind: report-in
+    is_prod_mutating: false
+`,
+    );
+
+    const result = loadDeployPlaybook(tmpDir);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.playbook.steps[0].kind).toBe('report-in');
+    expect(result.playbook.steps[0].command_or_prompt).toBeUndefined();
+  });
+
+  it('rejects a report-in step that also carries a command_or_prompt', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-deploy-playbook.yml'),
+      `
+steps:
+  - id: report-in
+    kind: report-in
+    command_or_prompt: "curl -f http://localhost:3000/api/deploy/report-in"
+    is_prod_mutating: false
+`,
+    );
+
+    const result = loadDeployPlaybook(tmpDir);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(
+      /command_or_prompt must be absent for a report-in step/,
+    );
+  });
 });

@@ -537,6 +537,35 @@ describe('DeployOrchestrator: resume after a restart', () => {
   });
 });
 
+describe('DeployOrchestrator: report-in step', () => {
+  it('records the deployed SHA via the engine directly, with no outbound HTTP request', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const playbook = playbookWith([
+      step({ id: 'build', kind: 'shell' }),
+      step({ id: 'report-in', kind: 'report-in', command_or_prompt: undefined }),
+    ]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator(
+      'claude-dashboard',
+      '/tmp/proj',
+      deps,
+    );
+
+    await orchestrator.startDeploy('target-sha-123');
+    await flush();
+
+    expect(getProjectDeployedSha('claude-dashboard')).toBe('target-sha-123');
+    expect(getProjectDeployedSha('claude-orchestrator')).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(deps.runShell).not.toHaveBeenCalledWith(
+      expect.stringContaining('report-in'),
+      expect.anything(),
+    );
+
+    fetchSpy.mockRestore();
+  });
+});
+
 describe('DeployOrchestrator: companion-diff flags', () => {
   it('flags a companion whose trigger_paths match the deployed→target diff', async () => {
     const playbook = playbookWith(
