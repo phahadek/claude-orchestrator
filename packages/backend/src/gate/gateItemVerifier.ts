@@ -207,15 +207,63 @@ function buildGateVerifyProcedure(item: GateItem): string {
 }
 
 /**
+ * The result of trying to read an evidence payload as an object. A session
+ * may report evidence as a JSON string rather than an object — that must be
+ * parsed and then judged on its contents, not rejected on shape alone. A
+ * string that cannot be parsed into an object is a distinct failure mode
+ * ("shape") from an object whose contents don't satisfy the contract
+ * ("substance") and must be reported differently. Exported for testing.
+ */
+export type EvidenceShapeResult =
+  | { kind: 'object'; value: Record<string, unknown> }
+  | { kind: 'unusable' }
+  | { kind: 'shape-error'; description: string };
+
+/**
+ * Parses an evidence payload into an object, accepting either an object
+ * directly or a JSON-encoded string of one. Exported for testing.
+ */
+export function resolveEvidenceShape(evidence: unknown): EvidenceShapeResult {
+  if (typeof evidence === 'string') {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(evidence);
+    } catch {
+      return {
+        kind: 'shape-error',
+        description: 'a string that could not be parsed as JSON',
+      };
+    }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return { kind: 'object', value: parsed as Record<string, unknown> };
+    }
+    return {
+      kind: 'shape-error',
+      description: `a JSON string that parsed to ${
+        Array.isArray(parsed) ? 'an array' : parsed === null ? 'null' : typeof parsed
+      }, not an object`,
+    };
+  }
+  if (evidence && typeof evidence === 'object' && !Array.isArray(evidence)) {
+    return { kind: 'object', value: evidence as Record<string, unknown> };
+  }
+  return { kind: 'unusable' };
+}
+
+function toEvidenceObject(evidence: unknown): Record<string, unknown> | null {
+  const resolved = resolveEvidenceShape(evidence);
+  return resolved.kind === 'object' ? resolved.value : null;
+}
+
+/**
  * True when a `pass` result's evidence claims to be grounded in
  * operational/runtime observation rather than source-code reading alone.
  * Exported for testing.
  */
 export function hasOperationalEvidence(evidence: unknown): boolean {
-  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
-    return false;
-  }
-  const basis = (evidence as Record<string, unknown>).basis;
+  const value = toEvidenceObject(evidence);
+  if (!value) return false;
+  const basis = value.basis;
   if (typeof basis === 'string') {
     return basis.toLowerCase() === 'operational';
   }
@@ -301,8 +349,9 @@ function tokenize(text: string): string[] {
  * never to observing the described behavior itself. Exported for testing.
  */
 export function isPreconditionOnlyEvidence(evidence: unknown): boolean {
-  if (!evidence || typeof evidence !== 'object') return false;
-  const tokens = tokenize(JSON.stringify(evidence));
+  const value = toEvidenceObject(evidence);
+  if (!value) return false;
+  const tokens = tokenize(JSON.stringify(value));
   const hasPreconditionToken = tokens.some((t) => PRECONDITION_TOKENS.has(t));
   if (!hasPreconditionToken) return false;
 
@@ -316,9 +365,10 @@ export function isPreconditionOnlyEvidence(evidence: unknown): boolean {
 }
 
 function evidenceText(evidence: unknown): string | null {
-  if (!evidence || typeof evidence !== 'object') return null;
+  const value = toEvidenceObject(evidence);
+  if (!value) return null;
   try {
-    return JSON.stringify(evidence).toLowerCase();
+    return JSON.stringify(value).toLowerCase();
   } catch {
     return null;
   }
@@ -492,6 +542,17 @@ export function enforcePassEvidenceContract(
   result: GateVerificationResult,
 ): GateVerificationResult {
   if (result.disposition !== 'pass') return result;
+  const shape = resolveEvidenceShape(result.evidence);
+  if (shape.kind === 'shape-error') {
+    return downgrade(
+      `pass disposition's evidence could not be interpreted as an evidence ` +
+        `object (it was ${shape.description}) — this is a shape problem, ` +
+        'not a judgment that the evidence was source-only, and no ' +
+        'operational/source determination could be made',
+      result.evidence,
+      result.reclassify,
+    );
+  }
   if (!hasOperationalEvidence(result.evidence)) {
     return downgrade(
       'pass disposition lacked operational/runtime evidence — a source-only verdict cannot pass',
@@ -541,9 +602,7 @@ export function enforceAbstentionEvidenceContract(
   if (result.disposition !== 'needs-setup') return result;
   if (!citesMissingIdentifierWithoutSearch(result.evidence)) return result;
   const baseEvidence =
-    result.evidence && typeof result.evidence === 'object'
-      ? (result.evidence as Record<string, unknown>)
-      : { reportedEvidence: result.evidence };
+    toEvidenceObject(result.evidence) ?? { reportedEvidence: result.evidence };
   return {
     ...result,
     evidence: {
