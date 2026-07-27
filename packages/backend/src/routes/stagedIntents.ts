@@ -813,7 +813,7 @@ export function stageIntent(
           : undefined;
 
   if (existing) {
-    if (existing.payload_hash === payloadHash) {
+    if (existing !== explicitValid && existing.payload_hash === payloadHash) {
       if (groupId && groupId !== existing.group_id) {
         const grouped = setStagedIntentGroup(existing.id, groupId);
         broadcastIntentChange(rowToApi(grouped));
