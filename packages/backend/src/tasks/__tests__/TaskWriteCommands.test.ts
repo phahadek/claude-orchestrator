@@ -270,6 +270,30 @@ describe('getCachedType / getCachedStatus — task ID normalization', () => {
 
     expect(getCachedStatus('notion:abc-uuid')).toBe('Backlog');
   });
+
+  const hyphenated = '3aa22f91-52f3-81a7-a58b-db94fe13e649';
+  const hyphenless = '3aa22f9152f381a7a58bdb94fe13e649';
+
+  it.each([
+    ['hyphenless, no prefix', hyphenless],
+    ['hyphenated, no prefix', hyphenated],
+    ['hyphenless, notion:-prefixed', `notion:${hyphenless}`],
+    ['hyphenated, notion:-prefixed', `notion:${hyphenated}`],
+  ])('getCachedType resolves the same cached type for %s', (_label, id) => {
+    mockGetTaskCache.mockImplementation((key: string) =>
+      key === `notion:${hyphenated}`
+        ? cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '📐 Design')
+        : undefined,
+    );
+
+    expect(getCachedType(id)).toBe('📐 Design');
+  });
+
+  it('getCachedType returns null when there is no matching task_cache row', () => {
+    mockGetTaskCache.mockReturnValue(undefined);
+
+    expect(getCachedType(hyphenless)).toBeNull();
+  });
 });
 
 describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () => {
@@ -479,6 +503,137 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
       expect.anything(),
     );
   });
+
+  const hyphenatedUuid = '3aa22f91-52f3-81a7-a58b-db94fe13e649';
+  const hyphenlessUuid = '3aa22f9152f381a7a58bdb94fe13e649';
+
+  it.each([
+    ['hyphenless', hyphenlessUuid],
+    ['hyphenated', hyphenatedUuid],
+  ])(
+    'passes the readiness gate for a 📐 Design task with a non-empty Open Questions section, id supplied %s',
+    async (_label, id) => {
+      mockGetTaskCache.mockImplementation((key: string) =>
+        key === `notion:${hyphenatedUuid}`
+          ? cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '📐 Design')
+          : undefined,
+      );
+      const backend = makeBackend({
+        fetchTaskPage: vi
+          .fn()
+          .mockResolvedValue(
+            '## Open Questions\n- What supplies the credential?\n',
+          ),
+      });
+      const commands = new BackendTaskWriteCommands(backend);
+
+      await expect(
+        commands.setStatus(id, 'Ready', {
+          groomingGate: {
+            size_check: { decision: 'n/a' },
+            type_check: { decision: 'n/a' },
+            triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+          },
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(backend.updateStatus).toHaveBeenCalledWith(
+        id,
+        '🗂️ Ready',
+        expect.anything(),
+      );
+    },
+  );
+
+  it.each([
+    ['hyphenless', hyphenlessUuid],
+    ['hyphenated', hyphenatedUuid],
+  ])(
+    'still blocks a 💻 Code task with a non-empty Open Questions section, id supplied %s',
+    async (_label, id) => {
+      mockGetTaskCache.mockImplementation((key: string) =>
+        key === `notion:${hyphenatedUuid}`
+          ? cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '💻 Code')
+          : undefined,
+      );
+      mockGetAccretionMarker.mockReturnValue({ decision: 'items' });
+      mockGetSeedAccretionMarker.mockReturnValue({ decision: 'none' });
+      const backend = makeBackend({
+        fetchTaskPage: vi
+          .fn()
+          .mockResolvedValue(
+            '## Open Questions\n- What supplies the credential?\n',
+          ),
+      });
+      const commands = new BackendTaskWriteCommands(backend);
+
+      let caught: unknown;
+      try {
+        await commands.setStatus(id, 'Ready', {
+          groomingGate: {
+            size_check: { decision: 'no_split' },
+            type_check: { decision: 'none' },
+            filesPathsEntries: [
+              {
+                raw: 'packages/backend/src/abc.ts *(new)*',
+                isNew: true,
+                existsInRepo: false,
+              },
+            ],
+          },
+        });
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ReadinessGateError);
+      expect(backend.updateStatus).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['hyphenless', hyphenlessUuid],
+    ['hyphenated', hyphenatedUuid],
+  ])(
+    'resolves the triageCleanDesign standard-override path for a Design task, id supplied %s',
+    async (_label, id) => {
+      mockGetTaskCache.mockImplementation((key: string) =>
+        key === `notion:${hyphenatedUuid}`
+          ? cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '📐 Design')
+          : undefined,
+      );
+      const backend = makeBackend({
+        fetchTaskPage: vi
+          .fn()
+          .mockResolvedValue(
+            'Files affected: confirm the exact module at grooming.',
+          ),
+      });
+      const commands = new BackendTaskWriteCommands(backend, 'proj-1');
+
+      await commands.setStatus(id, 'Ready', {
+        sessionId: 'sess-1',
+        triageCleanDesign: { milestoneLabel: 'M12' },
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'n/a' },
+          triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+        },
+      });
+
+      const expectedReason =
+        'Design task — open questions are the /design worklist, resolved at execution; ' +
+        'triaged clean in the M12 consolidated Design triage';
+
+      expect(backend.updateStatus).toHaveBeenCalled();
+      expect(mockRecordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'readiness_override',
+          payload: expect.objectContaining({ reason: expectedReason }),
+        }),
+      );
+    },
+  );
 });
 
 describe('TaskWriteCommands.setStatus — grooming promotion gate', () => {
