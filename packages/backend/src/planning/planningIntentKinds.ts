@@ -27,6 +27,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'session.requestCapability',
     'task.updateBody',
     'task.patchBodySection',
+    'decision.pickOne',
   ],
   design: [
     'decision.pickOne',

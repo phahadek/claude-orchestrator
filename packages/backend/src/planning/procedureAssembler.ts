@@ -685,7 +685,32 @@ function renderSkeleton(
           'value passed to `task.setStatus` / `task.setDependsOn` / ' +
           '`gate.accrete` / `seed.stage` above. When the pre-groom body carries ' +
           'no such section, stage no strip intent at all — there is nothing to ' +
-          'remove.'
+          'remove.\n\n' +
+          'A finding that turns on an operator judgment this session cannot ' +
+          "make on its own authority — the task's scope is wrong, a " +
+          'dependency cannot be confirmed, the spec contradicts the code — ' +
+          'is raised as its own `decision.pickOne` question-intent, never ' +
+          'smuggled through a `task.setStatus` staged to the status the task ' +
+          'already holds: `task.setStatus` is staged only when the status is ' +
+          'actually changing. A worked example: call the ' +
+          `\`${orchestratorMcpToolName('decision.pickOne')}\` tool with ` +
+          '`{"payload":{"prompt":"The task\'s Scope section only covers X and ' +
+          'Y, but the code also has a live Z path — widen scope, file a ' +
+          'sibling task for Z, or proceed as specified?","options":[' +
+          '{"label":"Widen scope","description":"..."},' +
+          '{"label":"File a sibling task for Z","description":"..."},' +
+          '{"label":"Proceed as specified","description":"..."}],' +
+          '"allowFreeForm":true},"decisionProposal":"<the finding and its ' +
+          'evidence>"}` — the task stays at its current status (typically ' +
+          '`Backlog`) while the question is outstanding; no `task.setStatus` ' +
+          'accompanies it. This is not a punt channel: a readiness judgment ' +
+          'this session is equipped to resolve is still resolved now (see ' +
+          '"Investigate before resolving" above) — `decision.pickOne` is only ' +
+          "for a decision genuinely outside a groomer's authority, changing " +
+          'what the task is. A scope gap is not automatically a body edit ' +
+          'either: ask via `decision.pickOne` first when the resolution is ' +
+          "the operator's to make, and patch the body only once the answer " +
+          'is known.'
         : '') +
       (workflow === 'ops'
         ? ' Stage the next step, then keep driving: once investigation reaches a ' +
