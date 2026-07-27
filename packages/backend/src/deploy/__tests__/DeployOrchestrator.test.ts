@@ -283,6 +283,61 @@ describe('DeployOrchestrator: step failure halts + rollback', () => {
     expect(events).toContain('step_failed');
     expect(events).toContain('rollback_succeeded');
   });
+
+  it('halts to a terminal failed state with no rollback event when the failed step has no rollback_ref', async () => {
+    const playbook = playbookWith([
+      step({ id: 'bookkeeping', kind: 'shell' }),
+      step({ id: 'never-reached', kind: 'shell' }),
+    ]);
+    const deps = makeDeps(playbook, {
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        if (command === 'run bookkeeping')
+          return { ok: false, output: 'bookkeeping exploded', exitCode: 1 };
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const completed = getDeployRun(run.run_id);
+    expect(completed?.status).toBe('failed');
+    const events = listDeployRunEvents(run.run_id);
+    expect(events.map((e) => e.event_type)).toEqual([
+      'step_started',
+      'step_failed',
+    ]);
+    expect(
+      events.find((e) => e.event_type === 'step_failed')?.detail,
+    ).toBe('bookkeeping exploded');
+    expect(events.some((e) => e.event_type === 'rollback_succeeded')).toBe(
+      false,
+    );
+    expect(events.some((e) => e.event_type === 'rollback_failed')).toBe(
+      false,
+    );
+  });
+
+  it('reaches a terminal failed state (not stuck running) when the final step fails with no rollback_ref', async () => {
+    const playbook = playbookWith([
+      step({ id: 'setup', kind: 'shell' }),
+      step({ id: 'final-bookkeeping', kind: 'shell' }),
+    ]);
+    const deps = makeDeps(playbook, {
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        if (command === 'run final-bookkeeping')
+          return { ok: false, output: 'final step exploded', exitCode: 1 };
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const completed = getDeployRun(run.run_id);
+    expect(completed?.status).toBe('failed');
+    expect(completed?.status).not.toBe('running');
+  });
 });
 
 describe('DeployOrchestrator: failure detail synthesis', () => {
