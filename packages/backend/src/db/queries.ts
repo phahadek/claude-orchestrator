@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { db } from './db';
 import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
-import { normalizeTaskId } from '../tasks/taskId';
+import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
@@ -552,19 +552,17 @@ export function getVerifySessionsForGateItems(
  * an orphan: OrphanedTaskSweeper must skip revert/nudge for such a task.
  */
 export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
-  const norm = taskId.replace(/-/g, '');
-  const row = db
-    .prepare<{ task_id: string }>(
+  const norm = normalizeBoardId(taskId);
+  const rows = db
+    .prepare<[], { task_id: string | null }>(
       `
-    SELECT 1 FROM sessions
-    WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
-      AND status NOT IN ('done', 'error', 'killed', 'superseded')
+    SELECT task_id FROM sessions
+    WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
       AND session_type IN ('groom', 'design', 'ops')
-    LIMIT 1
   `,
     )
-    .get({ task_id: norm });
-  return !!row;
+    .all();
+  return rows.some((row) => normalizeBoardId(row.task_id ?? '') === norm);
 }
 
 export function hasActiveSessionForTask(taskId: string): boolean {

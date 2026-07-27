@@ -13,7 +13,7 @@ import { loadDesignContext } from '../design/designLoad';
 import { getProjectRowById } from '../db/queries';
 import { resolveMilestoneForProject } from '../projects/milestoneResolver';
 import { isPlanningSession } from '../session/sessionPredicates';
-import { toExternalId } from '../tasks/taskId';
+import { toExternalId, normalizeTaskId } from '../tasks/taskId';
 
 /** Strips a `source:` prefix for URL-building; falls back to the raw id if unprefixed. */
 function bareTaskId(id: string): string {
@@ -417,7 +417,7 @@ export class OpsSessionLauncher {
           taskName,
           milestoneId,
           taskKind: 'milestone',
-          taskId: task.id,
+          taskId: normalizeTaskId(task.id),
           sessionType,
           ...(opsContext && {
             opsContext: buildOpsSessionContext(

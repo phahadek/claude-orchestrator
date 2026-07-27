@@ -188,6 +188,22 @@ describe('OpsSessionLauncher', () => {
     }
   });
 
+  it('records a notion:-prefixed sessions.task_id, matching every other launch path', async () => {
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const tasks = [makeTask({ id: 'task-1' })];
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      opsContext: makeOpsContext(tasks),
+      tasks,
+    });
+
+    const [, , options] = start.mock.calls[0];
+    expect(options.taskId).toBe('notion:task-1');
+  });
+
   it('defers a task whose Depends On is not all ✅ Done, and launches it once unblocked', async () => {
     const { loadOpsContext } = await import('../../ops/opsLoad.js');
     const blockedTask = makeTask({
@@ -594,7 +610,7 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
   it('partitions a mixed batch into launched, deferred, and failed, still dispatching the non-failing tasks', async () => {
     start.mockImplementation(
       (_url: string, _ctxUrl: string, opts: { taskId: string }) => {
-        if (opts.taskId === 'task-fail') {
+        if (opts.taskId === 'notion:task-fail') {
           return Promise.reject(
             new Error('Max concurrent planning sessions (5) reached'),
           );
