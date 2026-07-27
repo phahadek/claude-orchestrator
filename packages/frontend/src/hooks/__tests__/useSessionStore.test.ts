@@ -749,17 +749,20 @@ describe('useSessionStore', () => {
   });
 
   describe('session_archived handling', () => {
-    it('removes the session from the in-memory map on session_archived', () => {
+    it('marks the session archived instead of removing it from the in-memory map', () => {
       const { result } = renderHook(() => useSessionStore());
       act(() => result.current.dispatch(msg.session_started()));
       expect(result.current.sessions).toHaveLength(1);
+      expect(result.current.sessions[0].archived).toBeFalsy();
 
       const archivedMsg: ServerMessage = {
         type: 'session_archived',
         sessionId: SESSION_ID,
       };
       act(() => result.current.dispatch(archivedMsg));
-      expect(result.current.sessions).toHaveLength(0);
+      expect(result.current.sessions).toHaveLength(1);
+      expect(result.current.sessions[0].sessionId).toBe(SESSION_ID);
+      expect(result.current.sessions[0].archived).toBe(true);
     });
 
     it('session_archived for unknown id is a no-op', () => {

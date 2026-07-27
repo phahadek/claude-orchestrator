@@ -406,7 +406,9 @@ export function useSessionStore() {
           break;
         }
         case 'session_archived': {
-          next.delete(msg.sessionId);
+          const existing = next.get(msg.sessionId);
+          if (!existing) break;
+          next.set(msg.sessionId, { ...existing, archived: true });
           break;
         }
         default:
