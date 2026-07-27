@@ -123,7 +123,9 @@ describe('POST /api/planning/launch', () => {
   });
 
   it('resolves the task title from the task cache instead of using the bare id', async () => {
-    vi.mocked(getTaskTitleFromCache).mockReturnValue('Fix the flaky retry logic');
+    vi.mocked(getTaskTitleFromCache).mockReturnValue(
+      'Fix the flaky retry logic',
+    );
 
     const res = await request(app)
       .post('/api/planning/launch')
@@ -161,7 +163,9 @@ describe('POST /api/planning/launch', () => {
     expect(res.status).toBe(202);
     expect(launchSelected).toHaveBeenCalledWith(
       expect.objectContaining({
-        tasks: [expect.objectContaining({ id: 'notion:abc-123', title: 'abc-123' })],
+        tasks: [
+          expect.objectContaining({ id: 'notion:abc-123', title: 'abc-123' }),
+        ],
       }),
     );
   });
