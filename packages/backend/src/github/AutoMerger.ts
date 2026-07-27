@@ -383,6 +383,7 @@ export class AutoMerger {
         base_branch: row.base_branch,
         merge_sha: commitSha,
         local_branch_id: row.id,
+        source: 'auto-merger',
       },
     });
 
@@ -661,6 +662,7 @@ export class AutoMerger {
           pr_number: pr.pr_number,
           repo: pr.repo,
           merge_sha: result.sha ?? null,
+          source: 'poll',
         },
       });
       logger.info(
@@ -696,6 +698,7 @@ export class AutoMerger {
               pr_number: pr.pr_number,
               repo: pr.repo,
               merge_sha: retryResult.sha ?? null,
+              source: 'ingest',
             },
           });
           logger.info(

@@ -480,9 +480,10 @@ export function createPrsRouter(
         // cleanup, origin-branch deletion, session/task completion, broadcast)
         // to the same path the detected-merge flows (AutoMerger, poll, ingest)
         // use, so operator merges get identical cleanup.
-        if (mergeWatcher && prRow) {
-          await mergeWatcher.handleMerged(
-            prRow,
+        const usedWatcher = Boolean(mergeWatcher && prRow);
+        if (usedWatcher) {
+          await mergeWatcher!.handleMerged(
+            prRow!,
             (result as { sha?: string }).sha ?? null,
           );
         } else {
@@ -501,6 +502,8 @@ export function createPrsRouter(
             pr_number: prNumber,
             repo,
             merge_sha: (result as { sha?: string }).sha ?? null,
+            source: 'manual',
+            handling: usedWatcher ? 'full' : 'fallback',
           },
         });
 
