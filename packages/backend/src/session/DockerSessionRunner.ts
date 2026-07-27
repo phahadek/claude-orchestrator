@@ -8,10 +8,7 @@ import type {
 } from './SessionRunner';
 import { logger } from '../logger';
 import { isPlanningSession } from './sessionPredicates';
-import {
-  acquireCheckoutLockdown,
-  releaseCheckoutLockdown,
-} from './checkoutLockdown';
+import { createScratchDir, removeScratchDir } from './planningScratchDir';
 
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[DockerSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
@@ -56,6 +53,7 @@ export class DockerSessionRunner implements ISessionRunner {
   private execProc: ChildProcess | null = null;
   private _killed = false;
   private _isPlanning = false;
+  private _scratchDir: string | undefined;
 
   constructor(private readonly sessionId: string) {
     this.containerName = `${SESSION_CONTAINER_PREFIX}${sessionId}`;
@@ -85,17 +83,13 @@ export class DockerSessionRunner implements ISessionRunner {
     this._isPlanning = isPlanning;
 
     // Planning sessions share `cwd` === the project checkout (worktreePath
-    // here) across concurrent sessions. Ref-count the lockdown (DB-backed,
-    // see checkoutLockdown.ts) so the checkout mount only flips read-only
-    // while at least one planning session is running, and carve out a
-    // writable scratch-dir bind mount as the exception. Unlike
-    // CliSessionRunner, no host-level chmod is needed — the `:ro` bind
-    // mount below is what enforces read-only inside the container.
-    const scratchDir = isPlanning
-      ? await acquireCheckoutLockdown(worktreePath, this.sessionId, {
-          applyFsLockdown: false,
-        })
-      : undefined;
+    // here) across concurrent sessions. Give them a writable per-session
+    // scratch dir for output that shouldn't land in tracked files — the
+    // checkout mount below stays read-write for planning and coding
+    // sessions alike.
+    if (isPlanning) {
+      this._scratchDir = createScratchDir(worktreePath, this.sessionId);
+    }
 
     const claudeBin = config.claudePath;
     const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? '/root';
@@ -145,16 +139,8 @@ export class DockerSessionRunner implements ISessionRunner {
           'docker run -d',
           `--name ${this.containerName}`,
           `--network ${this.networkName}`,
-          // Planning sessions get a read-only checkout mount (no OS-level
-          // sandbox of their own) plus a writable scratch-dir mount as the
-          // carved-out exception. Coding/review sessions keep the
-          // read-write worktree mount — claude needs to modify files there.
-          ...(isPlanning
-            ? [
-                `-v "${worktreePath}:${worktreePath}:ro"`,
-                `-v "${scratchDir}:${scratchDir}"`,
-              ]
-            : [`-v "${worktreePath}:${worktreePath}"`]),
+          // Mount worktree (read-write — claude needs to modify files)
+          `-v "${worktreePath}:${worktreePath}"`,
           // Mount claude binary (read-only)
           `-v "${claudeBin}:${claudeBin}:ro"`,
           // Mount claude credentials and config (read-only)
@@ -344,10 +330,8 @@ export class DockerSessionRunner implements ISessionRunner {
   }
 
   private async _teardown(): Promise<void> {
-    if (this._isPlanning) {
-      await releaseCheckoutLockdown(this.sessionId, {
-        applyFsLockdown: false,
-      });
+    if (this._isPlanning && this._scratchDir) {
+      removeScratchDir(this._scratchDir);
     }
     for (const name of [this.containerName, this.proxyContainerName]) {
       try {

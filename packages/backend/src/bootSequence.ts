@@ -3,7 +3,6 @@ import { GitHubClient } from './github/GitHubClient';
 import { runPRBootSweep } from './github/PRBootSweep';
 import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
 import { runGitConfigIntegrityCheck } from './orchestration/gitConfigIntegrity';
-import { reconcileCheckoutLockdownAtBoot } from './session/checkoutLockdown';
 import { logger } from './logger';
 import { getCorporateMode } from './config/corporateMode';
 import { recordEvent, getLatestEventByType } from './audit/AuditLog';
@@ -220,7 +219,6 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'jsonl_import',
     'session_events_pruner_at_boot',
     'git_config_integrity_check',
-    'checkout_lockdown_reconciliation',
     'resume_orphan_sessions',
     'stuck_session_monitor_rehydrate',
     'auto_merger_rehydrate',
@@ -239,16 +237,6 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   );
   await tracker.runStep('git_config_integrity_check', () =>
     runGitConfigIntegrityCheck(),
-  );
-  // Restores each planning-locked checkout to the state its persisted ref
-  // count implies — a crash mid-lock/mid-unlock must never strand a
-  // checkout read-only (or leave it writable while a lock row still says
-  // otherwise). Must run before resume_orphan_sessions respawns any
-  // planning session process against that checkout.
-  await tracker.runStep('checkout_lockdown_reconciliation', () =>
-    reconcileCheckoutLockdownAtBoot({
-      applyFsLockdown: !getCorporateMode().gates.dockerMandatory,
-    }),
   );
   await tracker.runStep(
     'resume_orphan_sessions',

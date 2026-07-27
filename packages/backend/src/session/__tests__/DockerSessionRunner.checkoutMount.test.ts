@@ -9,17 +9,17 @@ vi.mock('../../config', () => ({
 
 let capturedExecSyncCmds: string[] = [];
 
-const { mockAcquire, mockRelease } = vi.hoisted(() => ({
-  mockAcquire: vi.fn(
+const { mockCreate, mockRemove } = vi.hoisted(() => ({
+  mockCreate: vi.fn(
     (projectDir: string, sessionId: string) =>
       `${projectDir}/.claude/scratch/${sessionId}`,
   ),
-  mockRelease: vi.fn(),
+  mockRemove: vi.fn(),
 }));
 
-vi.mock('../checkoutLockdown', () => ({
-  acquireCheckoutLockdown: mockAcquire,
-  releaseCheckoutLockdown: mockRelease,
+vi.mock('../planningScratchDir', () => ({
+  createScratchDir: mockCreate,
+  removeScratchDir: mockRemove,
 }));
 
 function makeMockProc() {
@@ -83,14 +83,14 @@ describe('DockerSessionRunner checkout mount', () => {
       () => {},
     );
 
-    expect(mockAcquire).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
     expect(sessionRunCmd()).toContain('-v "/fake/worktree:/fake/worktree"');
     expect(sessionRunCmd()).not.toContain(
       '-v "/fake/worktree:/fake/worktree:ro"',
     );
   });
 
-  it('mounts a planning-session checkout read-only plus a writable scratch-dir mount', async () => {
+  it('mounts a planning-session checkout read-write, same as coding sessions', async () => {
     const runner = new DockerSessionRunner(SESSION_ID);
     await runner.run(
       'hello',
@@ -104,17 +104,13 @@ describe('DockerSessionRunner checkout mount', () => {
       () => {},
     );
 
-    expect(mockAcquire).toHaveBeenCalledWith('/fake/project', SESSION_ID, {
-      applyFsLockdown: false,
-    });
+    expect(mockCreate).toHaveBeenCalledWith('/fake/project', SESSION_ID);
     const cmd = sessionRunCmd();
-    expect(cmd).toContain('-v "/fake/project:/fake/project:ro"');
-    expect(cmd).toContain(
-      `-v "/fake/project/.claude/scratch/${SESSION_ID}:/fake/project/.claude/scratch/${SESSION_ID}"`,
-    );
+    expect(cmd).toContain('-v "/fake/project:/fake/project"');
+    expect(cmd).not.toContain('-v "/fake/project:/fake/project:ro"');
   });
 
-  it('releases the checkout lock on session end', async () => {
+  it('removes the scratch dir on session end', async () => {
     const runner = new DockerSessionRunner(SESSION_ID);
     await runner.run(
       'hello',
@@ -128,8 +124,8 @@ describe('DockerSessionRunner checkout mount', () => {
       () => {},
     );
 
-    expect(mockRelease).toHaveBeenCalledWith(SESSION_ID, {
-      applyFsLockdown: false,
-    });
+    expect(mockRemove).toHaveBeenCalledWith(
+      `/fake/project/.claude/scratch/${SESSION_ID}`,
+    );
   });
 });

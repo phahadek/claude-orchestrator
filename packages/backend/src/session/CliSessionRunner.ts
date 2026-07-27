@@ -15,9 +15,10 @@ import { logger } from '../logger';
 import { placeSessionPid } from './sessionCgroup';
 import { isPlanningSession } from './sessionPredicates';
 import {
-  acquireCheckoutLockdown,
-  releaseCheckoutLockdown,
-} from './checkoutLockdown';
+  createScratchDir,
+  removeScratchDir,
+  getScratchDir,
+} from './planningScratchDir';
 
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
@@ -75,16 +76,13 @@ export class CliSessionRunner implements ISessionRunner {
     const isPlanning = Boolean(sessionType && isPlanningSession(sessionType));
 
     // Planning sessions share `cwd` === the project checkout across
-    // concurrent sessions (no worktree of their own — see below), and that
-    // checkout has no sandbox other than this lockdown: strip write
-    // permission from it (ref-counted, since concurrent planning sessions
-    // must not lift each other's lock) and carve out a writable per-session
-    // scratch dir as the exception. `worktreePath` is the project dir for
-    // planning sessions.
+    // concurrent sessions (no worktree of their own — see below).
+    // `worktreePath` is the project dir for planning sessions; give it a
+    // writable per-session scratch dir for output that shouldn't land in
+    // tracked files. The checkout itself is left read-write — see
+    // SessionManager's post-session drift-detection audit event.
     if (isPlanning) {
-      await acquireCheckoutLockdown(worktreePath, this.sessionId, {
-        applyFsLockdown: true,
-      });
+      createScratchDir(worktreePath, this.sessionId);
     }
 
     // Planning/ops/gate-verify sessions have no worktree of their own (they
@@ -228,7 +226,7 @@ export class CliSessionRunner implements ISessionRunner {
     ]);
 
     if (isPlanning) {
-      await releaseCheckoutLockdown(this.sessionId, { applyFsLockdown: true });
+      removeScratchDir(getScratchDir(worktreePath, this.sessionId));
     }
 
     return exitCode;
