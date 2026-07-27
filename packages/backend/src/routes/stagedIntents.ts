@@ -1185,7 +1185,10 @@ async function resumeCapabilityRequester(
  * session can actually act on — the unresolvable id — instead of sending it
  * off chasing a sharing setting that was never the problem.
  */
-export function translateApplyError(err: unknown, intent: StagedIntent): string {
+export function translateApplyError(
+  err: unknown,
+  intent: StagedIntent,
+): string {
   const raw = err instanceof Error ? err.message : String(err);
   const notFoundMatch = raw.match(
     /Could not find (?:page|database) with ID:\s*([0-9a-fA-F-]+)/,

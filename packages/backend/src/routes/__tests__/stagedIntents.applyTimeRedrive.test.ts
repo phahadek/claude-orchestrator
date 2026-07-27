@@ -101,7 +101,9 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
   it('enqueues a pushback to the originating session carrying the failure reason, and resumes it', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      setDependsOn: vi.fn().mockRejectedValue(new Error('backend write failed')),
+      setDependsOn: vi
+        .fn()
+        .mockRejectedValue(new Error('backend write failed')),
     });
 
     const sm = makeSessionManager();
@@ -186,7 +188,9 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
   it('an apply-time failure whose originating session no longer exists surfaces to the operator instead of being dropped', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      setDependsOn: vi.fn().mockRejectedValue(new Error('backend write failed')),
+      setDependsOn: vi
+        .fn()
+        .mockRejectedValue(new Error('backend write failed')),
     });
 
     const sm = makeSessionManager();
