@@ -992,6 +992,92 @@ describe('OrphanedTaskSweeper', () => {
     );
   });
 
+  // ── Ops/Investigation sweep (widened type filter) ─────────────────────────
+
+  it.each(['🔧 Operational', '🔎 Investigation'])(
+    'reverts a %s task at In Progress whose only session is killed',
+    async (taskType) => {
+      const backend = makeBackend([
+        makeTask('notion:abc', '🔄 In Progress', taskType),
+      ]);
+      // getLatestCodeSessionByNotionTaskId only ever sees 'standard' sessions,
+      // so an ops session (even a killed one) never surfaces here — it's undefined.
+      vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
+      vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+      // The ops session is killed (terminal), so the planning-session guard
+      // correctly reports no non-terminal planning session.
+      vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
+
+      const sweeper = new OrphanedTaskSweeper(broadcast, {
+        listProjects: () => [
+          { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+        ],
+        resolveBackend: () => backend,
+      });
+
+      await sweeper.sweepOnce();
+
+      expect(backend.updateStatus).toHaveBeenCalledWith(
+        'notion:abc',
+        '🗂️ Ready',
+      );
+      expect(recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'task_orphan_reverted',
+          task_id: 'notion:abc',
+        }),
+      );
+    },
+  );
+
+  it('does not revert an Operational task whose ops session is idle (parked awaiting disposition)', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '🔧 Operational'),
+    ]);
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    // The parked ops session is idle — non-terminal — so the guard reports true.
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(true);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  it('never touches an Operational task already at In Review or Done', async () => {
+    // listTasksByStatus is scoped to IN_PROGRESS_STATUS, so a task already past
+    // In Progress never appears in the sweep's candidate list at all.
+    const backend = makeBackend([]);
+    vi.mocked(getAllProjects).mockReturnValue([
+      { id: 'proj-1', name: 'P1' } as ReturnType<typeof getAllProjects>[number],
+    ]);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.listTasksByStatus).toHaveBeenCalledWith('🔄 In Progress');
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
   // ── GitHub PR-existence gate ──────────────────────────────────────────────
 
   it('suppresses "no PR opened" nudge when GitHub API finds open PR for session head branch', async () => {
