@@ -52,8 +52,10 @@ import {
   setStagedIntentAnnotation,
   setStagedIntentGroup,
   getTaskCache,
+  getSession,
 } from '../db/queries';
 import { parseTaskId, normalizeTaskId } from '../tasks/taskId';
+import { NotionApiError } from '../notion/types';
 import { recordEvent } from '../audit/AuditLog';
 import type {
   GateContributionSourceTask,
@@ -1174,6 +1176,80 @@ async function resumeCapabilityRequester(
   }
 }
 
+/**
+ * Notion's object_not_found message ("Could not find page with ID: X. Make
+ * sure the relevant pages and databases are shared with your integration.")
+ * is accurate for a genuine sharing gap but is the far more common apply-time
+ * fault: a staged intent referencing a task id that was mistyped or never
+ * existed. Recognizes that specific shape and renames the fault to what a
+ * session can actually act on — the unresolvable id — instead of sending it
+ * off chasing a sharing setting that was never the problem.
+ */
+export function translateApplyError(
+  err: unknown,
+  intent: StagedIntent,
+): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const notFoundMatch = raw.match(
+    /Could not find (?:page|database) with ID:\s*([0-9a-fA-F-]+)/,
+  );
+  const isNotFound =
+    (err instanceof NotionApiError && err.statusCode === 404) ||
+    notFoundMatch !== null;
+  if (!isNotFound) return raw;
+
+  const taskId =
+    extractTaskId(intent.kind, intent.payload) ?? notFoundMatch?.[1] ?? null;
+  return taskId
+    ? `Could not apply "${intent.kind}": task id "${taskId}" does not resolve to an ` +
+        'existing task. Re-stage this intent against the correct task id.'
+    : `Could not apply "${intent.kind}": the referenced task id does not resolve to ` +
+        'an existing task. Re-stage this intent against the correct task id.';
+}
+
+/**
+ * Apply-time twin of routeStageTimeBlock's redrive: an unexpected exception
+ * from applyIntent (a provider failure the stage-time gates didn't catch) used
+ * to reach the operator as a raw exception with the intent left dangling —
+ * no route back to the session that staged it. This rejects the intent (so
+ * it can never be silently re-applied — a corrected intent must be freshly
+ * staged and freshly disposed by the operator, never auto-retried here) and
+ * routes the translated failure to the originating session through the same
+ * pushback path PlanningOrchestrator.handleDisposition already uses for an
+ * operator pushback — reusing its enqueue-and-resume mechanics rather than
+ * adding a parallel one. handleDisposition itself no-ops (logs only) when
+ * the intent has no originating session or that session no longer exists; in
+ * either case `redriven` comes back false so the caller still surfaces the
+ * translated error to the operator instead of treating the failure as
+ * silently handled.
+ */
+async function routeApplyTimeFailure(
+  row: StagedIntentRow,
+  err: unknown,
+  planningOrchestrator: PlanningOrchestrator | undefined,
+): Promise<{ reason: string; redriven: boolean }> {
+  const intent = rowToApi(row);
+  const reason = translateApplyError(err, intent);
+
+  // No originating session — nothing to redrive; leave the human-staged
+  // surface's existing behavior (intent stays approved/staged, retryable)
+  // untouched, mirroring routeStageTimeBlock's own no-session bail-out.
+  if (!row.session_id) return { reason, redriven: false };
+
+  const { row: rejected } = transitionRejectedIntent(row, 'pushback', reason);
+  broadcastIntentChange(rowToApi(rejected));
+
+  const redriven = Boolean(getSession(row.session_id));
+  if (planningOrchestrator) {
+    await planningOrchestrator.handleDisposition({
+      intent: rejected,
+      disposition: 'pushback',
+      reason,
+    });
+  }
+  return { reason, redriven };
+}
+
 /** Active surface = staged | approved. Terminal states (committed/rejected) and the superseded tombstone are hidden, matching the old delete-on-resolve Map semantics. */
 const ACTIVE_STATES: StagedIntentState[] = ['staged', 'approved'];
 
@@ -1825,13 +1901,19 @@ async function commitGroupIntents(
           },
         };
       }
+      const { reason, redriven } = await routeApplyTimeFailure(
+        row,
+        err,
+        planningOrchestrator,
+      );
       return {
         status: 500,
         body: {
-          error: err instanceof Error ? err.message : 'Failed to commit group',
+          error: reason,
           committed,
           failedId: intent.id,
           remaining,
+          redrivenToSession: redriven,
         },
       };
     }
@@ -2034,9 +2116,12 @@ export function createStagedIntentsRouter(
           res.status(409).json({ error: err.message });
           return;
         }
-        res.status(500).json({
-          error: err instanceof Error ? err.message : 'Failed to apply intent',
-        });
+        const { reason, redriven } = await routeApplyTimeFailure(
+          row,
+          err,
+          planningOrchestrator,
+        );
+        res.status(500).json({ error: reason, redrivenToSession: redriven });
       }
     },
   );
