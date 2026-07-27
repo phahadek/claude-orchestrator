@@ -332,9 +332,7 @@ describe('DecisionPanel', () => {
       render(<DecisionPanel sessionId="groom-session-2" />);
       await waitFor(() => screen.getByTestId('decision-panel'));
 
-      fireEvent.click(
-        screen.getByTestId('clean-batch-include-group-clean-5'),
-      );
+      fireEvent.click(screen.getByTestId('clean-batch-include-group-clean-5'));
       fireEvent.click(screen.getByTestId('approve-all-clean'));
 
       await waitFor(() =>
