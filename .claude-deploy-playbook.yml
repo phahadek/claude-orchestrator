@@ -67,13 +67,11 @@ steps:
     kind: shell
     command_or_prompt: 'curl -f -X POST http://localhost:3000/api/deploy/report-in -H "Authorization: Bearer $ORCHESTRATOR_DEVICE_TOKEN" -H "Content-Type: application/json" -d "{\"projectId\":\"claude-dashboard\",\"sha\":\"$(git rev-parse HEAD)\"}"'
     is_prod_mutating: false
-    rollback_ref: verify
 
   - id: record-deployed-sha
     kind: shell
-    command_or_prompt: 'git rev-parse HEAD > config/projects/claude-orchestrator/DEPLOYED_SHA'
+    command_or_prompt: 'git rev-parse HEAD > /srv/orchestrator/projects/config/projects/claude-orchestrator/DEPLOYED_SHA'
     is_prod_mutating: true
-    rollback_ref: verify
 
 hazards:
   - 'never sync or restart before build succeeds — a partial build must never reach the runtime directory'

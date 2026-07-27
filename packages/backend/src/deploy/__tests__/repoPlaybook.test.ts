@@ -80,7 +80,7 @@ describe('the repo-committed deploy playbook', () => {
     expect(reportIn?.command_or_prompt).not.toContain('claude-orchestrator');
   });
 
-  it('record-deployed-sha is unchanged and still ordered after report-in', () => {
+  it('record-deployed-sha is still ordered after report-in and targets a directory that exists', () => {
     const result = loadDeployPlaybook(REPO_ROOT);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -95,11 +95,26 @@ describe('the repo-committed deploy playbook', () => {
       (s) => s.id === 'record-deployed-sha',
     );
     expect(recordSha?.kind).toBe('shell');
-    expect(recordSha?.command_or_prompt).toBe(
-      'git rev-parse HEAD > config/projects/claude-orchestrator/DEPLOYED_SHA',
-    );
     expect(recordSha?.is_prod_mutating).toBe(true);
-    expect(recordSha?.rollback_ref).toBe('verify');
+
+    const match = recordSha?.command_or_prompt.match(/>\s*(\S+)/);
+    expect(match).toBeTruthy();
+    const targetPath = match![1];
+    expect(path.isAbsolute(targetPath)).toBe(true);
+    expect(fs.existsSync(path.dirname(targetPath))).toBe(true);
+  });
+
+  it('report-in and record-deployed-sha carry no rollback_ref — they are informational bookkeeping after the last prod-mutating step, with nothing to roll back', () => {
+    const result = loadDeployPlaybook(REPO_ROOT);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const reportIn = result.playbook.steps.find((s) => s.id === 'report-in');
+    const recordSha = result.playbook.steps.find(
+      (s) => s.id === 'record-deployed-sha',
+    );
+    expect(reportIn?.rollback_ref).toBeUndefined();
+    expect(recordSha?.rollback_ref).toBeUndefined();
   });
 
   it('carries no device-token credential literal — the report-in step references it indirectly via env', () => {
