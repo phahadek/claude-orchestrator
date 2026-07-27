@@ -37,7 +37,7 @@ vi.mock('../../db/queries', async (importOriginal) => {
 });
 
 import { db } from '../../db/db';
-import { getTaskCache } from '../../db/queries';
+import { getTaskCache, setStagedIntentAdvisory } from '../../db/queries';
 import { createStagedIntentsRouter } from '../stagedIntents';
 import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
@@ -1148,5 +1148,77 @@ describe('group-level atomic disposition (approve / pushback / decline the whole
     expect(approve.status).toBe(409);
     expect(setDependsOn).not.toHaveBeenCalled();
     expect(updateStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe('Tier-3 advisory vs. annotation — commit-time channel independence', () => {
+  it('never blocks the commit on a populated advisory, while an annotation still does', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    vi.mocked(getTaskCache).mockReturnValue(null);
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-advisory',
+      't-advisory',
+      'g-advisory',
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+
+    // Simulate a flagged Tier-3 advisory landing on the arming intent —
+    // exactly what classifyReadyProposal writes via setStagedIntentAdvisory.
+    setStagedIntentAdvisory(
+      setStatus.id,
+      JSON.stringify({
+        tier: 'semantic',
+        status: 'flagged',
+        confidence: 0.9,
+        findings: [{ detail: 'looks deferred' }],
+        model: 'test-model',
+        checkedAt: 0,
+      }),
+    );
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-advisory/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+  });
+
+  it('still blocks the commit on a populated annotation', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('This detail will be decided by the implementer.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    vi.mocked(getTaskCache).mockReturnValue(null);
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-annotation',
+      't-annotation',
+      'g-annotation',
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-annotation/commit')
+      .send({});
+
+    expect(commit.status).toBe(409);
   });
 });
