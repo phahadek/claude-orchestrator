@@ -1,7 +1,11 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { loadOpsContext } from '../ops/opsLoad';
-import { getMilestoneById, getProjectRowById } from '../db/queries';
+import {
+  getMilestoneById,
+  getProjectRowById,
+  getTaskTitleFromCache,
+} from '../db/queries';
 import type {
   OpsSessionLauncher,
   PlanningSessionType,
@@ -135,11 +139,19 @@ export function createPlanningLaunchRouter(
       // groom / design: dispatch directly per selected task id. No
       // dependency gating and no rich per-task context yet — building that
       // out is the injected-assembler's job, not this dispatch seam's.
+      //
+      // Title is resolved from the task cache so the session name reads as
+      // the task, not its uuid; the assembler (buildInjectedProcedure) may
+      // still supply a richer title later, but this is the floor for when
+      // it doesn't. The id itself stays the normalized notion:-prefixed
+      // form every downstream lookup keys on — only the display title uses
+      // the cache lookup, with the bare id as the last-resort fallback.
       const tasks: PlanningTaskEntry[] = taskIds.map((id) => {
         const cleanId = bareId(id);
+        const normalizedId = normalizeTaskId(id);
         return {
-          id: normalizeTaskId(id),
-          title: cleanId,
+          id: normalizedId,
+          title: getTaskTitleFromCache(normalizedId) || cleanId,
           url: '',
           blockingDepIds: [],
         };

@@ -321,6 +321,27 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     );
   });
 
+  it('names the session "Gate verify: <item text>", unaffected by the groom/design/ops planning-session naming scheme', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-1',
+      disposition: { disposition: 'pass', evidence: { basis: 'operational' } },
+    });
+    await resultPromise;
+
+    const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
+    expect(dispatchOpts).toMatchObject({
+      taskName: 'Gate verify: some behavior',
+      taskId: 'gate-item:item-1',
+    });
+  });
+
   it('injects ask-permission guidance (request or abstain) rather than pre-fetched operational data', async () => {
     const sessionManager = makeSessionManager();
     vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
