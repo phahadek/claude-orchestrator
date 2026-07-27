@@ -66,6 +66,7 @@ import type {
   SeedContributionDecision,
 } from '../tasks/TaskWriteCommands';
 import { setEntryState, type OpsState } from '../ops/opsJournal';
+import { classifyReadyProposal } from '../tasks/deferralClassifier';
 import type { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
 import type { SessionManager } from '../session/SessionManager';
 import {
@@ -1567,6 +1568,11 @@ async function verifyGroup(
       broadcastIntentChange(rowToApi(transitionStagedIntent(row.id, 'staged')));
     }
     groupRevisionRounds.delete(groupId);
+    // Advisory-only: never awaited into the gate. classifyReadyProposal
+    // fails open internally, but the `.catch` guards against an unhandled
+    // rejection (e.g. a body-fetch error) crashing the process — either way
+    // this can never block or delay group surfacing.
+    void classifyReadyProposal(groupId).catch(() => {});
     return { groupId, sessionId, passed: true, escalated: false, errors };
   }
 
