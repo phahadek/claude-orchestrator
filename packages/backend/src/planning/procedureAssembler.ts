@@ -596,11 +596,28 @@ function renderSkeleton(
           'grooming passes skip a Deferred task entirely, and a Deferred task in ' +
           "another task's Depends On blocks that task forever — only Done " +
           'satisfies a dependency.\n' +
-          '- `Deferred` IS NOT the disposition for a task that is merely blocked on ' +
-          'a dependency, has a premise that needs re-investigation, or has a body ' +
-          'that needs rewriting before it can be groomed. Leave the task at `Backlog` instead ' +
-          '(optionally with a `decisionProposal` explaining what is blocking it): ' +
-          'it stays in the grooming queue and future passes will reconsider it.\n\n' +
+          '- `Deferred` IS NOT the disposition for a task whose premise needs ' +
+          're-investigation or whose body needs rewriting before it can be groomed. ' +
+          'Leave the task at `Backlog` instead (optionally with a `decisionProposal` ' +
+          'explaining what is blocking it): it stays in the grooming queue and ' +
+          'future passes will reconsider it.\n' +
+          '- A Depends On dependency is NOT, by itself, grounds for `Backlog` or ' +
+          '`Deferred` — readiness (is the spec settled) and dispatch (when the work ' +
+          'runs) are different gates, and the Depends On edge already queues the ' +
+          'task behind its blocker for free. The one exception: a non-Done ' +
+          '📐 Design or 📋 Planning Depends On task IS grounds for `Backlog`, ' +
+          "because its outcome can still reshape this task's own scope — leave the " +
+          'task at `Backlog` with a `decisionProposal` naming the blocking design/' +
+          'planning task, same as the premise/body cases above. A non-Done ' +
+          'dependency of any other type (most commonly 💻 Code) changes only when ' +
+          'the work runs, never what it says: groom the task normally and stage ' +
+          '`task.setStatus` → `Ready` if it clears the readiness bar on its own ' +
+          "merits. Being blocked on a Code dependency is not a readiness defect.\n" +
+          '- Never stage `task.setStatus` to the status the task already holds — a ' +
+          "no-op write gives the operator nothing to disposition. When a pass's " +
+          'conclusion is "stay at `Backlog`" and the task is already `Backlog`, ' +
+          'report the conclusion (and what it is blocked on, if anything) in chat ' +
+          'and end the turn instead of staging anything.\n\n' +
           'A `task.setStatus` → `Ready` proposal is structured, not free prose: carry ' +
           "the `/groom` skill's defined proposal format (`skills/groom/reference/" +
           'presentation.md` § "The 4-point summary") as a `groomProposal` object — ' +
