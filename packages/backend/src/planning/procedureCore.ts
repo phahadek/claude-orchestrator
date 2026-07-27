@@ -292,6 +292,35 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'never the vehicle for making one.',
   },
   {
+    id: 'groom-operator-judgment-question-intent',
+    title:
+      'Raise an operator-judgment finding as decision.pickOne, never a status no-op',
+    appliesTo: ['groom'],
+    text:
+      'A finding that turns on a judgment only the operator can make — the ' +
+      "task's scope is wrong, a dependency cannot be confirmed, the spec " +
+      'contradicts the code — is raised as its own `decision.pickOne` ' +
+      'question-intent, `options` carrying the candidate resolutions (e.g. ' +
+      'widen scope / file a sibling task / proceed as specified), never ' +
+      'smuggled through a `task.setStatus` staged to the status the task ' +
+      'already holds. DO NOT stage a no-op `task.setStatus` — the payload ' +
+      "status equal to the task's current status — as a vehicle for a " +
+      'finding, whatever the channel: once `decision.pickOne` exists there is ' +
+      'no remaining excuse for it. `task.setStatus` is staged only when the ' +
+      'status is actually changing. DO NOT treat a scope gap as automatically ' +
+      'a body edit: appending to Future Scope (or any other section) ' +
+      "silently commits {skillLabel}'s own resolution when that resolution " +
+      'is the operator’s to make — ask via `decision.pickOne` first, and ' +
+      'edit the body only once the answer is known. This is not a punt ' +
+      'channel: the anti-deferral discipline stands (see "Investigate before ' +
+      'resolving" above) — a readiness judgment {skillLabel} is equipped to ' +
+      'resolve is still resolved now, never handed to the operator as a ' +
+      'question just because asking is available. `decision.pickOne` is for ' +
+      "a decision genuinely outside a groomer's authority — changing what " +
+      'the task is — not a way to hand back a readiness call {skillLabel} is ' +
+      'supposed to make itself.',
+  },
+  {
     id: 'design-no-question-bundling',
     title:
       'No question-bundling — one Open Question per decision.pickOne intent',
