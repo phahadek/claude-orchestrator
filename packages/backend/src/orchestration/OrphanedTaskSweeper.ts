@@ -27,7 +27,11 @@ import { GitHubClient } from '../github/GitHubClient';
 import type { PullRequest } from '../github/types';
 
 /** Task types the orchestrator moves to In Progress itself on dispatch — eligible for orphan sweep. */
-const SWEEPABLE_TYPES = new Set(['💻 Code', '🔧 Operational', '🔎 Investigation']);
+const SWEEPABLE_TYPES = new Set([
+  '💻 Code',
+  '🔧 Operational',
+  '🔎 Investigation',
+]);
 
 const IN_PROGRESS_STATUS = '🔄 In Progress';
 const READY_STATUS = '🗂️ Ready';
