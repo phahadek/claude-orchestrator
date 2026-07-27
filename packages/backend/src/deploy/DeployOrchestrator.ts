@@ -13,6 +13,7 @@ import {
   advanceDeployRun,
   completeDeployRun,
   appendDeployRunEvent,
+  listDeployRunEvents,
   reportProjectDeploy,
   getProjectDeployedSha,
 } from './deployService';
@@ -26,6 +27,19 @@ import type { DeployRunRow } from '../db/types';
  * before the restart is issued) and on resume (never re-issued).
  */
 export const RESTART_STEP_ID = 'restart';
+
+/**
+ * Conventional step id for the validation step that must confirm the
+ * restarted process is serving before report-in/record-sha run. The engine
+ * gates this step's poll on a differing `identity_capture` reading (see
+ * playbookSchema) in addition to its own `poll_until` health check, so it
+ * can't green against the outgoing process still bound during the restart
+ * window.
+ */
+export const VERIFY_STEP_ID = 'verify';
+
+/** Event type recording the restart step's `identity_capture` output, read before it executes. */
+export const PRE_RESTART_IDENTITY_EVENT = 'pre_restart_identity_captured';
 
 export type AgenticVerdict = 'approved' | 'rejected';
 
@@ -406,6 +420,23 @@ export class DeployOrchestrator {
       });
 
       if (step.id === RESTART_STEP_ID) {
+        // Capture the pre-restart process identity (e.g. the outgoing
+        // MainPID) BEFORE the restart is issued, so the verify step can
+        // later require a differing reading rather than greening against
+        // the process this step is about to replace.
+        if (step.identity_capture) {
+          const identityResult = await this.runShell(step.identity_capture, {
+            runAs: step.run_as,
+            cwd: this.projectDir,
+          });
+          appendDeployRunEvent({
+            runId,
+            step: step.id,
+            eventType: PRE_RESTART_IDENTITY_EVENT,
+            detail: identityResult.output.trim(),
+            at: this.now(),
+          });
+        }
         // Record success and advance current_step past this step BEFORE
         // the restart is issued — the shell command may kill this very
         // process before it returns, so the resuming backend must already
@@ -419,7 +450,7 @@ export class DeployOrchestrator {
         const next = playbook.steps[i + 1];
         if (next) advanceDeployRun(runId, next.id);
         try {
-          const outcome = await this.executeStep(runId, step, targetSha);
+          const outcome = await this.executeStep(runId, step, targetSha, playbook);
           if (!outcome.ok) {
             logger.error(
               `[DeployOrchestrator] run ${runId} (${this.project}) restart step "${step.id}" reported failure after being marked succeeded: ${outcome.detail ?? ''}`,
@@ -435,7 +466,7 @@ export class DeployOrchestrator {
 
       let outcome: StepOutcome;
       try {
-        outcome = await this.executeStep(runId, step, targetSha);
+        outcome = await this.executeStep(runId, step, targetSha, playbook);
       } catch (err) {
         outcome = { ok: false, detail: String(err) };
       }
@@ -502,7 +533,12 @@ export class DeployOrchestrator {
       return;
     }
     try {
-      const result = await this.executeStep(runId, rollbackStep, targetSha);
+      const result = await this.executeStep(
+        runId,
+        rollbackStep,
+        targetSha,
+        playbook,
+      );
       appendDeployRunEvent({
         runId,
         step: rollbackStep.id,
@@ -525,6 +561,7 @@ export class DeployOrchestrator {
     runId: string,
     step: StepDescriptor,
     targetSha: string,
+    playbook: DeployPlaybook,
   ): Promise<StepOutcome> {
     switch (step.kind) {
       case 'shell': {
@@ -540,7 +577,8 @@ export class DeployOrchestrator {
 
       case 'validation': {
         const command = step.poll_until ?? (step.command_or_prompt as string);
-        return this.pollUntil(step.id, command, step.run_as);
+        const identityCheck = this.resolveIdentityCheck(runId, step, playbook);
+        return this.pollUntil(step.id, command, step.run_as, identityCheck);
       }
 
       case 'report-in': {
@@ -585,13 +623,57 @@ export class DeployOrchestrator {
     }
   }
 
+  /**
+   * For the conventional `verify` validation step, resolves the pre-restart
+   * identity baseline (captured off the `restart` step's `identity_capture`
+   * command, and persisted as a deploy_run_event so it survives a self-deploy
+   * restart into a fresh process) plus the command to re-read it on each poll
+   * attempt. Returns undefined when the playbook declares no identity_capture
+   * — verify then falls back to its plain poll_until health check alone.
+   */
+  private resolveIdentityCheck(
+    runId: string,
+    step: StepDescriptor,
+    playbook: DeployPlaybook,
+  ): { command: string; baseline: string } | undefined {
+    if (step.id !== VERIFY_STEP_ID) return undefined;
+    const restartStep = playbook.steps.find((s) => s.id === RESTART_STEP_ID);
+    if (!restartStep?.identity_capture) return undefined;
+    const captured = listDeployRunEvents(runId)
+      .filter((e) => e.event_type === PRE_RESTART_IDENTITY_EVENT)
+      .pop();
+    if (!captured) return undefined;
+    return { command: restartStep.identity_capture, baseline: captured.detail ?? '' };
+  }
+
   private async pollUntil(
     stepId: string,
     command: string,
     runAs: string | undefined,
+    identityCheck?: { command: string; baseline: string },
   ): Promise<StepOutcome> {
     let lastResult: ShellResult = { ok: false, output: '', exitCode: null };
     for (let attempt = 0; attempt < this.pollMaxAttempts; attempt++) {
+      if (identityCheck) {
+        const identityResult = await this.runShell(identityCheck.command, {
+          runAs,
+          cwd: this.projectDir,
+        });
+        const currentIdentity = identityResult.output.trim();
+        if (!identityResult.ok || currentIdentity === identityCheck.baseline) {
+          lastResult = {
+            ok: false,
+            output: `post-restart identity still matches the pre-restart baseline ("${identityCheck.baseline}")`,
+            exitCode: null,
+          };
+          if (attempt < this.pollMaxAttempts - 1) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, this.pollDelayMs),
+            );
+          }
+          continue;
+        }
+      }
       const result = await this.runShell(command, {
         runAs,
         cwd: this.projectDir,

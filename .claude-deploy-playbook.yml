@@ -8,6 +8,12 @@
 # this host's concrete paths (checkout root, /srv/orchestrator/runtime/, the
 # orchestrator.service unit, the DEPLOYED_SHA marker location) are embedded
 # directly in the steps below rather than in context.md.
+#
+# `restart`'s identity_capture runs BEFORE its own command_or_prompt: the
+# engine reads the outgoing MainPID and persists it as a deploy_run_event, so
+# `verify`'s poll_until can't green until a differing MainPID plus a healthy
+# response are both observed — otherwise verify would report the outgoing
+# process healthy while the new build is still booting (or crash-looping).
 
 steps:
   - id: fetch
@@ -53,6 +59,7 @@ steps:
   - id: restart
     kind: shell
     command_or_prompt: 'sudo systemctl restart orchestrator.service'
+    identity_capture: 'systemctl show -p MainPID --value orchestrator.service'
     is_prod_mutating: true
     rollback_ref: sync-runtime
 

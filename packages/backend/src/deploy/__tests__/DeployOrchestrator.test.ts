@@ -537,6 +537,147 @@ describe('DeployOrchestrator: resume after a restart', () => {
   });
 });
 
+describe('DeployOrchestrator: verify gates on a differing pre/post-restart identity', () => {
+  function identityPlaybook(): DeployPlaybook {
+    return playbookWith([
+      step({
+        id: RESTART_STEP_ID,
+        kind: 'shell',
+        command_or_prompt: 'sudo systemctl restart orchestrator.service',
+        identity_capture:
+          'systemctl show -p MainPID --value orchestrator.service',
+        is_prod_mutating: true,
+      }),
+      step({
+        id: 'verify',
+        kind: 'validation',
+        command_or_prompt: 'curl -sf -o /dev/null http://localhost:3000/',
+        poll_until: 'curl -sf -o /dev/null http://localhost:3000/',
+      }),
+    ]);
+  }
+
+  const IDENTITY_CMD = 'systemctl show -p MainPID --value orchestrator.service';
+  const HEALTH_CMD = 'curl -sf -o /dev/null http://localhost:3000/';
+
+  it('captures the pre-restart process identity before the restart step executes', async () => {
+    const shellCalls: string[] = [];
+    const deps = makeDeps(identityPlaybook(), {
+      pollMaxAttempts: 1,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        shellCalls.push(command);
+        if (command === IDENTITY_CMD) {
+          return { ok: true, output: 'pid-111', exitCode: 0 };
+        }
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    // The identity is read (and, per assertion below, persisted) before the
+    // restart step's own shell command — which may kill this very process —
+    // ever runs.
+    expect(shellCalls[0]).toBe(IDENTITY_CMD);
+    expect(shellCalls[1]).toBe('sudo systemctl restart orchestrator.service');
+
+    const captureEvent = listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'pre_restart_identity_captured',
+    );
+    expect(captureEvent).toBeDefined();
+    expect(captureEvent?.detail).toBe('pid-111');
+  });
+
+  it('fails verify when the observed post-restart identity equals the pre-restart one', async () => {
+    const deps = makeDeps(identityPlaybook(), {
+      pollMaxAttempts: 3,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        if (command === IDENTITY_CMD) {
+          // Same PID every time — the "restart" never actually replaced the process.
+          return { ok: true, output: 'pid-same', exitCode: 0 };
+        }
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+  });
+
+  it('succeeds only once a differing identity and a healthy response are both observed', async () => {
+    let identityCalls = 0;
+    const deps = makeDeps(identityPlaybook(), {
+      pollMaxAttempts: 5,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        if (command === IDENTITY_CMD) {
+          identityCalls += 1;
+          // Still the outgoing process for the first two reads, then the new one.
+          return {
+            ok: true,
+            output: identityCalls <= 2 ? 'pid-old' : 'pid-new',
+            exitCode: 0,
+          };
+        }
+        if (command === HEALTH_CMD) {
+          return { ok: true, output: '', exitCode: 0 };
+        }
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+    expect(identityCalls).toBeGreaterThanOrEqual(3);
+  });
+
+  it('does not succeed on a differing identity alone — the health check must also pass', async () => {
+    const deps = makeDeps(identityPlaybook(), {
+      pollMaxAttempts: 2,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        if (command === IDENTITY_CMD) {
+          return { ok: true, output: 'pid-new', exitCode: 0 };
+        }
+        if (command === HEALTH_CMD) {
+          return { ok: false, output: 'connection refused', exitCode: 7 };
+        }
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+  });
+
+  it('fails within the bounded step timeout (not an infinite poll) when no new process ever appears', async () => {
+    let identityCalls = 0;
+    const deps = makeDeps(identityPlaybook(), {
+      pollMaxAttempts: 4,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        if (command === IDENTITY_CMD) {
+          identityCalls += 1;
+          return { ok: true, output: 'pid-same', exitCode: 0 };
+        }
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+    // 1 pre-restart capture + pollMaxAttempts (4) polling reads — bounded,
+    // not an unbounded/hanging poll.
+    expect(identityCalls).toBe(5);
+  });
+});
+
 describe('DeployOrchestrator: report-in step', () => {
   it('records the deployed SHA via the engine directly, with no outbound HTTP request', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
