@@ -364,6 +364,7 @@ export function createGateStateRouter(): Router {
         milestone?: unknown;
         classification?: unknown;
         items?: unknown;
+        reason?: unknown;
       };
       const project = typeof body.project === 'string' ? body.project : null;
       const taskId = typeof body.taskId === 'string' ? body.taskId : null;
@@ -374,6 +375,7 @@ export function createGateStateRouter(): Router {
         typeof body.classification === 'string'
           ? (body.classification as GateContributionDecision)
           : null;
+      const reason = typeof body.reason === 'string' ? body.reason : undefined;
       if (!project) {
         res.status(400).json({ error: 'project is required' });
         return;
@@ -416,6 +418,7 @@ export function createGateStateRouter(): Router {
           { id: taskId, title, project, milestone: canonicalMilestone },
           items,
           classification,
+          reason,
         );
         res.json(result);
       } catch (err) {

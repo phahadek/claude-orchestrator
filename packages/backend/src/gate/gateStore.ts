@@ -480,6 +480,13 @@ export interface GateAccretionMarker {
   project: string;
   milestone: string;
   decision: GateAccretionDecision;
+  /**
+   * The groomer's substantive reason for a bare 'none'/'n/a' decision — the
+   * judgement that the change's behaviour was assessed and found to have
+   * nothing runtime-observable, tied to the change rather than to the state
+   * of the pre-groom body section. Absent for an 'items' decision.
+   */
+  reason?: string;
   accretedAt: string;
 }
 
@@ -494,6 +501,7 @@ export function getAccretionMarker(
     project: row.project,
     milestone: row.milestone,
     decision: row.decision,
+    reason: row.reason ?? undefined,
     accretedAt: row.accreted_at,
   };
 }
@@ -511,6 +519,7 @@ export function recordAccretionMarker(marker: GateAccretionMarker): void {
     project: marker.project,
     milestone: marker.milestone,
     decision: marker.decision,
+    reason: marker.reason ?? null,
     accreted_at: marker.accretedAt,
   });
 }

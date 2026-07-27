@@ -218,6 +218,7 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
       project: 'polimarket-analyser',
       milestone: 'M12',
       decision: 'n/a',
+      reason: 'This task type is exempt from gate accretion.',
       accretedAt: new Date(0).toISOString(),
     });
     recordSeedAccretionMarker({
@@ -266,6 +267,7 @@ describe('checkGroomingPromotionGate — seed_contribution', () => {
       project: 'polimarket-analyser',
       milestone: 'M12',
       decision: 'n/a',
+      reason: 'This task type is exempt from gate accretion.',
       accretedAt: new Date(0).toISOString(),
     });
     recordSeedAccretionMarker({
@@ -464,6 +466,7 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
       project: 'polimarket-analyser',
       milestone: 'M12',
       decision: 'n/a',
+      reason: 'This task type is exempt from gate accretion.',
       accretedAt: new Date(0).toISOString(),
     });
     recordSeedAccretionMarker({
@@ -657,6 +660,7 @@ describe('checkAccretionContributions', () => {
       project: 'polimarket-analyser',
       milestone: 'M12',
       decision: 'n/a',
+      reason: 'This task type is exempt from gate accretion.',
       accretedAt: new Date(0).toISOString(),
     });
     recordSeedAccretionMarker({
@@ -671,6 +675,31 @@ describe('checkAccretionContributions', () => {
       'notion:accretion-both',
     );
     expect(result.allowed).toBe(true);
+  });
+
+  it('blocks a Code task whose gate marker records a bare "n/a" with no reason', () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:accretion-bare-na',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:accretion-bare-na',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+    const result = checkAccretionContributions(
+      { type: '💻 Code' },
+      'notion:accretion-bare-na',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('substantive reason'))).toBe(
+      true,
+    );
   });
 
   it('fails open for a retired 🛠️ Tooling task with no markers', () => {
@@ -756,12 +785,14 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
     expect(result.allowed).toBe(true);
   });
 
-  it('a {"decision":"none"} contribution for a task with no Manual verification section still passes (unregressed)', () => {
+  it('a reasoned {"decision":"none"} contribution for a task with no Manual verification section still passes', () => {
     recordAccretionMarker({
       sourceTaskId: 'notion:candidate-none-section',
       project: 'polimarket-analyser',
       milestone: 'M12',
       decision: 'none',
+      reason:
+        'The change only adds a pure formatting helper with no I/O or user-visible effect.',
       accretedAt: new Date(0).toISOString(),
     });
     recordSeedAccretionMarker({
@@ -780,9 +811,75 @@ describe('checkGroomingPromotionGate — gate_contribution per-candidate triage'
           { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
         ],
         // No gateContributionCandidates recorded at all — there was no
-        // Manual verification section to triage.
+        // Manual verification section to triage. Accretion no longer depends
+        // on pre-authored candidate content; the marker's own reason carries
+        // the groomer's independent assessment.
       },
       'notion:candidate-none-section',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('a bare {"decision":"none"} contribution with no reason is rejected at the promotion gate', () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:candidate-none-no-reason',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'none',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:candidate-none-no-reason',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+    const result = checkGroomingPromotionGate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+        type: '💻 Code',
+        filesPathsEntries: [
+          { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
+        ],
+      },
+      'notion:candidate-none-no-reason',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('substantive reason'))).toBe(
+      true,
+    );
+  });
+
+  it('a Code promotion carrying accreted items succeeds regardless of pre-groom body content', () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:items-no-precontent',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'items',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:items-no-precontent',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+    const result = checkGroomingPromotionGate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+        type: '💻 Code',
+        filesPathsEntries: [
+          { raw: 'a.ts *(new)*', isNew: true, existsInRepo: false },
+        ],
+        // No gateContributionCandidates and no pre-groom Manual verification
+        // section — the groomer independently found runtime-observable
+        // behaviour and accreted it regardless.
+      },
+      'notion:items-no-precontent',
     );
     expect(result.allowed).toBe(true);
   });

@@ -301,6 +301,7 @@ export function runMigrations(target: Database.Database): void {
       project         TEXT    NOT NULL,
       milestone       TEXT    NOT NULL,
       decision        TEXT    NOT NULL,
+      reason          TEXT,
       accreted_at     TEXT    NOT NULL
     );
 
@@ -1466,4 +1467,17 @@ export function runMigrations(target: Database.Database): void {
     DROP INDEX IF EXISTS idx_planning_checkout_locks_project_dir;
     DROP TABLE IF EXISTS planning_checkout_locks;
   `);
+
+  // gate_accretion.reason: substantive reason recorded for a bare
+  // 'none'/'n/a' gate_contribution decision — distinguishes an assessed
+  // none (the groomer read the change and judged it has nothing
+  // runtime-observable) from an unassessed one (the old accretion-as-
+  // relocation behavior, where 'none' fell out of an empty input section).
+  // Forward-only: existing rows get NULL (no reason on record for markers
+  // written before this column existed).
+  try {
+    target.exec(`ALTER TABLE gate_accretion ADD COLUMN reason TEXT`);
+  } catch {
+    /* already exists */
+  }
 }

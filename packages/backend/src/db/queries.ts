@@ -4287,12 +4287,13 @@ export function getGateAccretion(
 
 export function upsertGateAccretion(row: GateAccretionRow): void {
   _stmtUpsertGateAccretion ??= db.prepare<GateAccretionRow>(`
-    INSERT INTO gate_accretion (source_task_id, project, milestone, decision, accreted_at)
-    VALUES (@source_task_id, @project, @milestone, @decision, @accreted_at)
+    INSERT INTO gate_accretion (source_task_id, project, milestone, decision, reason, accreted_at)
+    VALUES (@source_task_id, @project, @milestone, @decision, @reason, @accreted_at)
     ON CONFLICT(source_task_id) DO UPDATE SET
       project = excluded.project,
       milestone = excluded.milestone,
       decision = excluded.decision,
+      reason = excluded.reason,
       accreted_at = excluded.accreted_at
   `);
   _stmtUpsertGateAccretion.run({

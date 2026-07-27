@@ -808,18 +808,30 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     title: 'Accrete gate & seed contribution',
     appliesTo: ['groom'],
     summary:
-      'The accretion source is the task body\'s pre-groom "### 👁️ Manual ' +
-      'verification" section, when present — its lines are candidates for ' +
-      '`gate.accrete`, never a wholesale transcription target. Before staging ' +
-      'anything, triage every candidate line and classify it as one of three ' +
-      'outcomes: `runtime-observable` (only knowable by running the system and ' +
-      'looking — accrete it as a gate item), `config-or-code-determined` ' +
-      '(answerable from source, settings, or a unit test — never accrete it; ' +
-      'relocate the line to the task\'s "### 🤖 Automated tests" section instead ' +
-      'of dropping it), or `needs-triage` (genuinely unclear — accrete it ' +
-      'flagged, as today). The deciding question: would a headless verifier be ' +
-      'able to cite a behavioural trace for this, or only cite the code? If only ' +
-      "the code, it is a test, not a gate item. Record every candidate's " +
+      'Accretion is author-proposes, groomer-validates — never relocation. The ' +
+      'task body\'s pre-groom "### 👁️ Manual verification" section, when ' +
+      "present, carries the author's advisory candidates — a hypothesis about " +
+      'what will need observing, not an instruction, and not the input this ' +
+      'step transcribes. Do the independent work first: read the code regions ' +
+      "this task touches and assess the change's own runtime-observable " +
+      'behaviour from that reading — what would only be knowable by running ' +
+      'the system and looking, that the author may not have foreseen. Then ' +
+      'engage with each author candidate on its substance, not on whether a ' +
+      'line exists: accept it, correct it, or reject it with a reason, since ' +
+      'the author may simply be wrong. Also add runtime verifications of its ' +
+      'own that the change requires and the author did not foresee — the ' +
+      'groomer is the party that has read the code regions, so it is better ' +
+      'placed than the author to know what must be observed. Classify every ' +
+      'candidate — author-' +
+      'proposed or groomer-added — as one of three outcomes: `runtime-' +
+      'observable` (only knowable by running the system and looking — accrete ' +
+      'it as a gate item), `config-or-code-determined` (answerable from ' +
+      'source, settings, or a unit test — never accrete it; relocate the line ' +
+      'to the task\'s "### 🤖 Automated tests" section instead of dropping ' +
+      'it), or `needs-triage` (genuinely unclear — accrete it flagged, as ' +
+      'today). The deciding question: would a headless verifier be able to ' +
+      'cite a behavioural trace for this, or only cite the code? If only the ' +
+      "code, it is a test, not a gate item. Record every candidate's " +
       'classification in the `gate_contribution` artifact — the check enforced ' +
       'is that a classification was recorded for each candidate, never a ' +
       'judgment on which classification was chosen. The count of candidates in ' +
@@ -827,8 +839,19 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       'every candidate, never silently drop one. ' +
       'Then stage its gate_contribution (`gate.accrete`) and seed_contribution ' +
       "(`seed.stage`) — either the task's real runtime-gate items / " +
-      'config-change seeds, or an explicit `{"decision":"none"}` when it has ' +
-      'none. Both are durable markers checkGroomingPromotionGate requires for ' +
+      'config-change seeds (from the assessment above, not only from what the ' +
+      'author happened to write), or an explicit `{"decision":"none"}` when ' +
+      'the assessment genuinely finds nothing runtime-observable. ' +
+      '`{"decision":"none"}` remains fully legitimate — do not invent a fake ' +
+      'gate item to avoid it, since a padded gate is worse than an empty one: ' +
+      'it burns operator attention at milestone end on checks that verify ' +
+      'nothing — but it must be a judgment, not a byproduct of an ' +
+      'empty input section: `gate.accrete` requires a substantive `reason` ' +
+      'alongside a bare `none`/`n/a` classification, stating what about the ' +
+      "change's behaviour was assessed and found to have nothing gate-worthy " +
+      '(tied to the change, never to the state of the body section — "the ' +
+      'section was empty" is not a reason). Both are durable markers ' +
+      'checkGroomingPromotionGate requires for ' +
       'every 💻 Code task; a Ready flip staged without them is blocked at commit ' +
       'time and surfaced back at stage time — never stage the Ready flip first ' +
       'and leave accretion for later. Once accreted (and any ' +

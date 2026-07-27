@@ -291,13 +291,35 @@ describe('procedureCore', () => {
     );
   });
 
-  it('instructs a per-candidate triage of the Manual verification section before accretion, naming the three outcomes', () => {
+  it('instructs a per-candidate classification of the Manual verification section before accretion, naming the three outcomes', () => {
     const step = ORDERED_STEPS.find((s) => s.id === 'accrete-gate-and-seed')!;
     const text = stepSummaryFor(step, 'groom');
-    expect(text).toMatch(/triage every candidate line/);
+    expect(text).toMatch(/Classify every candidate/);
     expect(text).toContain('`runtime-observable`');
     expect(text).toContain('`config-or-code-determined`');
     expect(text).toContain('`needs-triage`');
+  });
+
+  it("describes accretion as independently assessing the change's behaviour and validating author candidates, not triaging pre-authored lines", () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'accrete-gate-and-seed')!;
+    const text = stepSummaryFor(step, 'groom');
+    expect(text).toMatch(/author-proposes, groomer-validates/i);
+    expect(text).toMatch(/advisory candidates/);
+    expect(text).toMatch(
+      /assess the change's own runtime-observable behaviour/,
+    );
+    expect(text).toMatch(/accept it, correct it, or reject it with a reason/);
+    expect(text).toMatch(
+      /runtime verifications of its\s+own that the change requires and the author did not foresee/,
+    );
+  });
+
+  it('requires a substantive reason tied to the change on a bare none/n-a gate_contribution decision', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'accrete-gate-and-seed')!;
+    const text = stepSummaryFor(step, 'groom');
+    expect(text).toMatch(/substantive `reason`/);
+    expect(text).toMatch(/never to the state of the body section/);
+    expect(text).toMatch(/padded gate is worse than an empty one/);
   });
 
   it('states the deciding question in terms a groomer can apply', () => {

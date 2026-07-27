@@ -412,6 +412,8 @@ interface GateAccretePayload {
   sourceTask: GateContributionSourceTask;
   items: GateContributionItemInput[];
   classification: GateContributionDecision;
+  /** Required (and validated non-empty) when classification is 'none'/'n/a'. */
+  reason?: string;
 }
 interface SeedStagePayload {
   sourceTask: SeedContributionSourceTask;
@@ -1116,6 +1118,7 @@ async function applyIntent(
         payload.sourceTask,
         payload.items,
         payload.classification,
+        payload.reason,
       );
     }
     case 'seed.stage': {

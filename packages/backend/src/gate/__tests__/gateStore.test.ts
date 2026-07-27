@@ -391,6 +391,37 @@ describe('gate_accretion marker', () => {
     expect(getAccretionMarker('notion:na-src')?.decision).toBe('n/a');
   });
 
+  it('round-trips the reason field on a bare none/n-a decision', () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:none-with-reason',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'none',
+      reason:
+        'The change only adds a pure formatting helper with no I/O or user-visible effect.',
+      accretedAt: new Date(0).toISOString(),
+    });
+
+    const marker = getAccretionMarker('notion:none-with-reason');
+    expect(marker?.reason).toBe(
+      'The change only adds a pure formatting helper with no I/O or user-visible effect.',
+    );
+  });
+
+  it('leaves reason undefined when not supplied (e.g. an "items" decision)', () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:items-no-reason',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'items',
+      accretedAt: new Date(0).toISOString(),
+    });
+
+    expect(
+      getAccretionMarker('notion:items-no-reason')?.reason,
+    ).toBeUndefined();
+  });
+
   it('replaces an existing marker for the same source task', () => {
     recordAccretionMarker({
       sourceTaskId: 'notion:src-2',

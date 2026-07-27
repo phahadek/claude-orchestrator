@@ -88,6 +88,7 @@ describe('POST /api/staged-intents — stage-time gate/seed accretion feedback',
       project: 'polimarket-analyser',
       milestone: 'M12',
       decision: 'n/a',
+      reason: 'This task type is exempt from gate accretion.',
       accretedAt: new Date(0).toISOString(),
     });
     recordSeedAccretionMarker({
