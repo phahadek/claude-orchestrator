@@ -196,7 +196,13 @@ export function DecisionPanel({ sessionId }: Props) {
   return (
     <div className={styles.panel} data-testid="decision-panel">
       <div className={styles.headingRow}>
-        <div className={styles.heading}>Proposals ({intents.length})</div>
+        <div className={styles.heading}>
+          Proposals (
+          {groups.size > 0
+            ? `${intents.length} intent${intents.length === 1 ? '' : 's'} across ${groups.size} group${groups.size === 1 ? '' : 's'}`
+            : intents.length}
+          )
+        </div>
         <button
           type="button"
           className={styles.dismissButton}
