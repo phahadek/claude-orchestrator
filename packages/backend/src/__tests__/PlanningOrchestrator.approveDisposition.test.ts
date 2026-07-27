@@ -31,10 +31,10 @@ function makeSessionManager() {
   const emitter = new EventEmitter();
   return Object.assign(emitter, {
     enqueueFeedback: vi.fn().mockResolvedValue(undefined),
-    evictSession: vi.fn(),
+    endSession: vi.fn(),
   }) as unknown as SessionManager & {
     enqueueFeedback: ReturnType<typeof vi.fn>;
-    evictSession: ReturnType<typeof vi.fn>;
+    endSession: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -106,7 +106,7 @@ describe('PlanningOrchestrator approve disposition', () => {
     });
 
     expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
-    expect(sessionManager.evictSession).not.toHaveBeenCalled();
+    expect(sessionManager.endSession).not.toHaveBeenCalled();
     expect(getSession(SESSION_ID)?.status).toBe('running');
   });
 
@@ -135,7 +135,7 @@ describe('PlanningOrchestrator approve disposition', () => {
     });
 
     expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
-    expect(sessionManager.evictSession).toHaveBeenCalledWith(SESSION_ID);
+    expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
     expect(getSession(SESSION_ID)?.status).toBe('done');
   });
 
@@ -164,7 +164,7 @@ describe('PlanningOrchestrator approve disposition', () => {
     });
 
     expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
-    expect(sessionManager.evictSession).not.toHaveBeenCalled();
+    expect(sessionManager.endSession).not.toHaveBeenCalled();
     expect(getSession(SESSION_ID)?.status).toBe('running');
   });
 
