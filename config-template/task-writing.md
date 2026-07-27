@@ -135,9 +135,10 @@ real runtime items to list (author judgment, not boilerplate). Grooming strips t
 items to the gate and then **removes the section entirely** — it is not replaced with
 `Covered by the Manual Verification Gate.` boilerplate. A post-groom (🗂️ Ready or
 later) Code task therefore carries **no** manual-verification section at all; its
-absence *is* the signal that verification is gate-owned. *(🔧 Operational /
-🔎 Investigation tasks are the exception — they verify in-session, always carry the
-section, and do NOT accrete to the gate; see their section below.)*
+absence *is* the signal that verification is gate-owned. *(🔧 Operational / 🔎 Investigation
+tasks always carry the section — see their section below. 🔎 Investigation is the exception
+that never accretes it to the gate (it self-verifies in-session); 🔧 Operational can
+legitimately accrete like Code.)*
 
 ### Notion pages affected *(Design/Planning tasks only)*
 Bulleted list of every Notion page this task creates or edits, with `*(new)*` or
@@ -390,8 +391,9 @@ uncertainty is **breadth / source / mechanics**, never *whether* or *what*.
 - **Acceptance criteria:** `### 🤖 Automated tests` is usually `*N/A — operational task;
   verification is by reconcile + capture.*` `### 👁️ Manual verification` lists the **in-session**
   checks (seed present on prod; worker reconciled; correct breadth authored; "Done ≠ deployed ≠
-  seeded ≠ working"). **Operational tasks do NOT accrete to the Manual Verification Gate** — they
-  self-verify when run.
+  seeded ≠ working"). **Operational tasks can legitimately accrete to the Manual Verification
+  Gate** — unlike Investigation (below), an Operational task's runtime/launch-and-observe items
+  are not categorically exempt from grooming's strip-and-accrete pass.
 - **Milestone config-seed accretion (grooming-time).** A 💻 Code task's *operational data/config
   seed* — a prod-data row/flag/default deliberately kept **out** of its auto-dispatched PR — accretes
   at grooming time to the milestone's one **config-seed** `🔧 Operational` task, the operational twin
@@ -412,7 +414,10 @@ follow-on tasks**. The uncertainty is **the conclusion itself**.
   look?"). Treat any registered number as a claim to re-derive, not a fact.
 - **Acceptance criteria:** `### 🤖 Automated tests` is usually `*N/A — investigation task.*`
   `### 👁️ Manual verification` lists: the decision reached is defensible (falsification run);
-  evidence recorded with provenance; follow-on tasks filed with **accurate priority**.
+  evidence recorded with provenance; follow-on tasks filed with **accurate priority**. **An
+  Investigation task does NOT accrete to the Manual Verification Gate, and its `### 👁️ Manual
+  verification` section is never stripped** — it self-verifies in-session; grooming must reject
+  both an accretion from it and a removal of that section.
 - Use a **Deliverables** section (the decision + the follow-on tasks it will file) in place of
   *Files / paths affected*. **Never** put "implement module X" in an Investigation's acceptance
   criteria — a code fix it surfaces is a *separate* `💻 Code` task it files (an Investigation

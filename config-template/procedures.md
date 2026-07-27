@@ -424,8 +424,9 @@ authoritatively.
 > a `gate_item_event`. Grooming still **strips** each 💻 Code task's runtime/manual items and
 > **accretes** them (mandatory before the task goes Ready, recorded as a `gate_contribution`
 > artifact) — only the accretion *target* changed from a task body to the `gate_item` store. See
-> `task-writing.md` § Manual Verification Gate. 🔧 Operational / 🔎 Investigation tasks still **do
-> not accrete** (they self-verify in-session).
+> `task-writing.md` § Manual Verification Gate. 🔎 Investigation tasks **do not accrete** (they
+> self-verify in-session) — 🔧 Operational tasks legitimately can (see the config-seed accretion
+> above).
 
 Two consequences every session must internalize:
 

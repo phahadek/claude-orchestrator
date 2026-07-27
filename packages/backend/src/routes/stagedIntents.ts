@@ -569,6 +569,27 @@ class TaskReferenceValidationError extends Error {
 }
 
 /**
+ * Thrown when a gate.accrete's resolved source task, or a
+ * task.patchBodySection remove targeting the Manual verification section, is
+ * a 🔎 Investigation. An Investigation self-verifies in-session — its
+ * acceptance criteria belong in its own "👁️ Manual verification" body
+ * section, never relocated to the milestone gate — so neither write is
+ * accepted at all, rather than silently dropped, which would let the
+ * criteria go missing with no visible trace. 🔧 Operational is unaffected:
+ * it legitimately accretes, per the operator's 2026-07-27 decision.
+ */
+class InvestigationAccretionRejectedError extends Error {
+  constructor(kind: string, taskId: string) {
+    super(
+      `[stagedIntents] ${kind} rejected for task "${taskId}": its Type is 🔎 Investigation, ` +
+        'which self-verifies in-session and must never accrete to the Manual Verification Gate ' +
+        'or have its "👁️ Manual verification" section stripped.',
+    );
+    this.name = 'InvestigationAccretionRejectedError';
+  }
+}
+
+/**
  * Parses/normalizes one raw task-reference id. A bare id (no `source:`
  * prefix) is unambiguous — every unprefixed id surfacing in this system
  * originates from Notion (board rows, groom-context bundles) — so it is
@@ -646,15 +667,44 @@ const SUBJECT_TASK_ID_KINDS: ReadonlySet<string> = new Set([
  * argument internally (see NotionTaskBackend), so rewriting it here would
  * only risk diverging from what downstream code expects verbatim. Throws
  * TaskReferenceValidationError on anything unparseable or unresolvable. A
- * no-op for kinds that carry no task reference in scope (gate.accrete/
- * seed.stage key off sourceTask, arch.* off unitId — neither is a board
- * task reference).
+ * no-op for kinds that carry no task reference in scope (seed.stage keys off
+ * sourceTask, arch.* off unitId — neither is a board task reference), except
+ * gate.accrete and a Manual-verification-removing task.patchBodySection,
+ * which this also checks — before any other validation — for a resolved 🔎
+ * Investigation source/subject task, throwing
+ * InvestigationAccretionRejectedError if so (see that class).
  */
 export async function validateAndNormalizeTaskReferences(
   kind: string,
   payload: unknown,
   projectId: string,
 ): Promise<unknown> {
+  if (kind === 'gate.accrete') {
+    const sourceTaskId = (
+      payload as { sourceTask?: { id?: unknown } } | null
+    )?.sourceTask?.id;
+    if (typeof sourceTaskId === 'string') {
+      if (getCachedType(sourceTaskId) === '🔎 Investigation') {
+        throw new InvestigationAccretionRejectedError(kind, sourceTaskId);
+      }
+    }
+  }
+
+  if (kind === 'task.patchBodySection') {
+    const p = payload as
+      | { taskId?: unknown; section?: unknown; operation?: unknown }
+      | null;
+    if (
+      typeof p?.taskId === 'string' &&
+      typeof p?.section === 'string' &&
+      p.operation === 'remove' &&
+      isManualVerificationSection(p.section) &&
+      getCachedType(p.taskId) === '🔎 Investigation'
+    ) {
+      throw new InvestigationAccretionRejectedError(kind, p.taskId);
+    }
+  }
+
   if (!SUBJECT_TASK_ID_KINDS.has(kind) && kind !== 'task.create') {
     return payload;
   }
@@ -1994,7 +2044,10 @@ export function createStagedIntentsRouter(
         projectId,
       );
     } catch (err) {
-      if (err instanceof TaskReferenceValidationError) {
+      if (
+        err instanceof TaskReferenceValidationError ||
+        err instanceof InvestigationAccretionRejectedError
+      ) {
         res.status(400).json({ error: err.message });
         return;
       }
