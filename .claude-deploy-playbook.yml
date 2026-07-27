@@ -64,8 +64,7 @@ steps:
     rollback_ref: restart
 
   - id: report-in
-    kind: shell
-    command_or_prompt: 'curl -f -X POST http://localhost:3000/api/deploy/report-in -H "Authorization: Bearer $ORCHESTRATOR_DEVICE_TOKEN" -H "Content-Type: application/json" -d "{\"projectId\":\"claude-dashboard\",\"sha\":\"$(git rev-parse HEAD)\"}"'
+    kind: report-in
     is_prod_mutating: false
 
   - id: record-deployed-sha
