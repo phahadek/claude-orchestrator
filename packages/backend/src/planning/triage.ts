@@ -31,6 +31,9 @@
  */
 export type TriageVerdict = 'clean' | 'blocked' | 'needs-attention';
 
+/** The TriageVerdict union's members, for schemas that must derive from (not duplicate) the type. */
+export const TRIAGE_VERDICTS = ['clean', 'blocked', 'needs-attention'] as const;
+
 /** Task types eligible for approve-by-standard triage; 💻 Code stays per-task-gated. */
 export const INTERACTIVE_TASK_TYPES: ReadonlySet<string> = new Set([
   '📐 Design',
