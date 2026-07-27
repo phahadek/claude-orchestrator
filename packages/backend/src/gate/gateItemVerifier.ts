@@ -240,7 +240,11 @@ export function resolveEvidenceShape(evidence: unknown): EvidenceShapeResult {
     return {
       kind: 'shape-error',
       description: `a JSON string that parsed to ${
-        Array.isArray(parsed) ? 'an array' : parsed === null ? 'null' : typeof parsed
+        Array.isArray(parsed)
+          ? 'an array'
+          : parsed === null
+            ? 'null'
+            : typeof parsed
       }, not an object`,
     };
   }
@@ -601,8 +605,9 @@ export function enforceAbstentionEvidenceContract(
 ): GateVerificationResult {
   if (result.disposition !== 'needs-setup') return result;
   if (!citesMissingIdentifierWithoutSearch(result.evidence)) return result;
-  const baseEvidence =
-    toEvidenceObject(result.evidence) ?? { reportedEvidence: result.evidence };
+  const baseEvidence = toEvidenceObject(result.evidence) ?? {
+    reportedEvidence: result.evidence,
+  };
   return {
     ...result,
     evidence: {
