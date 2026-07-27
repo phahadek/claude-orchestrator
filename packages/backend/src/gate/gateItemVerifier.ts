@@ -212,18 +212,18 @@ function buildGateVerifyProcedure(item: GateItem): string {
  * parsed and then judged on its contents, not rejected on shape alone. A
  * string that cannot be parsed into an object is a distinct failure mode
  * ("shape") from an object whose contents don't satisfy the contract
- * ("substance") and must be reported differently. Exported for testing.
+ * ("substance") and must be reported differently.
  */
-export type EvidenceShapeResult =
+type EvidenceShapeResult =
   | { kind: 'object'; value: Record<string, unknown> }
   | { kind: 'unusable' }
   | { kind: 'shape-error'; description: string };
 
 /**
  * Parses an evidence payload into an object, accepting either an object
- * directly or a JSON-encoded string of one. Exported for testing.
+ * directly or a JSON-encoded string of one.
  */
-export function resolveEvidenceShape(evidence: unknown): EvidenceShapeResult {
+function resolveEvidenceShape(evidence: unknown): EvidenceShapeResult {
   if (typeof evidence === 'string') {
     let parsed: unknown;
     try {
