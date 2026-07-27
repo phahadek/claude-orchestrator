@@ -676,9 +676,7 @@ describe('checkGroomingPromotionGate — triage eligibility (approve-by-standard
       'notion:triage-ineligible-operational',
     );
     expect(result.allowed).toBe(false);
-    expect(result.reasons.some((r) => r.includes('🔧 Operational'))).toBe(
-      true,
-    );
+    expect(result.reasons.some((r) => r.includes('🔧 Operational'))).toBe(true);
   });
 
   it('allows a 📐 Design task carrying a triage verdict', () => {

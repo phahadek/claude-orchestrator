@@ -447,7 +447,8 @@ function isTriageEligibleForType(
   type: string | undefined,
   entry: GroomingGateEntry,
 ): { ok: boolean; reasons: string[] } {
-  if (!entry.triage || isInteractiveTaskType(type)) return { ok: true, reasons: [] };
+  if (!entry.triage || isInteractiveTaskType(type))
+    return { ok: true, reasons: [] };
   return {
     ok: false,
     reasons: [
