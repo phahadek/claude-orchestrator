@@ -90,6 +90,7 @@ describe('POST /api/staged-intents/group/:groupId/commit — dispatched-groom Re
         },
         items: [],
         classification: 'n/a',
+        reason: 'This task type is exempt from gate accretion.',
       },
       projectId: 'proj-1',
       groupId,

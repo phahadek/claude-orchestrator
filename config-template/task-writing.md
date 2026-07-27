@@ -254,21 +254,36 @@ record — there is no dated run-note written back into a task body).
   loop over the gate-state API (`readiness` → pull runnable items by tier → human disposition →
   record the `gate_item_event`). `readiness` reports `green` when every item is `pass` or
   `deferred`, `blocked` otherwise (the blocking items are the worklist). Nothing is auto-dispatched.
-- **Triage each candidate before transcribing it — accretion is not a wholesale copy.**
-  The pre-groom `### 👁️ Manual verification` section's lines are *candidates* for the gate,
-  not automatic gate items. Before accreting, the groomer classifies every candidate line as
-  one of three outcomes: `runtime-observable` (only knowable by running the system and
-  looking — accrete it as a gate item), `config-or-code-determined` (answerable from source,
-  settings, or a unit test — never accrete it; relocate the line to the task's
-  `### 🤖 Automated tests` section instead of dropping it), or `needs-triage` (genuinely
-  unclear — accrete it flagged, as today). **The deciding question:** would a headless
-  verifier be able to cite a behavioural trace for this, or only cite the code? If only the
-  code, it is a test, not a gate item. **Disposition, don't drop:** the count of candidates in
-  must equal the count accreted plus the count relocated to `### 🤖 Automated tests` — this is
-  what prevents re-opening the exact silent-coverage leak (below) the mandatory-accretion rule
-  exists to close. **Present-and-dispositioned, not a correctness gate:** the promotion gate
-  requires a classification to be recorded for every candidate; it never re-judges which
-  classification the groomer chose — same posture as `size_check` / `type_check`.
+- **Author proposes, groomer validates — accretion is not relocation.** The pre-groom
+  `### 👁️ Manual verification` section's lines, when present, are the author's *advisory
+  candidates* — a hypothesis about what will need observing, never an instruction and never
+  the input this step transcribes wholesale. Grooming's job is to independently assess the
+  change's own runtime-observable behaviour from the code regions it touches — the groomer has
+  read the code, so it is better placed than the author to know what must be observed — and
+  then engage with each author candidate on its substance: accept it, correct it, or reject it
+  with a reason, since the author may simply be wrong. Grooming also adds runtime verifications
+  of its own that the change requires and the author did not foresee. Every candidate —
+  author-proposed or groomer-added — is classified as one of three outcomes:
+  `runtime-observable` (only knowable by running the system and looking — accrete it as a gate
+  item), `config-or-code-determined` (answerable from source, settings, or a unit test — never
+  accrete it; relocate the line to the task's `### 🤖 Automated tests` section instead of
+  dropping it), or `needs-triage` (genuinely unclear — accrete it flagged, as today). **The
+  deciding question:** would a headless verifier be able to cite a behavioural trace for this,
+  or only cite the code? If only the code, it is a test, not a gate item. **Disposition, don't
+  drop:** the count of candidates in must equal the count accreted plus the count relocated to
+  `### 🤖 Automated tests` — this is what prevents re-opening the exact silent-coverage leak
+  (below) the mandatory-accretion rule exists to close. **Present-and-dispositioned, not a
+  correctness gate:** the promotion gate requires a classification to be recorded for every
+  candidate; it never re-judges which classification the groomer chose — same posture as
+  `size_check` / `type_check`. **`none` must be a judgement, not a byproduct.** Some changes
+  genuinely have no runtime-observable behaviour, and a task must not be forced to invent a fake
+  gate item to avoid saying so — a padded gate is worse than an empty one, since it burns
+  operator attention at milestone end on checks that verify nothing. But a bare
+  `{"decision":"none"}` (or `"n/a"`) must carry a **substantive reason tied to the change's
+  behaviour**, never to the state of the pre-groom body section — "the section was empty" is
+  not a reason; "the change only adds a pure formatting helper with no I/O, no config read, and
+  no user-visible effect" is. A `gate_contribution` recording a bare decision without one is
+  rejected at the promotion gate.
 - **Accretion is mandatory and promotion-gated — not best-effort.** Because a
   💻 Code task's body is *required* to strip its runtime items (above),
   those items live nowhere else — if the groomer doesn't accrete them to the gate, they
@@ -280,7 +295,8 @@ record — there is no dated run-note written back into a task body).
   (which writes the `gate_item` rows, keyed by milestone display name, grouped by source task),
   or (b) confirm it has none — and record the outcome as a `gate_contribution`
   artifact in `grooming-state.json`: `{ "items": [...], "accreted_at": "…" }`
-  or `{ "decision": "none" }`, with each item in `items` carrying its recorded classification.
+  or `{ "decision": "none", "reason": "…" }`, with each item in `items` carrying its recorded
+  classification and the bare-decision form carrying the substantive reason described above.
   This is symmetric with `size_check` / `hard_block_deps` /
   `signoff` — same shape, same load-bearing weight. A Ready-flip that strips manual items
   from the body without accreting them to the gate is the same class of failure as locking

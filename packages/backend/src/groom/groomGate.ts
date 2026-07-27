@@ -237,14 +237,34 @@ function isTypeCheckDispositioned(entry: GroomingGateEntry): boolean {
  * being promoted (accreteGateContribution writes it, keyed by source task id
  * — the task being promoted is its own source). Absent a resolved type, or a
  * type outside Code, fail-open (allow) — mirrors groom-gate.mjs's
- * needsGate check.
+ * needsGate check. A marker recording a bare 'none'/'n/a' decision must also
+ * carry a substantive, non-empty `reason` — the judgement that the change's
+ * behaviour was assessed and found to have nothing runtime-observable,
+ * distinguishing an assessed none from one that fell out of an empty
+ * pre-groom body section. An 'items' decision needs no reason: the items
+ * themselves are the evidence of assessment.
  */
 function isGateContributionRecorded(
   type: string | undefined,
   taskId: string,
-): boolean {
-  if (!type || !GATE_CONTRIBUTION_TYPES.has(type)) return true;
-  return getGateAccretionMarker(taskId) !== undefined;
+): { ok: boolean; reasons: string[] } {
+  if (!type || !GATE_CONTRIBUTION_TYPES.has(type)) return { ok: true, reasons: [] };
+  const marker = getGateAccretionMarker(taskId);
+  if (!marker) return { ok: false, reasons: [] };
+  if (
+    (marker.decision === 'none' || marker.decision === 'n/a') &&
+    !marker.reason?.trim()
+  ) {
+    return {
+      ok: false,
+      reasons: [
+        `gate_contribution is recorded as "${marker.decision}" without a substantive reason — a none/n/a ` +
+          "decision must record why the groomer's own assessment of the change's runtime-observable " +
+          'behaviour found nothing gate-worthy, not merely that the input section was empty.',
+      ],
+    };
+  }
+  return { ok: true, reasons: [] };
 }
 
 /**
@@ -532,15 +552,17 @@ export function checkAccretionContributions(
   const reasons: string[] = [];
   const resolvedType = authoritativeType ?? entry.type;
 
-  if (
-    !opts?.skipGateContributionCheck &&
-    !isGateContributionRecorded(resolvedType, taskId)
-  ) {
-    reasons.push(
-      'gate_contribution is not recorded — for 💻 Code tasks, accreteGateContribution ' +
-        'must record a gate_accretion marker (items appended to the milestone gate, or an explicit ' +
-        '"none"/"n/a" decision) for this task before promotion.',
-    );
+  if (!opts?.skipGateContributionCheck) {
+    const gateCheck = isGateContributionRecorded(resolvedType, taskId);
+    if (!gateCheck.ok && gateCheck.reasons.length === 0) {
+      reasons.push(
+        'gate_contribution is not recorded — for 💻 Code tasks, accreteGateContribution ' +
+          'must record a gate_accretion marker (items appended to the milestone gate, or an explicit ' +
+          '"none"/"n/a" decision with a substantive reason) for this task before promotion.',
+      );
+    } else {
+      reasons.push(...gateCheck.reasons);
+    }
   }
 
   if (

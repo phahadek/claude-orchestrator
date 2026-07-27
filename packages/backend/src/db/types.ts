@@ -446,6 +446,8 @@ export interface GateAccretionRow {
   project: string;
   milestone: string;
   decision: GateAccretionDecision;
+  /** Substantive reason recorded for a bare 'none'/'n/a' decision — mandatory for those, absent for 'items'. */
+  reason: string | null;
   accreted_at: string;
 }
 

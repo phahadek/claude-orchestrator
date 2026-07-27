@@ -1108,7 +1108,7 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
     expect(result.itemIds).toEqual(['gate-item-1', 'gate-item-2']);
   });
 
-  it('records a "none" marker and mints no items', async () => {
+  it('records a "none" marker with its reason and mints no items', async () => {
     const backend = makeBackend();
     const commands = new BackendTaskWriteCommands(backend);
 
@@ -1116,6 +1116,7 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
       sourceTask,
       [],
       'none',
+      'The change only adds a pure formatting helper with no I/O or user-visible effect.',
     );
 
     expect(mockInsertItem).not.toHaveBeenCalled();
@@ -1123,23 +1124,75 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
       expect.objectContaining({
         sourceTaskId: 'notion:src-1',
         decision: 'none',
+        reason:
+          'The change only adds a pure formatting helper with no I/O or user-visible effect.',
       }),
     );
     expect(result.itemIds).toEqual([]);
   });
 
-  it('records an "n/a" marker and mints no items', async () => {
+  it('records an "n/a" marker with its reason and mints no items', async () => {
     const backend = makeBackend();
     const commands = new BackendTaskWriteCommands(backend);
 
-    await commands.accreteGateContribution(sourceTask, [], 'n/a');
+    await commands.accreteGateContribution(
+      sourceTask,
+      [],
+      'n/a',
+      'This task type is exempt from gate accretion.',
+    );
 
     expect(mockInsertItem).not.toHaveBeenCalled();
     expect(mockRecordAccretionMarker).toHaveBeenCalledWith(
       expect.objectContaining({
         sourceTaskId: 'notion:src-1',
         decision: 'n/a',
+        reason: 'This task type is exempt from gate accretion.',
       }),
+    );
+  });
+
+  it('rejects a bare "none" decision with no reason', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.accreteGateContribution(sourceTask, [], 'none'),
+    ).rejects.toThrow(/substantive, non-empty reason/);
+    expect(mockRecordAccretionMarker).not.toHaveBeenCalled();
+  });
+
+  it('rejects a bare "none" decision with a whitespace-only reason', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.accreteGateContribution(sourceTask, [], 'none', '   '),
+    ).rejects.toThrow(/substantive, non-empty reason/);
+  });
+
+  it('rejects a bare "n/a" decision with no reason', async () => {
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(
+      commands.accreteGateContribution(sourceTask, [], 'n/a'),
+    ).rejects.toThrow(/substantive, non-empty reason/);
+  });
+
+  it('does not require a reason for an "items" classification', async () => {
+    mockInsertItem.mockReturnValueOnce({ id: 'gate-item-1' });
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.accreteGateContribution(
+      sourceTask,
+      [{ text: 'Verify the webhook fires' }],
+      'Read-Only',
+    );
+
+    expect(mockRecordAccretionMarker).toHaveBeenCalledWith(
+      expect.objectContaining({ decision: 'items', reason: undefined }),
     );
   });
 
@@ -1152,6 +1205,7 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
         sourceTask,
         [{ text: 'stray item' }],
         'none',
+        'a reason',
       ),
     ).rejects.toThrow(/empty items array/);
   });
@@ -1535,6 +1589,37 @@ describe('TaskWriteCommands.flipToReady', () => {
       'notion:abc',
     );
     expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('succeeds with a validly-reasoned "none" gate contribution and no minimum item count', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
+    const backend = makeBackend({
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll good.'),
+    });
+    const commands = new BackendTaskWriteCommands(backend);
+
+    const result = await commands.flipToReady({
+      ...flipParams,
+      gateContribution: {
+        classification: 'none',
+        items: [],
+        reason:
+          'The change only adds a pure formatting helper with no I/O or user-visible effect.',
+      },
+    });
+
+    expect(mockInsertItem).not.toHaveBeenCalled();
+    expect(mockRecordAccretionMarker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: 'none',
+        reason:
+          'The change only adds a pure formatting helper with no I/O or user-visible effect.',
+      }),
+    );
+    expect(result.gate.itemIds).toEqual([]);
+    expect(backend.updateStatus).toHaveBeenCalled();
   });
 });
 

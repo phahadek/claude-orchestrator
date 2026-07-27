@@ -201,11 +201,12 @@ export function registerStageProposalTools(
     {
       title: 'Stage a runtime-item gate contribution',
       description:
-        "Stages a gate.accrete intent — the source task's stripped runtime/launch-and-observe items to mint onto the milestone gate.",
+        "Stages a gate.accrete intent — the source task's independently-assessed runtime-observable items to mint onto the milestone gate, or a bare 'none'/'n/a' classification. A bare classification requires a substantive `reason` — the groomer's judgement that the change's behaviour was assessed and found to have nothing runtime-observable, tied to the change rather than to the pre-groom body.",
       inputSchema: envelope({
         sourceTask: gateContributionSourceTaskSchema,
         items: z.array(gateContributionItemInputSchema),
         classification: gateContributionDecisionSchema,
+        reason: z.string().optional(),
       }),
     },
     async (args) => stage('gate.accrete', args.payload, ctx, args),

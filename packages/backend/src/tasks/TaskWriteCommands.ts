@@ -333,6 +333,8 @@ export interface FlipReadyParams {
   gateContribution: {
     classification: GateContributionDecision;
     items: GateContributionItemInput[];
+    /** Required (and validated non-empty) when classification is 'none'/'n/a'. */
+    reason?: string;
   };
   seedContribution: {
     decision: SeedContributionDecision;
@@ -399,6 +401,7 @@ interface TaskWriteCommands {
     sourceTask: GateContributionSourceTask,
     items: GateContributionItemInput[],
     classification: GateContributionDecision,
+    reason?: string,
   ): Promise<AccreteGateContributionResult>;
   /**
    * Mints seed_item + seed_item_source rows for the source task's
@@ -618,14 +621,18 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
   /**
    * Store-only — writes gate_item/gate_item_source rows and the
    * gate_accretion marker directly via gateStore, no TaskBackend port call.
-   * "none"/"n/a" mint no items (the marker alone records the decision); any
-   * other classification requires at least one item and mints each as a
+   * "none"/"n/a" mint no items (the marker alone records the decision) and
+   * require a substantive, non-empty `reason` — the groomer's judgement that
+   * the change's runtime-observable behaviour was assessed and found to have
+   * nothing gate-worthy, not a byproduct of an empty pre-groom body section.
+   * Any other classification requires at least one item and mints each as a
    * gate_item sourced to this task, with the marker recorded as "items".
    */
   async accreteGateContribution(
     sourceTask: GateContributionSourceTask,
     items: GateContributionItemInput[],
     classification: GateContributionDecision,
+    reason?: string,
   ): Promise<AccreteGateContributionResult> {
     const isBareDecision =
       classification === 'none' || classification === 'n/a';
@@ -637,6 +644,11 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     if (!isBareDecision && items.length === 0) {
       throw new Error(
         `[TaskWriteCommands] accreteGateContribution: at least one item is required unless classification is "none" or "n/a"`,
+      );
+    }
+    if (isBareDecision && !reason?.trim()) {
+      throw new Error(
+        `[TaskWriteCommands] accreteGateContribution: classification "${classification}" requires a substantive, non-empty reason`,
       );
     }
 
@@ -674,6 +686,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       project: sourceTask.project,
       milestone,
       decision: isBareDecision ? classification : 'items',
+      reason: isBareDecision ? reason?.trim() : undefined,
       accretedAt,
     };
     recordAccretionMarker(marker);
@@ -769,6 +782,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       sourceTask,
       params.gateContribution.items,
       params.gateContribution.classification,
+      params.gateContribution.reason,
     );
 
     let seed: StageSeedContributionResult;
