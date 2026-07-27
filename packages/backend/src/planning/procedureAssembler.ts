@@ -612,7 +612,7 @@ function renderSkeleton(
           'dependency of any other type (most commonly 💻 Code) changes only when ' +
           'the work runs, never what it says: groom the task normally and stage ' +
           '`task.setStatus` → `Ready` if it clears the readiness bar on its own ' +
-          "merits. Being blocked on a Code dependency is not a readiness defect.\n" +
+          'merits. Being blocked on a Code dependency is not a readiness defect.\n' +
           '- Never stage `task.setStatus` to the status the task already holds — a ' +
           "no-op write gives the operator nothing to disposition. When a pass's " +
           'conclusion is "stay at `Backlog`" and the task is already `Backlog`, ' +
