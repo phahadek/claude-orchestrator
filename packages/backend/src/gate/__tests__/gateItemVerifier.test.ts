@@ -282,6 +282,7 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     const emitter = new EventEmitter();
     return Object.assign(emitter, {
       start: vi.fn().mockResolvedValue('sess-1'),
+      archiveAndEndSession: vi.fn(),
     });
   }
 
@@ -319,6 +320,7 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
       null,
       'gate_item_verifier_consumed',
     );
+    expect(sessionManager.archiveAndEndSession).toHaveBeenCalledWith('sess-1');
   });
 
   it('names the session "Gate verify: <item text>", unaffected by the groom/design/ops planning-session naming scheme', async () => {
@@ -503,6 +505,21 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
 
     expect(result.disposition).toBe('needs-setup');
     expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sessionManager.archiveAndEndSession).not.toHaveBeenCalled();
+  });
+
+  it('leaves an already-error session alone: no archive, no status overwrite', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'error' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never, {
+      pollIntervalMs: 5,
+    });
+    const result = await verifier.verify(item);
+
+    expect(result.disposition).toBe('needs-setup');
+    expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sessionManager.archiveAndEndSession).not.toHaveBeenCalled();
   });
 
   it('captures a gate_verify_disposition emitted synchronously as start() resolves, before the poll fallback can fire', async () => {
@@ -522,6 +539,7 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
         });
         return 'sess-fast';
       }),
+      archiveAndEndSession: vi.fn(),
     });
     vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
 
@@ -557,6 +575,7 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
         });
         return 'sess-fast-2';
       }),
+      archiveAndEndSession: vi.fn(),
     });
     vi.mocked(getSession).mockReturnValue({ status: 'done' } as never);
 
