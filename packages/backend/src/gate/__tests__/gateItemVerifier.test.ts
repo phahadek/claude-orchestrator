@@ -12,6 +12,10 @@ vi.mock('../../config', () => ({
     .mockReturnValue({ contextUrl: 'https://notion.so/project' }),
 }));
 
+vi.mock('../gateService', () => ({
+  appendGateItemEvent: vi.fn(),
+}));
+
 import {
   admitsLiveRecordUnreachable,
   citesMissingIdentifierWithoutSearch,
@@ -23,6 +27,7 @@ import {
   SessionGateItemVerifier,
 } from '../gateItemVerifier';
 import { getSession, markSessionDone } from '../../db/queries';
+import { appendGateItemEvent } from '../gateService';
 import type { GateItem } from '../gateStore';
 
 describe('hasOperationalEvidence', () => {
@@ -336,12 +341,14 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     return Object.assign(emitter, {
       start: vi.fn().mockResolvedValue('sess-1'),
       archiveAndEndSession: vi.fn(),
+      enqueueFeedback: vi.fn().mockResolvedValue(undefined),
     });
   }
 
   beforeEach(() => {
     vi.mocked(getSession).mockReset();
     vi.mocked(markSessionDone).mockReset();
+    vi.mocked(appendGateItemEvent).mockReset();
   });
 
   it('marks the session done once the gate_verify_disposition event fires', async () => {
@@ -386,7 +393,10 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
 
     sessionManager.emit('gate_verify_disposition', {
       sessionId: 'sess-1',
-      disposition: { disposition: 'pass', evidence: { basis: 'operational' } },
+      disposition: {
+        disposition: 'pass',
+        evidence: { basis: 'operational', note: 'audit_log shows the run' },
+      },
     });
     await resultPromise;
 
@@ -694,6 +704,227 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     expect(injectedProcedureContent).toMatch(/before abstaining/i);
     expect(injectedProcedureContent).toContain('.claude/session-prompts/');
     expect(injectedProcedureContent).toMatch(/must say what you\s+searched/i);
+  });
+});
+
+describe('SessionGateItemVerifier — one-shot gate-verify appeal', () => {
+  const item: GateItem = {
+    id: 'item-appeal-1',
+    project: 'proj',
+    milestone: 'm1',
+    text: 'some behavior',
+    classification: 'Read-Only',
+    state: 'open',
+    updatedAt: new Date(0).toISOString(),
+    sources: [],
+    events: [],
+  };
+
+  // Fails only the "concrete captured runtime record" clause — operational,
+  // not precondition-only, no unreachable-record admission, but no
+  // audit_log/session_events/live-API-read mention either.
+  const sourceGradeEvidence = {
+    basis: 'operational',
+    note: 'traced the code path and a CI check',
+  };
+  const revisedRuntimeEvidence = {
+    basis: 'operational',
+    note: 'audit_log confirms the described behavior actually ran',
+  };
+
+  function makeSessionManager() {
+    const emitter = new EventEmitter();
+    return Object.assign(emitter, {
+      start: vi.fn().mockResolvedValue('sess-appeal'),
+      archiveAndEndSession: vi.fn(),
+      enqueueFeedback: vi.fn().mockResolvedValue(undefined),
+    });
+  }
+
+  beforeEach(() => {
+    vi.mocked(getSession).mockReset();
+    vi.mocked(markSessionDone).mockReset();
+    vi.mocked(appendGateItemEvent).mockReset();
+  });
+
+  it('delivers appeal feedback naming the failing clause while the session is still live, before any teardown', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never, {
+      budgetMs: 60_000,
+    });
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-appeal',
+      disposition: { disposition: 'pass', evidence: sourceGradeEvidence },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Feedback was sent while the session was still live — no teardown yet.
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+    expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sessionManager.archiveAndEndSession).not.toHaveBeenCalled();
+
+    const [sessionId, source, message] = vi.mocked(
+      sessionManager.enqueueFeedback,
+    ).mock.calls[0];
+    expect(sessionId).toBe('sess-appeal');
+    expect(source).toBe('gate-verifier:appeal');
+    expect(message).toMatch(
+      /source\/CI-grade evidence.*rather than a concrete captured runtime record/i,
+    );
+
+    // The original verdict is preserved as a distinct log entry, not silently
+    // discarded.
+    expect(appendGateItemEvent).toHaveBeenCalledTimes(1);
+    expect(appendGateItemEvent).toHaveBeenCalledWith(
+      item.id,
+      expect.objectContaining({
+        disposition: 'noted',
+        operator: 'gate-verifier',
+        evidence: expect.objectContaining({
+          originalDisposition: 'pass',
+          originalEvidence: sourceGradeEvidence,
+          downgradeReason: expect.stringMatching(/concrete captured runtime/i),
+        }),
+      }),
+    );
+
+    // Still awaiting the revision — settle it so the test doesn't leak timers.
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-appeal',
+      disposition: { disposition: 'needs-setup' },
+    });
+    await resultPromise;
+  });
+
+  it('records a revised verdict that satisfies the contract as final, and only then tears the session down', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never, {
+      budgetMs: 60_000,
+    });
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-appeal',
+      disposition: { disposition: 'pass', evidence: sourceGradeEvidence },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(markSessionDone).not.toHaveBeenCalled();
+
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-appeal',
+      disposition: { disposition: 'pass', evidence: revisedRuntimeEvidence },
+    });
+
+    const result = await resultPromise;
+    expect(result.disposition).toBe('pass');
+    expect(result.evidence).toEqual(revisedRuntimeEvidence);
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'sess-appeal',
+      expect.any(Number),
+      null,
+      'gate_item_verifier_consumed',
+    );
+    expect(sessionManager.archiveAndEndSession).toHaveBeenCalledWith(
+      'sess-appeal',
+    );
+    // Exactly one appeal — no second round.
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+  });
+
+  it('downgrades a revised verdict that still fails the contract, final with no second appeal', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never, {
+      budgetMs: 60_000,
+    });
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-appeal',
+      disposition: { disposition: 'pass', evidence: sourceGradeEvidence },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Revised, still source-grade — a second pass that still fails.
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-appeal',
+      disposition: { disposition: 'pass', evidence: sourceGradeEvidence },
+    });
+
+    const result = await resultPromise;
+    expect(result.disposition).toBe('needs-setup');
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'sess-appeal',
+      expect.any(Number),
+      null,
+      'gate_item_verifier_consumed',
+    );
+  });
+
+  it('produces no appeal turn for a verdict that satisfies the contract on the first attempt', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-appeal',
+      disposition: { disposition: 'pass', evidence: revisedRuntimeEvidence },
+    });
+
+    const result = await resultPromise;
+    expect(result.disposition).toBe('pass');
+    expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
+    expect(appendGateItemEvent).not.toHaveBeenCalled();
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'sess-appeal',
+      expect.any(Number),
+      null,
+      'gate_item_verifier_consumed',
+    );
+  });
+
+  it('caps a session that never answers its appeal by the existing verification budget, and still tears it down', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never, {
+      budgetMs: 20,
+      pollIntervalMs: 100_000,
+    });
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-appeal',
+      disposition: { disposition: 'pass', evidence: sourceGradeEvidence },
+    });
+
+    const result = await resultPromise;
+    expect(result.disposition).toBe('needs-setup');
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'sess-appeal',
+      expect.any(Number),
+      null,
+      'gate_item_verifier_consumed',
+    );
+    expect(sessionManager.archiveAndEndSession).toHaveBeenCalledWith(
+      'sess-appeal',
+    );
   });
 });
 
