@@ -307,15 +307,13 @@ describe('DeployOrchestrator: step failure halts + rollback', () => {
       'step_started',
       'step_failed',
     ]);
-    expect(
-      events.find((e) => e.event_type === 'step_failed')?.detail,
-    ).toBe('bookkeeping exploded');
+    expect(events.find((e) => e.event_type === 'step_failed')?.detail).toBe(
+      'bookkeeping exploded',
+    );
     expect(events.some((e) => e.event_type === 'rollback_succeeded')).toBe(
       false,
     );
-    expect(events.some((e) => e.event_type === 'rollback_failed')).toBe(
-      false,
-    );
+    expect(events.some((e) => e.event_type === 'rollback_failed')).toBe(false);
   });
 
   it('reaches a terminal failed state (not stuck running) when the final step fails with no rollback_ref', async () => {
