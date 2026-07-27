@@ -639,6 +639,73 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
   });
 });
 
+describe('checkGroomingPromotionGate — triage eligibility (approve-by-standard type gate)', () => {
+  const cleanEntry = (type: string) => ({
+    size_check: { decision: 'n/a' },
+    type_check: { decision: 'n/a' },
+    type,
+    triage: {
+      proposedVerdict: 'clean' as const,
+      hasOpenQuestionsHeading: true,
+    },
+  });
+
+  it('rejects a 💻 Code task carrying a triage verdict, naming the type as the reason', () => {
+    const result = checkGroomingPromotionGate(
+      cleanEntry('💻 Code'),
+      'notion:triage-ineligible-code',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('💻 Code'))).toBe(true);
+  });
+
+  it('rejects a 🔎 Investigation task carrying a triage verdict', () => {
+    const result = checkGroomingPromotionGate(
+      cleanEntry('🔎 Investigation'),
+      'notion:triage-ineligible-investigation',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('🔎 Investigation'))).toBe(
+      true,
+    );
+  });
+
+  it('rejects a 🔧 Operational task carrying a triage verdict', () => {
+    const result = checkGroomingPromotionGate(
+      cleanEntry('🔧 Operational'),
+      'notion:triage-ineligible-operational',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('🔧 Operational'))).toBe(true);
+  });
+
+  it('allows a 📐 Design task carrying a triage verdict', () => {
+    const result = checkGroomingPromotionGate(
+      cleanEntry('📐 Design'),
+      'notion:triage-eligible-design',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('allows a 📋 Planning task carrying a triage verdict', () => {
+    const result = checkGroomingPromotionGate(
+      cleanEntry('📋 Planning'),
+      'notion:triage-eligible-planning',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('resolves eligibility from the authoritative type, rejecting even when the payload asserts an eligible type', () => {
+    const result = checkGroomingPromotionGate(
+      cleanEntry('📐 Design'),
+      'notion:triage-authoritative-mismatch',
+      '💻 Code',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('💻 Code'))).toBe(true);
+  });
+});
+
 describe('checkAccretionContributions', () => {
   it('surfaces both reasons for a Code task with neither marker recorded', () => {
     const result = checkAccretionContributions(

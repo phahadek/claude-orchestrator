@@ -430,6 +430,36 @@ function isConstraintsDispositioned(entry: GroomingGateEntry): {
 }
 
 /**
+ * Approve-by-standard triage is defined for interactive (📐 Design /
+ * 📋 Planning) types only — 💻 Code (and any other non-interactive type,
+ * e.g. 🔎 Investigation, 🔧 Operational) keeps the per-task human gate that
+ * approve-by-standard would otherwise remove. `entry.triage` is
+ * session-supplied, like `entry.type`: a dispatched session could otherwise
+ * attach a triage verdict to any task type to buy it batched treatment. A
+ * Ready-flip carrying `entry.triage` for a resolved type outside
+ * INTERACTIVE_TASK_TYPES is therefore rejected outright (never silently
+ * stripped), so the staging session sees the mismatch and can re-stage
+ * without a triage block. `type` here is always the caller's resolved type
+ * (authoritative when available — see checkGroomingPromotionGate), never
+ * `entry.type` on its own.
+ */
+function isTriageEligibleForType(
+  type: string | undefined,
+  entry: GroomingGateEntry,
+): { ok: boolean; reasons: string[] } {
+  if (!entry.triage || isInteractiveTaskType(type))
+    return { ok: true, reasons: [] };
+  return {
+    ok: false,
+    reasons: [
+      `groomingGate.triage was recorded for task type "${type ?? 'unknown'}" — approve-by-standard triage ` +
+        'applies only to interactive types (📐 Design / 📋 Planning); this type keeps the per-task human ' +
+        'gate and must not carry a triage verdict. Re-stage without groomingGate.triage.',
+    ],
+  };
+}
+
+/**
  * Approve-by-standard promotion path for interactive (📐 Design /
  * 📋 Planning) types — the per-task server-enforced records above stay
  * required and type-agnostic; this is the one additional gate that stands in
@@ -527,6 +557,7 @@ export function checkGroomingPromotionGate(
   );
   reasons.push(...isDependsOnDesignClear(entry.dependsOnTasks).reasons);
   reasons.push(...isConstraintsDispositioned(entry).reasons);
+  reasons.push(...isTriageEligibleForType(resolvedType, entry).reasons);
   reasons.push(...isInteractiveTriageClean(resolvedType, entry).reasons);
 
   return { allowed: reasons.length === 0, reasons };
