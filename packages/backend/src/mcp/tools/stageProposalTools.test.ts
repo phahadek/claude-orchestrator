@@ -255,16 +255,19 @@ describe('stage-proposal MCP tools — schema validation', () => {
           },
         },
       },
-    })) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+    })) as {
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
     expect(result.isError).toBe(true);
     const text = result.content[0]?.text ?? '';
     expect(text).toMatch(/proposedVerdict/);
     expect(text).toMatch(/clean/);
     expect(text).toMatch(/blocked/);
     expect(text).toMatch(/needs-attention/);
-    expect(
-      db.prepare('SELECT COUNT(*) as n FROM staged_intent').get(),
-    ).toEqual({ n: 0 });
+    expect(db.prepare('SELECT COUNT(*) as n FROM staged_intent').get()).toEqual(
+      { n: 0 },
+    );
     await close();
   });
 
