@@ -2,14 +2,15 @@
  * Canonical planning-procedure module — the shared domain core behind the
  * /groom, /design, and /ops skills.
  *
- * Today only one consumer exists: the interactive SKILL.md files, which
- * compose it by linking to `skills/_shared/reference/hard-rules.md` (kept in
+ * Two consumers exist today: the interactive SKILL.md files, which compose
+ * it by linking to `skills/_shared/reference/hard-rules.md` (kept in
  * lockstep with `renderHardRulesMarkdown` below — see
  * `procedureCore.test.ts`) instead of restating the cross-cutting rules
- * per-skill. A future injected assembler (present-and-wait replaced with
- * stage-output) is meant to import this same module rather than re-derive
- * the procedure from the vendored SKILL.md prose — that is the drift this
- * module exists to confine to thin execution-mode wrappers.
+ * per-skill; and `procedureAssembler.ts`, the injected assembler
+ * (present-and-wait replaced with stage-output) that imports this same
+ * module rather than re-deriving the procedure from the vendored SKILL.md
+ * prose — that is the drift this module exists to confine to thin
+ * execution-mode wrappers.
  *
  * Style: every load-bearing directive added here (a principle `text`, a
  * step `summary`/`summaryOverrides`) follows

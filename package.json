@@ -18,7 +18,7 @@
   ],
   "scripts": {
     "dev": "concurrently \"npm run dev -w packages/backend\" \"npm run dev -w packages/frontend\"",
-    "build": "npm run build -w packages/frontend && npm run build -w packages/backend",
+    "build": "npm run build -w packages/backend && npm run build -w packages/frontend",
     "start": "node packages/backend/dist/server.js",
     "restart": "npx kill-port 3000 5173 && npm run dev",
     "restart:backend": "npx kill-port 3000 && npm run dev -w packages/backend",
