@@ -146,7 +146,16 @@ export class PlanningOrchestrator {
 
   private markTerminal(sessionId: string, reason: string): void {
     const row = getSession(sessionId);
-    if (!row || row.status === 'done') return;
+    if (!row) return;
+    if (row.status === 'done') {
+      // Status was already written by another terminal-status writer (e.g.
+      // the gate-item verifier), which may not have reaped the subprocess.
+      // End it unconditionally rather than leaving it to leak a
+      // planning-concurrency slot forever — endSession on an already-exited
+      // session is already a no-op.
+      this.sessionManager.endSession(sessionId);
+      return;
+    }
     markSessionDone(sessionId, Date.now(), null, reason);
     this.stagedCountAtResume.delete(sessionId);
     // The normal run().then() cleanup that frees a session's in-memory

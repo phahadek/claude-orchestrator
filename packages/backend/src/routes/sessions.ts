@@ -123,11 +123,14 @@ sessionsRouter.patch('/:id/archive', (req: Request, res: Response) => {
     res.status(404).json({ error: 'Session not found' });
     return;
   }
-  archiveSession(sessionId);
   // Archiving is an explicit operator signal the session is done — reap any
   // live subprocess so it doesn't keep holding a concurrency slot under an
   // archived (dashboard-invisible) row.
-  _sessionManager?.endSession(sessionId);
+  if (_sessionManager) {
+    _sessionManager.archiveAndEndSession(sessionId);
+  } else {
+    archiveSession(sessionId);
+  }
   res.json({ ok: true });
 });
 

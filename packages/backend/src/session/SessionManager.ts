@@ -58,6 +58,7 @@ import {
   updateSessionStatus,
   updateSessionWorktreePath,
   markSessionDone,
+  archiveSession,
   markSessionSuperseded,
   insertEvent,
   getSession,
@@ -2801,6 +2802,17 @@ export class SessionManager extends EventEmitter {
     // Session not live (already idle) — explicitly finalize the worktree now
     // that a terminal event has fired (PR merged/closed, session done/killed).
     this._teardownIdleSessionWorktree(sessionId);
+  }
+
+  /**
+   * Archive a session's row and reap any live subprocess so it doesn't keep
+   * holding a concurrency slot under an archived (dashboard-invisible) row.
+   * Shared by the archive route and any terminal-status writer so the two
+   * paths can't drift apart again.
+   */
+  archiveAndEndSession(sessionId: string): void {
+    archiveSession(sessionId);
+    this.endSession(sessionId);
   }
 
   /** Mark a session so cleanupWorktree deletes its local branch (used on PR merge). */

@@ -417,6 +417,34 @@ describe('PlanningOrchestrator terminal detection', () => {
     expect(markSessionDone).not.toHaveBeenCalled();
   });
 
+  it('still ends the subprocess when the row already reached done via another writer, instead of returning early without reaping', () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'done' }));
+    const orch = new PlanningOrchestrator(sm as any);
+
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    const terminal = orch.checkTerminal('planning-session-1');
+
+    expect(terminal).toBe(true);
+    expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
+    // Status was already written by the other terminal-status writer — this
+    // path must not overwrite it again with its own reason/call_site.
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('reaps an already-done session safely on repeated calls (idempotent)', () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'done' }));
+    const orch = new PlanningOrchestrator(sm as any);
+
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    expect(() => orch.checkTerminal('planning-session-1')).not.toThrow();
+    expect(() => orch.checkTerminal('planning-session-1')).not.toThrow();
+
+    expect(sm.endSession).toHaveBeenCalledTimes(2);
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
   it('drives terminal automatically off a session_ended(idle) event for a planning session', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
@@ -560,14 +588,17 @@ describe('PlanningOrchestrator.endSession', () => {
     expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
   });
 
-  it('is a no-op for an already-done session', () => {
+  it('still reaps the subprocess for an already-done session, without overwriting its status', () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'done' }));
     const orch = new PlanningOrchestrator(sm as any);
 
     orch.endSession('planning-session-1');
 
+    // The row already reached done via some other writer — this path must
+    // not overwrite it again, but the subprocess still needs to be reaped or
+    // it leaks a planning-concurrency slot forever.
     expect(markSessionDone).not.toHaveBeenCalled();
-    expect(sm.endSession).not.toHaveBeenCalled();
+    expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
   });
 });
