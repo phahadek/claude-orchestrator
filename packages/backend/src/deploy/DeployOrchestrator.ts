@@ -36,10 +36,10 @@ export const RESTART_STEP_ID = 'restart';
  * can't green against the outgoing process still bound during the restart
  * window.
  */
-export const VERIFY_STEP_ID = 'verify';
+const VERIFY_STEP_ID = 'verify';
 
 /** Event type recording the restart step's `identity_capture` output, read before it executes. */
-export const PRE_RESTART_IDENTITY_EVENT = 'pre_restart_identity_captured';
+const PRE_RESTART_IDENTITY_EVENT = 'pre_restart_identity_captured';
 
 export type AgenticVerdict = 'approved' | 'rejected';
 
