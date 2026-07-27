@@ -18,6 +18,18 @@ vi.mock('../../db/db', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../../projects/ProjectService', () => ({
+  ProjectService: {
+    getById: (id: string) => {
+      if (id !== 'polimarket-analyser') return undefined;
+      return {
+        id,
+        milestones: [{ id: 'M12', name: 'M12', canonicalShortId: 'M12' }],
+      };
+    },
+  },
+}));
+
 import { db } from '../../db/db';
 import { createStagedIntentsRouter } from '../stagedIntents';
 import { getAccretionMarker as getGateAccretionMarker } from '../../gate/gateStore';

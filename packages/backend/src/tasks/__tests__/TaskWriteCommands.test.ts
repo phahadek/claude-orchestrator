@@ -45,6 +45,15 @@ vi.mock('../../projects/milestoneResolver', async (importOriginal) => {
   };
 });
 
+const M12_UUID = '8c381caa-31a8-41df-add7-2578a14f47d8';
+const mockProjectServiceGetById = vi.fn();
+
+vi.mock('../../projects/ProjectService', () => ({
+  ProjectService: {
+    getById: (...args: unknown[]) => mockProjectServiceGetById(...args),
+  },
+}));
+
 vi.mock('../../seed/seedStore', () => ({
   insertItem: (...args: unknown[]) => mockInsertSeedItem(...args),
   recordAccretionMarker: (...args: unknown[]) =>
@@ -113,6 +122,16 @@ beforeEach(() => {
   mockRollbackGateContribution.mockReset();
   mockRollbackSeedContribution.mockReset();
   mockResolveMilestoneDatabaseId.mockReset();
+  mockProjectServiceGetById.mockReset();
+  mockProjectServiceGetById.mockImplementation((id: string) => {
+    if (id !== 'polimarket-analyser') return undefined;
+    return {
+      id,
+      milestones: [
+        { id: M12_UUID, name: 'M12', canonicalShortId: 'M12' },
+      ],
+    };
+  });
 });
 
 describe('TaskWriteCommands.setStatus — state machine', () => {
@@ -1214,6 +1233,26 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
       expect.objectContaining({ sourceTaskId: 'notion:src-1' }),
     );
   });
+
+  it('normalizes a milestone UUID to the canonical display name before insertGateItem/recordAccretionMarker', async () => {
+    mockInsertItem.mockReturnValueOnce({ id: 'gate-item-1' });
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+    const uuidSourceTask = { ...sourceTask, milestone: M12_UUID };
+
+    await commands.accreteGateContribution(
+      uuidSourceTask,
+      [{ text: 'Verify the webhook fires' }],
+      'Read-Only',
+    );
+
+    expect(mockInsertItem).toHaveBeenCalledWith(
+      expect.objectContaining({ milestone: 'M12' }),
+    );
+    expect(mockRecordAccretionMarker).toHaveBeenCalledWith(
+      expect.objectContaining({ milestone: 'M12' }),
+    );
+  });
 });
 
 describe('TaskWriteCommands.stageSeedContribution', () => {
@@ -1349,6 +1388,26 @@ describe('TaskWriteCommands.stageSeedContribution', () => {
 
     expect(mockInsertSeedItem).not.toHaveBeenCalled();
     expect(mockRecordSeedAccretionMarker).not.toHaveBeenCalled();
+  });
+
+  it('normalizes a milestone UUID to the canonical display name before insertSeedItem/recordSeedAccretionMarker', async () => {
+    mockInsertSeedItem.mockReturnValueOnce({ id: 'seed-item-1' });
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+    const uuidSourceTask = { ...sourceTask, milestone: M12_UUID };
+
+    await commands.stageSeedContribution(
+      uuidSourceTask,
+      [{ spec: 'Add webhook_url to config' }],
+      'seeds',
+    );
+
+    expect(mockInsertSeedItem).toHaveBeenCalledWith(
+      expect.objectContaining({ milestone: 'M12' }),
+    );
+    expect(mockRecordSeedAccretionMarker).toHaveBeenCalledWith(
+      expect.objectContaining({ milestone: 'M12' }),
+    );
   });
 });
 

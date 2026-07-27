@@ -5,6 +5,18 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../../projects/ProjectService', () => ({
+  ProjectService: {
+    getById: (id: string) => {
+      if (id !== 'polimarket-analyser') return undefined;
+      return {
+        id,
+        milestones: [{ id: 'M12', name: 'M12', canonicalShortId: 'M12' }],
+      };
+    },
+  },
+}));
+
 import { db } from '../../db/db.js';
 import {
   checkGroomingPromotionGate,

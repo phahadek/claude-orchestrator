@@ -643,6 +643,11 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     const sourceTaskId = normalizeTaskId(sourceTask.id);
     await this.assertTaskExists(sourceTaskId);
 
+    const milestone = resolveMilestoneForProject(
+      sourceTask.project,
+      sourceTask.milestone,
+    );
+
     const accretedAt = new Date().toISOString();
     const mergeCommit =
       (await getMergeCommitForTask(sourceTaskId)) ?? undefined;
@@ -650,7 +655,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       (item) =>
         insertGateItem({
           project: sourceTask.project,
-          milestone: sourceTask.milestone,
+          milestone,
           text: item.text,
           classification: classification as GateItemClassification,
           sources: [
@@ -667,7 +672,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     const marker: GateAccretionMarker = {
       sourceTaskId,
       project: sourceTask.project,
-      milestone: sourceTask.milestone,
+      milestone,
       decision: isBareDecision ? classification : 'items',
       accretedAt,
     };
@@ -703,12 +708,17 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     const sourceTaskId = normalizeTaskId(sourceTask.id);
     await this.assertTaskExists(sourceTaskId);
 
+    const milestone = resolveMilestoneForProject(
+      sourceTask.project,
+      sourceTask.milestone,
+    );
+
     const accretedAt = new Date().toISOString();
     const itemIds = seeds.map(
       (seed) =>
         insertSeedItem({
           project: sourceTask.project,
-          milestone: sourceTask.milestone,
+          milestone,
           spec: seed.spec,
           sources: [
             {
@@ -723,7 +733,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     const marker: SeedAccretionMarker = {
       sourceTaskId,
       project: sourceTask.project,
-      milestone: sourceTask.milestone,
+      milestone,
       decision,
       accretedAt,
     };
