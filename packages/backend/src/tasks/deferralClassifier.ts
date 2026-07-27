@@ -26,7 +26,6 @@ import {
 } from './readinessGate';
 import {
   listStagedIntentsByGroup,
-  getTaskCache,
   setStagedIntentAdvisory,
 } from '../db/queries';
 import type { StagedIntentRow } from '../db/types';
@@ -34,6 +33,7 @@ import type { TaskBodySections } from './bodyRender';
 import { recordEvent } from '../audit/AuditLog';
 import { placeSessionPid } from '../session/sessionCgroup';
 import { logger } from '../logger';
+import { getCachedType } from './TaskWriteCommands';
 
 interface AdvisoryFinding {
   detail: string;
@@ -282,17 +282,6 @@ class Semaphore {
 
 const classifySemaphore = new Semaphore(MAX_CONCURRENT_CLASSIFICATIONS);
 
-function getCachedTaskType(taskId: string): string | null {
-  const row = getTaskCache(taskId);
-  if (!row) return null;
-  try {
-    const parsed = JSON.parse(row.raw_json) as { type?: string };
-    return parsed.type ?? null;
-  } catch {
-    return null;
-  }
-}
-
 const ACTIVE_INTENT_STATES: ReadonlySet<StagedIntentRow['state']> = new Set([
   'staged',
   'approved',
@@ -340,8 +329,13 @@ export async function classifyReadyProposal(groupId: string): Promise<void> {
   await Promise.all(
     readyFlips.map(async (row) => {
       const payload = JSON.parse(row.payload) as SetStatusPayload;
-      const taskType = getCachedTaskType(payload.taskId);
-      if (!taskType || !IMPLEMENTER_BEARING_TYPES.has(taskType)) return;
+      const taskType = getCachedType(payload.taskId);
+      if (!taskType || !IMPLEMENTER_BEARING_TYPES.has(taskType)) {
+        logger.debug(
+          `[deferralClassifier] skipping ${payload.taskId}: no cached task type resolved (taskType=${taskType ?? 'null'})`,
+        );
+        return;
+      }
 
       const backend = getTaskBackend(row.project_id);
       const body = await computeGroupProposedBody(

@@ -6,6 +6,7 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import { getTaskCache, getVerifySessionsForGateItems } from '../db/queries';
 import type { GateItemListOrder, GateItemVerifySession } from '../db/queries';
 import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
+import { normalizeTaskId } from '../tasks/taskId';
 
 /**
  * Recomputes whether a deploy contains a given commit. This is the git-ancestry
@@ -745,7 +746,7 @@ function isNotStartedStatus(notionStatus: string): boolean {
  * not-Done, the conservative (skip-refile) side.
  */
 export function isFollowupTaskDone(taskId: string): boolean {
-  const cacheRow = getTaskCache(taskId);
+  const cacheRow = getTaskCache(normalizeTaskId(taskId));
   if (!cacheRow) return false;
   try {
     const parsed = JSON.parse(cacheRow.raw_json) as { status?: string };
@@ -782,7 +783,7 @@ export async function backfillGateTask(
     );
   }
 
-  const cacheRow = getTaskCache(input.taskId);
+  const cacheRow = getTaskCache(normalizeTaskId(input.taskId));
   let notionStatus = '';
   if (cacheRow) {
     try {
