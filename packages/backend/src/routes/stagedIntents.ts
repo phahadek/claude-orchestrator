@@ -1223,7 +1223,7 @@ export function translateApplyError(
  * translated error to the operator instead of treating the failure as
  * silently handled.
  */
-export async function routeApplyTimeFailure(
+async function routeApplyTimeFailure(
   row: StagedIntentRow,
   err: unknown,
   planningOrchestrator: PlanningOrchestrator | undefined,
