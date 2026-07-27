@@ -813,6 +813,31 @@ function parseGroomProposal(value: unknown): GroomProposalFields | null {
   };
 }
 
+/**
+ * States an explicit `explicitSupersedes` pointer may target — wider than
+ * ACTIVE_STATES (staged/approved) because a needs_revision intent is exactly
+ * the thing a caller's explicit pointer most needs to retire: it's the state
+ * a stage-time validation block leaves behind, and the state machine
+ * (STAGED_INTENT_TRANSITIONS in db/queries.ts) already permits
+ * needs_revision -> superseded. The implicit (payload-hash/title/prompt)
+ * lookup paths below intentionally keep the narrower ACTIVE_STATES filter —
+ * a blocked intent must not be silently resurrected as an implicit target,
+ * only a caller that names it explicitly may retire it.
+ */
+const EXPLICIT_SUPERSEDES_ALLOWED_STATES: StagedIntentState[] = [
+  'staged',
+  'approved',
+  'needs_revision',
+];
+
+/** An explicit `explicitSupersedes` pointer that cannot be honoured — never silently dropped. */
+export class ExplicitSupersedesError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ExplicitSupersedesError';
+  }
+}
+
 export function stageIntent(
   kind: string,
   payload: unknown,
@@ -836,18 +861,36 @@ export function stageIntent(
     ? JSON.stringify(groomProposal)
     : null;
 
-  const explicit =
-    explicitSupersedes && sessionId
-      ? getStagedIntentRow(explicitSupersedes)
-      : undefined;
-  const explicitValid =
-    explicit &&
-    explicit.kind === kind &&
-    explicit.project_id === projectId &&
-    explicit.session_id === sessionId &&
-    ACTIVE_STATES.includes(explicit.state)
-      ? explicit
-      : undefined;
+  let explicitValid: StagedIntentRow | undefined;
+  if (explicitSupersedes && sessionId) {
+    const explicit = getStagedIntentRow(explicitSupersedes);
+    if (!explicit) {
+      throw new ExplicitSupersedesError(
+        `explicit supersedes target "${explicitSupersedes}" was not found`,
+      );
+    }
+    if (explicit.kind !== kind) {
+      throw new ExplicitSupersedesError(
+        `explicit supersedes target "${explicitSupersedes}" has kind "${explicit.kind}", expected "${kind}"`,
+      );
+    }
+    if (explicit.project_id !== projectId) {
+      throw new ExplicitSupersedesError(
+        `explicit supersedes target "${explicitSupersedes}" belongs to a different project`,
+      );
+    }
+    if (explicit.session_id !== sessionId) {
+      throw new ExplicitSupersedesError(
+        `explicit supersedes target "${explicitSupersedes}" belongs to a different session`,
+      );
+    }
+    if (!EXPLICIT_SUPERSEDES_ALLOWED_STATES.includes(explicit.state)) {
+      throw new ExplicitSupersedesError(
+        `explicit supersedes target "${explicitSupersedes}" is in state "${explicit.state}" and cannot be superseded`,
+      );
+    }
+    explicitValid = explicit;
+  }
 
   const existing = explicitValid
     ? explicitValid
