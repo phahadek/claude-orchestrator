@@ -680,9 +680,8 @@ export async function validateAndNormalizeTaskReferences(
   projectId: string,
 ): Promise<unknown> {
   if (kind === 'gate.accrete') {
-    const sourceTaskId = (
-      payload as { sourceTask?: { id?: unknown } } | null
-    )?.sourceTask?.id;
+    const sourceTaskId = (payload as { sourceTask?: { id?: unknown } } | null)
+      ?.sourceTask?.id;
     if (typeof sourceTaskId === 'string') {
       if (getCachedType(sourceTaskId) === '🔎 Investigation') {
         throw new InvestigationAccretionRejectedError(kind, sourceTaskId);
@@ -691,9 +690,11 @@ export async function validateAndNormalizeTaskReferences(
   }
 
   if (kind === 'task.patchBodySection') {
-    const p = payload as
-      | { taskId?: unknown; section?: unknown; operation?: unknown }
-      | null;
+    const p = payload as {
+      taskId?: unknown;
+      section?: unknown;
+      operation?: unknown;
+    } | null;
     if (
       typeof p?.taskId === 'string' &&
       typeof p?.section === 'string' &&
