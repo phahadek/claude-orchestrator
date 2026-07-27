@@ -118,7 +118,11 @@ export function TriageBatchPanel({ groups, onCommitted }: Props) {
           {expanded[groupId] && (
             <div data-testid={`triage-detail-${groupId}`}>
               {intents.map((intent) => (
-                <StagedIntentPanel key={intent.id} intent={intent} hideActions />
+                <StagedIntentPanel
+                  key={intent.id}
+                  intent={intent}
+                  hideActions
+                />
               ))}
             </div>
           )}

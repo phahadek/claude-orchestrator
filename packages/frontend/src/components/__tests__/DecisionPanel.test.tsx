@@ -223,7 +223,10 @@ describe('DecisionPanel', () => {
           taskId,
           status: 'Ready',
           groomingGate: {
-            triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: false },
+            triage: {
+              proposedVerdict: 'clean',
+              hasOpenQuestionsHeading: false,
+            },
           },
         },
         projectId: 'proj-1',
@@ -257,9 +260,9 @@ describe('DecisionPanel', () => {
 
       expect(screen.getByText(/depends on for/i)).toBeTruthy();
       expect(
-        within(
-          screen.getByTestId('triage-detail-group-clean-1'),
-        ).getAllByText('t-clean-1').length,
+        within(screen.getByTestId('triage-detail-group-clean-1')).getAllByText(
+          't-clean-1',
+        ).length,
       ).toBeGreaterThan(0);
     });
 
@@ -287,15 +290,11 @@ describe('DecisionPanel', () => {
       await waitFor(() => screen.getByTestId('decision-panel'));
 
       expect(screen.getByTestId('triage-batch-panel')).toBeTruthy();
-      expect(
-        screen.getByTestId('triage-expand-group-clean-3'),
-      ).toBeTruthy();
+      expect(screen.getByTestId('triage-expand-group-clean-3')).toBeTruthy();
 
       fireEvent.click(screen.getByTestId('triage-expand-group-clean-3'));
 
-      expect(
-        screen.getByTestId('triage-detail-group-clean-3'),
-      ).toBeTruthy();
+      expect(screen.getByTestId('triage-detail-group-clean-3')).toBeTruthy();
       expect(screen.getByText(/depends on for/i)).toBeTruthy();
     });
 
