@@ -11,6 +11,7 @@ import {
   insertGateItem,
   updateGateItem,
   updateGateItemMinDeployedCommit,
+  touchGateItemUpdatedAt,
   listGateItemSources,
   insertGateItemSource,
   listGateItemEvents,
@@ -235,6 +236,7 @@ export function appendEvent(gateItemId: string, event: GateItemEvent): void {
     operator: event.operator ?? null,
     at: event.at,
   });
+  touchGateItemUpdatedAt(gateItemId, event.at);
   recordEvent({
     event_type: 'gate_item_event_appended',
     actor_type: 'system',
