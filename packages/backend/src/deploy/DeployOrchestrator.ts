@@ -450,7 +450,12 @@ export class DeployOrchestrator {
         const next = playbook.steps[i + 1];
         if (next) advanceDeployRun(runId, next.id);
         try {
-          const outcome = await this.executeStep(runId, step, targetSha, playbook);
+          const outcome = await this.executeStep(
+            runId,
+            step,
+            targetSha,
+            playbook,
+          );
           if (!outcome.ok) {
             logger.error(
               `[DeployOrchestrator] run ${runId} (${this.project}) restart step "${step.id}" reported failure after being marked succeeded: ${outcome.detail ?? ''}`,
@@ -643,7 +648,10 @@ export class DeployOrchestrator {
       .filter((e) => e.event_type === PRE_RESTART_IDENTITY_EVENT)
       .pop();
     if (!captured) return undefined;
-    return { command: restartStep.identity_capture, baseline: captured.detail ?? '' };
+    return {
+      command: restartStep.identity_capture,
+      baseline: captured.detail ?? '',
+    };
   }
 
   private async pollUntil(

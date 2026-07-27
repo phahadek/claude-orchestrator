@@ -182,7 +182,8 @@ function validateStep(raw: unknown, index: number): StepDescriptor | string {
   }
   if (
     step.identity_capture !== undefined &&
-    (!isString(step.identity_capture) || !looksExecutable(step.identity_capture))
+    (!isString(step.identity_capture) ||
+      !looksExecutable(step.identity_capture))
   ) {
     return `steps[${index}].identity_capture must be an executable command, not prose`;
   }
