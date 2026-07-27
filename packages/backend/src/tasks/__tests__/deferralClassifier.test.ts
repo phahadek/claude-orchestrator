@@ -41,6 +41,35 @@ vi.mock('../../db/queries', () => ({
   listStagedIntentsByGroup: mockListStagedIntentsByGroup,
   getTaskCache: mockGetTaskCache,
   setStagedIntentAdvisory: mockSetStagedIntentAdvisory,
+  getMergeCommitForTask: vi.fn(),
+  deleteTaskCacheRow: vi.fn(),
+}));
+
+vi.mock('../../gate/gateStore', () => ({
+  insertItem: vi.fn(),
+  recordAccretionMarker: vi.fn(),
+  getAccretionMarker: vi.fn(),
+  rollbackContribution: vi.fn(),
+  rehomeItemsBySourceTask: vi.fn(),
+}));
+
+vi.mock('../../seed/seedStore', () => ({
+  insertItem: vi.fn(),
+  recordAccretionMarker: vi.fn(),
+  getAccretionMarker: vi.fn(),
+  rollbackContribution: vi.fn(),
+  rehomeItemsBySourceTask: vi.fn(),
+}));
+
+const { mockLoggerDebug } = vi.hoisted(() => ({ mockLoggerDebug: vi.fn() }));
+
+vi.mock('../../logger', () => ({
+  logger: {
+    debug: mockLoggerDebug,
+    warn: vi.fn(),
+    info: vi.fn(),
+    error: vi.fn(),
+  },
 }));
 
 import { classifyReadyProposal } from '../deferralClassifier';
@@ -112,6 +141,7 @@ beforeEach(() => {
   mockListStagedIntentsByGroup.mockReset();
   mockGetTaskCache.mockReset();
   mockSetStagedIntentAdvisory.mockReset();
+  mockLoggerDebug.mockReset();
 
   mockGetTaskBackend.mockReturnValue({
     fetchTaskPage: vi.fn().mockResolvedValue('A clean, ready task body.'),
@@ -277,6 +307,107 @@ describe('classifyReadyProposal — advisory/annotation independence', () => {
     const advisory = JSON.parse(advisoryJson);
     expect(advisory.status).toBe('flagged');
     expect(advisory.tier).toBe('semantic');
+  });
+});
+
+describe('classifyReadyProposal — task id normalization', () => {
+  it('reaches classifyDeferral for a bare-uuid payload id whose cache row is keyed notion:<uuid>', async () => {
+    const bareId = 'abc12345-aaaa-bbbb-cccc-abcdef123456';
+    mockListStagedIntentsByGroup.mockReturnValue([
+      makeRow({
+        payload: JSON.stringify({ taskId: bareId, status: 'Ready' }),
+        task_id: bareId,
+      }),
+    ]);
+    mockGetTaskCache.mockImplementation((key: string) =>
+      key === `notion:${bareId}`
+        ? { raw_json: JSON.stringify({ type: '💻 Code' }) }
+        : null,
+    );
+    stubSpawn({
+      stdout: cliJsonWrap({ status: 'clean', confidence: 0, findings: [] }),
+    });
+
+    await classifyReadyProposal('group-1');
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(mockSetStagedIntentAdvisory).toHaveBeenCalledTimes(1);
+  });
+
+  it('reaches classifyDeferral for a hyphenless payload id whose cache row is keyed notion:<hyphenless-id>', async () => {
+    const hyphenlessId = '3aa22f9152f381e4adaefd58a25e6afa';
+    mockListStagedIntentsByGroup.mockReturnValue([
+      makeRow({
+        payload: JSON.stringify({ taskId: hyphenlessId, status: 'Ready' }),
+        task_id: hyphenlessId,
+      }),
+    ]);
+    mockGetTaskCache.mockImplementation((key: string) =>
+      key === `notion:${hyphenlessId}`
+        ? { raw_json: JSON.stringify({ type: '💻 Code' }) }
+        : null,
+    );
+    stubSpawn({
+      stdout: cliJsonWrap({ status: 'clean', confidence: 0, findings: [] }),
+    });
+
+    await classifyReadyProposal('group-1');
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(mockSetStagedIntentAdvisory).toHaveBeenCalledTimes(1);
+  });
+
+  it('still returns early for a genuinely non-implementer-bearing type (📐 Design) once the id resolves', async () => {
+    const bareId = 'abc12345-aaaa-bbbb-cccc-abcdef123456';
+    mockListStagedIntentsByGroup.mockReturnValue([
+      makeRow({
+        payload: JSON.stringify({ taskId: bareId, status: 'Ready' }),
+        task_id: bareId,
+      }),
+    ]);
+    mockGetTaskCache.mockImplementation((key: string) =>
+      key === `notion:${bareId}`
+        ? { raw_json: JSON.stringify({ type: '📐 Design' }) }
+        : null,
+    );
+
+    await classifyReadyProposal('group-1');
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockSetStagedIntentAdvisory).not.toHaveBeenCalled();
+  });
+
+  it('logs a debug diagnostic naming the unresolved id when the cache lookup misses', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow({ task_id: 't-1' })]);
+    mockGetTaskCache.mockReturnValue(null);
+
+    await classifyReadyProposal('group-1');
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockLoggerDebug).toHaveBeenCalledTimes(1);
+    expect(mockLoggerDebug.mock.calls[0][0]).toContain('t-1');
+  });
+
+  it('uses the canonical getCachedType from TaskWriteCommands rather than a private duplicate', async () => {
+    const bareId = 'abc12345-aaaa-bbbb-cccc-abcdef123456';
+    mockListStagedIntentsByGroup.mockReturnValue([
+      makeRow({
+        payload: JSON.stringify({ taskId: bareId, status: 'Ready' }),
+        task_id: bareId,
+      }),
+    ]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({
+      stdout: cliJsonWrap({ status: 'clean', confidence: 0, findings: [] }),
+    });
+
+    await classifyReadyProposal('group-1');
+
+    // getCachedType (TaskWriteCommands.ts) normalizes before reading the
+    // cache — the private duplicate this task removes read the bare id raw.
+    expect(mockGetTaskCache).toHaveBeenCalledWith(`notion:${bareId}`);
   });
 });
 
