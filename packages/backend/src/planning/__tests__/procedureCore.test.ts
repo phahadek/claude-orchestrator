@@ -104,6 +104,16 @@ describe('procedureCore', () => {
     expect(renderHardRulesMarkdown()).not.toContain('{skillLabel}');
   });
 
+  it('names 🔎 Investigation and 🧪 Testing alongside 📋 Planning/📐 Design in the anti-deferral carve-out, so code and injected text cannot drift apart', () => {
+    const principle = CORE_PRINCIPLES.find(
+      (p) => p.id === 'investigate-before-resolving-no-deferral',
+    )!;
+    const rendered = renderPrinciple(principle, 'groom');
+    expect(rendered).toContain('🔎 Investigation');
+    expect(rendered).toContain('🧪 Testing');
+    expect(rendered).toContain('OPEN_QUESTIONS_EXEMPT_TYPES');
+  });
+
   it('keeps ordered steps sequential and non-empty per applicable skill', () => {
     expect(ORDERED_STEPS.length).toBeGreaterThan(0);
     for (const step of ORDERED_STEPS) {

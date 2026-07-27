@@ -128,6 +128,16 @@ describe('checkReadiness — type-aware Open Questions / deferral exemption', ()
     expect(checkReadiness(deferralBody, '📋 Planning')).toEqual([]);
   });
 
+  it('does not flag Open Questions / deferral for 🔎 Investigation', () => {
+    expect(checkReadiness(openQuestionsBody, '🔎 Investigation')).toEqual([]);
+    expect(checkReadiness(deferralBody, '🔎 Investigation')).toEqual([]);
+  });
+
+  it('does not flag Open Questions / deferral for 🧪 Testing', () => {
+    expect(checkReadiness(openQuestionsBody, '🧪 Testing')).toEqual([]);
+    expect(checkReadiness(deferralBody, '🧪 Testing')).toEqual([]);
+  });
+
   it('flags structural grooming residue for both 📐 Design and 💻 Code', () => {
     const residueBody = 'Files affected: confirm the exact module at grooming.';
     const designViolations = checkReadiness(residueBody, '📐 Design');
