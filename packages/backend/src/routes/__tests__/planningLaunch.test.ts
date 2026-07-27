@@ -13,9 +13,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../db/queries.js', () => ({
   getMilestoneById: vi.fn(),
   getProjectRowById: vi.fn(),
+  getTaskTitleFromCache: vi.fn(),
 }));
 
-import { getMilestoneById, getProjectRowById } from '../../db/queries';
+import {
+  getMilestoneById,
+  getProjectRowById,
+  getTaskTitleFromCache,
+} from '../../db/queries';
 import { createPlanningLaunchRouter } from '../planningLaunch';
 import type { OpsSessionLauncher } from '../../orchestration/OpsSessionLauncher';
 
@@ -33,6 +38,7 @@ describe('POST /api/planning/launch', () => {
       id: 'proj-1',
       context_url: 'https://example.com/proj-1',
     } as ReturnType<typeof getProjectRowById>);
+    vi.mocked(getTaskTitleFromCache).mockReturnValue(null);
 
     launchSelected = vi
       .fn()
@@ -112,6 +118,54 @@ describe('POST /api/planning/launch', () => {
     expect(launchSelected).toHaveBeenCalledWith(
       expect.objectContaining({
         tasks: [expect.objectContaining({ id: 'notion:abc-123' })],
+      }),
+    );
+  });
+
+  it('resolves the task title from the task cache instead of using the bare id', async () => {
+    vi.mocked(getTaskTitleFromCache).mockReturnValue(
+      'Fix the flaky retry logic',
+    );
+
+    const res = await request(app)
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'groom',
+        milestone: 'm1',
+        taskIds: ['abc-123'],
+      });
+
+    expect(res.status).toBe(202);
+    expect(getTaskTitleFromCache).toHaveBeenCalledWith('notion:abc-123');
+    expect(launchSelected).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tasks: [
+          expect.objectContaining({
+            id: 'notion:abc-123',
+            title: 'Fix the flaky retry logic',
+          }),
+        ],
+      }),
+    );
+  });
+
+  it('falls back to the bare id (never a notion.so/notion:<id> url) when the title cannot be resolved from the cache', async () => {
+    vi.mocked(getTaskTitleFromCache).mockReturnValue(null);
+
+    const res = await request(app)
+      .post('/api/planning/launch')
+      .send({
+        workflow: 'design',
+        milestone: 'm1',
+        taskIds: ['abc-123'],
+      });
+
+    expect(res.status).toBe(202);
+    expect(launchSelected).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tasks: [
+          expect.objectContaining({ id: 'notion:abc-123', title: 'abc-123' }),
+        ],
       }),
     );
   });

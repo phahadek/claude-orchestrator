@@ -13,6 +13,16 @@ import { loadDesignContext } from '../design/designLoad';
 import { getProjectRowById } from '../db/queries';
 import { resolveMilestoneForProject } from '../projects/milestoneResolver';
 import { isPlanningSession } from '../session/sessionPredicates';
+import { toExternalId } from '../tasks/taskId';
+
+/** Strips a `source:` prefix for URL-building; falls back to the raw id if unprefixed. */
+function bareTaskId(id: string): string {
+  try {
+    return toExternalId(id);
+  } catch {
+    return id;
+  }
+}
 import {
   assemblePlanningProcedure,
   deriveGroomDigestSlice,
@@ -58,6 +68,28 @@ export interface PlanningTaskEntry {
   title: string;
   url: string;
   blockingDepIds: string[];
+}
+
+/**
+ * Human-facing session name for a planning dispatch: `<Prefix>: <title>` so
+ * the dashboard shows what the session is and what it's grooming/designing,
+ * never a raw task id or url. sessionTypes without a defined prefix (e.g.
+ * 'standard', 'split') keep the bare title, unchanged from prior behavior.
+ */
+function formatPlanningSessionName(
+  sessionType: PlanningSessionType,
+  title: string,
+): string {
+  switch (sessionType) {
+    case 'groom':
+      return `Grooming: ${title}`;
+    case 'design':
+      return `Design: ${title}`;
+    case 'ops':
+      return `Ops: ${title}`;
+    default:
+      return title;
+  }
 }
 
 export interface OpsLaunchParams {
@@ -347,7 +379,8 @@ export class OpsSessionLauncher {
     effort?: string,
   ): Promise<LaunchOutcome> {
     const taskUrl =
-      task.url || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
+      task.url ||
+      `https://www.notion.so/${bareTaskId(task.id).replace(/-/g, '')}`;
     let injectedProcedure: { content: string; title?: string } | undefined;
     if (isPlanningSession(sessionType)) {
       try {
@@ -373,7 +406,8 @@ export class OpsSessionLauncher {
       }
     }
     const injectedProcedureContent = injectedProcedure?.content;
-    const taskName = injectedProcedure?.title || task.title || taskUrl;
+    const resolvedTitle = injectedProcedure?.title || task.title || task.id;
+    const taskName = formatPlanningSessionName(sessionType, resolvedTitle);
     try {
       const sessionId = await this.sessionManager.start(
         taskUrl,

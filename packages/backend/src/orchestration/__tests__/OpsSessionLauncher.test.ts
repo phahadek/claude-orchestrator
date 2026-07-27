@@ -296,6 +296,56 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     );
   });
 
+  it('names an ops session "Ops: <task title>"', async () => {
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = makeTask({ id: 'task-1', title: 'Investigate flakiness' });
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'ops',
+      opsContext: makeOpsContext([task]),
+      tasks: [task],
+    });
+
+    expect(start).toHaveBeenCalledTimes(1);
+    const [, , options] = start.mock.calls[0];
+    expect(options.taskName).toBe('Ops: Investigate flakiness');
+  });
+
+  it('falls back to the raw task id (never a malformed notion.so/notion:<id> url) when no title can be resolved', async () => {
+    const { loadGroomContext } = await import('../../groom/groomLoad.js');
+    (loadGroomContext as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeGroomResult([]),
+    );
+
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    // No groom digest match and no caller-supplied title: buildInjectedProcedure
+    // throws GroomWorklistTaskNotFoundError, which fails this dispatch fast —
+    // use a sessionType that skips the digest lookup entirely instead, so the
+    // fallback chain (title || task.title || task.id) is exercised directly.
+    const task = {
+      id: 'notion:untitled-task',
+      title: '',
+      url: '',
+      blockingDepIds: [],
+    };
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'standard',
+      tasks: [task],
+    });
+
+    expect(start).toHaveBeenCalledTimes(1);
+    const [, , options] = start.mock.calls[0];
+    expect(options.taskName).toBe('notion:untitled-task');
+    expect(options.taskName).not.toContain('notion.so/notion:');
+  });
+
   it('passes a non-empty injectedProcedureContent for a groom dispatch', async () => {
     const { loadGroomContext } = await import('../../groom/groomLoad.js');
     (loadGroomContext as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -404,7 +454,7 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
 
     expect(start).toHaveBeenCalledTimes(1);
     const [, , options] = start.mock.calls[0];
-    expect(options.taskName).toBe('Fix the flaky retry logic');
+    expect(options.taskName).toBe('Grooming: Fix the flaky retry logic');
   });
 
   it('names a design session after the digest-resolved title, not the bare task id', async () => {
@@ -437,7 +487,7 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
 
     expect(start).toHaveBeenCalledTimes(1);
     const [, , options] = start.mock.calls[0];
-    expect(options.taskName).toBe('Design the retry backoff strategy');
+    expect(options.taskName).toBe('Design: Design the retry backoff strategy');
   });
 
   it('reconciles a stale groom worklist: refreshes with skipCache and assembles once the freshly-created task is found', async () => {
@@ -469,7 +519,7 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     ).toMatchObject({ skipCache: true });
     expect(start).toHaveBeenCalledTimes(1);
     const [, , options] = start.mock.calls[0];
-    expect(options.taskName).toBe('Newly created backlog task');
+    expect(options.taskName).toBe('Grooming: Newly created backlog task');
     expect(typeof options.injectedProcedureContent).toBe('string');
   });
 
