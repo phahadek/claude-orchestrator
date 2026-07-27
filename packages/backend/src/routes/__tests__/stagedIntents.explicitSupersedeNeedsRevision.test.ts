@@ -17,10 +17,7 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import {
-  stageIntent,
-  ExplicitSupersedesError,
-} from '../stagedIntents.js';
+import { stageIntent, ExplicitSupersedesError } from '../stagedIntents.js';
 import { getStagedIntent, transitionStagedIntent } from '../../db/queries.js';
 
 beforeEach(() => {
