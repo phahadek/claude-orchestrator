@@ -8,6 +8,7 @@ import {
   renderProjectRecordAccess,
 } from '../planning/procedureAssembler';
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
+import { appendGateItemEvent } from './gateService';
 import type { GateItem } from './gateStore';
 import type {
   GateItemVerifier,
@@ -15,6 +16,22 @@ import type {
 } from './gateReconciler';
 
 const TERMINAL_SESSION_STATUSES = new Set(['done', 'error', 'killed']);
+
+/**
+ * Sessions with a live, un-settled gate-verify appeal in flight — added the
+ * instant a `pass` verdict is downgraded and appeal feedback is queued,
+ * removed the instant the exchange settles (revised verdict, budget timeout,
+ * or the session dying mid-appeal). Checked by AgentSession.handleCleanExit
+ * so a gate-verify session's one-shot auto-teardown does not archive it out
+ * from under its own pending appeal — mirroring the guard that path already
+ * has for an outstanding `session.requestCapability` intent.
+ */
+const pendingGateVerifyAppeal = new Set<string>();
+
+/** True if `sessionId` has an outstanding gate-verify appeal awaiting its one revision. */
+export function hasPendingGateVerifyAppeal(sessionId: string): boolean {
+  return pendingGateVerifyAppeal.has(sessionId);
+}
 
 export interface SessionGateItemVerifierOptions {
   /** Wall-clock budget for one verify dispatch before abstaining to needs-setup. Default 20 minutes. */
@@ -202,6 +219,46 @@ function buildGateVerifyProcedure(item: GateItem): string {
     '',
     '```json',
     `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"basis": "operational"|"source", "...": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,
+    '```',
+  ].join('\n');
+}
+
+/**
+ * The one-shot appeal message delivered via SessionManager.enqueueFeedback
+ * when a `pass` verdict is downgraded by enforcePassEvidenceContract while
+ * the session is still live. Names the specific clause that failed (never a
+ * generic rejection) and states plainly that this is the session's one and
+ * only chance to revise — a second verdict, whatever it is, is final.
+ */
+function buildGateVerifyAppealMessage(
+  item: GateItem,
+  downgradeReason: string,
+  originalEvidence: unknown,
+): string {
+  return [
+    `Your \`pass\` disposition for gate item ${item.id} was downgraded ` +
+      'before being finalized — the pass-evidence contract rejected it:',
+    '',
+    `> ${downgradeReason}`,
+    '',
+    'This is your one chance to revise, and the only one: whatever you ' +
+      'report next is final, appealed or not. If you have (or can now ' +
+      'gather) evidence that actually satisfies the contract — a concrete ' +
+      'captured runtime record (audit_log, session_events, a live DB/API ' +
+      'read, or an observed runtime occurrence), not source/CI-grade ' +
+      'evidence and not a guaranteed precondition (PR merged/deployed) — ' +
+      `report it now by calling \`${orchestratorMcpToolName('gate.verify')}\` ` +
+      `again for gate item ${item.id} with your revised disposition and ` +
+      'evidence.',
+    '',
+    'If you cannot produce evidence that satisfies the contract, report ' +
+      '`needs-setup` instead of repeating the same pass — a second pass ' +
+      'that still fails the contract is downgraded the same way, with no ' +
+      'further appeal.',
+    '',
+    'Your original reported evidence was:',
+    '```json',
+    JSON.stringify(originalEvidence ?? null, null, 2),
     '```',
   ].join('\n');
 }
@@ -688,28 +745,45 @@ export class SessionGateItemVerifier implements GateItemVerifier {
     this.sessionManager.off('gate_verify_disposition', capture);
     const preCaptured = captured.find((p) => p.sessionId === sessionId);
 
-    const result = await this.awaitDisposition(sessionId, preCaptured);
-    return enforceAbstentionEvidenceContract(
-      enforcePassEvidenceContract(result),
-    );
+    return this.awaitDisposition(item, sessionId, preCaptured);
   }
 
+  /**
+   * Awaits the dispatched session's disposition, applying the pass/abstention
+   * evidence contracts while the session is still live — ahead of teardown,
+   * not after it — so a contract-downgraded `pass` can be routed back to the
+   * session as a one-shot appeal instead of being silently discarded onto a
+   * now-dead session (see the module-level contract-enforcement doc above
+   * enforcePassEvidenceContract). The exchange is capped end-to-end by the
+   * same budget/poll timers regardless of whether an appeal happens.
+   */
   private awaitDisposition(
+    item: GateItem,
     sessionId: string,
     preCaptured?: GateVerifyDispositionPayload,
   ): Promise<GateVerificationResult> {
     return new Promise((resolve) => {
       let settled = false;
+      // Set once an appeal is sent; the *next* disposition report is treated
+      // as the one revision and is final regardless of outcome — no second
+      // appeal is ever offered.
+      let appealInFlight = false;
+      // The contract-downgraded result an in-flight appeal would fall back to
+      // if the session never answers (budget exhaustion or the session dying
+      // mid-appeal) — the downgrade stands as final in that case.
+      let appealFallback: GateVerificationResult | null = null;
       const handles: {
         poll?: ReturnType<typeof setInterval>;
         budget?: ReturnType<typeof setTimeout>;
       } = {};
-      const finish = (result: GateVerificationResult) => {
+
+      const teardown = (result: GateVerificationResult) => {
         if (settled) return;
         settled = true;
         if (handles.poll) clearInterval(handles.poll);
         if (handles.budget) clearTimeout(handles.budget);
         this.sessionManager.off('gate_verify_disposition', onDisposition);
+        pendingGateVerifyAppeal.delete(sessionId);
         // The disposition has now been consumed by the reconciler's caller —
         // this one-shot session has no resume purpose from here on (a
         // re-verify dispatches a fresh session), so archive it and reap its
@@ -735,37 +809,104 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         resolve(result);
       };
 
-      const onDisposition = (payload: GateVerifyDispositionPayload) => {
-        if (payload.sessionId !== sessionId) return;
-        finish({
-          disposition: payload.disposition.disposition,
-          evidence: payload.disposition.evidence ?? { sessionId },
-          reclassify: payload.disposition.reclassify,
+      const applyContracts = (
+        result: GateVerificationResult,
+      ): GateVerificationResult =>
+        enforceAbstentionEvidenceContract(enforcePassEvidenceContract(result));
+
+      const toResult = (
+        payload: GateVerifyDispositionPayload,
+      ): GateVerificationResult => ({
+        disposition: payload.disposition.disposition,
+        evidence: payload.disposition.evidence ?? { sessionId },
+        reclassify: payload.disposition.reclassify,
+      });
+
+      /** Sends the one-shot appeal, recording the original verdict first so it survives the appeal un-overwritten. */
+      const startAppeal = (
+        raw: GateVerificationResult,
+        contractChecked: GateVerificationResult,
+      ) => {
+        appealInFlight = true;
+        appealFallback = contractChecked;
+        pendingGateVerifyAppeal.add(sessionId);
+        const downgradeReason =
+          (contractChecked.evidence as { reason?: string } | undefined)
+            ?.reason ?? 'pass evidence contract violation';
+        appendGateItemEvent(item.id, {
+          disposition: 'noted',
+          operator: 'gate-verifier',
+          evidence: {
+            appeal: 'original-verdict',
+            originalDisposition: raw.disposition,
+            originalEvidence: raw.evidence,
+            downgradeReason,
+          },
         });
+        this.sessionManager
+          .enqueueFeedback(
+            sessionId,
+            'gate-verifier:appeal',
+            buildGateVerifyAppealMessage(item, downgradeReason, raw.evidence),
+          )
+          .catch((err) => {
+            logger.error(
+              `[GateItemVerifier] failed to enqueue gate-verify appeal for session ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : err}`,
+            );
+          });
       };
 
-      if (preCaptured) {
-        finish({
-          disposition: preCaptured.disposition.disposition,
-          evidence: preCaptured.disposition.evidence ?? { sessionId },
-          reclassify: preCaptured.disposition.reclassify,
-        });
-        return;
-      }
+      /** Handles one reported disposition — either the first attempt or the one appeal revision. */
+      const handleReport = (raw: GateVerificationResult) => {
+        if (appealInFlight) {
+          // The revision — final either way, no further appeal offered.
+          appealInFlight = false;
+          teardown(applyContracts(raw));
+          return;
+        }
+        const contractChecked = enforcePassEvidenceContract(raw);
+        const isPassDowngrade =
+          raw.disposition === 'pass' && contractChecked.disposition !== 'pass';
+        if (!isPassDowngrade) {
+          teardown(enforceAbstentionEvidenceContract(contractChecked));
+          return;
+        }
+        const row = getSession(sessionId);
+        if (row && TERMINAL_SESSION_STATUSES.has(row.status)) {
+          // No live session left to appeal to.
+          teardown(enforceAbstentionEvidenceContract(contractChecked));
+          return;
+        }
+        startAppeal(raw, contractChecked);
+      };
+
+      const onDisposition = (payload: GateVerifyDispositionPayload) => {
+        if (payload.sessionId !== sessionId) return;
+        handleReport(toResult(payload));
+      };
 
       this.sessionManager.on('gate_verify_disposition', onDisposition);
 
       handles.poll = setInterval(() => {
         const row = getSession(sessionId);
         if (row && TERMINAL_SESSION_STATUSES.has(row.status)) {
+          if (appealInFlight) {
+            logger.warn(
+              `[GateItemVerifier] session ${sessionId.slice(0, 8)} concluded without answering its gate-verify appeal`,
+            );
+            teardown(applyContracts(appealFallback!));
+            return;
+          }
           if (row.status === 'error' || row.status === 'killed') {
-            finish({
-              disposition: 'needs-setup',
-              evidence: {
-                reason: `verification session ended ${row.status}`,
-                sessionId,
-              },
-            });
+            teardown(
+              applyContracts({
+                disposition: 'needs-setup',
+                evidence: {
+                  reason: `verification session ended ${row.status}`,
+                  sessionId,
+                },
+              }),
+            );
             return;
           }
           // 'done' with no gate_verify_disposition event yet — give the
@@ -775,22 +916,37 @@ export class SessionGateItemVerifier implements GateItemVerifier {
           logger.warn(
             `[GateItemVerifier] session ${sessionId.slice(0, 8)} concluded with no gate_verify report`,
           );
-          finish({
-            disposition: 'needs-setup',
-            evidence: {
-              reason: 'no gate_verify report on conclusion',
-              sessionId,
-            },
-          });
+          teardown(
+            applyContracts({
+              disposition: 'needs-setup',
+              evidence: {
+                reason: 'no gate_verify report on conclusion',
+                sessionId,
+              },
+            }),
+          );
         }
       }, this.pollIntervalMs);
 
       handles.budget = setTimeout(() => {
-        finish({
-          disposition: 'needs-setup',
-          evidence: { reason: 'verification budget exceeded', sessionId },
-        });
+        if (appealInFlight) {
+          logger.warn(
+            `[GateItemVerifier] session ${sessionId.slice(0, 8)} exceeded budget while its gate-verify appeal was outstanding`,
+          );
+          teardown(applyContracts(appealFallback!));
+          return;
+        }
+        teardown(
+          applyContracts({
+            disposition: 'needs-setup',
+            evidence: { reason: 'verification budget exceeded', sessionId },
+          }),
+        );
       }, this.budgetMs);
+
+      if (preCaptured) {
+        handleReport(toResult(preCaptured));
+      }
     });
   }
 }
