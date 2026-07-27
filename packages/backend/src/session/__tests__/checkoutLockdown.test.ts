@@ -67,55 +67,61 @@ describe('checkoutLockdown', () => {
     fs.rmSync(projectDir, { recursive: true, force: true });
   });
 
-  it('strips write permission from the checkout on first acquire, restores it on last release', () => {
-    acquireCheckoutLockdown(projectDir, 'session-a', { applyFsLockdown: true });
+  it('strips write permission from the checkout on first acquire, restores it on last release', async () => {
+    await acquireCheckoutLockdown(projectDir, 'session-a', {
+      applyFsLockdown: true,
+    });
 
     expect(canWrite(path.join(projectDir, 'README.md'))).toBe(false);
     expect(canWrite(path.join(projectDir, '.git', 'HEAD'))).toBe(false);
     expect(canWrite(getScratchDir(projectDir, 'session-a'))).toBe(true);
 
-    releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
+    await releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
 
     expect(canWrite(path.join(projectDir, 'README.md'))).toBe(true);
     expect(fs.existsSync(getScratchDir(projectDir, 'session-a'))).toBe(false);
   });
 
-  it('does not lift the lock while a second concurrent planning session is still active', () => {
-    acquireCheckoutLockdown(projectDir, 'session-a', { applyFsLockdown: true });
-    acquireCheckoutLockdown(projectDir, 'session-b', { applyFsLockdown: true });
+  it('does not lift the lock while a second concurrent planning session is still active', async () => {
+    await acquireCheckoutLockdown(projectDir, 'session-a', {
+      applyFsLockdown: true,
+    });
+    await acquireCheckoutLockdown(projectDir, 'session-b', {
+      applyFsLockdown: true,
+    });
 
-    releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
+    await releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
     expect(canWrite(path.join(projectDir, 'README.md'))).toBe(false);
     // session-a's own scratch dir is gone, session-b's remains untouched.
     expect(fs.existsSync(getScratchDir(projectDir, 'session-a'))).toBe(false);
     expect(canWrite(getScratchDir(projectDir, 'session-b'))).toBe(true);
 
-    releaseCheckoutLockdown('session-b', { applyFsLockdown: true });
+    await releaseCheckoutLockdown('session-b', { applyFsLockdown: true });
     expect(canWrite(path.join(projectDir, 'README.md'))).toBe(true);
   });
 
-  it('is a no-op for a session that never acquired a lock', () => {
-    expect(() =>
+  it('is a no-op for a session that never acquired a lock', async () => {
+    await expect(
       releaseCheckoutLockdown('never-acquired', { applyFsLockdown: true }),
-    ).not.toThrow();
+    ).resolves.not.toThrow();
   });
 
-  it('applyFsLockdown: false (Docker path) tracks ref-counting without touching filesystem permissions', () => {
-    acquireCheckoutLockdown(projectDir, 'session-a', {
+  it('applyFsLockdown: false (Docker path) tracks ref-counting without touching filesystem permissions', async () => {
+    await acquireCheckoutLockdown(projectDir, 'session-a', {
       applyFsLockdown: false,
     });
     expect(canWrite(path.join(projectDir, 'README.md'))).toBe(true);
-    releaseCheckoutLockdown('session-a', { applyFsLockdown: false });
+    await releaseCheckoutLockdown('session-a', { applyFsLockdown: false });
   });
 
-  it('boot reconciliation prunes locks for terminal/missing sessions and restores the filesystem', () => {
+  it('boot reconciliation prunes locks for terminal/missing sessions and restores the filesystem', async () => {
     seedSession('dead-session', 'killed');
-    acquireCheckoutLockdown(projectDir, 'dead-session', {
+    await acquireCheckoutLockdown(projectDir, 'dead-session', {
       applyFsLockdown: true,
     });
     expect(canWrite(path.join(projectDir, 'README.md'))).toBe(false);
 
-    reconcileCheckoutLockdownAtBoot({ applyFsLockdown: true });
+    await reconcileCheckoutLockdownAtBoot({ applyFsLockdown: true });
 
     expect(canWrite(path.join(projectDir, 'README.md'))).toBe(true);
     expect(fs.existsSync(getScratchDir(projectDir, 'dead-session'))).toBe(
@@ -123,7 +129,7 @@ describe('checkoutLockdown', () => {
     );
   });
 
-  it('leaves .claude/session-prompts writable after stripWriteRecursive, unlike other subdirectories', () => {
+  it('leaves .claude/session-prompts writable after stripWriteRecursive, unlike other subdirectories', async () => {
     const sessionPromptsDir = path.join(
       projectDir,
       '.claude',
@@ -131,11 +137,31 @@ describe('checkoutLockdown', () => {
     );
     fs.mkdirSync(sessionPromptsDir, { recursive: true });
 
-    acquireCheckoutLockdown(projectDir, 'session-a', { applyFsLockdown: true });
+    await acquireCheckoutLockdown(projectDir, 'session-a', {
+      applyFsLockdown: true,
+    });
 
     expect(canWrite(sessionPromptsDir)).toBe(true);
 
-    releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
+    await releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
+  });
+
+  it('leaves node_modules writable after stripWriteRecursive, unlike other subdirectories', async () => {
+    const nodeModulesDir = path.join(projectDir, 'node_modules');
+    fs.mkdirSync(nodeModulesDir, { recursive: true });
+    const nodeModulesFile = path.join(nodeModulesDir, 'some-package.js');
+    fs.writeFileSync(nodeModulesFile, 'module.exports = {};\n');
+
+    await acquireCheckoutLockdown(projectDir, 'session-a', {
+      applyFsLockdown: true,
+    });
+
+    expect(canWrite(nodeModulesDir)).toBe(true);
+    expect(canWrite(nodeModulesFile)).toBe(true);
+    // The exclusion doesn't weaken the actual boundary elsewhere in the tree.
+    expect(canWrite(path.join(projectDir, 'README.md'))).toBe(false);
+
+    await releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
   });
 
   it('strips and restores the checkout against the exact same exclude list (no drift between call sites)', () => {
@@ -148,11 +174,12 @@ describe('checkoutLockdown', () => {
         path.join(projectDir, '.claude', 'scratch'),
         path.join(projectDir, '.claude', 'worktrees'),
         path.join(projectDir, '.claude', 'session-prompts'),
+        path.join(projectDir, 'node_modules'),
       ].sort(),
     );
   });
 
-  it('restores owner-write on session-prompts left read-only by a lock acquired before the carve-out existed', () => {
+  it('restores owner-write on session-prompts left read-only by a lock acquired before the carve-out existed', async () => {
     const sessionPromptsDir = path.join(
       projectDir,
       '.claude',
@@ -160,28 +187,30 @@ describe('checkoutLockdown', () => {
     );
     fs.mkdirSync(sessionPromptsDir, { recursive: true });
 
-    acquireCheckoutLockdown(projectDir, 'session-a', { applyFsLockdown: true });
+    await acquireCheckoutLockdown(projectDir, 'session-a', {
+      applyFsLockdown: true,
+    });
     // Simulate a lock acquired by pre-fix code, which stripped this
     // directory before it was excluded from the walk.
     fs.chmodSync(sessionPromptsDir, 0o444);
     expect(canWrite(sessionPromptsDir)).toBe(false);
 
-    releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
+    await releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
 
     expect(canWrite(sessionPromptsDir)).toBe(true);
   });
 
-  it('boot reconciliation re-applies the lockdown for a still-active session (mid-crash restore)', () => {
+  it('boot reconciliation re-applies the lockdown for a still-active session (mid-crash restore)', async () => {
     seedSession('live-session', 'running');
     // Simulate a crash between the DB insert and the chmod actually landing:
     // acquire with applyFsLockdown:false so the row exists but the tree is
     // still writable, then reconcile should notice count>0 and lock it.
-    acquireCheckoutLockdown(projectDir, 'live-session', {
+    await acquireCheckoutLockdown(projectDir, 'live-session', {
       applyFsLockdown: false,
     });
     expect(canWrite(path.join(projectDir, 'README.md'))).toBe(true);
 
-    reconcileCheckoutLockdownAtBoot({ applyFsLockdown: true });
+    await reconcileCheckoutLockdownAtBoot({ applyFsLockdown: true });
 
     expect(canWrite(path.join(projectDir, 'README.md'))).toBe(false);
     fs.chmodSync(projectDir, 0o755);
@@ -225,8 +254,8 @@ describe('checkoutLockdown — read-only .git allowlist verification', () => {
     fs.rmSync(repoDir, { recursive: true, force: true });
   });
 
-  it('every read-only Bash allowlist git command succeeds against a fully read-only checkout (including .git)', () => {
-    acquireCheckoutLockdown(repoDir, 'git-session', {
+  it('every read-only Bash allowlist git command succeeds against a fully read-only checkout (including .git)', async () => {
+    await acquireCheckoutLockdown(repoDir, 'git-session', {
       applyFsLockdown: true,
     });
 
@@ -246,6 +275,6 @@ describe('checkoutLockdown — read-only .git allowlist verification', () => {
       ).not.toThrow();
     }
 
-    releaseCheckoutLockdown('git-session', { applyFsLockdown: true });
+    await releaseCheckoutLockdown('git-session', { applyFsLockdown: true });
   });
 });

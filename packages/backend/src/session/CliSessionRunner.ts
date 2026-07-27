@@ -82,7 +82,7 @@ export class CliSessionRunner implements ISessionRunner {
     // scratch dir as the exception. `worktreePath` is the project dir for
     // planning sessions.
     if (isPlanning) {
-      acquireCheckoutLockdown(worktreePath, this.sessionId, {
+      await acquireCheckoutLockdown(worktreePath, this.sessionId, {
         applyFsLockdown: true,
       });
     }
@@ -228,7 +228,7 @@ export class CliSessionRunner implements ISessionRunner {
     ]);
 
     if (isPlanning) {
-      releaseCheckoutLockdown(this.sessionId, { applyFsLockdown: true });
+      await releaseCheckoutLockdown(this.sessionId, { applyFsLockdown: true });
     }
 
     return exitCode;

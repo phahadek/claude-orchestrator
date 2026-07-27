@@ -136,19 +136,23 @@ describe('checkoutLockdown — session-prompts carve-out', () => {
     fs.rmSync(projectDir, { recursive: true, force: true });
   });
 
-  it('leaves .claude/session-prompts writable after stripWriteRecursive runs', () => {
-    acquireCheckoutLockdown(projectDir, 'session-a', { applyFsLockdown: true });
+  it('leaves .claude/session-prompts writable after stripWriteRecursive runs', async () => {
+    await acquireCheckoutLockdown(projectDir, 'session-a', {
+      applyFsLockdown: true,
+    });
 
     expect(canWrite(path.join(projectDir, 'README.md'))).toBe(false);
     expect(canWrite(path.join(projectDir, '.claude', 'session-prompts'))).toBe(
       true,
     );
 
-    releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
+    await releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
   });
 
-  it('writes the real MCP config and system prompt files against a locked checkout', () => {
-    acquireCheckoutLockdown(projectDir, 'session-a', { applyFsLockdown: true });
+  it('writes the real MCP config and system prompt files against a locked checkout', async () => {
+    await acquireCheckoutLockdown(projectDir, 'session-a', {
+      applyFsLockdown: true,
+    });
 
     const mcpConfigPath = writeMcpConfig(projectDir, 'session-a', undefined);
     const systemPromptPath = writeSystemPromptFile(
@@ -166,12 +170,16 @@ describe('checkoutLockdown — session-prompts carve-out', () => {
     );
     expect(fs.existsSync(systemPromptPath)).toBe(true);
 
-    releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
+    await releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
   });
 
-  it('a second concurrent session can write its own prompt files while the first still holds the lock', () => {
-    acquireCheckoutLockdown(projectDir, 'session-a', { applyFsLockdown: true });
-    acquireCheckoutLockdown(projectDir, 'session-b', { applyFsLockdown: true });
+  it('a second concurrent session can write its own prompt files while the first still holds the lock', async () => {
+    await acquireCheckoutLockdown(projectDir, 'session-a', {
+      applyFsLockdown: true,
+    });
+    await acquireCheckoutLockdown(projectDir, 'session-b', {
+      applyFsLockdown: true,
+    });
 
     expect(() =>
       writeMcpConfig(projectDir, 'session-b', undefined),
@@ -188,12 +196,14 @@ describe('checkoutLockdown — session-prompts carve-out', () => {
     );
     expect(fs.existsSync(mcpPath)).toBe(true);
 
-    releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
-    releaseCheckoutLockdown('session-b', { applyFsLockdown: true });
+    await releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
+    await releaseCheckoutLockdown('session-b', { applyFsLockdown: true });
   });
 
-  it('restores owner-write on session-prompts left read-only by a pre-fix lock, on the last release', () => {
-    acquireCheckoutLockdown(projectDir, 'session-a', { applyFsLockdown: true });
+  it('restores owner-write on session-prompts left read-only by a pre-fix lock, on the last release', async () => {
+    await acquireCheckoutLockdown(projectDir, 'session-a', {
+      applyFsLockdown: true,
+    });
     const sessionPromptsDir = path.join(
       projectDir,
       '.claude',
@@ -204,7 +214,7 @@ describe('checkoutLockdown — session-prompts carve-out', () => {
     fs.chmodSync(sessionPromptsDir, 0o444);
     expect(canWrite(sessionPromptsDir)).toBe(false);
 
-    releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
+    await releaseCheckoutLockdown('session-a', { applyFsLockdown: true });
 
     expect(canWrite(sessionPromptsDir)).toBe(true);
   });
