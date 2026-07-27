@@ -99,9 +99,7 @@ describe('groom decision.pickOne question-intent', () => {
     const output = assembleGroomOutput();
     expect(output).toMatch(/operator judgment/i);
     expect(output).toMatch(/decision\.pickOne/);
-    expect(output).toMatch(
-      /never smuggled through a `task\.setStatus`/,
-    );
+    expect(output).toMatch(/never smuggled through a `task\.setStatus`/);
   });
 
   it('the assembled groom procedure states that task.setStatus is staged only when the status actually changes', () => {
@@ -154,10 +152,14 @@ describe('a decision.pickOne staged by a groom session', () => {
         payload: {
           prompt: 'Widen scope, file a sibling task, or proceed as specified?',
           options: [
-            { label: 'Widen scope', description: 'Cover the API transport too.' },
+            {
+              label: 'Widen scope',
+              description: 'Cover the API transport too.',
+            },
             {
               label: 'File a sibling task',
-              description: 'Scope this task as-is; API transport gets its own task.',
+              description:
+                'Scope this task as-is; API transport gets its own task.',
             },
           ],
           allowFreeForm: true,
