@@ -65,7 +65,11 @@ describe('hasNonTerminalPlanningSessionForTask', () => {
       for (const storedId of storedForms) {
         sessionCounter = 0;
         db.prepare('DELETE FROM sessions').run();
-        insertSession({ taskId: storedId, status: 'active', sessionType: 'groom' });
+        insertSession({
+          taskId: storedId,
+          status: 'active',
+          sessionType: 'groom',
+        });
         expect(hasNonTerminalPlanningSessionForTask(queryId)).toBe(true);
       }
     },
