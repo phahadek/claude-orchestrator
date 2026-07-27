@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { TRIAGE_VERDICTS } from '../../planning/triage';
 
 /**
  * Shared zod schemas for the stage-proposal MCP tool surface — one shape per
@@ -131,7 +132,7 @@ export const groomingGateEntrySchema = z
     dependsOnTasks: z.array(z.unknown()).optional(),
     triage: z
       .object({
-        proposedVerdict: z.string(),
+        proposedVerdict: z.enum(TRIAGE_VERDICTS),
         hasOpenQuestionsHeading: z.boolean(),
       })
       .optional(),

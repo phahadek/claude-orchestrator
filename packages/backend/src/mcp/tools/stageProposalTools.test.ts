@@ -239,6 +239,63 @@ describe('stage-proposal MCP tools — schema validation', () => {
     await close();
   });
 
+  it('task.setStatus rejects a groomingGate.triage.proposedVerdict outside the TriageVerdict taxonomy', async () => {
+    const { client, close } = await connectedClient();
+    const result = (await client.callTool({
+      name: 'task.setStatus',
+      arguments: {
+        payload: {
+          taskId: 't-1',
+          status: 'Ready',
+          groomingGate: {
+            triage: {
+              proposedVerdict: 'Ready',
+              hasOpenQuestionsHeading: true,
+            },
+          },
+        },
+      },
+    })) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+    expect(result.isError).toBe(true);
+    const text = result.content[0]?.text ?? '';
+    expect(text).toMatch(/proposedVerdict/);
+    expect(text).toMatch(/clean/);
+    expect(text).toMatch(/blocked/);
+    expect(text).toMatch(/needs-attention/);
+    expect(
+      db.prepare('SELECT COUNT(*) as n FROM staged_intent').get(),
+    ).toEqual({ n: 0 });
+    await close();
+  });
+
+  it.each(['clean', 'blocked', 'needs-attention'] as const)(
+    'task.setStatus accepts a groomingGate.triage.proposedVerdict of %s',
+    async (proposedVerdict) => {
+      const { client, close } = await connectedClient();
+      const result = await client.callTool({
+        name: 'task.setStatus',
+        arguments: {
+          payload: {
+            taskId: 't-1',
+            status: 'Ready',
+            groomingGate: {
+              triage: {
+                proposedVerdict,
+                hasOpenQuestionsHeading: true,
+              },
+            },
+          },
+        },
+      });
+      expect((result as { isError?: boolean }).isError).toBeFalsy();
+      const intent = parseIntentResult(
+        result as { content: Array<{ type: string; text?: string }> },
+      );
+      expect(intent.kind).toBe('task.setStatus');
+      await close();
+    },
+  );
+
   it('task.create accepts an optional body and stages it verbatim in the payload', async () => {
     const { client, close } = await connectedClient();
     const body = '## Summary\nDo the thing.';

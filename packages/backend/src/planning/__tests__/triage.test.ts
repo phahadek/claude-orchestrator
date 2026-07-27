@@ -4,7 +4,9 @@ import {
   hasOpenQuestionsHeading,
   isInteractiveTaskType,
   INTERACTIVE_TASK_TYPES,
+  TRIAGE_VERDICTS,
 } from '../triage';
+import type { TriageVerdict } from '../triage';
 import { DEFERRAL_PHRASES, checkReadiness } from '../../tasks/readinessGate';
 
 describe('isInteractiveTaskType / INTERACTIVE_TASK_TYPES', () => {
@@ -127,5 +129,19 @@ describe('applyTriageFloor', () => {
       hasOpenQuestionsHeading: hasOpenQuestionsHeading(body),
     });
     expect(result).toEqual({ verdict: 'clean', reasons: [] });
+  });
+});
+
+describe('TRIAGE_VERDICTS', () => {
+  it('matches the TriageVerdict union exactly, so the MCP schema cannot drift from the type', () => {
+    // Compile-time check: TRIAGE_VERDICTS' element type must be assignable to
+    // TriageVerdict — if the union gains/loses a member without updating the
+    // array, this line stops typechecking.
+    const asUnion: readonly TriageVerdict[] = TRIAGE_VERDICTS;
+    expect(asUnion).toEqual(TRIAGE_VERDICTS);
+
+    expect([...TRIAGE_VERDICTS].sort()).toEqual(
+      ['clean', 'blocked', 'needs-attention'].sort(),
+    );
   });
 });
