@@ -196,6 +196,114 @@ describe('stage-time task reference validation', () => {
   });
 });
 
+describe('Investigation accretion rejection', () => {
+  it('rejects a gate.accrete whose source task is 🔎 Investigation, naming the type as the reason', async () => {
+    upsertTaskCache(
+      'notion:investigation-1',
+      JSON.stringify({ type: '🔎 Investigation' }),
+    );
+
+    const res = await stagePost(app(), {
+      kind: 'gate.accrete',
+      payload: {
+        sourceTask: {
+          id: 'notion:investigation-1',
+          title: 'Some Investigation',
+          project: 'proj-1',
+          milestone: 'M1',
+        },
+        items: [{ text: 'Confirm the falsification run was performed' }],
+        classification: 'Human-Observation',
+      },
+      projectId: 'proj-1',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('🔎 Investigation');
+  });
+
+  it('allows a gate.accrete whose source task is 🔧 Operational', async () => {
+    upsertTaskCache(
+      'notion:operational-1',
+      JSON.stringify({ type: '🔧 Operational' }),
+    );
+
+    const res = await stagePost(app(), {
+      kind: 'gate.accrete',
+      payload: {
+        sourceTask: {
+          id: 'notion:operational-1',
+          title: 'Some Operational task',
+          project: 'proj-1',
+          milestone: 'M1',
+        },
+        items: [{ text: 'Confirm the backfill landed' }],
+        classification: 'Human-Observation',
+      },
+      projectId: 'proj-1',
+    });
+
+    expect(res.status).toBe(201);
+  });
+
+  it('allows a gate.accrete whose source task is 💻 Code (no regression)', async () => {
+    upsertTaskCache('notion:code-1', JSON.stringify({ type: '💻 Code' }));
+
+    const res = await stagePost(app(), {
+      kind: 'gate.accrete',
+      payload: {
+        sourceTask: {
+          id: 'notion:code-1',
+          title: 'Some Code task',
+          project: 'proj-1',
+          milestone: 'M1',
+        },
+        items: [{ text: 'Launch-and-observe the new endpoint' }],
+        classification: 'Human-Observation',
+      },
+      projectId: 'proj-1',
+    });
+
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects a task.patchBodySection remove of 👁️ Manual verification on an 🔎 Investigation task', async () => {
+    upsertTaskCache(
+      'notion:investigation-2',
+      JSON.stringify({ type: '🔎 Investigation' }),
+    );
+
+    const res = await stagePost(app(), {
+      kind: 'task.patchBodySection',
+      payload: {
+        taskId: 'notion:investigation-2',
+        section: '👁️ Manual verification',
+        operation: 'remove',
+      },
+      projectId: 'proj-1',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('🔎 Investigation');
+  });
+
+  it('allows a task.patchBodySection remove of Manual verification on a 💻 Code task', async () => {
+    upsertTaskCache('notion:code-2', JSON.stringify({ type: '💻 Code' }));
+
+    const res = await stagePost(app(), {
+      kind: 'task.patchBodySection',
+      payload: {
+        taskId: 'notion:code-2',
+        section: '👁️ Manual verification',
+        operation: 'remove',
+      },
+      projectId: 'proj-1',
+    });
+
+    expect(res.status).toBe(201);
+  });
+});
+
 function app() {
   return buildApp();
 }
