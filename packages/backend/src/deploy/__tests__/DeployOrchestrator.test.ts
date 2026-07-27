@@ -542,7 +542,11 @@ describe('DeployOrchestrator: report-in step', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const playbook = playbookWith([
       step({ id: 'build', kind: 'shell' }),
-      step({ id: 'report-in', kind: 'report-in', command_or_prompt: undefined }),
+      step({
+        id: 'report-in',
+        kind: 'report-in',
+        command_or_prompt: undefined,
+      }),
     ]);
     const deps = makeDeps(playbook);
     const orchestrator = new DeployOrchestrator(
