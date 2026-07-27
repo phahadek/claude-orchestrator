@@ -217,6 +217,7 @@ describe('DecisionPanel', () => {
           taskId,
           status: 'Ready',
           groomingGate: {
+            type: '📐 Design',
             triage: {
               proposedVerdict: 'clean',
               hasOpenQuestionsHeading: false,
