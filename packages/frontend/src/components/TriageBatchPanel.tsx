@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { StagedIntent } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { taskIdFor } from './triageVerdict';
+import { StagedIntentPanel } from './StagedIntentPanel';
 import styles from './DecisionPanel.module.css';
 
 interface Props {
@@ -21,6 +22,7 @@ interface Props {
  */
 export function TriageBatchPanel({ groups, onCommitted }: Props) {
   const [vetoed, setVetoed] = useState<Record<string, boolean>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [milestoneLabel, setMilestoneLabel] = useState('');
   const [inFlight, setInFlight] = useState(false);
   const [exceptions, setExceptions] = useState<Record<string, string>>({});
@@ -48,6 +50,10 @@ export function TriageBatchPanel({ groups, onCommitted }: Props) {
 
   const toggleVeto = (groupId: string) => {
     setVetoed((prev) => ({ ...prev, [groupId]: !prev[groupId] }));
+  };
+
+  const toggleExpanded = (groupId: string) => {
+    setExpanded((prev) => ({ ...prev, [groupId]: !prev[groupId] }));
   };
 
   const handleCommit = async () => {
@@ -87,22 +93,36 @@ export function TriageBatchPanel({ groups, onCommitted }: Props) {
         data-testid="triage-batch-milestone-input"
       />
       {groups.map(([groupId, intents]) => (
-        <label
-          key={groupId}
-          className={styles.groupHeader}
-          data-testid={`triage-row-${groupId}`}
-        >
-          <input
-            type="checkbox"
-            checked={!vetoed[groupId]}
-            onChange={() => toggleVeto(groupId)}
-            data-testid={`triage-veto-${groupId}`}
-          />
-          <span>{taskIdFor(intents) ?? groupId}</span>
-          {exceptions[groupId] && (
-            <span className={styles.groupError}>{exceptions[groupId]}</span>
+        <div key={groupId} data-testid={`triage-row-${groupId}`}>
+          <label className={styles.groupHeader}>
+            <input
+              type="checkbox"
+              checked={!vetoed[groupId]}
+              onChange={() => toggleVeto(groupId)}
+              data-testid={`triage-veto-${groupId}`}
+            />
+            <span>{taskIdFor(intents) ?? groupId}</span>
+            {exceptions[groupId] && (
+              <span className={styles.groupError}>{exceptions[groupId]}</span>
+            )}
+          </label>
+          <button
+            type="button"
+            className={styles.expandButton}
+            onClick={() => toggleExpanded(groupId)}
+            data-testid={`triage-expand-${groupId}`}
+            aria-expanded={!!expanded[groupId]}
+          >
+            {expanded[groupId] ? '▾ Hide detail' : '▸ Show detail'}
+          </button>
+          {expanded[groupId] && (
+            <div data-testid={`triage-detail-${groupId}`}>
+              {intents.map((intent) => (
+                <StagedIntentPanel key={intent.id} intent={intent} hideActions />
+              ))}
+            </div>
           )}
-        </label>
+        </div>
       ))}
       <button
         type="button"
