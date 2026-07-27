@@ -1,10 +1,4 @@
-import {
-  render,
-  screen,
-  fireEvent,
-  waitFor,
-  within,
-} from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { DecisionPanel } from '../DecisionPanel';
 import { stagedIntentsApi } from '../../api/stagedIntents';
@@ -246,7 +240,7 @@ describe('DecisionPanel', () => {
   }
 
   describe('clean-triaged groups', () => {
-    it("exposes a clean group's individual intents once its row is expanded", async () => {
+    it('renders a clean group through the same element as a non-clean group, carrying a visible clean indicator', async () => {
       vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
         cleanTriageGroupIntents('group-clean-1', 't-clean-1'),
       );
@@ -254,19 +248,14 @@ describe('DecisionPanel', () => {
       render(<DecisionPanel sessionId="groom-session-2" />);
       await waitFor(() => screen.getByTestId('decision-panel'));
 
-      expect(screen.queryByText(/depends on for/i)).toBeNull();
-
-      fireEvent.click(screen.getByTestId('triage-expand-group-clean-1'));
-
-      expect(screen.getByText(/depends on for/i)).toBeTruthy();
+      expect(screen.getByText('Group group-clean-1')).toBeTruthy();
+      expect(screen.getByTestId('clean-badge-group-clean-1')).toBeTruthy();
       expect(
-        within(screen.getByTestId('triage-detail-group-clean-1')).getAllByText(
-          't-clean-1',
-        ).length,
-      ).toBeGreaterThan(0);
+        screen.getAllByRole('button', { name: /approve groom/i }),
+      ).toHaveLength(1);
     });
 
-    it('exposes the groomProposal text of a clean row once expanded', async () => {
+    it('exposes pushback, decline, and reason drafting on a clean group', async () => {
       vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
         cleanTriageGroupIntents('group-clean-2', 't-clean-2'),
       );
@@ -274,14 +263,14 @@ describe('DecisionPanel', () => {
       render(<DecisionPanel sessionId="groom-session-2" />);
       await waitFor(() => screen.getByTestId('decision-panel'));
 
-      expect(screen.queryByText('Stand up t-clean-2 cleanly')).toBeNull();
-
-      fireEvent.click(screen.getByTestId('triage-expand-group-clean-2'));
-
-      expect(screen.getByText('Stand up t-clean-2 cleanly')).toBeTruthy();
+      expect(screen.getByRole('radio', { name: /pushback/i })).toBeTruthy();
+      expect(screen.getByRole('radio', { name: /decline/i })).toBeTruthy();
+      expect(
+        screen.getByPlaceholderText(/what should the session revise/i),
+      ).toBeTruthy();
     });
 
-    it('renders a detail path for a panel containing only clean groups — the case that produced the empty surface', async () => {
+    it("exposes a clean group's per-intent detail without a bespoke expand container", async () => {
       vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
         cleanTriageGroupIntents('group-clean-3', 't-clean-3'),
       );
@@ -289,33 +278,45 @@ describe('DecisionPanel', () => {
       render(<DecisionPanel sessionId="groom-session-2" />);
       await waitFor(() => screen.getByTestId('decision-panel'));
 
-      expect(screen.getByTestId('triage-batch-panel')).toBeTruthy();
-      expect(screen.getByTestId('triage-expand-group-clean-3')).toBeTruthy();
-
-      fireEvent.click(screen.getByTestId('triage-expand-group-clean-3'));
-
-      expect(screen.getByTestId('triage-detail-group-clean-3')).toBeTruthy();
       expect(screen.getByText(/depends on for/i)).toBeTruthy();
+      expect(screen.queryByTestId('triage-expand-group-clean-3')).toBeNull();
     });
 
-    it('reconciles the heading count with the rendered content for a panel of only clean groups', async () => {
+    it('lets a clean group whose commit is refused server-side still be pushed back or declined', async () => {
       vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
         cleanTriageGroupIntents('group-clean-4', 't-clean-4'),
       );
+      vi.spyOn(stagedIntentsApi, 'approveGroup').mockRejectedValue(
+        new Error('readiness gate violation'),
+      );
+      const rejectGroup = vi
+        .spyOn(stagedIntentsApi, 'rejectGroup')
+        .mockResolvedValue({ ok: true, rejected: ['group-clean-4-status'] });
 
       render(<DecisionPanel sessionId="groom-session-2" />);
       await waitFor(() => screen.getByTestId('decision-panel'));
 
-      expect(screen.getByText(/2 intents across 1 group\)/i)).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: /approve groom/i }));
+      await waitFor(() =>
+        expect(screen.getByText('readiness gate violation')).toBeTruthy(),
+      );
 
-      fireEvent.click(screen.getByTestId('triage-expand-group-clean-4'));
+      fireEvent.click(screen.getByRole('radio', { name: /decline/i }));
+      fireEvent.change(
+        screen.getByPlaceholderText(/why is this being declined/i),
+        { target: { value: 'gate refused it' } },
+      );
+      fireEvent.click(screen.getByRole('button', { name: /decline groom/i }));
 
-      const detail = screen.getByTestId('triage-detail-group-clean-4');
-      expect(within(detail).getByText('task.setDependsOn')).toBeTruthy();
-      expect(within(detail).getByText('task.setStatus')).toBeTruthy();
+      await waitFor(() =>
+        expect(rejectGroup).toHaveBeenCalledWith('group-clean-4', {
+          outcome: 'decline',
+          reason: 'gate refused it',
+        }),
+      );
     });
 
-    it('commits every non-vetoed clean group in one call whether its row is expanded or collapsed', async () => {
+    it('approves only the included flagged groups via the batch action, leaving an excluded group individually dispositionable', async () => {
       vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([
         ...cleanTriageGroupIntents('group-clean-5', 't-clean-5'),
         ...cleanTriageGroupIntents('group-clean-6', 't-clean-6'),
@@ -324,52 +325,45 @@ describe('DecisionPanel', () => {
         .spyOn(stagedIntentsApi, 'commitBatch')
         .mockResolvedValue({
           ok: true,
-          committed: ['group-clean-5', 'group-clean-6'],
+          committed: ['group-clean-6'],
           exceptions: [],
         });
 
       render(<DecisionPanel sessionId="groom-session-2" />);
       await waitFor(() => screen.getByTestId('decision-panel'));
 
-      fireEvent.click(screen.getByTestId('triage-expand-group-clean-5'));
-
-      fireEvent.click(screen.getByTestId('triage-batch-commit'));
+      fireEvent.click(
+        screen.getByTestId('clean-batch-include-group-clean-5'),
+      );
+      fireEvent.click(screen.getByTestId('approve-all-clean'));
 
       await waitFor(() =>
-        expect(commitBatch).toHaveBeenCalledWith(
-          ['group-clean-5', 'group-clean-6'],
-          undefined,
-        ),
+        expect(commitBatch).toHaveBeenCalledWith(['group-clean-6'], undefined),
       );
+
+      // the excluded group is still fully dispositionable in place
+      expect(screen.getByText('Group group-clean-5')).toBeTruthy();
+      expect(
+        screen.getAllByRole('button', { name: /approve groom/i }),
+      ).toHaveLength(1);
     });
 
-    it('excludes an unchecked row from the commit whether expanded or collapsed', async () => {
-      vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([
-        ...cleanTriageGroupIntents('group-clean-7', 't-clean-7'),
-        ...cleanTriageGroupIntents('group-clean-8', 't-clean-8'),
-      ]);
-      const commitBatch = vi
-        .spyOn(stagedIntentsApi, 'commitBatch')
-        .mockResolvedValue({
-          ok: true,
-          committed: ['group-clean-8'],
-          exceptions: [],
-        });
+    it('renders full disposition controls for a panel containing only clean groups', async () => {
+      vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
+        cleanTriageGroupIntents('group-clean-7', 't-clean-7'),
+      );
 
       render(<DecisionPanel sessionId="groom-session-2" />);
       await waitFor(() => screen.getByTestId('decision-panel'));
 
-      fireEvent.click(screen.getByTestId('triage-expand-group-clean-7'));
-      fireEvent.click(screen.getByTestId('triage-veto-group-clean-7'));
-
-      fireEvent.click(screen.getByTestId('triage-batch-commit'));
-
-      await waitFor(() =>
-        expect(commitBatch).toHaveBeenCalledWith(['group-clean-8'], undefined),
-      );
+      expect(
+        screen.getByRole('button', { name: /approve groom/i }),
+      ).toBeTruthy();
+      expect(screen.getByRole('radio', { name: /pushback/i })).toBeTruthy();
+      expect(screen.getByRole('radio', { name: /decline/i })).toBeTruthy();
     });
 
-    it('still renders non-clean groups through the standard StagedIntentPanel path with hideActions, unaffected by clean-group expansion', async () => {
+    it('still renders non-clean groups through the standard StagedIntentPanel path with hideActions, unaffected by clean groups', async () => {
       vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([
         ...cleanTriageGroupIntents('group-clean-9', 't-clean-9'),
         ...groomGroupIntents('group-blocked-1', 't-blocked-1'),
@@ -381,7 +375,7 @@ describe('DecisionPanel', () => {
       expect(screen.getByText('Group group-blocked-1')).toBeTruthy();
       expect(
         screen.getAllByRole('button', { name: /approve groom/i }),
-      ).toHaveLength(1);
+      ).toHaveLength(2);
     });
   });
 });

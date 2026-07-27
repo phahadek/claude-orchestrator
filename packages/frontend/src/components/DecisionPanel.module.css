@@ -118,6 +118,18 @@
   color: var(--ctp-red);
 }
 
+/* The clean-verdict signal: an annotation on the standard group element, not
+   a route to a separate surface — see DecisionPanel's `isClean`. */
+.cleanBadge {
+  background: rgba(166, 227, 161, 0.15);
+  border: 1px solid rgba(166, 227, 161, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-green);
+  font-size: 0.72rem;
+  padding: 2px 6px;
+  margin-left: 4px;
+}
+
 /*
  * The group-level atomic disposition bar: one Approve action commits the
  * whole grooming decision, and one Pushback/Decline form rejects it as a

@@ -7,8 +7,7 @@ import { stagedIntentsApi } from '../api/stagedIntents';
 import { subscribeStagedIntentChange } from '../hooks/stagedIntentBus';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import { DecisionPickOnePanel } from './DecisionPickOnePanel';
-import { TriageBatchPanel } from './TriageBatchPanel';
-import { triageVerdict } from './triageVerdict';
+import { triageVerdict, taskIdFor } from './triageVerdict';
 import styles from './DecisionPanel.module.css';
 
 interface Props {
@@ -33,6 +32,14 @@ export function DecisionPanel({ sessionId }: Props) {
     Record<string, { outcome: StagedIntentRejectOutcome; reason: string }>
   >({});
   const [collapsed, setCollapsed] = useState(false);
+  const [batchExcluded, setBatchExcluded] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [batchInFlight, setBatchInFlight] = useState(false);
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const [batchExceptions, setBatchExceptions] = useState<
+    Record<string, string>
+  >({});
 
   useEffect(() => {
     let cancelled = false;
@@ -97,27 +104,50 @@ export function DecisionPanel({ sessionId }: Props) {
     }
   }
 
-  // approve-by-standard (planning/triage.ts): a group whose Ready-flip
-  // carries a recorded triage verdict of 'clean' renders as a
-  // default-approved, veto-able batch row instead of the standard
-  // approve-then-commit group UI — 'blocked' / 'needs-attention' rows (and
-  // any non-triage group, e.g. a split) fall through to that standard UI
-  // unchanged, which is itself the per-item veto surface for those rows.
-  const cleanTriageGroups: [string, StagedIntent[]][] = [];
-  const otherGroups: [string, StagedIntent[]][] = [];
-  for (const entry of groups.entries()) {
-    if (triageVerdict(entry[1]) === 'clean') {
-      cleanTriageGroups.push(entry);
-    } else {
-      otherGroups.push(entry);
-    }
-  }
+  // approve-by-standard (planning/triage.ts): a group's recorded triage
+  // verdict is a signal on that group, not a routing decision — every group
+  // renders through the same per-group element below, whether or not its
+  // Ready-flip carries a 'clean' verdict. A clean group is additionally
+  // eligible for the "approve all clean" batch fast path (veto-able via
+  // batchExcluded), which is only ever an action over these flagged groups —
+  // never a container that replaces their individual disposition controls.
+  const groupEntries = [...groups.entries()];
+  const cleanGroupIds = groupEntries
+    .filter(([, groupIntents]) => triageVerdict(groupIntents) === 'clean')
+    .map(([groupId]) => groupId);
+  const includedCleanGroupIds = cleanGroupIds.filter(
+    (groupId) => !batchExcluded[groupId],
+  );
 
-  const handleTriageBatchCommitted = (committedGroupIds: string[]) => {
-    const committed = new Set(committedGroupIds);
-    setIntents((prev) =>
-      prev.filter((i) => !i.groupId || !committed.has(i.groupId)),
-    );
+  const toggleBatchExcluded = (groupId: string) => {
+    setBatchExcluded((prev) => ({ ...prev, [groupId]: !prev[groupId] }));
+  };
+
+  const handleApproveAllClean = async () => {
+    if (includedCleanGroupIds.length === 0) return;
+    setBatchInFlight(true);
+    setBatchError(null);
+    try {
+      const result = await stagedIntentsApi.commitBatch(
+        includedCleanGroupIds,
+        undefined,
+      );
+      const committed = new Set(result.committed);
+      setIntents((prev) =>
+        prev.filter((i) => !i.groupId || !committed.has(i.groupId)),
+      );
+      const nextExceptions: Record<string, string> = {};
+      for (const exc of result.exceptions) {
+        nextExceptions[exc.groupId] = exc.error;
+      }
+      setBatchExceptions(nextExceptions);
+    } catch (err) {
+      setBatchError(
+        err instanceof Error ? err.message : 'Failed to approve clean set',
+      );
+    } finally {
+      setBatchInFlight(false);
+    }
   };
 
   const draftFor = (groupId: string) =>
@@ -213,19 +243,57 @@ export function DecisionPanel({ sessionId }: Props) {
         </button>
       </div>
 
-      <TriageBatchPanel
-        groups={cleanTriageGroups}
-        onCommitted={handleTriageBatchCommitted}
-      />
+      {cleanGroupIds.length > 0 && (
+        <div className={styles.group} data-testid="clean-batch-bar">
+          <div className={styles.groupHeader}>
+            <span>Clean verdict ({cleanGroupIds.length})</span>
+          </div>
+          <button
+            type="button"
+            className={styles.commitButton}
+            disabled={includedCleanGroupIds.length === 0 || batchInFlight}
+            onClick={() => void handleApproveAllClean()}
+            data-testid="approve-all-clean"
+          >
+            {batchInFlight
+              ? 'Approving…'
+              : `✓ Approve all clean (${includedCleanGroupIds.length})`}
+          </button>
+          {batchError && <div className={styles.groupError}>{batchError}</div>}
+        </div>
+      )}
 
-      {otherGroups.map(([groupId, groupIntents]) => {
+      {groupEntries.map(([groupId, groupIntents]) => {
         const draft = draftFor(groupId);
         const inFlight = groupInFlight === groupId;
+        const isClean = cleanGroupIds.includes(groupId);
         return (
           <div key={groupId} className={styles.group}>
             <div className={styles.groupHeader}>
               <span>Group {groupId}</span>
+              {isClean && (
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={!batchExcluded[groupId]}
+                    onChange={() => toggleBatchExcluded(groupId)}
+                    aria-label={`Include ${taskIdFor(groupIntents) ?? groupId} in approve all clean`}
+                    data-testid={`clean-batch-include-${groupId}`}
+                  />
+                  <span
+                    className={styles.cleanBadge}
+                    data-testid={`clean-badge-${groupId}`}
+                  >
+                    Clean
+                  </span>
+                </label>
+              )}
             </div>
+            {batchExceptions[groupId] && (
+              <div className={styles.groupError}>
+                {batchExceptions[groupId]}
+              </div>
+            )}
             {groupError && groupInFlight === null && (
               <div className={styles.groupError}>{groupError}</div>
             )}
