@@ -49,13 +49,12 @@ vi.mock('child_process', () => ({
   execSync: vi.fn(() => ''),
 }));
 
-// checkoutLockdown does real fs/DB work (mkdir the scratch dir, chmod the
-// checkout, persist a ref-count row) — irrelevant to these spawn-arg
-// assertions and unsafe against a fake '/fake/worktree' path. Covered by
-// its own dedicated test file instead.
-vi.mock('../checkoutLockdown', () => ({
-  acquireCheckoutLockdown: vi.fn(() => '/fake/worktree/.claude/scratch/fake'),
-  releaseCheckoutLockdown: vi.fn(),
+// planningScratchDir does real fs work (mkdir/rm the scratch dir) —
+// irrelevant to these spawn-arg assertions and unsafe against a fake
+// '/fake/worktree' path.
+vi.mock('../planningScratchDir', () => ({
+  createScratchDir: vi.fn(() => '/fake/worktree/.claude/scratch/fake'),
+  removeScratchDir: vi.fn(),
 }));
 
 import { DockerSessionRunner } from '../DockerSessionRunner';

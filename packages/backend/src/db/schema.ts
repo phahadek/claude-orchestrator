@@ -1457,21 +1457,13 @@ export function runMigrations(target: Database.Database): void {
     );
   `);
 
-  // planning_checkout_locks: one row per active planning session (groom/
-  // design/ops/split) currently holding the read-only-checkout lockdown on
-  // its project's shared cwd. Ref count for a project_dir is COUNT(*) over
-  // this table — persisted so an orchestrator restart can recompute and
-  // restore the correct read-only/scratch filesystem state instead of
-  // stranding the checkout (see checkoutLockdown.ts).
+  // planning_checkout_locks dropped: the OS-level read-only checkout
+  // lockdown it backed was reverted (recursive chmod is scoped to the OS,
+  // not the session, so it stranded every concurrent consumer of a shared
+  // checkout — see the 2026-07-27 revert). Forward-only drop; any rows
+  // present at migration time are stale by definition now.
   target.exec(`
-    CREATE TABLE IF NOT EXISTS planning_checkout_locks (
-      session_id   TEXT    PRIMARY KEY,
-      project_dir  TEXT    NOT NULL,
-      scratch_dir  TEXT    NOT NULL,
-      created_at   INTEGER NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_planning_checkout_locks_project_dir
-      ON planning_checkout_locks(project_dir);
+    DROP INDEX IF EXISTS idx_planning_checkout_locks_project_dir;
+    DROP TABLE IF EXISTS planning_checkout_locks;
   `);
 }

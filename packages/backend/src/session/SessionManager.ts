@@ -1725,14 +1725,17 @@ export class SessionManager extends EventEmitter {
     // Fire-and-forget — run() blocks until the subprocess exits, then clean up
     session
       .run()
-      .then(() =>
-        this.cleanupWorktree(
+      .then(() => {
+        if (isPlanningSession(session.sessionType)) {
+          this.checkPlanningSessionDrift(sessionId, session.taskId, projectDir);
+        }
+        return this.cleanupWorktree(
           sessionId,
           worktreePath,
           session.prUrl,
           projectDir,
-        ),
-      )
+        );
+      })
       .catch((err) => {
         logger.error(`[SessionManager] session ${sessionId} error: ${err}`);
         // If run() threw before broadcasting session_ended, update SQLite and
@@ -1740,6 +1743,9 @@ export class SessionManager extends EventEmitter {
         if (!session.hasEnded) {
           const detail = err instanceof Error ? err.message : String(err);
           this.markSessionErrored(sessionId, 'error', 'run_error', detail);
+        }
+        if (isPlanningSession(session.sessionType)) {
+          this.checkPlanningSessionDrift(sessionId, session.taskId, projectDir);
         }
         return this.cleanupWorktree(
           sessionId,
@@ -2231,6 +2237,52 @@ export class SessionManager extends EventEmitter {
         'max concurrent code sessions reached',
       );
     }
+  }
+
+  /**
+   * Planning sessions (groom/design/ops/split) run with cwd === the project
+   * checkout and store worktree_path: null, so cleanupWorktree's own
+   * git-status check never runs for them (it returns early via the
+   * isRemovableWorktree guard). This is the equivalent check for that
+   * teardown path: detection only, never auto-revert or auto-clean — the
+   * checkout has legitimately carried deliberate uncommitted hotfixes, and
+   * an automatic clean would destroy them.
+   */
+  private checkPlanningSessionDrift(
+    sessionId: string,
+    taskId: string,
+    projectDir: string,
+  ): void {
+    let dirty: string;
+    try {
+      dirty = execSync('git status --porcelain', {
+        cwd: projectDir,
+        encoding: 'utf8',
+      }).trim();
+    } catch (err) {
+      logger.error(
+        `[SessionManager] checkPlanningSessionDrift: git status failed for ${sessionId.slice(0, 8)}: ${err}`,
+      );
+      return;
+    }
+    if (!dirty) return;
+
+    const dirtyPaths = dirty.split('\n');
+    logger.warn(
+      `[SessionManager] planning session ${sessionId.slice(0, 8)} ended with uncommitted changes in ${projectDir}:\n${dirty}`,
+    );
+    recordEvent({
+      event_type: 'planning_session_checkout_drift',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: null,
+      task_id: taskId || null,
+      payload: {
+        sessionId,
+        projectDir,
+        dirtyPaths,
+      },
+    });
   }
 
   private cleanupWorktree(

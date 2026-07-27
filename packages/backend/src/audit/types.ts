@@ -38,6 +38,7 @@ type EventType =
   | 'conflict_nudge_delivery_failed'
   | 'worktree_remove_failed'
   | 'worktree_teardown_refused'
+  | 'planning_session_checkout_drift'
   | 'stale_branch_abandoned'
   | 'review_side_effect_failed'
   | 'pipeline_stage_entered'
