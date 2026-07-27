@@ -163,7 +163,6 @@ function useResolvedSession(
     return () => {
       cancelled = true;
     };
-     
   }, [sessionId, liveSession]);
 
   if (liveSession) return { session: liveSession, fetchState: 'idle' };
