@@ -402,7 +402,7 @@ describe('TaskWriteCommands.setStatus — Ready-transition readiness gate', () =
 
   it('does not honor triageCleanDesign for a non-Design cached type — auto-dispatched types stay per-task-gated', async () => {
     mockGetTaskCache.mockReturnValue(
-      cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '🔎 Investigation'),
+      cacheRowWithStatusAndType(STATUS_DISPLAY.Backlog, '🔧 Operational'),
     );
     const backend = makeBackend({
       fetchTaskPage: vi

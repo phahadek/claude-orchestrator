@@ -275,10 +275,17 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'resolved question, an Open Questions value of "None," or any other framing ' +
       'that launders a defer into a resolution. A task carrying that language is not ' +
       'Ready; either resolve the question now or leave it open and keep the task at ' +
-      '🔲 Backlog. (📋 Planning and 📐 Design tasks are exempt from this check on their ' +
-      "own open-question-space — see `readinessGate.ts`'s " +
-      '`OPEN_QUESTIONS_EXEMPT_TYPES` — because for those types the open questions ' +
-      'are the deliverable being scoped, not a precondition being dodged.)',
+      '🔲 Backlog. (📋 Planning, 📐 Design, 🔎 Investigation, and 🧪 Testing tasks are ' +
+      'exempt from this check on their own open-question-space — see ' +
+      "`readinessGate.ts`'s `OPEN_QUESTIONS_EXEMPT_TYPES` — because for those types " +
+      'the open questions are the deliverable being scoped, not a precondition being ' +
+      'dodged. For an Investigation or observational Testing task specifically, the ' +
+      'unresolved question is the payload it carries into execution: report it ' +
+      'honestly in groomProposal.openQuestions and promote the task with it — never ' +
+      'launder it into "None," and never hold the task at Backlog on the theory that ' +
+      'an unresolved question forbids Ready. Every non-exempt type keeps the rule ' +
+      'above unchanged: a 💻 Code task with an unresolved trade-off still stays at ' +
+      'Backlog.)',
   },
   {
     id: 'decision-pickone-genuine-forks-only',
