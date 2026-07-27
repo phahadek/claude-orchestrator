@@ -22,6 +22,15 @@ import { orchestratorMcpToolName } from '../mcp/toolNaming';
 
 export type SkillId = 'groom' | 'design' | 'ops' | 'split';
 
+/**
+ * Interactive: a human-typed `/groom`/`/design`/`/ops` skill session with a
+ * synchronous chat turn to wait within. Dispatched: an injected, non-
+ * interactive planning session (`procedureAssembler.ts`) that ends its turn
+ * and parks rather than waiting in chat — see `ORDERED_STEPS`'s
+ * `present-for-signoff` summaries for what that inversion means in practice.
+ */
+export type ExecutionMode = 'interactive' | 'dispatched';
+
 export const SKILL_LABELS: Record<SkillId, string> = {
   groom: 'Grooming',
   design: 'Design Execution',
@@ -44,6 +53,14 @@ export interface ProcedurePrinciple {
    * named instead. Still resolved through `{skillLabel}` substitution.
    */
   textOverrides?: Partial<Record<SkillId, string>>;
+  /**
+   * True for a rule meaningful only to a human-operated interactive skill
+   * session (e.g. confirming a write in chat) — one with no dispatched
+   * equivalent because a dispatched session has no synchronous chat turn to
+   * confirm within (see `ExecutionMode`). `principlesFor` drops these when
+   * called with `{ dispatched: true }`, mirroring `ProcedureStep.skillOnly`.
+   */
+  interactiveOnly?: boolean;
 }
 
 /**
@@ -92,6 +109,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     id: 'no-silent-writes',
     title: 'No silent writes',
     appliesTo: ['groom', 'design', 'ops', 'split'],
+    interactiveOnly: true,
     text:
       'Every write (a Notion page edit, a status transition, a staged intent) is ' +
       'confirmed in chat before, or at the moment, it is made — never applied and ' +
@@ -496,8 +514,13 @@ export function renderPrinciple(p: ProcedurePrinciple, skill: SkillId): string {
   return text.replace(/\{skillLabel\}/g, SKILL_LABELS[skill]);
 }
 
-export function principlesFor(skill: SkillId): ProcedurePrinciple[] {
-  return CORE_PRINCIPLES.filter((p) => p.appliesTo.includes(skill));
+export function principlesFor(
+  skill: SkillId,
+  context: { dispatched?: boolean } = {},
+): ProcedurePrinciple[] {
+  return CORE_PRINCIPLES.filter(
+    (p) => p.appliesTo.includes(skill) && !(context.dispatched && p.interactiveOnly),
+  );
 }
 
 /**
@@ -556,11 +579,24 @@ export interface ProcedureStep {
    * for ops.
    */
   summaryOverrides?: Partial<Record<SkillId, string>>;
+  /**
+   * Per-mode override of `title` for a step whose interactive framing
+   * doesn't fit a dispatched session — e.g. "Present for sign-off" and
+   * "Apply on sign-off" both name a synchronous chat wait that a dispatched
+   * session never has (see `ExecutionMode`); the dispatched title names
+   * what the step actually is for that session instead.
+   */
+  titleOverrides?: Partial<Record<ExecutionMode, string>>;
 }
 
 /** Resolve a step's summary against the given skill, honoring `summaryOverrides`. */
 export function stepSummaryFor(step: ProcedureStep, skill: SkillId): string {
   return step.summaryOverrides?.[skill] ?? step.summary;
+}
+
+/** Resolve a step's title against the given execution mode, honoring `titleOverrides`. */
+export function stepTitleFor(step: ProcedureStep, mode: ExecutionMode): string {
+  return step.titleOverrides?.[mode] ?? step.title;
 }
 
 export const ORDERED_STEPS: readonly ProcedureStep[] = [
@@ -609,6 +645,9 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     id: 'present-for-signoff',
     title: 'Present for sign-off',
     appliesTo: ['groom', 'design', 'ops', 'split'],
+    titleOverrides: {
+      dispatched: 'Present (stage — the terminal action)',
+    },
     summary:
       'Present findings and a recommendation in batches (or one task/question at a ' +
       'time), and stop for explicit human sign-off before proceeding.',
@@ -848,6 +887,9 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     id: 'apply-on-signoff',
     title: 'Apply on sign-off',
     appliesTo: ['groom', 'design', 'ops', 'split'],
+    titleOverrides: {
+      dispatched: 'Apply (operator/device-auth only)',
+    },
     summary:
       'Only after explicit sign-off, stage and apply the write through the ' +
       'sanctioned surface, and confirm the result in chat.',
