@@ -17,7 +17,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "ts-node src/server.ts",
-    "build": "tsc",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc",
     "test": "vitest run"
   },
   "dependencies": {

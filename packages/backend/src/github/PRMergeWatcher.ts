@@ -199,7 +199,8 @@ export class PRMergeWatcher extends EventEmitter {
       runOnBoot: true,
       concurrency: 'skip-if-running',
       run: async () => {
-        await this.sweepEscalatedStalePRs();
+        const items_processed = await this.sweepEscalatedStalePRs();
+        return { items_processed };
       },
       onError: (err: unknown) =>
         logger.warn(
@@ -225,11 +226,12 @@ export class PRMergeWatcher extends EventEmitter {
    * A row still open on GitHub (e.g. a PR that's genuinely stuck) is left
    * untouched by reconcileTerminalState.
    */
-  async sweepEscalatedStalePRs(): Promise<void> {
+  async sweepEscalatedStalePRs(): Promise<number> {
     const escalated = getAllOpenPRs().filter(
       (pr) =>
         parsePauseReason(pr.pause_reason)?.reason === 'stalled_reconcile_cap',
     );
+    let items_processed = 0;
     for (const pr of escalated) {
       if (!getProjectByGithubRepo(pr.repo)) {
         logger.warn(
@@ -238,7 +240,9 @@ export class PRMergeWatcher extends EventEmitter {
         continue;
       }
       await this.reconcileTerminalState(pr);
+      items_processed++;
     }
+    return items_processed;
   }
 
   /**

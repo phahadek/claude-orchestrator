@@ -197,6 +197,43 @@ describe('PRMergeWatcher — escalated stale-open sweep', () => {
     expect(github.listOpenPRs).not.toHaveBeenCalled();
   });
 
+  it('returns a numeric processed count, non-zero when it reconciles a row', async () => {
+    const pr = makePRRow({ task_id: null });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+
+    const github = makeGithubClient({
+      getPRState: vi.fn().mockResolvedValue({ state: 'merged', headSha: null }),
+    });
+    const watcher = new PRMergeWatcher(
+      github,
+      makeSessionManager(),
+      undefined,
+      vi.fn(),
+    );
+
+    const processed = await watcher.sweepEscalatedStalePRs();
+
+    expect(typeof processed).toBe('number');
+    expect(processed).toBe(1);
+  });
+
+  it('returns zero rather than undefined/null when there is nothing to reconcile', async () => {
+    vi.mocked(getAllOpenPRs).mockReturnValue([]);
+
+    const github = makeGithubClient();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeSessionManager(),
+      undefined,
+      vi.fn(),
+    );
+
+    const processed = await watcher.sweepEscalatedStalePRs();
+
+    expect(processed).toBe(0);
+  });
+
   it('transitions an escalated row reported closed, and clears its pause reason via the closed trigger', async () => {
     const pr = makePRRow();
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
@@ -298,7 +335,7 @@ describe('PRMergeWatcher — escalated stale-open sweep', () => {
       vi.fn(),
     );
 
-    await expect(watcher.sweepEscalatedStalePRs()).resolves.toBeUndefined();
+    await expect(watcher.sweepEscalatedStalePRs()).resolves.toBe(2);
 
     // The failing row was never transitioned...
     expect(updatePRState).not.toHaveBeenCalledWith(500, REPO, 'closed');
