@@ -5395,4 +5395,3 @@ export function queryArchUnits(query: ArchUnitQuery = {}): ArchUnitRow[] {
     .prepare(`SELECT * FROM arch_unit ${where} ORDER BY updated_at DESC`)
     .all(params) as ArchUnitRow[];
 }
-

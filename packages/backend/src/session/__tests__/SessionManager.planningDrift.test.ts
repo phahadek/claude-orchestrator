@@ -107,9 +107,7 @@ describe('SessionManager — checkPlanningSessionDrift', () => {
   let sm: SessionManager;
 
   beforeEach(() => {
-    projectDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'planning-drift-test-'),
-    );
+    projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'planning-drift-test-'));
     git(projectDir, 'init', '-q');
     git(projectDir, 'config', 'user.email', 'test@example.com');
     git(projectDir, 'config', 'user.name', 'Test');

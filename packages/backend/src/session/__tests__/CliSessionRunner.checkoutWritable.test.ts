@@ -104,9 +104,9 @@ describe('CliSessionRunner — planning sessions leave the checkout writable', (
 
     expect(canWrite(path.join(projectDir, 'README.md'))).toBe(true);
     expect(canWrite(path.join(projectDir, '.git', 'HEAD'))).toBe(true);
-    expect(
-      canWrite(path.join(projectDir, '.claude', 'session-prompts')),
-    ).toBe(true);
+    expect(canWrite(path.join(projectDir, '.claude', 'session-prompts'))).toBe(
+      true,
+    );
 
     expect(fs.statSync(path.join(projectDir, 'README.md')).mode).toBe(
       before.readme,
@@ -120,12 +120,7 @@ describe('CliSessionRunner — planning sessions leave the checkout writable', (
   });
 
   it('creates a writable scratch dir for the session and removes it when the session ends', async () => {
-    const scratchDir = path.join(
-      projectDir,
-      '.claude',
-      'scratch',
-      SESSION_ID,
-    );
+    const scratchDir = path.join(projectDir, '.claude', 'scratch', SESSION_ID);
 
     const runner = new CliSessionRunner(SESSION_ID);
     const runPromise = runner.run(

@@ -14,7 +14,11 @@ import type {
 import { logger } from '../logger';
 import { placeSessionPid } from './sessionCgroup';
 import { isPlanningSession } from './sessionPredicates';
-import { createScratchDir, removeScratchDir, getScratchDir } from './planningScratchDir';
+import {
+  createScratchDir,
+  removeScratchDir,
+  getScratchDir,
+} from './planningScratchDir';
 
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
