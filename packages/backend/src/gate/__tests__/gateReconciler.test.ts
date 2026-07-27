@@ -355,6 +355,7 @@ describe('runGateReconcilerTick', () => {
 
   it('needs-setup leaves the item runnable and the dispatcher skips it on the next pull', async () => {
     const item = makeRunnableItem({ classification: 'Read-Only' });
+    expect(getItem(item.id)?.events ?? []).toHaveLength(0);
     const verifier: GateItemVerifier = {
       verify: vi.fn(async () => ({
         disposition: 'needs-setup',
@@ -374,6 +375,12 @@ describe('runGateReconcilerTick', () => {
       },
     ]);
     expect(getItem(item.id)?.state).toBe('runnable');
+    // A non-resolving needs-setup attempt still records an event (and stamps
+    // updated_at), so it stays distinguishable from a never-dispatched item.
+    expect(getItem(item.id)?.events).toHaveLength(1);
+    expect(getItem(item.id)?.events[0]).toMatchObject({
+      disposition: 'needs-setup',
+    });
 
     const second = await runGateReconcilerTick({
       deployAdvanceTrigger: fixedTrigger('sha1'),

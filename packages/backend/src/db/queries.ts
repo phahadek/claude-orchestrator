@@ -4130,6 +4130,20 @@ export function updateGateItemMinDeployedCommit(
   });
 }
 
+let _stmtTouchGateItemUpdatedAt: Database.Statement | null = null;
+
+/** Stamps updated_at only — never touches state/current_disposition. For non-resolving events (e.g. needs-setup). */
+export function touchGateItemUpdatedAt(id: string, updatedAt: string): void {
+  _stmtTouchGateItemUpdatedAt ??= db.prepare<{
+    id: string;
+    updated_at: string;
+  }>(`UPDATE gate_item SET updated_at = @updated_at WHERE id = @id`);
+  _stmtTouchGateItemUpdatedAt.run({
+    id,
+    updated_at: updatedAt,
+  });
+}
+
 let _stmtRehomeGateItemsBySourceTask: Database.Statement | null = null;
 
 /**

@@ -125,6 +125,32 @@ describe('gateStore', () => {
     });
   });
 
+  it('stamps updated_at on a non-resolving needs-setup event without touching state or current_disposition', () => {
+    const created = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Verify the read-only report renders',
+      classification: 'Read-Only',
+      sources: [{ sourceTaskId: 'notion:n1', sourceTaskTitle: 'Add report' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+    expect(created.updatedAt).toBe(new Date(0).toISOString());
+
+    appendEvent(created.id, {
+      disposition: 'needs-setup',
+      evidence: { note: 'missing test fixture' },
+      operator: 'pedro',
+      at: new Date(5).toISOString(),
+    });
+
+    const item = getItem(created.id);
+    expect(item?.updatedAt).toBe(new Date(5).toISOString());
+    expect(item?.state).toBe('open');
+    expect(item?.currentDisposition).toBeUndefined();
+    expect(item?.events).toHaveLength(1);
+    expect(item?.events[0]).toMatchObject({ disposition: 'needs-setup' });
+  });
+
   it('advances the denormalized state and current_disposition', () => {
     const created = insertItem({
       project: 'polimarket-analyser',
