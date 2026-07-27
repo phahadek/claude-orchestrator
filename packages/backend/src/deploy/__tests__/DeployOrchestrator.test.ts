@@ -68,7 +68,11 @@ function makeDeps(
   return {
     loadPlaybook: () => loadResult,
     runShell: vi.fn(
-      async (): Promise<ShellResult> => ({ ok: true, output: '' }),
+      async (): Promise<ShellResult> => ({
+        ok: true,
+        output: '',
+        exitCode: 0,
+      }),
     ),
     spawnAgenticStep: vi.fn(),
     waitForConfirmGate: vi.fn(async () => true),
@@ -90,7 +94,7 @@ describe('DeployOrchestrator: step execution order and kinds', () => {
     const deps = makeDeps(playbook, {
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         calls.push(`shell:${command}`);
-        return { ok: true, output: '' };
+        return { ok: true, output: '', exitCode: 0 };
       }),
       waitForConfirmGate: vi.fn(async ({ step: s }) => {
         calls.push(`confirm-gate:${s.id}`);
@@ -170,7 +174,7 @@ describe('DeployOrchestrator: changed_paths skip', () => {
       getDiffPaths: vi.fn(async () => ['packages/backend/src/index.ts']),
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         shellCommands.push(command);
-        return { ok: true, output: '' };
+        return { ok: true, output: '', exitCode: 0 };
       }),
     });
     const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
@@ -197,7 +201,7 @@ describe('DeployOrchestrator: agentic step gating', () => {
       spawnAgenticStep: vi.fn(),
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         shellCommands.push(command);
-        return { ok: true, output: '' };
+        return { ok: true, output: '', exitCode: 0 };
       }),
     });
     const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
@@ -258,8 +262,8 @@ describe('DeployOrchestrator: step failure halts + rollback', () => {
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         shellCommands.push(command);
         if (command === 'run deploy')
-          return { ok: false, output: 'deploy exploded' };
-        return { ok: true, output: '' };
+          return { ok: false, output: 'deploy exploded', exitCode: 1 };
+        return { ok: true, output: '', exitCode: 0 };
       }),
     });
     const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
@@ -278,6 +282,89 @@ describe('DeployOrchestrator: step failure halts + rollback', () => {
     const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
     expect(events).toContain('step_failed');
     expect(events).toContain('rollback_succeeded');
+  });
+});
+
+describe('DeployOrchestrator: failure detail synthesis', () => {
+  it('synthesizes a detail with the exit code when a failed shell step produced no output', async () => {
+    const playbook = playbookWith([step({ id: 'silent-fail', kind: 'shell' })]);
+    const deps = makeDeps(playbook, {
+      runShell: vi.fn(
+        async (): Promise<ShellResult> => ({
+          ok: false,
+          output: '',
+          exitCode: 22,
+        }),
+      ),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const failedEvent = listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'step_failed',
+    );
+    expect(failedEvent?.detail).toBeTruthy();
+    expect(failedEvent?.detail).toContain('22');
+  });
+
+  it('keeps the child output as the detail unchanged when a failed shell step did produce output', async () => {
+    const playbook = playbookWith([step({ id: 'loud-fail', kind: 'shell' })]);
+    const deps = makeDeps(playbook, {
+      runShell: vi.fn(
+        async (): Promise<ShellResult> => ({
+          ok: false,
+          output: 'boom: unauthorized',
+          exitCode: 1,
+        }),
+      ),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const failedEvent = listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'step_failed',
+    );
+    expect(failedEvent?.detail).toBe('boom: unauthorized');
+  });
+
+  it('records no detail for a successful step', async () => {
+    const playbook = playbookWith([step({ id: 'ok-step', kind: 'shell' })]);
+    const deps = makeDeps(playbook);
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const succeededEvent = listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'step_succeeded',
+    );
+    expect(succeededEvent?.detail).toBeFalsy();
+  });
+
+  it('applies the same empty-output fallback to a failed validation step', async () => {
+    const playbook = playbookWith([
+      step({ id: 'silent-validation', kind: 'validation' }),
+    ]);
+    const deps = makeDeps(playbook, {
+      pollMaxAttempts: 1,
+      runShell: vi.fn(
+        async (): Promise<ShellResult> => ({
+          ok: false,
+          output: '',
+          exitCode: 7,
+        }),
+      ),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const failedEvent = listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'step_failed',
+    );
+    expect(failedEvent?.detail).toBeTruthy();
+    expect(failedEvent?.detail).toContain('7');
   });
 });
 
@@ -304,7 +391,7 @@ describe('DeployOrchestrator: resume after a restart', () => {
     const deps = makeDeps(playbook, {
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         shellCommands.push(command);
-        return { ok: true, output: '' };
+        return { ok: true, output: '', exitCode: 0 };
       }),
     });
     const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
@@ -342,7 +429,7 @@ describe('DeployOrchestrator: resume after a restart', () => {
     const deps = makeDeps(playbook, {
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         shellCommands.push(command);
-        return { ok: true, output: '' };
+        return { ok: true, output: '', exitCode: 0 };
       }),
     });
     const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
@@ -384,6 +471,7 @@ describe('DeployOrchestrator: resume after a restart', () => {
         async (): Promise<ShellResult> => ({
           ok: false,
           output: 'health check failed',
+          exitCode: 1,
         }),
       ),
     });

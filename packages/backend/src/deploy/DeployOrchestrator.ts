@@ -32,6 +32,8 @@ export type AgenticVerdict = 'approved' | 'rejected';
 export interface ShellResult {
   ok: boolean;
   output: string;
+  /** The child's exit code, or `null` when it never ran (e.g. spawn error). */
+  exitCode: number | null;
 }
 
 /** Runs a step's shell command (kind `shell`/`validation`), optionally as another user. */
@@ -134,9 +136,19 @@ export function spawnShell(
     proc.stderr?.on('data', (d: Buffer) => {
       out += d.toString();
     });
-    proc.on('error', (err) => resolve({ ok: false, output: String(err) }));
-    proc.on('close', (code) => resolve({ ok: code === 0, output: out }));
+    proc.on('error', (err) =>
+      resolve({ ok: false, output: String(err), exitCode: null }),
+    );
+    proc.on('close', (code) =>
+      resolve({ ok: code === 0, output: out, exitCode: code }),
+    );
   });
+}
+
+/** Synthesises a diagnosable detail when a failed step's shell output is empty. */
+function shellFailureDetail(stepId: string, result: ShellResult): string {
+  if (result.output.trim().length > 0) return result.output;
+  return `step "${stepId}" failed with exit code ${result.exitCode ?? 'unknown'} and produced no output`;
 }
 
 function gitDiffNameOnly(input: {
@@ -518,12 +530,15 @@ export class DeployOrchestrator {
           runAs: step.run_as,
           cwd: this.projectDir,
         });
-        return { ok: result.ok, detail: result.ok ? undefined : result.output };
+        return {
+          ok: result.ok,
+          detail: result.ok ? undefined : shellFailureDetail(step.id, result),
+        };
       }
 
       case 'validation': {
         const command = step.poll_until ?? step.command_or_prompt;
-        return this.pollUntil(command, step.run_as);
+        return this.pollUntil(step.id, command, step.run_as);
       }
 
       case 'agentic': {
@@ -564,21 +579,22 @@ export class DeployOrchestrator {
   }
 
   private async pollUntil(
+    stepId: string,
     command: string,
     runAs: string | undefined,
   ): Promise<StepOutcome> {
-    let lastOutput = '';
+    let lastResult: ShellResult = { ok: false, output: '', exitCode: null };
     for (let attempt = 0; attempt < this.pollMaxAttempts; attempt++) {
       const result = await this.runShell(command, {
         runAs,
         cwd: this.projectDir,
       });
       if (result.ok) return { ok: true };
-      lastOutput = result.output;
+      lastResult = result;
       if (attempt < this.pollMaxAttempts - 1) {
         await new Promise((resolve) => setTimeout(resolve, this.pollDelayMs));
       }
     }
-    return { ok: false, detail: lastOutput };
+    return { ok: false, detail: shellFailureDetail(stepId, lastResult) };
   }
 }
