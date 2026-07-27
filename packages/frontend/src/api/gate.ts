@@ -22,7 +22,7 @@ interface GateItemSource {
  * (e.g. `basis`, `note`). Kept loose since the verifier's evidence payload
  * is otherwise free-form.
  */
-export interface GateItemEvidence {
+interface GateItemEvidenceObject {
   reason?: string;
   reportedEvidence?: unknown;
   verifierEvidence?: unknown;
@@ -32,6 +32,12 @@ export interface GateItemEvidence {
   attempts?: number;
   [key: string]: unknown;
 }
+
+/**
+ * The verifier's evidence payload can also arrive as a plain string —
+ * long-form prose rationale rather than a structured verdict.
+ */
+export type GateItemEvidence = string | GateItemEvidenceObject;
 
 interface GateItemEvent {
   disposition: string;

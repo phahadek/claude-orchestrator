@@ -105,6 +105,73 @@ describe('GateReadinessPanel — gate item event evidence', () => {
     expect(screen.getByText('#994')).toBeTruthy();
   });
 
+  it('renders a plain-string evidence value as prose in the event history', async () => {
+    const stringEvidence =
+      'Verified via manual review: the deploy log shows the migration ran cleanly against staging and the smoke tests passed.';
+    gateApiMock.listGateItems.mockResolvedValue({
+      items: [ITEM],
+      total: 1,
+      page: 1,
+    });
+    gateApiMock.getGateItemDetail.mockResolvedValue({
+      item: ITEM,
+      sources: [],
+      events: [
+        {
+          disposition: 'pass',
+          at: '2026-01-01T00:00:00Z',
+          operator: 'reviewer',
+          evidence: stringEvidence,
+        },
+      ],
+    });
+
+    render(<GateReadinessPanel activeProjectId="proj-1" />);
+
+    const row = await screen.findByText('a gate item with a downgraded event');
+    fireEvent.click(row);
+
+    const evidenceSummary = await screen.findByText('Evidence');
+    fireEvent.click(evidenceSummary);
+
+    expect(screen.getByText(stringEvidence)).toBeTruthy();
+  });
+
+  it('renders a multi-kilobyte string evidence value inside the collapsible details', async () => {
+    const longEvidence = 'a very long line of rationale text. '.repeat(50);
+    expect(longEvidence.length).toBeGreaterThan(1024);
+
+    gateApiMock.listGateItems.mockResolvedValue({
+      items: [ITEM],
+      total: 1,
+      page: 1,
+    });
+    gateApiMock.getGateItemDetail.mockResolvedValue({
+      item: ITEM,
+      sources: [],
+      events: [
+        {
+          disposition: 'pass',
+          at: '2026-01-01T00:00:00Z',
+          operator: 'reviewer',
+          evidence: longEvidence,
+        },
+      ],
+    });
+
+    render(<GateReadinessPanel activeProjectId="proj-1" />);
+
+    const row = await screen.findByText('a gate item with a downgraded event');
+    fireEvent.click(row);
+
+    const evidenceSummary = await screen.findByText('Evidence');
+    const details = evidenceSummary.closest('details');
+    expect(details).toBeTruthy();
+    fireEvent.click(evidenceSummary);
+
+    expect(details?.textContent).toContain(longEvidence.trim());
+  });
+
   it('renders no evidence details when an event has none', async () => {
     gateApiMock.listGateItems.mockResolvedValue({
       items: [ITEM],

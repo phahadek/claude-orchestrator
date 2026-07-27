@@ -126,7 +126,18 @@ function EventEvidence({
   evidence?: GateItemEvidence;
   recordedDisposition: string;
 }) {
-  if (!evidence || typeof evidence !== 'object') return null;
+  if (!evidence) return null;
+
+  if (typeof evidence === 'string') {
+    return (
+      <details className={styles.evidenceDetails}>
+        <summary className={styles.evidenceSummary}>Evidence</summary>
+        <p className={`${styles.evidenceRow} ${styles.evidenceProse}`}>
+          {evidence}
+        </p>
+      </details>
+    );
+  }
 
   const { reason, reportedEvidence, verifierEvidence, ...rest } = evidence;
   const nested = reportedEvidence ?? verifierEvidence;

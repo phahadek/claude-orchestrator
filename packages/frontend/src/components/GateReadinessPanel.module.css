@@ -320,6 +320,14 @@
   word-break: break-word;
 }
 
+.evidenceProse {
+  margin: 4px 0 0 4px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border, #313244);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .evidenceFieldList {
   margin: 0;
   padding-left: 16px;
