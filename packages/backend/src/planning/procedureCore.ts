@@ -519,7 +519,8 @@ export function principlesFor(
   context: { dispatched?: boolean } = {},
 ): ProcedurePrinciple[] {
   return CORE_PRINCIPLES.filter(
-    (p) => p.appliesTo.includes(skill) && !(context.dispatched && p.interactiveOnly),
+    (p) =>
+      p.appliesTo.includes(skill) && !(context.dispatched && p.interactiveOnly),
   );
 }
 

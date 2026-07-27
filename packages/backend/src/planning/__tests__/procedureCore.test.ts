@@ -118,7 +118,9 @@ describe('procedureCore', () => {
         (p) => p.id === 'no-silent-writes',
       );
       expect(interactive, `${skill} interactive`).toBeDefined();
-      expect(renderPrinciple(interactive!, skill)).toMatch(/confirmed in chat/i);
+      expect(renderPrinciple(interactive!, skill)).toMatch(
+        /confirmed in chat/i,
+      );
 
       const dispatched = principlesFor(skill, { dispatched: true }).find(
         (p) => p.id === 'no-silent-writes',
