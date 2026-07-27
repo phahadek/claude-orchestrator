@@ -9,6 +9,7 @@ import type { SessionState } from '../hooks/useSessionStore';
 import { SessionPanel } from './SessionPanel';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { sessionsApi, authedFetch } from '../api/projects';
+import type { SessionWithEvents } from '../api/projects';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useTaskPage } from '../hooks/useTaskPage';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
@@ -93,6 +94,82 @@ function parseOwnerRepo(prUrl: string): { owner: string; repo: string } | null {
   const match = prUrl.match(/github\.com\/([^/]+)\/([^/]+)\/pull\//);
   if (!match) return null;
   return { owner: match[1], repo: match[2] };
+}
+
+// ── Archived-session resolution ────────────────────────────────────
+
+function toSessionState({ session, events }: SessionWithEvents): SessionState {
+  return {
+    sessionId: session.session_id,
+    taskName: session.task_name ?? session.task_url ?? session.session_id,
+    notionTaskUrl: session.task_url ?? '',
+    sessionType: session.session_type,
+    status: session.status,
+    events,
+    started_at: session.started_at,
+    ended_at: session.ended_at ?? undefined,
+    archived: session.archived === 1,
+    favorited: session.favorited === 1,
+    project_id: session.project_id,
+    note: session.note,
+    tags: session.tags ? (JSON.parse(session.tags) as string[]) : undefined,
+    model: session.model,
+    compaction_count: session.compaction_count,
+    context_occupancy_tokens: session.context_occupancy_tokens,
+    totalInputTokens: session.total_input_tokens,
+    totalOutputTokens: session.total_output_tokens,
+  };
+}
+
+type SessionFetchState = 'idle' | 'loading' | 'not_found';
+
+/**
+ * Resolves a session referenced by a task. The live `sessions` store only
+ * carries active/recently-touched sessions — an archived session is absent
+ * after a reload, so a miss there triggers a direct by-id fetch (which
+ * resolves regardless of archived state) rather than assuming the miss
+ * means the session is gone.
+ */
+function useResolvedSession(
+  sessionId: string | undefined,
+  sessions: SessionState[],
+): { session: SessionState | null; fetchState: SessionFetchState } {
+  const liveSession = sessionId
+    ? (sessions.find((s) => s.sessionId === sessionId) ?? null)
+    : null;
+  const [fetched, setFetched] = useState<{
+    id: string;
+    session: SessionState;
+  } | null>(null);
+  const [fetchState, setFetchState] = useState<SessionFetchState>('idle');
+
+  useEffect(() => {
+    if (!sessionId || liveSession) {
+      setFetchState('idle');
+      return;
+    }
+    let cancelled = false;
+    setFetchState('loading');
+    sessionsApi
+      .getById(sessionId)
+      .then((result) => {
+        if (cancelled) return;
+        setFetched({ id: sessionId, session: toSessionState(result) });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setFetchState('not_found');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, liveSession]);
+
+  if (liveSession) return { session: liveSession, fetchState: 'idle' };
+  if (fetched && fetched.id === sessionId) {
+    return { session: fetched.session, fetchState: 'idle' };
+  }
+  return { session: null, fetchState };
 }
 
 // ── Props ─────────────────────────────────────────────────────────
@@ -184,13 +261,10 @@ export function TaskDetail({
     ? (sessions.find((s) => s.sessionId === task.codeSession!.sessionId) ??
       null)
     : null;
-  const reviewSession = task.review
-    ? (sessions.find((s) => s.sessionId === task.review!.sessionId) ?? null)
-    : null;
-  const planningSession = task.planningSession
-    ? (sessions.find((s) => s.sessionId === task.planningSession!.sessionId) ??
-      null)
-    : null;
+  const { session: reviewSession, fetchState: reviewFetchState } =
+    useResolvedSession(task.review?.sessionId, sessions);
+  const { session: planningSession, fetchState: planningFetchState } =
+    useResolvedSession(task.planningSession?.sessionId, sessions);
 
   const effectiveDisplayStatus = optimisticDisplayStatus ?? task.displayStatus;
   const displayStatusLabel =
@@ -571,7 +645,9 @@ export function TaskDetail({
                   />
                 ) : (
                   <p className={styles.noTranscript}>
-                    Transcript not available — session not loaded.
+                    {planningFetchState === 'loading'
+                      ? 'Transcript not available — loading session…'
+                      : 'Transcript not available — session not found.'}
                   </p>
                 )}
               </div>
@@ -697,7 +773,9 @@ export function TaskDetail({
                   />
                 ) : (
                   <p className={styles.noTranscript}>
-                    Review transcript not available.
+                    {reviewFetchState === 'loading'
+                      ? 'Review transcript not available — loading session…'
+                      : 'Review transcript not available — session not found.'}
                   </p>
                 )}
               </div>

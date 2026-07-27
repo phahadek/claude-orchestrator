@@ -682,7 +682,7 @@ describe('TaskDetail', () => {
       />,
     );
     // Expanded by default, shows placeholder
-    expect(screen.getByText('Review transcript not available.')).toBeTruthy();
+    expect(screen.getByText(/Review transcript not available/)).toBeTruthy();
   });
 
   it('renders review SessionPanel when review session is in store', () => {
@@ -963,14 +963,14 @@ describe('TaskDetail', () => {
       />,
     );
     // Initially REVIEW is open (body visible), PR body is collapsed
-    expect(screen.getByText('Review transcript not available.')).toBeTruthy();
+    expect(screen.getByText(/Review transcript not available/)).toBeTruthy();
     expect(screen.queryByText('#42')).toBeNull();
 
     // Expand PR section → REVIEW body should collapse
     fireEvent.click(
       screen.getByRole('button', { name: /pull request/i, hidden: true }),
     );
-    expect(screen.queryByText('Review transcript not available.')).toBeNull();
+    expect(screen.queryByText(/Review transcript not available/)).toBeNull();
     expect(screen.getByText('#42')).toBeTruthy();
   });
 
@@ -1051,12 +1051,12 @@ describe('TaskDetail', () => {
       />,
     );
     // Review is expanded by default
-    expect(screen.getByText('Review transcript not available.')).toBeTruthy();
+    expect(screen.getByText(/Review transcript not available/)).toBeTruthy();
     const prHeader = screen.getByRole('button', { name: /pull request/i });
     fireEvent.click(prHeader);
     // PR is now expanded, review is collapsed
     expect(screen.getByText('#42')).toBeTruthy();
-    expect(screen.queryByText('Review transcript not available.')).toBeNull();
+    expect(screen.queryByText(/Review transcript not available/)).toBeNull();
   });
 
   // ── Review dead-space: CSS cap applied ──
