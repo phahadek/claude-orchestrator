@@ -26,6 +26,13 @@ import type { Session, PullRequestRow } from '../db/types';
 import { GitHubClient } from '../github/GitHubClient';
 import type { PullRequest } from '../github/types';
 
+/** Task types the orchestrator moves to In Progress itself on dispatch — eligible for orphan sweep. */
+const SWEEPABLE_TYPES = new Set([
+  '💻 Code',
+  '🔧 Operational',
+  '🔎 Investigation',
+]);
+
 const IN_PROGRESS_STATUS = '🔄 In Progress';
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -127,9 +134,11 @@ export class OrphanedTaskSweeper {
         if (!taskId || seen.has(taskId)) continue;
         seen.add(taskId);
 
-        // Only sweep Code tasks — non-Code types (Planning, Testing, Tooling) are
-        // never auto-dispatched, so In Progress with no session is normal, not orphaned.
-        if (resolved.task.type !== '💻 Code') continue;
+        // Only sweep task types the orchestrator actually auto-dispatches (moving
+        // them to In Progress itself). Design/Planning tasks are never auto-dispatched
+        // the same way (a groom launch never moves its target), so In Progress with
+        // no session there is normal, not orphaned — leave them alone.
+        if (!SWEEPABLE_TYPES.has(resolved.task.type)) continue;
 
         try {
           await this.maybeRevertTask(taskId, project.id, backend);
