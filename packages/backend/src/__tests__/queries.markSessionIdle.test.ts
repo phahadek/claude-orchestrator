@@ -6,7 +6,11 @@ vi.mock('../db/db.js', async () => {
 });
 
 import { db } from '../db/db.js';
-import { markSessionDone, markSessionIdle, applyPendingDone } from '../db/queries';
+import {
+  markSessionDone,
+  markSessionIdle,
+  applyPendingDone,
+} from '../db/queries';
 
 function insertSession(
   sessionId: string,

@@ -1489,7 +1489,9 @@ export function runMigrations(target: Database.Database): void {
   // settle handler, plus a boot-time sweep for rows left pending across a
   // restart), so a deferred mark is never silently dropped.
   try {
-    target.exec(`ALTER TABLE sessions ADD COLUMN pending_done_ended_at INTEGER`);
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN pending_done_ended_at INTEGER`,
+    );
   } catch {
     /* already exists */
   }

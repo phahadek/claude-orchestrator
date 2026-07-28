@@ -131,9 +131,7 @@ describe('markSessionDone in-flight guard', () => {
 
     markSessionDone('sess-idle', Date.now(), null, 'boot_idle_merged_pr');
 
-    expect(getAuditRows('session_done_deferred_while_running')).toHaveLength(
-      0,
-    );
+    expect(getAuditRows('session_done_deferred_while_running')).toHaveLength(0);
     expect(getStatus('sess-idle')).toBe('done');
   });
 
@@ -154,9 +152,7 @@ describe('markSessionDone in-flight guard', () => {
       skipInFlightGuard: true,
     });
 
-    expect(getAuditRows('session_done_deferred_while_running')).toHaveLength(
-      0,
-    );
+    expect(getAuditRows('session_done_deferred_while_running')).toHaveLength(0);
     expect(getStatus('sess-confirmed-dead')).toBe('done');
   });
 
@@ -260,9 +256,7 @@ describe('StuckSessionMonitor.scanForStuckSessions — liveness guard (no PR row
 
     await monitor.scanForStuckSessions();
 
-    expect(
-      getAuditRows('session_done_deferred_while_running'),
-    ).toHaveLength(0);
+    expect(getAuditRows('session_done_deferred_while_running')).toHaveLength(0);
     expect(getStatus('sess-dead-audit')).toBe('done');
   });
 });
