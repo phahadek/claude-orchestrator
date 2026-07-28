@@ -313,6 +313,7 @@ function isGateContributionCandidatesClassified(
  */
 function tokenToHedgeRegex(token: string): RegExp {
   const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // eslint-disable-next-line security/detect-non-literal-regexp -- token is always one of the fixed FILES_PATHS_HEDGE_TOKENS constants above, never external input.
   return new RegExp(`\\b${escaped}\\b(?!-)`, 'i');
 }
 
