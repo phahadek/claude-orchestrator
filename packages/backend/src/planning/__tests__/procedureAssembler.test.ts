@@ -74,6 +74,7 @@ function fixtureDesignLoadResult(
       items: ['Should we do X or Y?'],
       source: 'explicit_heading',
     },
+    archSource: 'notion',
     archUnits: [{ id: 'arch-1', title: 'Arch Unit A', raw: '- Arch Unit A' }],
     unresolvedPageRefs: [
       { title: 'Some Unresolved Page', raw: '- Some Unresolved Page' },

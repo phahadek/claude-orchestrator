@@ -7,6 +7,7 @@ import yaml from 'js-yaml';
 import { normalizePath } from '../config';
 import {
   ProjectService,
+  type Project,
   type ProjectPatch,
   type MilestonePatch,
 } from '../projects/ProjectService';
@@ -457,24 +458,39 @@ projectsRouter.patch('/projects/:id', async (req: Request, res: Response) => {
     patch.base_branch = body.baseBranch;
   }
 
-  // dataResidencyConfirmed triggers audit logging via the dedicated service method.
+  // dataResidencyConfirmed and archStoreAdopted each trigger audit logging via
+  // their own dedicated service methods, applied before the plain patch.
+  let auditedUpdate: Project | undefined;
   if ('dataResidencyConfirmed' in body) {
-    const updated = ProjectService.setDataResidencyConfirmed(
+    auditedUpdate = ProjectService.setDataResidencyConfirmed(
       id,
       body.dataResidencyConfirmed === true,
     );
-    if (!updated) {
+    if (!auditedUpdate) {
       res.status(404).json({ error: `Project '${id}' not found` });
       return;
     }
-    // Apply any remaining patch fields on top.
-    delete (patch as Record<string, unknown>).data_residency_confirmed;
+  }
+  if ('archStoreAdopted' in body) {
+    auditedUpdate = ProjectService.setArchStoreAdopted(
+      id,
+      body.archStoreAdopted === true,
+    );
+    if (!auditedUpdate) {
+      res.status(404).json({ error: `Project '${id}' not found` });
+      return;
+    }
+  }
+  if (auditedUpdate) {
+    // Apply any remaining patch fields on top (neither dataResidencyConfirmed
+    // nor archStoreAdopted is ever added to `patch` — both are handled solely
+    // through their dedicated, audited service methods above).
     if (Object.keys(patch).length === 0) {
-      res.json(updated);
+      res.json(auditedUpdate);
       return;
     }
     const final = ProjectService.update(id, patch);
-    res.json(final ?? updated);
+    res.json(final ?? auditedUpdate);
     return;
   }
 

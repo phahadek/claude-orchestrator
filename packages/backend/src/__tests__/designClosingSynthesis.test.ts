@@ -20,6 +20,7 @@ function fixtureDesignLoadResult(): DesignLoadResult {
       items: ['Should we do X or Y?', 'Should we do A or B?'],
       source: 'explicit_heading',
     },
+    archSource: 'notion',
     archUnits: [{ id: 'arch-1', title: 'Arch Unit A', raw: '- Arch Unit A' }],
     unresolvedPageRefs: [],
     codeMapGrounding: {},

@@ -9,9 +9,12 @@
  *   1. The target task itself (status/type/url) + its body markdown.
  *   2. Its parsed open questions (same heading/bullet heuristics as the
  *      vendored script).
- *   3. The arch-store-selected units — the subset of the manifest's fixed
- *      `context_pages` catalog ("the arch store") that this task's body
- *      references under "Notion pages affected".
+ *   3. The arch-store-selected units — for a project with the arch_unit
+ *      store adopted (`archStoreAdopted`), the store's active invariant
+ *      units (design/planning tasks carry no file scope, per
+ *      selectiveInjection.ts); for a project not yet migrated, the subset
+ *      of the manifest's fixed `context_pages` catalog ("the arch store")
+ *      that this task's body references under "Notion pages affected".
  *   4. Code-map grounding — the loader-seeded `.skill-cache/design/<milestone>/
  *      code-map.json` cache (per-package digests an interactive session
  *      writes during Step 1b), read as-is; empty if not yet populated.
@@ -25,6 +28,8 @@ import { config } from '../config';
 import { NotionClient } from '../notion/NotionClient';
 import { getMilestoneById } from '../db/queries';
 import { formatTaskId, normalizeBoardId } from '../tasks/taskId';
+import { ProjectService } from '../projects/ProjectService';
+import { selectUnitsFromStore } from '../architecture/selectiveInjection';
 
 // ─── manifest resolution (mirrors groomLoad.ts) ────────────────────────────
 
@@ -204,6 +209,8 @@ export interface DesignLoadResult {
   task: DesignTaskRef;
   markdown: string;
   openQuestions: OpenQuestions;
+  /** Which dual-read branch produced `archUnits` — driven by the project's `archStoreAdopted` flag. */
+  archSource: 'store' | 'notion';
   archUnits: ArchUnit[];
   unresolvedPageRefs: PageRef[];
   codeMapGrounding: Record<string, unknown>;
@@ -263,16 +270,39 @@ export async function loadDesignContext(
     formatTaskId('notion', row.id),
   );
   const openQuestions = extractOpenQuestions(markdown);
-  const pagesAffected = extractPagesAffected(markdown);
 
+  // Dual-read: a migrated project (archStoreAdopted) reads its architecture
+  // from the arch_unit store — design/planning tasks carry no file scope, so
+  // the selection is exactly the store's unconditional active-invariant set
+  // (see selectiveInjection.ts). A non-migrated project keeps the
+  // pre-migration behaviour untouched: fuzzy-resolving the task body's
+  // "Notion pages affected" references against the manifest's context_pages.
+  const archStoreAdopted =
+    ProjectService.getById(milestone.project_id)?.archStoreAdopted ?? false;
+
+  let archSource: 'store' | 'notion';
   const archUnits: ArchUnit[] = [];
   const unresolvedPageRefs: PageRef[] = [];
-  const contextPages = manifest.context_pages ?? [];
-  for (const p of pagesAffected) {
-    const unit = resolveArchUnit(p.title, contextPages);
-    if (unit)
-      archUnits.push({ id: unit.id, title: unit.title ?? p.title, raw: p.raw });
-    else unresolvedPageRefs.push(p);
+
+  if (archStoreAdopted) {
+    archSource = 'store';
+    for (const unit of selectUnitsFromStore({})) {
+      archUnits.push({ id: unit.id, title: unit.title, raw: '' });
+    }
+  } else {
+    archSource = 'notion';
+    const pagesAffected = extractPagesAffected(markdown);
+    const contextPages = manifest.context_pages ?? [];
+    for (const p of pagesAffected) {
+      const unit = resolveArchUnit(p.title, contextPages);
+      if (unit)
+        archUnits.push({
+          id: unit.id,
+          title: unit.title ?? p.title,
+          raw: p.raw,
+        });
+      else unresolvedPageRefs.push(p);
+    }
   }
 
   const codeMapPath = join(
@@ -301,6 +331,7 @@ export async function loadDesignContext(
     },
     markdown,
     openQuestions,
+    archSource,
     archUnits,
     unresolvedPageRefs,
     codeMapGrounding,

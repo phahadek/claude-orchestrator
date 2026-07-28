@@ -93,6 +93,7 @@ function fixtureDesignLoadResult(): DesignLoadResult {
       items: ['Should we do X or Y?'],
       source: 'explicit_heading',
     },
+    archSource: 'notion',
     archUnits: [],
     unresolvedPageRefs: [],
     codeMapGrounding: {},
