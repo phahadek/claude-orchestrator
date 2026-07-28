@@ -659,6 +659,55 @@ class TaskReferenceValidationError extends Error {
 }
 
 /**
+ * Prefix marking a `task.setDependsOn` `dependsOn` entry as a group-local
+ * symbolic reference to a sibling `task.create` intent staged in the same
+ * group, rather than a literal task id — the create-then-wire affordance: a
+ * session that stages a `task.create` for a just-discovered prerequisite can
+ * stage the dependency edge onto it in the same breath, instead of handing
+ * the operator a manual "apply the create, then point Depends On at the
+ * resulting id" follow-up. The reference names the sibling intent by its own
+ * staged-intent id (already unique, no new alias namespace needed) and is
+ * resolved to the real created task id by the commit loop
+ * (`commitGroupIntents`) — it is never written to the backend as-is.
+ */
+const SYMBOLIC_CREATE_REF_PREFIX = 'staged-intent:';
+
+function parseSymbolicCreateRef(value: string): string | null {
+  if (!value.startsWith(SYMBOLIC_CREATE_REF_PREFIX)) return null;
+  const intentId = value.slice(SYMBOLIC_CREATE_REF_PREFIX.length).trim();
+  return intentId || null;
+}
+
+/**
+ * Stage-time validation for a symbolic `dependsOn` entry: it must resolve to
+ * a live `task.create` intent staged in the *same* group. Never resolves
+ * across groups — that would open a second route to the cross-task write
+ * already tracked by 3ab22f91-52f3-81d8-a55b-f4a23b4ec80a — and never
+ * resolves to a non-`task.create` intent or one that has been withdrawn/
+ * rejected/superseded.
+ */
+function assertSymbolicCreateRefResolves(
+  intentId: string,
+  groupId: string | null | undefined,
+  fieldLabel: string,
+): void {
+  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
+  const referenced = groupId ? getStagedIntentRow(intentId) : null;
+  if (
+    !groupId ||
+    !referenced ||
+    referenced.kind !== 'task.create' ||
+    referenced.group_id !== groupId ||
+    !ACTIVE.includes(referenced.state)
+  ) {
+    throw new TaskReferenceValidationError(
+      `${fieldLabel} "${SYMBOLIC_CREATE_REF_PREFIX}${intentId}" does not resolve to a live ` +
+        'task.create intent in this same staged-intent group',
+    );
+  }
+}
+
+/**
  * Thrown when a gate.accrete's resolved source task, or a
  * task.patchBodySection remove targeting the Manual verification section, is
  * a 🔎 Investigation. An Investigation self-verifies in-session — its
@@ -748,8 +797,13 @@ const SUBJECT_TASK_ID_KINDS: ReadonlySet<string> = new Set([
  * accretion already run before accepting a contribution — a mis-keyed or
  * unprefixed id is caught here, before the intent is ever staged, instead
  * of surfacing as an apply-time provider error after an operator's review
- * window has already been spent. Returns the payload with dependsOn
- * normalized to prefixed form — the shape apply time requires, since
+ * window has already been spent. A dependsOn entry may instead be a
+ * `SYMBOLIC_CREATE_REF_PREFIX`-prefixed group-local reference to a sibling
+ * task.create intent (by that intent's own staged-intent id) — validated
+ * against `groupId` and left as-is (never normalized to a real task id;
+ * there isn't one yet) for the commit loop to resolve. Returns the payload
+ * with every literal dependsOn entry normalized to prefixed form — the
+ * shape apply time requires, since
  * NotionClient.setDependsOn parses each entry with no bare-id fallback
  * (taskId.ts's toExternalId, unlike normalizeTaskId, throws on a bare id).
  * The taskId subject is validated (existence + shape) but left as the
@@ -768,6 +822,7 @@ export async function validateAndNormalizeTaskReferences(
   kind: string,
   payload: unknown,
   projectId: string,
+  groupId?: string | null,
 ): Promise<unknown> {
   if (kind === 'gate.accrete') {
     const sourceTaskId = (payload as { sourceTask?: { id?: unknown } } | null)
@@ -816,6 +871,26 @@ export async function validateAndNormalizeTaskReferences(
       }
       const normalizedDependsOn: string[] = [];
       for (const [i, dep] of rawDependsOn.entries()) {
+        // Symbolic references are accepted only for task.setDependsOn — an
+        // existing task wiring onto a sibling task.create. task.create's own
+        // dependsOn names dependencies of the task being created itself; a
+        // symbolic reference there would be a sibling-create-depends-on-
+        // sibling-create (a symbolic *subject* id) case, out of this task's
+        // scope (see e3d05d03-6a79-4a48-86cd-defcbfd51aed) and unresolved by
+        // the commit loop below.
+        const symbolicIntentId =
+          kind === 'task.setDependsOn' && typeof dep === 'string'
+            ? parseSymbolicCreateRef(dep)
+            : null;
+        if (symbolicIntentId) {
+          assertSymbolicCreateRefResolves(
+            symbolicIntentId,
+            groupId,
+            `dependsOn[${i}]`,
+          );
+          normalizedDependsOn.push(dep as string);
+          continue;
+        }
         const normalized = normalizeOrRejectTaskId(dep, `dependsOn[${i}]`);
         await assertTaskIdResolves(normalized, projectId);
         normalizedDependsOn.push(normalized);
@@ -2114,15 +2189,45 @@ async function commitGroupIntents(
   }
 
   const committed: string[] = [];
+  // Populated as each task.create in this group applies — keyed by that
+  // intent's own staged-intent id (the symbolic-reference token, see
+  // SYMBOLIC_CREATE_REF_PREFIX), consumed below to resolve a later
+  // task.setDependsOn's symbolic dependsOn entries to real created task ids
+  // before that intent is applied. `ordered` places every task.create ahead
+  // of any intent that stage-time validation confirmed references it (a
+  // symbolic reference can only resolve to an already-staged, and therefore
+  // earlier by created_at, task.create), so the id is always present here.
+  const createdTaskIds = new Map<string, string>();
   for (const row of ordered) {
     const intent = rowToApi(row);
     try {
-      await applyIntent(
+      if (intent.kind === 'task.setDependsOn') {
+        const payload = intent.payload as SetDependsOnPayload;
+        intent.payload = {
+          ...payload,
+          dependsOn: payload.dependsOn.map((dep) => {
+            const symbolicIntentId = parseSymbolicCreateRef(dep);
+            if (!symbolicIntentId) return dep;
+            const resolved = createdTaskIds.get(symbolicIntentId);
+            if (!resolved) {
+              throw new TaskReferenceValidationError(
+                `dependsOn entry "${dep}" references a task.create intent that has not ` +
+                  'applied yet in this commit',
+              );
+            }
+            return resolved;
+          }),
+        };
+      }
+      const result = await applyIntent(
         intent,
         opts.override ? { reason: opts.reason } : undefined,
         opts.actorType,
         opts.triageMilestoneLabel,
       );
+      if (intent.kind === 'task.create') {
+        createdTaskIds.set(intent.id, (result as { id: string }).id);
+      }
       const committedRow = transitionStagedIntent(intent.id, 'committed', {
         annotation: null,
       });
@@ -2299,6 +2404,7 @@ export function createStagedIntentsRouter(
         kind,
         body.payload,
         projectId,
+        groupId,
       );
     } catch (err) {
       if (

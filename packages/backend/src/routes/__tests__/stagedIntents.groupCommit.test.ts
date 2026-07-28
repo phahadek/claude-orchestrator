@@ -1223,3 +1223,158 @@ describe('Tier-3 advisory vs. annotation — commit-time channel independence', 
     expect(commit.status).toBe(409);
   });
 });
+
+describe('task.setDependsOn symbolic reference to a sibling task.create — commit-loop resolution', () => {
+  it('resolves the symbolic reference to the real created task id at commit, and does not block the arming Ready flip', async () => {
+    const setDependsOn = vi.fn().mockResolvedValue(undefined);
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    const createTask = vi.fn().mockResolvedValue('notion:new-prereq-id');
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus,
+      setDependsOn,
+      createTask,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const projectId = 'proj-symref';
+    const groupId = 'g-symref';
+    const taskId = 't-symref';
+
+    const create = await agent.post('/api/staged-intents').send({
+      kind: 'task.create',
+      projectId,
+      groupId,
+      payload: {
+        databaseId: 'db-1',
+        title: 'Missing prerequisite endpoint',
+        type: '💻 Code',
+      },
+    });
+    expect(create.status).toBe(201);
+
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId,
+      groupId,
+      payload: {
+        taskId,
+        dependsOn: [`staged-intent:${create.body.id}`],
+      },
+    });
+    expect(dependsOn.status).toBe(201);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId,
+      groupId,
+      payload: {
+        taskId,
+        status: 'Ready',
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+        },
+      },
+    });
+    expect(setStatus.status).toBe(201);
+
+    for (const id of [create.body.id, dependsOn.body.id, setStatus.body.id]) {
+      const approved = await agent
+        .post(`/api/staged-intents/${id}/approve`)
+        .send({});
+      expect(approved.status).toBe(200);
+    }
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.committed).toEqual([
+      create.body.id,
+      dependsOn.body.id,
+      setStatus.body.id,
+    ]);
+    expect(createTask).toHaveBeenCalledTimes(1);
+    expect(setDependsOn).toHaveBeenCalledWith(
+      taskId,
+      ['notion:new-prereq-id'],
+      expect.objectContaining({ source: 'human' }),
+    );
+    expect(updateStatus).toHaveBeenCalledWith(
+      taskId,
+      '🗂️ Ready',
+      expect.objectContaining({ source: 'human' }),
+    );
+  });
+
+  it('surfaces a mid-commit failure without silently dropping the already-applied task.create from the reported outcome', async () => {
+    const createTask = vi.fn().mockResolvedValue('notion:new-prereq-id-2');
+    const setDependsOn = vi
+      .fn()
+      .mockRejectedValue(new Error('backend write failed'));
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn,
+      createTask,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const projectId = 'proj-symref-fail';
+    const groupId = 'g-symref-fail';
+    const taskId = 't-symref-fail';
+
+    const create = await agent.post('/api/staged-intents').send({
+      kind: 'task.create',
+      projectId,
+      groupId,
+      payload: {
+        databaseId: 'db-1',
+        title: 'Missing prerequisite endpoint',
+        type: '💻 Code',
+      },
+    });
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId,
+      groupId,
+      payload: {
+        taskId,
+        dependsOn: [`staged-intent:${create.body.id}`],
+      },
+    });
+    for (const id of [create.body.id, dependsOn.body.id]) {
+      await agent.post(`/api/staged-intents/${id}/approve`).send({});
+    }
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(500);
+    expect(createTask).toHaveBeenCalledTimes(1);
+    // The task.create is not silently dropped from the reported outcome even
+    // though the group commit as a whole failed: it is listed as committed,
+    // and the failing intent is named explicitly.
+    expect(commit.body.committed).toEqual([create.body.id]);
+    expect(commit.body.failedId).toBe(dependsOn.body.id);
+
+    // The create is no longer live (it committed for real, so it drops out
+    // of the active-intents listing); the failed dependsOn intent stays
+    // live/approved, retryable in a follow-up commit.
+    const list = await agent
+      .get('/api/staged-intents')
+      .query({ projectId });
+    const liveIds = list.body.intents.map((i: { id: string }) => i.id);
+    expect(liveIds).not.toContain(create.body.id);
+    expect(liveIds).toContain(dependsOn.body.id);
+    const dependsOnRow = list.body.intents.find(
+      (i: { id: string }) => i.id === dependsOn.body.id,
+    );
+    expect(dependsOnRow.state).toBe('approved');
+  });
+});

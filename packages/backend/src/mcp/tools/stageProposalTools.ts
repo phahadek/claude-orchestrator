@@ -67,6 +67,7 @@ async function stage(
     kind,
     payload,
     ctx.projectId,
+    envelopeArgs.groupId ?? null,
   );
   const intent: StagedIntent = stageIntent(
     kind,
