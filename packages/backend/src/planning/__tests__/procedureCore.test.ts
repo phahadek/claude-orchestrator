@@ -261,7 +261,7 @@ describe('procedureCore', () => {
 
   it('instructs staging each listed Open Question as a decision.pickOne with no competing "stage the concrete write when confident" routing', () => {
     const batchLockingText = renderPrinciple(
-      CORE_PRINCIPLES.find((p) => p.id === 'design-no-question-bundling')!,
+      CORE_PRINCIPLES.find((p) => p.id === 'design-one-question-per-turn')!,
       'design',
     );
     expect(batchLockingText).toMatch(/decision\.pickOne/);
@@ -416,7 +416,7 @@ describe('procedureCore', () => {
 
     it('states the ordering requirement once and references it, not duplicating it across the three existing sites', () => {
       const noBundling = CORE_PRINCIPLES.find(
-        (p) => p.id === 'design-no-question-bundling',
+        (p) => p.id === 'design-one-question-per-turn',
       )!;
       const presentForSignoff = ORDERED_STEPS.find(
         (s) => s.id === 'present-for-signoff',
@@ -458,15 +458,33 @@ describe('procedureCore', () => {
       expect(critic.text).toContain('task.updateBody');
     });
 
-    it('still permits independent Open Questions to be staged in the same turn', () => {
+    it('requires one Open Question per turn, in task-body order, and never permits staging more than one at once', () => {
       const noBundling = CORE_PRINCIPLES.find(
-        (p) => p.id === 'design-no-question-bundling',
+        (p) => p.id === 'design-one-question-per-turn',
       )!;
       expect(noBundling.text).toMatch(
+        /handle the task\s+body's listed Open Questions one at a time, in the order they are written/,
+      );
+      expect(noBundling.text).toMatch(
+        /DO NOT stage two Open Questions, however independent they appear, in the\s+same turn/,
+      );
+      expect(noBundling.text).not.toMatch(
         /DO stage every Open\s+Question whose answer is independent of the others in the same turn/,
       );
       expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /Open Questions stage one per turn, in the\s+order the task body lists them/,
+      );
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).not.toMatch(
         /independent Open Questions still stage in\s+the same turn/,
+      );
+    });
+
+    it('instructs holding a question that depends on an unresolved one, stating the dependency rather than staging it', () => {
+      const noBundling = CORE_PRINCIPLES.find(
+        (p) => p.id === 'design-one-question-per-turn',
+      )!;
+      expect(noBundling.text).toMatch(
+        /DO hold a question whose answer depends on another\s+still-unresolved question, and say so plainly/,
       );
     });
 
@@ -493,6 +511,129 @@ describe('procedureCore', () => {
           DESIGN_TERMINAL_ARTIFACTS_ORDERING,
         );
       }
+    });
+  });
+
+  describe('recommendation-quality and option-framing guidance injected for dispatched design sessions', () => {
+    /** Every rendered snippet from the assembled design procedure. */
+    function assembledDesignProcedureText(): string {
+      const principleText = principlesFor('design')
+        .map((p) => renderPrinciple(p, 'design'))
+        .join('\n');
+      const stepText = stepsFor('design')
+        .map((s) => stepSummaryFor(s, 'design'))
+        .join('\n');
+      return `${principleText}\n${stepText}`;
+    }
+
+    const NEW_RULE_IDS = [
+      'design-recommendation-quality',
+      'design-one-question-per-turn',
+      'design-pushback-is-iteration-not-signoff',
+      'design-option-framing',
+      'design-verify-the-body-premise',
+    ];
+
+    it('defines all five new rules, scoped to design only', () => {
+      for (const id of NEW_RULE_IDS) {
+        const rule = CORE_PRINCIPLES.find((p) => p.id === id);
+        expect(rule, `rule "${id}" should exist`).toBeDefined();
+        expect(rule!.appliesTo).toEqual(['design']);
+      }
+    });
+
+    it('asserts each new rule with a distinguishing phrase', () => {
+      const assembled = assembledDesignProcedureText();
+
+      expect(
+        renderPrinciple(
+          CORE_PRINCIPLES.find(
+            (p) => p.id === 'design-recommendation-quality',
+          )!,
+          'design',
+        ),
+      ).toMatch(/why the project's existing primitives don't already compose/);
+      expect(assembled).toMatch(
+        /why the project's existing primitives don't already compose/,
+      );
+
+      expect(
+        renderPrinciple(
+          CORE_PRINCIPLES.find((p) => p.id === 'design-one-question-per-turn')!,
+          'design',
+        ),
+      ).toMatch(
+        /handle the task\s+body's listed Open Questions one at a time, in the order they are written/,
+      );
+
+      expect(
+        renderPrinciple(
+          CORE_PRINCIPLES.find(
+            (p) => p.id === 'design-pushback-is-iteration-not-signoff',
+          )!,
+          'design',
+        ),
+      ).toMatch(
+        /iteration data, never as approval of the\s+closest-matching staged option/,
+      );
+
+      expect(
+        renderPrinciple(
+          CORE_PRINCIPLES.find((p) => p.id === 'design-option-framing')!,
+          'design',
+        ),
+      ).toMatch(/a rejected\/accepted contrast pair|rejected\/accepted/);
+
+      expect(
+        renderPrinciple(
+          CORE_PRINCIPLES.find(
+            (p) => p.id === 'design-verify-the-body-premise',
+          )!,
+          'design',
+        ),
+      ).toMatch(/claims to re-derive, never\s+givens to resolve against/);
+    });
+
+    it('states that evidence belongs in decisionProposal, never in an option description, and requires a rejected/accepted contrast pair', () => {
+      const optionFraming = renderPrinciple(
+        CORE_PRINCIPLES.find((p) => p.id === 'design-option-framing')!,
+        'design',
+      );
+      expect(optionFraming).toMatch(
+        /DO NOT put evidence.*inside an option `description`/,
+      );
+      expect(optionFraming).toMatch(
+        /that\s+evidence belongs in `decisionProposal`.s investigation summary, and only\s+there/,
+      );
+      expect(optionFraming).toMatch(
+        /explicit rejected\/accepted contrast pair among the\s+staged options/,
+      );
+    });
+
+    it('contains no skills/design/reference path citation of any kind', () => {
+      const assembled = assembledDesignProcedureText();
+      expect(assembled).not.toMatch(/skills\/design\/reference/);
+      expect(assembled).not.toMatch(/presentation\.md/);
+      expect(assembled).not.toMatch(/anti-patterns\.md/);
+
+      const rendered = renderHardRulesMarkdown();
+      expect(rendered).not.toMatch(/skills\/design\/reference/);
+    });
+
+    it('never asserts equality between procedureCore rule text and any skill reference file — the two are intended to diverge', () => {
+      const designReferenceDir = join(
+        repoRoot,
+        'skills',
+        'design',
+        'reference',
+      );
+      // Sanity check the file this task explicitly forbids citing still
+      // exists on disk in the self-hosted checkout — proving the two
+      // surfaces genuinely diverge, not merely that the path is unreachable.
+      expect(
+        readFileSync(join(designReferenceDir, 'presentation.md'), 'utf8')
+          .length,
+      ).toBeGreaterThan(0);
     });
   });
 });

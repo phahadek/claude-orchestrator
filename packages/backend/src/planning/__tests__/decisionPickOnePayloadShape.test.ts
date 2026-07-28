@@ -94,10 +94,10 @@ describe('design decision.pickOne payload-shape contract', () => {
       /A single `options` entry stays valid.*confident recommendation/i,
     );
 
-    // The pre-existing question-bundling principle also carries this — keep both
-    // in sync rather than dropping the guarantee when one is edited.
+    // The pre-existing one-question-per-turn principle also carries this — keep
+    // both in sync rather than dropping the guarantee when one is edited.
     const batchLocking = CORE_PRINCIPLES.find(
-      (p) => p.id === 'design-no-question-bundling',
+      (p) => p.id === 'design-one-question-per-turn',
     );
     expect(renderPrinciple(batchLocking!, 'design')).toMatch(
       /a single option is a confident recommendation/i,
@@ -107,7 +107,8 @@ describe('design decision.pickOne payload-shape contract', () => {
   it('is rendered into the assembled design procedure output', () => {
     const output = renderedDesignOutput();
     expect(output).toMatch(/decision\.pickOne payload shape/i);
-    expect(output).toContain('presentation.md');
+    expect(output).not.toMatch(/skills\/design\/reference/i);
+    expect(output).toMatch(/5-part question contract/i);
     expect(output).toMatch(/one `options\[\]` entry per candidate solution/i);
   });
 
