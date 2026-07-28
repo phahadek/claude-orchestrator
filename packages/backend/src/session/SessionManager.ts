@@ -59,6 +59,8 @@ import {
   updateSessionStatus,
   updateSessionWorktreePath,
   markSessionDone,
+  applyPendingDone,
+  getSessionsWithUnappliedPendingDone,
   archiveSession,
   markSessionSuperseded,
   insertEvent,
@@ -1785,6 +1787,24 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Apply a done-transition deferred (while this session's turn was in
+   * flight) by markSessionDone, now that the turn has genuinely completed —
+   * called only from wireSession's run()-settle handlers, never speculatively.
+   * Broadcasts session_status when a deferred done is actually applied so the
+   * UI reflects it even though the write happened outside the normal
+   * markSessionDone call site's own broadcast.
+   */
+  private applyPendingDoneForSettledSession(sessionId: string): void {
+    if (applyPendingDone(sessionId)) {
+      this.emit('message', {
+        type: 'session_status',
+        sessionId,
+        status: 'done',
+      } satisfies ServerMessage);
+    }
+  }
+
+  /**
    * Wire up event forwarding and fire-and-forget run() for a session.
    * Used by both start() and resumeSession() to avoid duplicating this logic.
    */
@@ -1852,6 +1872,10 @@ export class SessionManager extends EventEmitter {
     session
       .run()
       .then(() => {
+        // The turn has now genuinely completed (process exited). Apply any
+        // done-transition that markSessionDone deferred while this turn was
+        // in flight — see markSessionDone's in-flight guard in db/queries.ts.
+        this.applyPendingDoneForSettledSession(sessionId);
         if (isPlanningSession(session.sessionType)) {
           this.checkPlanningSessionDrift(sessionId, session.taskId, projectDir);
         }
@@ -1870,6 +1894,7 @@ export class SessionManager extends EventEmitter {
           const detail = err instanceof Error ? err.message : String(err);
           this.markSessionErrored(sessionId, 'error', 'run_error', detail);
         }
+        this.applyPendingDoneForSettledSession(sessionId);
         if (isPlanningSession(session.sessionType)) {
           this.checkPlanningSessionDrift(sessionId, session.taskId, projectDir);
         }
@@ -1898,6 +1923,7 @@ export class SessionManager extends EventEmitter {
     runner: ISessionRunner,
     mcpConfigPath: string | undefined,
     systemPromptFilePath?: string,
+    opts: { allowReopenTerminal?: boolean } = {},
   ): AgentSession {
     const session = new AgentSession(
       row.session_id,
@@ -1921,13 +1947,35 @@ export class SessionManager extends EventEmitter {
     if (row.pr_url) session.prUrl = row.pr_url;
     this.sessions.set(row.session_id, session);
     // Update (not insert) the existing DB row — the session is resuming in-place.
-    updateSessionStatus(row.session_id, 'running');
+    //
+    // Terminal is sticky: a done/error/killed row must not be silently
+    // overwritten with 'running' by a resume. The only way in is an explicit,
+    // audited reopen (opts.allowReopenTerminal — threaded from sendOrResume's
+    // allowTerminal, used by relaunchFixerForPR / terminal feedback-delivery),
+    // never an implicit side effect of respawning a process.
+    const isTerminal = TERMINAL_SESSION_STATUSES.has(row.status);
+    if (isTerminal && !opts.allowReopenTerminal) {
+      logger.warn(
+        `[SessionManager] respawnSession: refusing to overwrite terminal status '${row.status}' with running for ${row.session_id.slice(0, 8)}`,
+      );
+    } else {
+      if (isTerminal) {
+        recordEvent({
+          event_type: 'session_terminal_reopened',
+          actor_type: 'system',
+          actor_id: row.session_id,
+          task_id: row.task_id ?? null,
+          payload: { status_before: row.status },
+        });
+      }
+      updateSessionStatus(row.session_id, 'running');
+      this.emit('message', {
+        type: 'session_status',
+        sessionId: row.session_id,
+        status: 'running',
+      } satisfies ServerMessage);
+    }
     updateSessionWorktreePath(row.session_id, worktreePath);
-    this.emit('message', {
-      type: 'session_status',
-      sessionId: row.session_id,
-      status: 'running',
-    } satisfies ServerMessage);
     return session;
   }
 
@@ -2196,6 +2244,22 @@ export class SessionManager extends EventEmitter {
    * as unkillable ghosts. Called from server.ts after migrations and imports.
    */
   async resumeOrphanSessions(): Promise<void> {
+    // Close the loop on deferred done-transitions that were never applied —
+    // e.g. the backend restarted between markSessionDone's pending write and
+    // applyPendingDoneForSettledSession's own call. Excludes status='running'
+    // rows: those are covered below by the ordinary orphan-resume path, and
+    // will settle their own pending mark once resumed and their turn ends.
+    const unappliedPendingDone = getSessionsWithUnappliedPendingDone();
+    for (const row of unappliedPendingDone) {
+      if (applyPendingDone(row.session_id)) {
+        this.emit('message', {
+          type: 'session_status',
+          sessionId: row.session_id,
+          status: 'done',
+        } satisfies ServerMessage);
+      }
+    }
+
     // Recover sessions that completed (last event = result) but got stuck at
     // 'running' because the review pipeline threw mid-handleCleanExit.
     const stuckRows = getStuckResultSessionRows();
@@ -2204,11 +2268,16 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] recovering ${stuckRows.length} stuck session(s) from running→done`,
       );
       for (const row of stuckRows) {
+        // Boot-time recovery: no process for this session exists yet this
+        // run, so status='running' here reflects a stale write from before
+        // the crash/restart, not a turn actually in flight — safe to bypass
+        // the in-flight guard.
         markSessionDone(
           row.session_id,
           row.last_ts,
           row.pr_url ?? null,
           'boot_orphan_result_event',
+          { skipInFlightGuard: true },
         );
         let taskBackend;
         try {
@@ -2248,11 +2317,14 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] reaping ${mergedPrRows.length} session(s) with merged/closed PR`,
       );
       for (const row of mergedPrRows) {
+        // Same boot-time reasoning as above — no live process for this
+        // session exists yet this run.
         markSessionDone(
           row.session_id,
           row.last_ts,
           row.pr_url ?? null,
           'boot_merged_or_closed_pr',
+          { skipInFlightGuard: true },
         );
         let taskBackend;
         try {
@@ -3095,15 +3167,34 @@ export class SessionManager extends EventEmitter {
     if (this.sessions.has(sessionId)) {
       this.send(sessionId, text);
       // Mirror the respawn path: ensure status reflects the resumed activity
-      // so the UI doesn't keep rendering this session as idle.
+      // so the UI doesn't keep rendering this session as idle. Terminal is
+      // sticky — a done/error/killed row is never silently overwritten with
+      // 'running' here; only an explicit allowTerminal caller may reopen it,
+      // and that reopen is audited rather than folded into this status write.
       const row = getSession(sessionId);
       if (row && row.status !== 'running') {
-        updateSessionStatus(sessionId, 'running');
-        this.emit('message', {
-          type: 'session_status',
-          sessionId,
-          status: 'running',
-        } satisfies ServerMessage);
+        const isTerminal = TERMINAL_SESSION_STATUSES.has(row.status);
+        if (isTerminal && !opts.allowTerminal) {
+          logger.warn(
+            `[SessionManager] sendOrResume: session ${sessionId.slice(0, 8)} is live but DB status is terminal (${row.status}) — not overwriting with running`,
+          );
+        } else {
+          if (isTerminal) {
+            recordEvent({
+              event_type: 'session_terminal_reopened',
+              actor_type: 'system',
+              actor_id: sessionId,
+              task_id: row.task_id ?? null,
+              payload: { status_before: row.status },
+            });
+          }
+          updateSessionStatus(sessionId, 'running');
+          this.emit('message', {
+            type: 'session_status',
+            sessionId,
+            status: 'running',
+          } satisfies ServerMessage);
+        }
       }
       return sessionId;
     }
@@ -3260,6 +3351,7 @@ export class SessionManager extends EventEmitter {
         runner,
         mcpConfigPath,
         fastPathSystemPromptPath,
+        { allowReopenTerminal: opts.allowTerminal },
       );
 
       // Proactive ceiling-escalation: if the session's persisted context occupancy
@@ -3515,6 +3607,7 @@ export class SessionManager extends EventEmitter {
       runner,
       mcpConfigPath,
       slowPathSystemPromptPath,
+      { allowReopenTerminal: opts.allowTerminal },
     );
 
     // Register the pending text on the session so that if the resumed context

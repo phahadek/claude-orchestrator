@@ -1480,4 +1480,27 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // sessions.pending_done_*: a done-marking call that arrives while a
+  // session's turn is still in flight (status='running') cannot write done
+  // immediately without racing the in-flight turn's own terminal write — see
+  // markSessionDone's in-flight guard. The transition is stashed here instead
+  // and applied once the turn actually completes (SessionManager's wireSession
+  // settle handler, plus a boot-time sweep for rows left pending across a
+  // restart), so a deferred mark is never silently dropped.
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN pending_done_ended_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN pending_done_pr_url TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN pending_done_call_site TEXT`);
+  } catch {
+    /* already exists */
+  }
 }
