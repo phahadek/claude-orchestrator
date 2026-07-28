@@ -20,8 +20,48 @@
  */
 
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
+import { ALLOWED_TRANSITIONS, type OpsState } from '../ops/opsJournal';
 
 export type SkillId = 'groom' | 'design' | 'ops' | 'split';
+
+/** `blocked` / `incident-frozen` are freezes reachable from (and returning to) any non-terminal state — not part of the normal path. */
+const OPS_JOURNAL_FREEZE_STATES: ReadonlySet<OpsState> = new Set([
+  'blocked',
+  'incident-frozen',
+]);
+
+/**
+ * The ops_journal normal-path lifecycle order, derived from
+ * ALLOWED_TRANSITIONS's own declaration order (freeze states excluded)
+ * rather than restated as a second hand-typed list that can drift from it —
+ * see opsJournal.ts's ALLOWED_TRANSITIONS doc comment for why this
+ * declaration order is the normal path.
+ */
+export const OPS_JOURNAL_LIFECYCLE_ORDER: readonly OpsState[] = (
+  Object.keys(ALLOWED_TRANSITIONS) as OpsState[]
+).filter((s) => !OPS_JOURNAL_FREEZE_STATES.has(s));
+
+/** Renders the ops_journal state machine for injection into the ops procedure — states, normal path, and pending's exact legal targets, all read from ALLOWED_TRANSITIONS. */
+function renderOpsJournalStateMachine(): string {
+  const allStates = (Object.keys(ALLOWED_TRANSITIONS) as OpsState[])
+    .map((s) => `\`${s}\``)
+    .join(', ');
+  const path = OPS_JOURNAL_LIFECYCLE_ORDER.map((s) => `\`${s}\``).join(' → ');
+  const pendingTargets = ALLOWED_TRANSITIONS.pending
+    .map((s) => `\`${s}\``)
+    .join(', ');
+  return (
+    `The ops_journal states are: ${allStates}. The normal path is ${path} ` +
+    '(`blocked` / `incident-frozen` are freezes reachable from, and returning ' +
+    'to, any non-terminal state — not part of the normal path). From ' +
+    `\`pending\` specifically, the only legal \`journal.setState\` targets are: ` +
+    `${pendingTargets} — \`staged-proposal\` is NOT reachable directly from ` +
+    '`pending`; stage `candidate` first. This is enforced at both stage time ' +
+    'and apply time (the same `isValidOpsTransition` check) — a session that ' +
+    'stages an illegal transition is rejected immediately, before it ever ' +
+    'reaches the operator.'
+  );
+}
 
 /**
  * Interactive: a human-typed `/groom`/`/design`/`/ops` skill session with a
@@ -141,6 +181,12 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'throwaway script and run it (`node _foo.cjs` then `rm`), and never shell out ' +
       '(`echo >`, `cat >`, a `cd … && …` chain) — that is what causes the constant ' +
       'permission friction, not a workaround for it.',
+  },
+  {
+    id: 'ops-journal-state-machine',
+    title: 'ops_journal state machine',
+    appliesTo: ['ops'],
+    text: renderOpsJournalStateMachine(),
   },
   {
     id: 'atomic-single-action-request',
@@ -848,7 +894,9 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       ops:
         '**Directive — stage or request is the terminal action, then keep driving:**\n' +
         '- DO stage the next step the moment investigation reaches a decision — ' +
-        'either the ops_journal transition (`journal.setState` → staged-proposal), ' +
+        'either the next legal ops_journal transition (`journal.setState` → the ' +
+        'next state on the normal path — `candidate` before `staged-proposal` ' +
+        'when leaving `pending`; see "ops_journal state machine" above), ' +
         'or, if applying it needs a capability this session lacks, a ' +
         '`session.requestCapability` naming the exact write.\n' +
         '- DO NOT ask in chat whether to stage or request first.\n' +
@@ -858,8 +906,10 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'A dispatched ops session has no synchronous chat turn to wait within — ' +
         'end the turn and it parks. So presenting IS staging, but for ops staging ' +
         'is the first move in a drive-to-applied loop, not a handoff: once ' +
-        'investigation reaches a decision, stage the ops_journal transition ' +
-        '(`journal.setState` → staged-proposal), or, if applying it needs a ' +
+        'investigation reaches a decision, stage the next legal ops_journal ' +
+        'transition (`journal.setState` → the next state on the normal path — ' +
+        '`candidate` before `staged-proposal` when leaving `pending`; see ' +
+        '"ops_journal state machine" above), or, if applying it needs a ' +
         'capability this session lacks, stage a `session.requestCapability` ' +
         'naming the exact write. Never ask in chat whether to stage or request ' +
         'first — staging/requesting is what puts the decision in front of the ' +
