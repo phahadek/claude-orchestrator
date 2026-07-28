@@ -4881,7 +4881,7 @@ let _stmtUpdateCompletenessDispositionApproval: Database.Statement | null =
   null;
 
 /** Point read of one completeness-disposition run by id — the row a staged `completeness.disposition` intent's payload names. */
-export function getCompletenessDisposition(
+function getCompletenessDisposition(
   id: number,
 ): CompletenessDispositionRow | undefined {
   _stmtGetCompletenessDisposition ??= db.prepare<{ id: number }>(`

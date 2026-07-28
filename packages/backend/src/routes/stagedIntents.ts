@@ -1141,7 +1141,7 @@ const COMPLETENESS_GATED_KINDS: ReadonlySet<string> = new Set([
  * intent has been approved — tightens DESIGN_TERMINAL_ARTIFACTS_ORDERING
  * from "the critic has run" to "the critic's findings were accepted".
  */
-export class CompletenessApprovalRequiredError extends Error {
+class CompletenessApprovalRequiredError extends Error {
   constructor(kind: string, taskId: string) {
     super(
       `[stagedIntents] "${kind}" for design task "${taskId}" is blocked: the completeness critic's ` +
