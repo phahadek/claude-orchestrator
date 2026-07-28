@@ -139,6 +139,7 @@ export interface DesignDigestSlice {
   };
   markdown: string;
   openQuestions: DesignLoadResult['openQuestions'];
+  archSource: DesignLoadResult['archSource'];
   archUnits: DesignLoadResult['archUnits'];
   unresolvedPageRefs: DesignLoadResult['unresolvedPageRefs'];
   /** Whether milestone-wide code-map grounding is cached — the grounding
@@ -247,6 +248,7 @@ export function deriveDesignDigestSlice(
     task: result.task,
     markdown: result.markdown,
     openQuestions: result.openQuestions,
+    archSource: result.archSource,
     archUnits: result.archUnits,
     unresolvedPageRefs: result.unresolvedPageRefs,
     hasCodeMapGrounding: Object.keys(result.codeMapGrounding).length > 0,
@@ -940,7 +942,9 @@ function renderDesignDigest(data: DesignDigestSlice): string {
   }
   lines.push(
     '',
-    `### Arch-store-selected units (${data.archUnits.length})`,
+    data.archSource === 'store'
+      ? `### Arch-store-selected units (${data.archUnits.length})`
+      : `### Notion architecture pages referenced (${data.archUnits.length})`,
     '',
     ...data.archUnits.map((u) => `- ${u.title} (${u.id})`),
   );

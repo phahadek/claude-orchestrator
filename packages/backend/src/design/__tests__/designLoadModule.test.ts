@@ -22,7 +22,12 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { insertProject, insertMilestone } from '../../db/queries.js';
+import {
+  insertProject,
+  insertMilestone,
+  updateProject,
+} from '../../db/queries.js';
+import { createUnit } from '../../architecture/ArchUnitStore.js';
 import { loadDesignContext } from '../designLoad.js';
 
 const TARGET_BOARD = 'target-board-id';
@@ -34,6 +39,9 @@ const ARCH_PAGE_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 beforeEach(() => {
   db.prepare('DELETE FROM milestones').run();
   db.prepare('DELETE FROM projects').run();
+  db.prepare('DELETE FROM arch_unit_event').run();
+  db.prepare('DELETE FROM arch_unit').run();
+  db.prepare('DELETE FROM audit_log').run();
 
   insertProject({
     id: PROJECT,
@@ -191,6 +199,7 @@ describe('loadDesignContext', () => {
       source: 'explicit_heading',
     });
 
+    expect(result.archSource).toBe('notion');
     expect(result.archUnits).toEqual([
       {
         id: ARCH_PAGE_ID,
@@ -204,6 +213,69 @@ describe('loadDesignContext', () => {
 
     // No code-map.json cache under this repoRoot — grounding is empty.
     expect(result.codeMapGrounding).toEqual({});
+  });
+
+  it('resolves architecture units from the arch_unit store (source: store) once the project has archStoreAdopted set', async () => {
+    updateProject(PROJECT, { arch_store_adopted: 1 });
+    createUnit({
+      title: 'Sessions dispatch through the SessionManager invariant',
+      kind: 'invariant',
+      topic: 'general',
+      regions: [],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+    createUnit({
+      title: 'Non-invariant unit outside a design task scope',
+      kind: 'subsystem',
+      topic: 'sessions',
+      regions: ['packages/backend/src/sessions'],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    const result = await loadDesignContext(MILESTONE, TASK_ID, {
+      repoRoot: '/tmp/design-load-test-nonexistent-repo',
+      manifest: {
+        context_pages: [{ id: ARCH_PAGE_ID, title: 'Technical Architecture' }],
+      },
+    });
+
+    expect(result.archSource).toBe('store');
+    expect(result.archUnits.map((u) => u.title)).toEqual([
+      'Sessions dispatch through the SessionManager invariant',
+    ]);
+    // The store path doesn't consult the body's manifest-page references —
+    // there is nothing left to flag as unresolved.
+    expect(result.unresolvedPageRefs).toEqual([]);
+  });
+
+  it("keeps returning the project's Notion architecture pages (source: notion) when archStoreAdopted is not set", async () => {
+    // No updateProject call — archStoreAdopted defaults to false at insertProject.
+    createUnit({
+      title: 'Should never surface — project has not adopted the store',
+      kind: 'invariant',
+      topic: 'general',
+      regions: [],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    const result = await loadDesignContext(MILESTONE, TASK_ID, {
+      repoRoot: '/tmp/design-load-test-nonexistent-repo',
+      manifest: {
+        context_pages: [{ id: ARCH_PAGE_ID, title: 'Technical Architecture' }],
+      },
+    });
+
+    expect(result.archSource).toBe('notion');
+    expect(result.archUnits).toEqual([
+      {
+        id: ARCH_PAGE_ID,
+        title: 'Technical Architecture',
+        raw: 'Technical Architecture *(update — Section X)*',
+      },
+    ]);
   });
 
   it('resolves the manifest at config/projects/<repo-basename>, not the registry id, when they differ', async () => {

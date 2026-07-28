@@ -47,6 +47,7 @@ describe('GET /api/design-context', () => {
       },
       markdown: '## Open questions\n- A or B?',
       openQuestions: { items: ['A or B?'], source: 'explicit_heading' },
+      archSource: 'notion',
       archUnits: [],
       unresolvedPageRefs: [],
       codeMapGrounding: {},
