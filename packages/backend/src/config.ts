@@ -217,9 +217,18 @@ const GROOM_MCP_TOOLS = [
   ...PLANNING_INTENT_KINDS.groom.map(orchestratorMcpToolName),
 ];
 
+// Plus completeness.disposition / completeness.traceCoverage — the /design
+// completeness safeguard's durable-write + advisory-read surface
+// (mcp/tools/completenessTools.ts). Neither is a staged-intent kind (both
+// are direct calls a dispatched design session makes immediately, never
+// something staged for later apply — see completenessTools.ts's doc
+// comment), so neither belongs in PLANNING_INTENT_KINDS.design — added here
+// explicitly, mirroring how gate.verify is added to OPS_MCP_TOOLS below.
 const DESIGN_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
   ...PLANNING_INTENT_KINDS.design.map(orchestratorMcpToolName),
+  orchestratorMcpToolName('completeness.disposition'),
+  orchestratorMcpToolName('completeness.traceCoverage'),
 ];
 
 // Plus gate.verify — a gate-item-verification session is sessionType 'ops'

@@ -79,9 +79,7 @@ describe('assembled design procedure — closing synthesis for approval', () => 
     );
     expect(dispositionPrinciple).toBeDefined();
     const text = renderPrinciple(dispositionPrinciple!, 'design');
-    expect(text).toMatch(
-      /POST `?\/api\/design\/:taskId\/completeness-disposition/,
-    );
+    expect(text).toMatch(/mcp__orchestrator__completeness_disposition/);
     expect(text).toMatch(
       /resolved.*out-of-scope.*not-a-decision.*fold.*file-sibling.*sibling-owned/s,
     );

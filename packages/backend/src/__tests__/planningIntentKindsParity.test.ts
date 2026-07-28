@@ -25,6 +25,14 @@ const HEALTH_TOOL = orchestratorMcpToolName('health');
 // in PLANNING_INTENT_KINDS.ops, so the ops guard below excludes it too (see
 // config.ts's OPS_MCP_TOOLS comment).
 const GATE_VERIFY_TOOL = orchestratorMcpToolName('gate.verify');
+// completeness.disposition / completeness.traceCoverage are direct
+// write/read calls, not staged-intent kinds — they aren't in
+// PLANNING_INTENT_KINDS.design, so the design guard below excludes them too
+// (see config.ts's DESIGN_MCP_TOOLS comment).
+const COMPLETENESS_TOOLS = [
+  orchestratorMcpToolName('completeness.disposition'),
+  orchestratorMcpToolName('completeness.traceCoverage'),
+];
 
 const WORKFLOWS: {
   name: 'groom' | 'design' | 'ops';
@@ -35,7 +43,7 @@ const WORKFLOWS: {
   {
     name: 'design',
     allowedTools: DESIGN_ALLOWED_TOOLS,
-    extraNonStagedTools: [],
+    extraNonStagedTools: COMPLETENESS_TOOLS,
   },
   {
     name: 'ops',

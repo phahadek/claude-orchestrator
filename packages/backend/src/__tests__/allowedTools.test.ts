@@ -35,6 +35,8 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'review.disposition',
   'flaky.confirm',
   'gate.verify',
+  'completeness.disposition',
+  'completeness.traceCoverage',
 ];
 
 const REGISTERED_TOOL_NAMES = new Set(
@@ -117,6 +119,15 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
       }
     });
   }
+
+  it('design allow-list contains the underscore forms of completeness_disposition and completeness_traceCoverage', () => {
+    expect(DESIGN_ALLOWED_TOOLS).toContain(
+      'mcp__orchestrator__completeness_disposition',
+    );
+    expect(DESIGN_ALLOWED_TOOLS).toContain(
+      'mcp__orchestrator__completeness_traceCoverage',
+    );
+  });
 
   it('ops/gate allow-list contains the underscore forms of gate_verify, task_create, journal_setState, session_requestCapability', () => {
     expect(OPS_ALLOWED_TOOLS).toContain('mcp__orchestrator__gate_verify');
