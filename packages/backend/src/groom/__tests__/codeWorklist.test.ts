@@ -320,7 +320,10 @@ describe('regionsForBinding', () => {
     });
 
     const binding = regionsForBinding(regions);
-    expect(binding.packages).toEqual(['packages', 'packages/backend/src/notion']);
+    expect(binding.packages).toEqual([
+      'packages',
+      'packages/backend/src/notion',
+    ]);
     expect(binding.files).toEqual([
       'packages/backend/src/notion/NotionClient.ts',
     ]);
