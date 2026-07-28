@@ -13,7 +13,7 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
-import { db } from '../../db/db.js';
+import { db } from '../../db/db';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
