@@ -187,7 +187,9 @@ describe('PlanningOrchestrator.handleDisposition', () => {
 
   it('an approve that completes the mandate while the session has a live in-flight turn defers the terminal transition instead of marking it terminal underneath the turn', async () => {
     const sm = makeSessionManager();
-    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'running' }));
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }),
+    );
     vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
     const orch = new PlanningOrchestrator(sm as any);
 
@@ -204,7 +206,9 @@ describe('PlanningOrchestrator.handleDisposition', () => {
 
   it('applies the deferred terminal transition once the in-flight turn completes (session_ended), without re-consulting staged-intent state', async () => {
     const sm = makeSessionManager();
-    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'running' }));
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }),
+    );
     vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
     const orch = new PlanningOrchestrator(sm as any);
 
