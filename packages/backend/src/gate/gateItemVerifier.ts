@@ -211,11 +211,33 @@ function buildGateVerifyProcedure(item: GateItem): string {
             'the backend applies it and re-routes the item, it does not ' +
             'change what you report for `disposition`.',
           '',
+          'This same routing applies, not just to a visibly wrong tier tag, ' +
+            'but whenever your investigation establishes that no ' +
+            'operational trace of the described behavior can exist by ' +
+            'construction — e.g. you traced the code path that would ' +
+            'produce it and confirmed it never records one, by design, not ' +
+            'merely that you could not find one within this run. That is a ' +
+            'distinct outcome from a bounded-effort abstention: "I ran out ' +
+            'of turn/time budget" or "I lack a capability to read the ' +
+            'record" stays a plain `needs-setup` with no reclassify — the ' +
+            'item may still be settleable another way. But "this item ' +
+            'cannot be settled from the operational record, period, ' +
+            'because the record is structurally never produced" means the ' +
+            'item is mis-routed the same way a wrongly-tagged UI item is, ' +
+            'and the correct response is a `reclassify` proposal ' +
+            '(`Human-Observation` or `needs-triage`) alongside your ' +
+            '`needs-setup` — never a bare `needs-setup` that leaves the ' +
+            'item sitting in an auto-run tier for the next verifier to ' +
+            'hit the same wall.',
+          '',
         ]),
     `Report your finding by calling the \`${orchestratorMcpToolName('gate.verify')}\` tool ` +
       'exactly once, as your final action — never a chat JSON block, which is ' +
-      'not delivered anywhere. `reclassify` is optional — omit it unless you ' +
-      'are proposing a self-correction as described above:',
+      'not delivered anywhere. `reclassify` is required whenever you ' +
+      'concluded the item cannot be settled from the operational record by ' +
+      'construction (see above) — omit it only for a genuine pass/fail or a ' +
+      'bounded-effort abstention that does not rest on structural ' +
+      'unverifiability:',
     '',
     '```json',
     `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"basis": "operational"|"source", "...": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,
@@ -255,6 +277,49 @@ function buildGateVerifyAppealMessage(
       '`needs-setup` instead of repeating the same pass — a second pass ' +
       'that still fails the contract is downgraded the same way, with no ' +
       'further appeal.',
+    '',
+    'Your original reported evidence was:',
+    '```json',
+    JSON.stringify(originalEvidence ?? null, null, 2),
+    '```',
+  ].join('\n');
+}
+
+/**
+ * The symmetric one-shot appeal to `buildGateVerifyAppealMessage`, for the
+ * other half of the disposition contract: a `needs-setup` whose own evidence
+ * establishes that no operational trace of the described behavior can exist
+ * by construction, reported with no accompanying `reclassify`. Names the
+ * omission plainly and states this is the session's one and only chance to
+ * add one — a second verdict, reclassify or not, is final.
+ */
+function buildGateVerifyReclassifyAppealMessage(
+  item: GateItem,
+  originalEvidence: unknown,
+): string {
+  return [
+    `Your \`needs-setup\` disposition for gate item ${item.id} reads as ` +
+      'having established that no operational trace of the described ' +
+      'behavior can exist by construction — not merely that you could not ' +
+      'find one within this run — but it did not include a `reclassify` ' +
+      'field.',
+    '',
+    'That is the outcome the disposition contract asks you to route ' +
+      'differently: a bare `needs-setup` here leaves the item sitting in ' +
+      'its current (auto-run) tier, to be handed to another verifier that ' +
+      'will hit the same structural wall and report the same abstention, ' +
+      'indefinitely.',
+    '',
+    'This is your one chance to revise, and the only one: whatever you ' +
+      'report next is final, appealed or not. If your conclusion stands, ' +
+      `report it again by calling \`${orchestratorMcpToolName('gate.verify')}\` ` +
+      `for gate item ${item.id} with the same \`needs-setup\` disposition, ` +
+      'this time alongside a `reclassify` field proposing `Human-Observation` ' +
+      '(if the item needs a human to judge it) or `needs-triage` (if you ' +
+      'cannot tell what tier fits and a human should decide) — never an ' +
+      'auto-run tier. If on reflection this was actually a bounded-effort ' +
+      'abstention (budget/capability limited, not structural), report ' +
+      '`needs-setup` again with no `reclassify` and explain that instead.',
     '',
     'Your original reported evidence was:',
     '```json',
@@ -518,6 +583,45 @@ export function admitsLiveRecordUnreachable(evidence: unknown): boolean {
     LIVE_RECORD_MENTION_TOKENS.has(t),
   );
   return hasNegation && hasLiveRecordMention;
+}
+
+/**
+ * Tokens naming a structural/by-construction reason evidence can't exist —
+ * paired with a negation token and a record-surface mention, this signals a
+ * `needs-setup` that has established the item can never be settled from the
+ * operational record (as opposed to merely not being settled within this
+ * run's budget).
+ */
+const STRUCTURAL_UNVERIFIABILITY_SIGNAL_TOKENS = new Set([
+  'design',
+  'construction',
+  'structurally',
+  'structural',
+]);
+
+/**
+ * True when `needs-setup` evidence asserts that no operational trace of the
+ * described behavior can exist by construction — e.g. "this code path never
+ * calls recordEvent, so no audit_log entry is produced by design" — rather
+ * than a bounded-effort abstention that merely ran out of budget or lacked a
+ * capability grant this run. The former is the case this task's appeal
+ * targets: a session that reaches this conclusion but reports a bare
+ * `needs-setup` with no `reclassify` has left the item mis-routed. Exported
+ * for testing.
+ */
+export function assertsStructuralUnverifiability(evidence: unknown): boolean {
+  const text = evidenceText(evidence);
+  if (!text) return false;
+  const tokens = tokenize(text);
+  const hasStructuralSignal = tokens.some((t) =>
+    STRUCTURAL_UNVERIFIABILITY_SIGNAL_TOKENS.has(t),
+  );
+  if (!hasStructuralSignal) return false;
+  const hasNegation = tokens.some((t) => NEGATION_TOKENS.has(t));
+  const hasRecordMention = tokens.some((t) =>
+    LIVE_RECORD_MENTION_TOKENS.has(t),
+  );
+  return hasNegation && hasRecordMention;
 }
 
 /**
@@ -822,38 +926,65 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         reclassify: payload.disposition.reclassify,
       });
 
-      /** Sends the one-shot appeal, recording the original verdict first so it survives the appeal un-overwritten. */
-      const startAppeal = (
-        raw: GateVerificationResult,
-        contractChecked: GateVerificationResult,
+      /** Shared one-shot-appeal mechanics: marks the appeal in flight, records the pre-appeal verdict, and enqueues the appeal feedback. */
+      const sendAppeal = (
+        fallback: GateVerificationResult,
+        eventEvidence: Record<string, unknown>,
+        message: string,
+        feedbackKind: string,
       ) => {
         appealInFlight = true;
-        appealFallback = contractChecked;
+        appealFallback = fallback;
         pendingGateVerifyAppeal.add(sessionId);
-        const downgradeReason =
-          (contractChecked.evidence as { reason?: string } | undefined)
-            ?.reason ?? 'pass evidence contract violation';
         appendGateItemEvent(item.id, {
           disposition: 'noted',
           operator: 'gate-verifier',
-          evidence: {
-            appeal: 'original-verdict',
-            originalDisposition: raw.disposition,
-            originalEvidence: raw.evidence,
-            downgradeReason,
-          },
+          evidence: eventEvidence,
         });
         this.sessionManager
-          .enqueueFeedback(
-            sessionId,
-            'gate-verifier:appeal',
-            buildGateVerifyAppealMessage(item, downgradeReason, raw.evidence),
-          )
+          .enqueueFeedback(sessionId, feedbackKind, message)
           .catch((err) => {
             logger.error(
               `[GateItemVerifier] failed to enqueue gate-verify appeal for session ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : err}`,
             );
           });
+      };
+
+      /** Sends the one-shot appeal for a `pass` downgraded by the evidence contract, recording the original verdict first so it survives the appeal un-overwritten. */
+      const startAppeal = (
+        raw: GateVerificationResult,
+        contractChecked: GateVerificationResult,
+      ) => {
+        const downgradeReason =
+          (contractChecked.evidence as { reason?: string } | undefined)
+            ?.reason ?? 'pass evidence contract violation';
+        sendAppeal(
+          contractChecked,
+          {
+            appeal: 'original-verdict',
+            originalDisposition: raw.disposition,
+            originalEvidence: raw.evidence,
+            downgradeReason,
+          },
+          buildGateVerifyAppealMessage(item, downgradeReason, raw.evidence),
+          'gate-verifier:appeal',
+        );
+      };
+
+      /** Sends the symmetric one-shot appeal for a `needs-setup` that establishes structural unverifiability but omits `reclassify`. */
+      const startReclassifyOmissionAppeal = (
+        result: GateVerificationResult,
+      ) => {
+        sendAppeal(
+          result,
+          {
+            appeal: 'reclassify-omission',
+            originalDisposition: result.disposition,
+            originalEvidence: result.evidence,
+          },
+          buildGateVerifyReclassifyAppealMessage(item, result.evidence),
+          'gate-verifier:reclassify-appeal',
+        );
       };
 
       /** Handles one reported disposition — either the first attempt or the one appeal revision. */
@@ -867,17 +998,29 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         const contractChecked = enforcePassEvidenceContract(raw);
         const isPassDowngrade =
           raw.disposition === 'pass' && contractChecked.disposition !== 'pass';
-        if (!isPassDowngrade) {
-          teardown(enforceAbstentionEvidenceContract(contractChecked));
-          return;
-        }
         const row = getSession(sessionId);
-        if (row && TERMINAL_SESSION_STATUSES.has(row.status)) {
-          // No live session left to appeal to.
-          teardown(enforceAbstentionEvidenceContract(contractChecked));
+        const sessionTerminal =
+          !!row && TERMINAL_SESSION_STATUSES.has(row.status);
+        if (isPassDowngrade) {
+          if (sessionTerminal) {
+            // No live session left to appeal to.
+            teardown(enforceAbstentionEvidenceContract(contractChecked));
+            return;
+          }
+          startAppeal(raw, contractChecked);
           return;
         }
-        startAppeal(raw, contractChecked);
+        const abstained = enforceAbstentionEvidenceContract(contractChecked);
+        if (
+          !sessionTerminal &&
+          abstained.disposition === 'needs-setup' &&
+          !abstained.reclassify &&
+          assertsStructuralUnverifiability(abstained.evidence)
+        ) {
+          startReclassifyOmissionAppeal(abstained);
+          return;
+        }
+        teardown(abstained);
       };
 
       const onDisposition = (payload: GateVerifyDispositionPayload) => {
