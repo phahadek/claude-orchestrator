@@ -550,7 +550,9 @@ export type StagedIntentState =
   | 'approved'
   | 'committed'
   | 'rejected'
-  | 'superseded';
+  | 'superseded'
+  /** Terminal, non-appliable: the staging session itself withdrew this intent — see stagedIntents.ts's withdrawIntent. */
+  | 'withdrawn';
 
 export interface StagedIntentRow {
   id: string;

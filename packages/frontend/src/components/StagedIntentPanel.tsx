@@ -39,7 +39,12 @@ function isNotFoundError(err: unknown): boolean {
   return err instanceof Error && /not found/i.test(err.message);
 }
 
-const TERMINAL_INTENT_STATES = new Set(['committed', 'rejected', 'superseded']);
+const TERMINAL_INTENT_STATES = new Set([
+  'committed',
+  'rejected',
+  'superseded',
+  'withdrawn',
+]);
 
 interface TaskMovePayload {
   taskName?: string;
@@ -708,10 +713,20 @@ export function StagedIntentPanel({
             {intent.groupId}
           </span>
         )}
-        {intent.state && (
-          <span className={styles.stateBadge}>{intent.state}</span>
+        {intent.state === 'withdrawn' ? (
+          <span className={styles.withdrawnBadge}>withdrawn</span>
+        ) : (
+          intent.state && (
+            <span className={styles.stateBadge}>{intent.state}</span>
+          )
         )}
       </div>
+
+      {intent.state === 'withdrawn' && intent.dispositionReason && (
+        <p className={styles.withdrawnReason}>
+          Withdrawn by the staging session: {intent.dispositionReason}
+        </p>
+      )}
 
       {intent.groomProposal ? (
         <GroomProposalSummary proposal={intent.groomProposal} />

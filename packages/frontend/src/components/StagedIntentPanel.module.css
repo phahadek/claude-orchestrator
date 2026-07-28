@@ -105,6 +105,20 @@
   font-style: italic;
 }
 
+.withdrawnBadge {
+  font-size: 0.7rem;
+  color: var(--ctp-yellow);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.withdrawnReason {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ctp-yellow);
+  font-style: italic;
+}
+
 .groomProposal {
   display: grid;
   grid-template-columns: max-content 1fr;

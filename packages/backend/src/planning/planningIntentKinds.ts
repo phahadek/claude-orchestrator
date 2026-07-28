@@ -28,6 +28,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'task.updateBody',
     'task.patchBodySection',
     'decision.pickOne',
+    'intent.withdraw',
   ],
   design: [
     'decision.pickOne',
@@ -41,6 +42,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'arch.createUnit',
     'arch.updateUnit',
     'arch.supersedeUnit',
+    'intent.withdraw',
   ],
   ops: [
     'journal.setState',
@@ -49,6 +51,12 @@ export const PLANNING_INTENT_KINDS: Record<
     'task.create',
     'task.updateBody',
     'task.patchBodySection',
+    'intent.withdraw',
   ],
-  split: ['task.updateBody', 'task.create', 'task.setDependsOn'],
+  split: [
+    'task.updateBody',
+    'task.create',
+    'task.setDependsOn',
+    'intent.withdraw',
+  ],
 };

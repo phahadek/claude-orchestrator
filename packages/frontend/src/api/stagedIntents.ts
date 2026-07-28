@@ -41,7 +41,9 @@ type StagedIntentState =
   | 'approved'
   | 'committed'
   | 'rejected'
-  | 'superseded';
+  | 'superseded'
+  /** The staging session itself withdrew this intent before an operator disposed of it — see `dispositionReason` for why. */
+  | 'withdrawn';
 
 export interface StagedIntent {
   id: string;
@@ -76,7 +78,7 @@ export interface StagedIntent {
    * Never rendered as a hard block.
    */
   advisory?: StagedIntentAdvisory | null;
-  /** Operator-supplied rationale for a reject disposition (pushback | decline). Null until rejected. */
+  /** Operator-supplied rationale for a reject disposition (pushback | decline), or the staging session's own rationale for a withdrawal. Null until rejected or withdrawn. */
   dispositionReason?: string | null;
   /** The operator's answer to a decision.pickOne question-intent. Null until answered. */
   answer?: StagedIntentAnswer | null;
