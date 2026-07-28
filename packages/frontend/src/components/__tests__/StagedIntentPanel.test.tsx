@@ -68,7 +68,9 @@ describe('StagedIntentPanel', () => {
     );
 
     expect(screen.getByText('completeness.disposition')).toBeTruthy();
-    expect(screen.getByTestId('staged-intent-completeness-disposition')).toBeTruthy();
+    expect(
+      screen.getByTestId('staged-intent-completeness-disposition'),
+    ).toBeTruthy();
     expect(screen.getByText(/Should X be configurable\?/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
     expect(screen.getByRole('button', { name: /^approve$/i })).toBeTruthy();

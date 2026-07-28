@@ -73,8 +73,7 @@ export function createDesignRouter(): Router {
         buildCompletenessDispositionRow({
           taskId,
           project: typeof body.project === 'string' ? body.project : null,
-          milestone:
-            typeof body.milestone === 'string' ? body.milestone : null,
+          milestone: typeof body.milestone === 'string' ? body.milestone : null,
           questions: body.questions as CompletenessDispositionQuestion[],
           runAt: body.runAt,
         }),

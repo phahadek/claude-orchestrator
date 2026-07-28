@@ -1668,7 +1668,8 @@ async function rejectStagedIntentRow(
   // `rejected` (decline) can, either way, re-run completeness.disposition to
   // stage a fresh intent — no second critic pass required.
   if (rejectedIntent.kind === 'completeness.disposition') {
-    const payload = rejectedIntent.payload as CompletenessDispositionIntentPayload;
+    const payload =
+      rejectedIntent.payload as CompletenessDispositionIntentPayload;
     updateCompletenessDispositionApproval(payload.rowId, 'rejected');
   }
 

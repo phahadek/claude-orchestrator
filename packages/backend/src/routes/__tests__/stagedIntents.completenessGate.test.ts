@@ -51,7 +51,12 @@ function stageDisposition(runAt = '2026-07-28T00:00:00.000Z') {
       project: 'demo',
       milestone: 'M13',
       questions: [
-        { question: 'Should X be configurable?', disposition: 'dismissed', reason: 'Out of scope.', approvalStatus: 'proposed' },
+        {
+          question: 'Should X be configurable?',
+          disposition: 'dismissed',
+          reason: 'Out of scope.',
+          approvalStatus: 'proposed',
+        },
       ],
       runAt,
     },
@@ -72,7 +77,12 @@ function insertRow(runAt: string): number {
       project: 'demo',
       milestone: 'M13',
       questions: JSON.stringify([
-        { question: 'Should X be configurable?', disposition: 'dismissed', reason: 'Out of scope.', approvalStatus: 'proposed' },
+        {
+          question: 'Should X be configurable?',
+          disposition: 'dismissed',
+          reason: 'Out of scope.',
+          approvalStatus: 'proposed',
+        },
       ]),
       run_at: runAt,
     });

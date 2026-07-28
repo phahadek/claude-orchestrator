@@ -122,7 +122,7 @@ export const DESIGN_TERMINAL_ARTIFACTS_ORDERING =
   "completeness critic's findings have been accepted: this is not just " +
   '"the critic has run" — `arch.createUnit`/`arch.updateUnit`/' +
   '`arch.supersedeUnit` and the closing-synthesis `task.updateBody` are ' +
-  'refused at stage time, naming the missing approval, until the session\'s ' +
+  "refused at stage time, naming the missing approval, until the session's " +
   '`completeness.disposition` intent for this task is operator-approved ' +
   '(see "Disposition-don\'t-drop" below). A rejected `completeness.disposition` ' +
   'intent does not require a second critic pass — call the tool again with a ' +

@@ -594,7 +594,9 @@ function CompletenessDispositionHeadline({ intent }: { intent: StagedIntent }) {
         <ul>
           {payload.questions.map((q, idx) => (
             <li key={idx}>
-              <strong>{q.disposition === 'accepted' ? 'Accepted' : 'Dismissed'}:</strong>{' '}
+              <strong>
+                {q.disposition === 'accepted' ? 'Accepted' : 'Dismissed'}:
+              </strong>{' '}
               {q.question} — {q.reason}
             </li>
           ))}
@@ -887,21 +889,20 @@ export function StagedIntentPanel({
                 Override block…
               </button>
             )}
-            {(isGrouped || skipsApply) &&
-              intent.state !== 'approved' && (
-                <button
-                  type="button"
-                  className={styles.approveButton}
-                  disabled={inFlight !== null}
-                  onClick={() => void handleApprove()}
-                >
-                  {inFlight === 'approve'
-                    ? 'Approving...'
-                    : isCapabilityRequest
-                      ? '✓ Grant'
-                      : 'Approve'}
-                </button>
-              )}
+            {(isGrouped || skipsApply) && intent.state !== 'approved' && (
+              <button
+                type="button"
+                className={styles.approveButton}
+                disabled={inFlight !== null}
+                onClick={() => void handleApprove()}
+              >
+                {inFlight === 'approve'
+                  ? 'Approving...'
+                  : isCapabilityRequest
+                    ? '✓ Grant'
+                    : 'Approve'}
+              </button>
+            )}
             <button
               type="button"
               className={styles.denyButton}

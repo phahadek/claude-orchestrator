@@ -4950,7 +4950,10 @@ export function buildCompletenessDispositionRow(input: {
     project: input.project,
     milestone: input.milestone,
     questions: JSON.stringify(
-      input.questions.map((q) => ({ approvalStatus: 'proposed' as const, ...q })),
+      input.questions.map((q) => ({
+        approvalStatus: 'proposed' as const,
+        ...q,
+      })),
     ),
     run_at: runAt,
   };
