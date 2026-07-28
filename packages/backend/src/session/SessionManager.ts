@@ -576,10 +576,7 @@ export function buildResumeMessage(row: Session): string {
   if (!pr?.review_result) return RESUME_NUDGE_MESSAGE;
   try {
     const result = JSON.parse(pr.review_result) as PRReviewResult;
-    if (
-      result.verdict === 'needs_changes' ||
-      result.verdict === 'incomplete'
-    ) {
+    if (result.verdict === 'needs_changes' || result.verdict === 'incomplete') {
       return formatReviewFeedback(result, pr.review_iteration ?? 0, {
         conflicted: pr.merge_state === 'dirty',
         baseBranch: pr.base_branch ?? undefined,
