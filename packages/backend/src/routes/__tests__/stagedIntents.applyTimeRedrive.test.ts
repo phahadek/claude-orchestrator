@@ -55,10 +55,10 @@ function makeApp(planningOrchestrator: PlanningOrchestrator) {
   return app;
 }
 
-function seedPlanningSession(sessionId: string) {
+function seedPlanningSession(sessionId: string, taskId: string = 'task-1') {
   insertSession({
     session_id: sessionId,
-    task_id: 'task-1',
+    task_id: taskId,
     task_url: null,
     project_context_url: null,
     status: 'idle',
@@ -133,7 +133,7 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
 
     const sm = makeSessionManager();
     const planningOrchestrator = new PlanningOrchestrator(sm as any);
-    seedPlanningSession('session-2');
+    seedPlanningSession('session-2', 'task-2');
     const intent = stageDependsOnIntent('session-2', 'notion:task-2');
 
     const app = makeApp(planningOrchestrator);
@@ -166,7 +166,7 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
 
     const sm = makeSessionManager();
     const planningOrchestrator = new PlanningOrchestrator(sm as any);
-    seedPlanningSession('session-3');
+    seedPlanningSession('session-3', '3a922f91-52f3-8151-9de8-e513f7b9de4d');
     const intent = stageDependsOnIntent(
       'session-3',
       '3a922f91-52f3-8151-9de8-e513f7b9de4d',
@@ -216,7 +216,7 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
 
     const sm = makeSessionManager();
     const planningOrchestrator = new PlanningOrchestrator(sm as any);
-    seedPlanningSession('session-5');
+    seedPlanningSession('session-5', 'task-5');
     const intent = stageDependsOnIntent('session-5', 'notion:task-5');
 
     const app = makeApp(planningOrchestrator);

@@ -212,6 +212,94 @@ function hasGroupManualVerificationStrip(
 }
 
 /**
+ * Kinds whose payload carries a `taskId` naming an existing task this
+ * session intends to mutate — the set a dispatched session must be bound to
+ * its own `sessions.task_id` for. task.create is deliberately excluded: a
+ * groom/design session legitimately files sibling and follow-on tasks, and a
+ * new task has no id yet to compare.
+ */
+const SESSION_TASK_BINDING_KINDS: ReadonlySet<string> = new Set([
+  'task.updateBody',
+  'task.patchBodySection',
+  'task.setStatus',
+  'task.setProperties',
+  'task.setDependsOn',
+]);
+
+/**
+ * The confirmed-bug guard: a dispatched planning session staged a
+ * task.updateBody whose payload taskId was a different, unrelated task,
+ * picked from its candidate-blockers list by mistake — a raw string
+ * mismatch this class of bug always is, since the two id-spaces
+ * (hyphenated/bare, notion:-prefixed/bare) otherwise let a mistaken id slip
+ * past an == comparison. Thrown at stage time, before any row reaches
+ * `staged`, the same shape as DependsOnCompletenessError /
+ * ManualVerificationStripCompletenessError above.
+ */
+export class SessionTaskBindingError extends Error {
+  constructor(kind: string, sessionTaskId: string, payloadTaskId: string) {
+    super(
+      `[stagedIntents] "${kind}" targets task "${payloadTaskId}", but the dispatching session's own task is ` +
+        `"${sessionTaskId}" — a session may only stage a task-write against its own task, or a task it ` +
+        'created earlier in the same intent group.',
+    );
+    this.name = 'SessionTaskBindingError';
+  }
+}
+
+/**
+ * True when the group already stages a live task.create intent from this
+ * same session — the "create-then-wire" escape hatch: a task.create intent
+ * carries no id of its own to compare (extractTaskId returns null for it),
+ * so once it commits and the resulting task is wired up by a later grouped
+ * intent (e.g. task.setDependsOn) in the same group, that grouped intent's
+ * taskId legitimately differs from the session's own task_id.
+ */
+function hasGroupTaskCreateForSession(
+  groupId: string,
+  sessionId: string,
+): boolean {
+  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
+  return listStagedIntentsByGroup(groupId).some(
+    (row) =>
+      row.kind === 'task.create' &&
+      row.session_id === sessionId &&
+      ACTIVE.includes(row.state),
+  );
+}
+
+/**
+ * Stage-time enforcement of the session/task binding: for every kind in
+ * SESSION_TASK_BINDING_KINDS, the payload's taskId must normalize to the
+ * same task as the dispatching session's own `sessions.task_id` (see
+ * taskId.ts's normalizeTaskId — comparing on the full normalized id, never a
+ * prefix, is what catches two ids sharing a long structured prefix but
+ * differing in full). A session with no bound task (human-driven surfaces
+ * pass no sessionId) or no recorded task_id is not checked — there is
+ * nothing to bind against.
+ */
+function assertSessionTaskBinding(
+  kind: string,
+  payload: unknown,
+  sessionId: string | null | undefined,
+  groupId: string | null | undefined,
+): void {
+  if (!sessionId || !SESSION_TASK_BINDING_KINDS.has(kind)) return;
+  const payloadTaskId = (payload as { taskId?: unknown } | null)?.taskId;
+  if (typeof payloadTaskId !== 'string' || !payloadTaskId) return;
+
+  const session = getSession(sessionId);
+  if (!session?.task_id) return;
+
+  if (normalizeTaskId(payloadTaskId) === normalizeTaskId(session.task_id)) {
+    return;
+  }
+  if (groupId && hasGroupTaskCreateForSession(groupId, sessionId)) return;
+
+  throw new SessionTaskBindingError(kind, session.task_id, payloadTaskId);
+}
+
+/**
  * The general staged-intent surface: a single chokepoint producers (Groom(N),
  * Ops(N), and future callers) stage generic { kind, payload } intents through,
  * and a human applies or rejects. Apply always dispatches through
@@ -853,6 +941,8 @@ export function stageIntent(
   if (kind === 'decision.pickOne') {
     validateDecisionPickOnePayload(payload, groupId, decisionProposal);
   }
+
+  assertSessionTaskBinding(kind, payload, sessionId, groupId);
 
   const taskId = extractTaskId(kind, payload);
   const titleKey = extractTitleKey(kind, payload);
