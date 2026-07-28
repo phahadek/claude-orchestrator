@@ -53,7 +53,7 @@ function seedEntry(taskId: string, state: OpsState) {
     needs_from_operator: null,
     resolution: null,
     updated_at: new Date(0).toISOString(),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
   } as any);
 }
 
