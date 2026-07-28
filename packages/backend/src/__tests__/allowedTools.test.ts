@@ -37,6 +37,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'gate.verify',
   'completeness.disposition',
   'completeness.traceCoverage',
+  'groom.precheck',
 ];
 
 const REGISTERED_TOOL_NAMES = new Set(
@@ -127,6 +128,10 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
     expect(DESIGN_ALLOWED_TOOLS).toContain(
       'mcp__orchestrator__completeness_traceCoverage',
     );
+  });
+
+  it('groom allow-list contains the underscore form of groom_precheck', () => {
+    expect(GROOM_ALLOWED_TOOLS).toContain('mcp__orchestrator__groom_precheck');
   });
 
   it('ops/gate allow-list contains the underscore forms of gate_verify, task_create, journal_setState, session_requestCapability', () => {

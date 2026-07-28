@@ -833,7 +833,16 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'of every turn that reaches a conclusion.\n' +
         '- DO NOT end the turn on a chat write-up, findings recap, or "plan ready ' +
         'to hand off" summary — none of those is a valid stopping point.\n' +
-        '- DO NOT ask for sign-off before staging.\n\n' +
+        '- DO NOT ask for sign-off before staging.\n' +
+        '- MAY call ' +
+        `\`${orchestratorMcpToolName('groom.precheck')}\`` +
+        ' with the proposed `taskId` + `groomingGate` payload before staging the ' +
+        'Ready path, to see the same violations `task.setStatus` would surface at ' +
+        'stage time — including the binding-constraint set recomputed from the ' +
+        'submitted `regions`, which can include a constraint the digest never ' +
+        'showed once regions have been refined during investigation — without ' +
+        'staging anything. Advisory only: a session confident its payload is ' +
+        'already clean may skip straight to staging.\n\n' +
         'A dispatched groom session has no synchronous chat turn to wait within — ' +
         'end the turn and it parks. So presenting IS staging: once investigation ' +
         'reaches a grooming decision, stage it (task.setStatus / setProperties / ' +

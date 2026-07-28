@@ -212,9 +212,15 @@ const ORCHESTRATOR_MCP_HEALTH_TOOL = orchestratorMcpToolName('health');
 // allow-list and the prompt's "DO stage as a `<kind>` intent" instructions
 // cannot drift apart (see planningIntentKindsParity.test.ts for the guard).
 // Supersedes the retired 'Bash(node:*)' + stage-task-intent.mjs.
+// Plus groom.precheck — the read-only Ready-flip-payload precheck
+// (mcp/tools/groomPrecheckTool.ts). Not a staged-intent kind (it stages
+// nothing — see the tool's doc comment), so it isn't in
+// PLANNING_INTENT_KINDS.groom — added here explicitly, mirroring how
+// gate.verify is added to OPS_MCP_TOOLS below.
 const GROOM_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
   ...PLANNING_INTENT_KINDS.groom.map(orchestratorMcpToolName),
+  orchestratorMcpToolName('groom.precheck'),
 ];
 
 // Plus completeness.disposition / completeness.traceCoverage — the /design
