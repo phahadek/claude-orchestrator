@@ -329,7 +329,7 @@ export function registerStageProposalTools(
     {
       title: 'Withdraw a staged intent this session staged',
       description:
-        'Withdraws (terminally cancels) an intent this session previously staged, before an operator has disposed of it — for a mistake this session catches itself, instead of only being able to ask the operator in prose to discard it. Only reaches this session\'s own staged intents. Requires a substantive one-line reason, recorded on the withdrawn intent for the decision surface.',
+        "Withdraws (terminally cancels) an intent this session previously staged, before an operator has disposed of it — for a mistake this session catches itself, instead of only being able to ask the operator in prose to discard it. Only reaches this session's own staged intents. Requires a substantive one-line reason, recorded on the withdrawn intent for the decision surface.",
       inputSchema: {
         payload: z.object({
           intentId: z.string(),

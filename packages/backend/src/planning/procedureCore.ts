@@ -251,7 +251,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       '`{"payload":{"intentId":"<the staged intent id>","reason":"<one-line reason it ' +
       'is wrong>"}}` — never rely on prose in your closing message to ask the operator ' +
       'to discard it. A withdrawal only ever reaches your own staged intents; it is ' +
-      'rejected against any other session\'s. Withdrawing moves the intent to a ' +
+      "rejected against any other session's. Withdrawing moves the intent to a " +
       'terminal state no apply can ever reach — it requires no operator action and is ' +
       'not a disposition for the operator to make. DO NOT re-stage a corrected version ' +
       'under the same intent id — withdraw the wrong one, then stage the correction as ' +

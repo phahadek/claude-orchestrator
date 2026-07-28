@@ -31,7 +31,11 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
-import { insertSession, insertStagedIntent, getSession } from '../../db/queries';
+import {
+  insertSession,
+  insertStagedIntent,
+  getSession,
+} from '../../db/queries';
 import {
   createStagedIntentsRouter,
   stageIntent,
@@ -97,7 +101,11 @@ describe('withdrawIntent', () => {
       'sess-1',
     );
 
-    const withdrawn = withdrawIntent(intent.id, 'staged against the wrong field', 'sess-1');
+    const withdrawn = withdrawIntent(
+      intent.id,
+      'staged against the wrong field',
+      'sess-1',
+    );
 
     expect(withdrawn.state).toBe('withdrawn');
     expect(withdrawn.dispositionReason).toBe('staged against the wrong field');
@@ -135,9 +143,9 @@ describe('withdrawIntent', () => {
   });
 
   it('rejects withdrawing an intent that is not found', () => {
-    expect(() =>
-      withdrawIntent('does-not-exist', 'reason', 'sess-1'),
-    ).toThrow(IntentWithdrawError);
+    expect(() => withdrawIntent('does-not-exist', 'reason', 'sess-1')).toThrow(
+      IntentWithdrawError,
+    );
   });
 
   it('rejects re-withdrawing an already-terminal intent', () => {

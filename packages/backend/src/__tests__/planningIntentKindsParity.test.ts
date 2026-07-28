@@ -70,7 +70,9 @@ describe('planning workflow --allowed-tools parity with PLANNING_INTENT_KINDS', 
     expect(GROOM_ALLOWED_TOOLS).toContain(tool);
     expect(DESIGN_ALLOWED_TOOLS).toContain(tool);
     expect(OPS_ALLOWED_TOOLS).toContain(tool);
-    expect(GROOM_ALLOWED_TOOLS).not.toContain('mcp__orchestrator__intent.withdraw');
+    expect(GROOM_ALLOWED_TOOLS).not.toContain(
+      'mcp__orchestrator__intent.withdraw',
+    );
   });
 
   it('groom and design session allow-lists grant the capability-request tool', () => {

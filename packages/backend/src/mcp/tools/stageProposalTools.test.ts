@@ -347,7 +347,7 @@ describe('stage-proposal MCP tools — schema validation', () => {
     await close();
   });
 
-  it('intent.withdraw moves this session\'s own staged intent to a terminal withdrawn state', async () => {
+  it("intent.withdraw moves this session's own staged intent to a terminal withdrawn state", async () => {
     const { client, close } = await connectedClient();
     const created = await client.callTool({
       name: 'task.create',
@@ -380,11 +380,11 @@ describe('stage-proposal MCP tools — schema validation', () => {
     await close();
   });
 
-  it('intent.withdraw rejects withdrawing another session\'s intent', async () => {
+  it("intent.withdraw rejects withdrawing another session's intent", async () => {
     const { client, close } = await connectedClient();
     const created = await client.callTool({
       name: 'task.create',
-      arguments: { payload: { title: 'Someone else\'s proposal' } },
+      arguments: { payload: { title: "Someone else's proposal" } },
     });
     const intent = parseIntentResult(
       created as { content: Array<{ type: string; text?: string }> },
