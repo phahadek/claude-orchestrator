@@ -14,7 +14,12 @@ interface Props {
   sessionId: string;
 }
 
-const TERMINAL_STATES = new Set(['committed', 'rejected', 'superseded']);
+const TERMINAL_STATES = new Set([
+  'committed',
+  'rejected',
+  'superseded',
+  'withdrawn',
+]);
 
 /**
  * The operator decision surface for a live session: staged/approved

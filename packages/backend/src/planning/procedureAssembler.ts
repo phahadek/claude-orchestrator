@@ -321,6 +321,9 @@ const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
     "read:session-record:<target-session-id> for the orchestrator's own " +
     'session_events/audit_log>","plan":"<what this session will do with it>",' +
     '"evidence":"<why this session needs it>"}',
+  'intent.withdraw':
+    '{"intentId":"<staged-intent-id this session staged>",' +
+    '"reason":"<one-line reason this intent should not be applied>"}',
 };
 
 /** Render one `mcp__orchestrator__<kind>` (CLI-sanitized) tool-call example per allowed kind. */

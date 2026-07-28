@@ -7,6 +7,7 @@ import {
   stageIntent,
   routeStageTimeBlock,
   validateAndNormalizeTaskReferences,
+  withdrawIntent,
   type StagedIntent,
 } from '../../routes/stagedIntents';
 import type { SessionManager } from '../../session/SessionManager';
@@ -317,5 +318,32 @@ export function registerStageProposalTools(
       }),
     },
     async (args) => stage('session.requestCapability', args.payload, ctx, args),
+  );
+
+  // Not routed through `stage()`: unlike every other tool here, this acts
+  // immediately on an existing staged intent rather than creating a new one
+  // — see withdrawIntent's doc comment in stagedIntents.ts for why this is
+  // not an operator disposition and requires no separate apply step.
+  registerTool(
+    'intent.withdraw',
+    {
+      title: 'Withdraw a staged intent this session staged',
+      description:
+        'Withdraws (terminally cancels) an intent this session previously staged, before an operator has disposed of it — for a mistake this session catches itself, instead of only being able to ask the operator in prose to discard it. Only reaches this session\'s own staged intents. Requires a substantive one-line reason, recorded on the withdrawn intent for the decision surface.',
+      inputSchema: {
+        payload: z.object({
+          intentId: z.string(),
+          reason: z.string(),
+        }),
+      },
+    },
+    async (args) => {
+      const withdrawn = withdrawIntent(
+        args.payload.intentId,
+        args.payload.reason,
+        ctx.sessionId,
+      );
+      return { content: [{ type: 'text', text: JSON.stringify(withdrawn) }] };
+    },
   );
 }

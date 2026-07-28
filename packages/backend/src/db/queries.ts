@@ -4797,13 +4797,15 @@ const STAGED_INTENT_TRANSITIONS: Record<
     'committed',
     'rejected',
     'superseded',
+    'withdrawn',
   ],
   pending_verification: ['staged', 'needs_revision'],
   needs_revision: ['rejected', 'superseded'],
-  approved: ['staged', 'committed', 'rejected', 'superseded'],
+  approved: ['staged', 'committed', 'rejected', 'superseded', 'withdrawn'],
   committed: [],
   rejected: [],
   superseded: [],
+  withdrawn: [],
 };
 
 export class IllegalStagedIntentTransitionError extends Error {

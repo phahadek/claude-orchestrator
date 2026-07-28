@@ -242,6 +242,22 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     },
   },
   {
+    id: 'withdraw-self-caught-mistake',
+    title: 'Withdraw an intent you catch is wrong yourself',
+    appliesTo: ['groom', 'design', 'ops', 'split'],
+    text:
+      'DO withdraw a staged intent, the moment you notice it is wrong, by calling ' +
+      `\`${orchestratorMcpToolName('intent.withdraw')}\` with ` +
+      '`{"payload":{"intentId":"<the staged intent id>","reason":"<one-line reason it ' +
+      'is wrong>"}}` — never rely on prose in your closing message to ask the operator ' +
+      'to discard it. A withdrawal only ever reaches your own staged intents; it is ' +
+      'rejected against any other session\'s. Withdrawing moves the intent to a ' +
+      'terminal state no apply can ever reach — it requires no operator action and is ' +
+      'not a disposition for the operator to make. DO NOT re-stage a corrected version ' +
+      'under the same intent id — withdraw the wrong one, then stage the correction as ' +
+      'a new intent.',
+  },
+  {
     id: 'incidental-tooling-gap-not-a-blocker',
     title: 'An incidental tooling gap is not a blocker',
     appliesTo: ['ops'],

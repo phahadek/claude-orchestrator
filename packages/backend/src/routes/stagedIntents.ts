@@ -827,7 +827,15 @@ export async function validateAndNormalizeTaskReferences(
   return p;
 }
 
-/** Intent kinds accepted by POST /staged-intents. */
+/**
+ * Intent kinds accepted by POST /staged-intents. `intent.withdraw` is not
+ * actually staged through this route — it acts immediately on an existing
+ * intent (see withdrawIntent below) — but it is a real member of the kind
+ * registry so it can be advertised in a dispatched session's injected
+ * procedure (renderIntentKindInvocations) and satisfy the
+ * planningIntentKindsParity guard (every PLANNING_INTENT_KINDS entry must be
+ * a KNOWN_INTENT_KINDS member).
+ */
 export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'task.create',
   'task.setStatus',
@@ -846,6 +854,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'arch.updateUnit',
   'arch.supersedeUnit',
   'session.requestCapability',
+  'intent.withdraw',
 ]);
 
 /**
@@ -1057,6 +1066,80 @@ export function stageIntent(
   const staged = rowToApi(row);
   broadcastIntentChange(staged);
   return staged;
+}
+
+/** States a session may still withdraw from — mirrors ACTIVE_STATES below (declared later in this file). */
+const WITHDRAWABLE_STATES: StagedIntentState[] = ['staged', 'approved'];
+
+/**
+ * Thrown by withdrawIntent when the withdrawal cannot be honoured — never
+ * silently dropped, mirroring ExplicitSupersedesError's shape above.
+ */
+export class IntentWithdrawError extends Error {
+  constructor(message: string) {
+    super(`[stagedIntents] ${message}`);
+    this.name = 'IntentWithdrawError';
+  }
+}
+
+/**
+ * A session's self-caught-mistake escape hatch (the confirmed-bug fix): a
+ * dispatched planning session can withdraw an intent it staged itself,
+ * before an operator has disposed of it, instead of the only channel being
+ * prose in its closing message that carries no weight in the apply path.
+ * Unlike a reject disposition, this is not an operator action — it requires
+ * no operator involvement and never resumes the session (there is nothing
+ * for the session to be told; it already knows why, since it asked for
+ * this). Authorised only against the calling session's own intents, reusing
+ * the same ownership-check shape as explicitSupersedes (stageIntent above:
+ * `explicit.session_id !== sessionId`). Moves the intent straight to the
+ * terminal `withdrawn` state with the supplied reason recorded as its
+ * `dispositionReason`, so the decision surface shows why the intent
+ * disappeared rather than it silently vanishing.
+ */
+export function withdrawIntent(
+  intentId: string,
+  reason: string,
+  sessionId: string,
+): StagedIntent {
+  const trimmedReason = reason.trim();
+  if (!trimmedReason) {
+    throw new IntentWithdrawError(
+      'a non-empty reason is required to withdraw an intent',
+    );
+  }
+
+  const row = getStagedIntentRow(intentId);
+  if (!row) {
+    throw new IntentWithdrawError(`staged intent "${intentId}" was not found`);
+  }
+  if (row.session_id !== sessionId) {
+    throw new IntentWithdrawError(
+      `staged intent "${intentId}" was not staged by this session and cannot be withdrawn by it`,
+    );
+  }
+  if (!WITHDRAWABLE_STATES.includes(row.state)) {
+    throw new IntentWithdrawError(
+      `staged intent "${intentId}" is in state "${row.state}" and cannot be withdrawn`,
+    );
+  }
+
+  const withdrawn = transitionStagedIntent(intentId, 'withdrawn', {
+    dispositionReason: trimmedReason,
+  });
+  const withdrawnIntent = rowToApi(withdrawn);
+  broadcastIntentChange(withdrawnIntent);
+
+  recordEvent({
+    event_type: 'staged_intent_disposition',
+    actor_type: 'ai',
+    actor_id: sessionId,
+    project_id: withdrawnIntent.projectId,
+    task_id: row.task_id,
+    payload: { intentId, disposition: 'withdrawn', reason: trimmedReason },
+  });
+
+  return withdrawnIntent;
 }
 
 /**

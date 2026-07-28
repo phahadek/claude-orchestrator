@@ -72,7 +72,7 @@ beforeEach(() => {
 });
 
 describe('stage-proposal MCP tools — registration', () => {
-  it('registers exactly the 14 stage-proposal tool names', async () => {
+  it('registers exactly the 15 stage-proposal tool names', async () => {
     const { client, close } = await connectedClient();
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
@@ -83,6 +83,7 @@ describe('stage-proposal MCP tools — registration', () => {
         'arch.updateUnit',
         'decision.pickOne',
         'gate.accrete',
+        'intent.withdraw',
         'journal.setState',
         'seed.stage',
         'session.requestCapability',
@@ -340,6 +341,67 @@ describe('stage-proposal MCP tools — schema validation', () => {
           items: [{ text: 'an item' }],
           classification: 'not-a-real-tier',
         },
+      },
+    });
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    await close();
+  });
+
+  it('intent.withdraw moves this session\'s own staged intent to a terminal withdrawn state', async () => {
+    const { client, close } = await connectedClient();
+    const created = await client.callTool({
+      name: 'task.create',
+      arguments: { payload: { title: 'A mistaken proposal' } },
+    });
+    const intent = parseIntentResult(
+      created as { content: Array<{ type: string; text?: string }> },
+    );
+
+    const result = await client.callTool({
+      name: 'intent.withdraw',
+      arguments: {
+        payload: {
+          intentId: intent.id,
+          reason: 'staged against the wrong task by mistake',
+        },
+      },
+    });
+    expect((result as { isError?: boolean }).isError).toBeFalsy();
+    const withdrawn = parseIntentResult(
+      result as { content: Array<{ type: string; text?: string }> },
+    );
+    expect(withdrawn.state).toBe('withdrawn');
+    expect(withdrawn.dispositionReason).toBe(
+      'staged against the wrong task by mistake',
+    );
+
+    const stored = getStagedIntent(intent.id as string);
+    expect(stored?.state).toBe('withdrawn');
+    await close();
+  });
+
+  it('intent.withdraw rejects withdrawing another session\'s intent', async () => {
+    const { client, close } = await connectedClient();
+    const created = await client.callTool({
+      name: 'task.create',
+      arguments: { payload: { title: 'Someone else\'s proposal' } },
+    });
+    const intent = parseIntentResult(
+      created as { content: Array<{ type: string; text?: string }> },
+    );
+
+    // registerStageProposalTools is scoped per-connection to a fixed
+    // ctx.sessionId — simulate a different staging session by mutating the
+    // stored row's session_id directly, rather than this connection's own.
+    db.prepare('UPDATE staged_intent SET session_id = ? WHERE id = ?').run(
+      'a-different-session',
+      intent.id,
+    );
+
+    const result = await client.callTool({
+      name: 'intent.withdraw',
+      arguments: {
+        payload: { intentId: intent.id, reason: 'not mine to withdraw' },
       },
     });
     expect((result as { isError?: boolean }).isError).toBe(true);

@@ -59,6 +59,20 @@ describe('planning workflow --allowed-tools parity with PLANNING_INTENT_KINDS', 
     );
   });
 
+  it('the intent.withdraw tool is exposed under the CLI-sanitized underscore name, not the dotted kind', () => {
+    // A hand-written `mcp__orchestrator__intent.withdraw` (dotted) entry, or
+    // any other name that doesn't route through orchestratorMcpToolName,
+    // would fail this — the CLI itself sanitizes dots to underscores, so the
+    // model-facing name must always be derived, never hand-written (see
+    // mcp/toolNaming.ts).
+    const tool = orchestratorMcpToolName('intent.withdraw');
+    expect(tool).toBe('mcp__orchestrator__intent_withdraw');
+    expect(GROOM_ALLOWED_TOOLS).toContain(tool);
+    expect(DESIGN_ALLOWED_TOOLS).toContain(tool);
+    expect(OPS_ALLOWED_TOOLS).toContain(tool);
+    expect(GROOM_ALLOWED_TOOLS).not.toContain('mcp__orchestrator__intent.withdraw');
+  });
+
   it('groom and design session allow-lists grant the capability-request tool', () => {
     const tool = orchestratorMcpToolName('session.requestCapability');
     expect(GROOM_ALLOWED_TOOLS).toContain(tool);
