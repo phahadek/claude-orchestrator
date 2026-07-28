@@ -147,15 +147,15 @@ describe('isValidOpsTransition', () => {
     expect(isValidOpsTransition('staged-proposal', 'incident-frozen')).toBe(
       true,
     );
-    expect(
-      isValidOpsTransition('applied-pending-confirm', 'resolved'),
-    ).toBe(true);
+    expect(isValidOpsTransition('applied-pending-confirm', 'resolved')).toBe(
+      true,
+    );
     expect(
       isValidOpsTransition('applied-pending-confirm', 'staged-proposal'),
     ).toBe(true);
-    expect(
-      isValidOpsTransition('applied-pending-confirm', 'blocked'),
-    ).toBe(true);
+    expect(isValidOpsTransition('applied-pending-confirm', 'blocked')).toBe(
+      true,
+    );
     expect(
       isValidOpsTransition('applied-pending-confirm', 'incident-frozen'),
     ).toBe(true);
@@ -183,9 +183,9 @@ describe('isValidOpsTransition', () => {
     expect(isValidOpsTransition('resolved', 'pending')).toBe(false);
     expect(isValidOpsTransition('resolved', 'candidate')).toBe(false);
     expect(isValidOpsTransition('resolved', 'staged-proposal')).toBe(false);
-    expect(
-      isValidOpsTransition('resolved', 'applied-pending-confirm'),
-    ).toBe(false);
+    expect(isValidOpsTransition('resolved', 'applied-pending-confirm')).toBe(
+      false,
+    );
     expect(isValidOpsTransition('resolved', 'blocked')).toBe(false);
     expect(isValidOpsTransition('resolved', 'incident-frozen')).toBe(false);
   });
