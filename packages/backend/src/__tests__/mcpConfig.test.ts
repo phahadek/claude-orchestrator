@@ -65,7 +65,7 @@ vi.mock('../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
 vi.mock('../routes/tasks', () => ({ emitTaskUpdated: vi.fn() }));
 
 import { AgentSession } from '../session/AgentSession';
-import { writeMcpConfig } from '../session/SessionManager';
+import { writeMcpConfig, mcpConfigDir } from '../session/SessionManager';
 import { _resetStageCredentialsForTesting } from '../auth/SessionStageAuth';
 import type { TaskBackend } from '../tasks/TaskBackend';
 
@@ -85,10 +85,12 @@ describe('writeMcpConfig', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-config-'));
+    process.env.MCP_CONFIG_DIR = tmpDir;
     _resetStageCredentialsForTesting();
   });
 
   afterEach(() => {
+    delete process.env.MCP_CONFIG_DIR;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -97,9 +99,8 @@ describe('writeMcpConfig', () => {
       github: { type: 'http', url: 'https://api.githubcopilot.com/mcp/' },
     };
     const filePath = writeMcpConfig(tmpDir, 'session-1', mcpServers);
-    expect(filePath).toBe(
-      path.join(tmpDir, '.claude', 'session-prompts', 'session-1.mcp.json'),
-    );
+    expect(filePath).toBe(path.join(mcpConfigDir(), 'session-1.mcp.json'));
+    expect(filePath.startsWith(tmpDir)).toBe(true);
     const written = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     expect(written.mcpServers.github).toEqual(mcpServers.github);
     expect(written.mcpServers.orchestrator).toMatchObject({
@@ -121,14 +122,27 @@ describe('writeMcpConfig', () => {
     expect(Object.keys(written.mcpServers)).toEqual(['orchestrator']);
   });
 
-  it('creates the .claude/session-prompts directory if it does not exist', () => {
+  it('creates the mcp config directory if it does not exist', () => {
     const mcpServers = { notion: { type: 'stdio', command: 'npx' } };
     writeMcpConfig(tmpDir, 'session-4', mcpServers);
     expect(
-      fs.existsSync(
-        path.join(tmpDir, '.claude', 'session-prompts', 'session-4.mcp.json'),
-      ),
+      fs.existsSync(path.join(mcpConfigDir(), 'session-4.mcp.json')),
     ).toBe(true);
+  });
+
+  it('never writes the per-session MCP config under the project checkout', () => {
+    const projectDir = path.join(tmpDir, 'checkout');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const filePath = writeMcpConfig(
+      projectDir,
+      'session-checkout-safety',
+      undefined,
+      'notion',
+    );
+    expect(filePath.startsWith(projectDir)).toBe(false);
+    expect(
+      fs.existsSync(path.join(projectDir, '.claude', 'session-prompts')),
+    ).toBe(false);
   });
 
   it('mints an idempotent stage credential per session id across multiple writes', () => {

@@ -3,8 +3,10 @@
  * concurrent planning sessions (groom/design/ops) share worktreePath ===
  * projectDir, so siting the config file by worktreePath alone caused the
  * last-spawned session's stage credential to overwrite every other
- * concurrent session's file. writeMcpConfig now sites the file by
- * sessionId under `<projectDir>/.claude/session-prompts/`.
+ * concurrent session's file. writeMcpConfig now sites the file by sessionId
+ * under `mcpConfigDir()` — the app data dir, outside any project checkout
+ * (so the inlined Notion API key never lands on a path the dispatched
+ * session, or anything else with checkout access, can read).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -162,7 +164,7 @@ vi.mock('fs', () => {
 });
 
 import path from 'path';
-import { SessionManager, writeMcpConfig } from '../SessionManager';
+import { SessionManager, writeMcpConfig, mcpConfigDir } from '../SessionManager';
 import { _resetStageCredentialsForTesting } from '../../auth/SessionStageAuth';
 import { getSession } from '../../db/queries';
 import { getProjectById } from '../../config';
@@ -191,22 +193,11 @@ describe('writeMcpConfig — per-session collision fix', () => {
     const pathB = writeMcpConfig(PROJECT_DIR, 'session-bbbb', undefined);
 
     expect(pathA).not.toBe(pathB);
-    expect(pathA).toBe(
-      path.join(
-        PROJECT_DIR,
-        '.claude',
-        'session-prompts',
-        'session-aaaa.mcp.json',
-      ),
-    );
-    expect(pathB).toBe(
-      path.join(
-        PROJECT_DIR,
-        '.claude',
-        'session-prompts',
-        'session-bbbb.mcp.json',
-      ),
-    );
+    expect(pathA).toBe(path.join(mcpConfigDir(), 'session-aaaa.mcp.json'));
+    expect(pathB).toBe(path.join(mcpConfigDir(), 'session-bbbb.mcp.json'));
+    // Neither file is sited under the project checkout.
+    expect(pathA.startsWith(PROJECT_DIR)).toBe(false);
+    expect(pathB.startsWith(PROJECT_DIR)).toBe(false);
   });
 
   it('gives two concurrent planning sessions (same projectDir) each their own embedded stage credential', () => {
@@ -240,12 +231,7 @@ describe('writeMcpConfig — per-session collision fix', () => {
     );
 
     expect(codingPath).toBe(
-      path.join(
-        PROJECT_DIR,
-        '.claude',
-        'session-prompts',
-        'coding-session-1.mcp.json',
-      ),
+      path.join(mcpConfigDir(), 'coding-session-1.mcp.json'),
     );
     const written = JSON.parse(writtenFiles.get(codingPath)!);
     expect(written.mcpServers.github).toBeDefined();
@@ -310,6 +296,27 @@ describe('writeMcpConfig — per-session collision fix', () => {
     const options = call![2] as { mode?: number } | string | undefined;
     expect(typeof options === 'object' ? options?.mode : undefined).toBe(0o600);
   });
+
+  it('never writes the raw Notion API key to a file under the project checkout', () => {
+    const p = writeMcpConfig(
+      PROJECT_DIR,
+      'notion-session-checkout-safety',
+      undefined,
+      'notion',
+    );
+
+    // The config carrying the raw key is sited outside the project checkout...
+    expect(p.startsWith(PROJECT_DIR)).toBe(false);
+
+    // ...and no write call this test observed targeted a path under the
+    // project checkout at all, raw key or otherwise.
+    const checkoutWrites = vi
+      .mocked(fsModule.writeFileSync)
+      .mock.calls.filter(([calledPath]) =>
+        String(calledPath).startsWith(PROJECT_DIR),
+      );
+    expect(checkoutWrites).toHaveLength(0);
+  });
 });
 
 describe('cleanupWorktree — removes the per-session MCP config for the correct session only', () => {
@@ -338,12 +345,7 @@ describe('cleanupWorktree — removes the per-session MCP config for the correct
       PROJECT_DIR,
     );
 
-    const expectedFileA = path.join(
-      PROJECT_DIR,
-      '.claude',
-      'session-prompts',
-      `${sessionA}.mcp.json`,
-    );
+    const expectedFileA = path.join(mcpConfigDir(), `${sessionA}.mcp.json`);
     const unlinkCalls = vi
       .mocked(fsModule.unlinkSync)
       .mock.calls.map((call) => call[0]);
