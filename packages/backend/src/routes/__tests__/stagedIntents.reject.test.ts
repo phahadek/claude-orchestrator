@@ -140,7 +140,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
     );
   });
 
-  it('outcome "pushback" persists the reason and re-turns the originating session to revise', async () => {
+  it('outcome "pushback" persists the reason, lands in needs_revision (not rejected), and re-turns the originating session to revise', async () => {
     const planningOrchestrator = makePlanningOrchestrator();
     const app = makeApp(planningOrchestrator);
     const intent = stageIntent(
@@ -157,7 +157,9 @@ describe('POST /api/staged-intents/:id/reject', () => {
 
     expect(res.status).toBe(200);
     const row = getStagedIntent(intent.id)!;
-    expect(row.state).toBe('rejected');
+    // pushback is revisable, so it lands in needs_revision — not the
+    // terminal rejected state, which is reserved for an operator decline.
+    expect(row.state).toBe('needs_revision');
     expect(row.disposition_reason).toBe('please reconsider');
 
     expect(planningOrchestrator.handleDisposition).toHaveBeenCalledWith(
@@ -166,6 +168,66 @@ describe('POST /api/staged-intents/:id/reject', () => {
         reason: 'please reconsider',
       }),
     );
+  });
+
+  it('a pushed-back intent (needs_revision) can be superseded by the staging session, and the supersede link is recorded', async () => {
+    const planningOrchestrator = makePlanningOrchestrator();
+    const app = makeApp(planningOrchestrator);
+    const intent = stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-9', dependsOn: [] },
+      'proj-1',
+      null,
+      'planning-session-1',
+    );
+
+    await supertest(app)
+      .post(`/api/staged-intents/${intent.id}/reject`)
+      .send({ outcome: 'pushback', reason: 'please reconsider' });
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+
+    const corrected = stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-9', dependsOn: ['t-other'] },
+      'proj-1',
+      null,
+      'planning-session-1',
+      null,
+      null,
+      intent.id,
+    );
+
+    expect(getStagedIntent(corrected.id)!.supersedes).toBe(intent.id);
+    expect(getStagedIntent(intent.id)!.state).toBe('superseded');
+  });
+
+  it('an intent an operator declined stays in rejected and is refused by the supersede guard', async () => {
+    const app = makeApp(makePlanningOrchestrator());
+    const intent = stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-10', dependsOn: [] },
+      'proj-1',
+      null,
+      'planning-session-1',
+    );
+
+    await supertest(app)
+      .post(`/api/staged-intents/${intent.id}/reject`)
+      .send({ outcome: 'decline', reason: 'no longer needed' });
+    expect(getStagedIntent(intent.id)!.state).toBe('rejected');
+
+    expect(() =>
+      stageIntent(
+        'task.setDependsOn',
+        { taskId: 't-10', dependsOn: ['t-other'] },
+        'proj-1',
+        null,
+        'planning-session-1',
+        null,
+        null,
+        intent.id,
+      ),
+    ).toThrow(/cannot be superseded/);
   });
 
   it('records the disposition even when the originating session has already ended', async () => {
@@ -230,7 +292,9 @@ describe('POST /api/staged-intents/group/:groupId/reject — coalesced feedback'
     expect(res.status).toBe(200);
     expect(res.body.rejected.sort()).toEqual(intents.map((i) => i.id).sort());
     intents.forEach((intent) => {
-      expect(getStagedIntent(intent.id)!.state).toBe('rejected');
+      // pushback lands in needs_revision, not rejected — see the
+      // single-item "outcome pushback" test above for the same assertion.
+      expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
     });
 
     expect(planningOrchestrator.handleDisposition).not.toHaveBeenCalled();

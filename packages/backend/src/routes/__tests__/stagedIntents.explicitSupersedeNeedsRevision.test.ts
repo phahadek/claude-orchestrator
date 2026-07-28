@@ -17,7 +17,11 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { stageIntent, ExplicitSupersedesError } from '../stagedIntents.js';
+import {
+  stageIntent,
+  withdrawIntent,
+  ExplicitSupersedesError,
+} from '../stagedIntents.js';
 import { getStagedIntent, transitionStagedIntent } from '../../db/queries.js';
 
 beforeEach(() => {
@@ -181,7 +185,7 @@ describe('stageIntent — explicit supersedes targeting a needs_revision intent'
     ).toThrow(ExplicitSupersedesError);
   });
 
-  it('an explicit supersedes naming an already-terminal (rejected) intent throws', () => {
+  it('an explicit supersedes naming an already-terminal (rejected, i.e. operator-declined) intent throws, naming the supported alternative', () => {
     const first = stageIntent(
       'task.setStatus',
       { taskId: 't-7', status: 'Ready' },
@@ -203,6 +207,88 @@ describe('stageIntent — explicit supersedes targeting a needs_revision intent'
         first.id,
       ),
     ).toThrow(ExplicitSupersedesError);
+
+    try {
+      stageIntent(
+        'task.setStatus',
+        { taskId: 't-7', status: 'Backlog' },
+        'proj-1',
+        'group-1',
+        'session-1',
+        null,
+        null,
+        first.id,
+      );
+      throw new Error('expected stageIntent to throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ExplicitSupersedesError);
+      expect((err as Error).message).toMatch(/cannot be superseded/);
+      expect((err as Error).message).toMatch(/stage a new intent/i);
+    }
+  });
+
+  it('a committed intent remains non-supersedable, and the error names the supported alternative', () => {
+    const first = stageIntent(
+      'task.setStatus',
+      { taskId: 't-committed', status: 'Ready' },
+      'proj-1',
+      'group-1',
+      'session-1',
+    );
+    transitionStagedIntent(first.id, 'committed');
+
+    try {
+      stageIntent(
+        'task.setStatus',
+        { taskId: 't-committed', status: 'Backlog' },
+        'proj-1',
+        'group-1',
+        'session-1',
+        null,
+        null,
+        first.id,
+      );
+      throw new Error('expected stageIntent to throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ExplicitSupersedesError);
+      expect((err as Error).message).toMatch(/cannot be superseded/);
+      expect((err as Error).message).toMatch(/corrective intent/i);
+    }
+
+    expect(getStagedIntent(first.id)!.state).toBe('committed');
+  });
+
+  it('a withdrawn intent (the session-withdrawal state) is refused by the supersede guard, naming the supported alternative', () => {
+    const first = stageIntent(
+      'task.setStatus',
+      { taskId: 't-withdrawn', status: 'Ready' },
+      'proj-1',
+      'group-1',
+      'session-1',
+    );
+    withdrawIntent(first.id, 'staged in error', 'session-1');
+    expect(getStagedIntent(first.id)!.state).toBe('withdrawn');
+
+    try {
+      stageIntent(
+        'task.setStatus',
+        { taskId: 't-withdrawn', status: 'Backlog' },
+        'proj-1',
+        'group-1',
+        'session-1',
+        null,
+        null,
+        first.id,
+      );
+      throw new Error('expected stageIntent to throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ExplicitSupersedesError);
+      expect((err as Error).message).toMatch(/cannot be superseded/);
+      expect((err as Error).message).toMatch(/stage a fresh intent/i);
+    }
+
+    // Withdrawing did not silently leave the row resurrectable another way.
+    expect(getStagedIntent(first.id)!.state).toBe('withdrawn');
   });
 
   it('the implicit payload-hash lookup still ignores needs_revision rows — a blocked intent is not resurrected as an implicit target', () => {

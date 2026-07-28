@@ -31,7 +31,7 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
-import { insertSession, getSession } from '../../db/queries';
+import { insertSession, getSession, getStagedIntent } from '../../db/queries';
 import {
   createStagedIntentsRouter,
   stageIntent,
@@ -122,7 +122,46 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
     expect(sessionId).toBe('session-1');
     expect(source).toBe('operator-disposition');
     expect(message).toContain('backend write failed');
+    // The feedback text ("sent back for revision") and the state the intent
+    // actually lands in (needs_revision) must be asserted together — an
+    // apply-time failure is always a pushback, so the two cannot drift apart.
     expect(message).toContain('sent back for revision');
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+  });
+
+  it('an apply-time failure lands in needs_revision and can be superseded by the staging session', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setDependsOn: vi
+        .fn()
+        .mockRejectedValue(new Error('backend write failed')),
+    });
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    seedPlanningSession('session-6', 'task-6');
+    const intent = stageDependsOnIntent('session-6', 'notion:task-6');
+
+    const app = makeApp(planningOrchestrator);
+    await supertest(app)
+      .post(`/api/staged-intents/${intent.id}/apply`)
+      .send({});
+
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+
+    const corrected = stageIntent(
+      'task.setDependsOn',
+      { taskId: 'notion:task-6', dependsOn: ['notion:task-other'] },
+      'proj-1',
+      null,
+      'session-6',
+      null,
+      null,
+      intent.id,
+    );
+
+    expect(getStagedIntent(corrected.id)!.supersedes).toBe(intent.id);
+    expect(getStagedIntent(intent.id)!.state).toBe('superseded');
   });
 
   it('does not auto-retry the apply — the backend write is attempted exactly once, and the intent requires a fresh disposition', async () => {
