@@ -6,6 +6,23 @@ import { logger } from '../logger';
 const _configDbPath = getOrchestratorConfig().db.path;
 const dbPath = _configDbPath || path.join(process.cwd(), 'dashboard.db');
 
+// A test process (vitest, or anything with NODE_ENV=test) must never bind a
+// real on-disk database file: an inherited/misconfigured DB_PATH pointing at
+// the production database would otherwise be opened and written to silently.
+// The vitest setup file (see vitest.config.ts) forces DB_PATH=':memory:'
+// ahead of this module's first import; if it's anything else here, either
+// that setup didn't run or something is bypassing it — fail loudly rather
+// than risk writing to a real file.
+const isTestMode =
+  process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST);
+if (isTestMode && dbPath !== ':memory:') {
+  throw new Error(
+    `[db] Refusing to open database at "${dbPath}" while running in test mode ` +
+      `(NODE_ENV=test / VITEST set). Test runs must use an in-memory database ` +
+      `(DB_PATH=':memory:'); binding a real file risks writing to production data.`,
+  );
+}
+
 export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
