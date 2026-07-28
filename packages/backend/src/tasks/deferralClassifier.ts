@@ -99,6 +99,13 @@ interface ClassifyResult {
   findings: AdvisoryFinding[];
 }
 
+/** Tolerates a ```json (or bare ```) fence around the model's reply — the prompt forbids it, but the model emits one anyway. */
+function stripCodeFence(raw: string): string {
+  const trimmed = raw.trim();
+  const m = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/);
+  return m ? m[1].trim() : trimmed;
+}
+
 function parseClassifyOutput(stdout: string): ClassifyResult {
   const parsed = JSON.parse(stdout) as {
     result?: string;
@@ -106,7 +113,7 @@ function parseClassifyOutput(stdout: string): ClassifyResult {
   // `claude --print --output-format json` wraps the model's reply in a
   // `result` string field; fall back to raw stdout for forward-compat.
   const raw = typeof parsed.result === 'string' ? parsed.result : stdout;
-  const verdict = JSON.parse(raw) as {
+  const verdict = JSON.parse(stripCodeFence(raw)) as {
     status?: unknown;
     confidence?: unknown;
     findings?: unknown;
@@ -237,7 +244,10 @@ async function classifyDeferral(body: string): Promise<Advisory> {
           model,
           checkedAt,
         });
-      } catch {
+      } catch (err) {
+        logger.warn(
+          `[deferralClassifier] failed to parse classify output: ${(err as Error).message}`,
+        );
         settle({
           tier: 'semantic',
           status: 'errored',
