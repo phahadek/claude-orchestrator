@@ -126,7 +126,7 @@ export class CliSessionRunner implements ISessionRunner {
       ...(isPlanning ? ['--add-dir', '/'] : []),
     ];
 
-    const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR', 'DB_PATH'] as const;
+    const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR'] as const;
     const envStr = envKeys
       .filter((k) => process.env[k] !== undefined)
       .map((k) => `${k}=${process.env[k]}`)
@@ -136,11 +136,18 @@ export class CliSessionRunner implements ISessionRunner {
       `spawning: cwd=${worktreePath} cmd=${config.claudePath} ${spawnArgs.join(' ')} env={${envStr}}`,
     );
 
+    // Strip production data-plane env vars before they reach the child. A
+    // session runs arbitrary code (including test suites) inside a worktree;
+    // DB_PATH pointing at the live orchestrator database must never be
+    // forwarded, or a `vitest run` inside the session would open and write
+    // to production data. Session code has no legitimate need for this var.
+    const { DB_PATH: _productionDbPath, ...inheritedEnv } = process.env;
+
     this.proc = spawn(config.claudePath, spawnArgs, {
       cwd: worktreePath,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
-        ...process.env,
+        ...inheritedEnv,
         BASH_MAX_OUTPUT_LENGTH: String(BASH_MAX_OUTPUT_LENGTH),
         BASH_DEFAULT_TIMEOUT_MS: String(BASH_DEFAULT_TIMEOUT_MS),
         ...extraEnv,
