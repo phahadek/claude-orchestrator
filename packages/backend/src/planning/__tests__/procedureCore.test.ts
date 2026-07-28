@@ -406,7 +406,10 @@ describe('procedureCore', () => {
         /staged only once every listed Open Question is answered/,
       );
       expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
-        /completeness critic has run/,
+        /completeness critic's findings have been accepted/,
+      );
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toContain(
+        'completeness.disposition',
       );
 
       const assembled = assembledDesignProcedureText();

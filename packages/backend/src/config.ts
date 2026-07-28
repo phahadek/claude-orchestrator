@@ -224,12 +224,17 @@ const GROOM_MCP_TOOLS = [
 ];
 
 // Plus completeness.disposition / completeness.traceCoverage — the /design
-// completeness safeguard's durable-write + advisory-read surface
-// (mcp/tools/completenessTools.ts). Neither is a staged-intent kind (both
-// are direct calls a dispatched design session makes immediately, never
-// something staged for later apply — see completenessTools.ts's doc
-// comment), so neither belongs in PLANNING_INTENT_KINDS.design — added here
-// explicitly, mirroring how gate.verify is added to OPS_MCP_TOOLS below.
+// completeness safeguard's tool surface (mcp/tools/completenessTools.ts).
+// completeness.traceCoverage is a direct advisory read, never staged.
+// completeness.disposition durably writes the critic's findings immediately
+// (disposition-don't-drop) and additionally stages a completeness.disposition
+// StagedIntent for operator approval — but it's registered via its own
+// bespoke tool (not the generic one-tool-per-PLANNING_INTENT_KINDS-entry
+// mechanism in stageProposalTools.ts), since it must always durably write
+// first, so it isn't in PLANNING_INTENT_KINDS.design — added here explicitly,
+// mirroring how gate.verify is added to OPS_MCP_TOOLS below. See
+// routes/stagedIntents.ts's KNOWN_INTENT_KINDS for the registry it does
+// belong to (approve/reject/the completeness-approval gate).
 const DESIGN_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
   ...PLANNING_INTENT_KINDS.design.map(orchestratorMcpToolName),

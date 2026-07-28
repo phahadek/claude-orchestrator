@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import {
+  buildCompletenessDispositionRow,
   insertCompletenessDisposition,
   listCompletenessDispositions,
 } from '../db/queries';
@@ -46,14 +47,14 @@ export function createDesignRouter(): Router {
           ) ||
           typeof (q as { reason?: unknown }).reason !== 'string' ||
           ((q as { approvalStatus?: unknown }).approvalStatus !== undefined &&
-            !['proposed', 'approved'].includes(
+            !['proposed', 'approved', 'rejected'].includes(
               (q as { approvalStatus?: unknown }).approvalStatus as string,
             ))
         ) {
           res.status(400).json({
             error:
               'each question requires {question, disposition: "accepted"|"dismissed", reason, ' +
-              'approvalStatus?: "proposed"|"approved"}',
+              'approvalStatus?: "proposed"|"approved"|"rejected"}',
           });
           return;
         }
@@ -63,18 +64,21 @@ export function createDesignRouter(): Router {
         return;
       }
       // Recorded is not approved — the critic pass writes every disposition
-      // as `proposed` unless the caller says otherwise; only an operator
-      // sign-off on the closing synthesis flips a question to `approved`.
-      const questions = (
-        body.questions as CompletenessDispositionQuestion[]
-      ).map((q) => ({ approvalStatus: 'proposed' as const, ...q }));
-      const row = insertCompletenessDisposition({
-        source_task_id: taskId,
-        project: typeof body.project === 'string' ? body.project : null,
-        milestone: typeof body.milestone === 'string' ? body.milestone : null,
-        questions: JSON.stringify(questions),
-        run_at: body.runAt,
-      });
+      // as `proposed` unless the caller says otherwise; only approving (or
+      // rejecting) the completeness.disposition staged intent this run
+      // produces flips a question to `approved`/`rejected` — see
+      // buildCompletenessDispositionRow, shared with the completeness.
+      // disposition MCP tool so the two writers can never diverge in shape.
+      const row = insertCompletenessDisposition(
+        buildCompletenessDispositionRow({
+          taskId,
+          project: typeof body.project === 'string' ? body.project : null,
+          milestone:
+            typeof body.milestone === 'string' ? body.milestone : null,
+          questions: body.questions as CompletenessDispositionQuestion[],
+          runAt: body.runAt,
+        }),
+      );
       res.status(201).json({
         ...row,
         questions: JSON.parse(

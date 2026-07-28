@@ -59,6 +59,7 @@ import type {
   ArchUnitQuery,
   CompletenessDispositionRow,
   NewCompletenessDispositionRow,
+  CompletenessDispositionQuestion,
   StagedIntentRow,
   StagedIntentState,
   StagedIntentGroupRow,
@@ -4873,6 +4874,86 @@ export function listCompletenessDispositions(
   return _stmtListCompletenessDispositions.all({
     source_task_id: normalizeTaskId(sourceTaskId),
   }) as CompletenessDispositionRow[];
+}
+
+let _stmtGetCompletenessDisposition: Database.Statement | null = null;
+let _stmtUpdateCompletenessDispositionApproval: Database.Statement | null =
+  null;
+
+/** Point read of one completeness-disposition run by id — the row a staged `completeness.disposition` intent's payload names. */
+export function getCompletenessDisposition(
+  id: number,
+): CompletenessDispositionRow | undefined {
+  _stmtGetCompletenessDisposition ??= db.prepare<{ id: number }>(`
+    SELECT * FROM completeness_disposition WHERE id = @id
+  `);
+  return _stmtGetCompletenessDisposition.get({ id }) as
+    | CompletenessDispositionRow
+    | undefined;
+}
+
+/**
+ * Advances every question in one completeness-disposition run off `proposed`
+ * — `approved` once the operator approves the run's staged intent, `rejected`
+ * once they reject it. The durable write-through at critic time (`proposed`)
+ * happens immediately, before this ever runs, so a session dying mid-pass
+ * never loses the findings; this only resolves the lifecycle once the
+ * operator has actually disposed of them.
+ */
+export function updateCompletenessDispositionApproval(
+  id: number,
+  approvalStatus: 'approved' | 'rejected',
+): CompletenessDispositionRow | undefined {
+  const row = getCompletenessDisposition(id);
+  if (!row) return undefined;
+  const questions = (
+    JSON.parse(row.questions) as CompletenessDispositionQuestion[]
+  ).map((q) => ({ ...q, approvalStatus }));
+  const updatedQuestions = JSON.stringify(questions);
+  _stmtUpdateCompletenessDispositionApproval ??= db.prepare<{
+    id: number;
+    questions: string;
+  }>(`
+    UPDATE completeness_disposition SET questions = @questions WHERE id = @id
+  `);
+  _stmtUpdateCompletenessDispositionApproval.run({
+    id,
+    questions: updatedQuestions,
+  });
+  return { ...row, questions: updatedQuestions };
+}
+
+/**
+ * Shared row-shape builder for the completeness-disposition durable write —
+ * used identically by the completeness.disposition MCP tool
+ * (mcp/tools/completenessTools.ts) and the device-authed HTTP route
+ * (routes/design.ts), so the two writers can never diverge on defaulting.
+ * Every question defaults to `approvalStatus: 'proposed'` (recorded is not
+ * approved), and `runAt` is normalized to a full ISO timestamp — a bare
+ * date-only string (or any other Date-parseable value) round-trips to one via
+ * `toISOString()`; a value Date cannot parse is passed through unchanged
+ * rather than silently coerced to "Invalid Date".
+ */
+export function buildCompletenessDispositionRow(input: {
+  taskId: string;
+  project: string | null;
+  milestone: string | null;
+  questions: CompletenessDispositionQuestion[];
+  runAt: string;
+}): NewCompletenessDispositionRow {
+  const parsedRunAt = new Date(input.runAt);
+  const runAt = Number.isNaN(parsedRunAt.getTime())
+    ? input.runAt
+    : parsedRunAt.toISOString();
+  return {
+    source_task_id: input.taskId,
+    project: input.project,
+    milestone: input.milestone,
+    questions: JSON.stringify(
+      input.questions.map((q) => ({ approvalStatus: 'proposed' as const, ...q })),
+    ),
+    run_at: runAt,
+  };
 }
 
 // ─── staged_intent ────────────────────────────────────────────────────────

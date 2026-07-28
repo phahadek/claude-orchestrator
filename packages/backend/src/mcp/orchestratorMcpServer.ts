@@ -103,6 +103,13 @@ export function buildMcpServer(
       projectId: session.project_id,
       workflow,
     });
+    registerCompletenessTools(server, {
+      sessionId,
+      workflow,
+      projectId: session.project_id,
+    });
+  } else {
+    registerCompletenessTools(server, { sessionId, workflow });
   }
 
   registerVerdictTools(server, {
@@ -110,8 +117,6 @@ export function buildMcpServer(
     getSession: () => sessionManager.getLiveSession(sessionId),
     workflow,
   });
-
-  registerCompletenessTools(server, { sessionId, workflow });
 
   return server;
 }

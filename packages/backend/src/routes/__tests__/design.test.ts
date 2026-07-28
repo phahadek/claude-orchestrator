@@ -93,6 +93,41 @@ describe('POST /api/design/:taskId/completeness-disposition', () => {
   });
 });
 
+describe('POST /api/design/:taskId/completeness-disposition — row-shape parity with the completeness.disposition MCP tool', () => {
+  it('normalizes a date-only runAt to a full ISO timestamp, mirroring buildCompletenessDispositionRow', async () => {
+    const res = await request(app)
+      .post('/api/design/notion:design3/completeness-disposition')
+      .send({
+        questions: [
+          { question: 'Q?', disposition: 'accepted', reason: 'Resolved.' },
+        ],
+        runAt: '2026-07-20',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.run_at).toBe('2026-07-20T00:00:00.000Z');
+  });
+
+  it('accepts an explicit "rejected" approvalStatus override', async () => {
+    const res = await request(app)
+      .post('/api/design/notion:design4/completeness-disposition')
+      .send({
+        questions: [
+          {
+            question: 'Q?',
+            disposition: 'accepted',
+            reason: 'Resolved.',
+            approvalStatus: 'rejected',
+          },
+        ],
+        runAt: '2026-07-20T00:00:00.000Z',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.questions[0].approvalStatus).toBe('rejected');
+  });
+});
+
 describe('GET /api/design/:taskId/completeness-disposition', () => {
   it('reads back a persisted record for audit', async () => {
     await request(app)
