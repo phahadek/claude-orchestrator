@@ -156,7 +156,14 @@ export function applyStagedIntent({
   });
 }
 
-export function rejectStagedIntent({ host, port, token, intentId, outcome, reason }) {
+export function rejectStagedIntent({
+  host,
+  port,
+  token,
+  intentId,
+  outcome,
+  reason,
+}) {
   return requestStagedIntents({
     host,
     port,
