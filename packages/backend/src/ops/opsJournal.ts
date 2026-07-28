@@ -36,12 +36,20 @@ export interface OpsBoardTaskRow {
 
 /**
  * The normal path walks pending → candidate → staged-proposal →
- * applied-pending-confirm → resolved. blocked / incident-frozen are freezes
- * reachable from (and returning to) any non-terminal state. resolved is terminal.
+ * applied-pending-confirm → resolved. candidate → resolved is also allowed
+ * directly, for Investigation work that reaches a decision without ever
+ * applying a change. blocked / incident-frozen are freezes reachable from
+ * (and returning to) any non-terminal state. resolved is terminal.
  */
 const ALLOWED_TRANSITIONS: Record<OpsState, OpsState[]> = {
   pending: ['candidate', 'blocked', 'incident-frozen'],
-  candidate: ['staged-proposal', 'pending', 'blocked', 'incident-frozen'],
+  candidate: [
+    'staged-proposal',
+    'pending',
+    'blocked',
+    'incident-frozen',
+    'resolved',
+  ],
   'staged-proposal': [
     'applied-pending-confirm',
     'candidate',
