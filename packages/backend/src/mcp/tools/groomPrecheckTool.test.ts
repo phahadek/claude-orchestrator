@@ -151,25 +151,28 @@ describe('groom.precheck — parity with the stage-time check', () => {
   it('matches the stage-time annotation exactly for a payload failing Files/paths, type_check, and an undispositioned binding constraint at once', async () => {
     const stageClient = await connectedStageClient();
     const staged = resultOf(
-      await stageClient.client.callTool({
+      (await stageClient.client.callTool({
         name: 'task.setStatus',
         arguments: {
           payload: { ...MULTI_FAILURE_PAYLOAD, status: 'Ready' },
         },
-      }) as { content: Array<{ type: string; text?: string }> },
+      })) as { content: Array<{ type: string; text?: string }> },
     );
     expect(staged.state).toBe('needs_revision');
-    const annotation = staged.annotation as { blocked: true; reasons: string[] };
+    const annotation = staged.annotation as {
+      blocked: true;
+      reasons: string[];
+    };
     expect(annotation.blocked).toBe(true);
     expect('reasons' in annotation).toBe(true);
     await stageClient.close();
 
     const precheckClient = await connectedPrecheckClient('groom');
     const precheck = resultOf(
-      await precheckClient.client.callTool({
+      (await precheckClient.client.callTool({
         name: 'groom.precheck',
         arguments: MULTI_FAILURE_PAYLOAD,
-      }) as { content: Array<{ type: string; text?: string }> },
+      })) as { content: Array<{ type: string; text?: string }> },
     );
     await precheckClient.close();
 
@@ -179,9 +182,7 @@ describe('groom.precheck — parity with the stage-time check', () => {
     const reasons = precheck.gateReasons as string[];
     expect(reasons.some((r) => r.includes('Files / paths'))).toBe(true);
     expect(reasons.some((r) => r.includes('type_check'))).toBe(true);
-    expect(
-      reasons.some((r) => r.includes('binding constraint')),
-    ).toBe(true);
+    expect(reasons.some((r) => r.includes('binding constraint'))).toBe(true);
   });
 });
 
@@ -194,9 +195,9 @@ describe('groom.precheck — no side effects', () => {
     });
     await close();
 
-    expect(
-      db.prepare('SELECT COUNT(*) as n FROM staged_intent').get(),
-    ).toEqual({ n: 0 });
+    expect(db.prepare('SELECT COUNT(*) as n FROM staged_intent').get()).toEqual(
+      { n: 0 },
+    );
     expect(
       db.prepare('SELECT COUNT(*) as n FROM gate_accretion').get(),
     ).toEqual({ n: 0 });
@@ -214,7 +215,7 @@ describe('groom.precheck — recomputed binding-constraint set', () => {
     const { client, close } = await connectedPrecheckClient('groom');
 
     const narrow = resultOf(
-      await client.callTool({
+      (await client.callTool({
         name: 'groom.precheck',
         arguments: {
           taskId: 'notion:regions-narrow',
@@ -225,7 +226,7 @@ describe('groom.precheck — recomputed binding-constraint set', () => {
             },
           },
         },
-      }) as { content: Array<{ type: string; text?: string }> },
+      })) as { content: Array<{ type: string; text?: string }> },
     );
     expect(narrow.bindingConstraintIds).toEqual([
       'authority-vs-drift',
@@ -233,7 +234,7 @@ describe('groom.precheck — recomputed binding-constraint set', () => {
     ]);
 
     const widened = resultOf(
-      await client.callTool({
+      (await client.callTool({
         name: 'groom.precheck',
         arguments: {
           taskId: 'notion:regions-widened',
@@ -247,7 +248,7 @@ describe('groom.precheck — recomputed binding-constraint set', () => {
             },
           },
         },
-      }) as { content: Array<{ type: string; text?: string }> },
+      })) as { content: Array<{ type: string; text?: string }> },
     );
     expect(widened.bindingConstraintIds).toEqual([
       'authority-vs-drift',
@@ -284,7 +285,11 @@ describe('groom.precheck — a clean payload then stages without needs_revision'
       type_check: { decision: 'none' },
       type: '💻 Code',
       filesPathsEntries: [
-        { raw: 'packages/backend/src/foo.ts', isNew: true, existsInRepo: false },
+        {
+          raw: 'packages/backend/src/foo.ts',
+          isNew: true,
+          existsInRepo: false,
+        },
       ],
       dependsOnTasks: [],
       regions: { packages: [], files: [] },
@@ -292,10 +297,10 @@ describe('groom.precheck — a clean payload then stages without needs_revision'
 
     const { client, close } = await connectedPrecheckClient('groom');
     const precheck = resultOf(
-      await client.callTool({
+      (await client.callTool({
         name: 'groom.precheck',
         arguments: { taskId, groomingGate: cleanGroomingGate },
-      }) as { content: Array<{ type: string; text?: string }> },
+      })) as { content: Array<{ type: string; text?: string }> },
     );
     await close();
 
@@ -305,12 +310,12 @@ describe('groom.precheck — a clean payload then stages without needs_revision'
 
     const stageClient = await connectedStageClient();
     const staged = resultOf(
-      await stageClient.client.callTool({
+      (await stageClient.client.callTool({
         name: 'task.setStatus',
         arguments: {
           payload: { taskId, status: 'Ready', groomingGate: cleanGroomingGate },
         },
-      }) as { content: Array<{ type: string; text?: string }> },
+      })) as { content: Array<{ type: string; text?: string }> },
     );
     await stageClient.close();
 
