@@ -122,6 +122,73 @@ describe('isValidOpsTransition', () => {
   it('disallows resolved -> resolved-adjacent skips like resolved -> candidate', () => {
     expect(isValidOpsTransition('resolved', 'candidate')).toBe(false);
   });
+
+  it('allows candidate -> resolved directly (Investigation with no applied change)', () => {
+    expect(isValidOpsTransition('candidate', 'resolved')).toBe(true);
+  });
+
+  it('still rejects pending -> resolved (an entry never worked cannot be closed)', () => {
+    expect(isValidOpsTransition('pending', 'resolved')).toBe(false);
+  });
+
+  it('every pre-existing allowed transition still holds', () => {
+    expect(isValidOpsTransition('pending', 'candidate')).toBe(true);
+    expect(isValidOpsTransition('pending', 'blocked')).toBe(true);
+    expect(isValidOpsTransition('pending', 'incident-frozen')).toBe(true);
+    expect(isValidOpsTransition('candidate', 'staged-proposal')).toBe(true);
+    expect(isValidOpsTransition('candidate', 'pending')).toBe(true);
+    expect(isValidOpsTransition('candidate', 'blocked')).toBe(true);
+    expect(isValidOpsTransition('candidate', 'incident-frozen')).toBe(true);
+    expect(
+      isValidOpsTransition('staged-proposal', 'applied-pending-confirm'),
+    ).toBe(true);
+    expect(isValidOpsTransition('staged-proposal', 'candidate')).toBe(true);
+    expect(isValidOpsTransition('staged-proposal', 'blocked')).toBe(true);
+    expect(isValidOpsTransition('staged-proposal', 'incident-frozen')).toBe(
+      true,
+    );
+    expect(
+      isValidOpsTransition('applied-pending-confirm', 'resolved'),
+    ).toBe(true);
+    expect(
+      isValidOpsTransition('applied-pending-confirm', 'staged-proposal'),
+    ).toBe(true);
+    expect(
+      isValidOpsTransition('applied-pending-confirm', 'blocked'),
+    ).toBe(true);
+    expect(
+      isValidOpsTransition('applied-pending-confirm', 'incident-frozen'),
+    ).toBe(true);
+    expect(isValidOpsTransition('blocked', 'pending')).toBe(true);
+    expect(isValidOpsTransition('blocked', 'candidate')).toBe(true);
+    expect(isValidOpsTransition('blocked', 'staged-proposal')).toBe(true);
+    expect(isValidOpsTransition('blocked', 'applied-pending-confirm')).toBe(
+      true,
+    );
+    expect(isValidOpsTransition('blocked', 'incident-frozen')).toBe(true);
+    expect(isValidOpsTransition('blocked', 'resolved')).toBe(true);
+    expect(isValidOpsTransition('incident-frozen', 'pending')).toBe(true);
+    expect(isValidOpsTransition('incident-frozen', 'candidate')).toBe(true);
+    expect(isValidOpsTransition('incident-frozen', 'staged-proposal')).toBe(
+      true,
+    );
+    expect(
+      isValidOpsTransition('incident-frozen', 'applied-pending-confirm'),
+    ).toBe(true);
+    expect(isValidOpsTransition('incident-frozen', 'blocked')).toBe(true);
+    expect(isValidOpsTransition('incident-frozen', 'resolved')).toBe(true);
+  });
+
+  it('resolved remains terminal (its transition list stays empty)', () => {
+    expect(isValidOpsTransition('resolved', 'pending')).toBe(false);
+    expect(isValidOpsTransition('resolved', 'candidate')).toBe(false);
+    expect(isValidOpsTransition('resolved', 'staged-proposal')).toBe(false);
+    expect(
+      isValidOpsTransition('resolved', 'applied-pending-confirm'),
+    ).toBe(false);
+    expect(isValidOpsTransition('resolved', 'blocked')).toBe(false);
+    expect(isValidOpsTransition('resolved', 'incident-frozen')).toBe(false);
+  });
 });
 
 describe('worked-field round-trip', () => {
