@@ -287,6 +287,30 @@ export function blockToLine(block: NotionBlock): string {
   }
 }
 
+const ERROR_SECTION_TEXT_MAX_LENGTH = 2000;
+
+/**
+ * Bounds section text embedded in a thrown error message so a huge section
+ * doesn't blow up log/disposition payloads. Truncates on a JSON.stringify'd
+ * form so the cut point can't land mid-escape-sequence.
+ */
+export function truncateForError(text: string): string {
+  const quoted = JSON.stringify(text);
+  if (quoted.length <= ERROR_SECTION_TEXT_MAX_LENGTH) return quoted;
+  let truncated = quoted.slice(0, ERROR_SECTION_TEXT_MAX_LENGTH);
+  // A cut can land right after the backslash of a "\\n"-style escape,
+  // leaving a dangling backslash. An odd run of trailing backslashes means
+  // the last one is unpaired, so drop it.
+  let trailingBackslashes = 0;
+  while (truncated[truncated.length - 1 - trailingBackslashes] === '\\') {
+    trailingBackslashes++;
+  }
+  if (trailingBackslashes % 2 === 1) {
+    truncated = truncated.slice(0, -1);
+  }
+  return `${truncated}..."`;
+}
+
 // ─── Heading-bounded section engine (patchBodySection) ─────────────────────
 // Generalizes appendImplementationNote's "find heading, walk until the next
 // heading" scan into a reusable range locator, shared by append/replace/
@@ -931,7 +955,8 @@ export class NotionClient {
     const sectionText = range.bodyBlocks.map(blockToLine).join('\n');
     if (!sectionText.includes(patch.find)) {
       throw new Error(
-        `[NotionClient] patchBodySection: text to replace not found in section "${section}" of task ${taskId}`,
+        `[NotionClient] patchBodySection: text to replace not found in section "${section}" of task ${taskId}. ` +
+          `Section text was: ${truncateForError(sectionText)}`,
       );
     }
     const mutated = sectionText.replace(patch.find, patch.replaceWith);

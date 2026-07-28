@@ -1490,7 +1490,7 @@ function findMarkdownSectionRange(
  * remove) the stored body is returned unchanged, since apply time remains
  * the sole authority that fails explicitly.
  */
-function composePatchBodySectionPreview(
+export function composePatchBodySectionPreview(
   storedBody: string,
   section: string,
   patch: PatchBodySectionOperation,
