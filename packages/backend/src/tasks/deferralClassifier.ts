@@ -334,15 +334,21 @@ async function computeGroupProposedBody(
 export async function classifyReadyProposal(groupId: string): Promise<void> {
   const groupRows = listStagedIntentsByGroup(groupId);
   const readyFlips = groupRows.filter(isReadyFlip);
-  if (readyFlips.length === 0) return;
+  if (readyFlips.length === 0) {
+    logger.info(
+      `[deferralClassifier] skip guard=no-ready-flips groupId=${groupId}`,
+    );
+    return;
+  }
 
   await Promise.all(
     readyFlips.map(async (row) => {
       const payload = JSON.parse(row.payload) as SetStatusPayload;
       const taskType = getCachedType(payload.taskId);
       if (!taskType || !IMPLEMENTER_BEARING_TYPES.has(taskType)) {
-        logger.debug(
-          `[deferralClassifier] skipping ${payload.taskId}: no cached task type resolved (taskType=${taskType ?? 'null'})`,
+        logger.info(
+          `[deferralClassifier] skip taskId=${payload.taskId} guard=task-type ` +
+            `taskType=${taskType ?? 'null'}`,
         );
         return;
       }
@@ -354,7 +360,14 @@ export async function classifyReadyProposal(groupId: string): Promise<void> {
         payload.taskId,
       );
 
-      if (checkReadiness(body, taskType).length > 0) return;
+      const readinessViolations = checkReadiness(body, taskType);
+      if (readinessViolations.length > 0) {
+        logger.info(
+          `[deferralClassifier] skip taskId=${payload.taskId} guard=readiness ` +
+            `violations=${readinessViolations.map((v) => v.tier).join(',')}`,
+        );
+        return;
+      }
 
       const release = await classifySemaphore.acquire();
       let advisory: Advisory;
@@ -365,6 +378,10 @@ export async function classifyReadyProposal(groupId: string): Promise<void> {
       }
 
       setStagedIntentAdvisory(row.id, JSON.stringify(advisory));
+
+      logger.info(
+        `[deferralClassifier] classified taskId=${payload.taskId} status=${advisory.status}`,
+      );
 
       recordEvent({
         event_type: 'readiness_override',
