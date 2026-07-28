@@ -243,7 +243,9 @@ describe('renderProjectRecordAccess', () => {
     expect(renderProjectRecordAccess('ops', 'claude-dashboard')).toEqual([]);
     expect(mockRecordEvent).toHaveBeenCalledTimes(1);
     const event = mockRecordEvent.mock.calls[0][0];
-    expect(event.event_type).toBe('project_record_access_guide_blocks_escalation');
+    expect(event.event_type).toBe(
+      'project_record_access_guide_blocks_escalation',
+    );
     expect(event.project_id).toBe('claude-dashboard');
     expect(event.payload.workflow).toBe('ops');
     expect(event.payload.violations.length).toBeGreaterThan(0);
@@ -256,7 +258,7 @@ describe('renderProjectRecordAccess', () => {
       projectDir: repoDir,
     });
     writeGuide(
-      'Broader reads beyond a single session\'s own record are not directly ' +
+      "Broader reads beyond a single session's own record are not directly " +
         'reachable from this sandbox. Call session.requestCapability naming ' +
         'the exact read you need and an operator will decide.',
     );
