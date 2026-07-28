@@ -1366,9 +1366,7 @@ describe('task.setDependsOn symbolic reference to a sibling task.create — comm
     // The create is no longer live (it committed for real, so it drops out
     // of the active-intents listing); the failed dependsOn intent stays
     // live/approved, retryable in a follow-up commit.
-    const list = await agent
-      .get('/api/staged-intents')
-      .query({ projectId });
+    const list = await agent.get('/api/staged-intents').query({ projectId });
     const liveIds = list.body.intents.map((i: { id: string }) => i.id);
     expect(liveIds).not.toContain(create.body.id);
     expect(liveIds).toContain(dependsOn.body.id);

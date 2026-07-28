@@ -648,8 +648,8 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'When a `task.create` you stage in this pass is itself a prerequisite an ' +
       'existing task needs, DO stage the `task.setDependsOn` edge onto it in the ' +
       'same group in the same pass — name it in the `dependsOn` array as ' +
-      '`staged-intent:<the task.create intent\'s own id>` (the id the stage call ' +
-      'returned), not the task\'s real id, which does not exist yet. The commit ' +
+      "`staged-intent:<the task.create intent's own id>` (the id the stage call " +
+      "returned), not the task's real id, which does not exist yet. The commit " +
       'loop resolves that reference to the real created task id once the ' +
       '`task.create` applies, before the `task.setDependsOn` applies. DO NOT hand ' +
       'the operator a manual "apply the create, then point Depends On at the ' +
