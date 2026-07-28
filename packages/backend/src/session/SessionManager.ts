@@ -85,6 +85,7 @@ import {
   expireStagedIntentsForSession,
   sweepStagedIntentsForTerminalSessions,
   TERMINAL_SESSION_STATUSES,
+  listStagedIntentsBySession,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import {
@@ -498,6 +499,97 @@ export function pruneSessionBranch(
  */
 export const RESUME_NUDGE_MESSAGE =
   'Continue implementing the task. Check git status and your todo list to see where you left off.';
+
+/**
+ * Continuation nudge for a resumed planning/ops session (groom/design/ops/split)
+ * with no specific disposition feedback to relay — e.g. resumed before any of
+ * its staged intents were dispositioned. Never instructs it to check git status
+ * or continue implementing: these sessions are stage-only/read-only and never
+ * open a PR.
+ */
+export const PLANNING_RESUME_FALLBACK_MESSAGE =
+  'Re-read the disposition feedback on your staged intents and revise your proposal accordingly.';
+
+/**
+ * Human-facing label for a staged intent in a resume nudge, e.g.
+ * `task.create "Fix the thing"` or `task.setStatus for task-123`. Falls back
+ * to the bare kind when the payload carries neither a title nor a taskId —
+ * every staged intent kind has a `kind`, so this never returns an empty label.
+ */
+function describeStagedIntentForNudge(intent: {
+  kind: string;
+  payload: string;
+}): string {
+  let title: string | undefined;
+  let taskId: string | undefined;
+  try {
+    const payload = JSON.parse(intent.payload) as Record<string, unknown>;
+    if (typeof payload.title === 'string') title = payload.title;
+    if (typeof payload.taskId === 'string') taskId = payload.taskId;
+  } catch {
+    // Malformed payload — fall through to the bare kind label.
+  }
+  if (title) return `${intent.kind} "${title}"`;
+  if (taskId) return `${intent.kind} for ${taskId}`;
+  return intent.kind;
+}
+
+/**
+ * Build the resume nudge for a planning/ops session: name the most recently
+ * rejected staged intent and its disposition reason so the session can
+ * revise it, rather than a generic instruction it can misinterpret as
+ * "nothing to do here" (see PLANNING_RESUME_FALLBACK_MESSAGE doc-comment for
+ * why silence is not an acceptable fallback). Exported so tests can verify
+ * the exact message without hardcoding it.
+ */
+export function buildPlanningResumeMessage(row: Session): string {
+  const intents = listStagedIntentsBySession(row.session_id);
+  let mostRecentRejected: (typeof intents)[number] | undefined;
+  for (const intent of intents) {
+    if (intent.state === 'rejected') mostRecentRejected = intent;
+  }
+  if (!mostRecentRejected) return PLANNING_RESUME_FALLBACK_MESSAGE;
+
+  const label = describeStagedIntentForNudge(mostRecentRejected);
+  const reason =
+    mostRecentRejected.disposition_reason?.trim() || 'no reason given';
+  return `Your staged intent ${label} was sent back: ${reason}. Re-read this feedback and revise your staged intent accordingly.`;
+}
+
+/**
+ * Build the resume nudge message for a session row, branched on session
+ * type. A planning/ops session (groom/design/ops/split) never writes code or
+ * opens a PR, so it must never receive RESUME_NUDGE_MESSAGE — it gets the
+ * reason it was resumed instead (see buildPlanningResumeMessage).
+ *
+ * For a code session, when its PR has a stored review verdict, inject that
+ * verdict so the coder doesn't need to query GitHub (where verdicts are
+ * never posted). Falls back to the plain RESUME_NUDGE_MESSAGE when there is
+ * no verdict or the stored JSON is malformed. Exported so tests can verify
+ * the exact message without hardcoding it.
+ */
+export function buildResumeMessage(row: Session): string {
+  if (isPlanningSession(row.session_type)) {
+    return buildPlanningResumeMessage(row);
+  }
+  const pr = getPRBySessionId(row.session_id);
+  if (!pr?.review_result) return RESUME_NUDGE_MESSAGE;
+  try {
+    const result = JSON.parse(pr.review_result) as PRReviewResult;
+    if (result.verdict === 'needs_changes' || result.verdict === 'incomplete') {
+      return formatReviewFeedback(result, pr.review_iteration ?? 0, {
+        conflicted: pr.merge_state === 'dirty',
+        baseBranch: pr.base_branch ?? undefined,
+      });
+    }
+    if (result.verdict === 'approved') {
+      return formatApprovedVerdictMessage(result);
+    }
+  } catch {
+    // Malformed review_result — fall through to plain nudge.
+  }
+  return RESUME_NUDGE_MESSAGE;
+}
 
 /**
  * Wraps `git worktree add` with a retry loop that fires **only** on transient
@@ -2089,42 +2181,13 @@ export class SessionManager extends EventEmitter {
     // Send the nudge after a short delay so the CLI process is ready to receive
     // stdin before we write to it. Review sessions should not receive the
     // code-session nudge — they wait for a re-review prompt with a diff instead.
-    const nudgeMessage = this.buildResumeMessage(row);
+    const nudgeMessage = buildResumeMessage(row);
     const nudgeDelay = setTimeout(() => {
       if (!session.hasEnded && row.session_type !== 'review') {
         this.send(row.session_id, nudgeMessage);
       }
     }, RESUME_NUDGE_DELAY_MS);
     nudgeDelay.unref();
-  }
-
-  /**
-   * Build the resume nudge message for a session row. When the session's PR
-   * has a stored review verdict, inject that verdict so the coder doesn't need
-   * to query GitHub (where verdicts are never posted). Falls back to the plain
-   * RESUME_NUDGE_MESSAGE when there is no verdict or the stored JSON is malformed.
-   */
-  private buildResumeMessage(row: Session): string {
-    const pr = getPRBySessionId(row.session_id);
-    if (!pr?.review_result) return RESUME_NUDGE_MESSAGE;
-    try {
-      const result = JSON.parse(pr.review_result) as PRReviewResult;
-      if (
-        result.verdict === 'needs_changes' ||
-        result.verdict === 'incomplete'
-      ) {
-        return formatReviewFeedback(result, pr.review_iteration ?? 0, {
-          conflicted: pr.merge_state === 'dirty',
-          baseBranch: pr.base_branch ?? undefined,
-        });
-      }
-      if (result.verdict === 'approved') {
-        return formatApprovedVerdictMessage(result);
-      }
-    } catch {
-      // Malformed review_result — fall through to plain nudge.
-    }
-    return RESUME_NUDGE_MESSAGE;
   }
 
   /**
