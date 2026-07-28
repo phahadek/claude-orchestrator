@@ -9,7 +9,8 @@ const { mockGetTaskBackend } = vi.hoisted(() => ({
 }));
 
 vi.mock('../../tasks/TaskBackend', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../tasks/TaskBackend')>();
+  const actual =
+    await importOriginal<typeof import('../../tasks/TaskBackend')>();
   return { ...actual, getTaskBackend: mockGetTaskBackend };
 });
 
@@ -21,7 +22,8 @@ vi.mock('../../db/db', async () => {
 const { composeSplitIntents, stageSplitIntents, ORIGINAL_REF } =
   await import('../splitSession');
 const { db } = await import('../../db/db');
-const { createStagedIntentsRouter } = await import('../../routes/stagedIntents');
+const { createStagedIntentsRouter } =
+  await import('../../routes/stagedIntents');
 
 function makeApp() {
   const app = express();
@@ -216,7 +218,9 @@ describe('committing a split group resolves $ref placeholders', () => {
     // carries the `staged-intent:<id>` symbolic reference, not a bare
     // `$ref:<ref>` token — stageSplitIntents rewrites it at stage time.
     const dependsOnRow = db
-      .prepare(`SELECT payload FROM staged_intent WHERE kind = 'task.setDependsOn'`)
+      .prepare(
+        `SELECT payload FROM staged_intent WHERE kind = 'task.setDependsOn'`,
+      )
       .get() as { payload: string };
     expect(dependsOnRow.payload).not.toContain('$ref:');
 

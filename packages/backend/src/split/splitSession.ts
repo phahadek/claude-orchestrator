@@ -220,10 +220,7 @@ export function stageSplitIntents(
     );
     staged.push(stagedIntent);
     if (intent.kind === 'task.create') {
-      refToStagedId.set(
-        input.siblings[nextSiblingIndex].ref,
-        stagedIntent.id,
-      );
+      refToStagedId.set(input.siblings[nextSiblingIndex].ref, stagedIntent.id);
       nextSiblingIndex += 1;
     }
   }
