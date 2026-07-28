@@ -53,7 +53,6 @@ function seedEntry(taskId: string, state: OpsState) {
     needs_from_operator: null,
     resolution: null,
     updated_at: new Date(0).toISOString(),
-     
   } as any);
 }
 
