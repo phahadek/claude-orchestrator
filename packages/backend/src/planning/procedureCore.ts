@@ -67,7 +67,7 @@ export interface ProcedurePrinciple {
 /**
  * The single statement of the design terminal-artifacts ordering rule —
  * referenced (never restated) at every site below that governs one of the
- * ordered artifacts: `design-no-question-bundling`, the `present-for-signoff`
+ * ordered artifacts: `design-one-question-per-turn`, the `present-for-signoff`
  * design override, and the `apply-on-signoff` design override, plus the
  * `design-architecture-and-followon-required` principle and the
  * `file-follow-on-tasks` design override. Generalizes what used to be a
@@ -79,9 +79,10 @@ export const DESIGN_TERMINAL_ARTIFACTS_ORDERING =
   '`task.updateBody`, any `arch.createUnit` / `arch.updateUnit` / ' +
   '`arch.supersedeUnit` write, and the follow-on `task.create` set — is ' +
   'staged only once every listed Open Question is answered and the ' +
-  'completeness critic has run. This orders artifacts behind answers, never ' +
-  'questions behind each other: independent Open Questions still stage in ' +
-  'the same turn (see "No question-bundling" above). EXEMPT: a file-sibling ' +
+  'completeness critic has run. This orders artifacts behind answers, and ' +
+  'answers behind each other: Open Questions stage one per turn, in the ' +
+  'order the task body lists them (see "One Open Question per turn" above), ' +
+  'never several at once. EXEMPT: a file-sibling ' +
   "`task.create` (the Split-don't-trim overflow disposition) scopes the " +
   'work rather than following from a locked decision, and may be staged ' +
   'before Open Questions resolve.';
@@ -312,7 +313,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       "applies to a 📐 Design task's listed Open Questions: every listed Open " +
       'Question stages as its own `decision.pickOne` regardless of confidence (one ' +
       'option when the answer is a confident recommendation, two-or-more for a real ' +
-      "fork) — see 'No question-bundling' below. A listed Open Question is never routed " +
+      "fork) — see 'One Open Question per turn' below. A listed Open Question is never routed " +
       'to a concrete write to "lock it in" — `task.updateBody` (Implementation ' +
       'notes) only consolidates decisions already accepted by the operator; it is ' +
       'never the vehicle for making one.',
@@ -347,9 +348,9 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'supposed to make itself.',
   },
   {
-    id: 'design-no-question-bundling',
+    id: 'design-one-question-per-turn',
     title:
-      'No question-bundling — one Open Question per decision.pickOne intent',
+      'One Open Question per turn, in task-body order — no parallel staging',
     appliesTo: ['design'],
     text:
       "DO stage exactly one Open Question's resolution per `decision.pickOne` " +
@@ -358,16 +359,22 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'fork), never a `task.updateBody` edit, and never two questions bundled into ' +
       'one intent. DO investigate before deciding — cite the code read, arch-page ' +
       'section, or API-call result the resolution rests on; "decide at ' +
-      'implementation time" is a _defer_, never a _resolve_. DO stage every Open ' +
-      'Question whose answer is independent of the others in the same turn, each as ' +
-      'its own `decision.pickOne` intent — independent questions do not need to wait ' +
-      'for separate round-trips. DO hold a question whose answer depends on another ' +
-      'still-unresolved question, staging it once that answer lands, rather than ' +
-      'staging both together — and DO treat independence conservatively: when unsure ' +
-      'whether one answer constrains another, hold the dependent question rather ' +
-      'than stage both; an operator dispositioning two questions whose answers turn ' +
-      'out coupled is worse than one extra round-trip. DO NOT bundle multiple ' +
-      'questions into one `decision.pickOne` intent. `task.updateBody` (the ' +
+      'implementation time" is a _defer_, never a _resolve_. DO handle the task ' +
+      "body's listed Open Questions one at a time, in the order they are written: " +
+      'stage the one `decision.pickOne` intent for the question currently in hand, ' +
+      'end the turn, and move to the next question only once the operator has ' +
+      "disposed of this one — {skillLabel}'s own read of which questions look " +
+      '"independent" is not a reliable guard against staging two whose answers turn ' +
+      'out coupled; treat every question as potentially dependent until the prior ' +
+      "one is actually locked. DO hold a question whose answer depends on another " +
+      'still-unresolved question, and say so plainly — name the question it depends ' +
+      'on and why — rather than staging it alongside or ahead of that question. ' +
+      'DO NOT stage two Open Questions, however independent they appear, in the ' +
+      'same turn. DO NOT bundle multiple questions into one `decision.pickOne` ' +
+      'intent. Expect a question the operator pushes back on to come back as a ' +
+      'fresh `decision.pickOne` intent rather than a revision of the committed one ' +
+      '— a committed intent cannot be superseded (see ' +
+      '"Pushback is iteration, not sign-off" below). `task.updateBody` (the ' +
       'Implementation notes) is staged exactly once, the last of the ' +
       'decision-recording steps. ' +
       DESIGN_TERMINAL_ARTIFACTS_ORDERING +
@@ -378,31 +385,132 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'design-decision-pickone-payload-shape',
     title:
-      'decision.pickOne payload shape mirrors the skill’s 5-part presentation',
+      'decision.pickOne payload shape mirrors the 5-part question presentation',
     appliesTo: ['design'],
     text:
-      'DO shape every Open Question’s `decision.pickOne` payload to carry the ' +
-      'same contract `skills/design/reference/presentation.md`’s 5-part question ' +
-      'message specifies for the interactive skill, mapped onto the payload’s ' +
-      'fields (`prompt`, `options[]`, `decisionProposal`) rather than a second, ' +
-      'drifting restatement of that contract. `prompt` carries the question alone ' +
-      '— quote it concisely; DO NOT restate the candidate answers inline, those ' +
-      'belong in `options`. DO stage one `options[]` entry per candidate solution ' +
-      'considered, including a candidate {skillLabel} recommends against — DO NOT ' +
-      'omit a rejected candidate because it lost, and DO NOT fold its rationale into ' +
-      'a competing option’s description. DO write each option’s `description` as ' +
-      'a self-contained, architecture-level statement of that one candidate plus its ' +
-      'own trade-offs — DO NOT let it carry another option’s rationale, and DO NOT ' +
-      'concatenate every candidate’s analysis into a single option’s field. DO carry ' +
-      'evidence — file:line citations, arch-page section names, API-result specifics ' +
-      '— in `decisionProposal`’s investigation summary rather than inside an option ' +
-      'description; presentation.md’s evidence requirement still applies, this only ' +
-      'relocates where it is carried, since the payload has no separate Investigation ' +
-      'field. DO name the preferred solution and its load-bearing reason explicitly in ' +
-      '`decisionProposal`, alongside that investigation summary. A single `options` ' +
-      'entry stays valid — a confident recommendation the operator accepts or pushes ' +
-      'back on (see ‘No question-bundling’ above) — this shape governs how it, or each ' +
-      'of several, is written, never whether more than one is required.',
+      'DO shape every Open Question’s `decision.pickOne` payload to carry a ' +
+      '5-part question contract — the question, the candidate options with each ' +
+      'one’s own trade-offs, a rejected option retained alongside the accepted one, ' +
+      'the supporting evidence, and a named recommendation — mapped onto the ' +
+      'payload’s fields (`prompt`, `options[]`, `decisionProposal`) rather than a ' +
+      'second, drifting restatement of that contract. `prompt` carries the question ' +
+      'alone — quote it concisely; DO NOT restate the candidate answers inline, ' +
+      'those belong in `options`. DO stage one `options[]` entry per candidate ' +
+      'solution considered, including a candidate {skillLabel} recommends against ' +
+      '— DO NOT omit a rejected candidate because it lost, and DO NOT fold its ' +
+      'rationale into a competing option’s description. DO write each option’s ' +
+      '`description` as a self-contained, architecture-level statement of that one ' +
+      'candidate plus its own trade-offs — DO NOT let it carry another option’s ' +
+      'rationale, and DO NOT concatenate every candidate’s analysis into a single ' +
+      'option’s field. DO carry evidence — file:line citations, arch-page section ' +
+      'names, API-result specifics — in `decisionProposal`’s investigation summary ' +
+      'rather than inside an option description; this evidence requirement still ' +
+      'applies, this only relocates where it is carried, since the payload has no ' +
+      'separate Investigation field. DO name the preferred solution and its ' +
+      'load-bearing reason explicitly in `decisionProposal`, alongside that ' +
+      'investigation summary. A single `options` entry stays valid — a confident ' +
+      'recommendation the operator accepts or pushes back on (see ‘One Open ' +
+      'Question per turn’ above) — this shape governs how it, or each of several, ' +
+      'is written, never whether more than one is required. See "Option framing" ' +
+      'below for what belongs in an option’s `description` specifically.',
+  },
+  {
+    id: 'design-recommendation-quality',
+    title:
+      'Recommendation quality — reuse before new machinery, minimal scope, verify before locking',
+    appliesTo: ['design'],
+    text:
+      'DO state explicitly, before recommending any new surface, store, table, or ' +
+      "field, why the project's existing primitives don't already compose to solve " +
+      "the problem — if that gap can't be articulated, recommend reusing what " +
+      'exists instead of building new machinery. DO name the wider set of options ' +
+      'considered (including the broadest mechanism available) but default the ' +
+      'recommendation itself to the smallest scope that solves the problem the ' +
+      'Open Question actually poses — recommending the broadest available scope ' +
+      '"since it is more general" is a framing defect, not a virtue. DO verify a ' +
+      'recommendation’s load-bearing mechanism with the cheapest available probe — ' +
+      'a code read, a grep for the code path in question, a single live API call ' +
+      '— before locking it in; a mechanism assumed to work from its name or its ' +
+      'apparent purpose is not verified. DO NOT assert any system state — a ' +
+      'component exists, a change has shipped, a service is running, a bug is ' +
+      'fixed — as the premise of a recommendation without checking it against the ' +
+      "current code or a live call: 'shipped' and 'designed', and 'merged to the " +
+      "repo' and 'present on disk locally', are different states, and the " +
+      'dispatch model itself (what a dispatched session can and cannot do in a ' +
+      'turn) is exactly this kind of state to verify rather than assume. An ' +
+      '"advisory" signal (a trace-coverage hint, a completeness-critic finding) ' +
+      'scopes {skillLabel}’s authority to override it — it does not remove the ' +
+      'obligation to investigate it with the same rigor as any other input to a ' +
+      'recommendation.',
+  },
+  {
+    id: 'design-pushback-is-iteration-not-signoff',
+    title:
+      'An operator disposition carrying pushback is iteration, not sign-off',
+    appliesTo: ['design'],
+    text:
+      'DO treat an operator disposition on a staged `decision.pickOne` that carries ' +
+      'a factual correction, a reframe of the question, or a new option ' +
+      '{skillLabel} had not considered as iteration data, never as approval of the ' +
+      'closest-matching staged option — investigate the claim it makes, re-stage ' +
+      'the question as a fresh `decision.pickOne` intent (a committed intent cannot ' +
+      'be superseded, so the prior one stays committed and the revised question is ' +
+      'a new intent), and ask again. DO NOT fold the content of a pushback straight ' +
+      'into a "locked" answer without independently verifying it first — a reframe ' +
+      'carries its own premises, and those premises are re-derived (a code read, an ' +
+      'arch-page check, a live call) before they become premises of the next ' +
+      'recommendation, exactly as any other unverified claim would be (see "Verify ' +
+      'the task body\'s premises" below). Expect this to add park/resume round ' +
+      'trips relative to a single-pass bundle of questions; that is the intended ' +
+      'trade for never locking a question against an answer the operator has not ' +
+      'actually given.',
+  },
+  {
+    id: 'design-option-framing',
+    title:
+      'Option framing — architecture-level shape, evidence stays in decisionProposal, a contrast pair required',
+    appliesTo: ['design'],
+    text:
+      'Extends "decision.pickOne payload shape" above. An option’s `description` ' +
+      'carries the architectural shape of that candidate and its own trade-off — ' +
+      'the boundary it draws, the surface it touches, what it costs to build or to ' +
+      'live with — never an implementation-level restatement of the question ' +
+      'itself (which function, which line, which config flag) in place of that ' +
+      'architectural framing. DO NOT put evidence — file:line citations, arch-page ' +
+      'section names, API-result specifics — inside an option `description`; that ' +
+      'evidence belongs in `decisionProposal`’s investigation summary, and only ' +
+      'there. DO include an explicit rejected/accepted contrast pair among the ' +
+      'staged options — at least one option stated as genuinely considered and ' +
+      'rejected, with the reason it lost, sitting alongside the accepted one — ' +
+      'never only the winning option dressed up with a rationale and no real ' +
+      'counterpart. Two to three options is the sweet spot: `options[]` is not a ' +
+      'survey of every conceivable variant, and the recommendation named in ' +
+      '`decisionProposal` is a judgment call {skillLabel} is making, not a summary ' +
+      'of the field for the operator to judge from scratch. An option written in ' +
+      'implementation terms rather than architectural terms is a framing defect ' +
+      'even when its content is otherwise correct — an operator rejecting an ' +
+      'implementation-framed option is rejecting the framing, not necessarily the ' +
+      'underlying choice.',
+  },
+  {
+    id: 'design-verify-the-body-premise',
+    title: "Verify the task body's premises before resolving against them",
+    appliesTo: ['design'],
+    text:
+      "A Design task's body states facts as part of framing its Open Questions — " +
+      'that a component exists, that a mechanism behaves a certain way, that prior ' +
+      'work already handles some case — and those are claims to re-derive, never ' +
+      'givens to resolve against. DO NOT lock an Open Question’s answer without ' +
+      "reading the code the body's claim is actually about — a body-stated premise " +
+      'is exactly as unverified as a claim raised mid-pushback (see "Pushback is ' +
+      'iteration, not sign-off" above) until it has been checked against the ' +
+      'current source. DO NOT lock a decision that depends on an external API’s ' +
+      'behavior without a live call verifying that behavior — a remembered or ' +
+      'documented contract is not the same thing as the contract the deployed ' +
+      'service actually honors today. A task body authored days or milestones ' +
+      'earlier may describe a system that has since changed; treat its premises as ' +
+      'claims about the codebase’s state at body-authoring time, never as claims ' +
+      'about its state now.',
   },
   {
     id: 'design-completeness-critic',
@@ -451,8 +559,8 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     title: 'Closing synthesis — the terminal decisionProposal, not a body diff',
     appliesTo: ['design'],
     text:
-      'DO carry the exact five-part closing synthesis `skills/design/reference/' +
-      'presentation.md` specifies as the `decisionProposal` of the ' +
+      'DO carry the exact five-part closing synthesis below as the ' +
+      '`decisionProposal` of the ' +
       '`task.updateBody` intent: (1) Decision summary — one paragraph on what was ' +
       'decided and why; (2) Open questions resolved — a table, one row per listed ' +
       'Open Question, included only when there are ≥2 questions; (3) Completeness-' +
@@ -745,11 +853,12 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'no conclusion at all.',
       design:
         '**Directive — staging is the terminal action:**\n' +
-        "- DO stage each Open Question's resolution, the moment it is reached, as " +
-        'its own `decision.pickOne` intent (options = the candidate answers) — ' +
-        'never a `task.updateBody` edit. Independent questions may be staged ' +
-        'together; hold a question whose answer depends on an as-yet-unresolved ' +
-        'one.\n' +
+        "- DO stage each Open Question's resolution, one at a time in the order " +
+        'the task body lists them, as its own `decision.pickOne` intent (options = ' +
+        'the candidate answers) — never a `task.updateBody` edit, and never two ' +
+        'questions staged in the same turn. Hold a question whose answer depends ' +
+        'on an as-yet-unresolved one, stating the dependency, rather than staging ' +
+        'it.\n' +
         '- DO stage `task.updateBody` (the Implementation notes) exactly once, ' +
         'the last of the decision-recording steps — carrying the five-part ' +
         'closing synthesis (decision summary, open questions resolved, ' +
@@ -796,10 +905,12 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     summaryOverrides: {
       design:
         'DO stage each Open Question’s resolution as its own `decision.pickOne` ' +
-        'intent — never bundle two questions into one intent. DO stage every ' +
-        'independent Open Question in the same turn, each as its own intent; hold ' +
-        'a question whose answer depends on another still-unresolved question ' +
-        'until that answer lands. DO NOT wait for a chat confirmation before ' +
+        'intent — never bundle two questions into one intent, and never stage a ' +
+        'second question before the operator has disposed of the current one. DO ' +
+        'handle the task body’s Open Questions one at a time, in the order they ' +
+        'are written; hold a question whose answer depends on another ' +
+        'still-unresolved question, stating the dependency, until that answer ' +
+        'lands. DO NOT wait for a chat confirmation before ' +
         'continuing: a dispatched design session has no synchronous chat turn to ' +
         'wait within — the staged intent is the confirmation surface, and the ' +
         'operator (not this session) disposes it.',

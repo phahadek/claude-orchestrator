@@ -500,10 +500,12 @@ describe('assemblePlanningProcedure', () => {
     expect(designOutput).toMatch(/split.{0,3}don.t.{0,3}trim/i);
     expect(designOutput).toContain('file-sibling');
 
-    // One-question-at-a-time / no-batch-locking, staged as decision.pickOne.
+    // One-question-at-a-time, staged as decision.pickOne, never two per turn.
     expect(designOutput).toMatch(/one Open Question/i);
     expect(designOutput).toContain('decision.pickOne');
-    expect(designOutput).toMatch(/batch-lock/i);
+    expect(designOutput).toMatch(
+      /DO NOT stage two Open Questions, however independent they appear, in the\s+same turn/i,
+    );
 
     for (const { workflow, digest } of cases) {
       if (workflow === 'design') continue;
