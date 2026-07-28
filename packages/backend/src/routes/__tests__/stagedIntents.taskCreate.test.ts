@@ -213,3 +213,86 @@ describe('task.create staged by a planning session', () => {
     expect(createTask).not.toHaveBeenCalled();
   });
 });
+
+describe('task.setDependsOn symbolic reference to a sibling task.create — stage-time validation', () => {
+  it('rejects a symbolic reference naming a task.create staged in a different group', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      createTask: vi.fn(),
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+    });
+    const app = buildApp();
+    const agent = supertest(app);
+
+    const create = await agent.post('/api/staged-intents').send({
+      kind: 'task.create',
+      projectId: 'proj-1',
+      groupId: 'g-other',
+      payload: {
+        databaseId: 'db-1',
+        title: 'Sibling staged in a different group',
+        type: '💻 Code',
+      },
+    });
+    expect(create.status).toBe(201);
+
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-1',
+      groupId: 'g-mine',
+      payload: {
+        taskId: 't-1',
+        dependsOn: [`staged-intent:${create.body.id}`],
+      },
+    });
+
+    expect(dependsOn.status).toBe(400);
+    expect(dependsOn.body.error).toMatch(
+      /does not resolve to a live task\.create intent in this same staged-intent group/,
+    );
+  });
+
+  it('rejects a symbolic reference naming a non-existent staged intent', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+    });
+    const app = buildApp();
+    const agent = supertest(app);
+
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-1',
+      groupId: 'g-mine-2',
+      payload: {
+        taskId: 't-1',
+        dependsOn: ['staged-intent:does-not-exist'],
+      },
+    });
+
+    expect(dependsOn.status).toBe(400);
+    expect(dependsOn.body.error).toMatch(
+      /does not resolve to a live task\.create intent in this same staged-intent group/,
+    );
+  });
+
+  it('rejects a symbolic reference when the intent is staged with no groupId at all', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+    });
+    const app = buildApp();
+    const agent = supertest(app);
+
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-1',
+      payload: {
+        taskId: 't-1',
+        dependsOn: ['staged-intent:whatever'],
+      },
+    });
+
+    expect(dependsOn.status).toBe(400);
+  });
+});

@@ -640,6 +640,25 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'set. Question-count (`>~6`) IS a soft diagnostic prompting you to consider ' +
       'splitting; it IS NOT a numeric trigger and IS NOT wired into `size_check`.',
   },
+  {
+    id: 'create-then-wire-dependency',
+    title: 'Create-then-wire: staging a dependency on a task you just staged',
+    appliesTo: ['groom', 'design', 'ops'],
+    text:
+      'When a `task.create` you stage in this pass is itself a prerequisite an ' +
+      'existing task needs, DO stage the `task.setDependsOn` edge onto it in the ' +
+      'same group in the same pass — name it in the `dependsOn` array as ' +
+      "`staged-intent:<the task.create intent's own id>` (the id the stage call " +
+      "returned), not the task's real id, which does not exist yet. The commit " +
+      'loop resolves that reference to the real created task id once the ' +
+      '`task.create` applies, before the `task.setDependsOn` applies. DO NOT hand ' +
+      'the operator a manual "apply the create, then point Depends On at the ' +
+      'resulting id" follow-up, and DO NOT fabricate a plausible-looking task id ' +
+      'to unblock staging — both were the only recourse before this affordance ' +
+      'existed, and both leave the dependency unenforced or the stage rejected. ' +
+      'The symbolic reference resolves only within its own staged-intent group — ' +
+      'it can never name a `task.create` staged in a different group.',
+  },
 ] as const;
 
 /** Resolve `{skillLabel}` against the given skill and return the finished prose. */
