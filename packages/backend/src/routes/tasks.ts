@@ -191,7 +191,8 @@ export function setTaskCacheRefresher(
 export function emitTaskUpdated(notionTaskId: string): void {
   if (!taskBroadcastFn) return;
   void buildTaskView(notionTaskId).then((task) => {
-    if (task && taskBroadcastFn) taskBroadcastFn({ type: 'task_updated', task });
+    if (task && taskBroadcastFn)
+      taskBroadcastFn({ type: 'task_updated', task });
   });
 }
 
