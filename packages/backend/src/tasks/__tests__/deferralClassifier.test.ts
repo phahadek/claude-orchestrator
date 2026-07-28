@@ -61,12 +61,15 @@ vi.mock('../../seed/seedStore', () => ({
   rehomeItemsBySourceTask: vi.fn(),
 }));
 
-const { mockLoggerDebug } = vi.hoisted(() => ({ mockLoggerDebug: vi.fn() }));
+const { mockLoggerDebug, mockLoggerWarn } = vi.hoisted(() => ({
+  mockLoggerDebug: vi.fn(),
+  mockLoggerWarn: vi.fn(),
+}));
 
 vi.mock('../../logger', () => ({
   logger: {
     debug: mockLoggerDebug,
-    warn: vi.fn(),
+    warn: mockLoggerWarn,
     info: vi.fn(),
     error: vi.fn(),
   },
@@ -142,6 +145,7 @@ beforeEach(() => {
   mockGetTaskCache.mockReset();
   mockSetStagedIntentAdvisory.mockReset();
   mockLoggerDebug.mockReset();
+  mockLoggerWarn.mockReset();
 
   mockGetTaskBackend.mockReturnValue({
     fetchTaskPage: vi.fn().mockResolvedValue('A clean, ready task body.'),
@@ -269,6 +273,21 @@ describe('classifyReadyProposal — fail-open error handling', () => {
     expect(mockSetStagedIntentAdvisory).toHaveBeenCalledTimes(1);
     const written = JSON.parse(mockSetStagedIntentAdvisory.mock.calls[0][1]);
     expect(written.status).toBe('errored');
+    expect(written.confidence).toBe(0);
+    expect(written.findings).toEqual([]);
+  });
+
+  it('logs a warn diagnostic naming the parse error on unparseable classifier output', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({ stdout: 'not json at all' });
+
+    await classifyReadyProposal('group-1');
+
+    expect(mockLoggerWarn).toHaveBeenCalledTimes(1);
+    expect(mockLoggerWarn.mock.calls[0][0]).toContain('parse');
   });
 
   it('yields status:errored on a non-zero exit code (classify error)', async () => {
@@ -282,6 +301,84 @@ describe('classifyReadyProposal — fail-open error handling', () => {
 
     const written = JSON.parse(mockSetStagedIntentAdvisory.mock.calls[0][1]);
     expect(written.status).toBe('errored');
+  });
+});
+
+describe('classifyReadyProposal — markdown-fenced classifier output', () => {
+  it('parses a json-fenced verdict as clean', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    const fenced =
+      '```json\n{"status": "clean", "confidence": 0.95, "findings": []}\n```';
+    stubSpawn({ stdout: JSON.stringify({ result: fenced }) });
+
+    await classifyReadyProposal('group-1');
+
+    expect(mockSetStagedIntentAdvisory).toHaveBeenCalledTimes(1);
+    const written = JSON.parse(mockSetStagedIntentAdvisory.mock.calls[0][1]);
+    expect(written.status).toBe('clean');
+    expect(written.confidence).toBe(0.95);
+    expect(written.findings).toEqual([]);
+  });
+
+  it('parses a bare-fenced (no language tag) verdict identically', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    const fenced =
+      '```\n{"status": "clean", "confidence": 0.95, "findings": []}\n```';
+    stubSpawn({ stdout: JSON.stringify({ result: fenced }) });
+
+    await classifyReadyProposal('group-1');
+
+    const written = JSON.parse(mockSetStagedIntentAdvisory.mock.calls[0][1]);
+    expect(written.status).toBe('clean');
+    expect(written.confidence).toBe(0.95);
+    expect(written.findings).toEqual([]);
+  });
+
+  it('parses an unfenced verdict identically (no regression on the working path)', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({
+      stdout: cliJsonWrap({
+        status: 'clean',
+        confidence: 0.95,
+        findings: [],
+      }),
+    });
+
+    await classifyReadyProposal('group-1');
+
+    const written = JSON.parse(mockSetStagedIntentAdvisory.mock.calls[0][1]);
+    expect(written.status).toBe('clean');
+    expect(written.confidence).toBe(0.95);
+    expect(written.findings).toEqual([]);
+  });
+
+  it('reports a fenced flagged verdict below FLAG_CONFIDENCE_THRESHOLD as clean', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    const fenced = JSON.stringify({
+      status: 'flagged',
+      confidence: 0.5,
+      findings: [{ quote: 'q', detail: 'd' }],
+    });
+    stubSpawn({
+      stdout: JSON.stringify({ result: '```json\n' + fenced + '\n```' }),
+    });
+
+    await classifyReadyProposal('group-1');
+
+    const written = JSON.parse(mockSetStagedIntentAdvisory.mock.calls[0][1]);
+    expect(written.status).toBe('clean');
   });
 });
 
