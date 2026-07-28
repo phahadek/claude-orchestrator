@@ -7,6 +7,7 @@ import { getSession } from '../db/queries';
 import { registerStageProposalTools } from './tools/stageProposalTools';
 import { registerVerdictTools } from './tools/verdictTools';
 import { registerCompletenessTools } from './tools/completenessTools';
+import { registerGroomPrecheckTool } from './tools/groomPrecheckTool';
 import type { SessionManager } from '../session/SessionManager';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import type { PlanningWorkflow } from '../planning/planningIntentKinds';
@@ -59,10 +60,12 @@ export function buildOrchestratorMcpServerEntry(
  * session resolves to a project (one tool per staged-intent kind, see
  * mcp/tools/stageProposalTools.ts), and the verdict-delivery tool surface
  * (gate.verify / review.disposition / flaky.confirm, see
- * mcp/tools/verdictTools.ts) scoped to this session's live AgentSession, and
+ * mcp/tools/verdictTools.ts) scoped to this session's live AgentSession,
  * — for a 'design' workflow session — the completeness-safeguard direct-
  * write/read surface (completeness.disposition / completeness.traceCoverage,
- * see mcp/tools/completenessTools.ts).
+ * see mcp/tools/completenessTools.ts), and — for a 'groom' workflow session
+ * resolving to a project — the read-only Ready-flip-payload precheck
+ * (groom.precheck, see mcp/tools/groomPrecheckTool.ts).
  */
 export function buildMcpServer(
   sessionId: string,
@@ -95,6 +98,10 @@ export function buildMcpServer(
       // undefined = register every kind (code/review sessions).
       kinds: workflow ? PLANNING_INTENT_KINDS[workflow] : undefined,
       sessionManager,
+    });
+    registerGroomPrecheckTool(server, {
+      projectId: session.project_id,
+      workflow,
     });
   }
 
