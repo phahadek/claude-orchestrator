@@ -143,7 +143,7 @@ function resolveTaskPackages(
   for (const tok of extractCandidates(scope)) {
     if (tok.includes('/')) {
       const pkg = pathToPackage(tok, sourceRoot, packages);
-      if (pkgHasFiles(fileIndex, pkg)) {
+      if (fileIndex.tracked.has(tok) && pkgHasFiles(fileIndex, pkg)) {
         addPath(pkgFiles, pkg, tok);
         declared?.add(tok);
       }
