@@ -303,7 +303,9 @@ describe('loadDesignContext', () => {
       ]),
     );
     expect(
-      result.archUnits.some((u) => u.title === 'Unit filed under an unrelated topic'),
+      result.archUnits.some(
+        (u) => u.title === 'Unit filed under an unrelated topic',
+      ),
     ).toBe(false);
   });
 
