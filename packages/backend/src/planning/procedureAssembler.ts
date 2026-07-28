@@ -416,29 +416,57 @@ export function renderOpsCapabilities(): string[] {
 const PROJECT_RECORD_ACCESS_GUIDE_FILE = 'investigation-guide.md';
 
 /**
+ * Collapse to lowercase with runs of non-letter characters folded to a
+ * single space, so phrase matching below is tolerant of punctuation/
+ * whitespace variation without resorting to regex quantifiers over
+ * arbitrary input (flagged by `security/detect-unsafe-regex` — see git
+ * history on this function for the ReDoS-shaped patterns it replaced).
+ */
+function normalizeForPhraseMatch(text: string): string {
+  return text.toLowerCase().replace(/[^a-z]+/g, ' ');
+}
+
+/**
  * Phrases a project record-access guide uses to declare a class of read
  * permanently/structurally unavailable — "not sandbox-reachable", "out of
- * bounds", "tracked as future work", etc. Each pattern targets the
+ * bounds", "tracked as future work", etc. Each phrase targets the
  * *behavioural* move (declaring a read class closed, deferring it to
  * someone else's future work, telling the session not to work around it)
  * rather than one project's literal sentence, so a differently-worded guide
  * making the same move is still caught — see
  * `procedureAssembler.projectRecordAccess.test.ts` for the fixture this was
  * written against (the exact wording that shipped for claude-orchestrator's
- * investigation-guide.md and slipped past review).
+ * investigation-guide.md and slipped past review). Matched against the
+ * `normalizeForPhraseMatch`-folded guide, so each entry here is itself
+ * pre-folded (lowercase, single spaces, no punctuation).
  */
-const RECORD_ACCESS_STAND_DOWN_PATTERNS: readonly RegExp[] = [
-  /not\s+(?:[a-z-]+\s+)?reachable/i,
-  /is\s+not\s+(?:currently\s+|presently\s+)?(?:possible|available|supported)/i,
-  /(?:is\s+)?(?:explicitly\s+)?out\s+of\s+(?:bounds|scope)/i,
-  /not\s+something\s+to\s+work\s+around/i,
-  /(?:is\s+)?tracked\s+as\s+future\s+work/i,
-  /do\s+not\s+(?:attempt|try)\s+to\s+work\s+around/i,
+const RECORD_ACCESS_STAND_DOWN_PHRASES: readonly string[] = [
+  'not reachable',
+  'not sandbox reachable',
+  'is not possible',
+  'is not currently possible',
+  'is not presently possible',
+  'is not available',
+  'is not currently available',
+  'is not presently available',
+  'is not supported',
+  'is not currently supported',
+  'is not presently supported',
+  'out of bounds',
+  'out of scope',
+  'not something to work around',
+  'tracked as future work',
+  'do not attempt to work around',
+  'do not try to work around',
 ];
 
 /** Mentions the escalation path a stand-down claim above must route through instead. */
-const CAPABILITY_ESCALATION_MENTION =
-  /request\w*\s+(?:the\s+)?capabilit|session\.requestCapability/i;
+const CAPABILITY_ESCALATION_PHRASES: readonly string[] = [
+  'requestcapability',
+  'request the capability',
+  'request a capability',
+  'request capability',
+];
 
 /**
  * Behavioural guard against `renderProjectRecordAccess.ts`'s doc-comment
@@ -452,14 +480,19 @@ const CAPABILITY_ESCALATION_MENTION =
  * boolean, so the caller can log/audit what specifically tripped it.
  */
 export function findRecordAccessStandDownViolations(guide: string): string[] {
-  const matches = RECORD_ACCESS_STAND_DOWN_PATTERNS.filter((pattern) =>
-    pattern.test(guide),
-  ).map((pattern) => pattern.source);
+  const normalized = normalizeForPhraseMatch(guide);
+  const matches = RECORD_ACCESS_STAND_DOWN_PHRASES.filter((phrase) =>
+    normalized.includes(phrase),
+  );
   if (matches.length === 0) return [];
   // A guide that both names the difficulty AND points at the escalation
   // path is narrowing *how* to ask, not closing off *whether* to ask — the
   // sanctioned move. Only flag when the escalation path is absent entirely.
-  if (CAPABILITY_ESCALATION_MENTION.test(guide)) return [];
+  if (
+    CAPABILITY_ESCALATION_PHRASES.some((phrase) => normalized.includes(phrase))
+  ) {
+    return [];
+  }
   return matches;
 }
 
