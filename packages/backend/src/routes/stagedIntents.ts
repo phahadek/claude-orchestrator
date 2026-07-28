@@ -679,6 +679,17 @@ function parseSymbolicCreateRef(value: string): string | null {
 }
 
 /**
+ * Builds a symbolic reference to a staged (not-yet-applied) `task.create`
+ * intent's eventual real task id — see `parseSymbolicCreateRef` above.
+ * Exported for splitSession.ts, whose sibling-depends-on-sibling case needs
+ * this both as a `task.setDependsOn` subject `taskId` and as a `dependsOn`
+ * entry; `commitGroupIntents` resolves either.
+ */
+export function symbolicCreateRef(intentId: string): string {
+  return `${SYMBOLIC_CREATE_REF_PREFIX}${intentId}`;
+}
+
+/**
  * Stage-time validation for a symbolic `dependsOn` entry: it must resolve to
  * a live `task.create` intent staged in the *same* group. Never resolves
  * across groups — that would open a second route to the cross-task write
@@ -2192,31 +2203,37 @@ async function commitGroupIntents(
   // Populated as each task.create in this group applies — keyed by that
   // intent's own staged-intent id (the symbolic-reference token, see
   // SYMBOLIC_CREATE_REF_PREFIX), consumed below to resolve a later
-  // task.setDependsOn's symbolic dependsOn entries to real created task ids
-  // before that intent is applied. `ordered` places every task.create ahead
-  // of any intent that stage-time validation confirmed references it (a
-  // symbolic reference can only resolve to an already-staged, and therefore
-  // earlier by created_at, task.create), so the id is always present here.
+  // task.setDependsOn's symbolic taskId *subject* (splitSession.ts's
+  // sibling-depends-on-sibling case, where the dependency's subject is
+  // itself a not-yet-created task.create in this same group — the harder
+  // twin of the dependsOn-entry case already handled here) and its symbolic
+  // dependsOn entries, to real created task ids before that intent is
+  // applied. `ordered` places every task.create ahead of any intent that
+  // references it (splitSession.ts always stages a sibling's task.create
+  // before any task.setDependsOn naming that sibling — see
+  // stageSplitIntents), so the id is always present here.
   const createdTaskIds = new Map<string, string>();
   for (const row of ordered) {
     const intent = rowToApi(row);
     try {
       if (intent.kind === 'task.setDependsOn') {
         const payload = intent.payload as SetDependsOnPayload;
+        const resolveSymbolic = (value: string): string => {
+          const symbolicIntentId = parseSymbolicCreateRef(value);
+          if (!symbolicIntentId) return value;
+          const resolved = createdTaskIds.get(symbolicIntentId);
+          if (!resolved) {
+            throw new TaskReferenceValidationError(
+              `"${value}" references a task.create intent that has not applied ` +
+                'yet in this commit',
+            );
+          }
+          return resolved;
+        };
         intent.payload = {
           ...payload,
-          dependsOn: payload.dependsOn.map((dep) => {
-            const symbolicIntentId = parseSymbolicCreateRef(dep);
-            if (!symbolicIntentId) return dep;
-            const resolved = createdTaskIds.get(symbolicIntentId);
-            if (!resolved) {
-              throw new TaskReferenceValidationError(
-                `dependsOn entry "${dep}" references a task.create intent that has not ` +
-                  'applied yet in this commit',
-              );
-            }
-            return resolved;
-          }),
+          taskId: resolveSymbolic(payload.taskId),
+          dependsOn: payload.dependsOn.map(resolveSymbolic),
         };
       }
       const result = await applyIntent(

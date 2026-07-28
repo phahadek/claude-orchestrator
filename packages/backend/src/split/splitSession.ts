@@ -9,15 +9,26 @@
  *
  * The original task KEEPS its ID (updateBody, never archived/deferred — that
  * would lose history, comments, and inbound deps). The N-1 siblings don't
- * exist yet when the plan is composed, so intra-split dependsOn references to
- * them are expressed as `$ref:<ref>` placeholders; resolving those to real
- * task IDs happens as each createTask intent is applied (staged-intent apply
- * is a serial, human-gated action — see routes/stagedIntents.ts).
+ * exist yet when the plan is composed, so `composeSplitIntents` expresses
+ * intra-split dependsOn references to them with local `$ref:<ref>`
+ * placeholders. `stageSplitIntents` — the only function that actually writes
+ * to the staged-intent store — stages each sibling's task.create first and
+ * rewrites any placeholder naming it (as either a dependsOn entry OR, for a
+ * sibling-depends-on-sibling edge, the task.setDependsOn's own subject
+ * taskId) to routes/stagedIntents.ts's `staged-intent:<id>` symbolic
+ * reference before staging the dependency intent. `commitGroupIntents`
+ * resolves that symbolic reference to the real created task id once the
+ * referenced task.create has actually applied (staged-intent apply is a
+ * serial, human-gated action — see routes/stagedIntents.ts).
  */
 
 import type { NewTaskFields } from '../tasks/TaskBackend';
 import type { TaskBodySections } from '../tasks/bodyRender';
-import { stageIntent, type StagedIntent } from '../routes/stagedIntents';
+import {
+  stageIntent,
+  symbolicCreateRef,
+  type StagedIntent,
+} from '../routes/stagedIntents';
 
 export const ORIGINAL_REF = 'original';
 
@@ -151,10 +162,21 @@ export interface StageSplitIntentsResult {
 
 /**
  * Invocation glue: the dedicated split session's route from a decided cut to
- * the shared staged-intent display. Composes the intents (`composeSplitIntents`)
- * and stages every one of them through the same chokepoint every other
- * producer stages through (`stageIntent` in `routes/stagedIntents.ts`) — this
- * module still never calls TaskWriteCommands or applies anything itself.
+ * the shared staged-intent display. Composes the intents
+ * (`composeSplitIntents`) and stages every one of them through the same
+ * chokepoint every other producer stages through (`stageIntent` in
+ * `routes/stagedIntents.ts`) — this module still never calls
+ * TaskWriteCommands or applies anything itself.
+ *
+ * Staging happens in `composeSplitIntents`'s own order (updateBody, then
+ * every task.create, then every task.setDependsOn) so that, by the time a
+ * task.setDependsOn naming a sibling is staged, that sibling's task.create
+ * has already been staged and has a real staged-intent id — letting this
+ * function rewrite the composed `$ref:<ref>` placeholder (in either the
+ * dependsOn subject taskId or a dependsOn entry) to the
+ * `staged-intent:<id>` symbolic reference `commitGroupIntents` resolves at
+ * commit time. A placeholder naming the original task never needs rewriting
+ * — `composeSplitIntents` already resolved it to the original's real id.
  */
 export function stageSplitIntents(
   input: ComposeSplitInput,
@@ -162,15 +184,50 @@ export function stageSplitIntents(
 ): StageSplitIntentsResult {
   const composed = composeSplitIntents(input);
   const groupId = `split:${input.original.id}`;
-  const staged = composed.intents.map((intent) =>
-    stageIntent(
+
+  const refToStagedId = new Map<string, string>();
+  const staged: StagedIntent[] = [];
+  let nextSiblingIndex = 0;
+  for (const intent of composed.intents) {
+    let payload = intent.payload;
+    if (intent.kind === 'task.setDependsOn') {
+      const resolve = (value: string): string => {
+        if (!value.startsWith('$ref:')) return value;
+        const ref = value.slice('$ref:'.length);
+        const stagedId = refToStagedId.get(ref);
+        if (!stagedId) {
+          throw new Error(
+            `[splitSession] "${value}" was staged before its task.create intent`,
+          );
+        }
+        return symbolicCreateRef(stagedId);
+      };
+      const depsOnPayload = intent.payload as {
+        taskId: string;
+        dependsOn: string[];
+      };
+      payload = {
+        taskId: resolve(depsOnPayload.taskId),
+        dependsOn: depsOnPayload.dependsOn.map(resolve),
+      };
+    }
+    const stagedIntent = stageIntent(
       intent.kind,
-      intent.payload,
+      payload,
       intent.projectId,
       intent.groupId,
       sessionId,
-    ),
-  );
+    );
+    staged.push(stagedIntent);
+    if (intent.kind === 'task.create') {
+      refToStagedId.set(
+        input.siblings[nextSiblingIndex].ref,
+        stagedIntent.id,
+      );
+      nextSiblingIndex += 1;
+    }
+  }
+
   return {
     staged,
     siblingRefs: composed.siblingRefs,
