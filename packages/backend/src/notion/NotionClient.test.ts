@@ -21,6 +21,7 @@ import {
   parseDependsOn,
   parseExpectedSize,
   blockToLine,
+  truncateForError,
   NotionClient,
 } from './NotionClient';
 import {
@@ -81,6 +82,29 @@ Some context here.
 
 Details here.
 `.trim();
+
+describe('truncateForError()', () => {
+  it('returns the JSON-quoted text unchanged when under the length bound', () => {
+    expect(truncateForError('short text')).toBe('"short text"');
+  });
+
+  it('bounds output length for a very long section text', () => {
+    const long = 'x'.repeat(10_000);
+    const result = truncateForError(long);
+    expect(result.length).toBeLessThan(2100);
+  });
+
+  it('does not leave a dangling escape backslash when truncating through an escape sequence', () => {
+    // Force the cut point to fall inside a "\n" escape sequence by
+    // repeating a short escaping string past the bound.
+    const long = 'a\n'.repeat(2000);
+    const result = truncateForError(long);
+    // A dangling unescaped backslash right before the closing quote/ellipsis
+    // would break JSON.parse and any log line splicing.
+    expect(result).not.toMatch(/[^\\](\\)"\.\.\."$/);
+    expect(() => JSON.parse(result.replace(/\.\.\."$/, '"'))).not.toThrow();
+  });
+});
 
 describe('blockToLine()', () => {
   it('renders a heading_4 block with a #### prefix', () => {
@@ -544,6 +568,69 @@ describe('NotionClient.patchBodySection()', () => {
         replaceWith: 'y',
       }),
     ).rejects.toThrow(/text to replace not found/);
+  });
+
+  it('replace-not-found error includes the rendered section text so the caller can retry against ground truth', async () => {
+    mockChildrenFetch();
+
+    await expect(
+      client.patchBodySection('notion:abc', 'Context', {
+        operation: 'replace',
+        find: 'no such text',
+        replaceWith: 'y',
+      }),
+    ).rejects.toThrow(/Context line 1.*Context line 2/s);
+  });
+
+  it('replace succeeds for a multi-line find spanning two bulleted list items', async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        results: [
+          {
+            id: 'h-files',
+            type: 'heading_2',
+            heading_2: { rich_text: [{ plain_text: 'Files' }] },
+          },
+          {
+            id: 'li-1',
+            type: 'bulleted_list_item',
+            bulleted_list_item: { rich_text: [{ plain_text: 'src/a.ts' }] },
+          },
+          {
+            id: 'li-2',
+            type: 'bulleted_list_item',
+            bulleted_list_item: { rich_text: [{ plain_text: 'src/b.ts' }] },
+          },
+        ],
+        has_more: false,
+        next_cursor: null,
+      }),
+    });
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ results: [{ id: 'new-1' }, { id: 'new-2' }] }),
+    });
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete li-1
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({}) }); // delete li-2
+
+    await client.patchBodySection('notion:abc', 'Files', {
+      operation: 'replace',
+      find: '- src/a.ts\n- src/b.ts',
+      replaceWith: '- src/a.ts\n- src/c.ts',
+    });
+
+    const insertCall = fetchSpy.mock.calls[1] as [string, RequestInit];
+    const insertBody = JSON.parse(insertCall[1].body as string);
+    const renderedText = insertBody.children
+      .map(
+        (b: {
+          bulleted_list_item: { rich_text: { text: { content: string } }[] };
+        }) => b.bulleted_list_item.rich_text[0].text.content,
+      )
+      .join('\n');
+    expect(renderedText).toContain('src/c.ts');
+    expect(renderedText).not.toContain('src/b.ts');
   });
 
   it('remove deletes every block in the section plus the heading', async () => {

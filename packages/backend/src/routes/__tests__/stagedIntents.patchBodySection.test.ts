@@ -34,8 +34,13 @@ vi.mock('../../audit/AuditLog', () => ({
 }));
 
 import { db } from '../../db/db';
-import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
+import {
+  createStagedIntentsRouter,
+  stageIntent,
+  composePatchBodySectionPreview,
+} from '../stagedIntents';
 import { getStagedIntent, transitionStagedIntent } from '../../db/queries';
+import { blockToLine } from '../../notion/NotionClient';
 
 function buildApp() {
   const app = express();
@@ -223,5 +228,45 @@ describe('task.patchBodySection — human-apply-only + apply dispatch', () => {
       },
       { source: 'human' },
     );
+  });
+});
+
+describe('task.patchBodySection — staging-time preview matches apply-time rendering', () => {
+  it('a multi-line find spanning two bulleted list items that matches the apply-time render also matches the preview', () => {
+    // Mirrors NotionClient.fetchTaskPage()'s rendering: each block passed
+    // through blockToLine and joined with '\n' — the same rendering
+    // patchBodySection's apply path matches `find` against.
+    const filesBlocks = [
+      {
+        type: 'bulleted_list_item',
+        bulleted_list_item: { rich_text: [{ plain_text: 'src/a.ts' }] },
+      },
+      {
+        type: 'bulleted_list_item',
+        bulleted_list_item: { rich_text: [{ plain_text: 'src/b.ts' }] },
+      },
+    ];
+    const sectionText = filesBlocks.map(blockToLine).join('\n');
+    const storedBody = [
+      '## Summary',
+      '',
+      'Some summary.',
+      '',
+      '## Files / paths affected',
+      '',
+      sectionText,
+    ].join('\n');
+
+    const find = 'src/a.ts\n- src/b.ts';
+    expect(sectionText).toContain(find);
+
+    const preview = composePatchBodySectionPreview(
+      storedBody,
+      'Files / paths affected',
+      { operation: 'replace', find, replaceWith: 'src/a.ts\n- src/c.ts' },
+    );
+
+    expect(preview).toContain('src/c.ts');
+    expect(preview).not.toContain('src/b.ts');
   });
 });
