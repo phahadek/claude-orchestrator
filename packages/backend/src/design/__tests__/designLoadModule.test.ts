@@ -22,7 +22,11 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { insertProject, insertMilestone, updateProject } from '../../db/queries.js';
+import {
+  insertProject,
+  insertMilestone,
+  updateProject,
+} from '../../db/queries.js';
 import { createUnit } from '../../architecture/ArchUnitStore.js';
 import { loadDesignContext } from '../designLoad.js';
 
@@ -246,7 +250,7 @@ describe('loadDesignContext', () => {
     expect(result.unresolvedPageRefs).toEqual([]);
   });
 
-  it('keeps returning the project\'s Notion architecture pages (source: notion) when archStoreAdopted is not set', async () => {
+  it("keeps returning the project's Notion architecture pages (source: notion) when archStoreAdopted is not set", async () => {
     // No updateProject call — archStoreAdopted defaults to false at insertProject.
     createUnit({
       title: 'Should never surface — project has not adopted the store',
