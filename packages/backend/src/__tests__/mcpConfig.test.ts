@@ -125,9 +125,9 @@ describe('writeMcpConfig', () => {
   it('creates the mcp config directory if it does not exist', () => {
     const mcpServers = { notion: { type: 'stdio', command: 'npx' } };
     writeMcpConfig(tmpDir, 'session-4', mcpServers);
-    expect(
-      fs.existsSync(path.join(mcpConfigDir(), 'session-4.mcp.json')),
-    ).toBe(true);
+    expect(fs.existsSync(path.join(mcpConfigDir(), 'session-4.mcp.json'))).toBe(
+      true,
+    );
   });
 
   it('never writes the per-session MCP config under the project checkout', () => {

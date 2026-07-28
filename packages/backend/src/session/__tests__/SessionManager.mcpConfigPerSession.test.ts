@@ -164,7 +164,11 @@ vi.mock('fs', () => {
 });
 
 import path from 'path';
-import { SessionManager, writeMcpConfig, mcpConfigDir } from '../SessionManager';
+import {
+  SessionManager,
+  writeMcpConfig,
+  mcpConfigDir,
+} from '../SessionManager';
 import { _resetStageCredentialsForTesting } from '../../auth/SessionStageAuth';
 import { getSession } from '../../db/queries';
 import { getProjectById } from '../../config';
