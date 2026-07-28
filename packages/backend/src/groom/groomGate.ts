@@ -23,7 +23,7 @@
  * when absent, same as the marker check does for a non-Code type.
  *
  * bindingConstraints (FM1), Files/paths resolution (FM2), and the
- * Design/Planning Depends On + cite-or-route signals (FM3) are re-derived
+ * Design/Planning/Investigation Depends On + cite-or-route signals (FM3) are re-derived
  * from `entry.regions` / `entry.filesPathsEntries` / `entry.dependsOnTasks`
  * rather than trusted as a caller-asserted "this is fine" — a session can
  * misreport a disposition's shape, but it can't misreport which constraints
@@ -70,11 +70,17 @@ const DONE_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
 /**
  * Types whose non-Done presence in Depends On blocks promotion (FM3 signal
  * a): their outcome may still reshape the task and invalidate the grooming
- * already recorded against it. Same set as approve-by-standard's
- * INTERACTIVE_TASK_TYPES (planning/triage.ts) — both signals key off
- * "not auto-dispatched".
+ * already recorded against it. Deliberately decoupled from
+ * INTERACTIVE_TASK_TYPES (planning/triage.ts) — that set also gates
+ * approve-by-standard eligibility, and widening it would silently grant a
+ * new type approve-by-standard promotion as a side effect of fixing this
+ * gate. 🔎 Investigation is included because it has the most direct
+ * scope-reshaping mechanism after Design/Planning: "An Investigation
+ * legitimately produces Code tasks as its output" (procedures.md § Task
+ * types), so a task depending on a non-Done Investigation is groomed against
+ * a scope the Investigation may reshape, supersede, or split.
  */
-const DESIGN_GATE_TYPES = INTERACTIVE_TASK_TYPES;
+const DEPENDS_ON_GATE_TYPES = new Set([...INTERACTIVE_TASK_TYPES, '🔎 Investigation']);
 
 /** and/or is a Files/paths-section hedge token only — see readinessGate.ts's Tier-2 class for the general-prose scan, which deliberately excludes it. */
 const FILES_PATHS_HEDGE_TOKENS = ['and/or', 'confirm', 'tbd', 'exact file'];
@@ -360,19 +366,19 @@ function isFilesPathsResolved(
 }
 
 /**
- * FM3 signal (a) — a non-Done 📐 Design / 📋 Planning Depends On task can
- * still reshape this task's scope, invalidating whatever was groomed against
- * it. Blocks promotion until that dependency reaches ✅ Done (or is
- * ⏭️ Deferred).
+ * FM3 signal (a) — a non-Done 📐 Design / 📋 Planning / 🔎 Investigation
+ * Depends On task can still reshape this task's scope, invalidating whatever
+ * was groomed against it. Blocks promotion until that dependency reaches
+ * ✅ Done (or is ⏭️ Deferred).
  */
-function isDependsOnDesignClear(
+function isDependsOnGateClear(
   dependsOnTasks: DependsOnTaskRef[] | undefined,
 ): { ok: boolean; reasons: string[] } {
   const reasons: string[] = [];
   for (const dep of dependsOnTasks ?? []) {
     if (
       dep.type &&
-      DESIGN_GATE_TYPES.has(dep.type) &&
+      DEPENDS_ON_GATE_TYPES.has(dep.type) &&
       !(dep.status && DONE_STATUSES.has(dep.status))
     ) {
       reasons.push(
@@ -496,7 +502,7 @@ function isInteractiveTriageClean(
   const hardBlockDepNotDone = dependsOnTasks.some(
     (dep) =>
       dep.type &&
-      DESIGN_GATE_TYPES.has(dep.type) &&
+      DEPENDS_ON_GATE_TYPES.has(dep.type) &&
       !(dep.status && DONE_STATUSES.has(dep.status)),
   );
   const hasRoutedConstraintConflict = Object.values(
@@ -566,7 +572,7 @@ export function checkGroomingPromotionGate(
   reasons.push(
     ...isFilesPathsResolved(resolvedType, entry.filesPathsEntries).reasons,
   );
-  reasons.push(...isDependsOnDesignClear(entry.dependsOnTasks).reasons);
+  reasons.push(...isDependsOnGateClear(entry.dependsOnTasks).reasons);
   reasons.push(...isConstraintsDispositioned(entry).reasons);
   reasons.push(...isTriageEligibleForType(resolvedType, entry).reasons);
   reasons.push(...isInteractiveTriageClean(resolvedType, entry).reasons);
