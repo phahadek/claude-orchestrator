@@ -185,6 +185,69 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     expect(markSessionDone).not.toHaveBeenCalled();
   });
 
+  it('an approve that completes the mandate while the session has a live in-flight turn defers the terminal transition instead of marking it terminal underneath the turn', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }),
+    );
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'committed',
+    });
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
+    expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sm.endSession).not.toHaveBeenCalled();
+  });
+
+  it('applies the deferred terminal transition once the in-flight turn completes (session_ended), without re-consulting staged-intent state', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }),
+    );
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'committed',
+    });
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+    expect(markSessionDone).not.toHaveBeenCalled();
+
+    // Turn completes — the session parks (or errors) and settles as done regardless.
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'planning-session-1',
+      status: 'idle',
+    });
+    await flush();
+
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'planning-session-1',
+      expect.any(Number),
+      null,
+      expect.stringContaining('approved'),
+    );
+    expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
+    // Deferred terminal is a one-shot — a second, unrelated session_ended
+    // for the same id must not re-drive markSessionDone.
+    vi.mocked(markSessionDone).mockClear();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'done' }));
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'planning-session-1',
+      status: 'idle',
+    });
+    await flush();
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
   it('resumes with a pushback message including operator feedback', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
