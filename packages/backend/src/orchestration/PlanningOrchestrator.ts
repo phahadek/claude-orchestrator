@@ -63,13 +63,33 @@ export class PlanningOrchestrator {
   /** Total intent count (any state) observed for a session at its last resume — lets the next park detect whether that turn staged anything new. */
   private stagedCountAtResume = new Map<string, number>();
 
+  /**
+   * Sessions whose mandate-complete approval landed while a turn was still
+   * in flight (e.g. the session was resumed by a concurrent capability
+   * grant). markTerminal is deferred rather than dropped — applying it here
+   * would race the live turn, but forgetting it would park the session
+   * forever. Applied on the next session_ended for that id, whatever its
+   * status.
+   */
+  private pendingApproveTerminal = new Set<string>();
+
   constructor(private sessionManager: SessionManager) {
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
   }
 
   private onMessage(msg: ServerMessage): void {
-    if (msg.type !== 'session_ended' || msg.status !== 'idle') return;
+    if (msg.type !== 'session_ended') return;
+    if (this.applyPendingApproveTerminal(msg.sessionId)) return;
+    if (msg.status !== 'idle') return;
     void this.onSessionParked(msg.sessionId);
+  }
+
+  /** Returns true if a deferred approve-terminal was pending and has now been applied. */
+  private applyPendingApproveTerminal(sessionId: string): boolean {
+    if (!this.pendingApproveTerminal.has(sessionId)) return false;
+    this.pendingApproveTerminal.delete(sessionId);
+    this.markTerminal(sessionId, 'planning_approved');
+    return true;
   }
 
   /**
@@ -310,6 +330,13 @@ export class PlanningOrchestrator {
    * checkTerminal — that heuristic exists to detect a turn that staged
    * nothing new, which is a different question from "does this approval
    * itself warrant a resume" (it never does).
+   *
+   * A concurrent path (e.g. a capability-grant resume) can have the session
+   * mid-turn ('running') by the time this settles — the mandate having
+   * completed does not mean the session is between turns. Marking terminal
+   * underneath a live turn would stop it out from under itself while it
+   * keeps emitting events, so the transition is deferred to the turn's next
+   * session_ended instead of applied immediately.
    */
   private async handleApproveDisposition(
     sessionId: string,
@@ -321,6 +348,15 @@ export class PlanningOrchestrator {
       (i) => i.state === 'staged',
     );
     if (stillPending) return;
+
+    const row = getSession(sessionId);
+    if (row?.status === 'running') {
+      this.pendingApproveTerminal.add(sessionId);
+      logger.info(
+        `[PlanningOrchestrator] ${sessionId.slice(0, 8)} approval complete but turn is in flight — deferring terminal transition`,
+      );
+      return;
+    }
 
     this.markTerminal(sessionId, 'planning_approved');
   }
