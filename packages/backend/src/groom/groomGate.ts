@@ -80,7 +80,10 @@ const DONE_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
  * types), so a task depending on a non-Done Investigation is groomed against
  * a scope the Investigation may reshape, supersede, or split.
  */
-const DEPENDS_ON_GATE_TYPES = new Set([...INTERACTIVE_TASK_TYPES, '🔎 Investigation']);
+const DEPENDS_ON_GATE_TYPES = new Set([
+  ...INTERACTIVE_TASK_TYPES,
+  '🔎 Investigation',
+]);
 
 /** and/or is a Files/paths-section hedge token only — see readinessGate.ts's Tier-2 class for the general-prose scan, which deliberately excludes it. */
 const FILES_PATHS_HEDGE_TOKENS = ['and/or', 'confirm', 'tbd', 'exact file'];
@@ -371,9 +374,10 @@ function isFilesPathsResolved(
  * was groomed against it. Blocks promotion until that dependency reaches
  * ✅ Done (or is ⏭️ Deferred).
  */
-function isDependsOnGateClear(
-  dependsOnTasks: DependsOnTaskRef[] | undefined,
-): { ok: boolean; reasons: string[] } {
+function isDependsOnGateClear(dependsOnTasks: DependsOnTaskRef[] | undefined): {
+  ok: boolean;
+  reasons: string[];
+} {
   const reasons: string[] = [];
   for (const dep of dependsOnTasks ?? []) {
     if (
