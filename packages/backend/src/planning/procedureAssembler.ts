@@ -416,6 +416,87 @@ export function renderOpsCapabilities(): string[] {
 const PROJECT_RECORD_ACCESS_GUIDE_FILE = 'investigation-guide.md';
 
 /**
+ * Collapse to lowercase with runs of non-letter characters folded to a
+ * single space, so phrase matching below is tolerant of punctuation/
+ * whitespace variation without resorting to regex quantifiers over
+ * arbitrary input (flagged by `security/detect-unsafe-regex` — see git
+ * history on this function for the ReDoS-shaped patterns it replaced).
+ */
+function normalizeForPhraseMatch(text: string): string {
+  return text.toLowerCase().replace(/[^a-z]+/g, ' ');
+}
+
+/**
+ * Phrases a project record-access guide uses to declare a class of read
+ * permanently/structurally unavailable — "not sandbox-reachable", "out of
+ * bounds", "tracked as future work", etc. Each phrase targets the
+ * *behavioural* move (declaring a read class closed, deferring it to
+ * someone else's future work, telling the session not to work around it)
+ * rather than one project's literal sentence, so a differently-worded guide
+ * making the same move is still caught — see
+ * `procedureAssembler.projectRecordAccess.test.ts` for the fixture this was
+ * written against (the exact wording that shipped for claude-orchestrator's
+ * investigation-guide.md and slipped past review). Matched against the
+ * `normalizeForPhraseMatch`-folded guide, so each entry here is itself
+ * pre-folded (lowercase, single spaces, no punctuation).
+ */
+const RECORD_ACCESS_STAND_DOWN_PHRASES: readonly string[] = [
+  'not reachable',
+  'not sandbox reachable',
+  'is not possible',
+  'is not currently possible',
+  'is not presently possible',
+  'is not available',
+  'is not currently available',
+  'is not presently available',
+  'is not supported',
+  'is not currently supported',
+  'is not presently supported',
+  'out of bounds',
+  'out of scope',
+  'not something to work around',
+  'tracked as future work',
+  'do not attempt to work around',
+  'do not try to work around',
+];
+
+/** Mentions the escalation path a stand-down claim above must route through instead. */
+const CAPABILITY_ESCALATION_PHRASES: readonly string[] = [
+  'requestcapability',
+  'request the capability',
+  'request a capability',
+  'request capability',
+];
+
+/**
+ * Behavioural guard against `renderProjectRecordAccess.ts`'s doc-comment
+ * promise: "Guidance, not enforcement" for *how* to reach a project's
+ * record, never for *whether* a blocked read may be escalated at all. A
+ * project guide is free to say a read is hard, slow, or roundabout; it may
+ * never say a read is closed off and leave it there — the universal rule
+ * (`ask-permission-not-speculative` in `procedureCore.ts`) is that an unmet
+ * read always routes to `session.requestCapability` first. Returns the
+ * matched stand-down phrases (empty when the guide is clean) rather than a
+ * boolean, so the caller can log/audit what specifically tripped it.
+ */
+export function findRecordAccessStandDownViolations(guide: string): string[] {
+  const normalized = normalizeForPhraseMatch(guide);
+  const matches = RECORD_ACCESS_STAND_DOWN_PHRASES.filter((phrase) =>
+    normalized.includes(phrase),
+  );
+  if (matches.length === 0) return [];
+  // A guide that both names the difficulty AND points at the escalation
+  // path is narrowing *how* to ask, not closing off *whether* to ask — the
+  // sanctioned move. Only flag when the escalation path is absent entirely.
+  if (
+    CAPABILITY_ESCALATION_PHRASES.some((phrase) => normalized.includes(phrase))
+  ) {
+    return [];
+  }
+  return matches;
+}
+
+/**
  * Resolve the registry projectId (e.g. `claude-dashboard`) to the central
  * config tree's per-project guide artifact path. The assembler is keyed by
  * the registry projectId, but the config tree is keyed by config-dir (the
@@ -458,7 +539,13 @@ function resolveProjectRecordAccessGuidePath(projectId: string): string | null {
  * Guidance, not enforcement: the guide is prose read from the config tree.
  * It never changes which read tools/MCP servers/capabilities this session
  * actually holds — that stays orchestrator-owned (`OrchestratorConfig`'s
- * `mcp_servers`/`allowed_tools` plus the grant system).
+ * `mcp_servers`/`allowed_tools` plus the grant system). One property IS
+ * enforced here, though: the guide may narrow *how* a capability is
+ * requested/used, never *whether* one may be requested at all. A guide
+ * that declares a read class closed off — see
+ * `findRecordAccessStandDownViolations` — is dropped rather than injected;
+ * see that function's doc comment for why this can't be a per-project
+ * responsibility.
  *
  * A project with no guide artifact (or an unresolvable config tree/project)
  * renders no section at all — the caller's existing `renderOpsCapabilities`
@@ -490,7 +577,46 @@ export function renderProjectRecordAccess(
     return [];
   }
   if (!guide) return [];
+  const violations = findRecordAccessStandDownViolations(guide);
+  if (violations.length > 0) {
+    reportRecordAccessGuideStandDownViolation(
+      workflow,
+      projectId,
+      guidePath,
+      violations,
+    );
+    return [];
+  }
   return ["## This Project's Operational Record", '', guide, ''];
+}
+
+function reportRecordAccessGuideStandDownViolation(
+  workflow: PlanningWorkflow,
+  projectId: string,
+  resolvedPath: string,
+  violations: string[],
+): void {
+  logger.warn(
+    `[procedureAssembler] project record-access guide for project=${projectId} ` +
+      `workflow=${workflow} at ${resolvedPath} instructs a session to stand down ` +
+      `instead of requesting the capability (matched: ${violations.join('; ')}) — ` +
+      'dropping the guide section for this session rather than injecting it; fix ' +
+      `${PROJECT_RECORD_ACCESS_GUIDE_FILE} to narrow how a capability is used, ` +
+      'never whether one may be requested',
+  );
+  try {
+    recordEvent({
+      event_type: 'project_record_access_guide_blocks_escalation',
+      actor_type: 'system',
+      project_id: projectId,
+      payload: { workflow, resolvedPath, violations },
+    });
+  } catch (err) {
+    logger.warn(
+      `[procedureAssembler] failed to record project_record_access_guide_blocks_escalation: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 function reportMissingProjectRecordAccessGuide(

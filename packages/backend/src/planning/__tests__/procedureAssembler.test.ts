@@ -299,6 +299,13 @@ describe('assemblePlanningProcedure', () => {
       expect(output).toContain('Hard rules');
       expect(output).toContain('The human is the gate');
 
+      // An unmet read always routes to session.requestCapability first, and
+      // project guidance may only narrow how — never whether — one is
+      // requested. See procedureCore.ts's ask-permission-not-speculative
+      // principle and procedureAssembler.ts's renderProjectRecordAccess guard.
+      expect(output).toContain('session.requestCapability');
+      expect(output).toContain('it never narrows whether one may be requested');
+
       // Per-type digest section.
       const digestTitles: Record<PlanningDigest['workflow'], string> = {
         groom: '## Grooming Validation Slice',
