@@ -26,6 +26,7 @@ import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
 import { BackendTaskWriteCommands } from '../../tasks/TaskWriteCommands';
 import type { TaskBackend } from '../../tasks/TaskBackend';
+import { INTERACTIVE_TASK_TYPES } from '../../planning/triage';
 
 function makeBackend(): TaskBackend {
   return {
@@ -705,6 +706,61 @@ describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness
     );
     expect(result.allowed).toBe(false);
     expect(result.reasons.some((r) => r.includes('size_check'))).toBe(true);
+  });
+
+  const OPERATIONAL_BASE = {
+    size_check: { decision: 'n/a' },
+    type_check: { decision: 'n/a' },
+    type: '🔧 Operational',
+  };
+
+  it.each(['🔲 Backlog', '🗂️ Ready', '🔄 In Progress'])(
+    'blocks promotion when Depends On carries a non-Done 🔎 Investigation task at %s',
+    (status) => {
+      const result = checkGroomingPromotionGate(
+        {
+          ...OPERATIONAL_BASE,
+          dependsOnTasks: [{ id: 'dep-inv', type: '🔎 Investigation', status }],
+        },
+        `notion:fm3-blocked-investigation-${status}`,
+      );
+      expect(result.allowed).toBe(false);
+      expect(result.reasons.some((r) => r.includes('dep-inv'))).toBe(true);
+    },
+  );
+
+  it('allows promotion once the Investigation Depends On task is ✅ Done', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...OPERATIONAL_BASE,
+        dependsOnTasks: [
+          { id: 'dep-inv', type: '🔎 Investigation', status: '✅ Done' },
+        ],
+      },
+      'notion:fm3-investigation-done',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('allows promotion when the Investigation Depends On task is ⏭️ Deferred', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...OPERATIONAL_BASE,
+        dependsOnTasks: [
+          { id: 'dep-inv', type: '🔎 Investigation', status: '⏭️ Deferred' },
+        ],
+      },
+      'notion:fm3-investigation-deferred',
+    );
+    expect(result.allowed).toBe(true);
+  });
+});
+
+describe('INTERACTIVE_TASK_TYPES — approve-by-standard set was not widened', () => {
+  it('still contains exactly 📐 Design and 📋 Planning', () => {
+    expect(new Set(INTERACTIVE_TASK_TYPES)).toEqual(
+      new Set(['📐 Design', '📋 Planning']),
+    );
   });
 });
 
