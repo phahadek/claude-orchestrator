@@ -929,6 +929,34 @@ const EXPLICIT_SUPERSEDES_ALLOWED_STATES: StagedIntentState[] = [
   'needs_revision',
 ];
 
+/**
+ * Names the supported alternative for a refused explicit-supersede target, so
+ * the error tells the caller what to do instead of only what it cannot do.
+ * - committed: the change already applied — history must not be rewritten by
+ *   a supersede; stage a new corrective intent instead.
+ * - rejected: an operator explicitly declined this intent (decline); staging
+ *   a variant is precisely what should not happen — raise it with the
+ *   operator instead of re-staging.
+ * - withdrawn: the staging session itself already withdrew this intent;
+ *   stage a fresh intent instead of superseding a row that's already gone.
+ * - superseded: already retired by another supersede; target the newer
+ *   intent, or stage fresh.
+ */
+function explicitSupersedesAlternative(state: StagedIntentState): string {
+  switch (state) {
+    case 'committed':
+      return 'a committed intent cannot be superseded — stage a new corrective intent instead';
+    case 'rejected':
+      return 'this intent was declined by the operator — stage a new intent (or raise it with the operator) instead of superseding it';
+    case 'withdrawn':
+      return 'this intent was already withdrawn — stage a fresh intent instead of superseding it';
+    case 'superseded':
+      return 'this intent was already superseded — target its replacement, or stage a fresh intent';
+    default:
+      return 'stage a new intent instead';
+  }
+}
+
 /** An explicit `explicitSupersedes` pointer that cannot be honoured — never silently dropped. */
 export class ExplicitSupersedesError extends Error {
   constructor(message: string) {
@@ -987,7 +1015,8 @@ export function stageIntent(
     }
     if (!EXPLICIT_SUPERSEDES_ALLOWED_STATES.includes(explicit.state)) {
       throw new ExplicitSupersedesError(
-        `explicit supersedes target "${explicitSupersedes}" is in state "${explicit.state}" and cannot be superseded`,
+        `explicit supersedes target "${explicitSupersedes}" is in state "${explicit.state}" and cannot be ` +
+          `superseded; ${explicitSupersedesAlternative(explicit.state)}`,
       );
     }
     explicitValid = explicit;
@@ -1366,7 +1395,15 @@ function transitionRejectedIntent(
   outcome: StagedIntentRejectOutcome,
   reason: string,
 ): { intent: StagedIntent; row: StagedIntentRow } {
-  const rejected = transitionStagedIntent(row.id, 'rejected', {
+  // pushback (including an apply-time failure, which is always pushback) is
+  // revisable — it lands in needs_revision, the same state the stage-time
+  // verification block leaves behind, so the staging session can supersede
+  // it. decline is terminal: the operator outright rejected the intent, and
+  // a session re-staging a variant is precisely what should not happen, so
+  // it stays in rejected, which EXPLICIT_SUPERSEDES_ALLOWED_STATES excludes.
+  const targetState: StagedIntentState =
+    outcome === 'pushback' ? 'needs_revision' : 'rejected';
+  const rejected = transitionStagedIntent(row.id, targetState, {
     dispositionReason: reason,
   });
   const rejectedIntent = rowToApi(rejected);
