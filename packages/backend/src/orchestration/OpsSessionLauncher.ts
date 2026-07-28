@@ -268,7 +268,10 @@ export class OpsSessionLauncher {
     taskId: string,
     projectId: string,
   ) {
-    const result = await loadGroomContext(milestoneKey, { repoRoot, projectId });
+    const result = await loadGroomContext(milestoneKey, {
+      repoRoot,
+      projectId,
+    });
     try {
       return deriveGroomDigestSlice(result, taskId, milestoneKey);
     } catch (err) {
