@@ -30,6 +30,7 @@ import { getMilestoneById } from '../db/queries';
 import { formatTaskId, normalizeBoardId } from '../tasks/taskId';
 import { ProjectService } from '../projects/ProjectService';
 import { selectUnitsFromStore } from '../architecture/selectiveInjection';
+import { queryUnits } from '../architecture/ArchUnitStore';
 
 // ─── manifest resolution (mirrors groomLoad.ts) ────────────────────────────
 
@@ -176,17 +177,46 @@ function extractPagesAffected(md: string): PageRef[] {
   });
 }
 
+function normalizeTitle(title: string): string {
+  return title.replace(/\s+/g, ' ').toLowerCase().trim();
+}
+
 /** Resolve a page title to a manifest context_pages entry (fuzzy, case-insensitive). */
 function resolveArchUnit(
   title: string,
   contextPages: DesignManifestContextPage[],
 ): DesignManifestContextPage | null {
-  const want = title.replace(/\s+/g, ' ').toLowerCase().trim();
+  const want = normalizeTitle(title);
   for (const p of contextPages) {
-    const t = (p.title ?? '').replace(/\s+/g, ' ').toLowerCase().trim();
+    const t = normalizeTitle(p.title ?? '');
     if (t && (t === want || want.includes(t) || t.includes(want))) return p;
   }
   return null;
+}
+
+/**
+ * Resolve a design/planning task's topic for the store's topic fallback: a
+ * design task carries no '## Files / paths affected' section, so its topic
+ * is derived from its '## Notion pages affected' references, fuzzy-matched
+ * against the arch_unit store's own unit titles (per grooming decision
+ * 77fb7f50-1b34-4076-b688-c8c81ed101b4 — not from title/Summary text
+ * matching, and not a new explicit-topic body field). Returns undefined when
+ * no reference resolves to a store unit, in which case selection degrades to
+ * the store's unconditional active-invariant set.
+ */
+function resolveDesignTopic(pagesAffected: PageRef[]): string | undefined {
+  if (!pagesAffected.length) return undefined;
+  const units = queryUnits({ status: 'active' });
+  for (const p of pagesAffected) {
+    const want = normalizeTitle(p.title);
+    for (const unit of units) {
+      const t = normalizeTitle(unit.title);
+      if (t && (t === want || want.includes(t) || t.includes(want))) {
+        return unit.topic;
+      }
+    }
+  }
+  return undefined;
 }
 
 // ─── result shapes ──────────────────────────────────────────────────────────
@@ -272,26 +302,30 @@ export async function loadDesignContext(
   const openQuestions = extractOpenQuestions(markdown);
 
   // Dual-read: a migrated project (archStoreAdopted) reads its architecture
-  // from the arch_unit store — design/planning tasks carry no file scope, so
-  // the selection is exactly the store's unconditional active-invariant set
-  // (see selectiveInjection.ts). A non-migrated project keeps the
-  // pre-migration behaviour untouched: fuzzy-resolving the task body's
-  // "Notion pages affected" references against the manifest's context_pages.
+  // from the arch_unit store via the selective-injection selector —
+  // design/planning tasks carry no file scope, so selection is every active
+  // invariant unit unconditionally, plus (when the task's "Notion pages
+  // affected" references resolve to a store unit) that unit's topic's active
+  // units (see selectiveInjection.ts's topic fallback). A non-migrated
+  // project keeps the pre-migration behaviour untouched: fuzzy-resolving the
+  // task body's "Notion pages affected" references against the manifest's
+  // context_pages.
   const archStoreAdopted =
     ProjectService.getById(milestone.project_id)?.archStoreAdopted ?? false;
 
   let archSource: 'store' | 'notion';
   const archUnits: ArchUnit[] = [];
   const unresolvedPageRefs: PageRef[] = [];
+  const pagesAffected = extractPagesAffected(markdown);
 
   if (archStoreAdopted) {
     archSource = 'store';
-    for (const unit of selectUnitsFromStore({})) {
+    const topic = resolveDesignTopic(pagesAffected);
+    for (const unit of selectUnitsFromStore({ topic })) {
       archUnits.push({ id: unit.id, title: unit.title, raw: '' });
     }
   } else {
     archSource = 'notion';
-    const pagesAffected = extractPagesAffected(markdown);
     const contextPages = manifest.context_pages ?? [];
     for (const p of pagesAffected) {
       const unit = resolveArchUnit(p.title, contextPages);
