@@ -40,6 +40,7 @@ import {
   NOTION_MCP_SERVER_NAME,
 } from '../mcp/notionMcpServer';
 import { getOrchestratorConfig } from '../config/appConfig';
+import { getDataDir } from '../config/dataDir';
 import { ApiSessionRunner } from './ApiSessionRunner';
 import type { ISessionRunner } from './SessionRunner';
 import {
@@ -209,19 +210,46 @@ function resolveBackendPort(): number {
 }
 
 /**
- * Write a per-session MCP config file to
- * `<projectDir>/.claude/session-prompts/<sessionId>.mcp.json` and return its
- * absolute path. Always includes the loopback-only orchestrator MCP server
- * entry (authed with this session's stage credential), merged with any
- * per-project mcp_servers — under the CLI's strict-mcp-config flag a session
- * sees exactly the configured servers, so both must be present.
+ * Directory the per-session MCP config file is written under —
+ * `<app-data-dir>/session-mcp-configs/`, deliberately outside any project
+ * checkout. The notion server entry (when present) carries the resolved
+ * Notion API key inlined directly (see
+ * mcp/notionMcpServer.ts#buildNotionMcpServerEntry): the installed
+ * `@notionhq/notion-mcp-server` only reads its credential from a literal env
+ * value, not a `${VAR}` placeholder the CLI would expand, so the real secret
+ * has to land in this file's bytes. Siting the file under the project
+ * checkout (as previously done, alongside the per-session system-prompt
+ * file) would put that secret at a path the dispatched session's own file
+ * tools — and anything that inspects the checkout — can read. The app data
+ * dir is backend-owned and never part of a project's git tree.
  *
- * Sited by sessionId under projectDir rather than under worktreePath: planning
- * sessions (groom/design/ops) share worktreePath === projectDir, so a
- * worktree-relative path would collide across concurrently dispatched
- * sessions and the last writer's stage credential would win for all of them.
- * Coding/review sessions have an isolated worktreePath but this file lives
- * alongside the (already per-session) session-prompt file instead.
+ * `MCP_CONFIG_DIR` overrides the base location (tests use this to redirect
+ * writes to a temp dir instead of the real app data dir).
+ * Exported for unit testing.
+ */
+export function mcpConfigDir(): string {
+  return path.join(
+    process.env.MCP_CONFIG_DIR || getDataDir(),
+    'session-mcp-configs',
+  );
+}
+
+/**
+ * Write a per-session MCP config file to
+ * `mcpConfigDir()/<sessionId>.mcp.json` and return its absolute path. Always
+ * includes the loopback-only orchestrator MCP server entry (authed with this
+ * session's stage credential), merged with any per-project mcp_servers —
+ * under the CLI's strict-mcp-config flag a session sees exactly the
+ * configured servers, so both must be present.
+ *
+ * Sited by sessionId under the app data dir rather than under projectDir or
+ * worktreePath: planning sessions (groom/design/ops) share
+ * worktreePath === projectDir, so a worktree-relative path would collide
+ * across concurrently dispatched sessions and the last writer's stage
+ * credential would win for all of them. Siting it outside any project
+ * checkout additionally keeps the inlined Notion API key (see below) off a
+ * path the dispatched session — or anything else with checkout access — can
+ * read.
  *
  * `taskSource` gates in the Notion read MCP server (mcp/notionMcpServer.ts):
  * only Notion-task-source projects get it registered, matching the
@@ -229,16 +257,15 @@ function resolveBackendPort(): number {
  * orchestrator-config.ts#getSessionAllowedTools — a Jira/GitHub/YAML project
  * gets no notion entry here and no Notion tools in its allow-list.
  *
- * Written with mode 600: the notion server entry carries the resolved
- * Notion API key inlined directly (see
- * mcp/notionMcpServer.ts#buildNotionMcpServerEntry) rather than a `${VAR}`
- * placeholder for CLI-side env expansion, and the file already carries the
- * orchestrator stage credential regardless, so it's kept unreadable to other
- * users.
+ * Written with mode 600: the notion server entry (when present) carries the
+ * resolved Notion API key inlined directly (see
+ * mcp/notionMcpServer.ts#buildNotionMcpServerEntry), and the file already
+ * carries the orchestrator stage credential regardless, so it's kept
+ * unreadable to other users.
  * Exported for unit testing.
  */
 export function writeMcpConfig(
-  projectDir: string,
+  _projectDir: string,
   sessionId: string,
   mcpServers: Record<string, unknown> | undefined,
   taskSource?: 'notion' | 'yaml' | 'jira' | 'github',
@@ -259,7 +286,7 @@ export function writeMcpConfig(
       stageToken,
     ),
   };
-  const dir = path.join(projectDir, '.claude', 'session-prompts');
+  const dir = mcpConfigDir();
   fs.mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, `${sessionId}.mcp.json`);
   fs.writeFileSync(filePath, JSON.stringify({ mcpServers: merged }, null, 2), {
@@ -2366,14 +2393,10 @@ export class SessionManager extends EventEmitter {
       );
     }
 
-    // Remove the per-session MCP config (written outside the worktree,
-    // alongside the system-prompt file) before removing the worktree.
-    const mcpConfigFile = path.join(
-      projectDir,
-      '.claude',
-      'session-prompts',
-      `${sessionId}.mcp.json`,
-    );
+    // Remove the per-session MCP config (written under the app data dir,
+    // outside the worktree and outside the project checkout — see
+    // mcpConfigDir()) before removing the worktree.
+    const mcpConfigFile = path.join(mcpConfigDir(), `${sessionId}.mcp.json`);
     try {
       if (fs.existsSync(mcpConfigFile)) {
         fs.unlinkSync(mcpConfigFile);
