@@ -504,6 +504,75 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
     expect(result.reasons.some((r) => r.includes('hedge token'))).toBe(true);
   });
 
+  it('allows a Code task whose Files/paths entry contains confirm-gate (a StepKind, not a hedge)', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/deploy/DeployOrchestrator.ts (update — confirm-gate compensating step)',
+            isNew: false,
+            existsInRepo: true,
+          },
+        ],
+      },
+      'notion:fm2-task',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('allows a Code task whose Files/paths entry contains confirm-restart (a playbook step id, not a hedge)', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/deploy/playbookSchema.ts (update — add confirm-restart step)',
+            isNew: false,
+            existsInRepo: true,
+          },
+        ],
+      },
+      'notion:fm2-task',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('allows a Code task whose Files/paths entry contains Confirmed (an already-resolved assertion, not a hedge)', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/checkout.ts (Confirmed via manual test)',
+            isNew: false,
+            existsInRepo: true,
+          },
+        ],
+      },
+      'notion:fm2-task',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('still blocks a Code task whose Files/paths entry contains the standalone verb confirm', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'confirm the exact path at grooming',
+            isNew: false,
+            existsInRepo: true,
+          },
+        ],
+      },
+      'notion:fm2-task',
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r) => r.includes('hedge token'))).toBe(true);
+  });
+
   it('blocks a Code task whose Files/paths entry does not resolve and is not marked *(new)*', () => {
     const result = checkGroomingPromotionGate(
       {
