@@ -18,6 +18,7 @@ vi.mock('../gateService', () => ({
 
 import {
   admitsLiveRecordUnreachable,
+  assertsStructuralUnverifiability,
   citesMissingIdentifierWithoutSearch,
   enforceAbstentionEvidenceContract,
   enforcePassEvidenceContract,
@@ -178,6 +179,42 @@ describe('admitsLiveRecordUnreachable', () => {
     expect(admitsLiveRecordUnreachable(undefined)).toBe(false);
     expect(admitsLiveRecordUnreachable(null)).toBe(false);
     expect(admitsLiveRecordUnreachable('some string')).toBe(false);
+  });
+});
+
+describe('assertsStructuralUnverifiability', () => {
+  it('is true when evidence traces a code path that never records the behavior by design', () => {
+    expect(
+      assertsStructuralUnverifiability({
+        reason:
+          'traced the refresh code path; it never calls recordEvent, so ' +
+          'no audit_log entry is produced by design',
+      }),
+    ).toBe(true);
+  });
+
+  it('is false for a plain turn/time budget abstention', () => {
+    expect(
+      assertsStructuralUnverifiability({
+        reason:
+          'ran out of turn budget before reaching a conclusive determination',
+      }),
+    ).toBe(false);
+  });
+
+  it('is false for a missing-capability abstention', () => {
+    expect(
+      assertsStructuralUnverifiability({
+        reason:
+          'could not read session_events for the target session — no ' +
+          'capability grant for that read this run',
+      }),
+    ).toBe(false);
+  });
+
+  it('is false for missing/malformed evidence', () => {
+    expect(assertsStructuralUnverifiability(undefined)).toBe(false);
+    expect(assertsStructuralUnverifiability('a string')).toBe(false);
   });
 });
 
@@ -925,6 +962,194 @@ describe('SessionGateItemVerifier — one-shot gate-verify appeal', () => {
     expect(sessionManager.archiveAndEndSession).toHaveBeenCalledWith(
       'sess-appeal',
     );
+  });
+});
+
+describe('SessionGateItemVerifier — one-shot reclassify-omission appeal', () => {
+  const item: GateItem = {
+    id: 'item-reclassify-appeal-1',
+    project: 'proj',
+    milestone: 'm1',
+    text: 'a rendered-colour assertion',
+    classification: 'Read-Only',
+    state: 'open',
+    updatedAt: new Date(0).toISOString(),
+    sources: [],
+    events: [],
+  };
+
+  const structuralEvidence = {
+    reason:
+      'traced the refresh code path; it never calls recordEvent, so no ' +
+      'audit_log entry is produced by design',
+  };
+  const budgetEvidence = {
+    reason: 'ran out of turn budget before reaching a conclusive determination',
+  };
+
+  function makeSessionManager() {
+    const emitter = new EventEmitter();
+    return Object.assign(emitter, {
+      start: vi.fn().mockResolvedValue('sess-reclassify-appeal'),
+      archiveAndEndSession: vi.fn(),
+      enqueueFeedback: vi.fn().mockResolvedValue(undefined),
+    });
+  }
+
+  beforeEach(() => {
+    vi.mocked(getSession).mockReset();
+    vi.mocked(markSessionDone).mockReset();
+    vi.mocked(appendGateItemEvent).mockReset();
+  });
+
+  it('delivers exactly one appeal naming the omission for a needs-setup asserting structural unverifiability with no reclassify', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never, {
+      budgetMs: 60_000,
+    });
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-reclassify-appeal',
+      disposition: { disposition: 'needs-setup', evidence: structuralEvidence },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Appeal sent while the session is still live — no teardown yet.
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+    expect(markSessionDone).not.toHaveBeenCalled();
+
+    const [sessionId, source, message] = vi.mocked(
+      sessionManager.enqueueFeedback,
+    ).mock.calls[0];
+    expect(sessionId).toBe('sess-reclassify-appeal');
+    expect(source).toBe('gate-verifier:reclassify-appeal');
+    expect(message).toMatch(/did not include a `reclassify` field/i);
+
+    expect(appendGateItemEvent).toHaveBeenCalledTimes(1);
+    expect(appendGateItemEvent).toHaveBeenCalledWith(
+      item.id,
+      expect.objectContaining({
+        disposition: 'noted',
+        operator: 'gate-verifier',
+        evidence: expect.objectContaining({
+          appeal: 'reclassify-omission',
+          originalDisposition: 'needs-setup',
+          originalEvidence: structuralEvidence,
+        }),
+      }),
+    );
+
+    // Answer the appeal so the test doesn't leak timers.
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-reclassify-appeal',
+      disposition: {
+        disposition: 'needs-setup',
+        evidence: structuralEvidence,
+        reclassify: {
+          to: 'Human-Observation',
+          reason: 'no operational trace can ever be produced for this item',
+        },
+      },
+    });
+    const result = await resultPromise;
+    expect(result.disposition).toBe('needs-setup');
+    expect(result.reclassify).toEqual({
+      to: 'Human-Observation',
+      reason: 'no operational trace can ever be produced for this item',
+    });
+    // Exactly one appeal — no second round.
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+  });
+
+  it('produces no appeal for a needs-setup citing a budget/capability limit', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-reclassify-appeal',
+      disposition: { disposition: 'needs-setup', evidence: budgetEvidence },
+    });
+
+    const result = await resultPromise;
+    expect(result.disposition).toBe('needs-setup');
+    expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
+    expect(appendGateItemEvent).not.toHaveBeenCalled();
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'sess-reclassify-appeal',
+      expect.any(Number),
+      null,
+      'gate_item_verifier_consumed',
+    );
+  });
+
+  it('treats the revision as final with no second appeal, even if it repeats needs-setup with no reclassify', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never, {
+      budgetMs: 60_000,
+    });
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-reclassify-appeal',
+      disposition: { disposition: 'needs-setup', evidence: structuralEvidence },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Revision still omits reclassify — this must be final, not a second appeal.
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-reclassify-appeal',
+      disposition: { disposition: 'needs-setup', evidence: structuralEvidence },
+    });
+
+    const result = await resultPromise;
+    expect(result.disposition).toBe('needs-setup');
+    expect(result.reclassify).toBeUndefined();
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'sess-reclassify-appeal',
+      expect.any(Number),
+      null,
+      'gate_item_verifier_consumed',
+    );
+  });
+
+  it('produces no appeal when the needs-setup already carries a reclassify proposal', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-reclassify-appeal',
+      disposition: {
+        disposition: 'needs-setup',
+        evidence: structuralEvidence,
+        reclassify: {
+          to: 'Human-Observation',
+          reason: 'no operational trace can ever be produced for this item',
+        },
+      },
+    });
+
+    const result = await resultPromise;
+    expect(result.reclassify).toEqual({
+      to: 'Human-Observation',
+      reason: 'no operational trace can ever be produced for this item',
+    });
+    expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
   });
 });
 
