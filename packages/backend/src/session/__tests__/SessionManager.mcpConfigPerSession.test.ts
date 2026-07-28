@@ -97,7 +97,10 @@ vi.mock('../../db/queries', () => ({
 }));
 
 vi.mock('../../config', () => ({
-  config: { maxConcurrentCodeSessions: 5 },
+  config: {
+    maxConcurrentCodeSessions: 5,
+    notionApiKey: 'ntn_test-key-1234567890',
+  },
   getProjectById: vi.fn(),
   normalizePath: vi.fn().mockImplementation((p: string) => p),
   runtimeSettings: { session_mode: 'cli', corporate_mode_enabled: false },
@@ -289,7 +292,7 @@ describe('writeMcpConfig — per-session collision fix', () => {
     expect(written.mcpServers.orchestrator).toBeDefined();
   });
 
-  it('does not inline a plaintext Notion API key and writes the config file mode 600', () => {
+  it('inlines the resolved Notion API key under NOTION_TOKEN and writes the config file mode 600', () => {
     const p = writeMcpConfig(
       PROJECT_DIR,
       'notion-session-secret',
@@ -297,8 +300,8 @@ describe('writeMcpConfig — per-session collision fix', () => {
       'notion',
     );
     const rawContent = writtenFiles.get(p)!;
-    expect(rawContent).not.toMatch(/ntn_[A-Za-z0-9]+/);
-    expect(rawContent).toContain('${NOTION_API_KEY}');
+    expect(rawContent).toContain('"NOTION_TOKEN": "ntn_test-key-1234567890"');
+    expect(rawContent).not.toContain('${NOTION_API_KEY}');
 
     const call = vi
       .mocked(fsModule.writeFileSync)

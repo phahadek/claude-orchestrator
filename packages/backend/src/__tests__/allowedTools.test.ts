@@ -152,6 +152,14 @@ describe('NOTION_READ_MCP_TOOLS', () => {
         'API-get-users',
         'API-get-user',
         'API-get-self',
+        'API-retrieve-a-page',
+        'API-retrieve-a-page-property',
+        'API-retrieve-a-block',
+        'API-get-block-children',
+        'API-query-data-source',
+        'API-retrieve-a-data-source',
+        'API-retrieve-a-database',
+        'API-list-data-source-templates',
       ].map(notionMcpToolName),
     );
   });

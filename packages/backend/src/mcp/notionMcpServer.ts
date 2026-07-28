@@ -8,22 +8,19 @@ export { NOTION_MCP_SERVER_NAME };
  * merged into a session's MCP config in SessionManager.ts#writeMcpConfig,
  * gated on `project.taskSource === 'notion'`.
  *
- * The Notion API key is never inlined here: `${NOTION_API_KEY}` is a literal
- * placeholder string that the CLI expands from its own process env at spawn
- * time (the backend's `NOTION_API_KEY` is already forwarded to the spawned
- * subprocess — see CliSessionRunner#run). writeMcpConfig serialises this
- * entry verbatim into a file under the project checkout, so inlining the
- * real key here would write it to disk in a readable path.
+ * `@notionhq/notion-mcp-server@2.5.1` resolves its auth header from
+ * `OPENAPI_MCP_HEADERS` (a JSON headers object), falling back to
+ * `NOTION_TOKEN` (rendered as `Authorization: Bearer <token>`), and returns
+ * an empty header object — i.e. every call 401s — when neither is set (see
+ * its bundled bin/cli.mjs and its own --help output). `NOTION_API_KEY` is
+ * not a variable that package reads at all.
  *
- * Confirmed (not assumed) for the installed CLI (`@anthropic-ai/claude-code`
- * 2.1.220, matching config.claudePath): a server loaded via `--mcp-config
- * <path> --strict-mcp-config` is parsed with `scope:"dynamic"` and
- * `expandVars:true`, and `${VAR}` substitution reads the CLI subprocess's own
- * `process.env` by default — the same code path used for auto-discovered
- * project `.mcp.json` files. A live-session 401 from a Notion MCP tool call
- * is therefore a credential problem (stale/invalid `NOTION_API_KEY` in
- * `packages/backend/.env`), not a templating/delivery bug — see the
- * "Verify/fix Notion MCP credential delivery" investigation.
+ * The resolved key is inlined directly rather than passed as a `${VAR}`
+ * placeholder: writeMcpConfig serialises this entry into a per-session file
+ * under the project checkout, already written mode 0o600 and already
+ * carrying the orchestrator stage credential (see
+ * buildOrchestratorMcpServerEntry), so this is consistent with that file's
+ * existing sensitivity handling and not a new risk category.
  *
  * Read-only by design: the registered server exposes only the search/fetch/
  * get/query surface (see config.ts#NOTION_READ_MCP_TOOLS) — the write verbs
@@ -31,11 +28,13 @@ export { NOTION_MCP_SERVER_NAME };
  * added to a session's --allowed-tools, so they're structurally denied even
  * though the underlying integration token grants write.
  */
-export function buildNotionMcpServerEntry(): Record<string, unknown> {
+export function buildNotionMcpServerEntry(
+  apiKey: string,
+): Record<string, unknown> {
   return {
     type: 'stdio',
     command: 'npx',
     args: ['-y', '@notionhq/notion-mcp-server@2.5.1'],
-    env: { NOTION_API_KEY: '${NOTION_API_KEY}' },
+    env: { NOTION_TOKEN: apiKey },
   };
 }

@@ -229,14 +229,12 @@ function resolveBackendPort(): number {
  * orchestrator-config.ts#getSessionAllowedTools — a Jira/GitHub/YAML project
  * gets no notion entry here and no Notion tools in its allow-list.
  *
- * Written with mode 600: the notion server entry references
- * `${NOTION_API_KEY}` for CLI-side env expansion rather than an inline
- * literal — confirmed against the installed CLI (see
- * mcp/notionMcpServer.ts#buildNotionMcpServerEntry) that `--mcp-config
- * --strict-mcp-config` does expand it from the subprocess's own env, so this
- * is not a source of credential-delivery failures. The file may still carry
- * the orchestrator stage credential regardless, so it's kept unreadable to
- * other users.
+ * Written with mode 600: the notion server entry carries the resolved
+ * Notion API key inlined directly (see
+ * mcp/notionMcpServer.ts#buildNotionMcpServerEntry) rather than a `${VAR}`
+ * placeholder for CLI-side env expansion, and the file already carries the
+ * orchestrator stage credential regardless, so it's kept unreadable to other
+ * users.
  * Exported for unit testing.
  */
 export function writeMcpConfig(
@@ -250,7 +248,11 @@ export function writeMcpConfig(
   const merged = {
     ...mcpServers,
     ...(taskSource === 'notion'
-      ? { [NOTION_MCP_SERVER_NAME]: buildNotionMcpServerEntry() }
+      ? {
+          [NOTION_MCP_SERVER_NAME]: buildNotionMcpServerEntry(
+            config.notionApiKey,
+          ),
+        }
       : {}),
     [ORCHESTRATOR_MCP_SERVER_NAME]: buildOrchestratorMcpServerEntry(
       port,
