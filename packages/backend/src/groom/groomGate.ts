@@ -305,9 +305,20 @@ function isGateContributionCandidatesClassified(
   return { ok: reasons.length === 0, reasons };
 }
 
+/**
+ * Word-boundary match, excluding hyphenated compounds (e.g. `confirm-gate`,
+ * `confirm-restart`) — a bare `includes` flagged those StepKind/playbook step
+ * ids alongside real hedges. `\b` alone still rejects `Confirmed` (no
+ * boundary between the two word characters at `m`/`e`).
+ */
+function tokenToHedgeRegex(token: string): RegExp {
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // eslint-disable-next-line security/detect-non-literal-regexp -- token is always one of the fixed FILES_PATHS_HEDGE_TOKENS constants above, never external input.
+  return new RegExp(`\\b${escaped}\\b(?!-)`, 'i');
+}
+
 function filesPathsHedgeTokens(raw: string): string[] {
-  const lower = raw.toLowerCase();
-  return FILES_PATHS_HEDGE_TOKENS.filter((t) => lower.includes(t));
+  return FILES_PATHS_HEDGE_TOKENS.filter((t) => tokenToHedgeRegex(t).test(raw));
 }
 
 /**
