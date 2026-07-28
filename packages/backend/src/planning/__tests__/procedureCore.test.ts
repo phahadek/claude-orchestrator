@@ -552,9 +552,7 @@ describe('procedureCore', () => {
           )!,
           'design',
         ),
-      ).toMatch(
-        /why the project's existing primitives don't already compose/,
-      );
+      ).toMatch(/why the project's existing primitives don't already compose/);
       expect(assembled).toMatch(
         /why the project's existing primitives don't already compose/,
       );
@@ -575,7 +573,9 @@ describe('procedureCore', () => {
           )!,
           'design',
         ),
-      ).toMatch(/iteration data, never as approval of the\s+closest-matching staged option/);
+      ).toMatch(
+        /iteration data, never as approval of the\s+closest-matching staged option/,
+      );
 
       expect(
         renderPrinciple(

@@ -366,7 +366,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       "disposed of this one — {skillLabel}'s own read of which questions look " +
       '"independent" is not a reliable guard against staging two whose answers turn ' +
       'out coupled; treat every question as potentially dependent until the prior ' +
-      "one is actually locked. DO hold a question whose answer depends on another " +
+      'one is actually locked. DO hold a question whose answer depends on another ' +
       'still-unresolved question, and say so plainly — name the question it depends ' +
       'on and why — rather than staging it alongside or ahead of that question. ' +
       'DO NOT stage two Open Questions, however independent they appear, in the ' +
