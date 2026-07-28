@@ -125,6 +125,8 @@ vi.mock('../../db/queries', () => ({
   setSessionPauseReason: vi.fn(),
   setSessionLastErrorDetail: vi.fn(),
   setTaskPauseReason: vi.fn(),
+  listStagedIntentsBySession: vi.fn().mockReturnValue([]),
+  TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
 }));
 
 vi.mock('../../config', () => ({
@@ -183,6 +185,10 @@ import {
   SessionManager,
   gitWorktreeAddWithRetry,
   isRemovableWorktree,
+  buildResumeMessage,
+  buildPlanningResumeMessage,
+  RESUME_NUDGE_MESSAGE,
+  PLANNING_RESUME_FALLBACK_MESSAGE,
 } from '../SessionManager';
 import {
   updateSessionStatus,
@@ -195,6 +201,8 @@ import {
   incrementTaskCrashCount,
   setSessionLastErrorDetail,
   setTaskPauseReason,
+  getPRBySessionId,
+  listStagedIntentsBySession,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
@@ -758,6 +766,92 @@ describe('needs_changes verdict routing — synthetic integration', () => {
         payload: feedbackText,
       }),
     );
+  });
+});
+
+// ── buildResumeMessage / buildPlanningResumeMessage — session-type branch ────
+
+describe('buildResumeMessage — session-type branch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+  });
+
+  it.each(['groom', 'design', 'ops'] as const)(
+    'a resumed %s session never receives RESUME_NUDGE_MESSAGE',
+    (sessionType) => {
+      const row = { ...makeDeadRow(), session_type: sessionType };
+      expect(buildResumeMessage(row)).not.toBe(RESUME_NUDGE_MESSAGE);
+    },
+  );
+
+  it('a planning session resumed with no specific reason receives the planning-shaped fallback, not an empty message', () => {
+    const row = { ...makeDeadRow(), session_type: 'ops' };
+    const message = buildResumeMessage(row);
+    expect(message).toBe(PLANNING_RESUME_FALLBACK_MESSAGE);
+    expect(message.length).toBeGreaterThan(0);
+  });
+
+  it('a planning session resumed after an intent was sent back names that intent and the rejection reason', () => {
+    const row = { ...makeDeadRow(), session_type: 'design' };
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      {
+        id: 'intent-1',
+        kind: 'task.create',
+        payload: JSON.stringify({ title: 'Fix the flaky test' }),
+        state: 'rejected',
+        disposition_reason: 'duplicate of task-42',
+      } as any,
+    ]);
+
+    const message = buildResumeMessage(row);
+    expect(message).toContain('task.create "Fix the flaky test"');
+    expect(message).toContain('duplicate of task-42');
+  });
+
+  it('picks the most recently rejected intent when multiple exist', () => {
+    const row = { ...makeDeadRow(), session_type: 'groom' };
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      {
+        id: 'intent-1',
+        kind: 'task.setStatus',
+        payload: JSON.stringify({ taskId: 'task-1' }),
+        state: 'rejected',
+        disposition_reason: 'first reason',
+      } as any,
+      {
+        id: 'intent-2',
+        kind: 'task.setStatus',
+        payload: JSON.stringify({ taskId: 'task-2' }),
+        state: 'rejected',
+        disposition_reason: 'second reason',
+      } as any,
+    ]);
+
+    const message = buildPlanningResumeMessage(row);
+    expect(message).toContain('task-2');
+    expect(message).toContain('second reason');
+    expect(message).not.toContain('first reason');
+  });
+
+  it('a code session with a stored needs_changes verdict still receives the formatted review feedback unchanged', () => {
+    const row = { ...makeDeadRow(), session_type: 'standard' };
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      review_iteration: 1,
+      merge_state: 'clean',
+      base_branch: 'dev',
+    } as any);
+
+    expect(buildResumeMessage(row)).toBe('review-feedback');
+  });
+
+  it('a code session with no stored verdict still receives RESUME_NUDGE_MESSAGE', () => {
+    const row = { ...makeDeadRow(), session_type: 'standard' };
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+
+    expect(buildResumeMessage(row)).toBe(RESUME_NUDGE_MESSAGE);
   });
 });
 
