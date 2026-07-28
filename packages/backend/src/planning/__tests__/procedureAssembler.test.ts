@@ -14,6 +14,7 @@ import type { GroomLoadResult } from '../../groom/groomLoad';
 import type { DesignLoadResult } from '../../design/designLoad';
 import type { OpsLoadResult } from '../../ops/opsLoad';
 import { KNOWN_INTENT_KINDS } from '../../routes/stagedIntents';
+import { orchestratorMcpToolName } from '../../mcp/toolNaming';
 
 // ─── fixtures ───────────────────────────────────────────────────────────────
 
@@ -473,14 +474,23 @@ describe('assemblePlanningProcedure', () => {
     });
 
     // Completeness critic: probes gap classes via the advisory trace-coverage
-    // signal, before the terminal task.updateBody.
+    // signal, before the terminal task.updateBody. Names the MCP tool (the
+    // underscore form the CLI actually exposes), never the unreachable
+    // device-authed HTTP route.
     expect(designOutput).toMatch(/completeness critic/i);
-    expect(designOutput).toContain('/api/design/:taskId/trace-coverage');
+    expect(designOutput).toContain(
+      orchestratorMcpToolName('completeness.traceCoverage'),
+    );
+    expect(designOutput).not.toContain('/api/design/:taskId/trace-coverage');
     expect(designOutput).toMatch(/never a gate/i);
 
     // Disposition-don't-drop: every candidate lands in the durable store,
-    // never as body prose, never dropped silently.
+    // never as body prose, never dropped silently — via the MCP tool, never
+    // the unreachable device-authed HTTP route.
     expect(designOutput).toContain(
+      orchestratorMcpToolName('completeness.disposition'),
+    );
+    expect(designOutput).not.toContain(
       '/api/design/:taskId/completeness-disposition',
     );
     expect(designOutput).toMatch(/DO NOT drop a candidate silently/);
@@ -505,9 +515,11 @@ describe('assemblePlanningProcedure', () => {
         digest,
       });
       expect(other).not.toMatch(/completeness critic/i);
-      expect(other).not.toContain('/api/design/:taskId/trace-coverage');
       expect(other).not.toContain(
-        '/api/design/:taskId/completeness-disposition',
+        orchestratorMcpToolName('completeness.traceCoverage'),
+      );
+      expect(other).not.toContain(
+        orchestratorMcpToolName('completeness.disposition'),
       );
     }
   });

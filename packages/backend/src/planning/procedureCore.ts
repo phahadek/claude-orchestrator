@@ -414,7 +414,8 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       '`task.updateBody` closing synthesis. DO probe the recurring gap ' +
       'classes — a decision the implementer needs that no locked question ' +
       'covers — consuming the advisory trace-coverage signal ' +
-      '(`POST /api/design/:taskId/trace-coverage`) as an aid, never a gate: no ' +
+      `(the \`${orchestratorMcpToolName('completeness.traceCoverage')}\` tool) ` +
+      'as an aid, never a gate: no ' +
       'locked-decision-count threshold, no promotion block. DO NOT skip the critic ' +
       'pass because every listed question already locked cleanly — the pass exists ' +
       'to surface gaps no question named. DO carry every gap the pass raises, and ' +
@@ -431,8 +432,9 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'reason — one of `resolved` / `out-of-scope` / `not-a-decision` / `fold` / ' +
       "`file-sibling` / `sibling-owned` — folded into the API's accepted/dismissed " +
       'disposition (`resolved` is `accepted`; the rest are `dismissed` carrying that ' +
-      'reason). DO call `POST /api/design/:taskId/completeness-disposition` with ' +
-      '`{questions: [{question, disposition: "accepted"|"dismissed", reason, ' +
+      'reason). DO call the ' +
+      `\`${orchestratorMcpToolName('completeness.disposition')}\` tool with ` +
+      '`{taskId, questions: [{question, disposition: "accepted"|"dismissed", reason, ' +
       'approvalStatus: "proposed"}], runAt}` at critic time, for every critic run — ' +
       'this durable store, never body prose, is the record, and it is written ' +
       'immediately so nothing is silently lost even before the operator has seen ' +

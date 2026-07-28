@@ -774,7 +774,7 @@ function renderSkeleton(
           'implementation work beyond the locked decisions" when nothing further ' +
           'is implied).\n\n' +
           'Every completeness-critic gap and its proposed disposition (from the ' +
-          '`POST /api/design/:taskId/completeness-disposition` store, written ' +
+          `\`${orchestratorMcpToolName('completeness.disposition')}\` store, written ` +
           '`approvalStatus: "proposed"` at critic time) must appear in part 3 for ' +
           'operator sign-off — the store call records it durably so nothing is ' +
           'silently dropped, but recorded is not approved, and presenting it here ' +
