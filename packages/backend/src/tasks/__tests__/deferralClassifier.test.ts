@@ -61,16 +61,17 @@ vi.mock('../../seed/seedStore', () => ({
   rehomeItemsBySourceTask: vi.fn(),
 }));
 
-const { mockLoggerDebug, mockLoggerWarn } = vi.hoisted(() => ({
+const { mockLoggerDebug, mockLoggerWarn, mockLoggerInfo } = vi.hoisted(() => ({
   mockLoggerDebug: vi.fn(),
   mockLoggerWarn: vi.fn(),
+  mockLoggerInfo: vi.fn(),
 }));
 
 vi.mock('../../logger', () => ({
   logger: {
     debug: mockLoggerDebug,
     warn: mockLoggerWarn,
-    info: vi.fn(),
+    info: mockLoggerInfo,
     error: vi.fn(),
   },
 }));
@@ -146,6 +147,7 @@ beforeEach(() => {
   mockSetStagedIntentAdvisory.mockReset();
   mockLoggerDebug.mockReset();
   mockLoggerWarn.mockReset();
+  mockLoggerInfo.mockReset();
 
   mockGetTaskBackend.mockReturnValue({
     fetchTaskPage: vi.fn().mockResolvedValue('A clean, ready task body.'),
@@ -474,15 +476,16 @@ describe('classifyReadyProposal — task id normalization', () => {
     expect(mockSetStagedIntentAdvisory).not.toHaveBeenCalled();
   });
 
-  it('logs a debug diagnostic naming the unresolved id when the cache lookup misses', async () => {
+  it('logs an info diagnostic naming the unresolved id when the cache lookup misses', async () => {
     mockListStagedIntentsByGroup.mockReturnValue([makeRow({ task_id: 't-1' })]);
     mockGetTaskCache.mockReturnValue(null);
 
     await classifyReadyProposal('group-1');
 
     expect(mockSpawn).not.toHaveBeenCalled();
-    expect(mockLoggerDebug).toHaveBeenCalledTimes(1);
-    expect(mockLoggerDebug.mock.calls[0][0]).toContain('t-1');
+    expect(mockLoggerInfo).toHaveBeenCalledTimes(1);
+    expect(mockLoggerInfo.mock.calls[0][0]).toContain('t-1');
+    expect(mockLoggerInfo.mock.calls[0][0]).toContain('guard=task-type');
   });
 
   it('uses the canonical getCachedType from TaskWriteCommands rather than a private duplicate', async () => {
@@ -524,5 +527,154 @@ describe('classifyReadyProposal — deterministic-tier gating', () => {
 
     expect(mockSpawn).not.toHaveBeenCalled();
     expect(mockSetStagedIntentAdvisory).not.toHaveBeenCalled();
+  });
+});
+
+describe('classifyReadyProposal — guard logging', () => {
+  it('logs guard=no-ready-flips with the groupId and does not classify when there are no Ready-flip targets', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([]);
+
+    await classifyReadyProposal('group-42');
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockSetStagedIntentAdvisory).not.toHaveBeenCalled();
+    expect(mockLoggerInfo).toHaveBeenCalledTimes(1);
+    const [line] = mockLoggerInfo.mock.calls[0];
+    expect(line).toContain('guard=no-ready-flips');
+    expect(line).toContain('group-42');
+  });
+
+  it('logs guard=task-type with the resolved type when the type is non-implementer-bearing', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '📐 Design' }),
+    });
+
+    await classifyReadyProposal('group-1');
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockSetStagedIntentAdvisory).not.toHaveBeenCalled();
+    expect(mockLoggerInfo).toHaveBeenCalledTimes(1);
+    const [line] = mockLoggerInfo.mock.calls[0];
+    expect(line).toContain('guard=task-type');
+    expect(line).toContain('📐 Design');
+    expect(line).toContain('t-1');
+  });
+
+  it('logs guard=task-type with type=null when the cache lookup misses', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue(null);
+
+    await classifyReadyProposal('group-1');
+
+    expect(mockLoggerInfo).toHaveBeenCalledTimes(1);
+    const [line] = mockLoggerInfo.mock.calls[0];
+    expect(line).toContain('guard=task-type');
+    expect(line).toContain('null');
+  });
+
+  it('logs guard=readiness naming the violated tier(s) when the proposed body fails checkReadiness', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('This detail will be decided by the implementer.'),
+    });
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+
+    await classifyReadyProposal('group-1');
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockSetStagedIntentAdvisory).not.toHaveBeenCalled();
+    expect(mockLoggerInfo).toHaveBeenCalledTimes(1);
+    const [line] = mockLoggerInfo.mock.calls[0];
+    expect(line).toContain('guard=readiness');
+    expect(line).toContain('violations=');
+    expect(line).toContain('t-1');
+  });
+
+  it('logs the resulting advisory status on the success path', async () => {
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({
+      stdout: cliJsonWrap({ status: 'clean', confidence: 0, findings: [] }),
+    });
+
+    await classifyReadyProposal('group-1');
+
+    expect(mockSetStagedIntentAdvisory).toHaveBeenCalledTimes(1);
+    expect(mockLoggerInfo).toHaveBeenCalledTimes(1);
+    const [line] = mockLoggerInfo.mock.calls[0];
+    expect(line).toContain('status=clean');
+    expect(line).toContain('t-1');
+  });
+
+  it('never includes task body text in any emitted log line', async () => {
+    const secretBody =
+      'CONFIDENTIAL SECRET BODY TEXT that must never appear in logs.';
+    mockGetTaskBackend.mockReturnValue({
+      fetchTaskPage: vi.fn().mockResolvedValue(secretBody),
+    });
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    stubSpawn({
+      stdout: cliJsonWrap({ status: 'clean', confidence: 0, findings: [] }),
+    });
+
+    await classifyReadyProposal('group-1');
+
+    const allLoggedLines = [
+      ...mockLoggerInfo.mock.calls,
+      ...mockLoggerWarn.mock.calls,
+      ...mockLoggerDebug.mock.calls,
+    ].map((call) => call[0]);
+    for (const line of allLoggedLines) {
+      expect(line).not.toContain(secretBody);
+      expect(line).not.toContain('CONFIDENTIAL');
+    }
+  });
+
+  it('control flow is unchanged: each guard still returns without invoking classifyDeferral, and a passing input still classifies', async () => {
+    // guard=no-ready-flips
+    mockListStagedIntentsByGroup.mockReturnValue([]);
+    await classifyReadyProposal('group-1');
+    expect(mockSpawn).not.toHaveBeenCalled();
+
+    // guard=task-type
+    mockListStagedIntentsByGroup.mockReturnValue([makeRow()]);
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '📐 Design' }),
+    });
+    await classifyReadyProposal('group-1');
+    expect(mockSpawn).not.toHaveBeenCalled();
+
+    // guard=readiness
+    mockGetTaskBackend.mockReturnValue({
+      fetchTaskPage: vi
+        .fn()
+        .mockResolvedValue('This detail will be decided by the implementer.'),
+    });
+    mockGetTaskCache.mockReturnValue({
+      raw_json: JSON.stringify({ type: '💻 Code' }),
+    });
+    await classifyReadyProposal('group-1');
+    expect(mockSpawn).not.toHaveBeenCalled();
+
+    // passing input still classifies
+    mockGetTaskBackend.mockReturnValue({
+      fetchTaskPage: vi.fn().mockResolvedValue('A clean, ready task body.'),
+    });
+    stubSpawn({
+      stdout: cliJsonWrap({ status: 'clean', confidence: 0, findings: [] }),
+    });
+    await classifyReadyProposal('group-1');
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(mockSetStagedIntentAdvisory).toHaveBeenCalledTimes(1);
   });
 });
