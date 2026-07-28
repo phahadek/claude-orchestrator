@@ -328,7 +328,8 @@ describe('classifyReadyProposal — markdown-fenced classifier output', () => {
     mockGetTaskCache.mockReturnValue({
       raw_json: JSON.stringify({ type: '💻 Code' }),
     });
-    const fenced = '```\n{"status": "clean", "confidence": 0.95, "findings": []}\n```';
+    const fenced =
+      '```\n{"status": "clean", "confidence": 0.95, "findings": []}\n```';
     stubSpawn({ stdout: JSON.stringify({ result: fenced }) });
 
     await classifyReadyProposal('group-1');
@@ -370,7 +371,9 @@ describe('classifyReadyProposal — markdown-fenced classifier output', () => {
       confidence: 0.5,
       findings: [{ quote: 'q', detail: 'd' }],
     });
-    stubSpawn({ stdout: JSON.stringify({ result: '```json\n' + fenced + '\n```' }) });
+    stubSpawn({
+      stdout: JSON.stringify({ result: '```json\n' + fenced + '\n```' }),
+    });
 
     await classifyReadyProposal('group-1');
 
