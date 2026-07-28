@@ -248,7 +248,11 @@ export function writeMcpConfig(
   const merged = {
     ...mcpServers,
     ...(taskSource === 'notion'
-      ? { [NOTION_MCP_SERVER_NAME]: buildNotionMcpServerEntry(config.notionApiKey) }
+      ? {
+          [NOTION_MCP_SERVER_NAME]: buildNotionMcpServerEntry(
+            config.notionApiKey,
+          ),
+        }
       : {}),
     [ORCHESTRATOR_MCP_SERVER_NAME]: buildOrchestratorMcpServerEntry(
       port,
