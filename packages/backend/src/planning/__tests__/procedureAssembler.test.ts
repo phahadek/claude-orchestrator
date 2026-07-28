@@ -20,6 +20,7 @@ import { orchestratorMcpToolName } from '../../mcp/toolNaming';
 
 function fixtureGroomLoadResult(): GroomLoadResult {
   return {
+    archSource: 'notion',
     contextPages: [{ id: 'ctx-1', title: 'Master Context', markdown: '...' }],
     board: [],
     neighbourBoards: [],
@@ -42,6 +43,8 @@ function fixtureGroomLoadResult(): GroomLoadResult {
           planned: [],
         },
         bindingConstraints: ['constraint-a'],
+        archSource: 'notion',
+        archUnits: [{ id: 'ctx-1', title: 'Master Context' }],
         filesPathsEntries: [],
         dependsOnTasks: [],
       },

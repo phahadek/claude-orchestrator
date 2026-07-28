@@ -34,10 +34,10 @@ export function createGroomContextRouter(): Router {
     }
 
     try {
-      const result = await loadGroomContext(
-        milestone,
-        repoRoot ? { repoRoot } : undefined,
-      );
+      const result = await loadGroomContext(milestone, {
+        ...(repoRoot ? { repoRoot } : {}),
+        ...(project ? { projectId: project } : {}),
+      });
       res.json({
         ...result,
         codeWorklist: Object.fromEntries(result.codeWorklist),

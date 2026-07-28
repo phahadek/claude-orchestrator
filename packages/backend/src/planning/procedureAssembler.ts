@@ -120,6 +120,10 @@ export interface GroomDigestSlice {
   typeCheck: TypeCheckResult;
   readinessViolations: ReadinessViolation[];
   bindingConstraints: string[];
+  /** Which dual-read branch `archUnits` was resolved from — see `groomLoad.ts`'s `TaskDoc.archSource`. */
+  archSource: GroomLoadResult['archSource'];
+  /** Region-intersected arch_unit store units (+ active invariants) once adopted, else the fixed Notion context pages. */
+  archUnits: { id: string; title: string }[];
   dependencyCandidates: TaskDependencyCandidates | null;
   /** This task's declared scope, resolved into package/file regions — the code it touches. */
   regions: TaskRegions;
@@ -233,6 +237,8 @@ export function deriveGroomDigestSlice(
     typeCheck: doc.typeCheck,
     readinessViolations: doc.readinessViolations,
     bindingConstraints: doc.bindingConstraints,
+    archSource: doc.archSource,
+    archUnits: doc.archUnits,
     dependencyCandidates,
     regions: doc.regions,
     body: doc.rawMarkdown,
@@ -1021,6 +1027,17 @@ function renderGroomDigest(
     `- type_check: ${data.typeCheck.decision}${data.typeCheck.signals?.length ? ` — ${data.typeCheck.signals.join('; ')}` : ''}`,
     `- Binding constraints: ${data.bindingConstraints.length ? data.bindingConstraints.join(', ') : '(none)'}`,
   ];
+  // Store-sourced architecture is task-scoped (region-intersected + active
+  // invariants) — small enough to inline. The Notion branch's archUnits
+  // mirror the milestone's whole fixed context-page set, which is exactly
+  // the milestone-wide dump this digest is constrained to exclude (see
+  // `deriveGroomDigestSlice`'s doc comment) — pre-migration behaviour never
+  // inlined it here either, so leave the digest unchanged on that branch.
+  if (data.archSource === 'store') {
+    lines.push(
+      `- Arch-store-selected units (${data.archUnits.length}): ${data.archUnits.length ? data.archUnits.map((u) => u.title).join(', ') : '(none)'}`,
+    );
+  }
   const hasResolvedRegions =
     data.regions.packages.length > 0 || data.regions.files.length > 0;
   const hasPlanned = data.regions.planned.length > 0;

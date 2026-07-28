@@ -1,4 +1,11 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+
+vi.mock('../../db/db.js', async () => {
+  const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
+});
+
+import { db } from '../../db/db.js';
 import { spawnSync } from 'child_process';
 import { mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
@@ -11,6 +18,8 @@ import {
 } from '../groomLoad';
 import { toExternalId } from '../../tasks/taskId';
 import { bindingConstraintIdsForRegions } from '../constraintCatalog';
+import { insertProject, updateProject } from '../../db/queries';
+import { createUnit } from '../../architecture/ArchUnitStore';
 
 function git(args: string[], cwd: string) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -441,5 +450,153 @@ describe('loadGroomContext', () => {
         notionClient: fakeNotion(),
       }),
     ).rejects.toThrow(/not registered/);
+  });
+
+  describe('architecture dual-read', () => {
+    const PROJECT_ID = 'proj-groom-dual-read';
+
+    beforeEach(() => {
+      db.prepare('DELETE FROM arch_unit_event').run();
+      db.prepare('DELETE FROM arch_unit').run();
+      db.prepare('DELETE FROM projects').run();
+    });
+
+    function setupProject(archStoreAdopted: boolean) {
+      insertProject({
+        id: PROJECT_ID,
+        name: 'Groom Dual Read Project',
+        project_dir: '/tmp/groom-dual-read-project',
+        context_url: null,
+        github_repo: null,
+        task_source: 'notion',
+      });
+      if (archStoreAdopted) {
+        updateProject(PROJECT_ID, { arch_store_adopted: 1 });
+      }
+    }
+
+    it('resolves architecture from the arch_unit store (not the manifest context pages) once archStoreAdopted is set', async () => {
+      ({ repoDir } = setupRepo());
+      setupProject(true);
+      createUnit({
+        title: 'Always-binding invariant',
+        kind: 'invariant',
+        topic: 'general',
+        regions: [],
+        body: 'body',
+        at: '2026-01-01T00:00:00Z',
+      });
+      createUnit({
+        title: 'Notion-client subsystem unit',
+        kind: 'subsystem',
+        topic: 'notion',
+        regions: ['packages/backend/src/notion'],
+        body: 'body',
+        at: '2026-01-01T00:00:00Z',
+      });
+      createUnit({
+        title: 'Unrelated subsystem unit',
+        kind: 'subsystem',
+        topic: 'unrelated',
+        regions: ['packages/backend/src/unrelated'],
+        body: 'body',
+        at: '2026-01-01T00:00:00Z',
+      });
+
+      const result = await loadGroomContext('M-test', {
+        repoRoot: repoDir,
+        manifest: MANIFEST,
+        notionClient: fakeNotion(),
+        projectId: PROJECT_ID,
+      });
+
+      expect(result.archSource).toBe('store');
+      // The fixed Notion context pages are never fetched once the store is adopted.
+      expect(result.contextPages).toEqual([]);
+
+      const codeTask = result.targetTasks.find((t) => t.id === CODE_ROW.id);
+      expect(codeTask?.archSource).toBe('store');
+      expect(codeTask?.archUnits.map((u) => u.title).sort()).toEqual(
+        ['Always-binding invariant', 'Notion-client subsystem unit'].sort(),
+      );
+
+      const toolTask = result.targetTasks.find((t) => t.id === TOOL_ROW.id);
+      // Region-intersecting units select by the task's own regions — active
+      // invariants are still included regardless of region match.
+      expect(toolTask?.archUnits.map((u) => u.title)).toEqual([
+        'Always-binding invariant',
+      ]);
+    });
+
+    it("keeps grooming's pre-migration Notion behaviour unchanged when archStoreAdopted is not set", async () => {
+      ({ repoDir } = setupRepo());
+      setupProject(false);
+      createUnit({
+        title: 'Should never surface — project has not adopted the store',
+        kind: 'invariant',
+        topic: 'general',
+        regions: [],
+        body: 'body',
+        at: '2026-01-01T00:00:00Z',
+      });
+
+      const result = await loadGroomContext('M-test', {
+        repoRoot: repoDir,
+        manifest: MANIFEST,
+        notionClient: fakeNotion(),
+        projectId: PROJECT_ID,
+      });
+
+      expect(result.archSource).toBe('notion');
+      expect(result.contextPages).toEqual([
+        {
+          id: 'ctx-page-1',
+          title: 'Technical Architecture',
+          markdown: '# Technical Architecture\n\nSome context.',
+        },
+      ]);
+
+      const codeTask = result.targetTasks.find((t) => t.id === CODE_ROW.id);
+      expect(codeTask?.archSource).toBe('notion');
+      expect(codeTask?.archUnits).toEqual([
+        { id: 'ctx-page-1', title: 'Technical Architecture' },
+      ]);
+    });
+
+    it('computes bindingConstraints from the independent constraint catalog regardless of archStoreAdopted, alongside the dual-read archUnits', async () => {
+      ({ repoDir } = setupRepo());
+      setupProject(true);
+      createUnit({
+        title: 'Notion-client subsystem unit',
+        kind: 'subsystem',
+        topic: 'notion',
+        regions: ['packages/backend/src/notion'],
+        body: 'body',
+        at: '2026-01-01T00:00:00Z',
+      });
+
+      const result = await loadGroomContext('M-test', {
+        repoRoot: repoDir,
+        manifest: MANIFEST,
+        notionClient: fakeNotion(),
+        projectId: PROJECT_ID,
+      });
+
+      const codeTask = result.targetTasks.find((t) => t.id === CODE_ROW.id);
+      // The catalog is a separate structure from the arch_unit store — both
+      // are consulted, and the catalog's region-intersection is unaffected
+      // by the dual-read source.
+      expect(codeTask?.bindingConstraints).toEqual(
+        bindingConstraintIdsForRegions({
+          packages: codeTask!.regions.packages,
+          files: codeTask!.regions.files,
+        }),
+      );
+      expect(codeTask?.bindingConstraints).toContain('notion-single-writer');
+      expect(codeTask?.archSource).toBe('store');
+      expect(codeTask?.archUnits.map((u) => u.title)).toEqual([
+        'Notion-client subsystem unit',
+      ]);
+    });
   });
 });
