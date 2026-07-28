@@ -51,7 +51,7 @@ describe('GET /api/groom-context', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(mockLoadGroomContext).toHaveBeenCalledWith('M12', undefined);
+    expect(mockLoadGroomContext).toHaveBeenCalledWith('M12', {});
     expect(res.body.contextPages).toHaveLength(1);
     expect(res.body.codeWorklist).toEqual({ backend: ['a.ts', 'b.ts'] });
   });
@@ -76,6 +76,7 @@ describe('GET /api/groom-context', () => {
     expect(mockGetProjectRowById).toHaveBeenCalledWith('p1');
     expect(mockLoadGroomContext).toHaveBeenCalledWith('M12', {
       repoRoot: '/repo/root',
+      projectId: 'p1',
     });
   });
 

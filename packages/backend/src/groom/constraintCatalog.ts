@@ -9,6 +9,32 @@
  * against `appliesTo` to derive that task's `bindingConstraints`; groomGate.ts
  * re-derives the same intersection server-side so a session can't clear a
  * constraint by omitting or misreporting it.
+ *
+ * Relationship to the arch_unit store (decided, not deferred): this catalog
+ * stays an independent, code-shipped structure — it is NOT a projection of
+ * the store's invariant/contract units, and grooming consults both rather
+ * than one subsuming the other. Reasons this is the right split, not a
+ * shortcut past the design question:
+ *  - Scope mismatch: the store is per-project (a project's `archStoreAdopted`
+ *    flag gates whether it has one at all); this catalog encodes
+ *    orchestrator-wide non-negotiables that hold across every project
+ *    regardless of that flag. Deriving it from a per-project store would
+ *    make catalog coverage a function of what any given project happened to
+ *    author into its store.
+ *  - Different failure mode: `bindingConstraintIdsForRegions` feeds
+ *    groomGate.ts's server-side re-derivation — a hard promotion gate that
+ *    must stay available even for a project that has no store units yet (or
+ *    whose store migration is mid-flight). Coupling it to `queryUnits()`
+ *    would make the gate's availability depend on store population.
+ *  - `unresolvedCatalogEntries` already gives this catalog its own
+ *    keep-honest check (entries must resolve to a live Notion heading) —
+ *    the store path has no equivalent need since a store unit's regions are
+ *    authored directly, not derived from prose headings.
+ * So a groomed task carries two independent signals side by side:
+ * `bindingConstraints` (this catalog, region-intersected, always computed)
+ * and `archUnits` (the dual-read architecture — store or Notion, per
+ * `archStoreAdopted`). Revisit this split only if the catalog itself is
+ * migrated into the store as first-class per-project units.
  */
 
 export interface ConstraintCatalogEntry {

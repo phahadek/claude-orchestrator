@@ -266,8 +266,9 @@ export class OpsSessionLauncher {
     milestoneKey: string,
     repoRoot: string,
     taskId: string,
+    projectId: string,
   ) {
-    const result = await loadGroomContext(milestoneKey, { repoRoot });
+    const result = await loadGroomContext(milestoneKey, { repoRoot, projectId });
     try {
       return deriveGroomDigestSlice(result, taskId, milestoneKey);
     } catch (err) {
@@ -277,6 +278,7 @@ export class OpsSessionLauncher {
       );
       const refreshed = await loadGroomContext(milestoneKey, {
         repoRoot,
+        projectId,
         skipCache: true,
       });
       return deriveGroomDigestSlice(refreshed, taskId, milestoneKey);
@@ -317,6 +319,7 @@ export class OpsSessionLauncher {
             milestoneKey,
             project.project_dir,
             task.id,
+            projectId,
           ),
         };
       } else if (sessionType === 'split') {
@@ -329,6 +332,7 @@ export class OpsSessionLauncher {
             milestoneKey,
             project.project_dir,
             task.id,
+            projectId,
           ),
         };
       } else if (sessionType === 'design') {
