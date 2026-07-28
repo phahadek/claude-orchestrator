@@ -174,6 +174,49 @@ const stmtMarkSessionDone = db.prepare<{
   WHERE session_id = @session_id
 `);
 
+// pending_done_* are prepared lazily (inline, per-call) rather than as
+// module-level consts — unlike the sessions table's long-standing columns,
+// these are new, and some callers of queries.ts run against a `db` handle
+// that was never taken through schema.ts's runMigrations (only db.ts's own
+// bootstrap schema — see production callers vs. test fixtures that don't
+// mock db.ts). A module-level db.prepare() against a column that handle
+// doesn't have would fail at import time for every such caller, not just
+// ones that actually use pending-done. Preparing inline defers that check to
+// first actual use, matching the existing convention for other newer
+// optional columns in this file (e.g. addGrantedCapability).
+function setPendingDone(
+  sessionId: string,
+  endedAt: number,
+  prUrl: string | null,
+  callSite: string,
+): void {
+  db.prepare<{
+    session_id: string;
+    pending_done_ended_at: number;
+    pending_done_pr_url: string | null;
+    pending_done_call_site: string;
+  }>(
+    `UPDATE sessions
+     SET pending_done_ended_at = @pending_done_ended_at,
+         pending_done_pr_url = @pending_done_pr_url,
+         pending_done_call_site = @pending_done_call_site
+     WHERE session_id = @session_id`,
+  ).run({
+    session_id: sessionId,
+    pending_done_ended_at: endedAt,
+    pending_done_pr_url: prUrl,
+    pending_done_call_site: callSite,
+  });
+}
+
+function clearPendingDone(sessionId: string): void {
+  db.prepare<{ session_id: string }>(
+    `UPDATE sessions
+     SET pending_done_ended_at = NULL, pending_done_pr_url = NULL, pending_done_call_site = NULL
+     WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId });
+}
+
 const stmtMarkSessionIdle = db.prepare<{
   session_id: string;
   ended_at: number;
@@ -235,36 +278,109 @@ export function getOtherRunningSessionsForTask(
  * also persists pr_url without a second round-trip.
  * pr_url is only overwritten when non-null — existing value is preserved otherwise.
  *
- * Advisory guard: if the current session status is 'running', emits a
- * session_marked_done_while_running audit event to surface premature transitions
- * in production data. The write proceeds regardless (advisory only).
+ * In-flight guard: if the current session status is 'running', a turn may
+ * still be in progress (or about to be — e.g. a resume race), so writing
+ * 'done' now would either stomp an active turn or get silently reverted by
+ * that turn's own terminal write once it finishes. Instead of writing, the
+ * transition is deferred onto pending_done_* and a session_done_deferred_while_running
+ * audit event is recorded. The deferred transition is applied once the turn
+ * completes — see applyPendingDone, called from SessionManager's run()-settle
+ * handler and its boot-time sweep — so it is never silently lost.
+ *
+ * opts.skipInFlightGuard bypasses the guard for callers that have already
+ * independently confirmed there is no live process for this session (e.g.
+ * SessionManager's boot-time orphan recovery, reconciling a row stuck at
+ * 'running' from a crash before any process for it exists again this run) —
+ * never set this from a caller that cannot make that guarantee.
  */
 export function markSessionDone(
   sessionId: string,
   endedAt: number,
   prUrl?: string | null,
   callSite?: string,
+  opts?: { skipInFlightGuard?: boolean },
 ): void {
   const current = stmtGetSession.get({ session_id: sessionId }) as
     | { status: string; task_id: string | null }
     | undefined;
-  if (current?.status === 'running') {
+  if (current?.status === 'running' && !opts?.skipInFlightGuard) {
     logger.warn(
-      `[markSessionDone] running→done for ${sessionId.slice(0, 8)} call_site=${callSite ?? 'unknown'} — emitting audit event`,
+      `[markSessionDone] deferring running→done for ${sessionId.slice(0, 8)} call_site=${callSite ?? 'unknown'} — turn still in flight`,
     );
     recordEvent({
-      event_type: 'session_marked_done_while_running',
+      event_type: 'session_done_deferred_while_running',
       actor_type: 'system',
       actor_id: sessionId,
       task_id: current.task_id ?? null,
       payload: { call_site: callSite ?? 'unknown', status_before: 'running' },
     });
+    setPendingDone(sessionId, endedAt, prUrl ?? null, callSite ?? 'unknown');
+    return;
   }
   stmtMarkSessionDone.run({
     session_id: sessionId,
     ended_at: endedAt,
     pr_url: prUrl ?? null,
   });
+}
+
+/**
+ * Applies a done-transition previously deferred by markSessionDone, once the
+ * session's turn has genuinely completed (i.e. its process has exited — the
+ * caller is responsible for only invoking this at that point, never while a
+ * turn might still be in flight). No-op if nothing is pending. If the session
+ * already reached a terminal status via another path in the meantime, the
+ * stale pending mark is dropped rather than applied (that other terminal
+ * status wins — it reflects something more recent).
+ * Returns true if a deferred done-transition was applied.
+ */
+export function applyPendingDone(sessionId: string): boolean {
+  const current = stmtGetSession.get({ session_id: sessionId }) as
+    | {
+        status: string;
+        task_id: string | null;
+        pending_done_ended_at: number | null;
+        pending_done_pr_url: string | null;
+        pending_done_call_site: string | null;
+      }
+    | undefined;
+  if (!current || current.pending_done_ended_at == null) return false;
+  if (TERMINAL_SESSION_STATUSES.has(current.status)) {
+    clearPendingDone(sessionId);
+    return false;
+  }
+  stmtMarkSessionDone.run({
+    session_id: sessionId,
+    ended_at: current.pending_done_ended_at,
+    pr_url: current.pending_done_pr_url,
+  });
+  clearPendingDone(sessionId);
+  recordEvent({
+    event_type: 'session_done_deferred_applied',
+    actor_type: 'system',
+    actor_id: sessionId,
+    task_id: current.task_id ?? null,
+    payload: { call_site: current.pending_done_call_site ?? 'unknown' },
+  });
+  return true;
+}
+
+/**
+ * Sessions with an unapplied deferred done-transition (pending_done_ended_at
+ * set) that are not currently 'running' — these can arise if the backend
+ * restarted between the pending write and applyPendingDone's own call (e.g.
+ * mid-way through a clean-exit). Running rows are excluded because they are
+ * already covered by the ordinary orphan-resume path: once resumed and the
+ * turn completes again, applyPendingDone fires from the settle handler same
+ * as any other session. Used by SessionManager's boot sweep to close the
+ * loop on the rest.
+ */
+export function getSessionsWithUnappliedPendingDone(): Session[] {
+  return db
+    .prepare(
+      `SELECT * FROM sessions WHERE pending_done_ended_at IS NOT NULL AND status != 'running'`,
+    )
+    .all() as Session[];
 }
 
 /**

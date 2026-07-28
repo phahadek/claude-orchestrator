@@ -47,6 +47,9 @@ export interface Session {
   last_error_detail: string | null;
   events_pruned_at: number | null;
   granted_capabilities: string; // JSON array of operator-approved capability strings, sticky for the session's life
+  pending_done_ended_at: number | null; // deferred done-transition, applied once the in-flight turn completes
+  pending_done_pr_url: string | null;
+  pending_done_call_site: string | null;
 }
 
 export type NewSession = Omit<
@@ -71,6 +74,9 @@ export type NewSession = Omit<
   | 'last_error_detail'
   | 'events_pruned_at'
   | 'granted_capabilities'
+  | 'pending_done_ended_at'
+  | 'pending_done_pr_url'
+  | 'pending_done_call_site'
 > & {
   ended_at?: number | null;
   pr_url?: string | null;

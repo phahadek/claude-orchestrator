@@ -6,7 +6,11 @@ vi.mock('../db/db.js', async () => {
 });
 
 import { db } from '../db/db.js';
-import { markSessionDone, markSessionIdle } from '../db/queries';
+import {
+  markSessionDone,
+  markSessionIdle,
+  applyPendingDone,
+} from '../db/queries';
 
 function insertSession(
   sessionId: string,
@@ -111,20 +115,29 @@ describe('markSessionIdle terminal guard', () => {
     expect(row?.pr_url).toBe('https://github.com/o/r/pull/1');
   });
 
-  it("mirrors PlanningOrchestrator.markTerminal's ordering: a markSessionDone write sticks even when the ended subprocess's clean-exit chain calls markSessionIdle afterward", () => {
+  it("mirrors PlanningOrchestrator.markTerminal's ordering: a markSessionDone call made while the turn is still in flight defers instead of racing the clean-exit chain's markSessionIdle, and the deferred done still wins once applied", () => {
     insertSession('sess-planning', 'running', { taskId: 'task-plan' });
 
+    // Turn still in flight (status='running') — markSessionDone must not
+    // write 'done' here; it stashes the transition instead.
     markSessionDone(
       'sess-planning',
       Date.now(),
       null,
       'planning_no_pending_dispositions',
     );
+    expect(getRow('sess-planning')?.status).toBe('running');
+
     // Ending the session's subprocess drives a clean exit; AgentSession's
     // clean-exit chain calls markSessionIdle for a planning session
-    // regardless — the terminal guard must keep 'done' from being clobbered.
+    // regardless of the deferred mark above.
     markSessionIdle('sess-planning', Date.now(), null);
+    expect(getRow('sess-planning')?.status).toBe('idle');
 
+    // SessionManager applies the deferred transition once the turn has
+    // genuinely completed (its run() promise settles) — the deferred 'done'
+    // wins over the idle write that preceded it.
+    expect(applyPendingDone('sess-planning')).toBe(true);
     const row = getRow('sess-planning');
     expect(row?.status).toBe('done');
   });

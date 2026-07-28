@@ -107,6 +107,8 @@ vi.mock('../../db/queries', () => ({
   updateSessionStatus: vi.fn(),
   updateSessionWorktreePath: vi.fn(),
   markSessionDone: vi.fn(),
+  applyPendingDone: vi.fn().mockReturnValue(false),
+  getSessionsWithUnappliedPendingDone: vi.fn().mockReturnValue([]),
   markSessionIdle: vi.fn(),
   markSessionSuperseded: vi.fn(),
   insertEvent: vi.fn(),
@@ -203,6 +205,8 @@ import {
   setTaskPauseReason,
   getPRBySessionId,
   listStagedIntentsBySession,
+  applyPendingDone,
+  getSessionsWithUnappliedPendingDone,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
@@ -389,6 +393,52 @@ describe('sendOrResume — dead session path', () => {
       );
     expect(worktreeAdds.length).toBeLessThanOrEqual(1);
   });
+
+  it.each(['done', 'error', 'killed'])(
+    'refuses to respawn a terminal (%s) session without allowTerminal — no AgentSession constructed',
+    async (terminalStatus) => {
+      vi.mocked(getSession).mockReturnValue({
+        ...makeDeadRow(),
+        status: terminalStatus,
+      } as any);
+
+      const result = await sm.sendOrResume(SESSION_ID, 'feedback');
+
+      expect(result).toBeNull();
+      expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    },
+  );
+
+  it('with allowTerminal, respawns a terminal session and records session_terminal_reopened instead of silently writing running', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'done',
+    } as any);
+
+    const p = sm.sendOrResume(SESSION_ID, 're-open me', {
+      allowTerminal: true,
+    });
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    await p;
+
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_terminal_reopened',
+        actor_id: SESSION_ID,
+        payload: expect.objectContaining({ status_before: 'done' }),
+      }),
+    );
+  });
 });
 
 // ── sendOrResume — live session fast path ────────────────────────────────────
@@ -488,6 +538,79 @@ describe('sendOrResume — live session fast path', () => {
     expect(
       emittedMessages.filter((m: any) => m.type === 'session_status'),
     ).toHaveLength(0);
+  });
+
+  it.each(['done', 'error', 'killed'])(
+    'does not overwrite a terminal (%s) status with running for a live session, and does not reopen it without allowTerminal',
+    async (terminalStatus) => {
+      // Establish the session as live.
+      const p = sm.sendOrResume(SESSION_ID, 'first');
+      await vi.waitFor(() =>
+        expect(capturedSessions.length).toBeGreaterThan(0),
+      );
+      capturedSessions[0].emit('message', {
+        type: 'session_event',
+        sessionId: SESSION_ID,
+        eventType: 'system',
+        content: 'boot',
+      });
+      await p;
+
+      vi.mocked(updateSessionStatus).mockClear();
+      vi.mocked(recordEvent).mockClear();
+      // The row concluded (e.g. a deferred done was applied) while the
+      // process object is still registered as live.
+      vi.mocked(getSession).mockReturnValue({
+        ...makeDeadRow(),
+        status: terminalStatus,
+      } as any);
+
+      const emittedMessages: unknown[] = [];
+      sm.on('message', (msg) => emittedMessages.push(msg));
+
+      await sm.sendOrResume(SESSION_ID, 'live message');
+
+      expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalled();
+      expect(
+        emittedMessages.filter((m: any) => m.type === 'session_status'),
+      ).toHaveLength(0);
+      expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event_type: 'session_terminal_reopened' }),
+      );
+    },
+  );
+
+  it('explicitly reopens a live-but-terminal session when allowTerminal is set, recording session_terminal_reopened', async () => {
+    const p = sm.sendOrResume(SESSION_ID, 'first');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    await p;
+
+    vi.mocked(updateSessionStatus).mockClear();
+    vi.mocked(recordEvent).mockClear();
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'done',
+    } as any);
+
+    await sm.sendOrResume(SESSION_ID, 'live message', { allowTerminal: true });
+
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'session_terminal_reopened',
+        actor_id: SESSION_ID,
+        payload: expect.objectContaining({ status_before: 'done' }),
+      }),
+    );
   });
 });
 
@@ -601,6 +724,58 @@ describe('resumeOrphanSessions — boot recovery regression', () => {
       'error',
       expect.any(Number),
     );
+  });
+});
+
+// ── resumeOrphanSessions — deferred done-transition boot sweep ───────────────
+
+describe('resumeOrphanSessions — deferred done-transition boot sweep', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getStuckResultSessionRows).mockReturnValue([]);
+    vi.mocked(getSessionsByStatus).mockReturnValue([]);
+  });
+
+  it('applies a deferred done-transition left over from a restart and broadcasts session_status', async () => {
+    const pendingRow = { ...makeDeadRow(), status: 'idle' };
+    vi.mocked(getSessionsWithUnappliedPendingDone).mockReturnValue([
+      pendingRow,
+    ] as any);
+    vi.mocked(applyPendingDone).mockReturnValue(true);
+
+    const emittedMessages: unknown[] = [];
+    sm.on('message', (msg) => emittedMessages.push(msg));
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(applyPendingDone)).toHaveBeenCalledWith(SESSION_ID);
+    expect(emittedMessages).toContainEqual({
+      type: 'session_status',
+      sessionId: SESSION_ID,
+      status: 'done',
+    });
+  });
+
+  it('does not broadcast when applyPendingDone finds nothing to apply (e.g. stale row already terminal via another path)', async () => {
+    const pendingRow = { ...makeDeadRow(), status: 'error' };
+    vi.mocked(getSessionsWithUnappliedPendingDone).mockReturnValue([
+      pendingRow,
+    ] as any);
+    vi.mocked(applyPendingDone).mockReturnValue(false);
+
+    const emittedMessages: unknown[] = [];
+    sm.on('message', (msg) => emittedMessages.push(msg));
+
+    await sm.resumeOrphanSessions();
+
+    expect(
+      emittedMessages.filter((m: any) => m.type === 'session_status'),
+    ).toHaveLength(0);
   });
 });
 
