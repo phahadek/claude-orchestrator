@@ -13,7 +13,8 @@ const dbPath = _configDbPath || path.join(process.cwd(), 'dashboard.db');
 // ahead of this module's first import; if it's anything else here, either
 // that setup didn't run or something is bypassing it — fail loudly rather
 // than risk writing to a real file.
-const isTestMode = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST);
+const isTestMode =
+  process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST);
 if (isTestMode && dbPath !== ':memory:') {
   throw new Error(
     `[db] Refusing to open database at "${dbPath}" while running in test mode ` +
