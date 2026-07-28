@@ -57,6 +57,27 @@ function runScript(args) {
   });
 }
 
+describe('staged-intents-client.mjs usage', () => {
+  it('lists all six subcommands when invoked with no command', async () => {
+    let stderr = '';
+    try {
+      await runScript([]);
+    } catch (err) {
+      stderr = err.stderr ?? '';
+    }
+    for (const subcommand of [
+      'create',
+      'apply',
+      'reject',
+      'list',
+      'approve',
+      'group-commit',
+    ]) {
+      expect(stderr).toContain(subcommand);
+    }
+  });
+});
+
 describe('staged-intents-client.mjs approve', () => {
   it('POSTs /:id/approve, bearing the device token', async () => {
     const { stdout } = await runScript(['approve', 'intent-1']);
@@ -128,17 +149,65 @@ describe('staged-intents-client.mjs existing subcommands', () => {
     expect(lastRequestPath).toBe('/api/staged-intents/intent-1/apply');
   });
 
-  it('reject still POSTs /:id/reject', async () => {
-    await runScript(['reject', 'intent-1']);
-
-    expect(lastRequestMethod).toBe('POST');
-    expect(lastRequestPath).toBe('/api/staged-intents/intent-1/reject');
-  });
-
   it('list still GETs /api/staged-intents', async () => {
     await runScript(['list']);
 
     expect(lastRequestMethod).toBe('GET');
     expect(lastRequestPath).toBe('/api/staged-intents');
+  });
+});
+
+describe('staged-intents-client.mjs reject', () => {
+  it('POSTs /:id/reject with outcome and reason in the body', async () => {
+    await runScript([
+      'reject',
+      'intent-1',
+      '--outcome',
+      'decline',
+      '--reason',
+      'not needed',
+    ]);
+
+    expect(lastRequestMethod).toBe('POST');
+    expect(lastRequestPath).toBe('/api/staged-intents/intent-1/reject');
+    expect(lastRequestBody).toEqual({
+      outcome: 'decline',
+      reason: 'not needed',
+    });
+  });
+
+  it('refuses client-side when --outcome is not pushback or decline', async () => {
+    await expect(
+      runScript([
+        'reject',
+        'intent-1',
+        '--outcome',
+        'bogus',
+        '--reason',
+        'because',
+      ]),
+    ).rejects.toThrow();
+    expect(lastRequestPath).toBeNull();
+  });
+
+  it('refuses client-side when --reason is missing', async () => {
+    await expect(
+      runScript(['reject', 'intent-1', '--outcome', 'pushback']),
+    ).rejects.toThrow();
+    expect(lastRequestPath).toBeNull();
+  });
+
+  it('refuses client-side when --reason is blank', async () => {
+    await expect(
+      runScript([
+        'reject',
+        'intent-1',
+        '--outcome',
+        'pushback',
+        '--reason',
+        '   ',
+      ]),
+    ).rejects.toThrow();
+    expect(lastRequestPath).toBeNull();
   });
 });

@@ -2,8 +2,8 @@
 // Sanctioned session-side client for the shared, device-authed staged-intent
 // surface (see packages/backend/src/routes/stagedIntents.ts): POST
 // /api/staged-intents (create), POST /api/staged-intents/:id/apply (apply),
-// POST /api/staged-intents/:id/reject (reject), POST
-// /api/staged-intents/:id/approve (approve), and POST
+// POST /api/staged-intents/:id/reject (reject), GET /api/staged-intents
+// (list), POST /api/staged-intents/:id/approve (approve), and POST
 // /api/staged-intents/group/:groupId/commit (group-commit).
 //
 // This is the surface the interactive skills (/groom, /design, /ops) use to
@@ -22,7 +22,7 @@
 // Usage:
 //   node staged-intents-client.mjs create <kind> <json-payload> <projectId> [groupId]
 //   node staged-intents-client.mjs apply <intentId> [--override <reason>] [--actorType human|session]
-//   node staged-intents-client.mjs reject <intentId>
+//   node staged-intents-client.mjs reject <intentId> --outcome pushback|decline --reason <reason>
 //   node staged-intents-client.mjs list [--projectId <projectId>]
 //   node staged-intents-client.mjs approve <intentId>
 //   node staged-intents-client.mjs group-commit <groupId> [--override <reason>] [--actorType human|session]
@@ -156,14 +156,14 @@ export function applyStagedIntent({
   });
 }
 
-export function rejectStagedIntent({ host, port, token, intentId }) {
+export function rejectStagedIntent({ host, port, token, intentId, outcome, reason }) {
   return requestStagedIntents({
     host,
     port,
     token,
     method: 'POST',
     path: `/api/staged-intents/${encodeURIComponent(intentId)}/reject`,
-    payload: {},
+    payload: { outcome, reason },
   });
 }
 
@@ -210,6 +210,8 @@ function parseFlags(argv) {
     override: option('--override'),
     actorType: option('--actorType'),
     projectId: option('--projectId'),
+    outcome: option('--outcome'),
+    reason: option('--reason'),
   };
 }
 
@@ -217,7 +219,7 @@ const USAGE =
   'usage:\n' +
   '  node staged-intents-client.mjs create <kind> <json-payload> <projectId> [groupId]\n' +
   '  node staged-intents-client.mjs apply <intentId> [--override <reason>] [--actorType human|session]\n' +
-  '  node staged-intents-client.mjs reject <intentId>\n' +
+  '  node staged-intents-client.mjs reject <intentId> --outcome pushback|decline --reason <reason>\n' +
   '  node staged-intents-client.mjs list [--projectId <projectId>]\n' +
   '  node staged-intents-client.mjs approve <intentId>\n' +
   '  node staged-intents-client.mjs group-commit <groupId> [--override <reason>] [--actorType human|session]';
@@ -279,9 +281,23 @@ async function main() {
         actorType,
       });
     } else if (command === 'reject') {
-      const [intentId] = rest;
+      const [intentId, ...flagArgv] = rest;
       if (!intentId) return fail(USAGE);
-      result = await rejectStagedIntent({ host, port, token, intentId });
+      const { outcome, reason } = parseFlags(flagArgv);
+      if (outcome !== 'pushback' && outcome !== 'decline') {
+        return fail('--outcome must be "pushback" or "decline"');
+      }
+      if (!reason || !reason.trim()) {
+        return fail('--reason is required and must not be blank');
+      }
+      result = await rejectStagedIntent({
+        host,
+        port,
+        token,
+        intentId,
+        outcome,
+        reason,
+      });
     } else if (command === 'list') {
       const { projectId } = parseFlags(rest);
       result = await listStagedIntents({ host, port, token, projectId });
