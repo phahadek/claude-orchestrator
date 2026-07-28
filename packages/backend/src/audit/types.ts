@@ -83,7 +83,8 @@ type EventType =
   | 'arch_unit_created'
   | 'arch_unit_updated'
   | 'arch_unit_superseded'
-  | 'project_record_access_guide_missing';
+  | 'project_record_access_guide_missing'
+  | 'project_record_access_guide_blocks_escalation';
 
 type ActorType = 'ai' | 'human' | 'system';
 
