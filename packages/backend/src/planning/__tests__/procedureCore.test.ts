@@ -5,6 +5,7 @@ import {
   CORE_PRINCIPLES,
   DESIGN_TERMINAL_ARTIFACTS_ORDERING,
   ORDERED_STEPS,
+  OPS_JOURNAL_LIFECYCLE_ORDER,
   READINESS_BAR,
   SIZE_TYPE_CHECK,
   SKILL_LABELS,
@@ -16,6 +17,7 @@ import {
   stepTitleFor,
   type SkillId,
 } from '../procedureCore';
+import { ALLOWED_TRANSITIONS } from '../../ops/opsJournal';
 
 const repoRoot = join(__dirname, '..', '..', '..', '..', '..');
 const sharedHardRulesPath = join(
@@ -634,6 +636,60 @@ describe('procedureCore', () => {
         readFileSync(join(designReferenceDir, 'presentation.md'), 'utf8')
           .length,
       ).toBeGreaterThan(0);
+    });
+  });
+
+  describe('ops_journal state machine is taught to the ops procedure', () => {
+    it('names every ops_journal state and the normal path from pending, derived from ALLOWED_TRANSITIONS rather than restated', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'ops-journal-state-machine',
+      )!;
+      expect(principle).toBeDefined();
+      expect(principle.appliesTo).toEqual(['ops']);
+
+      const rendered = renderPrinciple(principle, 'ops');
+      for (const state of Object.keys(ALLOWED_TRANSITIONS)) {
+        expect(rendered, `should name state "${state}"`).toContain(
+          `\`${state}\``,
+        );
+      }
+      // The normal-path order is read from ALLOWED_TRANSITIONS's own
+      // declaration order, not a second hand-typed list.
+      expect(OPS_JOURNAL_LIFECYCLE_ORDER).toEqual([
+        'pending',
+        'candidate',
+        'staged-proposal',
+        'applied-pending-confirm',
+        'resolved',
+      ]);
+      expect(rendered).toContain(
+        OPS_JOURNAL_LIFECYCLE_ORDER.map((s) => `\`${s}\``).join(' → '),
+      );
+
+      // pending's legal targets are stated exactly, and staged-proposal is
+      // explicitly named as unreachable directly from pending.
+      for (const target of ALLOWED_TRANSITIONS.pending) {
+        expect(rendered).toContain(`\`${target}\``);
+      }
+      expect(rendered).toMatch(
+        /`staged-proposal` is NOT reachable directly from\s*`pending`/,
+      );
+      expect(rendered).toMatch(/stage `candidate` first/);
+    });
+
+    it('is included in the assembled dispatched ops procedure', () => {
+      const assembled = principlesFor('ops', { dispatched: true })
+        .map((p) => renderPrinciple(p, 'ops'))
+        .join('\n');
+      expect(assembled).toMatch(/ops_journal states are/);
+      expect(assembled).toMatch(/stage `candidate` first/);
+    });
+
+    it('never tells a dispatched ops session to stage journal.setState straight to staged-proposal', () => {
+      const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+      const text = stepSummaryFor(step, 'ops');
+      expect(text).not.toMatch(/journal\.setState.*→ staged-proposal/);
+      expect(text).toMatch(/next legal ops_journal transition/);
     });
   });
 });

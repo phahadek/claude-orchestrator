@@ -33,6 +33,10 @@ Canonical source: `packages/backend/src/planning/procedureCore.ts` (`CORE_PRINCI
 - **Grooming**: Loader-seeded on-disk JSON (grooming-state.json / code-map.json for /groom, design-state.json / code-map.json for /design) is mutated with the Edit tool (a unique-string change) or Read + Write (a structural change). Never write a throwaway script and run it (`node _foo.cjs` then `rm`), and never shell out (`echo >`, `cat >`, a `cd … && …` chain) — that is what causes the constant permission friction, not a workaround for it.
 - **Design Execution**: Loader-seeded on-disk JSON (grooming-state.json / code-map.json for /groom, design-state.json / code-map.json for /design) is mutated with the Edit tool (a unique-string change) or Read + Write (a structural change). Never write a throwaway script and run it (`node _foo.cjs` then `rm`), and never shell out (`echo >`, `cat >`, a `cd … && …` chain) — that is what causes the constant permission friction, not a workaround for it.
 
+## ops_journal state machine
+
+- **ops**: The ops_journal states are: `pending`, `candidate`, `staged-proposal`, `applied-pending-confirm`, `blocked`, `incident-frozen`, `resolved`. The normal path is `pending` → `candidate` → `staged-proposal` → `applied-pending-confirm` → `resolved` (`blocked` / `incident-frozen` are freezes reachable from, and returning to, any non-terminal state — not part of the normal path). From `pending` specifically, the only legal `journal.setState` targets are: `candidate`, `blocked`, `incident-frozen` — `staged-proposal` is NOT reachable directly from `pending`; stage `candidate` first. This is enforced at both stage time and apply time (the same `isValidOpsTransition` check) — a session that stages an illegal transition is rejected immediately, before it ever reaches the operator.
+
 ## Atomic single-action requests
 
 - **ops**: Every command a dispatched ops session requests is exactly one action per invocation — never a chained or bundled sequence (`&&`, `;`, a multi-step script). This is load-bearing for grant safety: a human approving a capability grant is approving *that one command*, not whatever it might trigger next.

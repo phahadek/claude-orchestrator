@@ -65,7 +65,13 @@ import type {
   SeedContributionItemInput,
   SeedContributionDecision,
 } from '../tasks/TaskWriteCommands';
-import { setEntryState, type OpsState } from '../ops/opsJournal';
+import {
+  setEntryState,
+  getEntry as getOpsJournalEntry,
+  isValidOpsTransition,
+  ALLOWED_TRANSITIONS,
+  type OpsState,
+} from '../ops/opsJournal';
 import { classifyReadyProposal } from '../tasks/deferralClassifier';
 import type { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
 import type { SessionManager } from '../session/SessionManager';
@@ -740,6 +746,32 @@ class InvestigationAccretionRejectedError extends Error {
 }
 
 /**
+ * Thrown when a journal.setState intent's transition is illegal from the
+ * journal's *current* state at stage time — the same authority
+ * (`isValidOpsTransition`, reading `ALLOWED_TRANSITIONS`) apply time already
+ * enforces, run here so the session (or the operator reviewing the decision
+ * surface) sees the rejection immediately rather than after an operator
+ * disposition has been spent staging/approving an intent that can never
+ * apply. This never replaces the apply-time check in setEntryState — the
+ * journal's state can still change between stage and apply (e.g. a sibling
+ * intent applies first), so apply time remains the sole hard authority.
+ */
+class OpsJournalTransitionRejectedError extends Error {
+  constructor(taskId: string, from: OpsState, to: OpsState) {
+    const legalTargets = ALLOWED_TRANSITIONS[from];
+    const legalTargetsText = legalTargets.length
+      ? legalTargets.map((s) => `"${s}"`).join(', ')
+      : `(none — "${from}" is terminal)`;
+    super(
+      `[stagedIntents] journal.setState rejected for task "${taskId}": "${from}" -> "${to}" ` +
+        `is not a legal ops_journal transition. Current state is "${from}"; legal targets are: ` +
+        `${legalTargetsText}.`,
+    );
+    this.name = 'OpsJournalTransitionRejectedError';
+  }
+}
+
+/**
  * Parses/normalizes one raw task-reference id. A bare id (no `source:`
  * prefix) is unambiguous — every unprefixed id surfacing in this system
  * originates from Notion (board rows, groom-context bundles) — so it is
@@ -859,6 +891,21 @@ export async function validateAndNormalizeTaskReferences(
       getCachedType(p.taskId) === '🔎 Investigation'
     ) {
       throw new InvestigationAccretionRejectedError(kind, p.taskId);
+    }
+  }
+
+  if (kind === 'journal.setState') {
+    const p = payload as { taskId?: unknown; state?: unknown } | null;
+    if (typeof p?.taskId === 'string' && typeof p?.state === 'string') {
+      const entry = getOpsJournalEntry(p.taskId);
+      const targetState = p.state as OpsState;
+      if (entry && !isValidOpsTransition(entry.state, targetState)) {
+        throw new OpsJournalTransitionRejectedError(
+          p.taskId,
+          entry.state,
+          targetState,
+        );
+      }
     }
   }
 
@@ -2426,7 +2473,8 @@ export function createStagedIntentsRouter(
     } catch (err) {
       if (
         err instanceof TaskReferenceValidationError ||
-        err instanceof InvestigationAccretionRejectedError
+        err instanceof InvestigationAccretionRejectedError ||
+        err instanceof OpsJournalTransitionRejectedError
       ) {
         res.status(400).json({ error: err.message });
         return;

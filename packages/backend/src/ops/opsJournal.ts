@@ -41,7 +41,7 @@ export interface OpsBoardTaskRow {
  * applying a change. blocked / incident-frozen are freezes reachable from
  * (and returning to) any non-terminal state. resolved is terminal.
  */
-const ALLOWED_TRANSITIONS: Record<OpsState, OpsState[]> = {
+export const ALLOWED_TRANSITIONS: Record<OpsState, OpsState[]> = {
   pending: ['candidate', 'blocked', 'incident-frozen'],
   candidate: [
     'staged-proposal',
