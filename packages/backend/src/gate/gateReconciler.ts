@@ -250,12 +250,15 @@ async function processItem(
   if (!tryReserveInFlight(item.id)) {
     return null;
   }
+  // processItem is only ever called from the tick's own auto-run loop — a
+  // fully-unattended verification, with no operator dispatch involved.
   return runReservedVerification(
     item,
     verifier,
     followupFiler,
     deploySha,
     concurrency,
+    true,
   );
 }
 
@@ -266,6 +269,8 @@ async function runReservedVerification(
   followupFiler: FollowupFixTaskFiler,
   deploySha: string | null,
   concurrency: GateVerificationConcurrencyConfig = {},
+  /** true = reconciler auto-launch (processItem); false = operator-triggered manual dispatch (dispatchGateItemVerification) — recorded on every event this run appends. */
+  unattended = false,
 ): Promise<ProcessedGateItem | null> {
   const maxDispatchAttempts =
     concurrency.maxDispatchAttempts ?? DEFAULT_MAX_DISPATCH_ATTEMPTS;
@@ -292,6 +297,7 @@ async function runReservedVerification(
         attempts,
         error: err instanceof Error ? err.message : String(err),
       },
+      unattended,
     });
     return {
       itemId: item.id,
@@ -331,6 +337,7 @@ async function runReservedVerification(
           verifierEvidence: result.evidence,
         },
         deploySha: deploySha ?? undefined,
+        unattended,
       });
       return {
         itemId: item.id,
@@ -343,6 +350,7 @@ async function runReservedVerification(
         disposition: 'needs-setup',
         evidence: result.evidence,
         deploySha: deploySha ?? undefined,
+        unattended,
       });
     } else if (result.disposition === 'fail') {
       const priorFollowon = latestFailFollowon(item);
@@ -356,6 +364,7 @@ async function runReservedVerification(
           evidence: failEvidence(item, result.evidence),
           filedFollowon: priorFollowon,
           deploySha: deploySha ?? undefined,
+          unattended,
         });
         gateStore.advanceState(
           item.id,
@@ -370,6 +379,7 @@ async function runReservedVerification(
             verifierEvidence: result.evidence,
             reason: `max-fix-attempts (${maxFixAttempts}) reached — escalate to operator`,
           },
+          unattended,
         });
         return {
           itemId: item.id,
@@ -383,6 +393,7 @@ async function runReservedVerification(
           evidence: failEvidence(item, result.evidence),
           filedFollowon: followup.taskId,
           deploySha: deploySha ?? undefined,
+          unattended,
         });
         const now = new Date().toISOString();
         gateStore.addSource(
@@ -402,6 +413,7 @@ async function runReservedVerification(
         evidence: result.evidence,
         deploySha: deploySha ?? undefined,
         operator: 'gate-verifier',
+        unattended,
       });
     }
   } finally {

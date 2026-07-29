@@ -17,6 +17,8 @@ import {
 } from '../gate/gateService';
 import { dispatchGateItemVerification } from '../gate/gateReconciler';
 import type { GateItemClassification } from '../db/types';
+import { getFlowRejectionRate } from '../db/queries';
+import type { TrustPrecisionFlow } from '../db/queries';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { BackendTaskWriteCommands } from '../tasks/TaskWriteCommands';
 import type {
@@ -453,6 +455,58 @@ export function createGateStateRouter(): Router {
         error:
           err instanceof Error ? err.message : 'gate verify dispatch failed',
       });
+    }
+  });
+
+  const TRUST_PRECISION_FLOWS: TrustPrecisionFlow[] = [
+    'groom',
+    'design',
+    'ops',
+    'gate-verify',
+  ];
+
+  // GET /api/gate/trust-rate?project=<id>&milestone=M12&flow=groom
+  // The Milestone panel's trust-precision read: per flow per milestone, the
+  // rate at which auto-dispatched output was rejected/abstained rather than
+  // approved — see db/queries.ts's getFlowRejectionRate for the per-flow
+  // definition. Informative only; no auto-disarm.
+  router.get('/gate/trust-rate', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : null;
+    const milestone =
+      typeof req.query.milestone === 'string' ? req.query.milestone : null;
+    const flow =
+      typeof req.query.flow === 'string' ? req.query.flow : null;
+    if (!project || !milestone || !flow) {
+      res
+        .status(400)
+        .json({ error: 'project, milestone, and flow are all required' });
+      return;
+    }
+    if (!TRUST_PRECISION_FLOWS.includes(flow as TrustPrecisionFlow)) {
+      res.status(400).json({
+        error: `flow must be one of ${TRUST_PRECISION_FLOWS.join(', ')}`,
+      });
+      return;
+    }
+    try {
+      const canonicalMilestone = resolveMilestoneForProject(
+        project,
+        milestone,
+      );
+      res.json(
+        getFlowRejectionRate(
+          project,
+          canonicalMilestone,
+          flow as TrustPrecisionFlow,
+        ),
+      );
+    } catch (err) {
+      if (err instanceof UnknownMilestoneError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
     }
   });
 

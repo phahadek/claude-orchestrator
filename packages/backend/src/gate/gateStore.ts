@@ -45,6 +45,8 @@ export interface GateItemEvent {
   filedFollowon?: string;
   deploySha?: string;
   operator?: string;
+  /** true = a fully-unattended reconciler auto-launch verified this event; false = a manual dispatch; absent = not verifier-originated. */
+  unattended?: boolean;
   at: string;
 }
 
@@ -101,6 +103,7 @@ export function getItem(id: string): GateItem | undefined {
       filedFollowon: e.filed_followon ?? undefined,
       deploySha: e.deploy_sha ?? undefined,
       operator: e.operator ?? undefined,
+      unattended: e.unattended === null ? undefined : e.unattended === 1,
       at: e.at,
     })),
   };
@@ -234,6 +237,7 @@ export function appendEvent(gateItemId: string, event: GateItemEvent): void {
     filed_followon: event.filedFollowon ?? null,
     deploy_sha: event.deploySha ?? null,
     operator: event.operator ?? null,
+    unattended: event.unattended === undefined ? null : event.unattended ? 1 : 0,
     at: event.at,
   });
   touchGateItemUpdatedAt(gateItemId, event.at);
@@ -321,6 +325,7 @@ export function setClassification(
     filed_followon: null,
     deploy_sha: null,
     operator: operator ?? null,
+    unattended: null,
     at: updatedAt,
   });
   recordEvent({

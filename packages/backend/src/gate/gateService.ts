@@ -448,6 +448,8 @@ export interface AppendGateItemEventInput {
   filedFollowon?: string;
   deploySha?: string;
   operator?: string;
+  /** true = a fully-unattended reconciler auto-launch verified this event; false = a manual dispatch; omit for a non-verifier-originated event. */
+  unattended?: boolean;
 }
 
 /** Prod-Mutating passes stop short of resolving — they wait for approveGateItem. */

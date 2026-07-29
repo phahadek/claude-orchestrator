@@ -439,6 +439,8 @@ export interface GateItemEventRow {
   filed_followon: string | null;
   deploy_sha: string | null;
   operator: string | null;
+  /** 1 = a fully-unattended reconciler auto-launch verified this event; 0 = a manual dispatch; NULL = not verifier-originated. */
+  unattended: number | null;
   at: string;
 }
 

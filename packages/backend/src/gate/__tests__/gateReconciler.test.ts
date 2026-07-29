@@ -147,6 +147,7 @@ describe('dispatchGateItemVerification', () => {
     expect(getItem(item.id)?.events.at(-1)).toMatchObject({
       disposition: 'pass',
       operator: 'gate-verifier',
+      unattended: false,
     });
   });
 
@@ -248,6 +249,7 @@ describe('runGateReconcilerTick', () => {
     expect(getItem(item.id)?.events.at(-1)).toMatchObject({
       disposition: 'pass',
       operator: 'gate-verifier',
+      unattended: true,
     });
   });
 
