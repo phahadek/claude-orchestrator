@@ -1,7 +1,7 @@
 import type { TaskView } from '../types/taskView';
 import type { MilestoneConvergence } from '@claude-orchestrator/backend/src/convergence/convergenceService';
 
-export type BurndownState = 'pending' | 'staged' | 'done';
+type BurndownState = 'pending' | 'staged' | 'done';
 
 export const PHASE_ORDER = [
   'design',
