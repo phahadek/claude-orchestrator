@@ -42,6 +42,16 @@ const PROJECT_ID = 'proj-completeness';
 const TASK_ID = 'notion:design-task-1';
 const SESSION_ID = 'design-session-completeness-1';
 
+const PROBED = ['unstated-premises'];
+const QUESTIONS = [
+  {
+    question: 'Should X be configurable?',
+    disposition: 'out-of-scope',
+    reason: 'Out of scope.',
+    approvalStatus: 'proposed',
+  },
+];
+
 function stageDisposition(runAt = '2026-07-28T00:00:00.000Z') {
   return stageIntent(
     'completeness.disposition',
@@ -50,14 +60,8 @@ function stageDisposition(runAt = '2026-07-28T00:00:00.000Z') {
       rowId: insertRow(runAt),
       project: 'demo',
       milestone: 'M13',
-      questions: [
-        {
-          question: 'Should X be configurable?',
-          disposition: 'dismissed',
-          reason: 'Out of scope.',
-          approvalStatus: 'proposed',
-        },
-      ],
+      probed: PROBED,
+      questions: QUESTIONS,
       runAt,
     },
     PROJECT_ID,
@@ -76,14 +80,7 @@ function insertRow(runAt: string): number {
       source_task_id: TASK_ID,
       project: 'demo',
       milestone: 'M13',
-      questions: JSON.stringify([
-        {
-          question: 'Should X be configurable?',
-          disposition: 'dismissed',
-          reason: 'Out of scope.',
-          approvalStatus: 'proposed',
-        },
-      ]),
+      questions: JSON.stringify({ probed: PROBED, questions: QUESTIONS }),
       run_at: runAt,
     });
   return Number(result.lastInsertRowid);
@@ -143,6 +140,38 @@ describe('completeness-approval gate on design terminal artifacts', () => {
     ).toThrow(/completeness critic's dispositions.*have not been approved/);
   });
 
+  it('blocks a follow-on task.create at stage time until approved (task …3012260f: task.create is a terminal artifact too)', () => {
+    stageDisposition();
+
+    expect(() =>
+      stageIntent(
+        'task.create',
+        { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+        PROJECT_ID,
+        null,
+        SESSION_ID,
+      ),
+    ).toThrow(/completeness critic's dispositions.*have not been approved/);
+  });
+
+  it('allows a follow-on task.create once the intent is approved', async () => {
+    const intent = stageDisposition();
+    const app = makeApp();
+    const agent = supertest(app);
+
+    await agent.post(`/api/staged-intents/${intent.id}/approve`).send({});
+
+    expect(() =>
+      stageIntent(
+        'task.create',
+        { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+        PROJECT_ID,
+        null,
+        SESSION_ID,
+      ),
+    ).not.toThrow();
+  });
+
   it('allows arch.createUnit and the closing-synthesis task.updateBody once the intent is approved, and advances the store rows off proposed', async () => {
     const intent = stageDisposition();
     const app = makeApp();
@@ -180,10 +209,12 @@ describe('completeness-approval gate on design terminal artifacts', () => {
 
     const rows = listCompletenessDispositions(TASK_ID);
     expect(rows).toHaveLength(1);
-    expect(JSON.parse(rows[0].questions)[0].approvalStatus).toBe('approved');
+    expect(JSON.parse(rows[0].questions).questions[0].approvalStatus).toBe(
+      'approved',
+    );
   });
 
-  it('rejecting the intent records the outcome on the store row, and a freshly-staged intent (no second critic run) still unblocks the gate once approved', async () => {
+  it('rejecting the intent removes the underlying store row (no orphan), and a freshly-staged intent (no second critic run) still unblocks the gate once approved', async () => {
     const intent = stageDisposition();
     const app = makeApp();
     const agent = supertest(app);
@@ -194,9 +225,7 @@ describe('completeness-approval gate on design terminal artifacts', () => {
     expect(rejected.status).toBe(200);
 
     const rowsAfterReject = listCompletenessDispositions(TASK_ID);
-    expect(JSON.parse(rowsAfterReject[0].questions)[0].approvalStatus).toBe(
-      'rejected',
-    );
+    expect(rowsAfterReject).toHaveLength(0);
 
     // The session is still able to re-stage a revised disposition — the
     // rejected intent is terminal and does not block a fresh one.

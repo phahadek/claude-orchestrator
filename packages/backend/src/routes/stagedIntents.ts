@@ -36,6 +36,7 @@ import type {
   StagedIntentAnswer,
   GroomProposalFields,
   CompletenessDispositionQuestion,
+  CompletenessProbedGapClass,
 } from '../db/types';
 import {
   hashIntentPayload,
@@ -56,6 +57,7 @@ import {
   getTaskCache,
   getSession,
   updateCompletenessDispositionApproval,
+  deleteCompletenessDisposition,
 } from '../db/queries';
 import { parseTaskId, normalizeTaskId } from '../tasks/taskId';
 import { NotionApiError } from '../notion/types';
@@ -560,6 +562,7 @@ export interface CompletenessDispositionIntentPayload {
   rowId: number;
   project: string | null;
   milestone: string | null;
+  probed: CompletenessProbedGapClass[];
   questions: CompletenessDispositionQuestion[];
   runAt: string;
 }
@@ -1199,16 +1202,24 @@ export class ExplicitSupersedesError extends Error {
 /**
  * The design terminal-artifacts kinds DESIGN_TERMINAL_ARTIFACTS_ORDERING
  * (procedureCore.ts) requires the completeness critic's findings be accepted
- * before: the three arch.* writes, and task.updateBody — which in a design
+ * before: the three arch.* writes, task.updateBody — which in a design
  * session is staged exactly once, as the closing synthesis (see
  * "design-closing-synthesis" in procedureCore.ts), so this never conflicts
- * with a groom/ops session's unrelated task.updateBody use.
+ * with a groom/ops session's unrelated task.updateBody use — and task.create,
+ * the follow-on-task set DESIGN_TERMINAL_ARTIFACTS_ORDERING also names as a
+ * terminal artifact. task.create carries no bound taskId of its own to check
+ * against (extractTaskId returns null for it — see assertCompletenessApproval,
+ * which checks the *session's* bound task instead), so gating it here closes
+ * task …3012260f's ordering hole: a follow-on task could otherwise be staged
+ * (and, in a group, committed) minutes before the disposition that was
+ * supposed to gate it was even approved.
  */
 const COMPLETENESS_GATED_KINDS: ReadonlySet<string> = new Set([
   'arch.createUnit',
   'arch.updateUnit',
   'arch.supersedeUnit',
   'task.updateBody',
+  'task.create',
 ]);
 
 /**
@@ -1741,16 +1752,18 @@ async function rejectStagedIntentRow(
     reason,
   );
 
-  // Records the operator's disposition on the underlying
-  // completeness_disposition row(s) too — not just the intent — so a caller
-  // reading the durable store directly (never just the intent) sees the
-  // outcome. A session left in `needs_revision` (pushback) or terminal
-  // `rejected` (decline) can, either way, re-run completeness.disposition to
-  // stage a fresh intent — no second critic pass required.
+  // Removes the underlying completeness_disposition row outright — not just
+  // the intent — so the store never carries a row the operator explicitly
+  // declined (task …3012260f, defect 5: the row is durably written before
+  // the intent that gates it, so rejecting the intent must not leave that
+  // row behind as an orphan). A session left in `needs_revision` (pushback)
+  // or terminal `rejected` (decline) can, either way, re-run
+  // completeness.disposition to stage a fresh intent with a fresh row — no
+  // second critic pass required.
   if (rejectedIntent.kind === 'completeness.disposition') {
     const payload =
       rejectedIntent.payload as CompletenessDispositionIntentPayload;
-    updateCompletenessDispositionApproval(payload.rowId, 'rejected');
+    deleteCompletenessDisposition(payload.rowId);
   }
 
   if (rejectedIntent.kind === 'session.requestCapability') {

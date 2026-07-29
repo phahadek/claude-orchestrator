@@ -16,13 +16,25 @@ vi.mock('../../db/db.js', async () => {
 
 import { db } from '../../db/db.js';
 import { createDesignRouter } from '../design';
+import { upsertTaskCache } from '../../db/queries';
 
 const app = express();
 app.use(express.json());
 app.use('/api', createDesignRouter());
 
+const PROBED = ['unstated-premises'];
+
 beforeEach(() => {
   db.prepare('DELETE FROM completeness_disposition').run();
+  db.prepare('DELETE FROM task_cache').run();
+  for (const taskId of [
+    'notion:design1',
+    'notion:design2',
+    'notion:design3',
+    'notion:design4',
+  ]) {
+    upsertTaskCache(taskId, JSON.stringify({ type: '📐 Design' }));
+  }
 });
 
 describe('POST /api/design/:taskId/completeness-disposition', () => {
@@ -32,10 +44,11 @@ describe('POST /api/design/:taskId/completeness-disposition', () => {
       .send({
         project: 'demo',
         milestone: 'M12',
+        probed: PROBED,
         questions: [
           {
             question: 'Should X be configurable?',
-            disposition: 'dismissed',
+            disposition: 'out-of-scope',
             reason: 'Out of scope.',
           },
         ],
@@ -44,10 +57,11 @@ describe('POST /api/design/:taskId/completeness-disposition', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.source_task_id).toBe('notion:design1');
+    expect(res.body.probed).toEqual(PROBED);
     expect(res.body.questions).toEqual([
       {
         question: 'Should X be configurable?',
-        disposition: 'dismissed',
+        disposition: 'out-of-scope',
         reason: 'Out of scope.',
         approvalStatus: 'proposed',
       },
@@ -58,6 +72,7 @@ describe('POST /api/design/:taskId/completeness-disposition', () => {
     const res = await request(app)
       .post('/api/design/notion:design1/completeness-disposition')
       .send({
+        probed: PROBED,
         questions: [{ question: 'x' }],
         runAt: '2026-07-20T00:00:00.000Z',
       });
@@ -65,12 +80,90 @@ describe('POST /api/design/:taskId/completeness-disposition', () => {
     expect(res.status).toBe(400);
   });
 
+  it('rejects a question carrying a legacy accepted/dismissed value instead of a named disposition', async () => {
+    const res = await request(app)
+      .post('/api/design/notion:design1/completeness-disposition')
+      .send({
+        probed: PROBED,
+        questions: [
+          { question: 'Q?', disposition: 'accepted', reason: 'Resolved.' },
+        ],
+        runAt: '2026-07-20T00:00:00.000Z',
+      });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects an empty probed array — a clean pass must still name what it checked', async () => {
+    const res = await request(app)
+      .post('/api/design/notion:design1/completeness-disposition')
+      .send({
+        probed: [],
+        questions: [],
+        runAt: '2026-07-20T00:00:00.000Z',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/probed/);
+  });
+
+  it('records a clean pass as an affirmative statement of what was probed, not an empty questions array alone', async () => {
+    const res = await request(app)
+      .post('/api/design/notion:design1/completeness-disposition')
+      .send({
+        probed: [
+          'durability-failure-modes',
+          'dual-read-consumer-set',
+          'interaction-bugs',
+          'missing-scaffolding',
+          'state-mutation-granularity',
+          'unstated-premises',
+        ],
+        questions: [],
+        runAt: '2026-07-20T00:00:00.000Z',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.probed).toHaveLength(6);
+    expect(res.body.questions).toEqual([]);
+  });
+
+  it('rejects a malformed/non-timestamp runAt', async () => {
+    const res = await request(app)
+      .post('/api/design/notion:design1/completeness-disposition')
+      .send({
+        probed: PROBED,
+        questions: [],
+        runAt: 'not-a-timestamp',
+      });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a task id that does not resolve, and writes no row', async () => {
+    const res = await request(app)
+      .post('/api/design/notion:does-not-exist/completeness-disposition')
+      .send({
+        probed: PROBED,
+        questions: [],
+        runAt: '2026-07-20T00:00:00.000Z',
+      });
+
+    expect(res.status).toBe(400);
+
+    const rows = db
+      .prepare('SELECT * FROM completeness_disposition')
+      .all() as unknown[];
+    expect(rows).toHaveLength(0);
+  });
+
   it('recorded is not approved: defaults a fresh disposition to approvalStatus "proposed", and honors an explicit "approved" override', async () => {
     const defaulted = await request(app)
       .post('/api/design/notion:design2/completeness-disposition')
       .send({
+        probed: PROBED,
         questions: [
-          { question: 'Q?', disposition: 'accepted', reason: 'Resolved.' },
+          { question: 'Q?', disposition: 'resolved', reason: 'Resolved.' },
         ],
         runAt: '2026-07-20T00:00:00.000Z',
       });
@@ -79,10 +172,11 @@ describe('POST /api/design/:taskId/completeness-disposition', () => {
     const overridden = await request(app)
       .post('/api/design/notion:design2/completeness-disposition')
       .send({
+        probed: PROBED,
         questions: [
           {
             question: 'Q?',
-            disposition: 'accepted',
+            disposition: 'resolved',
             reason: 'Resolved.',
             approvalStatus: 'approved',
           },
@@ -98,8 +192,9 @@ describe('POST /api/design/:taskId/completeness-disposition — row-shape parity
     const res = await request(app)
       .post('/api/design/notion:design3/completeness-disposition')
       .send({
+        probed: PROBED,
         questions: [
-          { question: 'Q?', disposition: 'accepted', reason: 'Resolved.' },
+          { question: 'Q?', disposition: 'resolved', reason: 'Resolved.' },
         ],
         runAt: '2026-07-20',
       });
@@ -112,10 +207,11 @@ describe('POST /api/design/:taskId/completeness-disposition — row-shape parity
     const res = await request(app)
       .post('/api/design/notion:design4/completeness-disposition')
       .send({
+        probed: PROBED,
         questions: [
           {
             question: 'Q?',
-            disposition: 'accepted',
+            disposition: 'resolved',
             reason: 'Resolved.',
             approvalStatus: 'rejected',
           },
@@ -126,6 +222,28 @@ describe('POST /api/design/:taskId/completeness-disposition — row-shape parity
     expect(res.status).toBe(201);
     expect(res.body.questions[0].approvalStatus).toBe('rejected');
   });
+
+  it('round-trips each of the six named dispositions', async () => {
+    const named = [
+      'resolved',
+      'out-of-scope',
+      'not-a-decision',
+      'fold',
+      'file-sibling',
+      'sibling-owned',
+    ] as const;
+    for (const disposition of named) {
+      const res = await request(app)
+        .post('/api/design/notion:design4/completeness-disposition')
+        .send({
+          probed: PROBED,
+          questions: [{ question: 'Q?', disposition, reason: 'r' }],
+          runAt: '2026-07-20T00:00:00.000Z',
+        });
+      expect(res.status).toBe(201);
+      expect(res.body.questions[0].disposition).toBe(disposition);
+    }
+  });
 });
 
 describe('GET /api/design/:taskId/completeness-disposition', () => {
@@ -133,10 +251,11 @@ describe('GET /api/design/:taskId/completeness-disposition', () => {
     await request(app)
       .post('/api/design/notion:design1/completeness-disposition')
       .send({
+        probed: PROBED,
         questions: [
           {
             question: 'Q1?',
-            disposition: 'accepted',
+            disposition: 'resolved',
             reason: 'Filed as follow-on.',
           },
         ],
@@ -149,6 +268,7 @@ describe('GET /api/design/:taskId/completeness-disposition', () => {
     expect(res.status).toBe(200);
     expect(res.body.runs).toHaveLength(1);
     expect(res.body.runs[0].source_task_id).toBe('notion:design1');
+    expect(res.body.runs[0].probed).toEqual(PROBED);
   });
 });
 
