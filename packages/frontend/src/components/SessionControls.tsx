@@ -164,11 +164,14 @@ export function SessionControls({
   }
 
   async function handleRevokeCapability(capability: string) {
-    await authedFetch(`/api/sessions/${session.sessionId}/capabilities/revoke`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ capability }),
-    });
+    await authedFetch(
+      `/api/sessions/${session.sessionId}/capabilities/revoke`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capability }),
+      },
+    );
   }
 
   const adminChromeClass = `${styles.adminChrome} ${compactOpen ? styles['adminChrome--open'] : ''}`;

@@ -16,7 +16,11 @@ vi.mock('../../db/db', async () => {
 
 import { db } from '../../db/db';
 import { sessionsRouter } from '../sessions';
-import { insertSession, addGrantedCapability, getGrantedCapabilities } from '../../db/queries';
+import {
+  insertSession,
+  addGrantedCapability,
+  getGrantedCapabilities,
+} from '../../db/queries';
 import { getAuditLogByActorId } from '../../audit/AuditLog';
 
 function buildApp() {
@@ -57,7 +61,9 @@ describe('PATCH /api/sessions/:id/capabilities/revoke', () => {
     ]);
 
     const events = getAuditLogByActorId('sess-revoke-1');
-    const revokedEvent = events.find((e) => e.eventType === 'capability_revoked');
+    const revokedEvent = events.find(
+      (e) => e.eventType === 'capability_revoked',
+    );
     expect(revokedEvent).toBeDefined();
     expect(revokedEvent?.payload).toEqual({ capability: 'Bash(psql:*)' });
   });
