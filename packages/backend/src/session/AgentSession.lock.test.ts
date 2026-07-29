@@ -21,7 +21,7 @@ vi.mock('../config', () => ({
     review_session_model: null,
     corporate_mode_enabled: false,
   },
-  config: { maxConcurrentCodeSessions: 5 },
+  config: {},
   getProjectById: vi.fn(),
   normalizePath: (p: string) => p,
 }));

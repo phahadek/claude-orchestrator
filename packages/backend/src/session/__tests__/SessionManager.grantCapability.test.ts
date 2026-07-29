@@ -159,10 +159,14 @@ vi.mock('../../db/queries', () => ({
 }));
 
 vi.mock('../../config', () => ({
-  config: { maxConcurrentCodeSessions: 5 },
+  config: {},
   getProjectById: vi.fn(),
   normalizePath: vi.fn().mockImplementation((p: string) => p),
-  runtimeSettings: { session_mode: 'cli', corporate_mode_enabled: false },
+  runtimeSettings: {
+    session_mode: 'cli',
+    corporate_mode_enabled: false,
+    max_concurrent_code_sessions: 5,
+  },
   ALLOWED_TOOLS: ['Read', 'Grep', 'Glob'],
   GROOM_ALLOWED_TOOLS: ['Read', 'Grep', 'Glob'],
   DESIGN_ALLOWED_TOOLS: ['Read', 'Grep', 'Glob'],

@@ -90,7 +90,6 @@ vi.mock('../config', () => ({
   ALLOWED_TOOLS: [],
   config: {
     claudePath: '/fake/claude',
-    maxConcurrentCodeSessions: 20,
     projectDir: '/fake/project',
   },
   getProjectById: vi.fn((id: string) =>

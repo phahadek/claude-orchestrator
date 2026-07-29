@@ -100,12 +100,15 @@ vi.mock('../../db/queries', () => ({
 
 vi.mock('../../config', () => ({
   config: {
-    maxConcurrentCodeSessions: 5,
     notionApiKey: 'ntn_test-key-1234567890',
   },
   getProjectById: vi.fn(),
   normalizePath: vi.fn().mockImplementation((p: string) => p),
-  runtimeSettings: { session_mode: 'cli', corporate_mode_enabled: false },
+  runtimeSettings: {
+    session_mode: 'cli',
+    corporate_mode_enabled: false,
+    max_concurrent_code_sessions: 5,
+  },
 }));
 
 vi.mock('child_process', () => ({

@@ -8,7 +8,6 @@ vi.mock('../config.js', () => ({
     port: 3001,
     projectDir: '/tmp',
     claudePath: 'claude',
-    maxConcurrentCodeSessions: 20,
     anthropicApiKey: '',
   },
   GITHUB_TOKEN: '',
