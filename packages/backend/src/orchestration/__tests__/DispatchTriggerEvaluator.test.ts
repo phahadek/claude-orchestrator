@@ -161,9 +161,7 @@ describe('DispatchTriggerEvaluator scan scope — wrapped_at exclusion', () => {
 
   it('excludes a wrapped milestone from scanProjectDesignCandidates while keeping the open sibling', () => {
     const evaluator = makeEvaluator();
-    const candidates = (evaluator as any).scanProjectDesignCandidates(
-      PROJECT,
-    );
+    const candidates = (evaluator as any).scanProjectDesignCandidates(PROJECT);
     expect(candidates.map((c: any) => c.milestone.id)).toEqual([
       OPEN_MILESTONE,
     ]);
