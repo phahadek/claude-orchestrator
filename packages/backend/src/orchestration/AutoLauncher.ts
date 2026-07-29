@@ -139,7 +139,8 @@ export class AutoLauncher {
    * escalated to needs_attention so a human can investigate.
    */
   private onSessionLaunchFailed(taskId: string): void {
-    const { count, escalated, cooldownMs } = this.crashBudget.recordEvent(taskId);
+    const { count, escalated, cooldownMs } =
+      this.crashBudget.recordEvent(taskId);
 
     if (escalated) {
       logger.warn(

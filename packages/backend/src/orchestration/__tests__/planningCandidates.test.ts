@@ -18,12 +18,18 @@ describe('passesGroomDepGate', () => {
   it('requires a 📐 Design/📋 Planning dep to be ✅ Done', () => {
     const t = task({ dependsOn: ['design-dep'] });
     const notDone = new Map([
-      ['design-dep', task({ id: 'design-dep', type: '📐 Design', status: '📐 In Progress' })],
+      [
+        'design-dep',
+        task({ id: 'design-dep', type: '📐 Design', status: '📐 In Progress' }),
+      ],
     ]);
     expect(passesGroomDepGate(t, notDone)).toBe(false);
 
     const done = new Map([
-      ['design-dep', task({ id: 'design-dep', type: '📐 Design', status: '✅ Done' })],
+      [
+        'design-dep',
+        task({ id: 'design-dep', type: '📐 Design', status: '✅ Done' }),
+      ],
     ]);
     expect(passesGroomDepGate(t, done)).toBe(true);
   });
@@ -31,12 +37,18 @@ describe('passesGroomDepGate', () => {
   it('requires an other-Type dep to be groomed past 🔲 Backlog (at 🗂️ Ready or beyond)', () => {
     const t = task({ dependsOn: ['code-dep'] });
     const stillBacklog = new Map([
-      ['code-dep', task({ id: 'code-dep', type: '💻 Code', status: '🔲 Backlog' })],
+      [
+        'code-dep',
+        task({ id: 'code-dep', type: '💻 Code', status: '🔲 Backlog' }),
+      ],
     ]);
     expect(passesGroomDepGate(t, stillBacklog)).toBe(false);
 
     const groomed = new Map([
-      ['code-dep', task({ id: 'code-dep', type: '💻 Code', status: '🗂️ Ready' })],
+      [
+        'code-dep',
+        task({ id: 'code-dep', type: '💻 Code', status: '🗂️ Ready' }),
+      ],
     ]);
     expect(passesGroomDepGate(t, groomed)).toBe(true);
   });
