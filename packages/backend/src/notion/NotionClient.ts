@@ -990,6 +990,62 @@ export class NotionClient {
     }
     deleteTaskCacheRow(taskPageCacheKey(taskId));
   }
+
+  /**
+   * Applies a notion.pageEdit staged intent's content_updates (each an
+   * old_str/new_str find/replace pair) to an arbitrary Notion page's full
+   * body. Unlike patchBodySection this is not heading-scoped — the payload
+   * targets a source-of-truth doc page rather than a task, so there is no
+   * fixed section to anchor on.
+   *
+   * Stale-base handling: the page may have changed since this edit was
+   * staged, so every old_str is re-checked against a fresh fetch of the
+   * page's current content before any write happens. If any old_str no
+   * longer matches exactly, the whole apply is rejected with
+   * NotionPageEditStaleBaseError rather than guessing at a partial or
+   * best-effort match — the caller routes this back to the staging surface
+   * for re-anchoring/re-staging.
+   */
+  async applyPageEdit(
+    pageId: string,
+    contentUpdates: { old_str: string; new_str: string }[],
+  ): Promise<void> {
+    const externalId = toExternalId(pageId);
+    const blocks = await fetchBlockChildren(externalId);
+    const text = blocks.map(blockToLine).join('\n');
+
+    let mutated = text;
+    for (const { old_str, new_str } of contentUpdates) {
+      if (!mutated.includes(old_str)) {
+        throw new NotionPageEditStaleBaseError(pageId, old_str);
+      }
+      mutated = mutated.replace(old_str, new_str);
+    }
+
+    const newBlocks = markdownToBlocks(mutated);
+    // Insert-before-delete: the new content lands before the stale blocks
+    // are torn down, so a crash mid-apply never leaves the page empty.
+    await insertChildBlocks(externalId, newBlocks);
+    for (const block of blocks) {
+      await notionRequest('DELETE', `/blocks/${block.id as string}`);
+    }
+    deleteTaskCacheRow(taskPageCacheKey(pageId));
+  }
+}
+
+/**
+ * Thrown by applyPageEdit when a content_update's old_str no longer appears
+ * verbatim in the page's current content — the page changed between staging
+ * and commit. Never mis-applied as a partial/best-effort match.
+ */
+export class NotionPageEditStaleBaseError extends Error {
+  constructor(pageId: string, oldStr: string) {
+    super(
+      `[NotionClient] applyPageEdit: old_str no longer matches on page ${pageId} — ` +
+        `the page changed since this edit was staged. Reject and re-stage: ${truncateForError(oldStr)}`,
+    );
+    this.name = 'NotionPageEditStaleBaseError';
+  }
 }
 
 /** Shape accepted by updateBody — mirrors the bodyRender.ts RenderedBlock output. */

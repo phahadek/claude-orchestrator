@@ -170,6 +170,30 @@ describe('StalledPRReconciler', () => {
     ).toBeUndefined();
   });
 
+  it('never re-drives an open human_merge_only PR, even in an otherwise incomplete-verdict shape', async () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'incomplete' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      human_merge_only: 1,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast, messages } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+    expect(
+      messages.find((m) => m.type === 'pr_stalled_escalated'),
+    ).toBeUndefined();
+  });
+
   it('clears review_session_id and enqueues fresh review for errored review session', async () => {
     const pr = makePR({
       review_result: null,

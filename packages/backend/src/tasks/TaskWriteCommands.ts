@@ -50,6 +50,7 @@ import {
   STATUS_DISPLAY,
   type TaskStatus,
 } from './statusCanonical';
+import type { NotionClient } from '../notion/NotionClient';
 
 export { isValidTransition, STATUS_DISPLAY, type TaskStatus };
 
@@ -1035,4 +1036,28 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
     }
     await this.backend.updateStatus(taskId, STATUS_DISPLAY[status], options);
   }
+}
+
+/**
+ * Apply handler for the notion.pageEdit staged intent — the Notion
+ * source-of-truth-page twin of BackendTaskWriteCommands' task-board writes.
+ * Unlike every other TaskWriteCommands entry point, this targets an
+ * arbitrary Notion page (not a board task row bound to a TaskBackend), so it
+ * is a standalone command class rather than a BackendTaskWriteCommands
+ * method. Applies directly via NotionClient.applyPageEdit — never through a
+ * TaskBackend port, since only Notion has this concept of a free-standing
+ * doc page.
+ */
+export class NotionWriteCommands {
+  constructor(private readonly notion: Pick<NotionClient, 'applyPageEdit'>) {}
+
+  async applyPageEdit(payload: NotionPageEditPayload): Promise<void> {
+    await this.notion.applyPageEdit(payload.page_id, payload.content_updates);
+  }
+}
+
+/** Payload for the notion.pageEdit staged intent kind — see stagedIntents.ts. */
+export interface NotionPageEditPayload {
+  page_id: string;
+  content_updates: { old_str: string; new_str: string }[];
 }

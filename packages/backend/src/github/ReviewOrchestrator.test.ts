@@ -547,6 +547,43 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
 // See packages/backend/src/server.ts for the push_detected listener and
 // reReviewPR() tests in PRReviewService.test.ts.
 
+describe('ReviewOrchestrator — human_merge_only docs PRs skip review', () => {
+  it('runs no review session for a human_merge_only PR, though the pre-review analyze gate already ran', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      human_merge_only: 1,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(rs.reviewPR).not.toHaveBeenCalled();
+    expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
+  });
+
+  it('still runs a review session for a non-human_merge_only PR (regression guard)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      human_merge_only: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(rs.reviewPR).toHaveBeenCalledOnce();
+  });
+});
+
 describe('ReviewOrchestrator — push_detected triggers re-review', () => {
   // Tests removed: push_detected wiring moved to server.ts.
   // See packages/backend/src/server.ts and PRReviewService.test.ts for coverage.

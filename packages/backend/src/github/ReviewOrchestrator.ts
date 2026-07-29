@@ -949,6 +949,20 @@ export class ReviewOrchestrator {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    // The docs execution flow's never-auto-merged output gate: a docs PR
+    // still runs the pre-review analyze gate above (secret-scan/hygiene) but
+    // spawns no review session — review is source-blind and can't verify
+    // doc source-fidelity against the Notion/repo source of truth, so a docs
+    // PR is never gated on review_result for its (human-only) merge.
+    if (prRow?.human_merge_only) {
+      setPreReviewStage(job.prNumber, job.repo, null);
+      logger.info(
+        `[ReviewOrchestrator] PR #${job.prNumber}: human_merge_only — analyze passed, skipping review session`,
+      );
+      this.consumePendingPushIfSet(job.prNumber, job.repo);
+      return;
+    }
+
     setPreReviewStage(job.prNumber, job.repo, null);
     this.sessionManager.emit('message', {
       type: 'review_started',

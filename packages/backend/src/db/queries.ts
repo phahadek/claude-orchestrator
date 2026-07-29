@@ -1314,6 +1314,7 @@ export function upsertPullRequest(
     | 'session_initiated_close_at'
     | 'reviewer_requested_at'
     | 'flake_recovery_attempts'
+    | 'human_merge_only'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -2156,9 +2157,28 @@ export function getApprovedOpenPRs(): PullRequestRow[] {
     WHERE state = 'open'
       AND review_result LIKE '%approved%'
       AND pause_reason IS NULL
+      AND (human_merge_only IS NULL OR human_merge_only = 0)
   `,
     )
     .all() as PullRequestRow[];
+}
+
+/**
+ * Sets the docs execution flow's never-auto-merged output gate at PR-open
+ * time. Idempotent — a repeat call with the same value is a no-op.
+ */
+export function setHumanMergeOnly(
+  prNumber: number,
+  repo: string,
+  value: boolean,
+): void {
+  db.prepare<{ pr_number: number; repo: string; human_merge_only: number }>(
+    `
+    UPDATE pull_requests
+    SET human_merge_only = @human_merge_only
+    WHERE pr_number = @pr_number AND repo = @repo
+  `,
+  ).run({ pr_number: prNumber, repo, human_merge_only: value ? 1 : 0 });
 }
 
 export function getAllOpenPRs(): PullRequestRow[] {

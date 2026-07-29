@@ -77,6 +77,11 @@ export function classifyStalledPR(
   implementingSessionStatus: string | null = null,
   hasUndeliveredFeedback = false,
 ): { kind: StalledPRKind } | null {
+  // The docs execution flow's never-auto-merged gate: an open, un-merged
+  // human_merge_only PR waits indefinitely for a human to merge it — that is
+  // its legitimate resting state, never stalled/orphaned/nudgeable.
+  if (pr.human_merge_only) return null;
+
   // Already escalated — reconciler is done with this PR
   const parsed = parsePauseReason(pr.pause_reason);
   if (parsed?.reason === 'stalled_reconcile_cap') return null;

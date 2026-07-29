@@ -102,6 +102,13 @@ export class StalledPRReconciler {
     let itemsProcessed = 0;
 
     for (const pr of openPRs) {
+      // The docs execution flow's never-auto-merged gate: an open
+      // human_merge_only PR is legitimately waiting for a human merge —
+      // never re-drive it (classifyStalledPR also excludes it, but skip the
+      // mergeability refresh/session lookups below entirely rather than
+      // relying on that alone).
+      if (pr.human_merge_only) continue;
+
       // Skip PRs already escalated to the human-attention queue
       const existing = parsePauseReason(pr.pause_reason);
       if (existing?.reason === 'stalled_reconcile_cap') continue;

@@ -1536,4 +1536,20 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // pull_requests.human_merge_only: the docs execution flow's never-auto-merged
+  // output gate for repo-file docs PRs — set at PR-open time by the /docs
+  // skill's dispatch path. Excluded from auto-merge at getApprovedOpenPRs
+  // (the periodic sweep query) AND independently at AutoMerger's actual
+  // merge-attempt choke point (attempt()), since attempt() is also invoked
+  // directly by callers that bypass getApprovedOpenPRs entirely (see
+  // AutoMerger.ts). Waits indefinitely for a human to merge — never stalled,
+  // orphaned, nudged, or escalated by the sweepers.
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN human_merge_only INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
 }

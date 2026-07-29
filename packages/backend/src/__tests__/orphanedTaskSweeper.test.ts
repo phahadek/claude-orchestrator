@@ -1302,4 +1302,36 @@ describe('OrphanedTaskSweeper', () => {
     // Task is NOT reverted — open PR means session did its job
     expect(backend.updateStatus).not.toHaveBeenCalled();
   });
+
+  it('idle session with an open human_merge_only PR is never nudged (legitimately waiting for a human merge)', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 30 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      id: 8,
+      pr_number: 511,
+      pr_url: 'https://github.com/o/r/pull/511',
+      session_id: 'sess-1',
+      state: 'open',
+      human_merge_only: 1,
+    } as ReturnType<typeof getPRBySessionId>);
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
 });

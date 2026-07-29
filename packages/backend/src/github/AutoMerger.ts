@@ -495,6 +495,19 @@ export class AutoMerger {
       return;
     }
     if (initialRow.state !== 'open') return;
+    // Independent re-check of the docs execution flow's never-auto-merged
+    // gate — attempt()/run() is invoked directly by PRReviewService,
+    // routes/prs.ts, routes/projects.ts's bypassToggle path, and rehydrate(),
+    // all of which bypass getApprovedOpenPRs (and its own human_merge_only
+    // exclusion) entirely. This is the one choke point every merge attempt
+    // actually funnels through, so it is the only place this can be enforced
+    // unconditionally, regardless of caller.
+    if (initialRow.human_merge_only) {
+      logger.info(
+        `[AutoMerger] PR #${prNumber}: human_merge_only — never auto-merged, waiting for a human merge`,
+      );
+      return;
+    }
 
     const ciCheckNames = loadOrchestratorConfig(
       project.projectDir,
@@ -643,6 +656,16 @@ export class AutoMerger {
     pr: PullRequestRow,
     ciCheckNames: string[] = [],
   ): Promise<void> {
+    // The docs execution flow's never-auto-merged output gate — re-checked
+    // here, immediately before the actual GitHub merge API call, so no code
+    // path through attemptMerge (however it got here) can ever merge a
+    // human_merge_only PR.
+    if (pr.human_merge_only) {
+      logger.info(
+        `[AutoMerger] PR #${pr.pr_number}: human_merge_only — refusing to merge, waiting for a human`,
+      );
+      return;
+    }
     const commitTitle = pr.title ?? `Merge PR #${pr.pr_number}`;
     try {
       const result = await this.github.mergePR(
