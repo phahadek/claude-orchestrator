@@ -233,6 +233,22 @@ describe('procedureCore', () => {
     );
   });
 
+  it('names splitting-by-narrowing as an outcome of the groom Ready path, not the Deferred path', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+    const text = stepSummaryFor(step, 'groom');
+    expect(text).toMatch(/still the\s+Ready path, not Deferred/);
+    expect(text).toContain(
+      'narrows the original in place to exactly the retained scope',
+    );
+    expect(text).toMatch(/one `task\.create` per\s+excised piece/);
+    expect(text).toMatch(/never for "I split this up"/);
+    expect(text).toMatch(/`size_check\.decision` as `no_split`/);
+    expect(text).toMatch(/never `split_now`/);
+    expect(text).toMatch(
+      /short one-line note \(e\.g\. in Context\) naming the siblings/,
+    );
+  });
+
   it('instructs surfacing a digest-contradicting spot-check as a blocker, not resolving around it', () => {
     const step = ORDERED_STEPS.find((s) => s.id === 'investigate')!;
     const text = stepSummaryFor(step, 'groom');

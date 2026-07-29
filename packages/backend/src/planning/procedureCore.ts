@@ -1021,6 +1021,33 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'staged no-op is an auditable, deliberate signal the operator can ' +
         'see and judge. Reach for Deferred whenever there is a real gap to ' +
         'name; reach for `planning.noOp` only when there genuinely is none. ' +
+        'When investigation concludes the task is simply too large — a coherent ' +
+        'subset should be retained and the rest carved off — that is still the ' +
+        'Ready path, not Deferred: stage a `task.updateBody` (or targeted ' +
+        '`task.patchBodySection` operations) that narrows the original in place ' +
+        'to exactly the retained scope (Summary, Context, acceptance criteria, ' +
+        'and Files/paths all reduced to match), stage one `task.create` per ' +
+        'excised piece (landing at 🔲 Backlog, each naming in its Context that ' +
+        'it was split off this task and which part it carries), stage ' +
+        '`task.setDependsOn` where the cut creates a genuine ordering ' +
+        'constraint between the narrowed original and a sibling, then take the ' +
+        'Ready path for the narrowed original as normal — it has been groomed, ' +
+        "not abandoned. Recommend the narrowed original's body also carry a " +
+        'short one-line note (e.g. in Context) naming the siblings it was ' +
+        'split into, so the redistribution stays traceable from the surviving ' +
+        'task. The Deferred path is for scope genuinely superseded or ' +
+        'genuinely not ready — never for "I split this up"; a split that ends ' +
+        "on Deferred silently blocks the original's dependents, since only " +
+        '✅ Done satisfies a Depends On (config/procedures.md § Task types) ' +
+        'and Deferred does not. Relatedly, a session that narrows in place ' +
+        'must record `size_check.decision` as `no_split` — the retained ' +
+        'scope, after narrowing, genuinely does not need further splitting — ' +
+        'never `split_now`: `split_now` nominates the separate, untested ' +
+        'split-session flow (`routes/groomFlip.ts` routing to ' +
+        '`split/splitSession.ts`), which this in-place narrowing does not ' +
+        'invoke, and recording it would divert the Ready flip into that ' +
+        'routing and fail with a 409 instead of landing the narrowed task at ' +
+        'Ready. ' +
         'See the Structured Output Contract below for the ' +
         'field-level format of every field in each — reaching the right ' +
         'conclusion and not staging it in full is the same failure as reaching ' +
