@@ -90,7 +90,8 @@ type EventType =
   | 'arch_unit_superseded'
   | 'project_record_access_guide_missing'
   | 'project_record_access_guide_blocks_escalation'
-  | 'flow_arm_changed';
+  | 'flow_arm_changed'
+  | 'milestone_wrapped';
 
 type ActorType = 'ai' | 'human' | 'system';
 

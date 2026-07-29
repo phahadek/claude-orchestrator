@@ -36,6 +36,8 @@ export interface ProjectMilestone {
   sourceId: string | null;
   canonicalShortId: string | null;
   displayOrder: number;
+  /** Set once /milestone-wrap closes out this milestone. Null = active or in-planning. */
+  wrappedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -96,6 +98,7 @@ function rowToMilestone(row: MilestoneRow): ProjectMilestone {
     sourceId: row.source_id,
     canonicalShortId: row.canonical_short_id,
     displayOrder: row.display_order,
+    wrappedAt: row.wrapped_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

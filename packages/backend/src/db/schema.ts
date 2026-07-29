@@ -1568,4 +1568,14 @@ export function runMigrations(target: Database.Database): void {
       PRIMARY KEY (milestone_id, flow)
     );
   `);
+
+  // milestones.wrapped_at: nullable Done marker, set once /milestone-wrap
+  // closes out a milestone. Convergence and the milestone list read filter
+  // wrapped_at IS NULL to scope to active + in-planning milestones — the
+  // non-Done scope rule.
+  try {
+    target.exec(`ALTER TABLE milestones ADD COLUMN wrapped_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
 }

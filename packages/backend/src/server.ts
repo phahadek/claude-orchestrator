@@ -96,6 +96,7 @@ import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
 import { createOpsJournalRouter } from './routes/opsJournal';
 import { createGateStateRouter } from './routes/gateState';
 import { createSeedStateRouter } from './routes/seedState';
+import { createConvergenceRouter } from './routes/convergence';
 import { createArchitectureRouter } from './routes/architecture';
 import { createDesignRouter } from './routes/design';
 import { createDesignContextRouter } from './routes/designContext';
@@ -283,6 +284,7 @@ app.use(
 app.use('/api', createGateStateRouter());
 app.use('/api', createDeployRouter());
 app.use('/api', createSeedStateRouter());
+app.use('/api', createConvergenceRouter());
 app.use('/api', createArchitectureRouter());
 app.use('/api', createDesignRouter());
 app.use('/api', createDesignContextRouter());
