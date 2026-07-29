@@ -7,6 +7,7 @@ import type { StagedIntent } from '../api/stagedIntents';
 import type { SessionState } from '../hooks/useSessionStore';
 import { useMilestoneConvergence } from '../hooks/useMilestoneConvergence';
 import { MilestoneBurndown } from './MilestoneBurndown';
+import { FlowArmToggle } from './FlowArmToggle';
 import {
   MilestoneDecisionStack,
   type MilestoneStackSelection,
@@ -134,6 +135,10 @@ export function MilestoneView({
           convergence={convergence}
           activePhase={phaseFilter}
           onPhaseSelect={handlePhaseFilterChange}
+        />
+        <FlowArmToggle
+          milestoneId={activeBoardId}
+          autoLaunchEnabled={project?.autoLaunchEnabled}
         />
       </div>
 
