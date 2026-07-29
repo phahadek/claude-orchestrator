@@ -14,7 +14,9 @@ describe('ws/router.ts — fetch_tasks milestone-based routing', () => {
   });
 
   it('resolves the milestone via ProjectService.getMilestone(milestoneId)', () => {
-    expect(routerSource).toMatch(/ProjectService\.getMilestone\(msg\.milestoneId\)/);
+    expect(routerSource).toMatch(
+      /ProjectService\.getMilestone\(msg\.milestoneId\)/,
+    );
   });
 
   it('reads the board cache keyed on the milestone UUID (not boardId), never blocking on a live backend round-trip', () => {

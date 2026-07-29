@@ -60,9 +60,7 @@ describe('eventKind — JSONL ev.content shape', () => {
   // event_type is never 'tool_use'/'tool_result'/'error' in storage, so
   // these fall through to the default 'other'.
   it('tool_use (impossible event_type) → other (no type field in payload)', () => {
-    expect(eventKind(makeEventRow('tool_use').jsonl)).toBe<EventKind>(
-      'other',
-    );
+    expect(eventKind(makeEventRow('tool_use').jsonl)).toBe<EventKind>('other');
   });
 
   it('tool_result (impossible event_type) → other (no type field in payload)', () => {
@@ -184,9 +182,7 @@ describe('regression — mid-turn detection', () => {
   });
 
   it('eventKind≠tool_use — JSONL shape (impossible event_type, dead comparison)', () => {
-    expect(eventKind(makeEventRow('tool_use').jsonl)).toBe<EventKind>(
-      'other',
-    );
+    expect(eventKind(makeEventRow('tool_use').jsonl)).toBe<EventKind>('other');
   });
 
   it('eventKind≠tool_result for a text event (no false positive)', () => {

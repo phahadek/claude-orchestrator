@@ -54,7 +54,10 @@ function makeApp() {
  * real project (resolveMilestoneForProject -> ProjectService.getById) —
  * seed a project + milestone row so that lookup succeeds.
  */
-function insertProjectWithMilestone(projectId: string, milestone: string): void {
+function insertProjectWithMilestone(
+  projectId: string,
+  milestone: string,
+): void {
   const now = Date.now();
   db.prepare(
     `INSERT INTO projects (id, name, project_dir, task_source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
