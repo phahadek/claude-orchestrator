@@ -5871,10 +5871,7 @@ let _stmtGetFlowArm: Database.Statement | undefined;
 let _stmtUpsertFlowArm: Database.Statement | undefined;
 
 /** flow_arm row for (milestoneId, flow), or null if absent (caller applies DEFAULT_ARM). */
-function getFlowArmRow(
-  milestoneId: string,
-  flow: FlowId,
-): FlowArmRow | null {
+function getFlowArmRow(milestoneId: string, flow: FlowId): FlowArmRow | null {
   _stmtGetFlowArm ??= db.prepare<{ milestone_id: string; flow: string }>(
     `SELECT * FROM flow_arm WHERE milestone_id = @milestone_id AND flow = @flow`,
   );

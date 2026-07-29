@@ -5,12 +5,23 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { FLOW_IDS, FLOW_DISPATCH, isFlowId, type FlowDispatch } from '../flowArm.js';
+import {
+  FLOW_IDS,
+  FLOW_DISPATCH,
+  isFlowId,
+  type FlowDispatch,
+} from '../flowArm.js';
 
 describe('FLOW_DISPATCH', () => {
   it('maps groom/design/ops to their same-named session type', () => {
-    expect(FLOW_DISPATCH.groom).toEqual({ kind: 'session', sessionType: 'groom' });
-    expect(FLOW_DISPATCH.design).toEqual({ kind: 'session', sessionType: 'design' });
+    expect(FLOW_DISPATCH.groom).toEqual({
+      kind: 'session',
+      sessionType: 'groom',
+    });
+    expect(FLOW_DISPATCH.design).toEqual({
+      kind: 'session',
+      sessionType: 'design',
+    });
     expect(FLOW_DISPATCH.ops).toEqual({ kind: 'session', sessionType: 'ops' });
   });
 
