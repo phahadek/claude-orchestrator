@@ -3,6 +3,7 @@ import type { Scheduler } from '../orchestration/Scheduler';
 import { getAllProjects, getProjectById, runtimeSettings } from '../config';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { getProjectDeployedSha } from '../deploy/deployService';
+import { getArm } from '../db/queries';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
 import { catchUpMergeCommits } from './gateMergeConsumer';
@@ -483,6 +484,7 @@ export async function runGateReconcilerTick(
   } else {
     const verifier = options.verifier;
     for (const milestone of milestones) {
+      if (!getArm(milestone, 'gate-verify')) continue;
       for (const classification of AUTO_RUN_TIERS) {
         const batch = nextRunnableGateItems(milestone, {
           classification,
@@ -514,11 +516,11 @@ let configuredVerificationOptions: GateReconcilerOptions | null = null;
 
 /**
  * Wires the verifier + followupFiler + concurrency config for gate
- * verification. Deliberately NOT threaded into `register()`'s scheduled tick
- * below — M12 excludes reconciler auto-launch (that's the deferred M13+
- * phase); until then, the sibling manual-dispatch surface is the only
- * caller that reads this back (via getGateVerificationOptions) to invoke
- * verification on operator-selected items.
+ * verification, read back by the manual-dispatch surface (via
+ * getGateVerificationOptions) to invoke verification on operator-selected
+ * items. The same config is passed to `register()` below to also drive the
+ * scheduled tick's auto-run, gated per-milestone by the (milestone,
+ * 'gate-verify') arm — see the tick's auto-run loop above.
  */
 export function configureGateVerification(
   options: GateReconcilerOptions,
@@ -594,7 +596,13 @@ export function dispatchGateItemVerification(
   return { dispatched, skipped };
 }
 
-/** Registers the reconciler with the Scheduler. Runnability/readiness always run; auto-run verification stays inert (no verifier passed) until M13+. */
+/**
+ * Registers the reconciler with the Scheduler. Runnability/readiness always
+ * run; auto-run verification runs only when `options.verifier` is passed
+ * (see runGateReconcilerTick), further gated per-milestone by the
+ * (milestone, 'gate-verify') arm on top of the global
+ * gate_verification_enabled master switch checked below.
+ */
 export function register(
   scheduler: Scheduler,
   options: GateReconcilerOptions = {},
