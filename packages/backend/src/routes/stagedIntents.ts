@@ -280,6 +280,7 @@ const SESSION_TASK_BINDING_KINDS: ReadonlySet<string> = new Set([
   'task.setStatus',
   'task.setProperties',
   'task.setDependsOn',
+  'planning.noOp',
 ]);
 
 /**
@@ -703,6 +704,44 @@ function validateCapabilityRequestPayload(
 }
 
 /**
+ * Payload for the `planning.noOp` staged intent — a dispatched planning
+ * session's deliberate declaration that it reached terminal with nothing to
+ * change, distinct from a silent park. Rendered on the decision surface as
+ * informational/auditable and requires no operator disposition (see
+ * StagedIntentPanel.tsx's NoOpHeadline) — its purpose is to make a
+ * legitimate empty run visible to the operator, not to gate anything.
+ */
+interface NoOpPayload {
+  taskId: string;
+  reason: string;
+}
+
+/**
+ * The no-op-as-escape-hatch guard: a bare `{}` or an empty reason would let
+ * a session declare "nothing to do" without ever having to say why, which
+ * defeats the point of the marker (the operator sees it and can judge
+ * whether the reasoning holds up).
+ */
+class NoOpValidationError extends Error {
+  constructor(reason: string) {
+    super(`[stagedIntents] planning.noOp rejected: ${reason}`);
+    this.name = 'NoOpValidationError';
+  }
+}
+
+function validateNoOpPayload(payload: unknown): asserts payload is NoOpPayload {
+  const p = payload as Partial<NoOpPayload> | null;
+  if (typeof p?.taskId !== 'string' || !p.taskId.trim()) {
+    throw new NoOpValidationError('payload.taskId is required');
+  }
+  if (typeof p?.reason !== 'string' || !p.reason.trim()) {
+    throw new NoOpValidationError(
+      'payload.reason is required — a one-line why-nothing-to-change explanation',
+    );
+  }
+}
+
+/**
  * Validates a decision.pickOne payload/staging request — throws
  * DecisionPickOneValidationError on the first violation. A question-intent
  * writes no task store, so it must carry its own substantive justification
@@ -970,6 +1009,7 @@ const SUBJECT_TASK_ID_KINDS: ReadonlySet<string> = new Set([
   'task.patchBodySection',
   'task.setProperties',
   'task.setDependsOn',
+  'planning.noOp',
 ]);
 
 /**
@@ -1130,6 +1170,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'session.requestCapability',
   'completeness.disposition',
   'intent.withdraw',
+  'planning.noOp',
 ]);
 
 /**
@@ -1335,6 +1376,9 @@ export function stageIntent(
   if (kind === 'session.requestCapability') {
     validateCapabilityRequestPayload(payload);
     validateCapabilityRequestDoesNotCarryGroup(groupId);
+  }
+  if (kind === 'planning.noOp') {
+    validateNoOpPayload(payload);
   }
 
   assertSessionTaskBinding(kind, payload, sessionId, groupId);

@@ -5093,7 +5093,6 @@ let _stmtListStagedIntentsByProject: Database.Statement | null = null;
 let _stmtListStagedIntentsByGroup: Database.Statement | null = null;
 let _stmtFindActiveStagedIntentForTask: Database.Statement | null = null;
 let _stmtUpdateStagedIntentState: Database.Statement | null = null;
-let _stmtHasStagedIntentForSession: Database.Statement | null = null;
 let _stmtHasStagedIntentForTask: Database.Statement | null = null;
 let _stmtHasActiveCapabilityRequestForSession: Database.Statement | null = null;
 
@@ -5116,22 +5115,6 @@ export function getStagedIntent(id: string): StagedIntentRow | undefined {
     `SELECT * FROM staged_intent WHERE id = @id`,
   );
   return _stmtGetStagedIntent.get({ id }) as StagedIntentRow | undefined;
-}
-
-/**
- * True if this session ever staged at least one intent (any lifecycle state —
- * even a since-rejected one still proves the session produced *something*
- * that passed validation). Used to distinguish a planning session's
- * first-turn-empty (surfaces needs_attention) from a later-turn-empty
- * (natural completion).
- */
-export function hasStagedIntentForSession(sessionId: string): boolean {
-  _stmtHasStagedIntentForSession ??= db.prepare<{ session_id: string }>(
-    `SELECT 1 FROM staged_intent WHERE session_id = @session_id LIMIT 1`,
-  );
-  return (
-    _stmtHasStagedIntentForSession.get({ session_id: sessionId }) !== undefined
-  );
 }
 
 /**

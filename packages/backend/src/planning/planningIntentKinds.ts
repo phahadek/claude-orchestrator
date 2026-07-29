@@ -29,6 +29,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'task.patchBodySection',
     'decision.pickOne',
     'intent.withdraw',
+    'planning.noOp',
   ],
   design: [
     'decision.pickOne',
@@ -43,6 +44,7 @@ export const PLANNING_INTENT_KINDS: Record<
     'arch.updateUnit',
     'arch.supersedeUnit',
     'intent.withdraw',
+    'planning.noOp',
   ],
   ops: [
     'journal.setState',
