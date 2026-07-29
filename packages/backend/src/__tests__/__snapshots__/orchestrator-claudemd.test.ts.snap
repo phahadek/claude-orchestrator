@@ -29,6 +29,39 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > github backend > ma
 
 ---
 
+## Flaky / Transient CI or F2 Gate Failures
+
+When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
+
+Only disposition a failure as flaky after clearing this verification bar, in order:
+
+1. Run the failing test in isolation and confirm it fails or passes inconsistently on its own.
+2. Run the full test suite once more end-to-end and confirm it passes clean.
+3. Confirm the failure is unrelated to your diff (e.g. infra contention, test-ordering/parallelism interference, a timing race) — not a real regression you introduced.
+
+If all three hold, call the \`mcp__orchestrator__flaky_confirm\` tool instead of pushing a commit, with:
+
+- \`gate\`: \`"ci"\` for a failing GitHub check or \`"f2"\` for the orchestrator-run test gate — whichever gate actually failed.
+- \`reason\`: one line naming what you ran and what you concluded.
+
+The orchestrator re-runs that gate on the same commit (no new push) and re-drives the merge loop on a pass. This is bounded — after a small number of re-run attempts the PR stays paused for human attention, so only call this when you've genuinely cleared the verification bar above, not as a way to skip investigating.
+
+---
+
+## Responding to Review Comments
+
+When a follow-up message delivers review feedback tied to specific GitHub review comments (each comment has a \`comment_id\`), after you've addressed them — by pushing a commit, or by deciding a comment doesn't need a code change — call the \`mcp__orchestrator__review_disposition\` tool once per \`comment_id\` to report the outcome:
+
+- \`comment_id\` is the numeric GitHub review comment ID from the feedback message — not the PR number.
+- \`disposition\` is one of:
+  - \`"addressed"\` — you changed code (or confirmed existing behavior already satisfies the comment) and pushed a commit.
+  - \`"wont_fix"\` — you deliberately did not change anything; the comment is valid but out of scope for a fix here, or you disagree with it.
+  - \`"out_of_scope"\` — the comment asks for something beyond this task's scope (scope creep, unrelated refactor, etc.).
+- \`reason\` is required for every call — a one-line explanation a human reviewer can read without opening the diff.
+- Call it once per routed review comment you were given, not just the ones you changed code for. The orchestrator replies to and resolves each comment's thread on GitHub based on these calls — a comment with no call stays open and unresolved.
+
+---
+
 ## Status Ownership
 
 **Do NOT update GitHub issue status.**
@@ -62,7 +95,7 @@ Running in \`--print\` mode — optimize for speed and token efficiency:
 ## PR Format Standards
 
 - **Title**: \`feat: <task-name>\` — no scope prefix, no milestone tags.
-- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only path.
+- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message — this is the sanctioned path. Do NOT use the MCP \`mcp__github__create_pull_request\` tool. If a PR was already opened another way (e.g. you ran \`gh pr create\` directly), that is fine and does not need to be undone — the orchestrator detects and tracks it too; just re-emit the \`<pr-body>\` marker if the body still needs to match the template below.
 - **Required body sections**:
 
 \`\`\`
@@ -104,22 +137,23 @@ AI-Authored-By: <model> (session: <session-id>)
 
 Run in order — all must pass before opening the PR:
 
-1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
-2. Rebase onto \`dev\` and resolve any conflicts.
-3. Restore CLAUDE.md: \`git stash pop\`
-4. No local verify step configured — CI is the gate.
-5. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.
+1. Rebase onto \`dev\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
+2. No local verify step configured — CI is the gate.
+3. Stage only your implementation files for commit.
 
 ---
 
 ## Forbidden Actions
 
 - Never push directly to \`main\`
-- Never force push (\`--force\`)
+- Never bare force push (\`git push --force\`)
+- Never force-push \`main\`, \`dev\`, or any branch outside this worktree's own feature branch
+- \`git push --force-with-lease origin <your feature branch>\` **is allowed** — use it to update your own PR branch after a rebase (see Pre-PR Gate)
 - Never delete branches that live outside this worktree
 - Never run \`git reset --hard\` on the main repository directory
 - Never skip pre-commit hooks (\`--no-verify\`)
-- Never stage or commit \`CLAUDE.md\` — it contains orchestrator-injected content that must not appear in PRs. Use \`git add <specific files>\` instead of \`git add .\`.
+- Use \`git add <specific files>\` instead of \`git add .\` — review staged files before committing.
+- Never run \`gh pr close\` or \`gh pr reopen\`, and never close or recreate your own PR to "redo" it — the orchestrator tracks whatever PR is currently open. If it was opened the wrong way, leave it open; just re-emit the \`<pr-body>\` marker if the body needs updating.
 
 ---
 
@@ -138,7 +172,17 @@ Run in order — all must pass before opening the PR:
 
 > ⚠️ **No sandbox** — isolation is prompt-level only. Writes outside the worktree corrupt the developer's environment.
 
-All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/\` in your worktree.
+All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/scratch/\` in your worktree.
+
+---
+
+## Manual Verification Gate
+
+Manual/runtime verification is owned by the milestone's Manual Verification Gate, not
+by you. Do NOT run, attempt, or simulate manual/runtime tests to satisfy acceptance
+criteria. Your task carries no manual-verification section by default — its absence
+does NOT mean "go run something"; it means the gate already owns it. Ship only what
+the automated acceptance criteria require.
 
 ---
 
@@ -190,6 +234,39 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > jira backend > matc
 
 ---
 
+## Flaky / Transient CI or F2 Gate Failures
+
+When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
+
+Only disposition a failure as flaky after clearing this verification bar, in order:
+
+1. Run the failing test in isolation and confirm it fails or passes inconsistently on its own.
+2. Run the full test suite once more end-to-end and confirm it passes clean.
+3. Confirm the failure is unrelated to your diff (e.g. infra contention, test-ordering/parallelism interference, a timing race) — not a real regression you introduced.
+
+If all three hold, call the \`mcp__orchestrator__flaky_confirm\` tool instead of pushing a commit, with:
+
+- \`gate\`: \`"ci"\` for a failing GitHub check or \`"f2"\` for the orchestrator-run test gate — whichever gate actually failed.
+- \`reason\`: one line naming what you ran and what you concluded.
+
+The orchestrator re-runs that gate on the same commit (no new push) and re-drives the merge loop on a pass. This is bounded — after a small number of re-run attempts the PR stays paused for human attention, so only call this when you've genuinely cleared the verification bar above, not as a way to skip investigating.
+
+---
+
+## Responding to Review Comments
+
+When a follow-up message delivers review feedback tied to specific GitHub review comments (each comment has a \`comment_id\`), after you've addressed them — by pushing a commit, or by deciding a comment doesn't need a code change — call the \`mcp__orchestrator__review_disposition\` tool once per \`comment_id\` to report the outcome:
+
+- \`comment_id\` is the numeric GitHub review comment ID from the feedback message — not the PR number.
+- \`disposition\` is one of:
+  - \`"addressed"\` — you changed code (or confirmed existing behavior already satisfies the comment) and pushed a commit.
+  - \`"wont_fix"\` — you deliberately did not change anything; the comment is valid but out of scope for a fix here, or you disagree with it.
+  - \`"out_of_scope"\` — the comment asks for something beyond this task's scope (scope creep, unrelated refactor, etc.).
+- \`reason\` is required for every call — a one-line explanation a human reviewer can read without opening the diff.
+- Call it once per routed review comment you were given, not just the ones you changed code for. The orchestrator replies to and resolves each comment's thread on GitHub based on these calls — a comment with no call stays open and unresolved.
+
+---
+
 ## Status Ownership
 
 **Do NOT update Jira issue status.**
@@ -223,7 +300,7 @@ Running in \`--print\` mode — optimize for speed and token efficiency:
 ## PR Format Standards
 
 - **Title**: \`feat: <task-name>\` — no scope prefix, no milestone tags.
-- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only path.
+- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message — this is the sanctioned path. Do NOT use the MCP \`mcp__github__create_pull_request\` tool. If a PR was already opened another way (e.g. you ran \`gh pr create\` directly), that is fine and does not need to be undone — the orchestrator detects and tracks it too; just re-emit the \`<pr-body>\` marker if the body still needs to match the template below.
 - **Required body sections**:
 
 \`\`\`
@@ -265,22 +342,23 @@ AI-Authored-By: <model> (session: <session-id>)
 
 Run in order — all must pass before opening the PR:
 
-1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
-2. Rebase onto \`dev\` and resolve any conflicts.
-3. Restore CLAUDE.md: \`git stash pop\`
-4. No local verify step configured — CI is the gate.
-5. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.
+1. Rebase onto \`dev\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
+2. No local verify step configured — CI is the gate.
+3. Stage only your implementation files for commit.
 
 ---
 
 ## Forbidden Actions
 
 - Never push directly to \`main\`
-- Never force push (\`--force\`)
+- Never bare force push (\`git push --force\`)
+- Never force-push \`main\`, \`dev\`, or any branch outside this worktree's own feature branch
+- \`git push --force-with-lease origin <your feature branch>\` **is allowed** — use it to update your own PR branch after a rebase (see Pre-PR Gate)
 - Never delete branches that live outside this worktree
 - Never run \`git reset --hard\` on the main repository directory
 - Never skip pre-commit hooks (\`--no-verify\`)
-- Never stage or commit \`CLAUDE.md\` — it contains orchestrator-injected content that must not appear in PRs. Use \`git add <specific files>\` instead of \`git add .\`.
+- Use \`git add <specific files>\` instead of \`git add .\` — review staged files before committing.
+- Never run \`gh pr close\` or \`gh pr reopen\`, and never close or recreate your own PR to "redo" it — the orchestrator tracks whatever PR is currently open. If it was opened the wrong way, leave it open; just re-emit the \`<pr-body>\` marker if the body needs updating.
 
 ---
 
@@ -299,7 +377,17 @@ Run in order — all must pass before opening the PR:
 
 > ⚠️ **No sandbox** — isolation is prompt-level only. Writes outside the worktree corrupt the developer's environment.
 
-All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/\` in your worktree.
+All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/scratch/\` in your worktree.
+
+---
+
+## Manual Verification Gate
+
+Manual/runtime verification is owned by the milestone's Manual Verification Gate, not
+by you. Do NOT run, attempt, or simulate manual/runtime tests to satisfy acceptance
+criteria. Your task carries no manual-verification section by default — its absence
+does NOT mean "go run something"; it means the gate already owns it. Ship only what
+the automated acceptance criteria require.
 
 ---
 
@@ -353,6 +441,39 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > local backend > mat
 
 ---
 
+## Flaky / Transient CI or F2 Gate Failures
+
+When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
+
+Only disposition a failure as flaky after clearing this verification bar, in order:
+
+1. Run the failing test in isolation and confirm it fails or passes inconsistently on its own.
+2. Run the full test suite once more end-to-end and confirm it passes clean.
+3. Confirm the failure is unrelated to your diff (e.g. infra contention, test-ordering/parallelism interference, a timing race) — not a real regression you introduced.
+
+If all three hold, call the \`mcp__orchestrator__flaky_confirm\` tool instead of pushing a commit, with:
+
+- \`gate\`: \`"ci"\` for a failing GitHub check or \`"f2"\` for the orchestrator-run test gate — whichever gate actually failed.
+- \`reason\`: one line naming what you ran and what you concluded.
+
+The orchestrator re-runs that gate on the same commit (no new push) and re-drives the merge loop on a pass. This is bounded — after a small number of re-run attempts the PR stays paused for human attention, so only call this when you've genuinely cleared the verification bar above, not as a way to skip investigating.
+
+---
+
+## Responding to Review Comments
+
+When a follow-up message delivers review feedback tied to specific GitHub review comments (each comment has a \`comment_id\`), after you've addressed them — by pushing a commit, or by deciding a comment doesn't need a code change — call the \`mcp__orchestrator__review_disposition\` tool once per \`comment_id\` to report the outcome:
+
+- \`comment_id\` is the numeric GitHub review comment ID from the feedback message — not the PR number.
+- \`disposition\` is one of:
+  - \`"addressed"\` — you changed code (or confirmed existing behavior already satisfies the comment) and pushed a commit.
+  - \`"wont_fix"\` — you deliberately did not change anything; the comment is valid but out of scope for a fix here, or you disagree with it.
+  - \`"out_of_scope"\` — the comment asks for something beyond this task's scope (scope creep, unrelated refactor, etc.).
+- \`reason\` is required for every call — a one-line explanation a human reviewer can read without opening the diff.
+- Call it once per routed review comment you were given, not just the ones you changed code for. The orchestrator replies to and resolves each comment's thread on GitHub based on these calls — a comment with no call stays open and unresolved.
+
+---
+
 ## Status Ownership
 
 **Do NOT update Task status.**
@@ -386,7 +507,7 @@ Running in \`--print\` mode — optimize for speed and token efficiency:
 ## PR Format Standards
 
 - **Title**: \`feat: <task-name>\` — no scope prefix, no milestone tags.
-- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only path.
+- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message — this is the sanctioned path. Do NOT use the MCP \`mcp__github__create_pull_request\` tool. If a PR was already opened another way (e.g. you ran \`gh pr create\` directly), that is fine and does not need to be undone — the orchestrator detects and tracks it too; just re-emit the \`<pr-body>\` marker if the body still needs to match the template below.
 - **Required body sections**:
 
 \`\`\`
@@ -394,7 +515,7 @@ Running in \`--print\` mode — optimize for speed and token efficiency:
 <1-3 sentences: what changed and why>
 
 ## Task
-<link to the task page>
+Record the originating ticket: its key (e.g. \`ENG-8641\`) and its browse URL (e.g. https://yourcompany.atlassian.net/browse/ENG-8641).
 
 ## Automated Tests
 <list tests added/modified, or "No test changes">
@@ -428,22 +549,23 @@ AI-Authored-By: <model> (session: <session-id>)
 
 Run in order — all must pass before opening the PR:
 
-1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
-2. Rebase onto \`dev\` and resolve any conflicts.
-3. Restore CLAUDE.md: \`git stash pop\`
-4. No local verify step configured — CI is the gate.
-5. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.
+1. Rebase onto \`dev\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
+2. No local verify step configured — CI is the gate.
+3. Stage only your implementation files for commit.
 
 ---
 
 ## Forbidden Actions
 
 - Never push directly to \`main\`
-- Never force push (\`--force\`)
+- Never bare force push (\`git push --force\`)
+- Never force-push \`main\`, \`dev\`, or any branch outside this worktree's own feature branch
+- \`git push --force-with-lease origin <your feature branch>\` **is allowed** — use it to update your own PR branch after a rebase (see Pre-PR Gate)
 - Never delete branches that live outside this worktree
 - Never run \`git reset --hard\` on the main repository directory
 - Never skip pre-commit hooks (\`--no-verify\`)
-- Never stage or commit \`CLAUDE.md\` — it contains orchestrator-injected content that must not appear in PRs. Use \`git add <specific files>\` instead of \`git add .\`.
+- Use \`git add <specific files>\` instead of \`git add .\` — review staged files before committing.
+- Never run \`gh pr close\` or \`gh pr reopen\`, and never close or recreate your own PR to "redo" it — the orchestrator tracks whatever PR is currently open. If it was opened the wrong way, leave it open; just re-emit the \`<pr-body>\` marker if the body needs updating.
 
 ---
 
@@ -462,7 +584,17 @@ Run in order — all must pass before opening the PR:
 
 > ⚠️ **No sandbox** — isolation is prompt-level only. Writes outside the worktree corrupt the developer's environment.
 
-All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/\` in your worktree.
+All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/scratch/\` in your worktree.
+
+---
+
+## Manual Verification Gate
+
+Manual/runtime verification is owned by the milestone's Manual Verification Gate, not
+by you. Do NOT run, attempt, or simulate manual/runtime tests to satisfy acceptance
+criteria. Your task carries no manual-verification section by default — its absence
+does NOT mean "go run something"; it means the gate already owns it. Ship only what
+the automated acceptance criteria require.
 
 ---
 
@@ -514,6 +646,39 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > notion backend (def
 
 ---
 
+## Flaky / Transient CI or F2 Gate Failures
+
+When a CI check or the F2 orchestrator-run test gate fails on your PR, do not assume it's flaky and do not push an empty commit to force a re-run — that does not re-drive anything. Default to treating the failure as real and fixing it.
+
+Only disposition a failure as flaky after clearing this verification bar, in order:
+
+1. Run the failing test in isolation and confirm it fails or passes inconsistently on its own.
+2. Run the full test suite once more end-to-end and confirm it passes clean.
+3. Confirm the failure is unrelated to your diff (e.g. infra contention, test-ordering/parallelism interference, a timing race) — not a real regression you introduced.
+
+If all three hold, call the \`mcp__orchestrator__flaky_confirm\` tool instead of pushing a commit, with:
+
+- \`gate\`: \`"ci"\` for a failing GitHub check or \`"f2"\` for the orchestrator-run test gate — whichever gate actually failed.
+- \`reason\`: one line naming what you ran and what you concluded.
+
+The orchestrator re-runs that gate on the same commit (no new push) and re-drives the merge loop on a pass. This is bounded — after a small number of re-run attempts the PR stays paused for human attention, so only call this when you've genuinely cleared the verification bar above, not as a way to skip investigating.
+
+---
+
+## Responding to Review Comments
+
+When a follow-up message delivers review feedback tied to specific GitHub review comments (each comment has a \`comment_id\`), after you've addressed them — by pushing a commit, or by deciding a comment doesn't need a code change — call the \`mcp__orchestrator__review_disposition\` tool once per \`comment_id\` to report the outcome:
+
+- \`comment_id\` is the numeric GitHub review comment ID from the feedback message — not the PR number.
+- \`disposition\` is one of:
+  - \`"addressed"\` — you changed code (or confirmed existing behavior already satisfies the comment) and pushed a commit.
+  - \`"wont_fix"\` — you deliberately did not change anything; the comment is valid but out of scope for a fix here, or you disagree with it.
+  - \`"out_of_scope"\` — the comment asks for something beyond this task's scope (scope creep, unrelated refactor, etc.).
+- \`reason\` is required for every call — a one-line explanation a human reviewer can read without opening the diff.
+- Call it once per routed review comment you were given, not just the ones you changed code for. The orchestrator replies to and resolves each comment's thread on GitHub based on these calls — a comment with no call stays open and unresolved.
+
+---
+
 ## Status Ownership
 
 **Do NOT update Notion task status.**
@@ -547,7 +712,7 @@ Running in \`--print\` mode — optimize for speed and token efficiency:
 ## PR Format Standards
 
 - **Title**: \`feat: <task-name>\` — no scope prefix, no milestone tags.
-- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only path.
+- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message — this is the sanctioned path. Do NOT use the MCP \`mcp__github__create_pull_request\` tool. If a PR was already opened another way (e.g. you ran \`gh pr create\` directly), that is fine and does not need to be undone — the orchestrator detects and tracks it too; just re-emit the \`<pr-body>\` marker if the body still needs to match the template below.
 - **Required body sections**:
 
 \`\`\`
@@ -589,22 +754,23 @@ AI-Authored-By: <model> (session: <session-id>)
 
 Run in order — all must pass before opening the PR:
 
-1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
-2. Rebase onto \`dev\` and resolve any conflicts.
-3. Restore CLAUDE.md: \`git stash pop\`
-4. No local verify step configured — CI is the gate.
-5. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.
+1. Rebase onto \`dev\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
+2. No local verify step configured — CI is the gate.
+3. Stage only your implementation files for commit.
 
 ---
 
 ## Forbidden Actions
 
 - Never push directly to \`main\`
-- Never force push (\`--force\`)
+- Never bare force push (\`git push --force\`)
+- Never force-push \`main\`, \`dev\`, or any branch outside this worktree's own feature branch
+- \`git push --force-with-lease origin <your feature branch>\` **is allowed** — use it to update your own PR branch after a rebase (see Pre-PR Gate)
 - Never delete branches that live outside this worktree
 - Never run \`git reset --hard\` on the main repository directory
 - Never skip pre-commit hooks (\`--no-verify\`)
-- Never stage or commit \`CLAUDE.md\` — it contains orchestrator-injected content that must not appear in PRs. Use \`git add <specific files>\` instead of \`git add .\`.
+- Use \`git add <specific files>\` instead of \`git add .\` — review staged files before committing.
+- Never run \`gh pr close\` or \`gh pr reopen\`, and never close or recreate your own PR to "redo" it — the orchestrator tracks whatever PR is currently open. If it was opened the wrong way, leave it open; just re-emit the \`<pr-body>\` marker if the body needs updating.
 
 ---
 
@@ -623,7 +789,17 @@ Run in order — all must pass before opening the PR:
 
 > ⚠️ **No sandbox** — isolation is prompt-level only. Writes outside the worktree corrupt the developer's environment.
 
-All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/\` in your worktree.
+All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/scratch/\` in your worktree.
+
+---
+
+## Manual Verification Gate
+
+Manual/runtime verification is owned by the milestone's Manual Verification Gate, not
+by you. Do NOT run, attempt, or simulate manual/runtime tests to satisfy acceptance
+criteria. Your task carries no manual-verification section by default — its absence
+does NOT mean "go run something"; it means the gate already owns it. Ship only what
+the automated acceptance criteria require.
 
 ---
 

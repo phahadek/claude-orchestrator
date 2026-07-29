@@ -312,9 +312,30 @@ describe('buildOrchestratorClaudeMd — taskBackend wording', () => {
       );
     });
 
-    it('PR body template uses "## Task"', () => {
+    it('PR body template tells the session to record the ticket key and browse URL', () => {
       const output = buildOrchestratorClaudeMd(localParams);
-      expect(output).toContain('## Task\n<link to the task page>');
+      expect(output).toContain('## Task\nRecord the originating ticket');
+      expect(output).toContain('its key (e.g. `ENG-8641`)');
+      expect(output).toContain('its browse URL (e.g.');
+    });
+
+    it('derives the example browse URL from jiraBrowseBaseUrl when configured', () => {
+      const output = buildOrchestratorClaudeMd({
+        ...localParams,
+        jiraBrowseBaseUrl: 'https://mycompany.atlassian.net',
+      });
+      expect(output).toContain(
+        'https://mycompany.atlassian.net/browse/ENG-8641',
+      );
+    });
+
+    it('falls back to a usable generic example when no browse-URL source is configured', () => {
+      const output = buildOrchestratorClaudeMd(localParams);
+      expect(output).toContain(
+        'https://yourcompany.atlassian.net/browse/ENG-8641',
+      );
+      expect(output).not.toMatch(/\(e\.g\. \/browse\//);
+      expect(output).not.toContain('(e.g. ).');
     });
 
     it('contains no "Notion" substring (regression)', () => {
@@ -324,6 +345,40 @@ describe('buildOrchestratorClaudeMd — taskBackend wording', () => {
 
     it('matches snapshot', () => {
       expect(buildOrchestratorClaudeMd(localParams)).toMatchSnapshot();
+    });
+  });
+
+  describe('PR body template structure is backend-agnostic', () => {
+    const taskSectionHeaderByBackend = {
+      notion: '## Notion Task',
+      github: '## GitHub Issue',
+      jira: '## Jira Issue',
+      local: '## Task',
+    } as const;
+
+    it('section set and ordering are identical across all backends', () => {
+      const backends = ['notion', 'github', 'jira', 'local'] as const;
+
+      for (const taskBackend of backends) {
+        const output = buildOrchestratorClaudeMd({
+          ...baseParams,
+          taskBackend,
+        });
+        const template = output.slice(
+          output.indexOf('## PR Format Standards'),
+          output.indexOf('## Branch Rules'),
+        );
+        const order = [
+          '## Summary',
+          taskSectionHeaderByBackend[taskBackend],
+          '## Automated Tests',
+          '## Files Changed',
+        ].map((h) => template.indexOf(h));
+
+        expect(order.every((i) => i !== -1)).toBe(true);
+        const sorted = [...order].sort((a, b) => a - b);
+        expect(order).toEqual(sorted);
+      }
     });
   });
 });

@@ -45,6 +45,14 @@ export interface OrchestratorClaudeMdParams {
    * and GitHub instructions; 'github' (default) keeps the full PR flow.
    */
   gitMode?: 'github' | 'local-only';
+  /**
+   * Base browse URL for the project's Jira host (e.g. `https://mycompany.atlassian.net`),
+   * derived from existing Jira config (project `taskSourceConfig.host` or the
+   * `JIRA_HOST` env var) — not a new per-project field. Used only to render a
+   * concrete example in the 'local' backend's PR body task-section instruction.
+   * Omitted when no Jira host is configured.
+   */
+  jiraBrowseBaseUrl?: string;
 }
 
 type TaskBackend = 'notion' | 'local' | 'jira' | 'github';
@@ -100,6 +108,27 @@ function prBodyTaskSectionHeader(backend: TaskBackend): string {
 }
 
 /**
+ * Body-line instruction for the PR body's task section. Only the 'local'
+ * backend needs bespoke wording — it has no hosted task page to link to, so
+ * the session is told to record the originating ticket's key and browse URL
+ * instead. `jiraBrowseBaseUrl` comes from existing Jira config (project
+ * config or the JIRA_HOST env var) — when absent, fall back to a generic
+ * example rather than interpolating a broken/empty URL.
+ */
+function prBodyTaskSectionContent(
+  backend: TaskBackend,
+  jiraBrowseBaseUrl?: string,
+): string {
+  if (backend === 'local') {
+    const exampleUrl = jiraBrowseBaseUrl
+      ? `${jiraBrowseBaseUrl.replace(/\/+$/, '')}/browse/ENG-8641`
+      : 'https://yourcompany.atlassian.net/browse/ENG-8641';
+    return `Record the originating ticket: its key (e.g. \`ENG-8641\`) and its browse URL (e.g. ${exampleUrl}).`;
+  }
+  return '<link to the task page>';
+}
+
+/**
  * Build the orchestrator CLAUDE.md header content to inject into each session worktree.
  *
  * Returns a markdown string with all orchestrator rule sections (sections 1-9).
@@ -146,6 +175,7 @@ export function buildOrchestratorClaudeMd(
     taskContent,
     projectContextContent,
     gitMode = 'github',
+    jiraBrowseBaseUrl,
   } = params;
 
   const resolvedBashRules = bashRules ?? [
@@ -291,7 +321,7 @@ ${
 <1-3 sentences: what changed and why>
 
 ${prBodyTaskSectionHeader(taskBackend)}
-<link to the task page>
+${prBodyTaskSectionContent(taskBackend, jiraBrowseBaseUrl)}
 
 ## Automated Tests
 <list tests added/modified, or "No test changes">
