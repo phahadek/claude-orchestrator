@@ -695,4 +695,74 @@ describe('procedureCore', () => {
       expect(text).toMatch(/next legal ops_journal transition/);
     });
   });
+
+  describe('a dispatched ops run is write-capable and must drive to applied-pending-confirm', () => {
+    it('states the write-capable doctrine, scoped to ops only', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      expect(principle).toBeDefined();
+      expect(principle.appliesTo).toEqual(['ops']);
+
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/IS write-capable/);
+      expect(rendered).toContain('applied-pending-confirm');
+    });
+
+    it('names a parked staged proposal as not the acceptable terminal for work the session can perform or become equipped to perform', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(
+        /parked for someone else to execute|parking it for someone else to execute/,
+      );
+      expect(rendered).toMatch(/not the target terminal/);
+      expect(rendered).toMatch(/could earn by request/);
+    });
+
+    it('names the request → grant → apply → reconcile loop and instructs requesting a missing tool rather than declaring blocked', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/request → grant → apply → reconcile loop/);
+      expect(rendered).toContain('session_requestCapability');
+      expect(rendered).toMatch(
+        /DO NOT record the missing tool as `blocked` or `needs-setup`/,
+      );
+    });
+
+    it('still permits a genuine external blocker to terminate as blocked/needs-setup with the blocker named', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/genuine external blocker/);
+      expect(rendered).toMatch(
+        /terminates as `blocked` \/ `needs-setup`, naming the blocker explicitly/,
+      );
+    });
+
+    it('does not appear for groom or design', () => {
+      expect(
+        principlesFor('groom').find(
+          (p) => p.id === 'dispatched-ops-write-capable',
+        ),
+      ).toBeUndefined();
+      expect(
+        principlesFor('design').find(
+          (p) => p.id === 'dispatched-ops-write-capable',
+        ),
+      ).toBeUndefined();
+    });
+
+    it('is included in the assembled dispatched ops procedure', () => {
+      const assembled = principlesFor('ops', { dispatched: true })
+        .map((p) => renderPrinciple(p, 'ops'))
+        .join('\n');
+      expect(assembled).toMatch(/IS write-capable/);
+      expect(assembled).toMatch(/request → grant → apply → reconcile loop/);
+    });
+  });
 });
