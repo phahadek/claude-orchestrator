@@ -439,6 +439,26 @@ describe('sendOrResume — dead session path', () => {
       }),
     );
   });
+
+  it('passes taskBackend: "jira" through to buildSessionContext when resuming a jira-sourced project', async () => {
+    vi.mocked(getProjectById).mockReturnValue({
+      ...makeProject(),
+      taskSource: 'jira',
+    });
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      mcp_servers: undefined,
+      allowed_tools: [],
+      verify: [],
+      bash_rules: [],
+      session_rules: [],
+    } as any);
+
+    await doResume();
+
+    expect(vi.mocked(buildSessionContext)).toHaveBeenCalledWith(
+      expect.objectContaining({ taskBackend: 'jira' }),
+    );
+  });
 });
 
 // ── sendOrResume — live session fast path ────────────────────────────────────
@@ -1775,6 +1795,7 @@ describe('start() — bootstrap gate', () => {
     allowed_tools: [],
     verify: [],
     bash_rules: [],
+    session_rules: [],
     bootstrap_script: '',
     required_env: [] as string[],
     required_files: [] as string[],
@@ -1910,6 +1931,23 @@ describe('start() — bootstrap gate', () => {
       String(detail).startsWith('bootstrap'),
     );
     expect(bootstrapErrorCalls).toHaveLength(0);
+  });
+
+  it('passes taskBackend: "jira" through to buildSessionContext for a jira-sourced project', async () => {
+    vi.mocked(getProjectById).mockReturnValue({
+      ...makeProject(),
+      taskSource: 'jira',
+    });
+
+    sm.start('https://jira.example.com/task', 'https://jira.example.com/project', START_OPTS);
+
+    await vi.waitFor(() =>
+      expect(vi.mocked(buildSessionContext)).toHaveBeenCalled(),
+    );
+
+    expect(vi.mocked(buildSessionContext)).toHaveBeenCalledWith(
+      expect.objectContaining({ taskBackend: 'jira' }),
+    );
   });
 });
 

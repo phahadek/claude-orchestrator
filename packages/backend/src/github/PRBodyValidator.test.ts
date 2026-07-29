@@ -28,6 +28,13 @@ describe('validatePRBody()', () => {
     expect(result.missingSections).toHaveLength(0);
   });
 
+  it('accepts ## Task as an alternative to ## Notion Task', () => {
+    const body = VALID_BODY.replace('## Notion Task', '## Task');
+    const result = validatePRBody(body);
+    expect(result.valid).toBe(true);
+    expect(result.missingSections).toHaveLength(0);
+  });
+
   it('rejects a null body', () => {
     const result = validatePRBody(null);
     expect(result.valid).toBe(false);
@@ -66,11 +73,10 @@ describe('validatePRBody()', () => {
     expect(result.missingSections).toContain('## Files Changed');
   });
 
-  it('rejects a body missing both task-source variants', () => {
-    const body = VALID_BODY.replace('## Notion Task\n', '').replace(
-      '## Task Source\n',
-      '',
-    );
+  it('rejects a body missing all task-heading variants', () => {
+    const body = VALID_BODY.replace('## Notion Task\n', '')
+      .replace('## Task Source\n', '')
+      .replace('## Task\n', '');
     const result = validatePRBody(body);
     expect(result.valid).toBe(false);
     expect(result.missingSections).toContain('## Notion Task');

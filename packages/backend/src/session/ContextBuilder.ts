@@ -12,7 +12,7 @@ export interface BuildSessionContextParams {
   verify?: string[];
   bashRules?: string[];
   sessionRules?: string[];
-  taskBackend?: 'notion' | 'local' | 'github';
+  taskBackend?: 'notion' | 'local' | 'github' | 'jira';
   /** Pre-fetched task spec markdown. Passed through to orchestrator CLAUDE.md. */
   taskContent?: string;
   /** Git mode: 'local-only' omits PR instructions; 'github' (default) keeps full PR flow. */
