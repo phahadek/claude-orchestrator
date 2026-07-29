@@ -1,0 +1,83 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.phaseRow {
+  all: unset;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 6px 8px;
+  transition: background 0.15s;
+}
+
+.phaseRow:hover {
+  background: var(--bg-tertiary, #313244);
+}
+
+.phaseRowActive {
+  background: var(--bg-tertiary, #313244);
+  outline: 1px solid var(--color-blue, #89b4fa);
+}
+
+.phaseHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+}
+
+.phaseLabel {
+  font-weight: 500;
+  color: var(--text-primary, #cdd6f4);
+}
+
+.phaseCount {
+  color: var(--text-faint, #6c7086);
+  font-size: 0.75rem;
+}
+
+.blockerBadge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.6875rem;
+  color: var(--color-red, #f38ba8);
+}
+
+.track {
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg-tertiary, #313244);
+  display: flex;
+  width: 100%;
+}
+
+.emptySegment {
+  width: 100%;
+  height: 100%;
+}
+
+.fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.fillPending {
+  background: var(--color-red, #f38ba8);
+}
+
+.fillStaged {
+  background: var(--color-yellow, #f9e2af);
+}
+
+.fillDone {
+  background: var(--color-green, #a6e3a1);
+}

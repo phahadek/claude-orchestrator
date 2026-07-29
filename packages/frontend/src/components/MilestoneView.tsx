@@ -1,7 +1,9 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
+import type { TaskView as BackendTaskView } from '@claude-orchestrator/backend/src/routes/tasks';
+import type { TaskView } from '../types/taskView';
 import type { StagedIntent } from '../api/stagedIntents';
 import { useMilestoneConvergence } from '../hooks/useMilestoneConvergence';
+import { MilestoneBurndown } from './MilestoneBurndown';
 import styles from './MilestoneView.module.css';
 
 const MIN_MIDDLE_WIDTH_PCT = 30;
@@ -14,8 +16,10 @@ interface Props {
   activeBoardId: string | null;
   /** Display name of the active milestone, or null when no real milestone is selected. */
   activeBoardMilestone: string | null;
-  lastTaskUpdate: TaskView | null;
+  lastTaskUpdate: BackendTaskView | null;
   lastStagedIntentChange: StagedIntent | null;
+  /** Tasks for the active project + board — already scoped upstream. */
+  tasks: TaskView[];
 }
 
 export function MilestoneView({
@@ -24,6 +28,7 @@ export function MilestoneView({
   activeBoardMilestone,
   lastTaskUpdate,
   lastStagedIntentChange,
+  tasks,
 }: Props) {
   // Shared filter state: the burndown (left) emits a phase, the decision
   // stack (middle) consumes it.
@@ -92,13 +97,12 @@ export function MilestoneView({
       data-testid="milestone-view-shell"
     >
       <div className={styles.leftColumn} data-testid="milestone-burndown-mount">
-        <button
-          type="button"
-          className={styles.mountPlaceholder}
-          onClick={() => handlePhaseFilterChange('current')}
-        >
-          Burndown for {activeBoardMilestone}
-        </button>
+        <MilestoneBurndown
+          tasks={tasks}
+          convergence={convergence}
+          activePhase={phaseFilter}
+          onPhaseSelect={handlePhaseFilterChange}
+        />
       </div>
 
       <div
