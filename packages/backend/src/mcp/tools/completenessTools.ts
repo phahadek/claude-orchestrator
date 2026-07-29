@@ -27,7 +27,7 @@ function isValidTimestamp(value: string): boolean {
 }
 
 /** Thrown at stage time when a disposition names a task id the store has never seen — defect 4. */
-export class UnresolvedTaskIdError extends Error {
+class UnresolvedTaskIdError extends Error {
   constructor(taskId: string) {
     super(
       `[completeness.disposition] task "${taskId}" does not resolve — no cached task with this id exists, ` +

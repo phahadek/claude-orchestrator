@@ -658,7 +658,7 @@ export type NewSeedItemEventRow = Omit<SeedItemEventRow, 'id'>;
  * accepted/dismissed column could not distinguish — see task
  * …3012260f. Stored verbatim, never collapsed.
  */
-export type NamedCompletenessDisposition =
+type NamedCompletenessDisposition =
   | 'resolved'
   | 'out-of-scope'
   | 'not-a-decision'
