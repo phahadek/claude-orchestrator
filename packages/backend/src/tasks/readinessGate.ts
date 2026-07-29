@@ -241,3 +241,90 @@ export class ReadinessGateError extends Error {
     this.name = 'ReadinessGateError';
   }
 }
+
+/**
+ * The strip⇔accrete content-verification hard gate (accretion CONTENT
+ * verification, not merely "recorded"): parses the non-empty list items
+ * under a "👁️ Manual verification" heading (any level) from a task body —
+ * the pre-groom candidate set that accreteGateContribution's minted
+ * gate_item rows are supposed to account for. Same heading-normalization
+ * posture as checkOpenQuestionsSection (normalizeHeadingText strips emoji),
+ * so "### 👁️ Manual verification" and "## Manual Verification" both match.
+ */
+export function parseManualVerificationItems(body: string): string[] {
+  const items: string[] = [];
+  const lines = body.split('\n');
+  let inSection = false;
+  for (const line of lines) {
+    const heading = line.match(/^#{1,6}\s*(.+)$/);
+    if (heading) {
+      inSection = normalizeHeadingText(heading[1]) === 'manual verification';
+      continue;
+    }
+    if (!inSection) continue;
+    const trimmed = line.trim();
+    if (!trimmed || /^none$/i.test(trimmed)) continue;
+    if (/^[-*]\s+/.test(trimmed) || /^\d+[.)]\s+/.test(trimmed)) {
+      items.push(trimmed.replace(/^[-*]\s+/, '').replace(/^\d+[.)]\s+/, '').trim());
+    }
+  }
+  return items;
+}
+
+export interface AccretionContentMatchResult {
+  ok: boolean;
+  reasons: string[];
+}
+
+function normalizeItemText(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * The strip⇔accrete comparison itself: every item stripped from the task
+ * body's source section must correspond to a row actually accreted onto the
+ * gate/seed store within the same staged group — the promotion gate this
+ * upgrades from "accretion recorded" (a marker exists) to "accretion content
+ * matches" (the marker's rows account for what was stripped). Count-based
+ * first (accretedItems shorter than strippedItems can never satisfy every
+ * stripped item), then item-correspondence by exact normalized text —
+ * matching a stripped item against any accreted item, consuming it so a
+ * single accreted row can't cover two distinct stripped items. Extra
+ * accreted rows beyond strippedItems.length are allowed unmatched: the
+ * groomer legitimately adds its own runtime verifications the author didn't
+ * foresee (see procedureCore.ts's accrete-gate-and-seed principle), so a
+ * larger accreted set is never itself a mismatch. An empty strippedItems is
+ * always ok — nothing to account for, and the existing none/n-a accretion
+ * path (which mints no items at all) is unaffected by this check.
+ */
+export function checkAccretionContentMatch(
+  label: string,
+  strippedItems: string[],
+  accretedItems: string[],
+): AccretionContentMatchResult {
+  if (strippedItems.length === 0) return { ok: true, reasons: [] };
+
+  const remaining = accretedItems.map(normalizeItemText);
+  const unmatched: string[] = [];
+  for (const stripped of strippedItems) {
+    const idx = remaining.indexOf(normalizeItemText(stripped));
+    if (idx === -1) {
+      unmatched.push(stripped);
+    } else {
+      remaining.splice(idx, 1);
+    }
+  }
+
+  if (unmatched.length === 0) return { ok: true, reasons: [] };
+
+  return {
+    ok: false,
+    reasons: [
+      `${label} content mismatch: ${strippedItems.length} item(s) were stripped from the task body but ` +
+        `only ${accretedItems.length} were accreted, leaving ${unmatched.length} unmatched — every ` +
+        `stripped item must correspond to an accreted row. Unmatched: ${unmatched
+          .map((t) => `"${t}"`)
+          .join(', ')}.`,
+    ],
+  };
+}

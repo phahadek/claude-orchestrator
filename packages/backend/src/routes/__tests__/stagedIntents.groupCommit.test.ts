@@ -36,6 +36,18 @@ vi.mock('../../db/queries', async (importOriginal) => {
   };
 });
 
+// Only the strip⇔accrete content-match tests below drive a real
+// accreteGateContribution apply (resolveMilestoneForProject) — every other
+// project id in this file never reaches that code path.
+vi.mock('../../projects/ProjectService', () => ({
+  ProjectService: {
+    getById: (id: string) => {
+      if (!id.startsWith('proj-cm')) return undefined;
+      return { id, milestones: [{ id: 'M1', name: 'M1', canonicalShortId: 'M1' }] };
+    },
+  },
+}));
+
 import { db } from '../../db/db';
 import {
   getTaskCache,
@@ -1020,6 +1032,187 @@ describe('Manual-verification-strip grouping — commit-time hard enforcement', 
 
     const commit = await agent
       .post('/api/staged-intents/group/g-mv-none/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+  });
+});
+
+describe('strip⇔accrete content-verification hard gate', () => {
+  const MV_BODY =
+    '## Summary\nClean.\n\n### 👁️ Manual verification\n- Click the button and confirm a toast appears\n- Reload the page and confirm state persists\n';
+
+  async function stageContentMatchGroup(
+    agent: ReturnType<typeof supertest>,
+    projectId: string,
+    taskId: string,
+    groupId: string,
+    gateAccreteOverrides: Record<string, unknown>,
+  ) {
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId,
+      groupId,
+      payload: { taskId, dependsOn: [] },
+    });
+    const patch = await agent.post('/api/staged-intents').send({
+      kind: 'task.patchBodySection',
+      projectId,
+      groupId,
+      payload: {
+        taskId,
+        section: '👁️ Manual verification',
+        operation: 'remove',
+      },
+    });
+    const gateAccrete = await agent.post('/api/staged-intents').send({
+      kind: 'gate.accrete',
+      projectId,
+      groupId,
+      payload: {
+        sourceTask: { id: taskId, title: 'A task', project: projectId, milestone: 'M1' },
+        items: [],
+        classification: 'items',
+        ...gateAccreteOverrides,
+      },
+    });
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId,
+      groupId,
+      payload: {
+        taskId,
+        status: 'Ready',
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+          hasManualVerificationSection: true,
+        },
+      },
+    });
+    for (const intent of [dependsOn, patch, gateAccrete, setStatus]) {
+      await agent
+        .post(`/api/staged-intents/${intent.body.id}/approve`)
+        .send({});
+    }
+    return { dependsOn, patch, gateAccrete, setStatus };
+  }
+
+  it('commits cleanly when N stripped items match N accreted items', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue(MV_BODY),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      patchBodySection: vi.fn().mockResolvedValue(undefined),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-content-match';
+    await stageContentMatchGroup(agent, 'proj-cm', 't-cm', groupId, {
+      items: [
+        { text: 'Click the button and confirm a toast appears' },
+        { text: 'Reload the page and confirm state persists' },
+      ],
+    });
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+  });
+
+  it('hard-blocks the whole group when fewer items were accreted than stripped', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue(MV_BODY),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      patchBodySection: vi.fn().mockResolvedValue(undefined),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-content-fewer';
+    const { setStatus } = await stageContentMatchGroup(
+      agent,
+      'proj-cm-fewer',
+      't-cm-fewer',
+      groupId,
+      {
+        items: [
+          { text: 'Click the button and confirm a toast appears' },
+        ],
+      },
+    );
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.error).toContain('content mismatch');
+    expect(commit.body.reasons[0]).toContain(
+      'Reload the page and confirm state persists',
+    );
+
+    const annotated = await getStagedIntent(setStatus.body.id);
+    expect(annotated ? JSON.parse(annotated.annotation ?? 'null') : null).toEqual(
+      expect.objectContaining({ blocked: true }),
+    );
+  });
+
+  it('hard-blocks on an item-correspondence mismatch even with equal counts', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue(MV_BODY),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      patchBodySection: vi.fn().mockResolvedValue(undefined),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-content-correspondence';
+    await stageContentMatchGroup(
+      agent,
+      'proj-cm-corr',
+      't-cm-corr',
+      groupId,
+      {
+        items: [
+          { text: 'Click the button and confirm a toast appears' },
+          { text: 'Something totally unrelated' },
+        ],
+      },
+    );
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.error).toContain('content mismatch');
+  });
+
+  it('does not run the content-match check for the existing none/n-a accretion path', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue(MV_BODY),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      patchBodySection: vi.fn().mockResolvedValue(undefined),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-content-none';
+    await stageContentMatchGroup(agent, 'proj-cm-none', 't-cm-none', groupId, {
+      items: [],
+      classification: 'n/a',
+      reason: 'Assessed the change; nothing runtime-observable resulted.',
+    });
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
       .send({});
 
     expect(commit.status).toBe(200);
