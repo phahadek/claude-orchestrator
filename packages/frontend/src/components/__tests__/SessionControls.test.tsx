@@ -173,7 +173,9 @@ describe('SessionControls — Delete action', () => {
       />,
     );
     fireEvent.click(screen.getByText('Delete'));
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/sessions/sess-1', {
+      method: 'DELETE',
+    });
     vi.unstubAllGlobals();
   });
 });
@@ -366,7 +368,11 @@ describe('SessionControls — Note editor', () => {
     fireEvent.change(input, { target: { value: 'changed' } });
     fireEvent.keyDown(input, { key: 'Escape' });
     expect(screen.queryByPlaceholderText('Add a note...')).toBeNull();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/sessions/sess-1/note', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note: 'changed' }),
+    });
   });
 });
 
@@ -426,7 +432,11 @@ describe('SessionControls — Tags', () => {
     fireEvent.change(input, { target: { value: 'existing' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => {
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalledWith('/api/sessions/sess-1/tags', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tags: ['existing'] }),
+      });
     });
   });
 });
@@ -724,6 +734,46 @@ describe('SessionControls — disclosure toggle inline placement', () => {
     const notionLink = screen.getByText('Notion ↗').closest('a')!;
     // Toggle should immediately follow the Notion link in DOM order
     expect(notionLink.nextElementSibling).toBe(toggle);
+  });
+});
+
+describe('SessionControls — granted capability provenance', () => {
+  it('renders distinct badges for an auto-granted and an operator-granted capability', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/capabilities')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              capabilities: [
+                {
+                  capability: 'session.readOwnRecord(sess-1)',
+                  provenance: 'auto',
+                },
+                { capability: 'Bash(psql:*)', provenance: 'operator' },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 200 }));
+    });
+
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('session.readOwnRecord(sess-1)')).toBeTruthy();
+      expect(screen.getByText('Bash(psql:*)')).toBeTruthy();
+    });
+    expect(screen.getByText('auto')).toBeTruthy();
+    expect(screen.getByText('operator')).toBeTruthy();
+  });
+
+  it('renders no capability badges when the session has none granted', () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+    expect(screen.queryByText('auto')).toBeNull();
+    expect(screen.queryByText('operator')).toBeNull();
   });
 });
 
