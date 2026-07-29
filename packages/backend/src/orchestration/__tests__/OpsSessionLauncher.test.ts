@@ -13,9 +13,13 @@ vi.mock('../../ops/opsLoad.js', () => ({
   loadOpsContext: vi.fn(),
 }));
 
-vi.mock('../../ops/opsJournal.js', () => ({
-  getEntry: vi.fn().mockReturnValue(undefined),
-}));
+vi.mock('../../ops/opsJournal.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    getEntry: vi.fn().mockReturnValue(undefined),
+  };
+});
 
 vi.mock('../../groom/groomLoad.js', () => ({
   loadGroomContext: vi.fn(),
@@ -567,6 +571,42 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     expect(result.failed).toHaveLength(1);
     expect(result.failed[0]).toMatchObject({ taskId: 'task-1' });
     expect(result.failed[0].reason).toBeTruthy();
+  });
+
+  it('aborts before creating a session when planning-procedure assembly fails with a generic (non-worklist) error, and propagates that error as the failure reason', async () => {
+    const { loadDesignContext } = await import('../../design/designLoad.js');
+    (loadDesignContext as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('milestone milestone-1 is not registered'),
+    );
+
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = {
+      id: 'task-1',
+      title: 'Design me',
+      url: '',
+      blockingDepIds: [],
+    };
+
+    const result = await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'design',
+      tasks: [task],
+    });
+
+    // The assembly failure aborts the dispatch before any session.start()
+    // call — no session is created and torn down over a config fault.
+    expect(start).not.toHaveBeenCalled();
+    expect(result.launched).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0].taskId).toBe('task-1');
+    // The real cause (the assembly error) reaches the failure surface,
+    // instead of the generic no-injectedProcedureContent refusal that would
+    // otherwise fire one hop later and misattribute the failure.
+    expect(result.failed[0].reason).toContain(
+      'milestone milestone-1 is not registered',
+    );
   });
 
   it('puts a task in failed[] with the rejection message when sessionManager.start rejects, not in launched[]', async () => {

@@ -291,16 +291,15 @@ export class OpsSessionLauncher {
   /**
    * Load this workflow's per-task digest and assemble the injected planning
    * procedure (`planning/procedureAssembler.ts`) for a groom/design/ops
-   * dispatch. Returns undefined on any *unexpected* loader failure — the
-   * session still launches, falling back to the code-session context build
-   * in that case, but a warning is logged so the gap is visible. Re-throws
-   * `GroomWorklistTaskNotFoundError` (even after the worklist-reconciliation
-   * retry above) so the caller can fail the dispatch fast with that specific
-   * reason instead of launching a session that then errors on the generic
-   * no-injectedProcedureContent fail-loud. Also surfaces the digest's
-   * resolved task title (groom/design load real titles even when the caller
-   * only had the bare task id) so the session can be named after it instead
-   * of the id.
+   * dispatch. Any assembly failure — including `GroomWorklistTaskNotFoundError`
+   * — propagates to the caller, which aborts the dispatch instead of
+   * launching a session that then dies one hop later on SessionManager's
+   * generic no-injectedProcedureContent fail-loud. Falling back to the
+   * code-session context build here would be wrong: it would inject the
+   * implement/PR coding scaffold into a worktree-less planning session. Also
+   * surfaces the digest's resolved task title (groom/design load real titles
+   * even when the caller only had the bare task id) so the session can be
+   * named after it instead of the id.
    */
   private async buildInjectedProcedure(
     projectId: string,
@@ -368,10 +367,10 @@ export class OpsSessionLauncher {
       return { content, title: resolvedTitle };
     } catch (err) {
       if (err instanceof GroomWorklistTaskNotFoundError) throw err;
-      logger.warn(
-        `[OpsSessionLauncher] failed to assemble planning procedure for task ${task.id} (${sessionType}): ${err instanceof Error ? err.message : err}`,
+      throw new Error(
+        `failed to assemble planning procedure for task ${task.id} (${sessionType}): ${err instanceof Error ? err.message : err}`,
+        { cause: err },
       );
-      return undefined;
     }
   }
 
@@ -400,16 +399,17 @@ export class OpsSessionLauncher {
           taskUrl,
         );
       } catch (err) {
-        if (err instanceof GroomWorklistTaskNotFoundError) {
-          // Fail fast at dispatch instead of launching a session that then
-          // errors on SessionManager's generic no-injectedProcedureContent
-          // fail-loud — this reason is specific to the worklist miss.
-          logger.warn(
-            `[OpsSessionLauncher] skipping ${sessionType} dispatch for task ${task.id}: ${err.message}`,
-          );
-          return { status: 'failed', taskId: task.id, reason: err.message };
-        }
-        throw err;
+        // Abort before creating any session — a planning session with no
+        // injectedProcedureContent is a guaranteed, one-hop-later refusal
+        // in SessionManager.completeStart, and that refusal misattributes
+        // the failure as a code mis-wire instead of surfacing the real
+        // assembly error. Fail the dispatch here instead, with the actual
+        // reason.
+        const reason = err instanceof Error ? err.message : String(err);
+        logger.warn(
+          `[OpsSessionLauncher] skipping ${sessionType} dispatch for task ${task.id}: ${reason}`,
+        );
+        return { status: 'failed', taskId: task.id, reason };
       }
     }
     const injectedProcedureContent = injectedProcedure?.content;
