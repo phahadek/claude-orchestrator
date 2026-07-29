@@ -21,9 +21,9 @@ vi.mock('../../tasks/TaskBackend', () => ({
 }));
 
 vi.mock('../../notion/NotionClient', async () => {
-  const actual = await vi.importActual<typeof import('../../notion/NotionClient')>(
-    '../../notion/NotionClient',
-  );
+  const actual = await vi.importActual<
+    typeof import('../../notion/NotionClient')
+  >('../../notion/NotionClient');
   return {
     ...actual,
     NotionClient: vi.fn().mockImplementation(() => ({

@@ -77,9 +77,7 @@ describe('human_merge_only gate — getApprovedOpenPRs exclusion', () => {
       pr_number: 103,
     });
     setHumanMergeOnly(103, 'owner/repo', true);
-    expect(
-      getApprovedOpenPRs().map((r) => r.pr_number),
-    ).not.toContain(103);
+    expect(getApprovedOpenPRs().map((r) => r.pr_number)).not.toContain(103);
     setHumanMergeOnly(103, 'owner/repo', false);
     expect(getApprovedOpenPRs().map((r) => r.pr_number)).toContain(103);
   });
