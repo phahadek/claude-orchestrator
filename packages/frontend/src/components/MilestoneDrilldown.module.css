@@ -1,0 +1,48 @@
+.drilldown {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+}
+
+.emptyState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+}
+
+.taskReader {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+}
+
+.heading {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.taskMarkdown {
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.sessionEmbed {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.error {
+  color: var(--error, #f38ba8);
+  font-size: 0.875rem;
+}

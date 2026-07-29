@@ -10,6 +10,10 @@ import styles from './MilestoneDecisionInbox.module.css';
 interface Props {
   projectId: string;
   milestone: string;
+  /** The currently drill-down-selected intent/group card id, if any — highlights that card. */
+  selectedCardId?: string | null;
+  /** Drives the middle-stack selection -> right drill-down wiring. Omit to render read-only (no selection affordance). */
+  onSelectIntent?: (intent: StagedIntent) => void;
 }
 
 type Card =
@@ -52,7 +56,12 @@ function buildCardOrder(intents: StagedIntent[]): Card[] {
  * (StagedIntentPanel, DecisionPickOnePanel, TriageBatchPanel) via the shared
  * useDecisionQueue hook, differing only in fetch scope.
  */
-export function MilestoneDecisionInbox({ projectId, milestone }: Props) {
+export function MilestoneDecisionInbox({
+  projectId,
+  milestone,
+  selectedCardId = null,
+  onSelectIntent,
+}: Props) {
   const {
     intents,
     loaded,
@@ -96,7 +105,16 @@ export function MilestoneDecisionInbox({ projectId, milestone }: Props) {
           const { intent } = card;
           const provenance = provenanceOf([intent]);
           return (
-            <div key={intent.id} className={panelStyles.group}>
+            <div
+              key={intent.id}
+              className={`${panelStyles.group}${
+                selectedCardId === intent.id ? ` ${styles.selectedCard}` : ''
+              }`}
+              onClick={
+                onSelectIntent ? () => onSelectIntent(intent) : undefined
+              }
+              data-testid={`milestone-decision-card-${intent.id}`}
+            >
               <div className={panelStyles.groupHeader}>
                 <span>{intent.kind}</span>
                 <span
@@ -133,7 +151,18 @@ export function MilestoneDecisionInbox({ projectId, milestone }: Props) {
         const provenance = provenanceOf(groupIntents);
 
         return (
-          <div key={groupId} className={panelStyles.group}>
+          <div
+            key={groupId}
+            className={`${panelStyles.group}${
+              selectedCardId === groupId ? ` ${styles.selectedCard}` : ''
+            }`}
+            onClick={
+              onSelectIntent && groupIntents[0]
+                ? () => onSelectIntent(groupIntents[0])
+                : undefined
+            }
+            data-testid={`milestone-decision-card-${groupId}`}
+          >
             <div className={panelStyles.groupHeader}>
               <span>Group {groupId}</span>
               <span

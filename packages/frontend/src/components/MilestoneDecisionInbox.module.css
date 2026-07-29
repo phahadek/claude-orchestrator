@@ -24,3 +24,9 @@
   padding: 2px 6px;
   margin-left: 6px;
 }
+
+/* The middle-stack -> right drill-down selection highlight. */
+.selectedCard {
+  outline: 2px solid #89b4fa;
+  outline-offset: -1px;
+}

@@ -55,6 +55,13 @@ function emptyCounts(): PhaseStateCounts {
   return { pending: 0, staged: 0, done: 0 };
 }
 
+/** The burndown phase a task belongs to, or null when it's closed out (deferred) or its type maps to none. */
+export function phaseForTask(task: TaskView): PhaseKey | null {
+  if (CLOSED_STATUSES.has(task.displayStatus)) return null;
+  if (PRE_READY_STATUSES.has(task.displayStatus)) return 'grooming';
+  return TYPE_TO_PHASE[task.taskType] ?? null;
+}
+
 function stateForTask(task: TaskView): BurndownState {
   if (task.displayStatus === 'done') return 'done';
   if (task.displayStatus === 'ready') return 'pending';
@@ -77,13 +84,7 @@ export function computePhaseBurndown(
   }
 
   for (const task of tasks) {
-    if (CLOSED_STATUSES.has(task.displayStatus)) continue;
-
-    const phase: PhaseKey | undefined = PRE_READY_STATUSES.has(
-      task.displayStatus,
-    )
-      ? 'grooming'
-      : TYPE_TO_PHASE[task.taskType];
+    const phase = phaseForTask(task);
     if (!phase) continue;
 
     const state = stateForTask(task);
