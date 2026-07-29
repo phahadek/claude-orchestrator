@@ -10,6 +10,22 @@ import { upsertTaskCache } from '../db/queries';
 import { logger } from '../logger';
 import { ProjectService } from '../projects/ProjectService';
 
+/**
+ * Thrown when a milestone registered in the orchestrator DB has no matching
+ * entry in tasks.yaml. This is a config-drift condition, not a transient I/O
+ * failure — callers (TaskCacheRefresher) use the distinct type to classify it
+ * separately from ordinary fetch errors and avoid re-warning at poll cadence.
+ */
+export class MilestoneNotFoundError extends Error {
+  constructor(
+    public readonly filePath: string,
+    public readonly milestoneId: string,
+  ) {
+    super(`milestone not found in ${filePath}: ${milestoneId}`);
+    this.name = 'MilestoneNotFoundError';
+  }
+}
+
 // ── tasks.yaml schema ────────────────────────────────────────────────────────
 
 interface LocalTask {
@@ -225,9 +241,7 @@ export class LocalTaskBackend implements TaskBackend {
     } else {
       const milestone = file.milestones.find((m) => m.id === milestoneId);
       if (!milestone) {
-        throw new Error(
-          `[LocalTaskBackend] milestone not found in ${this.filePath}: ${milestoneId}`,
-        );
+        throw new MilestoneNotFoundError(this.filePath, milestoneId);
       }
       allTasks = milestone.tasks.map((t) => this.mapToNotionTask(t));
     }
