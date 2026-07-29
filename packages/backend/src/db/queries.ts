@@ -65,7 +65,9 @@ import type {
   StagedIntentRow,
   StagedIntentState,
   StagedIntentGroupRow,
+  FlowArmRow,
 } from './types';
+import { FLOW_IDS, DEFAULT_ARM, type FlowId } from '../orchestration/flowArm';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
 
@@ -5861,4 +5863,78 @@ export function queryArchUnits(query: ArchUnitQuery = {}): ArchUnitRow[] {
   return db
     .prepare(`SELECT * FROM arch_unit ${where} ORDER BY updated_at DESC`)
     .all(params) as ArchUnitRow[];
+}
+
+// ─── flow_arm ──────────────────────────────────────────────────────────────
+
+let _stmtGetFlowArm: Database.Statement | undefined;
+let _stmtUpsertFlowArm: Database.Statement | undefined;
+
+/** flow_arm row for (milestoneId, flow), or null if absent (caller applies DEFAULT_ARM). */
+function getFlowArmRow(milestoneId: string, flow: FlowId): FlowArmRow | null {
+  _stmtGetFlowArm ??= db.prepare<{ milestone_id: string; flow: string }>(
+    `SELECT * FROM flow_arm WHERE milestone_id = @milestone_id AND flow = @flow`,
+  );
+  return (
+    (_stmtGetFlowArm.get({
+      milestone_id: milestoneId,
+      flow,
+    }) as FlowArmRow | undefined) ?? null
+  );
+}
+
+/** Effective arm state: the flow_arm row's value if present, else DEFAULT_ARM[flow]. */
+export function getArm(milestoneId: string, flow: FlowId): boolean {
+  const row = getFlowArmRow(milestoneId, flow);
+  return row ? row.armed === 1 : DEFAULT_ARM[flow];
+}
+
+/** Effective per-flow arm state for a milestone, with the source of each value. */
+export function listArm(
+  milestoneId: string,
+): Record<FlowId, { armed: boolean; source: 'row' | 'default' }> {
+  const result = {} as Record<
+    FlowId,
+    { armed: boolean; source: 'row' | 'default' }
+  >;
+  for (const flow of FLOW_IDS) {
+    const row = getFlowArmRow(milestoneId, flow);
+    result[flow] = row
+      ? { armed: row.armed === 1, source: 'row' }
+      : { armed: DEFAULT_ARM[flow], source: 'default' };
+  }
+  return result;
+}
+
+/**
+ * Upsert the arm state for (milestoneId, flow). Returns the previous
+ * effective value (row value if present, else DEFAULT_ARM[flow]) so the
+ * caller can audit the transition.
+ */
+export function upsertArm(
+  milestoneId: string,
+  flow: FlowId,
+  armed: boolean,
+  updatedAt: number,
+): { previous: boolean } {
+  const previous = getArm(milestoneId, flow);
+  _stmtUpsertFlowArm ??= db.prepare<{
+    milestone_id: string;
+    flow: string;
+    armed: number;
+    updated_at: number;
+  }>(`
+    INSERT INTO flow_arm (milestone_id, flow, armed, updated_at)
+    VALUES (@milestone_id, @flow, @armed, @updated_at)
+    ON CONFLICT (milestone_id, flow) DO UPDATE SET
+      armed = excluded.armed,
+      updated_at = excluded.updated_at
+  `);
+  _stmtUpsertFlowArm.run({
+    milestone_id: milestoneId,
+    flow,
+    armed: armed ? 1 : 0,
+    updated_at: updatedAt,
+  });
+  return { previous };
 }

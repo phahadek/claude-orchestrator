@@ -1552,4 +1552,20 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // flow_arm: per-(milestone, flow) auto-dispatch arm state. Absent row
+  // means "use the flow's DEFAULT_ARM" (see orchestration/flowArm.ts) —
+  // this migration creates the empty table only, no seeded rows.
+  // Orphan-tolerant by design (no FK to milestones): the read path already
+  // defaults on an absent row, so a stale milestone_id is harmless and
+  // arming can't be blocked by milestone sync ordering.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS flow_arm (
+      milestone_id TEXT    NOT NULL,
+      flow         TEXT    NOT NULL,
+      armed        INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL,
+      PRIMARY KEY (milestone_id, flow)
+    );
+  `);
 }

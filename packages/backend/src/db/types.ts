@@ -243,6 +243,15 @@ export type NewMilestoneRow = Omit<
   updated_at?: number;
 };
 
+// ─── flow_arm ──────────────────────────────────────────────────────────────
+
+export interface FlowArmRow {
+  milestone_id: string;
+  flow: string;
+  armed: number;
+  updated_at: number;
+}
+
 // ─── local_branches ────────────────────────────────────────────────────────
 
 type LocalBranchStatus = 'open' | 'merged' | 'abandoned';

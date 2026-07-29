@@ -103,6 +103,7 @@ import { createGroomContextRouter } from './routes/groomContext';
 import { createGroomFlipRouter } from './routes/groomFlip';
 import { createMergeCandidatesRouter } from './routes/mergeCandidates';
 import { createOpsContextRouter } from './routes/opsContext';
+import { createMilestonesRouter } from './routes/milestones';
 import { createPlanningLaunchRouter } from './routes/planningLaunch';
 import {
   OpsSessionLauncher,
@@ -290,6 +291,7 @@ const opsSessionLauncher = new OpsSessionLauncher(sessionManager);
 app.use('/api', createGroomFlipRouter(opsSessionLauncher));
 app.use('/api', createMergeCandidatesRouter());
 app.use('/api', createOpsContextRouter());
+app.use('/api', createMilestonesRouter());
 app.use('/api', createPlanningLaunchRouter(opsSessionLauncher));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
