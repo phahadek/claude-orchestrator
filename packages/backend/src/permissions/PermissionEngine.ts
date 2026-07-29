@@ -25,6 +25,9 @@ const HARD_ALLOW = [
   'Bash *npx tsc*',
   'Bash *npx vitest*',
   'Bash *npm run *',
+  'Bash *go build*',
+  'Bash *go test*',
+  'Bash *go vet*',
 ];
 
 // ─── Pattern matching ────────────────────────────────────────────────────────
