@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { getDataDir } from './config/dataDir';
+import { scrubSecrets } from './security/scrubSecrets';
 
 const MAX_BYTES = 10 * 1024 * 1024; // 10 MB per file
 const MAX_ROTATIONS = 5; // orchestrator.log.1 … orchestrator.log.5
@@ -55,12 +56,25 @@ function rotate(): void {
   openFd();
 }
 
+/**
+ * Errors serialize to `{}` via JSON.stringify (message/stack are
+ * non-enumerable), so unwrap them into readable text first. Secrets can
+ * leak into an Error's message (e.g. subprocess stderr embedded by a
+ * caller), so the unwrapped text is scrubbed before it reaches the log.
+ */
+function formatArg(a: unknown): string {
+  if (typeof a === 'string') return a;
+  if (a instanceof Error) {
+    const text = a.stack ?? `${a.name}: ${a.message}`;
+    return scrubSecrets(text);
+  }
+  return JSON.stringify(a);
+}
+
 function write(level: string, args: unknown[]): void {
   if (logFd === null) return;
   const timestamp = new Date().toISOString();
-  const message = args
-    .map((a) => (typeof a === 'string' ? a : JSON.stringify(a)))
-    .join(' ');
+  const message = args.map(formatArg).join(' ');
   const line = `${timestamp} [${level.padEnd(5)}] ${message}\n`;
   const buf = Buffer.from(line);
   currentBytes += buf.byteLength;

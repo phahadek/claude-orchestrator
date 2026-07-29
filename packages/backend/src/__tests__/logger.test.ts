@@ -76,6 +76,34 @@ describe('initLogger', () => {
     expect(fs.statSync(logPath).size).toBeLessThan(64);
   });
 
+  it('logs the Error message instead of serializing to {}', () => {
+    initLogger();
+    console.error(
+      '[SessionManager] completeStart failed for abc123:',
+      new Error('spawn failed: missing auth token'),
+    );
+    const contents = fs.readFileSync(
+      path.join(tmpDir, 'logs', 'orchestrator.log'),
+      'utf8',
+    );
+    expect(contents).toContain('spawn failed: missing auth token');
+    expect(contents).not.toContain('{}');
+  });
+
+  it('scrubs secrets from an unwrapped Error before writing', () => {
+    initLogger();
+    console.error(
+      'boot failed:',
+      new Error('auth step failed: Bearer sk-ant-abcdefghijklmnop'),
+    );
+    const contents = fs.readFileSync(
+      path.join(tmpDir, 'logs', 'orchestrator.log'),
+      'utf8',
+    );
+    expect(contents).toContain('[REDACTED]');
+    expect(contents).not.toContain('sk-ant-abcdefghijklmnop');
+  });
+
   it('keeps at most 5 rotated backup files', () => {
     _setMaxBytesForTesting(64); // rotate aggressively for fast testing
     initLogger();

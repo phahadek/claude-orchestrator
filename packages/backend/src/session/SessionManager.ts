@@ -1156,11 +1156,11 @@ export class SessionManager extends EventEmitter {
       startedAt,
     ).catch(async (err) => {
       this.pendingStarts.delete(sessionId);
+      const errorDetail = err instanceof Error ? err.message : String(err);
       logger.error(
         `[SessionManager] completeStart failed for ${sessionId}:`,
-        err,
+        errorDetail,
       );
-      const errorDetail = err instanceof Error ? err.message : String(err);
       // Persist the error context so review-verdict construction can surface the
       // real cause instead of the generic "no output to parse" fallback.
       try {
