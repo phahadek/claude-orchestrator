@@ -43,7 +43,8 @@ export type CanonicalPauseReason =
   | 'resume_failed'
   | 'review_rules_escalation'
   | 'planning_crashed'
-  | 'planning_first_turn_empty';
+  | 'planning_first_turn_empty'
+  | 'planning_terminal_no_decision';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -208,6 +209,11 @@ export const PAUSE_REASON_REGISTRY: Record<
     retry_strategy: 'manual_action',
   },
   planning_first_turn_empty: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  planning_terminal_no_decision: {
     source: 'session',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
