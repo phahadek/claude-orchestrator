@@ -238,7 +238,7 @@ describe('procedureCore', () => {
     const text = stepSummaryFor(step, 'groom');
     expect(text).toMatch(/still the\s+Ready path, not Deferred/);
     expect(text).toContain(
-      "narrows the original in place to exactly the retained scope",
+      'narrows the original in place to exactly the retained scope',
     );
     expect(text).toMatch(/one `task\.create` per\s+excised piece/);
     expect(text).toMatch(/never for "I split this up"/);

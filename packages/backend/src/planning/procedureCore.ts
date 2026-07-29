@@ -1032,12 +1032,12 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         '`task.setDependsOn` where the cut creates a genuine ordering ' +
         'constraint between the narrowed original and a sibling, then take the ' +
         'Ready path for the narrowed original as normal — it has been groomed, ' +
-        'not abandoned. Recommend the narrowed original\'s body also carry a ' +
+        "not abandoned. Recommend the narrowed original's body also carry a " +
         'short one-line note (e.g. in Context) naming the siblings it was ' +
         'split into, so the redistribution stays traceable from the surviving ' +
         'task. The Deferred path is for scope genuinely superseded or ' +
         'genuinely not ready — never for "I split this up"; a split that ends ' +
-        'on Deferred silently blocks the original\'s dependents, since only ' +
+        "on Deferred silently blocks the original's dependents, since only " +
         '✅ Done satisfies a Depends On (config/procedures.md § Task types) ' +
         'and Deferred does not. Relatedly, a session that narrows in place ' +
         'must record `size_check.decision` as `no_split` — the retained ' +
