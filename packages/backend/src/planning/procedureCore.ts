@@ -196,6 +196,40 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     text: renderOpsJournalStateMachine(),
   },
   {
+    id: 'dispatched-ops-write-capable',
+    title:
+      'A dispatched ops run is write-capable — drive to applied-pending-confirm, never park a staged proposal',
+    appliesTo: ['ops'],
+    text:
+      'A dispatched {skillLabel} run IS write-capable: it earns capabilities on ' +
+      'request and drives the ops_journal to `applied-pending-confirm` (the change ' +
+      'actually applied, reconciled, evidence captured) through the ' +
+      'request → grant → apply → reconcile loop. IS NOT: a session limited to ' +
+      'staging a proposal and parking it for someone else to execute — that is ' +
+      'not the target terminal for work this session can perform, or can become ' +
+      'equipped to perform. DO keep driving the journal — stage the next legal ' +
+      'transition, apply once a capability is granted or a proposal is approved, ' +
+      'reconcile and capture evidence, repeat — until it reaches ' +
+      '`applied-pending-confirm`, rather than stopping at `staged-proposal` (or ' +
+      'any other non-terminal state) merely because every prerequisite for that ' +
+      'state is satisfied. DO NOT treat "the proposal is ready to stage" as a ' +
+      'stopping point when the session already holds, or could earn by request, ' +
+      'the tool needed to carry it further. A missing write tool IS a capability ' +
+      'request, never a blocker: DO call ' +
+      `\`${orchestratorMcpToolName('session.requestCapability')}\` the moment a ` +
+      'write the task needs is outside this session\'s tools, with ' +
+      '`{"payload":{"capability":"<the exact tool or capability>","plan":"<what ' +
+      'you will do once granted>","evidence":"<why this write is needed>"}}` — ' +
+      'then end the turn and wait to be re-dispatched, and apply the write once ' +
+      're-dispatched with it granted. DO NOT record the missing tool as `blocked` ' +
+      'or `needs-setup` when a capability request can reach it — request first. ' +
+      'A genuine external blocker (no sanctioned request path resolves it: a real ' +
+      'dependency has not landed, an external system is down, the decision is ' +
+      "only a human's to make) still terminates as `blocked` / `needs-setup`, " +
+      'naming the blocker explicitly — that terminal stays legitimate and is not ' +
+      'what this rule forbids.',
+  },
+  {
     id: 'atomic-single-action-request',
     title: 'Atomic single-action requests',
     appliesTo: ['ops'],
