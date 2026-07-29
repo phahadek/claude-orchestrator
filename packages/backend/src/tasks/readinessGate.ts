@@ -265,7 +265,12 @@ export function parseManualVerificationItems(body: string): string[] {
     const trimmed = line.trim();
     if (!trimmed || /^none$/i.test(trimmed)) continue;
     if (/^[-*]\s+/.test(trimmed) || /^\d+[.)]\s+/.test(trimmed)) {
-      items.push(trimmed.replace(/^[-*]\s+/, '').replace(/^\d+[.)]\s+/, '').trim());
+      items.push(
+        trimmed
+          .replace(/^[-*]\s+/, '')
+          .replace(/^\d+[.)]\s+/, '')
+          .trim(),
+      );
     }
   }
   return items;

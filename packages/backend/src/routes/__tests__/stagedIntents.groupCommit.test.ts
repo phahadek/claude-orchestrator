@@ -43,7 +43,10 @@ vi.mock('../../projects/ProjectService', () => ({
   ProjectService: {
     getById: (id: string) => {
       if (!id.startsWith('proj-cm')) return undefined;
-      return { id, milestones: [{ id: 'M1', name: 'M1', canonicalShortId: 'M1' }] };
+      return {
+        id,
+        milestones: [{ id: 'M1', name: 'M1', canonicalShortId: 'M1' }],
+      };
     },
   },
 }));
@@ -1070,7 +1073,12 @@ describe('strip⇔accrete content-verification hard gate', () => {
       projectId,
       groupId,
       payload: {
-        sourceTask: { id: taskId, title: 'A task', project: projectId, milestone: 'M1' },
+        sourceTask: {
+          id: taskId,
+          title: 'A task',
+          project: projectId,
+          milestone: 'M1',
+        },
         items: [],
         classification: 'items',
         ...gateAccreteOverrides,
@@ -1140,9 +1148,7 @@ describe('strip⇔accrete content-verification hard gate', () => {
       't-cm-fewer',
       groupId,
       {
-        items: [
-          { text: 'Click the button and confirm a toast appears' },
-        ],
+        items: [{ text: 'Click the button and confirm a toast appears' }],
       },
     );
 
@@ -1157,9 +1163,9 @@ describe('strip⇔accrete content-verification hard gate', () => {
     );
 
     const annotated = await getStagedIntent(setStatus.body.id);
-    expect(annotated ? JSON.parse(annotated.annotation ?? 'null') : null).toEqual(
-      expect.objectContaining({ blocked: true }),
-    );
+    expect(
+      annotated ? JSON.parse(annotated.annotation ?? 'null') : null,
+    ).toEqual(expect.objectContaining({ blocked: true }));
   });
 
   it('hard-blocks on an item-correspondence mismatch even with equal counts', async () => {
@@ -1173,18 +1179,12 @@ describe('strip⇔accrete content-verification hard gate', () => {
     const app = makeApp();
     const agent = supertest(app);
     const groupId = 'g-content-correspondence';
-    await stageContentMatchGroup(
-      agent,
-      'proj-cm-corr',
-      't-cm-corr',
-      groupId,
-      {
-        items: [
-          { text: 'Click the button and confirm a toast appears' },
-          { text: 'Something totally unrelated' },
-        ],
-      },
-    );
+    await stageContentMatchGroup(agent, 'proj-cm-corr', 't-cm-corr', groupId, {
+      items: [
+        { text: 'Click the button and confirm a toast appears' },
+        { text: 'Something totally unrelated' },
+      ],
+    });
 
     const commit = await agent
       .post(`/api/staged-intents/group/${groupId}/commit`)
