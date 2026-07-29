@@ -1219,6 +1219,209 @@ describe('strip⇔accrete content-verification hard gate', () => {
   });
 });
 
+describe('seed_contribution strip⇔accrete content-match (declared candidates vs staged seeds)', () => {
+  async function stageSeedContentMatchGroup(
+    agent: ReturnType<typeof supertest>,
+    projectId: string,
+    taskId: string,
+    groupId: string,
+    seedStageOverrides: Record<string, unknown>,
+    seedContributionCandidates?: { spec: string }[],
+  ) {
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId,
+      groupId,
+      payload: { taskId, dependsOn: [] },
+    });
+    const seedStage = await agent.post('/api/staged-intents').send({
+      kind: 'seed.stage',
+      projectId,
+      groupId,
+      payload: {
+        sourceTask: {
+          id: taskId,
+          title: 'A task',
+          project: projectId,
+          milestone: 'M1',
+        },
+        seeds: [],
+        decision: 'seeds',
+        ...seedStageOverrides,
+      },
+    });
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId,
+      groupId,
+      payload: {
+        taskId,
+        status: 'Ready',
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+          ...(seedContributionCandidates ? { seedContributionCandidates } : {}),
+        },
+      },
+    });
+    for (const intent of [dependsOn, seedStage, setStatus]) {
+      await agent
+        .post(`/api/staged-intents/${intent.body.id}/approve`)
+        .send({});
+    }
+    return { dependsOn, seedStage, setStatus };
+  }
+
+  it('commits cleanly when declared seed candidates match staged seeds', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-seed-match';
+    await stageSeedContentMatchGroup(
+      agent,
+      'proj-cm-seed',
+      't-cm-seed',
+      groupId,
+      { seeds: [{ spec: 'Set default retry count to 3' }] },
+      [{ spec: 'Set default retry count to 3' }],
+    );
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+  });
+
+  it('hard-blocks when fewer seeds were staged than declared', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-seed-fewer';
+    const { setStatus } = await stageSeedContentMatchGroup(
+      agent,
+      'proj-cm-seed-fewer',
+      't-cm-seed-fewer',
+      groupId,
+      { seeds: [{ spec: 'Set default retry count to 3' }] },
+      [
+        { spec: 'Set default retry count to 3' },
+        { spec: 'Enable the new feature flag' },
+      ],
+    );
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.error).toContain('content mismatch');
+    expect(commit.body.reasons[0]).toContain('Enable the new feature flag');
+
+    const annotated = await getStagedIntent(setStatus.body.id);
+    expect(
+      annotated ? JSON.parse(annotated.annotation ?? 'null') : null,
+    ).toEqual(expect.objectContaining({ blocked: true }));
+  });
+
+  it('hard-blocks on an item-correspondence mismatch even with equal counts', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-seed-correspondence';
+    await stageSeedContentMatchGroup(
+      agent,
+      'proj-cm-seed-corr',
+      't-cm-seed-corr',
+      groupId,
+      {
+        seeds: [
+          { spec: 'Set default retry count to 3' },
+          { spec: 'Something totally unrelated' },
+        ],
+      },
+      [
+        { spec: 'Set default retry count to 3' },
+        { spec: 'Enable the new feature flag' },
+      ],
+    );
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.error).toContain('content mismatch');
+  });
+
+  it('does not run the content-match check when no seedContributionCandidates were declared', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-seed-undeclared';
+    await stageSeedContentMatchGroup(
+      agent,
+      'proj-cm-seed-undeclared',
+      't-cm-seed-undeclared',
+      groupId,
+      { seeds: [{ spec: 'Set default retry count to 3' }] },
+      undefined,
+    );
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+  });
+
+  it('does not run the content-match check for the existing none/n-a decision path', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-seed-none';
+    await stageSeedContentMatchGroup(
+      agent,
+      'proj-cm-seed-none',
+      't-cm-seed-none',
+      groupId,
+      { seeds: [], decision: 'n/a' },
+      [{ spec: 'Set default retry count to 3' }],
+    );
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(200);
+  });
+});
+
 describe('group-level atomic disposition (approve / pushback / decline the whole groom)', () => {
   it('POST /group/:groupId/approve commits all members in dependency order without a prior per-item approve', async () => {
     const calls: string[] = [];

@@ -194,6 +194,23 @@ function getGroupGateAccretePayload(
   return row ? (JSON.parse(row.payload) as GateAccretePayload) : undefined;
 }
 
+/**
+ * The seed.stage twin of getGroupGateAccretePayload — the group's live
+ * seed.stage payload for this task, when one is staged, used by the
+ * seed_contribution content-match precheck.
+ */
+function getGroupSeedStagePayload(
+  groupId: string,
+  taskId: string,
+): SeedStagePayload | undefined {
+  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
+  const row = listStagedIntentsByGroup(groupId).find((r) => {
+    if (r.kind !== 'seed.stage' || !ACTIVE.includes(r.state)) return false;
+    return extractTaskId('seed.stage', JSON.parse(r.payload)) === taskId;
+  });
+  return row ? (JSON.parse(row.payload) as SeedStagePayload) : undefined;
+}
+
 /** The exact heading text bodyRender.ts writes for the section (see bodyRender.ts:298,463). */
 const MANUAL_VERIFICATION_SECTION = '👁️ Manual verification';
 
@@ -2371,6 +2388,36 @@ async function precheckGroupCommit(
         const accretedItems = gatePayload.items.map((item) => item.text);
         const match = checkAccretionContentMatch(
           'gate_contribution',
+          strippedItems,
+          accretedItems,
+        );
+        if (!match.ok) {
+          setStagedIntentAnnotation(
+            row.id,
+            JSON.stringify({ blocked: true, reasons: match.reasons }),
+          );
+          broadcastIntentById(row.id);
+          return {
+            status: 409,
+            body: {
+              error: new GroomingGateError(match.reasons).message,
+              reasons: match.reasons,
+              precheck: true,
+            },
+          };
+        }
+      }
+    }
+
+    if (payload.groomingGate?.seedContributionCandidates?.length) {
+      const seedPayload = getGroupSeedStagePayload(groupId, payload.taskId);
+      if (seedPayload && seedPayload.decision === 'seeds') {
+        const strippedItems = payload.groomingGate.seedContributionCandidates.map(
+          (c) => c.spec,
+        );
+        const accretedItems = seedPayload.seeds.map((s) => s.spec);
+        const match = checkAccretionContentMatch(
+          'seed_contribution',
           strippedItems,
           accretedItems,
         );

@@ -180,6 +180,23 @@ export interface GroomingGateEntry {
    */
   gateContributionCandidates?: GateContributionCandidate[];
   /**
+   * The groomer's declared operational data/config seeds for seed_contribution
+   * — the assessment output stageSeedContribution's `seeds` array is supposed
+   * to mint verbatim (see task-writing.md § Milestone config-seed). Unlike
+   * gate_contribution's candidates, seeds have no pre-groom body section to
+   * re-derive server-side (they are identified from reading the change, not
+   * stripped from an author-authored list) — this is the groomer's own
+   * declared set, cross-checked at stage-group-commit time
+   * (stagedIntents.ts's precheckGroupCommit, via
+   * readinessGate.ts's checkAccretionContentMatch) against the group's live
+   * `seed.stage` intent's actual `seeds` array, the same strip⇔accrete
+   * content-match posture gate_contribution enforces against the real body.
+   * Absent entirely, this check fails open (mirrors gate_contribution's own
+   * candidates check) — a caller that hasn't started passing this yet records
+   * nothing here and is unaffected.
+   */
+  seedContributionCandidates?: { spec: string }[];
+  /**
    * True when this task's pre-groom body (at Ready-flip staging time) still
    * carried a "### 👁️ Manual verification" section — a structural fact
    * groomLoad.ts computes from the body, same posture as

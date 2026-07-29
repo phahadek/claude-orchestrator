@@ -311,7 +311,16 @@ export interface SeedContributionSourceTask {
   milestone: string;
 }
 
-/** One operational data/config seed (config-change spec) to mint as a seed_item. */
+/**
+ * One operational data/config seed (config-change spec) to mint as a
+ * seed_item. `spec` is also the content-match key: when the caller's
+ * groomingGate entry declares `seedContributionCandidates`, the staged-intent
+ * group-commit precheck (stagedIntents.ts's precheckGroupCommit, via
+ * readinessGate.ts's checkAccretionContentMatch) compares those declared
+ * candidates against these staged specs before the Ready-flip is allowed to
+ * commit, the seed_contribution twin of GateContributionItemInput's
+ * body-derived content-match.
+ */
 export interface SeedContributionItemInput {
   spec: string;
 }
