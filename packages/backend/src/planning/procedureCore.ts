@@ -217,7 +217,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'the tool needed to carry it further. A missing write tool IS a capability ' +
       'request, never a blocker: DO call ' +
       `\`${orchestratorMcpToolName('session.requestCapability')}\` the moment a ` +
-      'write the task needs is outside this session\'s tools, with ' +
+      "write the task needs is outside this session's tools, with " +
       '`{"payload":{"capability":"<the exact tool or capability>","plan":"<what ' +
       'you will do once granted>","evidence":"<why this write is needed>"}}` — ' +
       'then end the turn and wait to be re-dispatched, and apply the write once ' +
