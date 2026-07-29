@@ -39,6 +39,7 @@ export type CanonicalPauseReason =
   | 'stalled_reconcile_cap'
   | 'needs_repo'
   | 'autofix_git_infra_failure'
+  | 'autofix_tool_infra_failure'
   | 'workflow_scope_denied'
   | 'resume_failed'
   | 'review_rules_escalation'
@@ -188,6 +189,11 @@ export const PAUSE_REASON_REGISTRY: Record<
     severity: 'needs_attention',
     retry_strategy: 'manual_action',
   },
+  autofix_tool_infra_failure: {
+    source: 'autofix',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
   workflow_scope_denied: {
     source: 'merge',
     severity: 'needs_attention',
@@ -240,6 +246,7 @@ const RECOVERY_ACTION_MAP: Partial<
   resume_failed: 'redispatch',
   // rerun: clear pause + re-run the pre-review pipeline
   autofix_git_infra_failure: 'rerun',
+  autofix_tool_infra_failure: 'rerun',
   ci_billing_blocked: 'rerun',
   stalled_reconcile_cap: 'rerun',
   auto_merge_failed: 'rerun',

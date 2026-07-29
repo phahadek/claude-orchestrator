@@ -95,6 +95,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'No repo assigned — assign a target repository before this task can launch.',
   autofix_git_infra_failure:
     'Git infrastructure failure (exit 128) during autofix — likely a corrupted .git/config. The orchestrator attempted a repair; manual inspection may be needed.',
+  autofix_tool_infra_failure:
+    'Autofix tool could not execute — a host/environment issue (config load abort, toolchain incompatibility), not a code defect. Fix the host tooling, then rerun.',
   workflow_scope_denied:
     'Push rejected: the auto-dispatch PAT lacks the `workflow` scope and cannot modify .github/workflows/. Re-type this task as 🛠️ Tooling and land it interactively with a workflow-scoped credential.',
   resume_failed:

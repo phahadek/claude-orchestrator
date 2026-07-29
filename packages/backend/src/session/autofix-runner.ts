@@ -28,6 +28,51 @@ export interface AutofixResult {
   isGitInfraFailure?: boolean;
   /** Combined stderr/stdout of the failing git command, surfaced distinctly from summary. */
   gitFailureReason?: string;
+  /** True when an autofix tool itself could not execute (config-load abort, toolchain incompatibility) — host issue, not a code defect. */
+  isToolInfraFailure?: boolean;
+  /** Names the tool and the reason it could not run, for operator triage. */
+  toolFailureReason?: string;
+}
+
+// Conservative: only patterns that unambiguously indicate the tool itself
+// failed to start/execute, never a diff/lint finding. When in doubt, a
+// pattern must NOT be added here — a false positive here silently
+// suppresses a legitimate fix request.
+const TOOL_INFRA_FAILURE_PATTERNS: RegExp[] = [
+  // golangci-lint (and similar) aborting before running any linter, e.g. a
+  // host toolchain older than the repo's `go` directive.
+  /go\.mod requires go\s*>=?\s*[\d.]+\s*\(running go\s*[\d.]+\)/i,
+  /error loading config( file)?[:\s]/i,
+  /can'?t (read|load) config/i,
+  /unsupported version of (the )?go\b/i,
+  // The invoked binary doesn't exist / isn't on PATH at all.
+  /command not found/i,
+  /executable file not found in \$?PATH/i,
+  /is not recognized as an internal or external command/i,
+];
+
+/**
+ * Recognises output indicating the autofix tool itself could not execute
+ * (config-load abort, toolchain incompatibility, missing binary) as
+ * distinct from a genuine diff/lint finding. Returns a reason string naming
+ * the failing command when detected, or null when the output is ambiguous
+ * or looks like a normal finding — ambiguous output must fall through to
+ * the normal finding path, not be classified as an infra failure.
+ */
+export function isToolInfraFailureOutput(
+  rawCmd: string,
+  output: string,
+): string | null {
+  for (const pattern of TOOL_INFRA_FAILURE_PATTERNS) {
+    const match = output.match(pattern);
+    if (match) {
+      const line =
+        output.split('\n').find((l) => pattern.test(l))?.trim() ||
+        match[0].trim();
+      return `${rawCmd}: ${line}`;
+    }
+  }
+  return null;
 }
 
 export const ORCHESTRATOR_BOT_EMAIL = 'bot@claude-code.internal';
@@ -186,6 +231,16 @@ export async function runAutofix(
       log,
     );
     if (exitCode !== 0) {
+      const toolFailureReason = isToolInfraFailureOutput(rawCmd, output);
+      if (toolFailureReason) {
+        log(`[autofix] ERROR: tool infra failure: ${toolFailureReason}\n`);
+        return {
+          success: false,
+          isToolInfraFailure: true,
+          toolFailureReason,
+          summary: toolFailureReason,
+        };
+      }
       const msg = `command exited with code ${exitCode}: ${rawCmd}`;
       log(`[autofix] WARN: ${msg}\n`);
       if (exitCode === 1 && output.trim()) {
