@@ -1510,7 +1510,11 @@ export class SessionManager extends EventEmitter {
               logger.error(
                 `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
               );
-              throw buildWorktreeSetupError(err, fullMsg, isBranchAlreadyExists);
+              throw buildWorktreeSetupError(
+                err,
+                fullMsg,
+                isBranchAlreadyExists,
+              );
             }
           } else {
             logger.error(
