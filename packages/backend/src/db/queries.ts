@@ -745,6 +745,7 @@ export function getActiveSessions(): Session[] {
       s.project_id, s.status, s.started_at, s.ended_at, s.worktree_path,
       s.archived, s.favorited, s.session_type, s.note, s.tags,
       s.total_input_tokens, s.total_output_tokens, s.model, s.task_name,
+      s.granted_capabilities,
       COALESCE(s.pr_url, (
         SELECT p.pr_url FROM pull_requests p WHERE p.session_id = s.session_id LIMIT 1
       )) AS pr_url
@@ -902,6 +903,22 @@ export function addGrantedCapability(
   const next = existing.includes(capability)
     ? existing
     : [...existing, capability];
+  db.prepare(
+    'UPDATE sessions SET granted_capabilities = ? WHERE session_id = ?',
+  ).run(JSON.stringify(next), sessionId);
+  return next;
+}
+
+/**
+ * Remove a capability from the session's durable granted set (idempotent —
+ * a no-op if the capability isn't present). Mirrors addGrantedCapability.
+ */
+export function removeGrantedCapability(
+  sessionId: string,
+  capability: string,
+): string[] {
+  const existing = getGrantedCapabilities(sessionId);
+  const next = existing.filter((c) => c !== capability);
   db.prepare(
     'UPDATE sessions SET granted_capabilities = ? WHERE session_id = ?',
   ).run(JSON.stringify(next), sessionId);

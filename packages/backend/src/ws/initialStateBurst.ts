@@ -5,6 +5,7 @@ import {
   getEventsBySession,
   getDenialsBySession,
   getPRByNotionTaskId,
+  getGrantedCapabilities,
 } from '../db/queries';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import { eventKind } from '../session/eventKind';
@@ -58,6 +59,7 @@ export function sendInitialStateBurst(
       ...(codeSessionId != null && { codeSessionId }),
       note: s.note ?? null,
       tags,
+      grantedCapabilities: getGrantedCapabilities(s.session_id),
       totalInputTokens: s.total_input_tokens ?? 0,
       totalOutputTokens: s.total_output_tokens ?? 0,
       compaction_count: s.compaction_count ?? 0,

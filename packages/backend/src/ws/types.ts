@@ -32,6 +32,7 @@ interface SessionState {
   project_id?: string | null;
   note?: string | null;
   tags?: string[];
+  grantedCapabilities?: string[];
   totalInputTokens?: number;
   totalOutputTokens?: number;
   compaction_count?: number;
@@ -177,6 +178,7 @@ export type ServerMessage =
       sessionId: string;
       note?: string | null;
       tags?: string[];
+      grantedCapabilities?: string[];
       totalInputTokens?: number;
       totalOutputTokens?: number;
       compactionCount?: number;

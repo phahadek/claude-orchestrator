@@ -16,7 +16,9 @@ import {
   unfavoriteSession,
   deleteDenialsBySession,
   getEventsBySession,
+  removeGrantedCapability,
 } from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
 import { getProjectById } from '../config';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
@@ -198,6 +200,36 @@ sessionsRouter.patch('/:id/tags', (req: Request, res: Response) => {
   setSessionTags(sessionId, tags);
   _broadcast({ type: 'session_updated', sessionId, tags });
   res.json({ ok: true });
+});
+
+// PATCH /api/sessions/:id/capabilities/revoke
+sessionsRouter.patch('/:id/capabilities/revoke', async (req: Request, res: Response) => {
+  const sessionId = String(req.params.id);
+  const existing = getSession(sessionId);
+  if (!existing) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  const capability = String(req.body.capability ?? '');
+  if (!capability) {
+    res.status(400).json({ error: 'capability is required' });
+    return;
+  }
+  const grantedCapabilities = _sessionManager
+    ? await _sessionManager.revokeCapability(sessionId, capability)
+    : removeGrantedCapability(sessionId, capability);
+
+  recordEvent({
+    event_type: 'capability_revoked',
+    actor_type: 'human',
+    actor_id: sessionId,
+    project_id: existing.project_id,
+    task_id: existing.task_id,
+    payload: { capability },
+  });
+
+  _broadcast({ type: 'session_updated', sessionId, grantedCapabilities });
+  res.json({ ok: true, grantedCapabilities });
 });
 
 // POST /api/sessions/:id/mark-merged

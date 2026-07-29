@@ -84,6 +84,8 @@ import {
   markInboxItemsDelivered,
   enqueueFeedbackItem,
   addGrantedCapability,
+  removeGrantedCapability,
+  getGrantedCapabilities,
   expireStagedIntentsForSession,
   hasStagedIntentForTask,
   sweepStagedIntentsForTerminalSessions,
@@ -1791,6 +1793,7 @@ export class SessionManager extends EventEmitter {
       project_id: projectId,
       totalInputTokens: 0,
       totalOutputTokens: 0,
+      grantedCapabilities: getGrantedCapabilities(sessionId),
       ...(sessionTaskId && { taskId: sessionTaskId }),
     } satisfies ServerMessage);
 
@@ -2910,6 +2913,40 @@ export class SessionManager extends EventEmitter {
       } catch (err) {
         logger.error(
           `[SessionManager] grantCapability: respawn failed for ${sessionId.slice(0, 8)}: ${err}`,
+        );
+      }
+    }
+
+    return granted;
+  }
+
+  /**
+   * Durably revoke a capability from a session's granted set. Mirrors
+   * grantCapability's live-session handling, but in the opposite safety
+   * direction: a delayed grant just denies a tool call (fail-closed), while
+   * a delayed revoke leaves an already-a-concern capability exercisable in
+   * a live process (fail-open) — so a tool-shaped capability
+   * (isGrantable/isToolShapedCapability) revoked from a currently-live
+   * session forces an immediate kill+respawn via respawnForCapabilityGrant,
+   * same mechanism as the grant path, so it actually leaves the live
+   * process's argv rather than sitting revoked-in-DB-but-still-usable.
+   */
+  async revokeCapability(
+    sessionId: string,
+    capability: string,
+  ): Promise<string[]> {
+    const granted = removeGrantedCapability(sessionId, capability);
+
+    if (
+      isGrantable(capability) &&
+      isToolShapedCapability(capability) &&
+      this.sessions.has(sessionId)
+    ) {
+      try {
+        await this.respawnForCapabilityGrant(sessionId);
+      } catch (err) {
+        logger.error(
+          `[SessionManager] revokeCapability: respawn failed for ${sessionId.slice(0, 8)}: ${err}`,
         );
       }
     }
