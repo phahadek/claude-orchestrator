@@ -2289,7 +2289,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       sessionId: this.sessionId,
       projectId: this.projectId || null,
       taskId: this.taskId || null,
-      skipCi: sessionConfig?.autofix_skip_ci ?? true,
+      skipCi: sessionConfig?.autofix_skip_ci ?? false,
       onReverted: (files) => {
         for (const f of files) this._revertLock.add(f);
       },

@@ -33,7 +33,7 @@ describe('loadOrchestratorConfig', () => {
     expect(config.bash_rules).toEqual([]);
     expect(config.bootstrap_script).toBe('');
     expect(config.mcp_servers).toBeUndefined();
-    expect(config.autofix_skip_ci).toBe(true);
+    expect(config.autofix_skip_ci).toBe(false);
   });
 
   it('returns parsed values for a well-formed config containing all six fields', () => {
@@ -136,7 +136,7 @@ describe('loadOrchestratorConfig', () => {
     expect(config.mcp_servers).toBeUndefined();
   });
 
-  it('defaults autofix_skip_ci to true when not set in config', () => {
+  it('defaults autofix_skip_ci to false when not set in config', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.claude-orchestrator.yml'),
       'autofix:\n  - npm run lint\n',
@@ -144,7 +144,7 @@ describe('loadOrchestratorConfig', () => {
     );
 
     const config = loadOrchestratorConfig(tmpDir);
-    expect(config.autofix_skip_ci).toBe(true);
+    expect(config.autofix_skip_ci).toBe(false);
   });
 
   it('parses autofix_skip_ci: false from config', () => {
