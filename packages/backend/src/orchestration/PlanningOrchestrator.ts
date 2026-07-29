@@ -72,10 +72,10 @@ const DECISION_INTENT_KINDS: ReadonlySet<string> = new Set([
 
 /**
  * True once the session has ever staged (any lifecycle state — even a
- * since-rejected intent still proves the session produced a real decision,
- * mirroring hasStagedIntentForSession's rationale) at least one intent of a
- * kind that counts as "staged a decision": a task-write/arch-write/gate/seed
- * intent, an ops_journal transition, or an explicit no-op marker.
+ * since-rejected intent still proves the session produced a real decision)
+ * at least one intent of a kind that counts as "staged a decision": a
+ * task-write/arch-write/gate/seed intent, an ops_journal transition, or an
+ * explicit no-op marker.
  */
 function hasStagedDecision(intents: StagedIntentRow[]): boolean {
   return intents.some(

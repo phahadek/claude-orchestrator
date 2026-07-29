@@ -709,7 +709,7 @@ function validateCapabilityRequestPayload(
  * StagedIntentPanel.tsx's NoOpHeadline) — its purpose is to make a
  * legitimate empty run visible to the operator, not to gate anything.
  */
-export interface NoOpPayload {
+interface NoOpPayload {
   taskId: string;
   reason: string;
 }
