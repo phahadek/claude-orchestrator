@@ -8,7 +8,7 @@ import {
 } from '../ops/opsLoad';
 import { buildOpsSessionContext } from '../ops/opsSessionContext';
 import { getEntry as getOpsJournalEntry } from '../ops/opsJournal';
-import { loadGroomContext } from '../groom/groomLoad';
+import { loadGroomContext, GroomTaskSourceUnsupportedError } from '../groom/groomLoad';
 import { loadDesignContext } from '../design/designLoad';
 import { getProjectRowById } from '../db/queries';
 import { resolveMilestoneForProject } from '../projects/milestoneResolver';
@@ -367,6 +367,7 @@ export class OpsSessionLauncher {
       return { content, title: resolvedTitle };
     } catch (err) {
       if (err instanceof GroomWorklistTaskNotFoundError) throw err;
+      if (err instanceof GroomTaskSourceUnsupportedError) throw err;
       throw new Error(
         `failed to assemble planning procedure for task ${task.id} (${sessionType}): ${err instanceof Error ? err.message : err}`,
         { cause: err },
@@ -404,7 +405,11 @@ export class OpsSessionLauncher {
         // in SessionManager.completeStart, and that refusal misattributes
         // the failure as a code mis-wire instead of surfacing the real
         // assembly error. Fail the dispatch here instead, with the actual
-        // reason.
+        // reason — this also covers GroomTaskSourceUnsupportedError (refusing
+        // a groom dispatch for a non-Notion project) and
+        // GroomWorklistTaskNotFoundError (a worklist-miss), both rethrown
+        // raw (unwrapped) by buildInjectedProcedure so their reason stays
+        // distinguishable from a generic assembly failure.
         const reason = err instanceof Error ? err.message : String(err);
         logger.warn(
           `[OpsSessionLauncher] skipping ${sessionType} dispatch for task ${task.id}: ${reason}`,

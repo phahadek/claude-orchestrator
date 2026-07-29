@@ -13,6 +13,7 @@ import { tmpdir } from 'os';
 import {
   loadGroomContext,
   GroomManifest,
+  GroomTaskSourceUnsupportedError,
   NotionReadClient,
   NotionTaskLike,
 } from '../groomLoad';
@@ -450,6 +451,68 @@ describe('loadGroomContext', () => {
         notionClient: fakeNotion(),
       }),
     ).rejects.toThrow(/not registered/);
+  });
+
+  describe('non-Notion task source', () => {
+    const PROJECT_ID = 'proj-groom-yaml-source';
+
+    beforeEach(() => {
+      db.prepare('DELETE FROM projects').run();
+    });
+
+    it('refuses with GroomTaskSourceUnsupportedError instead of reaching Notion for a YAML-backed project', async () => {
+      ({ repoDir } = setupRepo());
+      insertProject({
+        id: PROJECT_ID,
+        name: 'YAML-backed Project',
+        project_dir: repoDir,
+        context_url: null,
+        github_repo: null,
+        task_source: 'yaml',
+      });
+
+      // No notionClient is supplied — if the loader ever reached the
+      // NotionClient branch it would throw trying to construct a real
+      // client (no Notion API key configured in the test env), not the
+      // task-source error this test asserts on.
+      await expect(
+        loadGroomContext('M-test', {
+          repoRoot: repoDir,
+          manifest: MANIFEST,
+          projectId: PROJECT_ID,
+        }),
+      ).rejects.toThrow(GroomTaskSourceUnsupportedError);
+      await expect(
+        loadGroomContext('M-test', {
+          repoRoot: repoDir,
+          manifest: MANIFEST,
+          projectId: PROJECT_ID,
+        }),
+      ).rejects.toThrow(/task source "yaml"/);
+    });
+
+    it('still loads normally for a Notion-backed project (unchanged behavior)', async () => {
+      ({ repoDir } = setupRepo());
+      insertProject({
+        id: PROJECT_ID,
+        name: 'Notion-backed Project',
+        project_dir: repoDir,
+        context_url: null,
+        github_repo: null,
+        task_source: 'notion',
+      });
+
+      const result = await loadGroomContext('M-test', {
+        repoRoot: repoDir,
+        manifest: MANIFEST,
+        projectId: PROJECT_ID,
+        notionClient: fakeNotion(),
+      });
+
+      expect(result.targetTasks.map((t) => t.id).sort()).toEqual(
+        [CODE_ROW.id, TOOL_ROW.id].sort(),
+      );
+    });
   });
 
   describe('architecture dual-read', () => {

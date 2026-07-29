@@ -21,9 +21,13 @@ vi.mock('../../ops/opsJournal.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../../groom/groomLoad.js', () => ({
-  loadGroomContext: vi.fn(),
-}));
+vi.mock('../../groom/groomLoad.js', async () => {
+  const actual = await vi.importActual('../../groom/groomLoad.js');
+  return {
+    ...actual,
+    loadGroomContext: vi.fn(),
+  };
+});
 
 vi.mock('../../design/designLoad.js', () => ({
   loadDesignContext: vi.fn(),
@@ -607,6 +611,34 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     expect(result.failed[0].reason).toContain(
       'milestone milestone-1 is not registered',
     );
+  });
+
+  it('refuses a groom dispatch (no session launched) when the loader reports a non-Notion task source, with a reason distinct from a worklist-miss failure', async () => {
+    const { loadGroomContext, GroomTaskSourceUnsupportedError } =
+      await import('../../groom/groomLoad.js');
+    (loadGroomContext as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new GroomTaskSourceUnsupportedError('proj-1', 'yaml'),
+    );
+
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = { id: 'task-1', title: 'task-1', url: '', blockingDepIds: [] };
+
+    const result = await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'groom',
+      tasks: [task],
+    });
+
+    // Task-source unsupported is not a worklist-miss — no retry/reconciliation.
+    expect(loadGroomContext).toHaveBeenCalledTimes(1);
+    expect(start).not.toHaveBeenCalled();
+    expect(result.launched).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]).toMatchObject({ taskId: 'task-1' });
+    expect(result.failed[0].reason).toMatch(/task source "yaml"/);
+    expect(result.failed[0].reason).not.toMatch(/groom worklist/);
   });
 
   it('puts a task in failed[] with the rejection message when sessionManager.start rejects, not in launched[]', async () => {

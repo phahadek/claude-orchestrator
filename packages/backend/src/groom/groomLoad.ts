@@ -229,6 +229,29 @@ export interface LoadGroomContextOptions {
 
 const DONE_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
 
+/**
+ * Thrown by `loadGroomContext` when the target project's task source isn't
+ * Notion. The groom loader only knows how to assemble a worklist from a
+ * Notion board (`NotionClient` + the manifest's board id) — a YAML/Jira/
+ * GitHub-backed project has no board for it to read. Distinct from a
+ * generic Error so `OpsSessionLauncher` can refuse the dispatch (no session
+ * row created) with a reason the dashboard can tell apart from a genuine
+ * groom failure, instead of instantiating a `NotionClient` that can't ever
+ * resolve for this project.
+ */
+export class GroomTaskSourceUnsupportedError extends Error {
+  constructor(
+    public readonly projectId: string,
+    public readonly taskSource: string,
+  ) {
+    super(
+      `groomLoad: project ${projectId} has task source "${taskSource}" — ` +
+        `groom dispatch currently only supports Notion-backed projects.`,
+    );
+    this.name = 'GroomTaskSourceUnsupportedError';
+  }
+}
+
 // ─── Manifest resolution ────────────────────────────────────────────────────
 
 export function resolveConfigDir(repoRoot: string): string | null {
@@ -377,6 +400,16 @@ export async function loadGroomContext(
   milestone: string,
   opts?: LoadGroomContextOptions,
 ): Promise<GroomLoadResult> {
+  if (opts?.projectId) {
+    const project = ProjectService.getById(opts.projectId);
+    if (project && project.taskSource !== 'notion') {
+      throw new GroomTaskSourceUnsupportedError(
+        opts.projectId,
+        project.taskSource,
+      );
+    }
+  }
+
   const repoRoot = opts?.repoRoot ?? config.projectDir;
   const manifest = opts?.manifest ?? loadManifest(repoRoot);
   const milestoneCfg = manifest.milestones?.[milestone];
