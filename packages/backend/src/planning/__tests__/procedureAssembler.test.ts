@@ -1120,7 +1120,9 @@ describe('assemblePlanningProcedure', () => {
   it('points a store-sourced design digest at the architecture read tools instead of inlining unit bodies', () => {
     const design = fixtureDesignLoadResult();
     design.archSource = 'store';
-    design.archUnits = [{ id: 'unit-1', title: 'Selective injection contract' }];
+    design.archUnits = [
+      { id: 'unit-1', title: 'Selective injection contract' },
+    ];
 
     const output = assemblePlanningProcedure({
       taskName: 'A task',

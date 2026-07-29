@@ -251,7 +251,9 @@ describe('architecture.getUnit / architecture.queryUnits', () => {
       name: 'architecture.getUnit',
       arguments: { id: unit.id },
     });
-    const getContent = (getResult.content as { type: string; text: string }[])[0];
+    const getContent = (
+      getResult.content as { type: string; text: string }[]
+    )[0];
     expect(JSON.parse(getContent.text)).toMatchObject({
       id: unit.id,
       body: 'The full body content of this architecture unit.',

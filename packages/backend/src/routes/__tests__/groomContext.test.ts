@@ -113,7 +113,11 @@ describe('GET /api/groom-context', () => {
 
       const boardMatch = u.match(/\/databases\/([^/]+)\/query/);
       if (boardMatch && method === 'POST') {
-        return jsonResponse({ results: [], has_more: false, next_cursor: null });
+        return jsonResponse({
+          results: [],
+          has_more: false,
+          next_cursor: null,
+        });
       }
 
       const pageMatch = u.match(/\/pages\/([^/]+)$/);
@@ -164,7 +168,9 @@ describe('GET /api/groom-context', () => {
     expect(res.status).toBe(200);
     expect(res.body.archSource).toBe('store');
     expect(res.body.contextPages).toHaveLength(CONTEXT_PAGES.length);
-    const returnedIds = res.body.contextPages.map((p: { id: string }) => p.id).sort();
+    const returnedIds = res.body.contextPages
+      .map((p: { id: string }) => p.id)
+      .sort();
     expect(returnedIds).toEqual(CONTEXT_PAGES.map((p) => p.id).sort());
     for (const page of res.body.contextPages) {
       expect(typeof page.markdown).toBe('string');

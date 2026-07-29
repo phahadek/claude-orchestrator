@@ -527,7 +527,9 @@ describe('loadGroomContext', () => {
         ['Always-binding invariant', 'Notion-client subsystem unit'].sort(),
       );
       expect(
-        codeTask?.archUnits.every((u) => typeof u.body === 'string' && u.body.length > 0),
+        codeTask?.archUnits.every(
+          (u) => typeof u.body === 'string' && u.body.length > 0,
+        ),
       ).toBe(true);
 
       const toolTask = result.targetTasks.find((t) => t.id === TOOL_ROW.id);
