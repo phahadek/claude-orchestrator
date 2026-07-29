@@ -187,6 +187,8 @@ import {
   SessionManager,
   gitWorktreeAddWithRetry,
   isRemovableWorktree,
+  isDegradedSpawnFailure,
+  BACKEND_SPAWN_DEGRADED_REASON,
   buildResumeMessage,
   buildPlanningResumeMessage,
   RESUME_NUDGE_MESSAGE,
@@ -1699,6 +1701,239 @@ describe('gitWorktreeAddWithRetry — direct unit tests', () => {
     ).rejects.toMatchObject({ stderr: LOCK_STDERR });
     // 3 attempts (default maxAttempts).
     expect(vi.mocked(execCb)).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ── gitWorktreeAddWithRetry — per-repo serialization ──────────────────────────
+
+describe('gitWorktreeAddWithRetry — per-repo serialization', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('serializes concurrent worktree adds for the same repo (never > 1 in flight)', async () => {
+    let active = 0;
+    let maxActive = 0;
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        setTimeout(() => {
+          active--;
+          callback(null, { stdout: '', stderr: '' });
+        }, 15);
+      },
+    );
+
+    await Promise.all([
+      gitWorktreeAddWithRetry(
+        'git worktree add /repoA/w1 b1',
+        { cwd: '/repoA' },
+        3,
+        NO_DELAY,
+      ),
+      gitWorktreeAddWithRetry(
+        'git worktree add /repoA/w2 b2',
+        { cwd: '/repoA' },
+        3,
+        NO_DELAY,
+      ),
+      gitWorktreeAddWithRetry(
+        'git worktree add /repoA/w3 b3',
+        { cwd: '/repoA' },
+        3,
+        NO_DELAY,
+      ),
+    ]);
+
+    expect(maxActive).toBe(1);
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not serialize worktree adds for different repos', async () => {
+    let active = 0;
+    let maxActive = 0;
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        setTimeout(() => {
+          active--;
+          callback(null, { stdout: '', stderr: '' });
+        }, 15);
+      },
+    );
+
+    await Promise.all([
+      gitWorktreeAddWithRetry(
+        'git worktree add /repoA/w1 b1',
+        { cwd: '/repoA' },
+        3,
+        NO_DELAY,
+      ),
+      gitWorktreeAddWithRetry(
+        'git worktree add /repoB/w1 b1',
+        { cwd: '/repoB' },
+        3,
+        NO_DELAY,
+      ),
+    ]);
+
+    // Both repos' adds overlap — no cross-repo serialization.
+    expect(maxActive).toBe(2);
+  });
+
+  it('same-repo lock contention under real concurrency never surfaces a .git/config lock error to the caller', async () => {
+    // Simulates two concurrent launches against the same repo: without
+    // per-repo serialization both `git worktree add` invocations would run
+    // simultaneously and one would hit the .git/config lock. With
+    // serialization the second call's exec() never overlaps the first, so
+    // this mock — which fails if it observes concurrent invocations — never
+    // rejects with a lock error, and both callers succeed.
+    let inFlight = false;
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        if (inFlight) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr: LOCK_STDERR,
+          });
+          callback(err);
+          return;
+        }
+        inFlight = true;
+        setTimeout(() => {
+          inFlight = false;
+          callback(null, { stdout: '', stderr: '' });
+        }, 10);
+      },
+    );
+
+    await expect(
+      Promise.all([
+        gitWorktreeAddWithRetry(
+          'git worktree add /repoA/w1 b1',
+          { cwd: '/repoA' },
+          3,
+          NO_DELAY,
+        ),
+        gitWorktreeAddWithRetry(
+          'git worktree add /repoA/w2 b2',
+          { cwd: '/repoA' },
+          3,
+          NO_DELAY,
+        ),
+      ]),
+    ).resolves.toBeDefined();
+  });
+});
+
+// ── Spawn-health classification (degraded backend spawn) ──────────────────────
+
+describe('isDegradedSpawnFailure', () => {
+  it('classifies empty stderr + killed=true as a degraded spawn', () => {
+    expect(isDegradedSpawnFailure({ stderr: '', killed: true })).toBe(true);
+  });
+
+  it('classifies empty stderr + a signal as a degraded spawn', () => {
+    expect(
+      isDegradedSpawnFailure({ stderr: '', signal: 'SIGKILL', killed: false }),
+    ).toBe(true);
+  });
+
+  it('does not classify a normal command failure (non-empty stderr) as degraded', () => {
+    expect(
+      isDegradedSpawnFailure({ stderr: BRANCH_EXISTS_STDERR, killed: true }),
+    ).toBe(false);
+  });
+
+  it('does not classify a clean non-killed failure as degraded', () => {
+    expect(isDegradedSpawnFailure({ stderr: '', killed: false })).toBe(false);
+  });
+
+  it('handles non-object input safely', () => {
+    expect(isDegradedSpawnFailure(null)).toBe(false);
+    expect(isDegradedSpawnFailure(undefined)).toBe(false);
+    expect(isDegradedSpawnFailure('boom')).toBe(false);
+  });
+});
+
+describe('gitWorktreeAddWithRetry — degraded spawn does not retry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('fails immediately (no retry) on a degraded-spawn-shaped error', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        const err = Object.assign(new Error('Command failed'), {
+          stderr: '',
+          killed: true,
+        });
+        callback(err);
+      },
+    );
+
+    await expect(
+      gitWorktreeAddWithRetry(
+        'git worktree add /path branch',
+        { cwd: '/project' },
+        3,
+        NO_DELAY,
+      ),
+    ).rejects.toMatchObject({ stderr: '', killed: true });
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('sendOrResume — degraded spawn on worktree recreation is a backend-health condition', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(fsModule.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+    vi.mocked((fsModule as any).default.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+  });
+
+  it('classifies as backend_spawn_degraded, does not hit the crash budget, and surfaces a restart-recommending detail', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        if (String(_cmd).includes('worktree add')) {
+          const err = Object.assign(new Error('Command failed'), {
+            stderr: '',
+            killed: true,
+          });
+          return callback(err);
+        }
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+
+    const result = await sm.sendOrResume(SESSION_ID, 'hello');
+
+    expect(result).toBe(SESSION_ID);
+    // Backend-health condition, not a session/task-level failure — must not
+    // count against the crash budget (would otherwise misattribute a
+    // degraded backend spawn to the session/task).
+    expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
+
+    const lastErrorDetailCall = vi
+      .mocked(setSessionLastErrorDetail)
+      .mock.calls.find((call) => call[0] === SESSION_ID);
+    expect(lastErrorDetailCall?.[1]).toMatch(/restart/i);
+
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'error',
+      expect.any(Number),
+    );
   });
 });
 
