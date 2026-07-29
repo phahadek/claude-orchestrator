@@ -137,7 +137,8 @@ async function callHandlePushDetected(session: AgentSession): Promise<void> {
 
 function mockDivergedGit(branch: string, behind: number, ahead: number) {
   vi.mocked(execSync).mockImplementation((cmd: string) => {
-    if (cmd.includes('rev-parse --abbrev-ref')) return Buffer.from(`${branch}\n`);
+    if (cmd.includes('rev-parse --abbrev-ref'))
+      return Buffer.from(`${branch}\n`);
     if (cmd.includes('rev-parse HEAD')) return Buffer.from('local111\n');
     if (cmd.includes('ls-remote')) return Buffer.from(`remote222\t${branch}\n`);
     if (cmd.includes('rev-list --left-right'))
@@ -171,7 +172,11 @@ describe('AgentSession.handlePushDetected — diverged-branch nudge', () => {
     expect(nudgeMsg).toContain(`git rebase origin/${branch}`);
     expect(nudgeMsg).not.toContain('git rebase origin/dev');
 
-    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'diverged_branch');
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'diverged_branch',
+    );
   });
 
   it('applying the nudged rebase against origin/<branch> absorbs the behind commits (behind becomes 0)', async () => {
@@ -181,9 +186,11 @@ describe('AgentSession.handlePushDetected — diverged-branch nudge', () => {
     const branch = 'feature/diverged';
     let rebased = false;
     vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if (cmd.includes('rev-parse --abbrev-ref')) return Buffer.from(`${branch}\n`);
+      if (cmd.includes('rev-parse --abbrev-ref'))
+        return Buffer.from(`${branch}\n`);
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('local111\n');
-      if (cmd.includes('ls-remote')) return Buffer.from(`remote222\t${branch}\n`);
+      if (cmd.includes('ls-remote'))
+        return Buffer.from(`remote222\t${branch}\n`);
       if (cmd.includes('rev-list --left-right'))
         return rebased ? Buffer.from('0\t3\n') : Buffer.from('2\t1\n');
       if (cmd.includes(`git rebase origin/${branch}`)) {
@@ -282,6 +289,10 @@ describe('AgentSession.handlePushDetected — diverged-branch nudge', () => {
     const { session } = makeSession();
     await callHandlePushDetected(session);
 
-    expect(setPauseReason).toHaveBeenCalledWith(7, 'owner/repo', 'diverged_branch');
+    expect(setPauseReason).toHaveBeenCalledWith(
+      7,
+      'owner/repo',
+      'diverged_branch',
+    );
   });
 });
