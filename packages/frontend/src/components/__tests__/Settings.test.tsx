@@ -538,8 +538,7 @@ describe('Settings — capability auto-approve allowlist', () => {
           opts &&
           opts.method === 'PATCH' &&
           JSON.stringify(
-            JSON.parse(opts.body as string)
-              .capability_auto_approve_allowlist,
+            JSON.parse(opts.body as string).capability_auto_approve_allowlist,
           ) === JSON.stringify(['read:existing-entry', 'read:new-entry']),
       );
       expect(patchCall).toBeDefined();
@@ -560,8 +559,7 @@ describe('Settings — capability auto-approve allowlist', () => {
           opts &&
           opts.method === 'PATCH' &&
           JSON.stringify(
-            JSON.parse(opts.body as string)
-              .capability_auto_approve_allowlist,
+            JSON.parse(opts.body as string).capability_auto_approve_allowlist,
           ) === JSON.stringify([]),
       );
       expect(patchCall).toBeDefined();

@@ -102,9 +102,7 @@ describe('capability_auto_approve_allowlist setting', () => {
   });
 
   it('is readable via typedGetSetting once persisted to the DB', () => {
-    mockGetSetting.mockReturnValue(
-      JSON.stringify(['read:audit-log']),
-    );
+    mockGetSetting.mockReturnValue(JSON.stringify(['read:audit-log']));
     expect(typedGetSetting('capability_auto_approve_allowlist')).toEqual([
       'read:audit-log',
     ]);
