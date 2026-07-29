@@ -67,8 +67,10 @@ export function isToolInfraFailureOutput(
     const match = output.match(pattern);
     if (match) {
       const line =
-        output.split('\n').find((l) => pattern.test(l))?.trim() ||
-        match[0].trim();
+        output
+          .split('\n')
+          .find((l) => pattern.test(l))
+          ?.trim() || match[0].trim();
       return `${rawCmd}: ${line}`;
     }
   }
