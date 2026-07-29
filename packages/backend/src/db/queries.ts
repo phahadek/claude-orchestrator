@@ -2136,6 +2136,22 @@ export function clearTaskPauseReason(taskId: string): void {
 }
 
 /**
+ * Every task-level pause reason currently on record — the milestone-attention
+ * blocked/stalled detector's raw input. Task ids aren't pre-joined to a
+ * milestone here (the table has no milestone column), so callers resolve
+ * that via resolveMilestoneForTaskId per row, same as the staged_intent
+ * milestone backfill does.
+ */
+export function listTaskPauseReasons(): {
+  task_id: string;
+  pause_reason: string;
+}[] {
+  return db
+    .prepare(`SELECT task_id, pause_reason FROM task_pause_reasons`)
+    .all() as { task_id: string; pause_reason: string }[];
+}
+
+/**
  * Clear the pause_reason on all PRs associated with a task (used when the task
  * transitions back to Ready so the next launch attempt is not blocked by a
  * stale PR-level pause such as stuck_timeout).

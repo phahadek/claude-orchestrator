@@ -534,6 +534,10 @@ export interface RuntimeSettings {
    * editable from the Settings UI; empty by default.
    */
   capability_auto_approve_allowlist: string[];
+  /** Milestone view tier-2 attention: seconds a staged decision may sit before it's flagged aging. */
+  milestone_attention_aging_threshold_seconds: number;
+  /** Milestone view tier-2 attention: seconds of no distanceToGreen improvement before convergence is flagged flat. */
+  milestone_attention_flat_convergence_window_seconds: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -577,6 +581,13 @@ export const runtimeSettings: RuntimeSettings = {
   ),
   session_hard_stop_window_seconds: Number(
     process.env.SESSION_HARD_STOP_WINDOW_SECONDS ?? 60,
+  ),
+  milestone_attention_aging_threshold_seconds: Number(
+    process.env.MILESTONE_ATTENTION_AGING_THRESHOLD_SECONDS ?? 24 * 60 * 60,
+  ),
+  milestone_attention_flat_convergence_window_seconds: Number(
+    process.env.MILESTONE_ATTENTION_FLAT_CONVERGENCE_WINDOW_SECONDS ??
+      48 * 60 * 60,
   ),
   ci_poll_interval_seconds: Number(process.env.CI_POLL_INTERVAL_SECONDS ?? 30),
   ci_poll_max_minutes: Number(process.env.CI_POLL_MAX_MINUTES ?? 30),

@@ -13,8 +13,16 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 31 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(31);
+  it('contains exactly 32 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(32);
+  });
+
+  it('includes planning_terminal_no_decision with a valid severity and retry strategy', () => {
+    expect(PAUSE_REASON_REGISTRY.planning_terminal_no_decision).toEqual({
+      source: 'session',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
   });
 
   it('covers all 20 legacy PauseReason values', () => {

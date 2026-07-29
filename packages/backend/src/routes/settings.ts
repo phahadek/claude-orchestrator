@@ -53,6 +53,8 @@ const SETTING_KEYS = [
   'ops_session_effort',
   'tier3_classifier_model',
   'capability_auto_approve_allowlist',
+  'milestone_attention_aging_threshold_seconds',
+  'milestone_attention_flat_convergence_window_seconds',
 ] as const satisfies readonly SettingKey[];
 
 type RouteSettingKey = (typeof SETTING_KEYS)[number];
@@ -171,6 +173,14 @@ function applyToRuntime(
     case 'capability_auto_approve_allowlist':
       runtimeSettings.capability_auto_approve_allowlist = value as string[];
       break;
+    case 'milestone_attention_aging_threshold_seconds':
+      runtimeSettings.milestone_attention_aging_threshold_seconds =
+        value as number;
+      break;
+    case 'milestone_attention_flat_convergence_window_seconds':
+      runtimeSettings.milestone_attention_flat_convergence_window_seconds =
+        value as number;
+      break;
   }
 }
 
@@ -243,6 +253,12 @@ function runtimeSettingsAsRecord(): {
     tier3_classifier_model: runtimeSettings.tier3_classifier_model,
     capability_auto_approve_allowlist:
       runtimeSettings.capability_auto_approve_allowlist,
+    milestone_attention_aging_threshold_seconds: String(
+      runtimeSettings.milestone_attention_aging_threshold_seconds,
+    ),
+    milestone_attention_flat_convergence_window_seconds: String(
+      runtimeSettings.milestone_attention_flat_convergence_window_seconds,
+    ),
   };
 }
 

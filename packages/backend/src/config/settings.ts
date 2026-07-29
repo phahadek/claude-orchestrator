@@ -35,6 +35,11 @@ const SettingsSchema = z.object({
   flake_recovery_max_retries: z.coerce.number().int().min(0),
   session_cgroup_prod_reserve_mb: z.coerce.number().int().min(0),
   session_cgroup_memory_high_fraction: z.coerce.number().min(0).max(1),
+  milestone_attention_aging_threshold_seconds: z.coerce.number().int().min(0),
+  milestone_attention_flat_convergence_window_seconds: z.coerce
+    .number()
+    .int()
+    .min(0),
 
   // Boolean settings (stored as 'true'/'false' strings; also accepts native booleans)
   auto_review: zodBoolCoerce,
@@ -100,6 +105,8 @@ export const SETTING_DEFAULTS: Settings = {
   flake_recovery_max_retries: 2,
   session_cgroup_prod_reserve_mb: 4096,
   session_cgroup_memory_high_fraction: 0.9,
+  milestone_attention_aging_threshold_seconds: 24 * 60 * 60,
+  milestone_attention_flat_convergence_window_seconds: 48 * 60 * 60,
   auto_review: true,
   auto_archive_enabled: true,
   session_cgroup_deny_swap: true,

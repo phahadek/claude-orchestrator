@@ -13,6 +13,7 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { useBootReconciliation } from './hooks/useBootReconciliation';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useNotifications } from './hooks/useNotifications';
+import { useMilestoneAttention } from './hooks/useMilestoneAttention';
 import { useIsMobile } from './hooks/useIsMobile';
 import { useNavigationHistory } from './hooks/useNavigationHistory';
 import { apiRequest, authedFetch } from './api/projects';
@@ -1123,6 +1124,32 @@ export default function App() {
   const activeBoardMilestone =
     activeProject?.boards?.find((b) => b.id === activeBoardId)?.name ?? null;
 
+  const { pendingCount: milestoneAttentionCount, lastTier2Batch } =
+    useMilestoneAttention({
+      projectId: activeProjectId,
+      milestoneId: activeBoardMilestone ? activeBoardId : null,
+      invalidationKey: `${lastTaskUpdate?.taskId ?? ''}:${lastStagedIntentChange?.id ?? ''}`,
+    });
+
+  useEffect(() => {
+    if (!lastTier2Batch) return;
+    for (const event of lastTier2Batch.events) {
+      const notifId = `milestone-attention-${event.key}-${event.receivedAt}`;
+      const icon =
+        event.type === 'aging' ? '⏳' : event.type === 'blocked' ? '🚧' : '📉';
+      setNotifications((prev) => [
+        ...prev,
+        {
+          id: notifId,
+          message: `${icon} ${event.message}`,
+          status: 'review',
+          onClick: () => setTopView('milestone'),
+        },
+      ]);
+      setTimeout(() => dismissNotification(notifId), 10000);
+    }
+  }, [lastTier2Batch, dismissNotification]);
+
   const anyDragging = isDragging;
 
   useNotifications(
@@ -1256,6 +1283,7 @@ export default function App() {
           autoLaunchQueuedCount={autoLaunchQueuedCount}
           autoLaunchPollIntervalMs={autoLaunchPollIntervalMs}
           bootReconciliation={bootReconciliation.state}
+          milestoneAttentionCount={milestoneAttentionCount}
         />
       </ErrorBoundary>
       {updateInfo && (
