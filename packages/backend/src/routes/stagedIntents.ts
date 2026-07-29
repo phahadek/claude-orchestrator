@@ -2412,9 +2412,8 @@ async function precheckGroupCommit(
     if (payload.groomingGate?.seedContributionCandidates?.length) {
       const seedPayload = getGroupSeedStagePayload(groupId, payload.taskId);
       if (seedPayload && seedPayload.decision === 'seeds') {
-        const strippedItems = payload.groomingGate.seedContributionCandidates.map(
-          (c) => c.spec,
-        );
+        const strippedItems =
+          payload.groomingGate.seedContributionCandidates.map((c) => c.spec);
         const accretedItems = seedPayload.seeds.map((s) => s.spec);
         const match = checkAccretionContentMatch(
           'seed_contribution',
