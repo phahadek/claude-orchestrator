@@ -6,14 +6,17 @@
  * /design executes 📐 Design and 📋 Planning tasks (at Ready / In Progress) to lock specs, file
  * follow-on 🔲 Backlog Code tasks, and update architecture pages. This loader
  * does the deterministic part of /design's Step 1: fetches the fixed context
- * pages + the target milestone board (and neighbour boards) + every non-Done
- * task body, parses each into a per-task structure (open questions,
- * pages affected, dep status, theme tags), and writes a cache the skill (and
- * later sessions) read instead of re-discovering.
+ * pages + each task's dual-read architecture + the target milestone board
+ * (and neighbour boards) + every non-Done task body, parses each into a
+ * per-task structure (open questions, pages affected, dep status, theme
+ * tags), and writes a cache the skill (and later sessions) read instead of
+ * re-discovering.
  *
  * It REUSES the proven sibling scripts rather than re-implementing Notion REST:
  *   - notion-query.mjs  (paginated board query → JSON rows)
  *   - notion-page.mjs   (page body → clean Markdown)
+ *   - design-context-client.mjs (per-task GET /api/design-context — context
+ *     pages + the dual-read architecture; see runDesignContext() below)
  *
  * Usage:
  *   node design-load.mjs --milestone M9 [options]
@@ -28,7 +31,6 @@
  *   --env <path>         .env file with NOTION_API_KEY (passed through to sibling scripts).
  *   --board <id>         Board data-source id for an UNregistered milestone — run it now
  *                        without editing the manifest; prints the entry to persist.
- *   --refresh            Re-fetch context pages even if cached files already exist.
  *
  * Status classification (status_vocab from the manifest):
  *   - Ready / In Progress  → executable (skill walks these one open-question at a time)
@@ -51,12 +53,6 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
 // ── Arg parsing (same idiom as the sibling scripts) ──────────────────
 const args = process.argv.slice(2);
-function flag(name) {
-  const i = args.indexOf(name);
-  if (i === -1) return false;
-  args.splice(i, 1);
-  return true;
-}
 function option(name) {
   const i = args.indexOf(name);
   if (i === -1 || i + 1 >= args.length) return undefined;
@@ -70,7 +66,6 @@ const repo = resolve(process.cwd(), option('--repo') ?? '.');
 const manifestPath = resolveManifestPath(repo);
 const envPath = option('--env');
 const boardOverride = option('--board');
-const refresh = flag('--refresh');
 
 // Resolve the grooming manifest from the central config tree (decoupled from the repo).
 // Precedence: --manifest (explicit full path) > central tree (--config-dir / $ORCHESTRATOR_CONFIG_DIR)
@@ -232,19 +227,6 @@ function fetchPageMarkdown(pageId) {
   return runScript('notion-page.mjs', [pageId, '--format', 'md']);
 }
 
-/** Cheap metadata-only fetch (no block pagination) — used for the per-page
- *  freshness check against a cached context page. */
-function fetchPageMeta(pageId) {
-  const out = runScript('notion-page.mjs', [pageId, '--meta']);
-  try {
-    return JSON.parse(out);
-  } catch (e) {
-    fail(
-      `could not parse notion-page.mjs --meta JSON for ${pageId}: ${e.message}`,
-    );
-  }
-}
-
 // ── parsing helpers ──────────────────────────────────────────────────
 // Matches both full Notion UUIDs (32 hex, optionally dashed) and the truncated
 // 16-hex prefix form ("38522f91-52f3-81dd") that task bodies sometimes use.
@@ -358,7 +340,10 @@ function extractPagesAffected(md) {
   });
 }
 
-/** Try to resolve a page title to a Notion page_id via manifest.context_pages. */
+/** Try to resolve a page title to a Notion page_id via manifest.context_pages.
+ *  Display metadata only (used by the Notion-branch page-edit protocol) — it
+ *  does NOT drive canonicality. Which architecture is authoritative comes
+ *  from the design-context route's dual read (runDesignContext below). */
 function resolvePageId(title) {
   const want = title.replace(/\s+/g, ' ').toLowerCase().trim();
   for (const p of contextPagesCfg) {
@@ -514,63 +499,55 @@ function matchBodyLock(questionText, rawLocks) {
   return best;
 }
 
-// ── Step 1: load context pages ───────────────────────────────────────
-// Freshness: a cached context page is reused only if its Notion
-// last_edited_time still matches the marker stamped alongside it. This
-// catches edits made by a sibling Done Design task (or a human) earlier in
-// the same milestone without paying for a full-body re-fetch on every run.
-// --refresh forces a full-body re-fetch of every page regardless.
-const contextPages = [];
-for (const pg of contextPagesCfg) {
-  const slug = normaliseId(pg.id);
-  const fileRel = join('context', `${slug}.md`);
-  const filePath = join(cacheDir, fileRel);
-  const metaFileRel = join('context', `${slug}.meta.json`);
-  const metaFilePath = join(cacheDir, metaFileRel);
-
-  const hadCache = existsSync(filePath);
-  let status; // 'fetched' | 'cached' | 'refetched' (stale)
-  if (refresh || !hadCache) {
-    const meta = fetchPageMeta(pg.id);
-    writeFileSync(filePath, fetchPageMarkdown(pg.id), 'utf8');
-    writeFileSync(
-      metaFilePath,
-      JSON.stringify({ last_edited_time: meta.last_edited_time }, null, 2),
-      'utf8',
+// ── Step 1: load context pages + per-task architecture dual-read ──────
+// Context pages and each task's architecture (`archSource` / `archUnits`)
+// are no longer fetched from Notion directly here — that was flag-blind to
+// `archStoreAdopted` (it always treated the Notion pages as canonical). Both
+// are sourced from the backend's device-authed GET /api/design-context route
+// (design-context-client.mjs) via runDesignContext() below, which wraps the
+// same loadDesignContext() the dashboard calls: for a project with the
+// arch_unit store adopted, architecture resolves from the store; otherwise
+// from these same Notion pages, unchanged. Non-architecture context pages
+// (Project Context, Product Design Doc, Dev Setup & Git, Future Scope) load
+// on both branches — see contextPages below. Always fetched fresh (no
+// staleness cache — the route is a pure, cheap read).
+function runDesignContext(taskId) {
+  const out = runScript('design-context-client.mjs', [
+    '--milestone',
+    milestone,
+    '--task',
+    taskId,
+  ]);
+  try {
+    return JSON.parse(out);
+  } catch (e) {
+    fail(
+      `could not parse design-context-client.mjs JSON for task ${taskId}: ${e.message}`,
     );
-    status = refresh && hadCache ? 'refetched' : 'fetched';
-  } else {
-    let cachedLastEdited = null;
-    if (existsSync(metaFilePath)) {
-      try {
-        cachedLastEdited = JSON.parse(
-          readFileSync(metaFilePath, 'utf8'),
-        ).last_edited_time;
-      } catch {
-        cachedLastEdited = null;
-      }
-    }
-    const meta = fetchPageMeta(pg.id);
-    if (!cachedLastEdited || meta.last_edited_time !== cachedLastEdited) {
-      writeFileSync(filePath, fetchPageMarkdown(pg.id), 'utf8');
-      writeFileSync(
-        metaFilePath,
-        JSON.stringify({ last_edited_time: meta.last_edited_time }, null, 2),
-        'utf8',
-      );
-      status = 'refetched'; // stale → refetched
-    } else {
-      status = 'cached';
-    }
   }
-
-  contextPages.push({
-    id: pg.id,
-    title: pg.title ?? '',
-    file: fileRel.replace(/\\/g, '/'),
-    status,
-  });
 }
+
+/** Writes the dual-read-independent context pages (fetched once, from the
+ *  first task's bundle) to context/<slug>.md, mirroring the old cache shape
+ *  so the rest of the skill (which reads context-bundle.json + context/)
+ *  is unaffected by the cutover. */
+function writeContextPages(routeContextPages) {
+  const out = [];
+  for (const pg of routeContextPages) {
+    const slug = normaliseId(pg.id);
+    const fileRel = join('context', `${slug}.md`);
+    writeFileSync(join(cacheDir, fileRel), pg.markdown ?? '', 'utf8');
+    out.push({
+      id: pg.id,
+      title: pg.title ?? '',
+      file: fileRel.replace(/\\/g, '/'),
+      status: 'fetched',
+    });
+  }
+  return out;
+}
+
+let contextPages = null; // populated from the first task's design-context bundle
 
 // ── Step 2: query target board + neighbour boards ────────────────────
 const titleOf = (row) =>
@@ -641,17 +618,33 @@ for (const row of targetRows) {
   const openQ = extractOpenQuestions(md);
   const bodyLocks = extractBodyLocks(md);
   if (bodyLocks.length) bodyLocksByTaskId.set(row.id, bodyLocks);
-  const pagesAffected = extractPagesAffected(md).map((p) => {
-    const page_id = resolvePageId(p.title);
-    if (!page_id)
-      unresolvedPageRefs.push({
-        task_id: row.id,
-        task_title: titleOf(row),
-        page_title: p.title,
-        raw: p.raw,
-      });
-    return { title: p.title, page_id, raw: p.raw };
-  });
+  // Best-effort local title→id resolution against the manifest's
+  // context_pages — display metadata only (used by the Notion-branch
+  // page-edit protocol); it does NOT drive canonicality. Which architecture
+  // is authoritative — and the unresolved-reference warnings below — comes
+  // from the design-context route's dual read, not from this local match.
+  const pagesAffected = extractPagesAffected(md).map((p) => ({
+    title: p.title,
+    page_id: resolvePageId(p.title),
+    raw: p.raw,
+  }));
+
+  // Dual-read architecture for this task, via the design-context route
+  // (honours the project's archStoreAdopted — see runDesignContext above).
+  const designContext = runDesignContext(row.id);
+  const archSource = designContext.archSource;
+  const archUnits = designContext.archUnits ?? [];
+  for (const u of designContext.unresolvedPageRefs ?? []) {
+    unresolvedPageRefs.push({
+      task_id: row.id,
+      task_title: titleOf(row),
+      page_title: u.title,
+      raw: u.raw,
+    });
+  }
+  if (contextPages === null) {
+    contextPages = writeContextPages(designContext.contextPages ?? []);
+  }
 
   const depIds = extractDepIds(row['Depends On'] ?? '');
   const depDetails = depIds.map((id) => {
@@ -687,6 +680,8 @@ for (const row of targetRows) {
     open_questions: openQ.items,
     open_questions_source: openQ.source,
     pages_affected: pagesAffected,
+    arch_source: archSource,
+    arch_units: archUnits,
     depends_on: depDetails,
     dep_status: depStatus,
     blocking_dep_ids: blockingDeps.map((d) => d.id),
@@ -698,6 +693,11 @@ for (const row of targetRows) {
   else if (isBacklog) tasks.needs_grooming.push(entry);
   else if (isInReview) tasks.closed_not_done.push(entry);
 }
+
+// No non-Done Design/Planning task on the board — no design-context call was
+// ever made, so fall back to an empty context-pages set (nothing to design
+// this run; the skill's Step 1 will report zero executable tasks).
+if (contextPages === null) contextPages = [];
 
 // neighbour boards: context-only summaries (Design + Planning tasks only).
 const neighboursSummary = neighbours.map((n) => ({
@@ -897,12 +897,7 @@ const blockedExec = tasks.executable.filter(
 ).length;
 const readyExec = tasks.executable.length - blockedExec;
 console.log(`design-load: milestone ${milestone} loaded into ${cacheDir}`);
-console.log(
-  `  context pages: ${contextPages.length} ` +
-    `(${contextPages.filter((p) => p.status === 'fetched').length} fetched, ` +
-    `${contextPages.filter((p) => p.status === 'refetched').length} stale→refetched, ` +
-    `${contextPages.filter((p) => p.status === 'cached').length} cached)`,
-);
+console.log(`  context pages: ${contextPages.length} (fetched via design-context)`);
 console.log(`  📐 Design + 📋 Planning tasks on target board:`);
 console.log(
   `    executable (Ready + In Progress): ${tasks.executable.length} (${readyExec} dep-ready, ${blockedExec} dep-blocked)`,

@@ -40,6 +40,25 @@ const pageId = process.argv[2];
 process.stdout.write(fixtures.pages[pageId] ?? '');
 `;
 
+// Stands in for the sanctioned design-context-client.mjs (which normally
+// calls the backend's device-authed GET /api/design-context route) — reads
+// canned per-task DesignLoadResult bundles from the same fixtures file
+// instead of hitting the backend, exactly mirroring how the real script
+// shells out to it (see runDesignContext() in design-load.mjs).
+const FAKE_DESIGN_CONTEXT_CLIENT = `#!/usr/bin/env node
+import { readFileSync } from 'fs';
+const fixtures = JSON.parse(readFileSync(process.env.DESIGN_TEST_FIXTURES, 'utf8'));
+const args = process.argv.slice(2);
+const taskId = args[args.indexOf('--task') + 1];
+const bundle = (fixtures.designContext ?? {})[taskId] ?? {
+  archSource: 'notion',
+  archUnits: [],
+  unresolvedPageRefs: [],
+  contextPages: [],
+};
+process.stdout.write(JSON.stringify(bundle));
+`;
+
 const MANIFEST = {
   status_property: 'Status',
   status_vocab: {
@@ -96,6 +115,29 @@ const FIXTURES = {
     'task-a': TASK_A_BODY,
     'task-b': TASK_B_BODY,
   },
+  // Per-task design-context bundles the fake design-context-client.mjs
+  // returns, standing in for the backend's archStoreAdopted dual read: a
+  // store-adopted project resolves 'store' (task-a), a non-adopted one
+  // resolves 'notion' (task-b) — both carry the same non-architecture
+  // context pages, which never migrate into the store.
+  designContext: {
+    'task-a': {
+      archSource: 'store',
+      archUnits: [{ id: 'unit-1', title: 'Delivery invariant' }],
+      unresolvedPageRefs: [],
+      contextPages: [
+        { id: 'ctx-1', title: '🗺️ Project Context', markdown: 'project context body' },
+      ],
+    },
+    'task-b': {
+      archSource: 'notion',
+      archUnits: [],
+      unresolvedPageRefs: [],
+      contextPages: [
+        { id: 'ctx-1', title: '🗺️ Project Context', markdown: 'project context body' },
+      ],
+    },
+  },
 };
 
 function setupHarness() {
@@ -112,6 +154,10 @@ function setupHarness() {
   );
   writeFileSync(join(scriptsDir, 'notion-query.mjs'), FAKE_NOTION_QUERY);
   writeFileSync(join(scriptsDir, 'notion-page.mjs'), FAKE_NOTION_PAGE);
+  writeFileSync(
+    join(scriptsDir, 'design-context-client.mjs'),
+    FAKE_DESIGN_CONTEXT_CLIENT,
+  );
 
   const manifestPath = join(tmp, 'manifest.json');
   writeFileSync(manifestPath, JSON.stringify(MANIFEST, null, 2));
@@ -154,6 +200,11 @@ function readState(h: ReturnType<typeof setupHarness>) {
 function readWorklist(h: ReturnType<typeof setupHarness>) {
   return JSON.parse(
     readFileSync(join(h.cacheDir, 'design-worklist.json'), 'utf8'),
+  );
+}
+function readBundle(h: ReturnType<typeof setupHarness>) {
+  return JSON.parse(
+    readFileSync(join(h.cacheDir, 'context-bundle.json'), 'utf8'),
   );
 }
 
@@ -250,5 +301,38 @@ describe('design-load.mjs', () => {
       (t: { id: string }) => t.id === 'task-b',
     );
     expect(taskB.inbound_carries).toEqual([]);
+  });
+
+  it('loads each task\'s architecture via the design-context route (archStoreAdopted dual read), and carries the non-architecture context pages on both branches', () => {
+    harness = setupHarness();
+    runLoader(harness);
+    const worklist = readWorklist(harness);
+
+    const taskA = worklist.executable.find(
+      (t: { id: string }) => t.id === 'task-a',
+    );
+    expect(taskA.arch_source).toBe('store');
+    expect(taskA.arch_units).toEqual([
+      { id: 'unit-1', title: 'Delivery invariant' },
+    ]);
+
+    const taskB = worklist.executable.find(
+      (t: { id: string }) => t.id === 'task-b',
+    );
+    expect(taskB.arch_source).toBe('notion');
+    expect(taskB.arch_units).toEqual([]);
+
+    const bundle = readBundle(harness);
+    expect(bundle.context_pages).toEqual([
+      {
+        id: 'ctx-1',
+        title: '🗺️ Project Context',
+        file: 'context/ctx1.md',
+        status: 'fetched',
+      },
+    ]);
+    expect(
+      readFileSync(join(harness.cacheDir, 'context', 'ctx1.md'), 'utf8'),
+    ).toBe('project context body');
   });
 });

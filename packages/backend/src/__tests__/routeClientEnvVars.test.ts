@@ -3,8 +3,8 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Grep-guard: the six route-based cutover clients (ops/groom/gate/seed/
-// staged-intents + read-session-record) must agree on one host var name and
+// Grep-guard: the seven route-based cutover clients (ops/groom/design/gate/
+// seed/staged-intents + read-session-record) must agree on one host var name and
 // one port var name (ORCHESTRATOR_BACKEND_HOST / ORCHESTRATOR_BACKEND_PORT).
 // Token vars stay deliberately distinct — the five device-auth clients read
 // ORCHESTRATOR_DEVICE_TOKEN, the one remaining stage-token client
@@ -20,6 +20,7 @@ const repoRoot = resolve(backendRoot, '../..');
 const DEVICE_AUTH_CLIENTS = [
   resolve(repoRoot, 'scripts/ops-client.mjs'),
   resolve(backendRoot, 'scripts/groom-context-client.mjs'),
+  resolve(backendRoot, 'scripts/design-context-client.mjs'),
   resolve(backendRoot, 'scripts/gate-state-client.mjs'),
   resolve(backendRoot, 'scripts/seed-state-client.mjs'),
   resolve(backendRoot, 'scripts/staged-intents-client.mjs'),
