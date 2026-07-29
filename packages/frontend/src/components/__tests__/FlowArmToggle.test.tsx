@@ -1,4 +1,10 @@
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  act,
+} from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { FlowArmToggle } from '../FlowArmToggle';
 import { flowArmApi, type FlowArmState } from '../../api/flowArm';
@@ -41,7 +47,9 @@ describe('FlowArmToggle', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId('flow-arm-switch-groom').getAttribute('aria-checked'),
+        screen
+          .getByTestId('flow-arm-switch-groom')
+          .getAttribute('aria-checked'),
       ).toBe('true');
     });
     expect(
@@ -68,7 +76,9 @@ describe('FlowArmToggle', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByTestId('flow-arm-switch-groom').getAttribute('aria-checked'),
+        screen
+          .getByTestId('flow-arm-switch-groom')
+          .getAttribute('aria-checked'),
       ).toBe('true'),
     );
   });
@@ -83,7 +93,9 @@ describe('FlowArmToggle', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByTestId('flow-arm-switch-design').getAttribute('aria-checked'),
+        screen
+          .getByTestId('flow-arm-switch-design')
+          .getAttribute('aria-checked'),
       ).toBe('false'),
     );
 
@@ -95,7 +107,9 @@ describe('FlowArmToggle', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByTestId('flow-arm-switch-design').getAttribute('aria-checked'),
+        screen
+          .getByTestId('flow-arm-switch-design')
+          .getAttribute('aria-checked'),
       ).toBe('true'),
     );
   });
@@ -110,7 +124,9 @@ describe('FlowArmToggle', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByTestId('flow-arm-switch-design').getAttribute('aria-checked'),
+        screen
+          .getByTestId('flow-arm-switch-design')
+          .getAttribute('aria-checked'),
       ).toBe('false'),
     );
 
