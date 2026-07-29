@@ -28,6 +28,11 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerStageProposalTools } from './stageProposalTools';
 import { getStagedIntent, listStagedIntentsByGroup } from '../../db/queries';
+import {
+  gateContributionDecisionSchema,
+  gateContributionItemInputSchema,
+} from './schemas';
+import { GATE_ITEM_TIER_SELECTION_GUIDANCE } from '../../gate/gateItemClassificationGuidance';
 
 const SESSION_ID = 'session-1';
 const PROJECT_ID = 'proj-1';
@@ -405,6 +410,62 @@ describe('stage-proposal MCP tools — schema validation', () => {
       },
     });
     expect((result as { isError?: boolean }).isError).toBe(true);
+    await close();
+  });
+});
+
+describe('gate.accrete — classification tier guidance', () => {
+  const REAL_TIERS = [
+    'Read-Only',
+    'Prod-Mutating',
+    'Opportunistic',
+    'Human-Observation',
+  ];
+
+  it('the batch-level classification field exposes a non-empty description naming all four real tiers', () => {
+    const description = gateContributionDecisionSchema.description;
+    expect(description).toBeTruthy();
+    for (const tier of REAL_TIERS) {
+      expect(description).toContain(tier);
+    }
+  });
+
+  it('the per-item classification field exposes the same tier guidance', () => {
+    const description =
+      gateContributionItemInputSchema.shape.classification.description;
+    expect(description).toBeTruthy();
+    for (const tier of REAL_TIERS) {
+      expect(description).toContain(tier);
+    }
+  });
+
+  it('the tier guidance states the live-session-vs-human-observation distinction', () => {
+    const description = gateContributionDecisionSchema.description ?? '';
+    expect(description).toMatch(/live dispatched session/);
+    expect(description).toMatch(/not Human-Observation/);
+    expect(description).toMatch(/session_events/);
+  });
+
+  it('the gate.accrete tool description carries the tier-selection guidance', async () => {
+    const { client, close } = await connectedClient();
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'gate.accrete');
+    expect(tool?.description).toContain(GATE_ITEM_TIER_SELECTION_GUIDANCE);
+    await close();
+  });
+
+  it('the schema field description and the tool description are sourced from the same shared constant (no drift)', async () => {
+    const { client, close } = await connectedClient();
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'gate.accrete');
+
+    expect(gateContributionDecisionSchema.description).toContain(
+      GATE_ITEM_TIER_SELECTION_GUIDANCE,
+    );
+    expect(
+      gateContributionItemInputSchema.shape.classification.description,
+    ).toContain(GATE_ITEM_TIER_SELECTION_GUIDANCE);
+    expect(tool?.description).toContain(GATE_ITEM_TIER_SELECTION_GUIDANCE);
     await close();
   });
 });

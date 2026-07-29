@@ -29,6 +29,7 @@ import {
   archCreateUnitPayloadSchema,
   decisionPickOneOptionSchema,
 } from './schemas';
+import { GATE_ITEM_TIER_SELECTION_GUIDANCE } from '../../gate/gateItemClassificationGuidance';
 
 /** Per-connection context a stage-proposal tool call is scoped to. */
 export interface StageProposalToolContext {
@@ -203,7 +204,8 @@ export function registerStageProposalTools(
     {
       title: 'Stage a runtime-item gate contribution',
       description:
-        "Stages a gate.accrete intent — the source task's independently-assessed runtime-observable items to mint onto the milestone gate, or a bare 'none'/'n/a' classification. A bare classification requires a substantive `reason` — the groomer's judgement that the change's behaviour was assessed and found to have nothing runtime-observable, tied to the change rather than to the pre-groom body.",
+        "Stages a gate.accrete intent — the source task's independently-assessed runtime-observable items to mint onto the milestone gate, or a bare 'none'/'n/a' classification. A bare classification requires a substantive `reason` — the groomer's judgement that the change's behaviour was assessed and found to have nothing runtime-observable, tied to the change rather than to the pre-groom body. " +
+        `${GATE_ITEM_TIER_SELECTION_GUIDANCE} The top-level \`classification\` is the batch default; a heterogeneous batch overrides it per item via that item's own \`classification\` field instead of forcing every item in the batch to one tier.`,
       inputSchema: envelope({
         sourceTask: gateContributionSourceTaskSchema,
         items: z.array(gateContributionItemInputSchema),
