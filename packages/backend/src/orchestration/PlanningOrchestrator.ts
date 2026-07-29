@@ -23,6 +23,18 @@ import { emitTaskUpdated } from '../routes/tasks';
 
 const DESIGN_DONE_STATUS = '✅ Done';
 
+/**
+ * Terminal reasons that represent a genuinely completed design — the only
+ * ones with authority to promote a design task to Done. A future terminal
+ * reason must be consciously added here to gain that authority; it does not
+ * inherit it by default. planning_operator_end is deliberately excluded: an
+ * operator-ended session is not a completed design.
+ */
+const DESIGN_COMPLETING_REASONS = new Set([
+  'planning_approved',
+  'planning_no_pending_dispositions',
+]);
+
 type PlanningDisposition = 'approve' | 'pushback' | 'decline' | 'answer';
 
 export interface PlanningDispositionPayload {
@@ -255,7 +267,7 @@ export class PlanningOrchestrator {
     // model as a merged PR closing a Code task.
     if (
       row.session_type === 'design' &&
-      reason === 'planning_no_pending_dispositions'
+      DESIGN_COMPLETING_REASONS.has(reason)
     ) {
       this.completeDesignTask(sessionId, row);
     }
