@@ -33,6 +33,7 @@ import { RateLimitBanner } from './components/RateLimitBanner';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { GateReadinessPanel } from './components/GateReadinessPanel';
 import { ArchitecturePanel } from './components/ArchitecturePanel';
+import { MilestoneView } from './components/MilestoneView';
 import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
 import { SessionFilterBar } from './components/SessionFilterBar';
@@ -198,6 +199,7 @@ export default function App() {
     lastApiOverloadedPaused,
     incompleteReviews,
     lastTaskUpdate,
+    lastStagedIntentChange,
     taskListRefreshTrigger,
     lastAutofixEvent,
     lastReviewStartedEvent,
@@ -1584,6 +1586,18 @@ export default function App() {
             <div className={styles.analyticsView}>
               <ArchitecturePanel />
             </div>
+          </ErrorBoundary>
+        )}
+
+        {topView === 'milestone' && (
+          <ErrorBoundary name="MilestoneView">
+            <MilestoneView
+              activeProjectId={activeProjectId}
+              activeBoardId={activeBoardId}
+              activeBoardMilestone={activeBoardMilestone}
+              lastTaskUpdate={lastTaskUpdate}
+              lastStagedIntentChange={lastStagedIntentChange}
+            />
           </ErrorBoundary>
         )}
 
