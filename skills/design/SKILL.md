@@ -91,6 +91,16 @@ node ~/.claude/scripts/design-load.mjs \
 If it exits non-zero, **stop** — a partial load means a contaminated session. Report
 the error.
 
+Internally, the loader no longer hand-fetches the fixed context pages (or a task's
+architecture) from Notion directly — that was flag-blind to the project's
+`archStoreAdopted` migration flag and would always treat the Notion pages as
+canonical even for a migrated project. It instead calls the backend's
+device-authed `GET /api/design-context` route once per task, via the sanctioned
+`design-context-client.mjs` (same shape of cutover `/groom` already made — see
+`packages/backend/src/routes/designContext.ts`), which wraps the same
+`loadDesignContext()` the dashboard uses. **Do not shell out to Notion directly**
+for context pages or task architecture — the route is the sole loader now.
+
 On success it has written, under `.skill-cache/design/<milestone>/`:
 
 - `context-bundle.json` — the fixed context pages (bodies in `context/`), the
@@ -98,24 +108,42 @@ On success it has written, under `.skill-cache/design/<milestone>/`:
   (bodies in `tasks/`).
 - `design-worklist.json` — per executable task: parsed `open_questions`,
   `pages_affected`, `depends_on`, `dep_status` (resolved against the board),
-  `theme_tags`, `size`. Plus a `blocked` list (Design tasks at 🔲 Backlog that
-  need `/groom` first, or whose deps aren't ready).
+  `theme_tags`, `size`, and its dual-read architecture (`arch_source` +
+  `arch_units` — see below). Plus a `blocked` list (Design tasks at 🔲 Backlog
+  that need `/groom` first, or whose deps aren't ready).
 - `design-state.json` — per-task skeleton (the artifact tracking progress);
   preserved across resumes. Signed-off open questions and applied page edits
   survive; new questions in the task body are appended.
 
-Read the context-page bodies in `context/` — Master Context, Technical Architecture,
-Coding Guidelines, Research Goals, Future Scope, Project Milestones. **Future Scope is
-always present**, but its shape varies by project: a **standalone page** in some
-(e.g. polimarket-analyser), a **`## Future Scope` section of the Master Context page**
-in others (e.g. claude-orchestrator). Either way it is the home for defer-to-future
-decisions — locate it in the loaded bundle before you ever conclude "there's nowhere to
-put this" (see § the silent-non-capture anti-pattern). Also read the
-universal task-authoring standard at `config/task-writing.md` (no longer a Notion
-context page — read it from local disk). **This is non-negotiable**: executing a design task
-without the
-architectural constraints loaded is how design sessions produce confidently-wrong
-decisions that cascade through every Code task that consumes them.
+Read the non-architecture context-page bodies in `context/` — 🗺️ Project Context,
+🧩 Product Design Doc, ⚙️ Dev Setup & Git, 🔭 Future Scope — **always populated,
+regardless of `arch_source`**, since these pages are not migrating into the
+arch_unit store. **Future Scope is always present**, but its shape varies by project:
+a **standalone page** in some (e.g. polimarket-analyser), a **`## Future Scope`
+section of the Master Context page** in others (e.g. claude-orchestrator). Either
+way it is the home for defer-to-future decisions — locate it in the loaded bundle
+before you ever conclude "there's nowhere to put this" (see § the silent-non-capture
+anti-pattern). Also read the universal task-authoring standard at
+`config/task-writing.md` (no longer a Notion context page — read it from local disk).
+
+Read each task's architecture from `design-worklist.json` → `arch_units`,
+dual-read per `arch_source`:
+
+- `arch_source: 'notion'` — the project has not adopted the arch_unit store; the
+  task's `pages_affected` resolve against the milestone's fixed Notion
+  architecture pages exactly as before. This is also the branch `page-edits.md`'s
+  Notion diff-then-apply protocol targets.
+- `arch_source: 'store'` — the project has adopted the arch_unit store;
+  `arch_units[]` carries the store's selected units (`{id, title}`) — the
+  project's active invariants plus, when a `pages_affected` reference resolves
+  to a store unit, that unit's topic. Fetch a unit's full body with the
+  `mcp__orchestrator__architecture_getUnit` tool (`{id}`) before citing it, and
+  this is also the branch whose architecture-page **writes** go through the
+  `arch.*` staged-intent surface in `page-edits.md`, never a Notion edit.
+
+**This is non-negotiable**: executing a design task without the architectural
+constraints loaded is how design sessions produce confidently-wrong decisions that
+cascade through every Code task that consumes them.
 
 ---
 
@@ -292,15 +320,19 @@ For the current Design task (in the approved order):
    - A **"Follow-on tasks filed"** list — filled in as Step 3.6 progresses.
      Draft inline and show the human before writing to Notion.
 
-5. **For each entry in "Notion pages affected"** — per `reference/page-edits.md`.
+5. **For each entry in "Notion pages affected"** — per `reference/page-edits.md`,
+   which branches on this task's `arch_source` (Step 1): a `store`-sourced task
+   stages `arch.*` intents against the arch_unit units in `arch_units`, never a
+   Notion write; a `notion`-sourced task keeps the diff-then-apply Notion protocol
+   below, unchanged.
    **If the list is empty, don't just skip this step — ask the durable-home question
    explicitly:** _"where do these locked decisions durably land?"_ A terse Design task
    often under-declares its arch home (declares no pages-affected while clearly
    warranting a Technical Architecture edit); catch that here by default, not by
-   leaning on the completeness-critic to find it. If the answer is a real arch page,
-   add it and proceed; if the decisions genuinely live only in the Implementation
-   notes / a follow-on, say so deliberately.
-   - Fetch the target page via `notion-page.mjs` (full body, not MCP search).
+   leaning on the completeness-critic to find it. If the answer is a real arch page
+   or arch unit, add it and proceed; if the decisions genuinely live only in the
+   Implementation notes / a follow-on, say so deliberately.
+   - **`notion` branch:** Fetch the target page via `notion-page.mjs` (full body, not MCP search).
    - Identify the exact section to amend; quote enough context to disambiguate.
    - Compose the exact addition/edit.
    - Present: _"I'm going to update `<page title>` § `<section>` — append after
@@ -373,9 +405,12 @@ gate, no silent writes, `git -C` not `cd`, and cache/state files via the
 Edit/Write tool) — canonical source
 `packages/backend/src/planning/procedureCore.ts`. Design-specific rules below:
 
-- **Source of truth**: Notion for architectural rules, decisions, and task
-  definitions. For _implemented_ detail (DDL, signatures, analyzer specs), the code
-  under `source_root` wins; on intent/rationale, Notion wins.
+- **Source of truth**: task definitions are always Notion. Architectural rules
+  and decisions dual-read per `arch_source` (Step 1) — Notion for a project
+  that hasn't adopted the arch_unit store, the store otherwise; never both,
+  never per-page. For _implemented_ detail (DDL, signatures, analyzer specs),
+  the code under `source_root` wins; on intent/rationale, the resolved
+  architecture source wins.
 - **Scope is the target milestone only.** Do not touch Design tasks on other boards
   unless a dependency issue is explicitly identified and the human approves it.
 - **Never** re-open a ✅ Done or ⏭️ Deferred task by moving it back to In Progress.

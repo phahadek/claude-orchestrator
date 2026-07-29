@@ -10,7 +10,7 @@ const repoRoot = resolve(
 );
 
 describe('sync-guidelines-load.mjs vendor plan', () => {
-  it('covers the six route clients, all seven skills, the shared skill dependency, and drops the retired loaders', () => {
+  it('covers the seven route clients, all seven skills, the shared skill dependency, and drops the retired loaders', () => {
     const output = execFileSync(
       process.execPath,
       [
@@ -31,6 +31,7 @@ describe('sync-guidelines-load.mjs vendor plan', () => {
     for (const id of [
       'script:ops-client.mjs',
       'script:groom-context-client.mjs',
+      'script:design-context-client.mjs',
       'script:gate-state-client.mjs',
       'script:seed-state-client.mjs',
       'script:staged-intents-client.mjs',
