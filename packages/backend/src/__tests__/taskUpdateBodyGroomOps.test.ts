@@ -23,7 +23,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerStageProposalTools } from '../mcp/tools/stageProposalTools';
-import { getStagedIntent } from '../db/queries';
+import { getStagedIntent, upsertTaskCache } from '../db/queries';
 
 beforeEach(() => {
   db.prepare('DELETE FROM staged_intent').run();
@@ -56,6 +56,7 @@ describe('GROOM_ALLOWED_TOOLS / OPS_ALLOWED_TOOLS — CLI-sanitized task_updateB
 
 describe('a staged task.updateBody intent from a groom session', () => {
   it('persists with state = "staged" and is not auto-applied', async () => {
+    upsertTaskCache('notion:t-1', JSON.stringify({ status: '🔲 Backlog' }));
     const server = new McpServer({ name: 'test', version: '1.0.0' });
     registerStageProposalTools(server, {
       sessionId: 'session-groom-1',

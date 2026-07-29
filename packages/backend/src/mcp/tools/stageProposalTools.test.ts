@@ -77,7 +77,7 @@ beforeEach(() => {
 });
 
 describe('stage-proposal MCP tools — registration', () => {
-  it('registers exactly the 15 stage-proposal tool names', async () => {
+  it('registers exactly the 16 stage-proposal tool names', async () => {
     const { client, close } = await connectedClient();
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
@@ -90,6 +90,7 @@ describe('stage-proposal MCP tools — registration', () => {
         'gate.accrete',
         'intent.withdraw',
         'journal.setState',
+        'planning.noOp',
         'seed.stage',
         'session.requestCapability',
         'task.create',

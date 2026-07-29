@@ -650,7 +650,13 @@ describe('PlanningOrchestrator terminal detection', () => {
     vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'done' }));
     const orch = new PlanningOrchestrator(sm as any);
 
-    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    // A committed decision-kind intent so the no-staged-decision backstop
+    // doesn't intercept this call with a self-correct nudge — this test is
+    // about the already-done reap path, not that backstop.
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ state: 'committed' }),
+    ]);
+    orch.checkTerminal('planning-session-1'); // prime the staged-count snapshot
     const terminal = orch.checkTerminal('planning-session-1');
 
     expect(terminal).toBe(true);
@@ -665,7 +671,10 @@ describe('PlanningOrchestrator terminal detection', () => {
     vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'done' }));
     const orch = new PlanningOrchestrator(sm as any);
 
-    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ state: 'committed' }),
+    ]);
+    orch.checkTerminal('planning-session-1'); // prime the staged-count snapshot
     expect(() => orch.checkTerminal('planning-session-1')).not.toThrow();
     expect(() => orch.checkTerminal('planning-session-1')).not.toThrow();
 
@@ -676,8 +685,11 @@ describe('PlanningOrchestrator terminal detection', () => {
   it('drives terminal automatically off a session_ended(idle) event for a planning session', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
-    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
-    new PlanningOrchestrator(sm as any);
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ state: 'committed' }),
+    ]);
+    const orch = new PlanningOrchestrator(sm as any);
+    orch.checkTerminal('planning-session-1'); // prime the staged-count snapshot
 
     sm.emit('message', {
       type: 'session_ended',
@@ -748,7 +760,9 @@ describe('PlanningOrchestrator turn-end group verification', () => {
   it('does not feed back an escalated group failure, and falls through to the terminal check', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
-    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ state: 'committed' }),
+    ]);
     vi.mocked(verifyDispatchedGroupsForSession).mockResolvedValue([
       {
         groupId: 'group-1',
@@ -758,7 +772,8 @@ describe('PlanningOrchestrator turn-end group verification', () => {
         errors: ['task.setStatus (task-1): still blocked after 2 rounds'],
       },
     ]);
-    new PlanningOrchestrator(sm as any);
+    const orch = new PlanningOrchestrator(sm as any);
+    orch.checkTerminal('planning-session-1'); // prime the staged-count snapshot
 
     sm.emit('message', {
       type: 'session_ended',

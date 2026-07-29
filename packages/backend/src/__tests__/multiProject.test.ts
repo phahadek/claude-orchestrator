@@ -32,7 +32,7 @@ describe('SessionManager.start() — projectId validation', () => {
     // Must use project.projectDir, not config.projectDir for worktree creation
     expect(source).toMatch(/project\.projectDir/);
     // Must import getProjectById
-    expect(source).toMatch(/import.*getProjectById.*from.*config/);
+    expect(source).toMatch(/import.*getProjectById.*from.*config/s);
   });
 });
 
@@ -91,7 +91,7 @@ describe('NotionClient.fetchReadyTasks()', () => {
       'utf-8',
     );
     // Method signature must accept boardId as the first parameter
-    expect(source).toMatch(/fetchReadyTasks\(boardId:\s*string/);
+    expect(source).toMatch(/fetchReadyTasks\(\s*boardId:\s*string/);
     // Must use boardId in the API call (not a hardcoded value)
     expect(source).toMatch(/\/databases\/\$\{boardId\}\/query/);
   });

@@ -272,13 +272,28 @@ describe('SessionManager — detached worktree branch model', () => {
   );
 
   it('does not create session/<UUID> branches in start()', () => {
-    expect(source).not.toMatch(/`session\/\$\{sessionId\}`/);
-    expect(source).not.toMatch(/`session\/\$\{newSessionId\}`/);
+    // `session/${sessionId}` still appears in pruneSessionBranch — a
+    // backward-compat cleanup helper that deletes legacy pre-feature-branch
+    // sessions, not something start()/completeStart() creates. Scope the
+    // check to the start()/completeStart() region (up to the next unrelated
+    // private method) so the legacy prune helper doesn't trip a false
+    // positive.
+    const startIdx = source.indexOf('async start(');
+    const completeStartEndIdx = source.indexOf(
+      'private async cleanupPartialWorktree',
+    );
+    expect(startIdx).toBeGreaterThan(-1);
+    expect(completeStartEndIdx).toBeGreaterThan(startIdx);
+    const startRegion = source.slice(startIdx, completeStartEndIdx);
+    expect(startRegion).not.toMatch(/`session\/\$\{sessionId\}`/);
+    expect(startRegion).not.toMatch(/`session\/\$\{newSessionId\}`/);
   });
 
   it('creates worktree on named feature branch when taskName is available', () => {
     expect(source).toMatch(/git worktree add -b/);
-    expect(source).toMatch(/feature\/\$\{slugify/);
+    // Branch-name derivation now lives in branchModel.ts's deriveBranchSlug
+    // (imported below), rather than being inlined as `feature/${slugify(...)}`.
+    expect(source).toMatch(/deriveBranchSlug/);
   });
 
   it('imports resolveStartingPoint and ensureMilestoneBranch from branchModel', () => {
@@ -298,8 +313,12 @@ describe('SessionManager — detached worktree branch model', () => {
   });
 
   it('milestone branch is never deleted on cleanup (only task branch is)', () => {
-    // The branch deletion is conditioned on !prUrl && branchName
-    expect(source).toMatch(/if \(!prUrl && branchName\)/);
+    // The branch deletion is conditioned on deleteBranch (no PR, or the PR
+    // was merged) && branchName — never on the milestone branch itself.
+    expect(source).toMatch(
+      /const deleteBranch = !prUrl \|\| this\._mergedSessionIds\.has\(sessionId\);/,
+    );
+    expect(source).toMatch(/if \(deleteBranch && branchName\)/);
   });
 });
 

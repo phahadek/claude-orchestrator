@@ -144,7 +144,7 @@ describe('PlanningOrchestrator approve disposition', () => {
     expect(getSession(SESSION_ID)?.status).toBe('done');
   });
 
-  it('approving the last intent of a group when other intents remain staged resumes the session exactly once', async () => {
+  it('approving the last intent of a group when other intents remain staged produces no feedback and does not resume', async () => {
     seedSession();
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
@@ -168,12 +168,12 @@ describe('PlanningOrchestrator approve disposition', () => {
       disposition: 'approve',
     });
 
-    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+    expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
     expect(sessionManager.endSession).not.toHaveBeenCalled();
     expect(getSession(SESSION_ID)?.status).toBe('running');
   });
 
-  it('an approved standalone (ungrouped) intent is its own fully-disposed unit', async () => {
+  it('an approved standalone (ungrouped) intent with other staged work remaining is its own fully-disposed unit but does not resume', async () => {
     seedSession();
     const sessionManager = makeSessionManager();
     const orchestrator = new PlanningOrchestrator(sessionManager);
@@ -188,12 +188,9 @@ describe('PlanningOrchestrator approve disposition', () => {
       disposition: 'approve',
     });
 
-    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
-    const [sessionId, source, message] =
-      sessionManager.enqueueFeedback.mock.calls[0];
-    expect(sessionId).toBe(SESSION_ID);
-    expect(source).toBe('operator-disposition');
-    expect(message).toContain('approved and applied');
+    expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
+    expect(sessionManager.endSession).not.toHaveBeenCalled();
+    expect(getSession(SESSION_ID)?.status).toBe('running');
   });
 
   it('a pushback still resumes the session with the outcome', async () => {

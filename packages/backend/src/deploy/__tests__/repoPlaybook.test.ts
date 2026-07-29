@@ -91,7 +91,10 @@ describe('the repo-committed deploy playbook', () => {
       (s) => s.id === 'record-deployed-sha',
     );
     expect(recordSha?.kind).toBe('shell');
-    expect(recordSha?.is_prod_mutating).toBe(true);
+    // Post-success bookkeeping (runs after verify already passed) — a
+    // failure here means "re-write the marker," never a rollback
+    // candidate, so it's deliberately not prod-mutating.
+    expect(recordSha?.is_prod_mutating).toBe(false);
 
     const match = recordSha?.command_or_prompt?.match(/>\s*(\S+)/);
     expect(match).toBeTruthy();

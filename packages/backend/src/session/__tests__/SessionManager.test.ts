@@ -80,6 +80,7 @@ vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn().mockReturnValue({
     updateStatus: vi.fn().mockResolvedValue(undefined),
+    fetchTaskPage: vi.fn().mockResolvedValue(''),
   }),
 }));
 vi.mock('../../routes/tasks', () => ({ emitTaskUpdated: vi.fn() }));
@@ -896,7 +897,7 @@ describe('resumeOrphanSessions — resume failure flags needs_attention (resume_
     expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
       'task-1',
       'resume_failed',
-      expect.stringContaining('worktree missing'),
+      expect.stringContaining('path recorded but absent on disk'),
     );
     // Bypasses markSessionErrored's crash-budget/Notion-flip path entirely.
     expect(vi.mocked(incrementTaskCrashCount)).not.toHaveBeenCalled();
@@ -1544,6 +1545,7 @@ describe('sendOrResume — surviving worktree reuse (idle resume fast path)', ()
 
   async function doResume(text = 'hello'): Promise<string> {
     const p = sm.sendOrResume(SESSION_ID, text);
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
     const sess = capturedSessions[0];
     sess.emit('message', {
       type: 'session_event' as const,

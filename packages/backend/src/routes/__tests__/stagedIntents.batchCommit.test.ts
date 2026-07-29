@@ -102,9 +102,12 @@ describe('POST /api/staged-intents/batch/commit', () => {
     const updateStatus = vi.fn();
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
+      // 📐 Design is exempt from the Open Questions readiness tier — use
+      // grooming residue instead so the readiness gate still fires, forcing
+      // the triage-clean override path this test exists to cover.
       fetchTaskPage: vi
         .fn()
-        .mockResolvedValue('## Open Questions\n- Still open?\n'),
+        .mockResolvedValue('Confirm scope at grooming.\n'),
       updateStatus,
       setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
