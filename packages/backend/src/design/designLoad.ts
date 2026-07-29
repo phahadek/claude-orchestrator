@@ -236,6 +236,12 @@ interface ArchUnit {
   raw?: string;
 }
 
+interface PageDoc {
+  id: string;
+  title: string;
+  markdown: string;
+}
+
 export interface DesignLoadResult {
   task: DesignTaskRef;
   markdown: string;
@@ -244,6 +250,14 @@ export interface DesignLoadResult {
   archSource: 'store' | 'notion';
   archUnits: ArchUnit[];
   unresolvedPageRefs: PageRef[];
+  /**
+   * The milestone's manifest context pages (independent of archStoreAdopted:
+   * mostly non-architecture pages — Project Context, Product Design Doc, Dev
+   * Setup & Git, Future Scope — never migrated into the arch_unit store, so
+   * fetched from Notion regardless of dual-read branch; mirrors
+   * groomLoad.ts's contextPages).
+   */
+  contextPages: PageDoc[];
   codeMapGrounding: Record<string, unknown>;
 }
 
@@ -340,6 +354,21 @@ export async function loadDesignContext(
     }
   }
 
+  // contextPages is independent of archStoreAdopted, mirroring groomLoad.ts:
+  // the manifest's context pages are mostly non-architecture (project
+  // context, product design doc, dev setup, future scope) and were never
+  // migrated into the store, so they are fetched from Notion regardless of
+  // dual-read branch.
+  const contextPages: PageDoc[] = [];
+  for (const pg of manifest.context_pages ?? []) {
+    const page = await notion.fetchPageMarkdown(formatTaskId('notion', pg.id));
+    contextPages.push({
+      id: pg.id,
+      title: pg.title ?? page.title,
+      markdown: page.markdown,
+    });
+  }
+
   const codeMapPath = join(
     repoRoot,
     '.skill-cache',
@@ -369,6 +398,7 @@ export async function loadDesignContext(
     archSource,
     archUnits,
     unresolvedPageRefs,
+    contextPages,
     codeMapGrounding,
   };
 }

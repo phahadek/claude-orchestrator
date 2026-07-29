@@ -211,6 +211,11 @@ describe('loadDesignContext', () => {
       { title: 'Unregistered Page', raw: 'Unregistered Page *(new)*' },
     ]);
 
+    // contextPages is fetched from Notion regardless of archStoreAdopted.
+    expect(result.contextPages).toEqual([
+      { id: ARCH_PAGE_ID, title: 'Technical Architecture', markdown: result.markdown },
+    ]);
+
     // No code-map.json cache under this repoRoot — grounding is empty.
     expect(result.codeMapGrounding).toEqual({});
   });
@@ -248,6 +253,10 @@ describe('loadDesignContext', () => {
     // The store path's page references only drive topic resolution, never
     // the manifest — there is nothing left to flag as unresolved.
     expect(result.unresolvedPageRefs).toEqual([]);
+    // contextPages is unconditional of archStoreAdopted — still fetched here.
+    expect(result.contextPages).toEqual([
+      { id: ARCH_PAGE_ID, title: 'Technical Architecture', markdown: result.markdown },
+    ]);
     // Store-sourced units carry no `raw` reference text — unlike the notion
     // branch's literal "Notion pages affected" excerpt, there is nothing to
     // quote — but they must never fall back to the old raw: '' placeholder.
