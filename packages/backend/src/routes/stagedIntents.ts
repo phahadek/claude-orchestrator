@@ -21,6 +21,8 @@ import {
   checkReadiness,
   composeProposedBody,
   ReadinessGateError,
+  parseManualVerificationItems,
+  checkAccretionContentMatch,
   type ReadinessViolation,
 } from '../tasks/readinessGate';
 import {
@@ -170,6 +172,43 @@ function hasGroupAccretionIntent(
     if (row.kind !== kind || !ACTIVE.includes(row.state)) return false;
     return extractTaskId(row.kind, JSON.parse(row.payload)) === taskId;
   });
+}
+
+/**
+ * The group's live gate.accrete payload for this task, when one is staged —
+ * used by the strip⇔accrete content-match precheck to read the actual
+ * accreted item texts (visible in the staged payload before the real
+ * accretion has necessarily landed), the same "both sides visible in the
+ * proposed group" read hasGroupAccretionIntent's ACTIVE-state lookup already
+ * relies on.
+ */
+function getGroupGateAccretePayload(
+  groupId: string,
+  taskId: string,
+): GateAccretePayload | undefined {
+  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
+  const row = listStagedIntentsByGroup(groupId).find((r) => {
+    if (r.kind !== 'gate.accrete' || !ACTIVE.includes(r.state)) return false;
+    return extractTaskId('gate.accrete', JSON.parse(r.payload)) === taskId;
+  });
+  return row ? (JSON.parse(row.payload) as GateAccretePayload) : undefined;
+}
+
+/**
+ * The seed.stage twin of getGroupGateAccretePayload — the group's live
+ * seed.stage payload for this task, when one is staged, used by the
+ * seed_contribution content-match precheck.
+ */
+function getGroupSeedStagePayload(
+  groupId: string,
+  taskId: string,
+): SeedStagePayload | undefined {
+  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
+  const row = listStagedIntentsByGroup(groupId).find((r) => {
+    if (r.kind !== 'seed.stage' || !ACTIVE.includes(r.state)) return false;
+    return extractTaskId('seed.stage', JSON.parse(r.payload)) === taskId;
+  });
+  return row ? (JSON.parse(row.payload) as SeedStagePayload) : undefined;
 }
 
 /** The exact heading text bodyRender.ts writes for the section (see bodyRender.ts:298,463). */
@@ -2334,6 +2373,69 @@ async function precheckGroupCommit(
     ) {
       const err = new ManualVerificationStripCompletenessError(payload.taskId);
       return { status: 409, body: { error: err.message, precheck: true } };
+    }
+
+    if (payload.groomingGate?.hasManualVerificationSection) {
+      const gatePayload = getGroupGateAccretePayload(groupId, payload.taskId);
+      if (
+        gatePayload &&
+        gatePayload.classification !== 'none' &&
+        gatePayload.classification !== 'n/a'
+      ) {
+        const backend = getTaskBackend(row.project_id);
+        const storedBody = (await backend.fetchTaskPage(payload.taskId)) ?? '';
+        const strippedItems = parseManualVerificationItems(storedBody);
+        const accretedItems = gatePayload.items.map((item) => item.text);
+        const match = checkAccretionContentMatch(
+          'gate_contribution',
+          strippedItems,
+          accretedItems,
+        );
+        if (!match.ok) {
+          setStagedIntentAnnotation(
+            row.id,
+            JSON.stringify({ blocked: true, reasons: match.reasons }),
+          );
+          broadcastIntentById(row.id);
+          return {
+            status: 409,
+            body: {
+              error: new GroomingGateError(match.reasons).message,
+              reasons: match.reasons,
+              precheck: true,
+            },
+          };
+        }
+      }
+    }
+
+    if (payload.groomingGate?.seedContributionCandidates?.length) {
+      const seedPayload = getGroupSeedStagePayload(groupId, payload.taskId);
+      if (seedPayload && seedPayload.decision === 'seeds') {
+        const strippedItems =
+          payload.groomingGate.seedContributionCandidates.map((c) => c.spec);
+        const accretedItems = seedPayload.seeds.map((s) => s.spec);
+        const match = checkAccretionContentMatch(
+          'seed_contribution',
+          strippedItems,
+          accretedItems,
+        );
+        if (!match.ok) {
+          setStagedIntentAnnotation(
+            row.id,
+            JSON.stringify({ blocked: true, reasons: match.reasons }),
+          );
+          broadcastIntentById(row.id);
+          return {
+            status: 409,
+            body: {
+              error: new GroomingGateError(match.reasons).message,
+              reasons: match.reasons,
+              precheck: true,
+            },
+          };
+        }
+      }
     }
 
     const gateResult = checkGroomingPromotionGate(

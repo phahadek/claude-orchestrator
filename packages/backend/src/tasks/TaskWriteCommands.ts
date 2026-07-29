@@ -273,7 +273,18 @@ export interface GateContributionSourceTask {
   milestone: string;
 }
 
-/** One stripped runtime/launch-and-observe item to mint as a gate_item. */
+/**
+ * One stripped runtime/launch-and-observe item to mint as a gate_item. `text`
+ * is also the content-match key: the staged-intent group-commit precheck
+ * (stagedIntents.ts's precheckGroupCommit, via readinessGate.ts's
+ * checkAccretionContentMatch) compares every item stripped from the task
+ * body's pre-groom "### 👁️ Manual verification" section against these texts
+ * before the Ready-flip is allowed to commit — accretion must be
+ * content-verified, not merely recorded. accreteGateContribution itself does
+ * not run that comparison (it has no view of the pre-strip body or the
+ * sibling strip intent); it stays the store-only write the promotion gate
+ * checks against.
+ */
 export interface GateContributionItemInput {
   text: string;
   /** Overrides the batch-level classification for this item only; defaults to it when absent. */
@@ -300,7 +311,16 @@ export interface SeedContributionSourceTask {
   milestone: string;
 }
 
-/** One operational data/config seed (config-change spec) to mint as a seed_item. */
+/**
+ * One operational data/config seed (config-change spec) to mint as a
+ * seed_item. `spec` is also the content-match key: when the caller's
+ * groomingGate entry declares `seedContributionCandidates`, the staged-intent
+ * group-commit precheck (stagedIntents.ts's precheckGroupCommit, via
+ * readinessGate.ts's checkAccretionContentMatch) compares those declared
+ * candidates against these staged specs before the Ready-flip is allowed to
+ * commit, the seed_contribution twin of GateContributionItemInput's
+ * body-derived content-match.
+ */
 export interface SeedContributionItemInput {
   spec: string;
 }
