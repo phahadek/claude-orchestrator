@@ -52,6 +52,7 @@ const SETTING_KEYS = [
   'ops_session_model',
   'ops_session_effort',
   'tier3_classifier_model',
+  'capability_auto_approve_allowlist',
 ] as const satisfies readonly SettingKey[];
 
 type RouteSettingKey = (typeof SETTING_KEYS)[number];
@@ -167,6 +168,9 @@ function applyToRuntime(
     case 'tier3_classifier_model':
       runtimeSettings.tier3_classifier_model = value as string;
       break;
+    case 'capability_auto_approve_allowlist':
+      runtimeSettings.capability_auto_approve_allowlist = value as string[];
+      break;
   }
 }
 
@@ -177,7 +181,9 @@ export function loadRuntimeSettingsFromDb(): void {
   }
 }
 
-function runtimeSettingsAsRecord(): Record<RouteSettingKey, string> {
+function runtimeSettingsAsRecord(): {
+  [K in RouteSettingKey]: Settings[K] extends string[] ? string[] : string;
+} {
   return {
     max_concurrent_code_sessions: String(
       runtimeSettings.max_concurrent_code_sessions,
@@ -235,6 +241,8 @@ function runtimeSettingsAsRecord(): Record<RouteSettingKey, string> {
     ops_session_model: runtimeSettings.ops_session_model,
     ops_session_effort: runtimeSettings.ops_session_effort,
     tier3_classifier_model: runtimeSettings.tier3_classifier_model,
+    capability_auto_approve_allowlist:
+      runtimeSettings.capability_auto_approve_allowlist,
   };
 }
 

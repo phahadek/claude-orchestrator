@@ -39,6 +39,7 @@ const defaultSettings = {
   auto_archive_sweep_interval_minutes: '5',
   large_task_model: '',
   large_task_effort: '',
+  capability_auto_approve_allowlist: ['read:existing-entry'],
 };
 
 function makeFetch(getBody: object = defaultSettings, patchBody: object = {}) {
@@ -503,6 +504,66 @@ describe('Settings — planning/ops model selectors', () => {
 
     expect(screen.getByText('Planning session model')).toBeDefined();
     expect(screen.getByText('Ops session model')).toBeDefined();
+  });
+});
+
+describe('Settings — capability auto-approve allowlist', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', makeFetch());
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn().mockReturnValue(null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+  });
+
+  it('renders the existing allowlist entry as a chip', async () => {
+    render(<Settings />);
+    expect(await screen.findByText('read:existing-entry')).toBeDefined();
+  });
+
+  it('adds a new entry and fires PATCH with the appended array', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByText('read:existing-entry');
+
+    const input = screen.getByPlaceholderText('Add capability string...');
+    fireEvent.change(input, { target: { value: 'read:new-entry' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.stringify(
+            JSON.parse(opts.body as string).capability_auto_approve_allowlist,
+          ) === JSON.stringify(['read:existing-entry', 'read:new-entry']),
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
+
+  it('removes an entry and fires PATCH with the filtered array', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByText('read:existing-entry');
+
+    fireEvent.click(screen.getByLabelText('Remove read:existing-entry'));
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.stringify(
+            JSON.parse(opts.body as string).capability_auto_approve_allowlist,
+          ) === JSON.stringify([]),
+      );
+      expect(patchCall).toBeDefined();
+    });
   });
 });
 

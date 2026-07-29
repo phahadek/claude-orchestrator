@@ -69,6 +69,7 @@ const SettingsSchema = z.object({
   ai_reviewer_usernames: z.array(z.string()),
   bot_comment_deny_list: z.array(z.string()),
   bot_comment_allow_list: z.array(z.string()),
+  capability_auto_approve_allowlist: z.array(z.string()),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -117,6 +118,7 @@ export const SETTING_DEFAULTS: Settings = {
   ai_reviewer_usernames: [],
   bot_comment_deny_list: [],
   bot_comment_allow_list: [],
+  capability_auto_approve_allowlist: [],
 };
 
 function deserializeField<K extends SettingKey>(
