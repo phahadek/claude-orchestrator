@@ -470,6 +470,8 @@ export interface RuntimeSettings {
   session_notify_threshold_seconds: number;
   /** Stuck-session timer: seconds before injecting a pause message. */
   session_pause_threshold_seconds: number;
+  /** Activity-based stall detector: seconds since the last session_events row before a PR's implementing session is classified session_inert. */
+  session_inert_threshold_seconds: number;
   /** After pause, seconds during which a tool_use triggers a hard-stop. */
   session_hard_stop_window_seconds: number;
   /** Auto-merger: seconds between CI status polls while waiting for green. */
@@ -578,6 +580,9 @@ export const runtimeSettings: RuntimeSettings = {
   ),
   session_pause_threshold_seconds: Number(
     process.env.SESSION_PAUSE_THRESHOLD_SECONDS ?? 7200,
+  ),
+  session_inert_threshold_seconds: Number(
+    process.env.SESSION_INERT_THRESHOLD_SECONDS ?? 600,
   ),
   session_hard_stop_window_seconds: Number(
     process.env.SESSION_HARD_STOP_WINDOW_SECONDS ?? 60,

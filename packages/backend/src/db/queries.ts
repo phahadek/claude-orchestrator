@@ -1018,6 +1018,14 @@ export function getLatestSessionEventTimestamp(
   return row?.ts ?? null;
 }
 
+/**
+ * Same underlying signal as getLatestSessionEventTimestamp, named for the
+ * activity-based stall detector: the epoch ms of the session's last
+ * session_events row, or null when it has none (pruned or never emitted —
+ * callers must treat null as "unknown", never as "inert").
+ */
+export const getSessionLastActivityMs = getLatestSessionEventTimestamp;
+
 export function insertEvent(e: NewSessionEvent): void {
   stmtInsertEvent.run({
     message_id: null,

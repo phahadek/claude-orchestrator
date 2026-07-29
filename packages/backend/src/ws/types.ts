@@ -451,7 +451,8 @@ export type ServerMessage =
         | 'pre_review_interrupted'
         | 'conflict_dead_session'
         | 'undelivered_review_feedback'
-        | 'orphaned_no_task_link';
+        | 'orphaned_no_task_link'
+        | 'session_inert';
     };
 
 // ── Client → Server ──────────────────────────────────────────────

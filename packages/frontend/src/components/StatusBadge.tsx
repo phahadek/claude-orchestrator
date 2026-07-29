@@ -20,9 +20,24 @@ interface Props {
   status: string;
   sessionType?: string;
   isRateLimited?: boolean;
+  /** Ms since the session's last session_events row; null/undefined when unknown. */
+  lastActivityAgeMs?: number | null;
 }
 
-export function StatusBadge({ status, sessionType, isRateLimited }: Props) {
+function formatActivityAge(ageMs: number): string {
+  const minutes = Math.floor(ageMs / 60_000);
+  if (minutes < 1) return 'active <1m ago';
+  if (minutes < 60) return `active ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `active ${hours}h ago`;
+}
+
+export function StatusBadge({
+  status,
+  sessionType,
+  isRateLimited,
+  lastActivityAgeMs,
+}: Props) {
   const key = isRateLimited
     ? 'rate_limited'
     : sessionType === 'review'
@@ -35,6 +50,12 @@ export function StatusBadge({ status, sessionType, isRateLimited }: Props) {
   return (
     <span className={`${styles.badge} ${config.className}`}>
       {config.label}
+      {lastActivityAgeMs != null && (
+        <span className={styles['badge-activity-age']}>
+          {' '}
+          · {formatActivityAge(lastActivityAgeMs)}
+        </span>
+      )}
     </span>
   );
 }
