@@ -44,16 +44,29 @@ export function passesGroomDepGate(
 export interface GroomCandidateDeps {
   /** Every task on the same board, keyed by id — used to read each dep's Type+Status. */
   tasksById: Map<string, NotionTask>;
-  /** True when a non-terminal session already handles this task id. */
+  /** True when a non-terminal *standard* session already handles this task id. */
   hasActiveSession: (taskId: string) => boolean;
   /** True while this task id is within its crash-budget cooldown window. */
   inCrashCooldown: (taskId: string) => boolean;
+  /** True while a groom session for this task is still running (not yet parked idle) — blocks unconditionally. */
+  hasRunningGroomSession: (taskId: string) => boolean;
+  /** True while this task has an undispositioned (staged/approved) intent — the parked-idle hold a groom session leaves behind. */
+  hasUndispositionedGroomIntent: (taskId: string) => boolean;
 }
 
 /**
  * A task is a groom candidate when it's still 🔲 Backlog (any Type), no
- * non-terminal session is already handling it, it isn't within its
- * crash-budget cooldown, and every Depends-On clears the groom dep-gate.
+ * non-terminal standard session is already handling it, no groom session is
+ * either still running or parked idle holding an undispositioned intent for
+ * it, it isn't within its crash-budget cooldown, and every Depends-On clears
+ * the groom dep-gate.
+ *
+ * The groom-specific hold is two-part rather than a single "session exists"
+ * check: a running session blocks unconditionally (it hasn't staged
+ * anything an operator could act on yet), while a parked-idle session blocks
+ * only for as long as it holds an undispositioned intent — once the
+ * operator dispositions it, the task re-qualifies immediately rather than
+ * waiting for the session's own resume/park cycle to reach a terminal state.
  */
 export function isGroomCandidate(
   task: NotionTask,
@@ -61,6 +74,8 @@ export function isGroomCandidate(
 ): boolean {
   if (!task.status.includes(BACKLOG_TOKEN)) return false;
   if (deps.hasActiveSession(task.id)) return false;
+  if (deps.hasRunningGroomSession(task.id)) return false;
+  if (deps.hasUndispositionedGroomIntent(task.id)) return false;
   if (deps.inCrashCooldown(task.id)) return false;
   return passesGroomDepGate(task, deps.tasksById);
 }
@@ -68,10 +83,17 @@ export function isGroomCandidate(
 export interface OpsCandidateDeps {
   /** Every task on the same board, keyed by id — feeds the dep-gate's status/title lookup. */
   tasksById: Map<string, NotionTask>;
-  /** True when a non-terminal session already handles this task id. */
+  /** True when a non-terminal *standard* session already handles this task id. */
   hasActiveSession: (taskId: string) => boolean;
   /** True while this task id is within its crash-budget cooldown window. */
   inCrashCooldown: (taskId: string) => boolean;
+  /**
+   * True when a non-terminal (running or parked idle) ops session already
+   * handles this task id. Unlike groom, ops has no undispositioned-intent
+   * nuance: a done gate-verify session is already excluded (it's terminal,
+   * see isGateVerifySession), so a fresh re-verify is never suppressed.
+   */
+  hasActiveOpsSession: (taskId: string) => boolean;
   /** Project id the dep-gate's deploy check runs against (getProjectDeployedSha). */
   projectId: string;
 }
@@ -108,8 +130,9 @@ export async function passesOpsDepGate(
 /**
  * A task is an ops candidate when it's 🗂️ Ready and a 🔧 Operational /
  * 🔎 Investigation / 🧪 Testing Type (per opsLoad's isOpsEligibleType), no
- * non-terminal session already handles it, it isn't within its crash-budget
- * cooldown, and every Depends-On clears the ops dep-gate (Done + deployed).
+ * non-terminal standard or ops session already handles it, it isn't within
+ * its crash-budget cooldown, and every Depends-On clears the ops dep-gate
+ * (Done + deployed).
  */
 export async function isOpsCandidate(
   task: NotionTask,
@@ -118,6 +141,7 @@ export async function isOpsCandidate(
   if (!task.status.includes(READY_TOKEN)) return false;
   if (!isOpsEligibleType(task.type)) return false;
   if (deps.hasActiveSession(task.id)) return false;
+  if (deps.hasActiveOpsSession(task.id)) return false;
   if (deps.inCrashCooldown(task.id)) return false;
   return passesOpsDepGate(task, deps.tasksById, deps.projectId);
 }
@@ -148,19 +172,28 @@ export function passesDesignDepGate(
 export interface DesignCandidateDeps {
   /** Every task on the same board, keyed by id — used to read each dep's Type+Status. */
   tasksById: Map<string, NotionTask>;
-  /** True when a non-terminal session already handles this task id. */
+  /** True when a non-terminal *standard* session already handles this task id. */
   hasActiveSession: (taskId: string) => boolean;
   /** True while this task id is within its crash-budget cooldown window. */
   inCrashCooldown: (taskId: string) => boolean;
+  /**
+   * True when a non-terminal (running or parked idle) design session
+   * already handles this task id. Design has its own terminal lifecycle
+   * (PlanningOrchestrator.markTerminal closes the task via
+   * completeDesignTask on a natural terminal) rather than groom's
+   * undispositioned-intent hold, so a plain non-terminal check is its own
+   * eligibility rule rather than reusing groom's.
+   */
+  hasActiveDesignSession: (taskId: string) => boolean;
   /** Effective getArm(milestone.id, 'design') result — design defaults off. */
   armed: boolean;
 }
 
 /**
  * A task is a design candidate when the design flow is armed, it's 🗂️ Ready
- * and a 📐 Design / 📋 Planning Type, no non-terminal session already
- * handles it, it isn't within its crash-budget cooldown, and every
- * Depends-On clears the design dep-gate.
+ * and a 📐 Design / 📋 Planning Type, no non-terminal standard or design
+ * session already handles it, it isn't within its crash-budget cooldown,
+ * and every Depends-On clears the design dep-gate.
  */
 export function isDesignCandidate(
   task: NotionTask,
@@ -170,6 +203,7 @@ export function isDesignCandidate(
   if (!task.status.includes(READY_TOKEN)) return false;
   if (!isDesignEligibleType(task.type)) return false;
   if (deps.hasActiveSession(task.id)) return false;
+  if (deps.hasActiveDesignSession(task.id)) return false;
   if (deps.inCrashCooldown(task.id)) return false;
   return passesDesignDepGate(task, deps.tasksById);
 }

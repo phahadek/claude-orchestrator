@@ -124,6 +124,9 @@ vi.mock('../../db/queries', () =>
     getPRBySessionId: vi.fn().mockReturnValue(null),
     getStuckResultSessionRows: vi.fn().mockReturnValue([]),
     hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    hasActivePlanningSessionForTask: vi.fn().mockReturnValue(false),
+    hasNonIdlePlanningSessionForTask: vi.fn().mockReturnValue(false),
+    hasUndispositionedStagedIntentForTask: vi.fn().mockReturnValue(false),
     incrementTaskCrashCount: vi.fn().mockReturnValue(1),
     getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
     setSessionPauseReason: vi.fn(),
@@ -216,6 +219,9 @@ import {
   listStagedIntentsBySession,
   applyPendingDone,
   getSessionsWithUnappliedPendingDone,
+  hasActivePlanningSessionForTask,
+  hasNonIdlePlanningSessionForTask,
+  hasUndispositionedStagedIntentForTask,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
@@ -2368,5 +2374,107 @@ describe('findLiveSessionIdForTask — planning session exclusion', () => {
     } as any);
 
     expect(sm.findLiveSessionIdForTask(TASK_ID)).toBe('coding-session-1');
+  });
+});
+
+// ── start() — planning-flow dedup (regression: concurrent groom dispatch) ──
+
+describe('start() — planning-flow dedup', () => {
+  let sm: SessionManager;
+
+  const PLANNING_START_OPTS = {
+    projectId: PROJECT_ID,
+    taskKind: 'milestone' as const,
+    taskName: 'my-task',
+  };
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      mcp_servers: undefined,
+      allowed_tools: [],
+    } as any);
+    // clearAllMocks() clears call history but not implementations set by an
+    // earlier test in this file — reset every planning-dedup predicate to
+    // its "nothing holds this task" default before each test opts in.
+    vi.mocked(hasNonIdlePlanningSessionForTask).mockReturnValue(false);
+    vi.mocked(hasUndispositionedStagedIntentForTask).mockReturnValue(false);
+    vi.mocked(hasActivePlanningSessionForTask).mockReturnValue(false);
+  });
+
+  it('rejects a second groom dispatch for the same task while the first is still running — the observed concurrent 68e8b7f6/c159505c pair', async () => {
+    await sm.start('https://notion.so/task', 'https://notion.so/project', {
+      ...PLANNING_START_OPTS,
+      sessionType: 'groom',
+    });
+    await vi.waitFor(() => expect(vi.mocked(insertSession)).toHaveBeenCalled());
+
+    // Second dispatch tick: a groom session for this task is now running.
+    vi.mocked(hasNonIdlePlanningSessionForTask).mockImplementation(
+      (_taskId, flow) => flow === 'groom',
+    );
+
+    await expect(
+      sm.start('https://notion.so/task', 'https://notion.so/project', {
+        ...PLANNING_START_OPTS,
+        sessionType: 'groom',
+      }),
+    ).rejects.toMatchObject({ alreadyRunning: true });
+  });
+
+  it('rejects a groom dispatch while an idle groom session still holds an undispositioned intent', async () => {
+    vi.mocked(hasUndispositionedStagedIntentForTask).mockReturnValue(true);
+
+    await expect(
+      sm.start('https://notion.so/task', 'https://notion.so/project', {
+        ...PLANNING_START_OPTS,
+        sessionType: 'groom',
+      }),
+    ).rejects.toMatchObject({ alreadyRunning: true });
+  });
+
+  it('admits a groom dispatch once the idle session\'s intents are all dispositioned', async () => {
+    vi.mocked(hasNonIdlePlanningSessionForTask).mockReturnValue(false);
+    vi.mocked(hasUndispositionedStagedIntentForTask).mockReturnValue(false);
+
+    await sm.start('https://notion.so/task', 'https://notion.so/project', {
+      ...PLANNING_START_OPTS,
+      sessionType: 'groom',
+    });
+
+    expect(vi.mocked(insertSession)).toHaveBeenCalled();
+  });
+
+  it.each(['design', 'ops'] as const)(
+    'rejects a second %s dispatch for the same task while a non-terminal %s session already holds it',
+    async (sessionType) => {
+      vi.mocked(hasActivePlanningSessionForTask).mockImplementation(
+        (_taskId, flow) => flow === sessionType,
+      );
+
+      await expect(
+        sm.start('https://notion.so/task', 'https://notion.so/project', {
+          ...PLANNING_START_OPTS,
+          sessionType,
+        }),
+      ).rejects.toMatchObject({ alreadyRunning: true });
+    },
+  );
+
+  it('a done gate-verify ops session does not suppress a fresh ops re-verify dispatch', async () => {
+    // hasActivePlanningSessionForTask already excludes 'done' sessions at the
+    // query layer (see queries.ts) — a fresh ops dispatch for the same task
+    // must not be blocked once the prior verify session is terminal.
+    vi.mocked(hasActivePlanningSessionForTask).mockReturnValue(false);
+
+    await sm.start('https://notion.so/task', 'https://notion.so/project', {
+      ...PLANNING_START_OPTS,
+      sessionType: 'ops',
+    });
+
+    expect(vi.mocked(insertSession)).toHaveBeenCalled();
   });
 });

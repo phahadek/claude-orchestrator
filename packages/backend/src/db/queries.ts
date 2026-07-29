@@ -722,6 +722,58 @@ export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
   return rows.some((row) => normalizeBoardId(row.task_id ?? '') === norm);
 }
 
+/** A planning flow whose dispatch-eligibility predicate needs its own re-dispatch dedup — see planningCandidates.ts. */
+export type DedupedPlanningFlow = 'groom' | 'design' | 'ops';
+
+/**
+ * True if this task has a non-terminal (running OR parked idle) session of
+ * the given planning flow. The flow-parameterised counterpart to
+ * hasActiveSessionForTask, which is standard-session-only and left
+ * unchanged — this is additive so the three planning candidate predicates
+ * (isGroomCandidate/isOpsCandidate/isDesignCandidate) can each dedup against
+ * their own flow's sessions instead of being blind to all of them.
+ */
+export function hasActivePlanningSessionForTask(
+  taskId: string,
+  flow: DedupedPlanningFlow,
+): boolean {
+  const norm = normalizeBoardId(taskId);
+  const rows = db
+    .prepare<{ flow: string }, { task_id: string | null }>(
+      `
+    SELECT task_id FROM sessions
+    WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
+      AND session_type = @flow
+  `,
+    )
+    .all({ flow });
+  return rows.some((row) => normalizeBoardId(row.task_id ?? '') === norm);
+}
+
+/**
+ * True if this task has a session of the given planning flow that is
+ * genuinely still running (not yet parked idle) — used to block re-dispatch
+ * unconditionally while a session is active, before it has staged anything
+ * an operator could disposition (see hasUndispositionedStagedIntentForTask
+ * for the idle-parked half of the same dedup).
+ */
+export function hasNonIdlePlanningSessionForTask(
+  taskId: string,
+  flow: DedupedPlanningFlow,
+): boolean {
+  const norm = normalizeBoardId(taskId);
+  const rows = db
+    .prepare<{ flow: string }, { task_id: string | null }>(
+      `
+    SELECT task_id FROM sessions
+    WHERE status NOT IN ('idle', 'done', 'error', 'killed', 'superseded')
+      AND session_type = @flow
+  `,
+    )
+    .all({ flow });
+  return rows.some((row) => normalizeBoardId(row.task_id ?? '') === norm);
+}
+
 export function hasActiveSessionForTask(taskId: string): boolean {
   const norm = taskId.replace(/-/g, '');
   const row = db
@@ -5228,6 +5280,33 @@ export function hasStagedIntentForTask(taskId: string): boolean {
     `SELECT 1 FROM staged_intent WHERE task_id = @task_id LIMIT 1`,
   );
   return _stmtHasStagedIntentForTask.get({ task_id: taskId }) !== undefined;
+}
+
+let _stmtHasUndispositionedStagedIntentForTask: Database.Statement | null =
+  null;
+
+/**
+ * True if this task has an intent still awaiting operator disposition
+ * (state 'staged' or 'approved' — the same PENDING set PlanningOrchestrator's
+ * isGroupFullyDisposed uses). Unlike hasStagedIntentForTask (any state,
+ * ever), this reflects the *current* hold: it flips false the instant an
+ * operator dispositions the last pending intent, without waiting for the
+ * parked session's next resume/park cycle to reach checkTerminal — that lag
+ * would otherwise leave a task un-groomable for longer than the disposition
+ * itself.
+ */
+export function hasUndispositionedStagedIntentForTask(taskId: string): boolean {
+  _stmtHasUndispositionedStagedIntentForTask ??= db.prepare<{
+    task_id: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE task_id = @task_id AND state IN ('staged', 'approved')
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasUndispositionedStagedIntentForTask.get({ task_id: taskId }) !==
+    undefined
+  );
 }
 
 /**

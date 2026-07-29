@@ -73,6 +73,9 @@ import {
   getStuckResultSessionRows,
   getRunningSessionsWithMergedOrClosedPR,
   hasActiveSessionForTask,
+  hasActivePlanningSessionForTask,
+  hasNonIdlePlanningSessionForTask,
+  hasUndispositionedStagedIntentForTask,
   getOtherRunningSessionsForTask,
   setSessionPauseReason,
   setSessionLastErrorDetail,
@@ -1176,13 +1179,28 @@ export class SessionManager extends EventEmitter {
 
     // Dedup: if a live or DB-active session already exists for this task, return early.
     // This lifts the AutoLauncher guard into SessionManager so every caller benefits.
+    // hasActiveSessionForTask/hasLiveSessionForTask only ever match standard
+    // sessions (findLiveSessionIdForTask deliberately excludes planning
+    // types — see its doc comment) — a groom/design/ops launch needs the
+    // planning-aware equivalent alongside them, mirroring the same
+    // eligibility rule isGroomCandidate/isDesignCandidate/isOpsCandidate use
+    // (planningCandidates.ts) so candidate-scan-time and dispatch-time
+    // dedup never disagree.
     if (countsAgainstConcurrency(sessionType)) {
       const earlyTaskId =
         precomputedTaskId ??
         deriveTaskId(project.taskSource ?? 'notion', taskUrl);
+      const duplicatePlanning =
+        sessionType === 'groom'
+          ? hasNonIdlePlanningSessionForTask(earlyTaskId, 'groom') ||
+            hasUndispositionedStagedIntentForTask(earlyTaskId)
+          : sessionType === 'design' || sessionType === 'ops'
+            ? hasActivePlanningSessionForTask(earlyTaskId, sessionType)
+            : false;
       if (
         this.hasLiveSessionForTask(earlyTaskId) ||
-        hasActiveSessionForTask(earlyTaskId)
+        hasActiveSessionForTask(earlyTaskId) ||
+        duplicatePlanning
       ) {
         const existing = [...this.sessions.values()].find((s) => {
           const tid = s.taskId?.replace(/-/g, '');

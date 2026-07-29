@@ -11,7 +11,10 @@ import {
   getMilestoneById,
   getProjectRowById,
   getTaskCache,
+  hasActivePlanningSessionForTask,
   hasActiveSessionForTask,
+  hasNonIdlePlanningSessionForTask,
+  hasUndispositionedStagedIntentForTask,
   listMilestonesByProject,
   setTaskPauseReason,
 } from '../db/queries';
@@ -177,6 +180,9 @@ export class DispatchTriggerEvaluator {
           isGroomCandidate(task, {
             tasksById,
             hasActiveSession: hasActiveSessionForTask,
+            hasRunningGroomSession: (taskId) =>
+              hasNonIdlePlanningSessionForTask(taskId, 'groom'),
+            hasUndispositionedGroomIntent: hasUndispositionedStagedIntentForTask,
             inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
           })
         ) {
@@ -204,6 +210,8 @@ export class DispatchTriggerEvaluator {
         const candidate = await isOpsCandidate(task, {
           tasksById,
           hasActiveSession: hasActiveSessionForTask,
+          hasActiveOpsSession: (taskId) =>
+            hasActivePlanningSessionForTask(taskId, 'ops'),
           inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
           projectId,
         });
@@ -230,6 +238,8 @@ export class DispatchTriggerEvaluator {
           isDesignCandidate(task, {
             tasksById,
             hasActiveSession: hasActiveSessionForTask,
+            hasActiveDesignSession: (taskId) =>
+              hasActivePlanningSessionForTask(taskId, 'design'),
             inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
             armed,
           })

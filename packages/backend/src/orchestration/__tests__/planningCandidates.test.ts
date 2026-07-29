@@ -72,6 +72,8 @@ describe('isGroomCandidate', () => {
   const baseDeps = {
     tasksById: new Map<string, NotionTask>(),
     hasActiveSession: () => false,
+    hasRunningGroomSession: () => false,
+    hasUndispositionedGroomIntent: () => false,
     inCrashCooldown: () => false,
   };
 
@@ -80,7 +82,7 @@ describe('isGroomCandidate', () => {
     expect(isGroomCandidate(t, baseDeps)).toBe(false);
   });
 
-  it('skips a task with an active session (dedup)', () => {
+  it('skips a task with an active standard session (dedup)', () => {
     const t = task();
     expect(
       isGroomCandidate(t, { ...baseDeps, hasActiveSession: () => true }),
@@ -97,6 +99,34 @@ describe('isGroomCandidate', () => {
   it('accepts a Backlog task with no active session, no cooldown, and a clear dep-gate', () => {
     const t = task();
     expect(isGroomCandidate(t, baseDeps)).toBe(true);
+  });
+
+  it('skips a task with a groom session still running', () => {
+    const t = task();
+    expect(
+      isGroomCandidate(t, { ...baseDeps, hasRunningGroomSession: () => true }),
+    ).toBe(false);
+  });
+
+  it('skips a task with an idle groom session holding at least one undispositioned intent', () => {
+    const t = task();
+    expect(
+      isGroomCandidate(t, {
+        ...baseDeps,
+        hasUndispositionedGroomIntent: () => true,
+      }),
+    ).toBe(false);
+  });
+
+  it('re-qualifies once the idle groom session\'s intents are dispositioned', () => {
+    const t = task();
+    expect(
+      isGroomCandidate(t, {
+        ...baseDeps,
+        hasRunningGroomSession: () => false,
+        hasUndispositionedGroomIntent: () => false,
+      }),
+    ).toBe(true);
   });
 });
 
@@ -134,6 +164,7 @@ describe('isDesignCandidate', () => {
   const baseDeps = {
     tasksById: new Map<string, NotionTask>(),
     hasActiveSession: () => false,
+    hasActiveDesignSession: () => false,
     inCrashCooldown: () => false,
     armed: true,
   };
@@ -163,10 +194,20 @@ describe('isDesignCandidate', () => {
     expect(isDesignCandidate(t, baseDeps)).toBe(false);
   });
 
-  it('skips a task with an active session (dedup)', () => {
+  it('skips a task with an active standard session (dedup)', () => {
     const t = task({ status: '🗂️ Ready', type: '📐 Design' });
     expect(
       isDesignCandidate(t, { ...baseDeps, hasActiveSession: () => true }),
+    ).toBe(false);
+  });
+
+  it('skips a task with an active design session (dedup)', () => {
+    const t = task({ status: '🗂️ Ready', type: '📐 Design' });
+    expect(
+      isDesignCandidate(t, {
+        ...baseDeps,
+        hasActiveDesignSession: () => true,
+      }),
     ).toBe(false);
   });
 
