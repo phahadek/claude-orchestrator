@@ -118,7 +118,7 @@ describe('isGroomCandidate', () => {
     ).toBe(false);
   });
 
-  it('re-qualifies once the idle groom session\'s intents are dispositioned', () => {
+  it("re-qualifies once the idle groom session's intents are dispositioned", () => {
     const t = task();
     expect(
       isGroomCandidate(t, {

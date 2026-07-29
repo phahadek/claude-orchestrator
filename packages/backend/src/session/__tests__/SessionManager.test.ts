@@ -2436,7 +2436,7 @@ describe('start() — planning-flow dedup', () => {
     ).rejects.toMatchObject({ alreadyRunning: true });
   });
 
-  it('admits a groom dispatch once the idle session\'s intents are all dispositioned', async () => {
+  it("admits a groom dispatch once the idle session's intents are all dispositioned", async () => {
     vi.mocked(hasNonIdlePlanningSessionForTask).mockReturnValue(false);
     vi.mocked(hasUndispositionedStagedIntentForTask).mockReturnValue(false);
 

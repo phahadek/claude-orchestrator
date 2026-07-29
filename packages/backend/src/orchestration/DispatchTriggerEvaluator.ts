@@ -182,7 +182,8 @@ export class DispatchTriggerEvaluator {
             hasActiveSession: hasActiveSessionForTask,
             hasRunningGroomSession: (taskId) =>
               hasNonIdlePlanningSessionForTask(taskId, 'groom'),
-            hasUndispositionedGroomIntent: hasUndispositionedStagedIntentForTask,
+            hasUndispositionedGroomIntent:
+              hasUndispositionedStagedIntentForTask,
             inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
           })
         ) {
