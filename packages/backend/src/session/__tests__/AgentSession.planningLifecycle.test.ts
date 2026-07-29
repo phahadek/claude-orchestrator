@@ -22,8 +22,6 @@ vi.mock('../../db/queries', () => ({
   setSessionTags: vi.fn(),
   resetTaskCrashCount: vi.fn(),
   getSession: vi.fn().mockReturnValue(null),
-  setTaskPauseReason: vi.fn(),
-  hasStagedIntentForSession: vi.fn().mockReturnValue(true),
   hasActiveCapabilityRequestForSession: vi.fn().mockReturnValue(false),
 }));
 
@@ -45,7 +43,6 @@ vi.mock('../../tasks/TaskBackend', () => ({
 vi.mock('../../audit/AuditLog', () => ({
   recordEvent: vi.fn(),
   countPushFailureEvents: vi.fn().mockReturnValue(0),
-  countEventsBySessionAndType: vi.fn().mockReturnValue(1),
 }));
 
 vi.mock('../filePollutionCheck', () => ({
@@ -80,12 +77,9 @@ import {
   markSessionIdle,
   markSessionDone,
   getEventsBySession,
-  setTaskPauseReason,
-  hasStagedIntentForSession,
   hasActiveCapabilityRequestForSession,
 } from '../../db/queries';
 import { recoverSession } from '../sessionRecovery';
-import { countEventsBySessionAndType } from '../../audit/AuditLog';
 
 function makeSession(
   sessionType: 'standard' | 'groom' | 'design' | 'ops',
@@ -226,88 +220,5 @@ describe('AgentSession.handleCleanExit — gate-verify session archival', () => 
       null,
     );
     expect(markSessionDone).not.toHaveBeenCalled();
-  });
-});
-
-describe('AgentSession.handleCleanExit — first-turn-empty vs later-turn-empty', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('surfaces needs_attention when the first turn stages nothing', async () => {
-    vi.mocked(countEventsBySessionAndType).mockReturnValue(0); // no prior turn
-    vi.mocked(hasStagedIntentForSession).mockReturnValue(false); // staged nothing
-
-    const session = makeSession('design');
-    const messages: unknown[] = [];
-    session.on('message', (m) => messages.push(m));
-
-    await (
-      session as unknown as { handleCleanExit: () => Promise<void> }
-    ).handleCleanExit();
-
-    expect(setTaskPauseReason).toHaveBeenCalledWith(
-      'task-123',
-      'planning_first_turn_empty',
-      expect.any(String),
-    );
-    expect(messages).toContainEqual(
-      expect.objectContaining({
-        type: 'auto_launch_paused',
-        taskId: 'task-123',
-        reason: 'planning_first_turn_empty',
-      }),
-    );
-    // Still parks into idle — surfacing does not replace the idle transition.
-    expect(markSessionIdle).toHaveBeenCalledWith(
-      'test-session-id',
-      expect.any(Number),
-      null,
-    );
-  });
-
-  it('does not surface when the first turn stages something', async () => {
-    vi.mocked(countEventsBySessionAndType).mockReturnValue(0);
-    vi.mocked(hasStagedIntentForSession).mockReturnValue(true);
-
-    const session = makeSession('groom');
-    const messages: unknown[] = [];
-    session.on('message', (m) => messages.push(m));
-
-    await (
-      session as unknown as { handleCleanExit: () => Promise<void> }
-    ).handleCleanExit();
-
-    expect(setTaskPauseReason).not.toHaveBeenCalled();
-    expect(
-      messages.some(
-        (m) => (m as { type: string }).type === 'auto_launch_paused',
-      ),
-    ).toBe(false);
-  });
-
-  it('does not surface a later turn that stages nothing (natural completion)', async () => {
-    vi.mocked(countEventsBySessionAndType).mockReturnValue(1); // already had a turn
-    vi.mocked(hasStagedIntentForSession).mockReturnValue(false);
-
-    const session = makeSession('design');
-    const messages: unknown[] = [];
-    session.on('message', (m) => messages.push(m));
-
-    await (
-      session as unknown as { handleCleanExit: () => Promise<void> }
-    ).handleCleanExit();
-
-    expect(setTaskPauseReason).not.toHaveBeenCalled();
-    expect(
-      messages.some(
-        (m) => (m as { type: string }).type === 'auto_launch_paused',
-      ),
-    ).toBe(false);
-    expect(markSessionIdle).toHaveBeenCalledWith(
-      'test-session-id',
-      expect.any(Number),
-      null,
-    );
   });
 });

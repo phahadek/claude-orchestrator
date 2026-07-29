@@ -995,7 +995,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'is never the deliverable and is never a valid place to end the turn; a ' +
         'session that ends there has produced nothing an operator can act on, ' +
         'no matter how correct its analysis was. The terminal intent set is ' +
-        'exactly one of two paths, by intent kind: the Ready path stages ' +
+        'exactly one of three paths, by intent kind: the Ready path stages ' +
         '`task.setStatus` (status: "Ready", carrying every `groomingGate` field) ' +
         '+ `task.setDependsOn` (always — the promotion gate requires it even ' +
         'when there are no dependencies, staged as an empty array) + ' +
@@ -1009,7 +1009,19 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'body strip staged separately or ungrouped; the Deferred path stages a ' +
         'single ' +
         '`task.setStatus` (status: "Deferred") carrying a `decisionProposal` ' +
-        'naming why. See the Structured Output Contract below for the ' +
+        'naming why; the third path, `planning.noOp`, is for the rare turn ' +
+        'that reaches terminal with no task-write at all — not "the task is ' +
+        'not ready" (that is Deferred, and always carries a `decisionProposal` ' +
+        'against a specific gap) but "nothing about this task needs a decision ' +
+        'right now" (e.g. a re-dispatch of an already-Ready task with nothing ' +
+        'new to add). Stage `planning.noOp` (`{taskId, reason}`, one line ' +
+        'naming why nothing changed) rather than ending the turn on a chat ' +
+        'write-up or silently parking — a park with nothing staged is ' +
+        'indistinguishable from a session that crashed mid-thought, while a ' +
+        'staged no-op is an auditable, deliberate signal the operator can ' +
+        'see and judge. Reach for Deferred whenever there is a real gap to ' +
+        'name; reach for `planning.noOp` only when there genuinely is none. ' +
+        'See the Structured Output Contract below for the ' +
         'field-level format of every field in each — reaching the right ' +
         'conclusion and not staging it in full is the same failure as reaching ' +
         'no conclusion at all.',
@@ -1204,11 +1216,15 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
       groom:
         'A dispatched groom session never applies a write itself — it only ' +
         'stages. The staged intent set (task.setStatus / setProperties / ' +
-        'setDependsOn for the Ready path, or task.setStatus for the Deferred ' +
-        'path) is the terminal action; the operator applies it from the shared ' +
-        'staged-intent display. DO NOT drive the write to applied or wait in ' +
-        'chat for confirmation of an applied result. DO end the turn the ' +
-        'moment it is staged.',
+        'setDependsOn for the Ready path, task.setStatus for the Deferred ' +
+        'path, or planning.noOp for the no-decision-needed path) is the ' +
+        'terminal action; the operator applies the Ready/Deferred paths from ' +
+        'the shared staged-intent display, while a `planning.noOp` needs no ' +
+        'operator disposition at all — it is informational/auditable, ' +
+        'rendered so the operator can see the turn was a deliberate no-op ' +
+        'rather than a silent park. DO NOT drive the write to applied or ' +
+        'wait in chat for confirmation of an applied result. DO end the ' +
+        'turn the moment it is staged.',
       split:
         'A dispatched split session never applies a write itself — it only ' +
         'stages the narrowed-original `task.updateBody`, the sibling ' +

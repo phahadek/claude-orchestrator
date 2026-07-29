@@ -336,6 +336,9 @@ const INTENT_KIND_EXAMPLE_PAYLOADS: Record<string, string> = {
   'intent.withdraw':
     '{"intentId":"<staged-intent-id this session staged>",' +
     '"reason":"<one-line reason this intent should not be applied>"}',
+  'planning.noOp':
+    '{"taskId":"<task-id>",' +
+    '"reason":"<one-line why nothing needs to change right now>"}',
 };
 
 /** Render one `mcp__orchestrator__<kind>` (CLI-sanitized) tool-call example per allowed kind. */

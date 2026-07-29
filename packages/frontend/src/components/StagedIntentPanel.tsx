@@ -613,6 +613,30 @@ function CompletenessDispositionHeadline({ intent }: { intent: StagedIntent }) {
   );
 }
 
+interface NoOpPayload {
+  taskId: string;
+  reason: string;
+}
+
+/**
+ * The deliberate-no-op terminal path: a dispatched planning session's
+ * declaration that it reached terminal with nothing to change. Purely
+ * informational/auditable — no operator disposition is required or offered
+ * for this kind (see the panel's isNoOp guard below), so the operator's only
+ * action is reading the reason.
+ */
+function NoOpHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as NoOpPayload;
+  return (
+    <div className={styles.text} data-testid="staged-intent-no-op">
+      <p>
+        No-op: nothing staged for <strong>{payload.taskId}</strong>
+      </p>
+      <p>Reason: {payload.reason}</p>
+    </div>
+  );
+}
+
 function renderHeadline(intent: StagedIntent): ReactNode {
   switch (intent.kind) {
     case 'completeness.disposition':
@@ -643,6 +667,8 @@ function renderHeadline(intent: StagedIntent): ReactNode {
       return <CapabilityRequestHeadline intent={intent} />;
     case 'journal.setState':
       return <JournalSetStateHeadline intent={intent} />;
+    case 'planning.noOp':
+      return <NoOpHeadline intent={intent} />;
     default:
       return renderFallback(intent.payload);
   }
@@ -697,6 +723,9 @@ export function StagedIntentPanel({
   // writes; there is no separate apply/commit step.
   const isCompletenessDisposition = intent.kind === 'completeness.disposition';
   const skipsApply = isCapabilityRequest || isCompletenessDisposition;
+  // planning.noOp is purely informational/auditable — no operator
+  // disposition (commit/approve/reject) is ever offered for it.
+  const isNoOp = intent.kind === 'planning.noOp';
   const isGrouped = !!intent.groupId;
 
   const handleApply = async (override?: { reason: string }) => {
@@ -809,7 +838,7 @@ export function StagedIntentPanel({
 
       {error && <div className={styles.error}>{error}</div>}
 
-      {hideActions ? null : (
+      {hideActions || isNoOp ? null : (
         <>
           {showOverride && (
             <div className={styles.overrideBox}>

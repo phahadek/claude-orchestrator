@@ -323,6 +323,20 @@ export function registerStageProposalTools(
     async (args) => stage('session.requestCapability', args.payload, ctx, args),
   );
 
+  registerTool(
+    'planning.noOp',
+    {
+      title: 'Stage a deliberate no-op for this task',
+      description:
+        'Stages a planning.noOp intent — a deliberate declaration that this turn reached terminal with nothing to change, distinct from a silent park. Purely informational/auditable: no operator disposition is required or offered for it. Use only when there is genuinely no decision to make (e.g. a re-dispatch of an already-settled task) — if there is a real gap, name it instead (e.g. groom\'s Deferred path).',
+      inputSchema: envelope({
+        taskId: z.string(),
+        reason: z.string(),
+      }),
+    },
+    async (args) => stage('planning.noOp', args.payload, ctx, args),
+  );
+
   // Not routed through `stage()`: unlike every other tool here, this acts
   // immediately on an existing staged intent rather than creating a new one
   // — see withdrawIntent's doc comment in stagedIntents.ts for why this is

@@ -7,6 +7,7 @@ import {
   setPendingApproveTerminal,
   clearPendingApproveTerminal,
   getSessionsWithPendingApproveTerminal,
+  setTaskPauseReason,
 } from '../db/queries';
 import type {
   Session,
@@ -34,6 +35,66 @@ const DESIGN_COMPLETING_REASONS = new Set([
   'planning_approved',
   'planning_no_pending_dispositions',
 ]);
+
+/** The deliberate-no-op marker kind — see stagedIntents.ts's KNOWN_INTENT_KINDS. */
+const NO_OP_INTENT_KIND = 'planning.noOp';
+
+/** The ops_journal disposition kind — a staged transition counts as a decision. */
+const OPS_JOURNAL_INTENT_KIND = 'journal.setState';
+
+/**
+ * Kinds that constitute "staged a decision" for the terminal-no-decision
+ * backstop (checkTerminal below) — every real task-write / arch-write /
+ * gate / seed intent kind a groom or design session can stage. Deliberately
+ * excludes decision.pickOne, session.requestCapability, and
+ * completeness.disposition: those are questions/asks the session raises for
+ * the operator, not decisions it has committed to, so staging one alone must
+ * not mask a session that otherwise never decided anything.
+ * OPS_JOURNAL_INTENT_KIND and NO_OP_INTENT_KIND count as decisions too (see
+ * hasStagedDecision) but are tracked separately since they aren't task-writes.
+ */
+const DECISION_INTENT_KINDS: ReadonlySet<string> = new Set([
+  'task.create',
+  'task.setStatus',
+  'task.setDependsOn',
+  'task.updateBody',
+  'task.patchBodySection',
+  'task.setProperties',
+  'task.setType',
+  'task.archive',
+  'task.move',
+  'gate.accrete',
+  'seed.stage',
+  'arch.createUnit',
+  'arch.updateUnit',
+  'arch.supersedeUnit',
+]);
+
+/**
+ * True once the session has ever staged (any lifecycle state — even a
+ * since-rejected intent still proves the session produced a real decision,
+ * mirroring hasStagedIntentForSession's rationale) at least one intent of a
+ * kind that counts as "staged a decision": a task-write/arch-write/gate/seed
+ * intent, an ops_journal transition, or an explicit no-op marker.
+ */
+function hasStagedDecision(intents: StagedIntentRow[]): boolean {
+  return intents.some(
+    (i) =>
+      DECISION_INTENT_KINDS.has(i.kind) ||
+      i.kind === OPS_JOURNAL_INTENT_KIND ||
+      i.kind === NO_OP_INTENT_KIND,
+  );
+}
+
+/**
+ * The bounded self-correct re-turn nudge sent exactly once (per session) when
+ * a dispatched planning session reaches terminal having staged nothing that
+ * counts as a decision — see checkTerminal's noDecisionNudgeSent guard.
+ */
+const NO_DECISION_NUDGE_MESSAGE =
+  'You reached terminal without staging — stage your decision, or an ' +
+  'explicit no-op (planning.noOp) if nothing needs changing. The chat ' +
+  'write-up is not the deliverable.';
 
 type PlanningDisposition = 'approve' | 'pushback' | 'decline' | 'answer';
 
@@ -91,6 +152,14 @@ export class PlanningOrchestrator {
    * safety net for a session that does exit.
    */
   private pendingApproveTerminal = new Set<string>();
+
+  /**
+   * Sessions that have already received the one bounded terminal-no-decision
+   * nudge (see checkTerminal) — a separate, session-scoped budget from
+   * handlePlanningSessionCrash's task_crash_counts, so the nudge never
+   * double-penalizes a session against the crash budget.
+   */
+  private noDecisionNudgeSent = new Set<string>();
 
   constructor(private sessionManager: SessionManager) {
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
@@ -206,16 +275,60 @@ export class PlanningOrchestrator {
    */
   checkTerminal(sessionId: string): boolean {
     const all = listStagedIntentsBySession(sessionId);
-    const stillPending = all.some((i) => i.state === 'staged');
+    // A staged no-op marker requires no operator disposition, and staging
+    // one is itself the terminal signal rather than "new work" a next turn
+    // must settle — it is excluded from both the pending gate and the
+    // staged-something-new snapshot below, so it never holds a session
+    // pending or non-terminal the way a real task-write would.
+    const countable = all.filter((i) => i.kind !== NO_OP_INTENT_KIND);
+    const stillPending = countable.some((i) => i.state === 'staged');
     const priorCount = this.stagedCountAtResume.get(sessionId) ?? 0;
-    const stagedNothingNew = all.length <= priorCount;
-    const terminal = !stillPending && stagedNothingNew;
-    if (terminal) {
-      this.markTerminal(sessionId, 'planning_no_pending_dispositions');
-    } else {
-      this.stagedCountAtResume.set(sessionId, all.length);
+    const stagedNothingNew = countable.length <= priorCount;
+    const reachedTerminal = !stillPending && stagedNothingNew;
+
+    if (!reachedTerminal) {
+      this.stagedCountAtResume.set(sessionId, countable.length);
+      return false;
     }
-    return terminal;
+
+    if (hasStagedDecision(all)) {
+      this.markTerminal(sessionId, 'planning_no_pending_dispositions');
+      return true;
+    }
+
+    // Terminal with nothing that counts as a staged decision — the backstop
+    // this class exists to close. First occurrence: one bounded self-correct
+    // re-turn nudge, no pause, session stays parked (not terminal). Second
+    // occurrence (the nudge's own re-turn also reached terminal empty):
+    // surface a needs-attention pause reason and let the session go terminal
+    // rather than nudging forever.
+    if (!this.noDecisionNudgeSent.has(sessionId)) {
+      this.noDecisionNudgeSent.add(sessionId);
+      this.stagedCountAtResume.set(sessionId, countable.length);
+      this.sessionManager
+        .enqueueFeedback(
+          sessionId,
+          'planning-terminal-no-decision-nudge',
+          NO_DECISION_NUDGE_MESSAGE,
+        )
+        .catch((err) => {
+          logger.error(
+            `[PlanningOrchestrator] resume failed for session ${sessionId.slice(0, 8)} after terminal-no-decision nudge: ${err}`,
+          );
+        });
+      return false;
+    }
+
+    const row = getSession(sessionId);
+    if (row?.task_id) {
+      setTaskPauseReason(
+        row.task_id,
+        'planning_terminal_no_decision',
+        'Planning session reached terminal with no staged decision, ops journal transition, or explicit no-op — twice, after one self-correct nudge.',
+      );
+    }
+    this.markTerminal(sessionId, 'planning_no_pending_dispositions');
+    return true;
   }
 
   private markTerminal(
@@ -240,6 +353,7 @@ export class PlanningOrchestrator {
       markSessionDone(sessionId, Date.now(), null, reason);
     }
     this.stagedCountAtResume.delete(sessionId);
+    this.noDecisionNudgeSent.delete(sessionId);
     // The normal run().then() cleanup that frees a session's in-memory
     // planning-concurrency slot only fires when its subprocess exits — a
     // session marked terminal here (from the apply path, which can fire
