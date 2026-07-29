@@ -279,6 +279,65 @@ describe('completeness-approval gate on design terminal artifacts', () => {
     ).not.toThrow();
   });
 
+  it('produces a distinct message when the session has a disposition keyed to a different task, vs. none at all', () => {
+    // Baseline: no disposition staged at all.
+    expect(() =>
+      stageIntent(
+        'arch.createUnit',
+        {
+          title: 'A new unit',
+          metadata: { kind: 'invariant', topic: 't', regions: ['r'] },
+          body: 'body',
+        },
+        PROJECT_ID,
+        null,
+        SESSION_ID,
+      ),
+    ).toThrow(/dispositions for this task have not been approved yet/);
+
+    // A committed disposition exists, but it is durably keyed to a
+    // different task than the session's own bound task — the shape a
+    // mis-keyed completeness.disposition would have left behind before the
+    // session/task binding check existed. Insert it directly, bypassing
+    // stageIntent, since the binding check now prevents staging one.
+    const otherTaskId = 'notion:some-other-task';
+    const rowId = insertRow('2026-07-28T00:00:00.000Z');
+    db.prepare(
+      `INSERT INTO staged_intent (id, kind, payload, project_id, state, session_id, created_at, updated_at, payload_hash)
+       VALUES (@id, 'completeness.disposition', @payload, @project_id, 'committed', @session_id, @created_at, @updated_at, @payload_hash)`,
+    ).run({
+      id: 'mismatched-disposition-1',
+      payload: JSON.stringify({
+        taskId: otherTaskId,
+        rowId,
+        project: 'demo',
+        milestone: 'M13',
+        probed: PROBED,
+        questions: QUESTIONS,
+        runAt: '2026-07-28T00:00:00.000Z',
+      }),
+      project_id: PROJECT_ID,
+      session_id: SESSION_ID,
+      created_at: 1,
+      updated_at: 1,
+      payload_hash: 'irrelevant-hash-1',
+    });
+
+    expect(() =>
+      stageIntent(
+        'arch.createUnit',
+        {
+          title: 'A new unit',
+          metadata: { kind: 'invariant', topic: 't', regions: ['r'] },
+          body: 'body',
+        },
+        PROJECT_ID,
+        null,
+        SESSION_ID,
+      ),
+    ).toThrow(/committed completeness\.disposition, but it is keyed to task/);
+  });
+
   it('does not gate a non-design (e.g. groom) session', () => {
     db.prepare('DELETE FROM sessions').run();
     insertSession({

@@ -279,7 +279,10 @@ function hasGroupManualVerificationStrip(
  * session intends to mutate — the set a dispatched session must be bound to
  * its own `sessions.task_id` for. task.create is deliberately excluded: a
  * groom/design session legitimately files sibling and follow-on tasks, and a
- * new task has no id yet to compare.
+ * new task has no id yet to compare. completeness.disposition is included: a
+ * design session's disposition always targets its own bound task, never a
+ * sibling or newly-created one — see the hasGroupTaskCreateForSession carve-out
+ * below, which this kind is deliberately excluded from.
  */
 const SESSION_TASK_BINDING_KINDS: ReadonlySet<string> = new Set([
   'task.updateBody',
@@ -288,6 +291,7 @@ const SESSION_TASK_BINDING_KINDS: ReadonlySet<string> = new Set([
   'task.setProperties',
   'task.setDependsOn',
   'planning.noOp',
+  'completeness.disposition',
 ]);
 
 /**
@@ -358,7 +362,13 @@ function assertSessionTaskBinding(
   if (normalizeTaskId(payloadTaskId) === normalizeTaskId(session.task_id)) {
     return;
   }
-  if (groupId && hasGroupTaskCreateForSession(groupId, sessionId)) return;
+  if (
+    kind !== 'completeness.disposition' &&
+    groupId &&
+    hasGroupTaskCreateForSession(groupId, sessionId)
+  ) {
+    return;
+  }
 
   throw new SessionTaskBindingError(kind, session.task_id, payloadTaskId);
 }
@@ -1331,14 +1341,30 @@ const COMPLETENESS_GATED_KINDS: ReadonlySet<string> = new Set([
  * COMPLETENESS_GATED_KINDS before its bound task's completeness.disposition
  * intent has been approved — tightens DESIGN_TERMINAL_ARTIFACTS_ORDERING
  * from "the critic has run" to "the critic's findings were accepted".
+ *
+ * `mismatchedTaskId`, when set, means the session has at least one
+ * committed completeness.disposition, but none of them are keyed to the
+ * session's own bound task — the stranded-session case a mis-keyed
+ * disposition produces (see SessionTaskBindingError, which now prevents new
+ * ones, but a legacy stranded row can still leave a session in this state).
+ * That case needs a different remedy than "none staged yet": re-running the
+ * critic to get a freshly, correctly-keyed disposition approved, not staging
+ * a first one — so the message must not point back at a remedy already
+ * completed.
  */
 class CompletenessApprovalRequiredError extends Error {
-  constructor(kind: string, taskId: string) {
+  constructor(kind: string, taskId: string, mismatchedTaskId?: string) {
     super(
-      `[stagedIntents] "${kind}" for design task "${taskId}" is blocked: the completeness critic's ` +
-        'dispositions for this task have not been approved yet. Stage a completeness.disposition ' +
-        'intent (if one is not already staged) and get operator approval before staging architecture ' +
-        'or closing-synthesis writes.',
+      mismatchedTaskId
+        ? `[stagedIntents] "${kind}" for design task "${taskId}" is blocked: this session has a ` +
+            `committed completeness.disposition, but it is keyed to task "${mismatchedTaskId}", not ` +
+            `this session's bound task "${taskId}" — re-run the completeness critic to stage a fresh, ` +
+            'correctly-keyed completeness.disposition intent and get operator approval before staging ' +
+            'architecture or closing-synthesis writes.'
+        : `[stagedIntents] "${kind}" for design task "${taskId}" is blocked: the completeness critic's ` +
+            'dispositions for this task have not been approved yet. Stage a completeness.disposition ' +
+            'intent (if one is not already staged) and get operator approval before staging architecture ' +
+            'or closing-synthesis writes.',
     );
     this.name = 'CompletenessApprovalRequiredError';
   }
@@ -1368,6 +1394,7 @@ function assertCompletenessApproval(
   if (!session?.task_id || session.session_type !== 'design') return;
   const taskId = normalizeTaskId(session.task_id);
 
+  let mismatchedTaskId: string | undefined;
   const approved = listStagedIntentsBySession(sessionId).some((row) => {
     if (row.kind !== 'completeness.disposition' || row.state !== 'committed') {
       return false;
@@ -1375,10 +1402,13 @@ function assertCompletenessApproval(
     const payload = JSON.parse(
       row.payload,
     ) as CompletenessDispositionIntentPayload;
-    return normalizeTaskId(payload.taskId) === taskId;
+    const payloadTaskId = normalizeTaskId(payload.taskId);
+    if (payloadTaskId === taskId) return true;
+    mismatchedTaskId = mismatchedTaskId ?? payloadTaskId;
+    return false;
   });
   if (!approved) {
-    throw new CompletenessApprovalRequiredError(kind, taskId);
+    throw new CompletenessApprovalRequiredError(kind, taskId, mismatchedTaskId);
   }
 }
 
