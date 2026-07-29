@@ -41,6 +41,9 @@ export interface BootDeps {
     reconcileInboxAtBoot(): Promise<void>;
     isAlive(sessionId: string): boolean;
   };
+  planningOrchestrator: {
+    reconcilePendingApproveTerminals(): void;
+  };
   stuckSessionMonitor: {
     rehydrate(): void;
   };
@@ -220,6 +223,7 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'session_events_pruner_at_boot',
     'git_config_integrity_check',
     'resume_orphan_sessions',
+    'planning_approve_terminal_reconciliation',
     'stuck_session_monitor_rehydrate',
     'auto_merger_rehydrate',
     'pr_boot_sweep',
@@ -242,6 +246,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'resume_orphan_sessions',
     () => deps.sessionManager.resumeOrphanSessions(),
     { fatalOnError: true },
+  );
+  await tracker.runStep('planning_approve_terminal_reconciliation', () =>
+    deps.planningOrchestrator.reconcilePendingApproveTerminals(),
   );
   await tracker.runStep('stuck_session_monitor_rehydrate', () =>
     deps.stuckSessionMonitor.rehydrate(),

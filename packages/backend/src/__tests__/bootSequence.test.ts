@@ -58,6 +58,9 @@ function makeDeps(): {
     sessionManager: {
       resumeOrphanSessions: vi.fn().mockResolvedValue(undefined),
     },
+    planningOrchestrator: {
+      reconcilePendingApproveTerminals: vi.fn(),
+    },
     stuckSessionMonitor: { rehydrate: vi.fn() },
     autoMerger: { rehydrate: vi.fn() },
     githubClient: {} as never,

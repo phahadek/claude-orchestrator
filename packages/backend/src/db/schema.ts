@@ -1505,4 +1505,21 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // sessions.pending_approve_terminal_at: an approve-driven terminal
+  // transition (PlanningOrchestrator.handleApproveDisposition) that arrives
+  // while the session's turn is still in flight (AgentSession.hasActiveTurn())
+  // is deferred rather than applied immediately. The in-memory
+  // pendingApproveTerminal Set that also tracks this is empty on a fresh
+  // process, so this column is the durable copy a boot-time sweep
+  // (SessionManager.resumeOrphanSessions) reads to apply any deferred
+  // transition that never got its turn-boundary drain (result event or
+  // session_ended) before a restart.
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN pending_approve_terminal_at INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
 }

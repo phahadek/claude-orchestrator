@@ -4,6 +4,9 @@ import {
   listStagedIntentsByGroup,
   listStagedIntentsBySession,
   markSessionDone,
+  setPendingApproveTerminal,
+  clearPendingApproveTerminal,
+  getSessionsWithPendingApproveTerminal,
 } from '../db/queries';
 import type {
   Session,
@@ -65,11 +68,15 @@ export class PlanningOrchestrator {
 
   /**
    * Sessions whose mandate-complete approval landed while a turn was still
-   * in flight (e.g. the session was resumed by a concurrent capability
-   * grant). markTerminal is deferred rather than dropped — applying it here
-   * would race the live turn, but forgetting it would park the session
-   * forever. Applied on the next session_ended for that id, whatever its
-   * status.
+   * in flight (AgentSession.hasActiveTurn(), e.g. the session was resumed by
+   * a concurrent capability grant). markTerminal is deferred rather than
+   * dropped — applying it here would race the live turn, but forgetting it
+   * would park the session forever. Mirrored to the durable
+   * pending_approve_terminal_at column (setPendingApproveTerminal) so a
+   * backend restart before the drain fires doesn't lose it — see
+   * SessionManager.resumeOrphanSessions' boot-time sweep. Applied on the
+   * turn-boundary result event for that session, or on session_ended as a
+   * safety net for a session that does exit.
    */
   private pendingApproveTerminal = new Set<string>();
 
@@ -78,6 +85,14 @@ export class PlanningOrchestrator {
   }
 
   private onMessage(msg: ServerMessage): void {
+    // Turn-boundary signal: fires the instant a turn's result event is
+    // processed, whether the session then parks alive (the normal resting
+    // state for a dispatched planning session, status stays 'running') or
+    // exits — unlike session_ended, which only fires on actual process exit.
+    if (msg.type === 'session_event' && msg.eventType === 'result') {
+      this.applyPendingApproveTerminal(msg.sessionId);
+      return;
+    }
     if (msg.type !== 'session_ended') return;
     if (this.applyPendingApproveTerminal(msg.sessionId)) return;
     if (msg.status !== 'idle') return;
@@ -88,8 +103,35 @@ export class PlanningOrchestrator {
   private applyPendingApproveTerminal(sessionId: string): boolean {
     if (!this.pendingApproveTerminal.has(sessionId)) return false;
     this.pendingApproveTerminal.delete(sessionId);
-    this.markTerminal(sessionId, 'planning_approved');
+    clearPendingApproveTerminal(sessionId);
+    // The turn that was in flight when this was deferred has now ended (this
+    // is only reached from the turn-boundary result event or session_ended),
+    // so skipInFlightGuard is safe even though the session's DB status may
+    // still read 'running' — its normal resting state while parked alive.
+    this.markTerminal(sessionId, 'planning_approved', {
+      skipInFlightGuard: true,
+    });
     return true;
+  }
+
+  /**
+   * Boot-time backstop for pendingApproveTerminal: a deferred
+   * approve-terminal transition that was durably recorded
+   * (pending_approve_terminal_at) but never reached its turn-boundary drain
+   * — e.g. the backend restarted between the defer and the session's
+   * result/session_ended message. No live process exists yet for any
+   * session this early in boot, so the turn that was in flight when this was
+   * deferred has certainly ended by now; apply it unconditionally rather
+   * than leaving the row stranded at status='running' forever.
+   */
+  reconcilePendingApproveTerminals(): void {
+    for (const row of getSessionsWithPendingApproveTerminal()) {
+      this.pendingApproveTerminal.delete(row.session_id);
+      clearPendingApproveTerminal(row.session_id);
+      this.markTerminal(row.session_id, 'planning_approved', {
+        skipInFlightGuard: true,
+      });
+    }
   }
 
   /**
@@ -164,7 +206,11 @@ export class PlanningOrchestrator {
     return terminal;
   }
 
-  private markTerminal(sessionId: string, reason: string): void {
+  private markTerminal(
+    sessionId: string,
+    reason: string,
+    opts?: { skipInFlightGuard?: boolean },
+  ): void {
     const row = getSession(sessionId);
     if (!row) return;
     if (row.status === 'done') {
@@ -176,7 +222,11 @@ export class PlanningOrchestrator {
       this.sessionManager.endSession(sessionId);
       return;
     }
-    markSessionDone(sessionId, Date.now(), null, reason);
+    if (opts) {
+      markSessionDone(sessionId, Date.now(), null, reason, opts);
+    } else {
+      markSessionDone(sessionId, Date.now(), null, reason);
+    }
     this.stagedCountAtResume.delete(sessionId);
     // The normal run().then() cleanup that frees a session's in-memory
     // planning-concurrency slot only fires when its subprocess exits — a
@@ -331,12 +381,16 @@ export class PlanningOrchestrator {
    * nothing new, which is a different question from "does this approval
    * itself warrant a resume" (it never does).
    *
-   * A concurrent path (e.g. a capability-grant resume) can have the session
-   * mid-turn ('running') by the time this settles — the mandate having
-   * completed does not mean the session is between turns. Marking terminal
-   * underneath a live turn would stop it out from under itself while it
-   * keeps emitting events, so the transition is deferred to the turn's next
-   * session_ended instead of applied immediately.
+   * A concurrent path (e.g. a capability-grant resume) can have the
+   * session's turn genuinely in flight (AgentSession.hasActiveTurn()) by the
+   * time this settles — the mandate having completed does not mean the
+   * session is between turns. Marking terminal underneath a live turn would
+   * stop it out from under itself while it keeps emitting events, so the
+   * transition is deferred to the turn's next boundary instead of applied
+   * immediately. Note this is deliberately NOT session.status === 'running'
+   * — that is the normal resting state for a dispatched planning session
+   * parked alive between turns, not a turn-in-flight signal, so it would
+   * defer almost every approval rather than only the rare mid-turn one.
    */
   private async handleApproveDisposition(
     sessionId: string,
@@ -349,16 +403,22 @@ export class PlanningOrchestrator {
     );
     if (stillPending) return;
 
-    const row = getSession(sessionId);
-    if (row?.status === 'running') {
+    const liveSession = this.sessionManager.getLiveSession(sessionId);
+    if (liveSession?.hasActiveTurn()) {
       this.pendingApproveTerminal.add(sessionId);
+      setPendingApproveTerminal(sessionId, Date.now());
       logger.info(
         `[PlanningOrchestrator] ${sessionId.slice(0, 8)} approval complete but turn is in flight — deferring terminal transition`,
       );
       return;
     }
 
-    this.markTerminal(sessionId, 'planning_approved');
+    // hasActiveTurn() has already confirmed no turn is in flight, so it's
+    // safe to skip markSessionDone's own in-flight guard even though the
+    // session's DB status may still read 'running'.
+    this.markTerminal(sessionId, 'planning_approved', {
+      skipInFlightGuard: true,
+    });
   }
 
   /**

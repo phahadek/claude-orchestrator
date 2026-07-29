@@ -509,6 +509,7 @@ configureGateVerification({
 void runBootSequence({
   jsonlReader,
   sessionManager,
+  planningOrchestrator,
   stuckSessionMonitor,
   autoMerger,
   githubClient,

@@ -43,6 +43,9 @@ function makeDeps(
     sessionManager: {
       resumeOrphanSessions: vi.fn().mockResolvedValue(undefined),
     },
+    planningOrchestrator: {
+      reconcilePendingApproveTerminals: vi.fn(),
+    },
     stuckSessionMonitor: {
       rehydrate: vi.fn(),
     },
