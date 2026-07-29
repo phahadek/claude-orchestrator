@@ -73,10 +73,9 @@ describe('GET /api/gate/trust-rate', () => {
       '/api/gate/trust-rate?project=proj-1&milestone=M12&flow=groom',
     );
 
-    expect(milestoneResolverMock.resolveMilestoneForProject).toHaveBeenCalledWith(
-      'proj-1',
-      'M12',
-    );
+    expect(
+      milestoneResolverMock.resolveMilestoneForProject,
+    ).toHaveBeenCalledWith('proj-1', 'M12');
     expect(queriesMock.getFlowRejectionRate).toHaveBeenCalledWith(
       'proj-1',
       'M12',

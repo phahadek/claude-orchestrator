@@ -5690,7 +5690,10 @@ export function getFlowRejectionRate(
           AND e.disposition IN ('pass', 'fail', 'needs-setup')
       `,
       )
-      .get(project, milestone) as { rejected: number | null; total: number | null };
+      .get(project, milestone) as {
+      rejected: number | null;
+      total: number | null;
+    };
     const total = row.total ?? 0;
     const rejected = row.rejected ?? 0;
     return {

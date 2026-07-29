@@ -237,7 +237,8 @@ export function appendEvent(gateItemId: string, event: GateItemEvent): void {
     filed_followon: event.filedFollowon ?? null,
     deploy_sha: event.deploySha ?? null,
     operator: event.operator ?? null,
-    unattended: event.unattended === undefined ? null : event.unattended ? 1 : 0,
+    unattended:
+      event.unattended === undefined ? null : event.unattended ? 1 : 0,
     at: event.at,
   });
   touchGateItemUpdatedAt(gateItemId, event.at);

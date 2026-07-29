@@ -475,8 +475,7 @@ export function createGateStateRouter(): Router {
       typeof req.query.project === 'string' ? req.query.project : null;
     const milestone =
       typeof req.query.milestone === 'string' ? req.query.milestone : null;
-    const flow =
-      typeof req.query.flow === 'string' ? req.query.flow : null;
+    const flow = typeof req.query.flow === 'string' ? req.query.flow : null;
     if (!project || !milestone || !flow) {
       res
         .status(400)
@@ -490,10 +489,7 @@ export function createGateStateRouter(): Router {
       return;
     }
     try {
-      const canonicalMilestone = resolveMilestoneForProject(
-        project,
-        milestone,
-      );
+      const canonicalMilestone = resolveMilestoneForProject(project, milestone);
       res.json(
         getFlowRejectionRate(
           project,
