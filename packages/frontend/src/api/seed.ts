@@ -40,6 +40,8 @@ interface SeedBlockingItem {
 export interface SeedReadiness {
   status: 'green' | 'blocked';
   blocking: SeedBlockingItem[];
+  /** The milestone's full per-state item totals, independent of any table filter. */
+  counts: Record<string, number>;
 }
 
 export interface SeedMilestoneReadiness {
@@ -55,6 +57,7 @@ export interface ListSeedItemsParams {
   state?: string;
   page?: number;
   limit?: number;
+  order?: 'not-done-first';
 }
 
 export interface ListSeedItemsResult {

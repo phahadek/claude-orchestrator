@@ -80,6 +80,19 @@ describe('getSeedReadiness', () => {
     makeItem({ milestone: 'M13' });
     expect(getSeedReadiness('M12').status).toBe('green');
   });
+
+  it('returns per-state counts summing to the milestone item total', () => {
+    const confirmed = makeItem({ spec: 'a' });
+    makeItem({ spec: 'b' });
+    appendSeedItemEvent(confirmed.id, { outcome: 'applied' });
+    appendSeedItemEvent(confirmed.id, { outcome: 'confirmed' });
+
+    const readiness = getSeedReadiness('M12');
+    expect(readiness.counts).toEqual({ confirmed: 1, pending: 1 });
+    expect(Object.values(readiness.counts).reduce((sum, n) => sum + n, 0)).toBe(
+      2,
+    );
+  });
 });
 
 describe('nextApplyableSeedItems', () => {
@@ -232,6 +245,16 @@ describe('listSeedItems', () => {
     }
     const result = listSeedItems({ limit: 10000 });
     expect(result.items).toHaveLength(3);
+  });
+
+  it('order: not-done-first sorts unconfirmed seeds ahead of confirmed ones', () => {
+    const confirmed = makeItem({ spec: 'confirmed' });
+    const pending = makeItem({ spec: 'pending' });
+    appendSeedItemEvent(confirmed.id, { outcome: 'applied' });
+    appendSeedItemEvent(confirmed.id, { outcome: 'confirmed' });
+
+    const result = listSeedItems({ order: 'not-done-first' });
+    expect(result.items.map((i) => i.id)).toEqual([pending.id, confirmed.id]);
   });
 });
 

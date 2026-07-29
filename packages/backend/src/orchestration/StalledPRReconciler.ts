@@ -14,6 +14,9 @@ import {
   clearTerminalPRFlags,
   countUndeliveredInboxItems,
   updateMergeState,
+  lookupSessionByBranch,
+  linkPRTaskAndSession,
+  setPendingPush,
 } from '../db/queries';
 import { parsePauseReason } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
@@ -38,9 +41,11 @@ const DEFAULT_RETRY_CAP = 2;
  *  - incomplete_verdict: verdict=incomplete with head_sha unchanged → re-enqueue review
  *  - errored_review_session: review session is error/killed → clear stale session ID and
  *    spawn a fresh review (sidesteps SessionManager's terminal-session refuse)
- *  - gate_failed: autofix_failed/verify_failed with no pending push → relaunch the
- *    coding fixer on the PR's existing branch (re-reviewing is futile when the
- *    implementing session is dead — nobody receives the gate-failure feedback)
+ *  - gate_failed: autofix_failed/verify_failed → relaunch the coding fixer on
+ *    the PR's existing branch (re-reviewing is futile when the implementing
+ *    session is dead — nobody receives the gate-failure feedback). If a
+ *    pending push is stuck on the PR, consume it and re-drive a fresh review
+ *    instead — that push is new content the failed gate never evaluated.
  *  - conflict_dead_session: merge conflict/blocked with a dead implementing
  *    session → relaunch the coding fixer with a rebase prompt
  *
@@ -235,22 +240,29 @@ export class StalledPRReconciler {
       return false;
     }
 
-    const newCount = incrementStalledPRRetryCount(prNumber, repo);
-    const project = getProjectByGithubRepo(repo);
-    const session = sessionId ? getSession(sessionId) : null;
-
-    logger.info(
-      `[StalledPRReconciler] PR #${prNumber} (${repo}): re-driving kind=${kind} (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP})`,
-    );
-
-    recordEvent({
-      event_type: 'stalled_pr_reconcile_attempt',
-      actor_type: 'system',
-      actor_id: null,
-      project_id: project?.id ?? null,
-      task_id: taskId ?? null,
-      payload: { pr_number: prNumber, repo, kind, attempt: newCount },
-    });
+    let effectiveTaskId = taskId;
+    let effectiveSessionId = sessionId;
+    if (!effectiveTaskId) {
+      const derived = pr.head_branch
+        ? lookupSessionByBranch(pr.head_branch)
+        : null;
+      if (derived?.task_id) {
+        effectiveTaskId = derived.task_id;
+        effectiveSessionId = effectiveSessionId ?? derived.session_id;
+        linkPRTaskAndSession(
+          prNumber,
+          repo,
+          derived.task_id,
+          derived.session_id,
+        );
+        logger.info(
+          `[StalledPRReconciler] PR #${prNumber} (${repo}): re-derived task_id ${derived.task_id} from head_branch "${pr.head_branch}"`,
+        );
+      } else {
+        this.escalateOrphaned(prNumber, repo);
+        return true;
+      }
+    }
 
     if (
       kind === 'errored_review_session' ||
@@ -272,15 +284,82 @@ export class StalledPRReconciler {
       setPauseReason(prNumber, repo, null);
     }
 
-    this.reviewOrchestrator.enqueueReview({
+    const project = getProjectByGithubRepo(repo);
+    const session = effectiveSessionId ? getSession(effectiveSessionId) : null;
+
+    const queued = this.reviewOrchestrator.enqueueReview({
       prNumber,
       repo,
-      taskId: taskId ?? '',
+      taskId: effectiveTaskId,
       taskUrl: session?.task_url ?? '',
       contextUrl: project?.contextUrl ?? '',
     });
 
+    if (!queued) {
+      logger.warn(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): enqueueReview declined to queue (kind=${kind}) — not counting as an attempt`,
+      );
+      return false;
+    }
+
+    const newCount = incrementStalledPRRetryCount(prNumber, repo);
+
+    logger.info(
+      `[StalledPRReconciler] PR #${prNumber} (${repo}): re-driving kind=${kind} (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP})`,
+    );
+
+    recordEvent({
+      event_type: 'stalled_pr_reconcile_attempt',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: project?.id ?? null,
+      task_id: effectiveTaskId,
+      payload: { pr_number: prNumber, repo, kind, attempt: newCount },
+    });
+
     return true;
+  }
+
+  /**
+   * Escalates a PR whose task_id is null and could not be re-derived from
+   * head_branch. Reported immediately (never after burning retry attempts on
+   * a re-drive that enqueueReview would silently no-op) with an honest
+   * "orphaned" reason distinct from a retry-cap exhaustion.
+   */
+  private escalateOrphaned(prNumber: number, repo: string): void {
+    const project = getProjectByGithubRepo(repo);
+
+    logger.warn(
+      `[StalledPRReconciler] PR #${prNumber} (${repo}): escalating as orphaned — task_id is null and could not be re-derived from head_branch`,
+    );
+
+    setPauseReason(
+      prNumber,
+      repo,
+      'stalled_reconcile_cap',
+      'orphaned — no task link (task_id null, re-derivation from head_branch failed)',
+    );
+
+    recordEvent({
+      event_type: 'stalled_pr_escalated',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: project?.id ?? null,
+      task_id: null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        kind: 'orphaned_no_task_link',
+        retryCount: 0,
+      },
+    });
+
+    this.broadcast({
+      type: 'pr_stalled_escalated',
+      prNumber,
+      repo,
+      kind: 'orphaned_no_task_link',
+    });
   }
 
   /**
@@ -298,6 +377,9 @@ export class StalledPRReconciler {
     const { pr_number: prNumber, repo } = pr;
 
     if (kind === 'gate_failed') {
+      if (pr.pending_push) {
+        return this.reDriveViaPendingPushConsume(pr);
+      }
       const pushed = await this.reDriveIfPushDetected(pr);
       if (pushed !== null) return pushed;
     }
@@ -394,6 +476,61 @@ export class StalledPRReconciler {
     });
 
     return this.sessionManager.redeliverUndeliveredFeedback(pr.session_id);
+  }
+
+  /**
+   * gate_failed with pending_push=1: content arrived before the initial review
+   * session was established (db.ts:278) and the gate failed without ever
+   * seeing it. ReviewOrchestrator.consumePendingPushIfSet no-ops in this case
+   * (it requires a live session_id to notify), so the flag is left stuck and
+   * the normal push-detected path never fires. Consume it here and re-drive
+   * the pipeline directly — the pending push is new content the failed gate
+   * hasn't evaluated, so a fresh review (not a fixer relaunch) is the correct
+   * re-drive.
+   */
+  private reDriveViaPendingPushConsume(pr: PullRequestRow): boolean {
+    const { pr_number: prNumber, repo } = pr;
+
+    if (!this.reviewOrchestrator) {
+      logger.warn(
+        `[StalledPRReconciler] reviewOrchestrator not set — cannot re-drive pending_push for PR #${prNumber}`,
+      );
+      return false;
+    }
+
+    const newCount = incrementStalledPRRetryCount(prNumber, repo);
+    const project = getProjectByGithubRepo(repo);
+
+    logger.info(
+      `[StalledPRReconciler] PR #${prNumber} (${repo}): consuming stuck pending_push and re-driving gate_failed pipeline (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP})`,
+    );
+
+    recordEvent({
+      event_type: 'stalled_pr_reconcile_attempt',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: project?.id ?? null,
+      task_id: pr.task_id ?? null,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        kind: 'gate_failed_pending_push',
+        attempt: newCount,
+      },
+    });
+
+    setPendingPush(prNumber, repo, 0);
+
+    const session = pr.session_id ? getSession(pr.session_id) : null;
+    this.reviewOrchestrator.enqueueReview({
+      prNumber,
+      repo,
+      taskId: pr.task_id ?? '',
+      taskUrl: session?.task_url ?? '',
+      contextUrl: project?.contextUrl ?? '',
+    });
+
+    return true;
   }
 
   /**

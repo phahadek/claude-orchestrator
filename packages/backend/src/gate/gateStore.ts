@@ -11,6 +11,7 @@ import {
   insertGateItem,
   updateGateItem,
   updateGateItemMinDeployedCommit,
+  touchGateItemUpdatedAt,
   listGateItemSources,
   insertGateItemSource,
   listGateItemEvents,
@@ -19,10 +20,11 @@ import {
   rehomeGateItemsBySourceTask,
   getGateAccretion,
   upsertGateAccretion,
+  deleteGateContribution,
   listGateItemIdsBySourceTask,
   listUnfilledGateItemSourceTaskIds,
 } from '../db/queries';
-import type { GateItemFilter } from '../db/queries';
+import type { GateItemFilter, GateItemListOrder } from '../db/queries';
 import type {
   GateItemClassification,
   GateAccretionDecision,
@@ -37,7 +39,8 @@ export interface GateItemSource {
 }
 
 export interface GateItemEvent {
-  disposition: string;
+  /** Absent for a pure log entry — evidence recorded without advancing state. */
+  disposition?: string;
   evidence?: unknown;
   filedFollowon?: string;
   deploySha?: string;
@@ -93,7 +96,7 @@ export function getItem(id: string): GateItem | undefined {
       addedAt: s.added_at,
     })),
     events: listGateItemEvents(row.id).map((e) => ({
-      disposition: e.disposition,
+      disposition: e.disposition ?? undefined,
       evidence: parseJson(e.evidence),
       filedFollowon: e.filed_followon ?? undefined,
       deploySha: e.deploy_sha ?? undefined,
@@ -158,8 +161,9 @@ export function listFiltered(
   filter: GateItemFilter,
   limit: number,
   offset: number,
+  order?: GateItemListOrder,
 ): ListFilteredResult {
-  const items = listGateItemsFiltered(filter, limit, offset)
+  const items = listGateItemsFiltered(filter, limit, offset, order)
     .map((row) => getItem(row.id))
     .filter((item): item is GateItem => item !== undefined);
   const total = countGateItemsFiltered(filter);
@@ -225,13 +229,14 @@ export function appendEvent(gateItemId: string, event: GateItemEvent): void {
   }
   insertGateItemEvent({
     gate_item_id: gateItemId,
-    disposition: event.disposition,
+    disposition: event.disposition ?? null,
     evidence: stringifyJson(event.evidence),
     filed_followon: event.filedFollowon ?? null,
     deploy_sha: event.deploySha ?? null,
     operator: event.operator ?? null,
     at: event.at,
   });
+  touchGateItemUpdatedAt(gateItemId, event.at);
   recordEvent({
     event_type: 'gate_item_event_appended',
     actor_type: 'system',
@@ -272,18 +277,27 @@ const VALID_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Read-Only',
   'Prod-Mutating',
   'Opportunistic',
+  'Human-Observation',
+  // A verifier's self-correction proposal (see gateService's
+  // proposeGateItemReclassification) may hand an item back to needs-triage
+  // when it cannot tell what tier fits — the human /gate reclassify step
+  // never targets this itself, but this store-level primitive is shared.
+  'needs-triage',
 ]);
 
 /**
  * Triages a `needs-triage` (or any) item into one of the resolved tiers —
- * the /gate skill's reclassify step. Refuses to set `needs-triage` back:
- * that state is only ever a default at insert time, never a target.
+ * the /gate skill's reclassify step, and a gate-verify session's
+ * self-correction proposal (gateService.proposeGateItemReclassification).
+ * `evidenceExtra` merges additional fields (e.g. a verifier's `reason`) into
+ * the recorded event's evidence alongside the standard {from, to}.
  */
 export function setClassification(
   gateItemId: string,
   classification: GateItemClassification,
   updatedAt: string,
   operator?: string,
+  evidenceExtra?: Record<string, unknown>,
 ): GateItem {
   if (!VALID_RECLASSIFY_TARGETS.has(classification)) {
     throw new Error(
@@ -303,7 +317,7 @@ export function setClassification(
   insertGateItemEvent({
     gate_item_id: gateItemId,
     disposition: 'reclassified',
-    evidence: stringifyJson({ from, to: classification }),
+    evidence: stringifyJson({ from, to: classification, ...evidenceExtra }),
     filed_followon: null,
     deploy_sha: null,
     operator: operator ?? null,
@@ -466,6 +480,13 @@ export interface GateAccretionMarker {
   project: string;
   milestone: string;
   decision: GateAccretionDecision;
+  /**
+   * The groomer's substantive reason for a bare 'none'/'n/a' decision — the
+   * judgement that the change's behaviour was assessed and found to have
+   * nothing runtime-observable, tied to the change rather than to the state
+   * of the pre-groom body section. Absent for an 'items' decision.
+   */
+  reason?: string;
   accretedAt: string;
 }
 
@@ -480,6 +501,7 @@ export function getAccretionMarker(
     project: row.project,
     milestone: row.milestone,
     decision: row.decision,
+    reason: row.reason ?? undefined,
     accretedAt: row.accreted_at,
   };
 }
@@ -497,6 +519,20 @@ export function recordAccretionMarker(marker: GateAccretionMarker): void {
     project: marker.project,
     milestone: marker.milestone,
     decision: marker.decision,
+    reason: marker.reason ?? null,
     accreted_at: marker.accretedAt,
   });
+}
+
+/**
+ * Undoes a completed accretion (the minted gate_item rows and the
+ * gate_accretion marker) — the rollback half of insertItem +
+ * recordAccretionMarker, used when a later step of an atomic Ready-flip
+ * transaction fails after gate accretion already committed.
+ */
+export function rollbackContribution(
+  itemIds: string[],
+  sourceTaskId: string,
+): void {
+  deleteGateContribution(itemIds, sourceTaskId);
 }

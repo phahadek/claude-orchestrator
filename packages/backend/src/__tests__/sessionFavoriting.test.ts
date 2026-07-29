@@ -30,6 +30,7 @@ describe('runMigrations() — favorited column', () => {
 // ── AC: PATCH /api/sessions/:id/favorite and /unfavorite endpoints ─────────
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   getSession: vi.fn(),
   getActiveSessions: vi.fn(() => []),
   getArchivedSessions: vi.fn(() => []),

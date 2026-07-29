@@ -32,7 +32,6 @@ function makeCorporateMode(enabled: boolean) {
       requireHumanApproval: enabled,
       requireZDR: enabled,
       validatePRBody: enabled,
-      secretsViaSeam: enabled,
     },
   };
 }

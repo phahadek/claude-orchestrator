@@ -35,9 +35,11 @@ vi.mock('child_process', () => ({
   }),
   execSync: vi.fn(() => 'claude'),
   execFile: vi.fn(),
+  exec: vi.fn(),
 }));
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   upsertSessionEvent: vi.fn(() => 1),
   updateSessionStatus: vi.fn(),
   markSessionDone: vi.fn(),
@@ -56,13 +58,15 @@ vi.mock('../db/queries', () => ({
   setPauseReason: vi.fn(),
   getProjectRowById: vi.fn(() => null),
   insertLocalBranch: vi.fn(),
+  TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
 }));
 
 vi.mock('../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
 vi.mock('../routes/tasks', () => ({ emitTaskUpdated: vi.fn() }));
 
 import { AgentSession } from '../session/AgentSession';
-import { writeMcpConfig } from '../session/SessionManager';
+import { writeMcpConfig, mcpConfigDir } from '../session/SessionManager';
+import { _resetStageCredentialsForTesting } from '../auth/SessionStageAuth';
 import type { TaskBackend } from '../tasks/TaskBackend';
 
 function fakeBackend(): TaskBackend {
@@ -81,43 +85,74 @@ describe('writeMcpConfig', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-config-'));
+    process.env.MCP_CONFIG_DIR = tmpDir;
+    _resetStageCredentialsForTesting();
   });
 
   afterEach(() => {
+    delete process.env.MCP_CONFIG_DIR;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('writes orchestrator-mcp.json with mcpServers when mcp_servers is non-empty', () => {
+  it('merges the orchestrator MCP entry with per-project mcp_servers when non-empty', () => {
     const mcpServers = {
       github: { type: 'http', url: 'https://api.githubcopilot.com/mcp/' },
     };
-    const filePath = writeMcpConfig(tmpDir, mcpServers);
-    expect(filePath).toBe(
-      path.join(tmpDir, '.claude', 'orchestrator-mcp.json'),
-    );
-    const written = JSON.parse(fs.readFileSync(filePath!, 'utf-8'));
-    expect(written).toEqual({ mcpServers });
+    const filePath = writeMcpConfig(tmpDir, 'session-1', mcpServers);
+    expect(filePath).toBe(path.join(mcpConfigDir(), 'session-1.mcp.json'));
+    expect(filePath.startsWith(tmpDir)).toBe(true);
+    const written = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    expect(written.mcpServers.github).toEqual(mcpServers.github);
+    expect(written.mcpServers.orchestrator).toMatchObject({
+      type: 'http',
+      url: expect.stringContaining('/api/mcp'),
+      headers: { Authorization: expect.stringMatching(/^Bearer .+/) },
+    });
   });
 
-  it('returns undefined when mcp_servers is undefined', () => {
-    const filePath = writeMcpConfig(tmpDir, undefined);
-    expect(filePath).toBeUndefined();
+  it('writes just the orchestrator MCP entry when mcp_servers is undefined', () => {
+    const filePath = writeMcpConfig(tmpDir, 'session-2', undefined);
+    const written = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    expect(Object.keys(written.mcpServers)).toEqual(['orchestrator']);
+  });
+
+  it('writes just the orchestrator MCP entry when mcp_servers is an empty object', () => {
+    const filePath = writeMcpConfig(tmpDir, 'session-3', {});
+    const written = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    expect(Object.keys(written.mcpServers)).toEqual(['orchestrator']);
+  });
+
+  it('creates the mcp config directory if it does not exist', () => {
+    const mcpServers = { notion: { type: 'stdio', command: 'npx' } };
+    writeMcpConfig(tmpDir, 'session-4', mcpServers);
+    expect(fs.existsSync(path.join(mcpConfigDir(), 'session-4.mcp.json'))).toBe(
+      true,
+    );
+  });
+
+  it('never writes the per-session MCP config under the project checkout', () => {
+    const projectDir = path.join(tmpDir, 'checkout');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const filePath = writeMcpConfig(
+      projectDir,
+      'session-checkout-safety',
+      undefined,
+      'notion',
+    );
+    expect(filePath.startsWith(projectDir)).toBe(false);
     expect(
-      fs.existsSync(path.join(tmpDir, '.claude', 'orchestrator-mcp.json')),
+      fs.existsSync(path.join(projectDir, '.claude', 'session-prompts')),
     ).toBe(false);
   });
 
-  it('returns undefined when mcp_servers is empty object', () => {
-    const filePath = writeMcpConfig(tmpDir, {});
-    expect(filePath).toBeUndefined();
-  });
-
-  it('creates the .claude directory if it does not exist', () => {
-    const mcpServers = { notion: { type: 'stdio', command: 'npx' } };
-    writeMcpConfig(tmpDir, mcpServers);
-    expect(
-      fs.existsSync(path.join(tmpDir, '.claude', 'orchestrator-mcp.json')),
-    ).toBe(true);
+  it('mints an idempotent stage credential per session id across multiple writes', () => {
+    const filePath1 = writeMcpConfig(tmpDir, 'session-5', undefined);
+    const written1 = JSON.parse(fs.readFileSync(filePath1, 'utf-8'));
+    const filePath2 = writeMcpConfig(tmpDir, 'session-5', undefined);
+    const written2 = JSON.parse(fs.readFileSync(filePath2, 'utf-8'));
+    expect(written1.mcpServers.orchestrator.headers.Authorization).toBe(
+      written2.mcpServers.orchestrator.headers.Authorization,
+    );
   });
 });
 
@@ -141,7 +176,12 @@ describe('CliSessionRunner — MCP config spawn args', () => {
   });
 
   it('includes --mcp-config and --strict-mcp-config when mcpConfigPath is set', async () => {
-    const mcpConfigPath = path.join(tmpDir, '.claude', 'orchestrator-mcp.json');
+    const mcpConfigPath = path.join(
+      tmpDir,
+      '.claude',
+      'session-prompts',
+      'mcp-with-config.mcp.json',
+    );
     fs.mkdirSync(path.dirname(mcpConfigPath), { recursive: true });
     fs.writeFileSync(
       mcpConfigPath,
@@ -206,18 +246,24 @@ describe('CliSessionRunner — MCP config spawn args', () => {
   });
 });
 
-// ── orchestrator-mcp.json cleanup integration test ───────────────────────────
+// ── per-session MCP config cleanup integration test ──────────────────────────
 
-describe('cleanupWorktree — orchestrator-mcp.json removal', () => {
-  it('removes orchestrator-mcp.json before the git worktree remove call', () => {
+describe('cleanupWorktree — per-session MCP config removal', () => {
+  it('removes the per-session MCP config before the git worktree remove call', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '..', 'session', 'SessionManager.ts'),
       'utf-8',
     );
-    expect(source).toContain('orchestrator-mcp.json');
+    expect(source).toContain('.mcp.json');
     expect(source).toContain('unlinkSync');
-    const unlinkIdx = source.indexOf('unlinkSync');
-    const worktreeRemoveIdx = source.indexOf('git worktree remove --force');
+    // Scope the ordering check to the cleanupWorktree method body — an
+    // unrelated earlier `git worktree remove --force` call exists elsewhere
+    // in the file (the resumeSession worktree-recreate path).
+    const cleanupWorktreeIdx = source.indexOf('private cleanupWorktree(');
+    expect(cleanupWorktreeIdx).toBeGreaterThan(0);
+    const body = source.slice(cleanupWorktreeIdx);
+    const unlinkIdx = body.indexOf('unlinkSync');
+    const worktreeRemoveIdx = body.indexOf('git worktree remove --force');
     expect(unlinkIdx).toBeGreaterThan(0);
     expect(worktreeRemoveIdx).toBeGreaterThan(unlinkIdx);
   });

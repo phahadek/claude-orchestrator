@@ -3,6 +3,7 @@ import type {
   NonMilestoneSourceConfig,
   NewTaskFields,
   TaskPropertiesPatch,
+  PatchBodySectionOperation,
 } from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
@@ -14,7 +15,11 @@ import {
   getTaskCache,
   getTasksByStatusFromCache,
 } from '../db/queries';
-import { renderTaskBody, type TaskBodySections } from './bodyRender';
+import {
+  renderTaskBody,
+  markdownToBlocks,
+  type TaskBodySections,
+} from './bodyRender';
 
 /**
  * Notion-backed implementation of TaskBackend. Resolves the Notion database ID
@@ -180,6 +185,9 @@ export class NotionTaskBackend implements TaskBackend {
       prefixedId,
       JSON.stringify({ ...task, id: prefixedId, dependsOn: prefixedDependsOn }),
     );
+    if (fields.body) {
+      await this.updateBodyRaw(prefixedId, fields.body);
+    }
     return prefixedId;
   }
 
@@ -200,6 +208,23 @@ export class NotionTaskBackend implements TaskBackend {
   async updateBody(taskId: string, sections: TaskBodySections): Promise<void> {
     const blocks = renderTaskBody(sections);
     await this.client.updateBody(normalizeTaskId(taskId), blocks);
+  }
+
+  async updateBodyRaw(taskId: string, markdown: string): Promise<void> {
+    const blocks = markdownToBlocks(markdown);
+    await this.client.updateBody(normalizeTaskId(taskId), blocks);
+  }
+
+  async patchBodySection(
+    taskId: string,
+    section: string,
+    operation: PatchBodySectionOperation,
+  ): Promise<void> {
+    await this.client.patchBodySection(
+      normalizeTaskId(taskId),
+      section,
+      operation,
+    );
   }
 
   async setType(taskId: string, type: string): Promise<void> {

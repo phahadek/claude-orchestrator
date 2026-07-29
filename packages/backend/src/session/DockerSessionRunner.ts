@@ -1,12 +1,14 @@
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { createInterface } from 'readline';
-import { config } from '../config';
+import { config, PLANNING_DISALLOWED_TOOLS } from '../config';
 import type {
   ISessionRunner,
   RawSessionEvent,
   SessionRunnerOptions,
 } from './SessionRunner';
 import { logger } from '../logger';
+import { isPlanningSession } from './sessionPredicates';
+import { createScratchDir, removeScratchDir } from './planningScratchDir';
 
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[DockerSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
@@ -50,6 +52,8 @@ export class DockerSessionRunner implements ISessionRunner {
   private networkName: string;
   private execProc: ChildProcess | null = null;
   private _killed = false;
+  private _isPlanning = false;
+  private _scratchDir: string | undefined;
 
   constructor(private readonly sessionId: string) {
     this.containerName = `${SESSION_CONTAINER_PREFIX}${sessionId}`;
@@ -67,7 +71,25 @@ export class DockerSessionRunner implements ISessionRunner {
     options: SessionRunnerOptions,
     onEvent: (event: RawSessionEvent) => void,
   ): Promise<number | null> {
-    const { worktreePath, model, allowedTools } = options;
+    const {
+      worktreePath,
+      model,
+      allowedTools,
+      mcpConfigPath,
+      systemPromptFilePath,
+      sessionType,
+    } = options;
+    const isPlanning = Boolean(sessionType && isPlanningSession(sessionType));
+    this._isPlanning = isPlanning;
+
+    // Planning sessions share `cwd` === the project checkout (worktreePath
+    // here) across concurrent sessions. Give them a writable per-session
+    // scratch dir for output that shouldn't land in tracked files — the
+    // checkout mount below stays read-write for planning and coding
+    // sessions alike.
+    if (isPlanning) {
+      this._scratchDir = createScratchDir(worktreePath, this.sessionId);
+    }
 
     const claudeBin = config.claudePath;
     const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? '/root';
@@ -146,6 +168,8 @@ export class DockerSessionRunner implements ISessionRunner {
     }
 
     // Build claude command arguments (same as CliSessionRunner)
+    const permissionMode = isPlanning ? 'default' : 'acceptEdits';
+
     const claudeArgs = [
       ...(resumeSessionId
         ? ['--resume', resumeSessionId]
@@ -157,10 +181,20 @@ export class DockerSessionRunner implements ISessionRunner {
       'stream-json',
       '--verbose',
       '--permission-mode',
-      'acceptEdits',
+      permissionMode,
       ...(model ? ['--model', model] : []),
+      ...(mcpConfigPath
+        ? ['--mcp-config', mcpConfigPath, '--strict-mcp-config']
+        : []),
+      ...(systemPromptFilePath
+        ? ['--append-system-prompt-file', systemPromptFilePath]
+        : []),
       '--allowed-tools',
       ...allowedTools,
+      ...(isPlanning
+        ? ['--disallowed-tools', ...PLANNING_DISALLOWED_TOOLS]
+        : []),
+      ...(isPlanning ? ['--add-dir', '/'] : []),
     ];
 
     log(this.sessionId, `exec claude in container: ${claudeArgs.join(' ')}`);
@@ -296,6 +330,9 @@ export class DockerSessionRunner implements ISessionRunner {
   }
 
   private async _teardown(): Promise<void> {
+    if (this._isPlanning && this._scratchDir) {
+      removeScratchDir(this._scratchDir);
+    }
     for (const name of [this.containerName, this.proxyContainerName]) {
       try {
         execSync(`docker rm -f ${name}`, { stdio: 'pipe' });

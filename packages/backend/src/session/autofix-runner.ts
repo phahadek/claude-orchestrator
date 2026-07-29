@@ -114,7 +114,15 @@ async function getChangedFiles(
     ['diff', '--name-only', `${baseBranch}...HEAD`],
     { cwd: worktreePath },
   );
-  return stdout.split('\n').filter(Boolean);
+  // A three-dot diff can list paths whose deletion is already committed in HEAD
+  // (e.g. inherited from a merged/rebased dev where a sibling PR removed the
+  // file). Such a path is absent from the worktree and has nothing to autofix
+  // or stage; filtering here keeps both the {{changed_files}} expansion and the
+  // `git add` staging step from ever seeing it.
+  return stdout
+    .split('\n')
+    .filter(Boolean)
+    .filter((f) => fs.existsSync(path.join(worktreePath, f)));
 }
 
 /**

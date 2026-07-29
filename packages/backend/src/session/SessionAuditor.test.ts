@@ -9,6 +9,7 @@ import type { PullRequest } from '../github/types';
 import type { WorktreeEscapeViolation } from '../db/types';
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   getPRByNotionTaskId: vi.fn(() => null),
   getEventsBySession: vi.fn(() => []),
   getDenialsBySession: vi.fn(() => []),

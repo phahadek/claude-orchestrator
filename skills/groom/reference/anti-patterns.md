@@ -60,7 +60,7 @@ toward hard-block when the dep names a symbol or migration; lean toward
 soft-order when the dep names a decision or informing investigation.**
 
 **Treating the size check as cosmetic.** The 500-LoC default is **load-bearing**,
-not advisory. Every Code/Tooling task in a batch carries a _Size:_ line in its
+not advisory. Every Code task in a batch carries a _Size:_ line in its
 presentation header, and `size_check` is a required field in `grooming-state.json`
 that the promotion gate enforces — a task without a recorded size classification
 is blocked at promotion, same as a task missing `hard_block_deps`. The most common
@@ -70,24 +70,26 @@ constrains behavior when sessions present and lock the estimate; otherwise it
 silently dilutes.
 
 **Stripping a task's runtime item from the body but never accreting it to the gate
-store (the "stripped-then-dropped" pattern).** Code/Tooling tasks are required to strip
-their runtime / launch-and-observe manual items and note _"Covered by the Manual
-Verification Gate."_ But stripping is only half the contract — the stripped items must
+store (the "stripped-then-dropped" pattern).** A Code task's pre-groom
+`### 👁️ Manual verification` section (when the author listed real runtime items) must
 **land on the milestone gate store** during grooming (Step 4 — Gate accretion, via the
-`gate-state-client.mjs accrete` route call). When the groomer strips without accreting,
-the item vanishes entirely: absent from the task body (which now says "Covered by
-gate") and absent from the gate store (never accreted). No coverage audit can find it;
-the manual tester never runs it. This already produced a real gap: an M9 PowerShell-5.1
-launch-script check was stripped from a task body but never landed on the Gate —
-discovered only by a 2026-06-29 coverage audit. The promotion gate now blocks this: a
-missing `gate_accretion` marker on a Code/Tooling task prevents the Ready-flip until the
-groomer either accretes the items (`{"classification": "<tier>", "items": [{"text":
-"…"}]}`) or explicitly accretes `{"classification": "none"}` to confirm the task has no
-standalone runtime item.
+`gate-state-client.mjs accrete` route call) before the section is removed from the
+body. When the groomer removes the section without accreting, the item vanishes
+entirely: absent from the task body and absent from the gate store (never accreted).
+No coverage audit can find it; the manual tester never runs it. This already produced a
+real gap: an M9 PowerShell-5.1 launch-script check was stripped from a task body but
+never landed on the Gate — discovered only by a 2026-06-29 coverage audit. The
+promotion gate now blocks this: a missing `gate_accretion` marker on a Code task
+prevents the Ready-flip until the groomer either accretes the items
+(`{"classification": "<tier>", "items": [{"text": "…"}]}`) or explicitly accretes
+`{"classification": "none"}` to confirm the task has no standalone runtime item. Either
+way, the groomer is inclined toward **removing** the section post-accretion — never
+leaving it in place, and never replacing it with boilerplate ("Covered by the Manual
+Verification Gate."); a post-groom Code task carries no manual-verification section.
 
 **Leaving a task's operational seed in an inline note but never accreting it to the
 seed store (the "seeded-then-dropped" pattern).** The operational twin of
-stripped-then-dropped. A Code/Tooling task frequently ships pure dispatchable code plus a
+stripped-then-dropped. A Code task frequently ships pure dispatchable code plus a
 prod-data/config seed (an `analyzer_configs` row, config defaults, alias/cohort flags)
 that is _correctly_ kept out of the auto-dispatched PR. Left as a free-floating "applied
 operationally on prod" note, that seed is owned by no one: after merge the code sits dark
@@ -95,12 +97,12 @@ until someone hand-seeds it (the "Done ≠ deployed ≠ seeded ≠ working" / si
 The seed must **land on the milestone seed store** during grooming (Step 4 — Seed
 accretion, via the `seed-state-client.mjs accrete` route call). Observed grooming M13
 (~17 scattered inline seed notes, fixed by hand). The promotion gate now blocks this: a
-missing `seed_accretion` marker on a Code/Tooling task prevents the Ready-flip until the
+missing `seed_accretion` marker on a Code task prevents the Ready-flip until the
 groomer either accretes the seeds (`{"decision": "seeds", "seeds": [{"spec": "…"}]}` —
 the array field is `seeds`, **not** the gate's `items`) or explicitly accretes
 `{"decision": "none"}` to confirm the task has no operational seed.
 
-**Promoting oversized Code/Tooling tasks without splitting.** The temptation is
+**Promoting oversized Code tasks without splitting.** The temptation is
 to wave a 1,200-LoC task through because it _"feels coherent"_ — but a Code task
 that big is one no one can review, and the implementation session that picks it
 up will either burn out or silently scope-creep. Split into ≤ 500 LoC subsets
@@ -119,17 +121,17 @@ comment — it surfaces as a broken or runaway session. This is the load-bearing
 reason the Ready flip is gated (sign-off + classified hard-block deps + size check).
 See `procedures.md` § _Task types — what Ready triggers_ for the per-type dispatch map.
 
-**A 🛠️ Tooling / 🧪 Testing task smuggling dispatchable code.** Tooling and
-Testing tasks are run **interactively** by a human session, not auto-dispatched.
-When such a task bundles a chunk of pure code-generation — _"write module/script
-X"_ — that has **no dependency on data only available at implementation time**,
-that chunk belongs in a separate 💻 Code task so the orchestrator can dispatch it
-the normal way. Excise it (use the split procedure in `presentation.md` § Size
-check): narrow the Tooling/Testing task to the interactive remainder (running it,
-wiring it, observing results) and file the code-gen as its own Code task at
-🔲 Backlog. Leaving them fused **strands** the dispatchable work behind an
-interactive task no worker auto-picks-up — and inflates the Tooling task past
-the point a single session can carry it.
+**A 🔧 Operational / 🔎 Investigation / 🧪 Testing task smuggling dispatchable code.**
+Operational, Investigation, and Testing tasks are run **interactively** by a human
+session, not auto-dispatched. When such a task bundles a chunk of pure code-generation —
+_"write module/script X"_ — that has **no dependency on data only available at
+implementation time**, that chunk belongs in a separate 💻 Code task so the orchestrator
+can dispatch it the normal way. Excise it (use the split procedure in `presentation.md`
+§ Size check): narrow the Operational/Investigation/Testing task to the interactive
+remainder (running it, wiring it, observing results) and file the code-gen as its own
+Code task at 🔲 Backlog. Leaving them fused **strands** the dispatchable work behind an
+interactive task no worker auto-picks-up — and inflates the Operational/Investigation
+task past the point a single session can carry it.
 
 **Demoting the original task to ⏭️ Deferred when splitting.** ⏭️ Deferred means
 _"scope superseded by another task"_ and is intended for tasks the project chose
@@ -152,8 +154,16 @@ contaminated. Surface it; don't groom on top of it.
 time" is a _defer_, not a _resolve_. Either lock the answer now or keep it as an
 explicit Open Question. Don't launder a defer into a resolution.
 
-**Promoting unilaterally.** Even when a task looks Ready-clean, the human is the
-gate. Present the batch and wait for sign-off. Never self-grant promotion.
+**Promoting unilaterally.** The human is the gate — but read the *granularity* right.
+For **auto-dispatched 💻 Code**, promotion is a per-task human decision: present the
+batch and wait for the per-task sign-off, and never self-grant it. For **interactive
+📐 Design / 📋 Planning**, promotion is **approve-by-standard** — the clean set promotes
+by default under one consolidated triage (visible + veto-able), so "wait for a per-item
+stamp" is the *wrong* correction there; the gate is the human's engagement with the
+blocked + needs-attention rows and their veto over any clean row, not a positive tick on
+each. Self-granting stays forbidden either way: you never invent a clean verdict, and the
+deterministic floor can only ever downgrade one (see `presentation.md` § Consolidated
+triage).
 
 **Treating batch pushback as sign-off.** The close-out ask is _"Any changes or
 questions before I mark these Ready and continue?"_ — so the human's reply is
@@ -171,8 +181,42 @@ what the human said in reply. Diagnostic: if your next action is to write
 edit, correction, or reframe, you are about to commit this anti-pattern. Stop,
 apply the feedback, re-present.
 
+**Manufactured decision — inventing an architectural answer in-grooming.** An open
+question that is an architectural decision is **not** yours to answer during grooming.
+Clearing it by reasoning to a plausible-sounding answer — instead of **citing a locked
+decision** (arch page / ✅-Done Design task) or **routing to `/design`** (file a Design
+task + a hard-block `Depends On` edge) — manufactures a decision the design process never
+made. It reads as resolved, promotes, and dispatches a worktree built on an answer no one
+owns. Cite or route; never invent. A task whose `Depends On` names a not-yet-✅-Done
+Design/Planning task is not promotable.
+
+**Batch / momentum sign-off — one action standing in for N sign-offs.** For
+auto-dispatched 💻 Code, each task's promotion is its **own** human decision. A single
+_"these all look fine,"_ a momentum _"yes, continue,"_ or a bulk stamp across a batch is
+**not** N per-task sign-offs — it launders the per-task disposition records. Promote
+💻 Code tasks individually. (Distinct from interactive Design/Planning
+approve-by-standard, where a consolidated triage promoting the clean set by default is the
+*documented* flow, not a momentum shortcut — the tell: approve-by-standard still has the
+human engage every blocked + needs-attention row and hold veto over the clean list; a
+momentum stamp engages nothing.)
+
+**Surface-polish substitution — a well-written body treated as evidence of readiness.** A
+crisp Summary, tidy acceptance criteria, and clean prose are **not** evidence the task is
+Ready — only that someone wrote well. Readiness is the *investigation*: constraints
+dispositioned, code read, anchors grounded, open questions genuinely resolved or routed. A
+beautifully-worded body over an un-investigated task is the most dangerous kind, because it
+*looks* done. Judge the investigation, not the polish.
+
+**Treating reduced ceremony as reduced rigor.** Approve-by-standard removes the per-item
+positive stamp for interactive types — it removes **ceremony, not rigor**. The
+investigation posture (arch-page reading, code exploration, anchor grounding) is now the
+**sole non-server backstop** for a clean verdict, and stays non-negotiable. Cutting the
+investigation because _"the clean set just promotes anyway"_ inverts the design: the
+lighter the stamp, the more load-bearing the investigation behind it.
+
 **Editing a Ready/Done task.** Any **ordinary** task at 🗂️ Ready or beyond may already
-be in-flight (auto-dispatched if 💻 Code, human-run if 🛠️ Tooling / 🧪 Testing). If its
+be in-flight (auto-dispatched if 💻 Code, human-run if 🔧 Operational / 🔎 Investigation /
+🧪 Testing). If its
 scope was insufficient, file a new sibling task — do not retroactively rewrite it. This is
 exceptionless for ordinary types. The **🚦 Gate** is the one task you *do* keep editing at
 Ready — but that's its type's defined accretion, not an exception (a Gate is an

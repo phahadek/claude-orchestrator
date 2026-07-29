@@ -32,7 +32,7 @@ export interface Session {
   worktree_path: string | null;
   archived: number; // 0 | 1 (SQLite boolean)
   favorited: number; // 0 | 1 (SQLite boolean)
-  session_type: string; // 'standard' | 'review'
+  session_type: string; // 'standard' | 'review' | 'groom' | 'design' | 'ops' | 'split'
   note: string | null;
   tags: string | null; // JSON array of strings, e.g. '["bugfix","auth"]'
   total_input_tokens: number;
@@ -46,6 +46,10 @@ export interface Session {
   pause_reason: string | null;
   last_error_detail: string | null;
   events_pruned_at: number | null;
+  granted_capabilities: string; // JSON array of operator-approved capability strings, sticky for the session's life
+  pending_done_ended_at: number | null; // deferred done-transition, applied once the in-flight turn completes
+  pending_done_pr_url: string | null;
+  pending_done_call_site: string | null;
 }
 
 export type NewSession = Omit<
@@ -69,6 +73,10 @@ export type NewSession = Omit<
   | 'pause_reason'
   | 'last_error_detail'
   | 'events_pruned_at'
+  | 'granted_capabilities'
+  | 'pending_done_ended_at'
+  | 'pending_done_pr_url'
+  | 'pending_done_call_site'
 > & {
   ended_at?: number | null;
   pr_url?: string | null;
@@ -86,6 +94,7 @@ export type NewSession = Omit<
   task_name?: string | null;
   metadata?: string | null;
   review_result?: string | null;
+  granted_capabilities?: string;
 };
 
 // ─── session_events ────────────────────────────────────────────────────────
@@ -177,6 +186,8 @@ export interface ProjectRow {
   task_source_config: string | null;
   data_residency_confirmed: number; // 0 | 1 (SQLite boolean)
   base_branch: string;
+  /** 0 = read the project's Notion architecture pages; 1 = read the arch_unit store. */
+  arch_store_adopted: number; // 0 | 1 (SQLite boolean)
   created_at: number;
   updated_at: number;
 }
@@ -194,6 +205,7 @@ export type NewProjectRow = Omit<
   | 'non_milestone_source_config'
   | 'task_source_config'
   | 'base_branch'
+  | 'arch_store_adopted'
 > & {
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
@@ -204,6 +216,7 @@ export type NewProjectRow = Omit<
   non_milestone_source_config?: string | null;
   task_source_config?: string | null;
   base_branch?: string;
+  arch_store_adopted?: number;
   created_at?: number;
   updated_at?: number;
 };
@@ -215,6 +228,7 @@ export interface MilestoneRow {
   project_id: string;
   name: string;
   source_id: string | null;
+  canonical_short_id: string | null;
   display_order: number;
   created_at: number;
   updated_at: number;
@@ -391,6 +405,7 @@ export type GateItemClassification =
   | 'Read-Only'
   | 'Prod-Mutating'
   | 'Opportunistic'
+  | 'Human-Observation'
   | 'needs-triage';
 
 export interface GateItemRow {
@@ -419,7 +434,7 @@ export type NewGateItemSourceRow = Omit<GateItemSourceRow, 'id'>;
 export interface GateItemEventRow {
   id: number;
   gate_item_id: string;
-  disposition: string;
+  disposition: string | null;
   evidence: string | null;
   filed_followon: string | null;
   deploy_sha: string | null;
@@ -437,10 +452,39 @@ export interface GateAccretionRow {
   project: string;
   milestone: string;
   decision: GateAccretionDecision;
+  /** Substantive reason recorded for a bare 'none'/'n/a' decision — mandatory for those, absent for 'items'. */
+  reason: string | null;
   accreted_at: string;
 }
 
 export type NewGateItemEventRow = Omit<GateItemEventRow, 'id'>;
+
+// ─── deploy_run ───────────────────────────────────────────────────────────
+
+/** Single-field lifecycle: running -> succeeded | failed | aborted. */
+export type DeployRunStatus = 'running' | 'succeeded' | 'failed' | 'aborted';
+
+export interface DeployRunRow {
+  run_id: string;
+  project: string;
+  target_sha: string;
+  current_step: string | null;
+  status: DeployRunStatus;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface DeployRunEventRow {
+  id: number;
+  run_id: string;
+  step: string;
+  event_type: string;
+  disposition: string | null;
+  detail: string | null;
+  at: string;
+}
+
+export type NewDeployRunEventRow = Omit<DeployRunEventRow, 'id'>;
 
 // ─── seed_item ────────────────────────────────────────────────────────────
 
@@ -493,7 +537,156 @@ export interface SeedItemEventRow {
   at: string;
 }
 
+// ─── staged_intent ────────────────────────────────────────────────────────
+
+/**
+ * Per-intent lifecycle: staged -> approved -> committed | rejected | superseded.
+ * `pending_verification` and `needs_revision` gate a dispatched session's
+ * proposal group between turn-end and operator visibility (see
+ * verifyDispatchedGroupsForSession in routes/stagedIntents.ts): a group's
+ * `staged` members move to `pending_verification` while the group-level
+ * verify pass runs, then either back to `staged` (clean) or to
+ * `needs_revision` (blocked, and not yet escalated to the operator) — both
+ * transient states are excluded from the operator-facing surface.
+ */
+export type StagedIntentState =
+  | 'staged'
+  | 'pending_verification'
+  | 'needs_revision'
+  | 'approved'
+  | 'committed'
+  | 'rejected'
+  | 'superseded'
+  /** Terminal, non-appliable: the staging session itself withdrew this intent — see stagedIntents.ts's withdrawIntent. */
+  | 'withdrawn';
+
+export interface StagedIntentRow {
+  id: string;
+  kind: string;
+  payload: string;
+  payload_hash: string;
+  task_id: string | null;
+  project_id: string;
+  session_id: string | null;
+  group_id: string | null;
+  state: StagedIntentState;
+  supersedes: string | null;
+  annotation: string | null;
+  /** Human-facing rationale/summary the decision surface renders beside the payload. */
+  decision_proposal: string | null;
+  /**
+   * The /groom skill's structured proposal fields (JSON-encoded
+   * `GroomProposalFields`), carried by a dispatched groom session's
+   * Ready-flip decision in place of a free-prose `decision_proposal`.
+   */
+  groom_proposal: string | null;
+  /** Tier-3 semantic readiness advisory — distinct from `annotation`'s deterministic hard-block channel. */
+  advisory: string | null;
+  /** Operator-supplied rationale for a reject disposition (pushback | decline). Null until rejected. */
+  disposition_reason: string | null;
+  /** The operator's answer to a decision.pickOne question-intent — JSON-serialized StagedIntentAnswer. Null until answered. */
+  answer: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** The two explicit operator-chosen outcomes for a reject disposition. */
+export type StagedIntentRejectOutcome = 'pushback' | 'decline';
+
+/** A single candidate the operator can pick for a decision.pickOne question-intent. */
+interface DecisionPickOneOption {
+  label: string;
+  description: string;
+}
+
+/**
+ * Payload for the decision.pickOne question-intent kind — modeled on
+ * Claude's AskUserQuestion shape: a multi-option question a dispatched
+ * planning session poses to the operator when it cannot confidently resolve
+ * a fork itself. Staging this writes no task store; only the answer does
+ * (by re-turning the originating session, which then stages the concrete
+ * writes for the chosen path as ordinary intents).
+ */
+export interface DecisionPickOnePayload {
+  prompt: string;
+  options: DecisionPickOneOption[];
+  allowFreeForm: boolean;
+}
+
+/** The operator's response to a decision.pickOne question-intent. At least one of chosenLabel or freeForm is present. */
+export interface StagedIntentAnswer {
+  chosenLabel: string | null;
+  freeForm: string | null;
+}
+
+/**
+ * The /groom skill's per-task proposal shape (`presentation.md`'s 4/5-point
+ * summary: what it achieves, open questions, automated tests, manual
+ * verification, and operational seed) — the structured contract a dispatched
+ * groom session's Ready-flip decision carries instead of free prose, so the
+ * reviewing human (and the decision surface) can render/judge it as fields
+ * rather than parse a paragraph.
+ */
+export interface GroomProposalFields {
+  achieves: string;
+  openQuestions: string;
+  automatedTests: string;
+  manualVerification: string;
+  operationalSeed: string;
+}
+
+// ─── staged_intent_group ──────────────────────────────────────────────────
+
+/** Per-group counter of automatic Tier-3 route-backs; caps at N (default 3), then escalates. */
+export interface StagedIntentGroupRow {
+  group_id: string;
+  route_back_count: number;
+  escalated: number;
+  updated_at: number;
+}
+
 export type NewSeedItemEventRow = Omit<SeedItemEventRow, 'id'>;
+
+// ─── completeness_disposition ───────────────────────────────────────────────
+
+/** A single candidate question the /design completeness critic considered and dispositioned. */
+export interface CompletenessDispositionQuestion {
+  question: string;
+  disposition: 'accepted' | 'dismissed';
+  reason: string;
+  /**
+   * Recorded (`proposed`, the default at critic-run time) is not approved —
+   * the same disposition is carried into a `completeness.disposition` staged
+   * intent for operator sign-off, and only flips to `approved` once that
+   * intent is approved (or `rejected` once it is rejected) — see
+   * routes/stagedIntents.ts's completeness-disposition approve/reject
+   * handling, which is what actually advances this field on the stored row.
+   * A rejected run leaves the session free to re-run the critic and stage a
+   * revised `completeness.disposition` intent, which writes a fresh row
+   * rather than editing this one in place.
+   */
+  approvalStatus?: 'proposed' | 'approved' | 'rejected';
+}
+
+/**
+ * Durable analog of gate_accretion for the /design completeness safeguard —
+ * one row per critic run, recording the source design task, the candidate
+ * questions it considered, and why each was accepted or dismissed. Advisory
+ * audit trail only; never read by a promotion gate.
+ */
+export interface CompletenessDispositionRow {
+  id: number;
+  source_task_id: string;
+  project: string | null;
+  milestone: string | null;
+  questions: string;
+  run_at: string;
+}
+
+export type NewCompletenessDispositionRow = Omit<
+  CompletenessDispositionRow,
+  'id'
+>;
 
 // ─── session_feedback_inbox ─────────────────────────────────────────────────
 
@@ -504,4 +697,65 @@ export interface FeedbackInboxRow {
   payload: string;
   enqueued_at: number;
   delivered_at: number | null;
+}
+
+// ─── arch_unit ────────────────────────────────────────────────────────────
+
+/** A single titled architecture statement. */
+export type ArchUnitKind =
+  | 'subsystem'
+  | 'invariant'
+  | 'decision'
+  | 'contract'
+  | 'reference';
+
+export type ArchUnitStatus = 'active' | 'deferred' | 'superseded';
+
+export interface ArchUnitRow {
+  id: string;
+  title: string;
+  kind: ArchUnitKind;
+  topic: string;
+  /** JSON-encoded string[] of code paths/regions (same vocabulary as the grooming code-worklist). */
+  regions: string;
+  status: ArchUnitStatus;
+  body: string;
+  supersedes: string | null;
+  superseded_by: string | null;
+  /** Optimistic-concurrency counter, bumped on every update/supersede mutation. */
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type NewArchUnitRow = Omit<
+  ArchUnitRow,
+  'superseded_by' | 'created_at' | 'updated_at'
+> & {
+  superseded_by?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ArchUnitEventType = 'created' | 'updated' | 'superseded';
+
+export interface ArchUnitEventRow {
+  id: number;
+  arch_unit_id: string;
+  event_type: ArchUnitEventType;
+  /** JSON-encoded change payload (e.g. previous/next field diffs); null for simple markers. */
+  payload: string | null;
+  at: string;
+}
+
+export type NewArchUnitEventRow = Omit<ArchUnitEventRow, 'id'>;
+
+export interface ArchUnitQuery {
+  topic?: string;
+  kind?: ArchUnitKind;
+  /** Region substring filter — matches units whose regions array contains a path prefix match. */
+  region?: string;
+  status?: ArchUnitStatus;
+  /** When true, includes superseded units. Default false (active-set query). */
+  includeSuperseded?: boolean;
 }

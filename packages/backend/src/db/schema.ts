@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { logger } from '../logger';
 
 export function runMigrations(target: Database.Database): void {
   target.exec(`
@@ -106,6 +107,7 @@ export function runMigrations(target: Database.Database): void {
       project_id    TEXT    NOT NULL,
       name          TEXT    NOT NULL,
       source_id     TEXT,
+      canonical_short_id TEXT,
       display_order INTEGER NOT NULL DEFAULT 0,
       created_at    INTEGER NOT NULL,
       updated_at    INTEGER NOT NULL,
@@ -252,7 +254,7 @@ export function runMigrations(target: Database.Database): void {
     CREATE TABLE IF NOT EXISTS gate_item_event (
       id             INTEGER PRIMARY KEY AUTOINCREMENT,
       gate_item_id   TEXT    NOT NULL,
-      disposition    TEXT    NOT NULL,
+      disposition    TEXT,
       evidence       TEXT,
       filed_followon TEXT,
       deploy_sha     TEXT,
@@ -268,11 +270,38 @@ export function runMigrations(target: Database.Database): void {
       recorded_at TEXT    NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS deploy_run (
+      run_id       TEXT    PRIMARY KEY,
+      project      TEXT    NOT NULL,
+      target_sha   TEXT    NOT NULL,
+      current_step TEXT,
+      status       TEXT    NOT NULL,
+      started_at   TEXT    NOT NULL,
+      completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_deploy_run_project_status ON deploy_run(project, status);
+    -- At most one active (status = 'running') run per project.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_deploy_run_active_per_project
+      ON deploy_run(project) WHERE status = 'running';
+
+    CREATE TABLE IF NOT EXISTS deploy_run_event (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id      TEXT    NOT NULL,
+      step        TEXT    NOT NULL,
+      event_type  TEXT    NOT NULL,
+      disposition TEXT,
+      detail      TEXT,
+      at          TEXT    NOT NULL,
+      FOREIGN KEY (run_id) REFERENCES deploy_run(run_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_deploy_run_event_run_id ON deploy_run_event(run_id);
+
     CREATE TABLE IF NOT EXISTS gate_accretion (
       source_task_id TEXT    PRIMARY KEY,
       project         TEXT    NOT NULL,
       milestone       TEXT    NOT NULL,
       decision        TEXT    NOT NULL,
+      reason          TEXT,
       accreted_at     TEXT    NOT NULL
     );
 
@@ -1006,6 +1035,16 @@ export function runMigrations(target: Database.Database): void {
       decision        TEXT    NOT NULL,
       accreted_at     TEXT    NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS completeness_disposition (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_task_id  TEXT    NOT NULL,
+      project         TEXT,
+      milestone       TEXT,
+      questions       TEXT    NOT NULL,
+      run_at          TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_completeness_disposition_source ON completeness_disposition(source_task_id);
   `);
 
   // ── Git-Bash project_dir backfill (win32-only, idempotent) ──────────────────
@@ -1123,5 +1162,347 @@ export function runMigrations(target: Database.Database): void {
           .run(normalized, row.source_task_id);
       }
     }
+  }
+
+  // ── staged_intent: durable per-intent lifecycle store ────────────────────
+  // Replaces the in-memory Map that used to back routes/stagedIntents.ts.
+  // Lifecycle: staged -> approved -> committed | rejected | superseded.
+  // Existing in-flight in-memory intents are dropped at cutover (same loss
+  // profile as a restart today) — no backfill needed.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS staged_intent (
+      id           TEXT    PRIMARY KEY,
+      kind         TEXT    NOT NULL,
+      payload      TEXT    NOT NULL,
+      payload_hash TEXT    NOT NULL,
+      task_id      TEXT,
+      project_id   TEXT    NOT NULL,
+      session_id   TEXT,
+      group_id     TEXT,
+      state        TEXT    NOT NULL DEFAULT 'staged',
+      supersedes   TEXT,
+      annotation   TEXT,
+      decision_proposal TEXT,
+      advisory     TEXT,
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_staged_intent_project_state ON staged_intent(project_id, state);
+    CREATE INDEX IF NOT EXISTS idx_staged_intent_group ON staged_intent(group_id);
+    CREATE INDEX IF NOT EXISTS idx_staged_intent_dedup ON staged_intent(project_id, kind, task_id, state);
+
+    CREATE TABLE IF NOT EXISTS staged_intent_group (
+      group_id         TEXT    PRIMARY KEY,
+      route_back_count INTEGER NOT NULL DEFAULT 0,
+      escalated        INTEGER NOT NULL DEFAULT 0,
+      updated_at       INTEGER NOT NULL
+    );
+  `);
+
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN decision_proposal TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN advisory TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // staged_intent.disposition_reason: operator-supplied rationale for a
+  // reject disposition (pushback | decline) — durable, not only carried in
+  // the transient session re-turn message. Forward-only: existing rows get
+  // NULL (no reason on record for dispositions made before this column
+  // existed).
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN disposition_reason TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // staged_intent.answer: the operator's response to a decision.pickOne
+  // question-intent — { chosenLabel, freeForm } as JSON. Set only on the
+  // terminal `committed` transition for that kind; never read by any apply
+  // path, since decision.pickOne writes no task-store mutation.
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN answer TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // staged_intent.groom_proposal: the /groom skill's structured proposal
+  // fields (achieves / openQuestions / automatedTests / manualVerification /
+  // operationalSeed — presentation.md's per-task summary) as JSON, carried by
+  // a dispatched groom session's Ready-flip decision instead of a free-prose
+  // decisionProposal string. Forward-only: existing rows get NULL.
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN groom_proposal TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // ── arch_unit: architecture-information store ───────────────────────────
+  // A single titled architecture statement (kind/topic/regions/status envelope
+  // + markdown body). Mirrors the gate_item/seed_item shape: envelope as typed
+  // columns, prose as a markdown body column, plus an append-only event log.
+  // supersede-not-delete: a superseded unit is retained with status='superseded',
+  // not removed.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS arch_unit (
+      id            TEXT    PRIMARY KEY,
+      title         TEXT    NOT NULL,
+      kind          TEXT    NOT NULL,
+      topic         TEXT    NOT NULL,
+      regions       TEXT    NOT NULL DEFAULT '[]',
+      status        TEXT    NOT NULL DEFAULT 'active',
+      body          TEXT    NOT NULL,
+      supersedes    TEXT,
+      superseded_by TEXT,
+      version       INTEGER NOT NULL DEFAULT 1,
+      created_at    TEXT    NOT NULL,
+      updated_at    TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_arch_unit_topic ON arch_unit(topic);
+    CREATE INDEX IF NOT EXISTS idx_arch_unit_kind ON arch_unit(kind);
+    CREATE INDEX IF NOT EXISTS idx_arch_unit_status ON arch_unit(status);
+
+    CREATE TABLE IF NOT EXISTS arch_unit_event (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      arch_unit_id TEXT    NOT NULL,
+      event_type   TEXT    NOT NULL,
+      payload      TEXT,
+      at           TEXT    NOT NULL,
+      FOREIGN KEY (arch_unit_id) REFERENCES arch_unit(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_arch_unit_event_arch_unit_id ON arch_unit_event(arch_unit_id);
+  `);
+
+  try {
+    target.exec(
+      `ALTER TABLE arch_unit ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // ── milestones.canonical_short_id: stored canonical short-form key ─────────
+  // Replaces the read-path extractMilestoneToken(name) parse in
+  // milestoneResolver.ts with an explicit stored field, populated once at
+  // registration. NOTE: this backfill's source_id-first precedence was wrong
+  // for Notion-synced milestones — it left canonical_short_id on the hex
+  // source_id while gate_item/seed_item key on the M<n> token. Left as-is
+  // (idempotent-on-NULL, so it won't re-run); the corrective follow-up
+  // migration below re-derives token-first for rows this one mis-populated.
+  try {
+    target.exec(`ALTER TABLE milestones ADD COLUMN canonical_short_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  {
+    const shortMilestoneToken = (name: string): string | null => {
+      const match = /^([Mm]\d+[A-Za-z]?)(?=[\s—:-]|$)/.exec(name);
+      return match ? match[1] : null;
+    };
+    const rows = target
+      .prepare(
+        `SELECT id, name, source_id FROM milestones WHERE canonical_short_id IS NULL`,
+      )
+      .all() as { id: string; name: string; source_id: string | null }[];
+    const update = target.prepare(
+      `UPDATE milestones SET canonical_short_id = ? WHERE id = ?`,
+    );
+    for (const row of rows) {
+      const canonical =
+        row.source_id ?? shortMilestoneToken(row.name) ?? row.name;
+      update.run(canonical, row.id);
+    }
+  }
+
+  // Per-project uniqueness: a canonical_short_id must resolve to exactly one
+  // milestone within a project (case-insensitive, matching resolver lookup),
+  // else findMilestone's first-match semantics would silently pick one.
+  target.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_milestones_project_canonical_short_id
+    ON milestones(project_id, canonical_short_id COLLATE NOCASE)
+    WHERE canonical_short_id IS NOT NULL;
+  `);
+
+  // ── milestones.canonical_short_id: corrective re-backfill, token-first ─────
+  // The backfill above derived canonical_short_id source_id-first, so
+  // Notion-synced milestones ended up keyed on their hex source_id while
+  // gate_item.milestone / seed_item.milestone (and reconcileYamlMilestones,
+  // and createMilestone) key on the M<n> token — the resolver never matched.
+  // Recompute only rows this migration itself mis-populated (canonical_short_id
+  // still equals source_id) where the name yields a token; token-less names
+  // (MVP, hex-named milestones) keep their existing fallback untouched.
+  // Migrations can't import app modules, so the token regex is duplicated
+  // inline (matches extractMilestoneToken / shortMilestoneToken above).
+  {
+    const shortMilestoneToken = (name: string): string | null => {
+      const match = /^([Mm]\d+[A-Za-z]?)(?=[\s—:-]|$)/.exec(name);
+      return match ? match[1] : null;
+    };
+    const rows = target
+      .prepare(
+        `SELECT id, project_id, name, source_id, canonical_short_id FROM milestones
+         WHERE source_id IS NOT NULL AND canonical_short_id = source_id`,
+      )
+      .all() as {
+      id: string;
+      project_id: string;
+      name: string;
+      source_id: string | null;
+      canonical_short_id: string | null;
+    }[];
+    const update = target.prepare(
+      `UPDATE milestones SET canonical_short_id = ? WHERE id = ?`,
+    );
+    const conflictCheck = target.prepare(
+      `SELECT id FROM milestones
+       WHERE project_id = ? AND id != ? AND canonical_short_id IS NOT NULL
+         AND canonical_short_id = ? COLLATE NOCASE`,
+    );
+    for (const row of rows) {
+      const token = shortMilestoneToken(row.name);
+      if (!token) continue;
+      const conflict = conflictCheck.get(row.project_id, row.id, token);
+      if (conflict) {
+        logger.warn(
+          `[schema] milestone canonical_short_id re-backfill: skipping "${row.name}" (${row.id}) — token "${token}" already used by another milestone in project ${row.project_id}`,
+        );
+        continue;
+      }
+      update.run(token, row.id);
+    }
+  }
+
+  // ── projects.arch_store_adopted: per-project dual-read flag ─────────────
+  // A whole project flips to reading the arch_unit store at once — no
+  // per-page split-brain. Default 0 (Notion fallback) until migrated.
+  try {
+    target.exec(
+      `ALTER TABLE projects ADD COLUMN arch_store_adopted INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // ── sessions.granted_capabilities: durable per-session capability grants ──
+  // Operator-approved grants (a Bash command prefix or named MCP write verb)
+  // sticky for the session's life, discarded at session end. Rehydrated on
+  // boot so a restart mid-session doesn't lose them. JSON array of strings.
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN granted_capabilities TEXT NOT NULL DEFAULT '[]'`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // gate_item_event.disposition: NOT NULL -> nullable. A dispositionless
+  // event is a pure log entry (evidence appended, state left unchanged) —
+  // see appendGateItemEvent's optional-disposition handling in gateService.ts.
+  // SQLite can't ALTER a column's NOT NULL away, so recreate the table.
+  {
+    const getTableSql = (name: string): string =>
+      (
+        target
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+          )
+          .get(name) as { sql: string } | undefined
+      )?.sql ?? '';
+
+    if (
+      getTableSql('gate_item_event').includes('disposition    TEXT    NOT NULL')
+    ) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS gate_item_event__new;
+        CREATE TABLE gate_item_event__new (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          gate_item_id   TEXT    NOT NULL,
+          disposition    TEXT,
+          evidence       TEXT,
+          filed_followon TEXT,
+          deploy_sha     TEXT,
+          operator       TEXT,
+          at             TEXT    NOT NULL,
+          FOREIGN KEY (gate_item_id) REFERENCES gate_item(id) ON DELETE CASCADE
+        );
+        INSERT INTO gate_item_event__new (id, gate_item_id, disposition, evidence, filed_followon, deploy_sha, operator, at)
+          SELECT id, gate_item_id, disposition, evidence, filed_followon, deploy_sha, operator, at
+          FROM gate_item_event;
+        DROP TABLE gate_item_event;
+        ALTER TABLE gate_item_event__new RENAME TO gate_item_event;
+        CREATE INDEX idx_gate_item_event_gate_item_id ON gate_item_event(gate_item_id);
+        COMMIT;
+      `);
+    }
+  }
+
+  // pr_review_comment_disposition_replies: idempotency guard for
+  // handleDispositions — records which (comment_id, disposition) replies have
+  // already been posted to GitHub so a redelivered 'pending' comment can't
+  // trigger a duplicate reply.
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS pr_review_comment_disposition_replies (
+      pr_number   INTEGER NOT NULL,
+      repo        TEXT    NOT NULL,
+      comment_id  TEXT    NOT NULL,
+      disposition TEXT    NOT NULL,
+      replied_at  INTEGER NOT NULL,
+      PRIMARY KEY (pr_number, repo, comment_id, disposition)
+    );
+  `);
+
+  // planning_checkout_locks dropped: the OS-level read-only checkout
+  // lockdown it backed was reverted (recursive chmod is scoped to the OS,
+  // not the session, so it stranded every concurrent consumer of a shared
+  // checkout — see the 2026-07-27 revert). Forward-only drop; any rows
+  // present at migration time are stale by definition now.
+  target.exec(`
+    DROP INDEX IF EXISTS idx_planning_checkout_locks_project_dir;
+    DROP TABLE IF EXISTS planning_checkout_locks;
+  `);
+
+  // gate_accretion.reason: substantive reason recorded for a bare
+  // 'none'/'n/a' gate_contribution decision — distinguishes an assessed
+  // none (the groomer read the change and judged it has nothing
+  // runtime-observable) from an unassessed one (the old accretion-as-
+  // relocation behavior, where 'none' fell out of an empty input section).
+  // Forward-only: existing rows get NULL (no reason on record for markers
+  // written before this column existed).
+  try {
+    target.exec(`ALTER TABLE gate_accretion ADD COLUMN reason TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // sessions.pending_done_*: a done-marking call that arrives while a
+  // session's turn is still in flight (status='running') cannot write done
+  // immediately without racing the in-flight turn's own terminal write — see
+  // markSessionDone's in-flight guard. The transition is stashed here instead
+  // and applied once the turn actually completes (SessionManager's wireSession
+  // settle handler, plus a boot-time sweep for rows left pending across a
+  // restart), so a deferred mark is never silently dropped.
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN pending_done_ended_at INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN pending_done_pr_url TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN pending_done_call_site TEXT`);
+  } catch {
+    /* already exists */
   }
 }

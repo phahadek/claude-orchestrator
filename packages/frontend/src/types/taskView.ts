@@ -30,6 +30,10 @@ export interface TaskView {
   blocked: boolean;
   blockerNames: string[];
   wave: number;
+  /** Ops-eligible task's dependency satisfaction (deploy-aware, not just ✅ Done) — absent for non-ops task types. */
+  opsDepBlocked?: boolean;
+  /** Human-readable reason when opsDepBlocked, e.g. "waiting on <dep title>". */
+  opsDepBlockedReason?: string | null;
   codeSession: {
     sessionId: string;
     status: string;
@@ -42,6 +46,16 @@ export interface TaskView {
     context_occupancy_tokens?: number;
     compaction_count?: number;
     model?: string | null;
+  } | null;
+  /** Latest launched planning (groom/design/ops) session for this task, if any. */
+  planningSession: {
+    sessionId: string;
+    status: string;
+    sessionType: string;
+    startedAt: number;
+    endedAt: number | null;
+    inputTokens: number;
+    outputTokens: number;
   } | null;
   pr: {
     prNumber: number;

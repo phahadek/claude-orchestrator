@@ -106,6 +106,13 @@ function prBodyTaskSectionHeader(backend: TaskBackend): string {
  * Section 10 — the separator and "# Project Instructions" heading — is appended by
  * the caller along with the project's own CLAUDE.md content.
  *
+ * Code-dispatch sessions only. A planning session (groom/design/ops) never
+ * receives this content — its appended-prompt file is instead assembled by
+ * `planning/procedureAssembler.ts`'s `assemblePlanningProcedure`, which
+ * carries its own session-lifecycle/transport rules suited to the
+ * stage-then-human-apply execution mode. See `SessionManager.completeStart`'s
+ * `injectedProcedureContent` branch.
+ *
  * Section inventory:
  *  1. Header with override warning
  *  2. Task assignment (task name, task URL, project context URL)
@@ -216,13 +223,26 @@ Only disposition a failure as flaky after clearing this verification bar, in ord
 2. Run the full test suite once more end-to-end and confirm it passes clean.
 3. Confirm the failure is unrelated to your diff (e.g. infra contention, test-ordering/parallelism interference, a timing race) — not a real regression you introduced.
 
-If all three hold, emit a verified-flaky disposition instead of pushing a commit. Include it as a JSON block in your response text, parsed the same way as review-thread dispositions:
+If all three hold, call the \`mcp__orchestrator__flaky_confirm\` tool instead of pushing a commit, with:
 
-\`\`\`
-{"verified_flaky":{"gate":"ci","reason":"<one line: what you ran and what you concluded>"}}
-\`\`\`
+- \`gate\`: \`"ci"\` for a failing GitHub check or \`"f2"\` for the orchestrator-run test gate — whichever gate actually failed.
+- \`reason\`: one line naming what you ran and what you concluded.
 
-\`gate\` is \`"ci"\` for a failing GitHub check or \`"f2"\` for the orchestrator-run test gate — use whichever gate actually failed. The orchestrator re-runs that gate on the same commit (no new push) and re-drives the merge loop on a pass. This is bounded — after a small number of re-run attempts the PR stays paused for human attention, so only disposition a failure as flaky when you've genuinely cleared the verification bar above, not as a way to skip investigating.
+The orchestrator re-runs that gate on the same commit (no new push) and re-drives the merge loop on a pass. This is bounded — after a small number of re-run attempts the PR stays paused for human attention, so only call this when you've genuinely cleared the verification bar above, not as a way to skip investigating.
+
+---
+
+## Responding to Review Comments
+
+When a follow-up message delivers review feedback tied to specific GitHub review comments (each comment has a \`comment_id\`), after you've addressed them — by pushing a commit, or by deciding a comment doesn't need a code change — call the \`mcp__orchestrator__review_disposition\` tool once per \`comment_id\` to report the outcome:
+
+- \`comment_id\` is the numeric GitHub review comment ID from the feedback message — not the PR number.
+- \`disposition\` is one of:
+  - \`"addressed"\` — you changed code (or confirmed existing behavior already satisfies the comment) and pushed a commit.
+  - \`"wont_fix"\` — you deliberately did not change anything; the comment is valid but out of scope for a fix here, or you disagree with it.
+  - \`"out_of_scope"\` — the comment asks for something beyond this task's scope (scope creep, unrelated refactor, etc.).
+- \`reason\` is required for every call — a one-line explanation a human reviewer can read without opening the diff.
+- Call it once per routed review comment you were given, not just the ones you changed code for. The orchestrator replies to and resolves each comment's thread on GitHub based on these calls — a comment with no call stays open and unresolved.
 
 ---
 
@@ -310,19 +330,17 @@ ${(() => {
   const verifyItems = verify && verify.length > 0 ? verify : null;
   const verifySteps = verifyItems
     ? verifyItems
-        .map((cmd, i) => `${i + 4}. \`${cmd}\` — must pass.`)
+        .map((cmd, i) => `${i + 2}. \`${cmd}\` — must pass.`)
         .join('\n')
-    : `4. No local verify step configured — CI is the gate.`;
-  const stageNum = verifyItems ? verifyItems.length + 4 : 5;
+    : `2. No local verify step configured — CI is the gate.`;
+  const stageNum = verifyItems ? verifyItems.length + 2 : 3;
   return `## Pre-PR Gate
 
 Run in order — all must pass before opening the PR:
 
-1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
-2. Rebase onto \`${targetBranch}\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
-3. Restore CLAUDE.md: \`git stash pop\`
+1. Rebase onto \`${targetBranch}\` and resolve any conflicts. If this branch was already pushed, update the remote with \`git push --force-with-lease origin <your feature branch>\` — a bare \`git push\` will be rejected after a rebase.
 ${verifySteps}
-${stageNum}. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.`;
+${stageNum}. Stage only your implementation files for commit.`;
 })()}
 
 ---
@@ -336,7 +354,7 @@ ${stageNum}. Stage only your implementation files for commit — never stage \`C
 - Never delete branches that live outside this worktree
 - Never run \`git reset --hard\` on the main repository directory
 - Never skip pre-commit hooks (\`--no-verify\`)
-- Never stage or commit \`CLAUDE.md\` — it contains orchestrator-injected content that must not appear in PRs. Use \`git add <specific files>\` instead of \`git add .\`.
+- Use \`git add <specific files>\` instead of \`git add .\` — review staged files before committing.
 ${
   gitMode === 'local-only'
     ? ''
@@ -360,7 +378,17 @@ ${
 
 > ⚠️ **No sandbox** — isolation is prompt-level only. Writes outside the worktree corrupt the developer's environment.
 
-All file writes **must stay inside** \`${worktreePath}\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/\` in your worktree.
+All file writes **must stay inside** \`${worktreePath}\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/scratch/\` in your worktree.
+
+---
+
+## Manual Verification Gate
+
+Manual/runtime verification is owned by the milestone's Manual Verification Gate, not
+by you. Do NOT run, attempt, or simulate manual/runtime tests to satisfy acceptance
+criteria. Your task carries no manual-verification section by default — its absence
+does NOT mean "go run something"; it means the gate already owns it. Ship only what
+the automated acceptance criteria require.
 
 ---
 
@@ -448,13 +476,17 @@ against task specifications and output structured JSON verdicts.
 
 ## Manual verification items — critical rule
 
-Some task acceptance criteria contain a section titled "### 👁️ Manual verification"
-(or similar wording like "Manual verification", "👁️ Manual", etc.).
+💻 Code tasks do not carry a "### 👁️ Manual verification" section in their spec —
+runtime/manual verification for a Code task is owned by the milestone's Manual
+Verification Gate, not by this review. Do NOT look for one, and do NOT treat its
+absence as a gap to flag — the absence is expected and correct.
 
-Items under that heading require a human reviewer with live credentials or
-environment access — they CANNOT be verified by automated code review.
+Some non-Code task specs (📐 Design, 🔧 Operational, 🔎 Investigation) legitimately
+carry a section titled "### 👁️ Manual verification" (or similar wording). Items
+under that heading require a human reviewer with live credentials or environment
+access — they CANNOT be verified by automated code review.
 
-You MUST follow these rules for manual verification items:
+You MUST follow these rules for manual verification items when a spec carries them:
 - **Do NOT evaluate them** as pass/fail criteria for your verdict.
 - **Do NOT fail the PR** solely because manual verification steps are not
   demonstrated in the PR body or diff.

@@ -10,7 +10,11 @@ export type SessionEvent = {
 
 type RenderItem =
   | { kind: 'event'; event: SessionEvent }
-  | { kind: 'group'; toolName: string; calls: CallPair[] };
+  | { kind: 'group'; toolName: string; calls: CallPair[] }
+  | { kind: 'subagent'; toolName: string; calls: CallPair[] };
+
+/** Tool names that represent a subagent invocation (the Task tool). */
+const SUBAGENT_TOOL_NAMES = new Set(['Task', 'Agent']);
 
 function getToolNameFromTextEvent(event: SessionEvent): string | null {
   if (event.eventType !== 'text') return null;
@@ -49,27 +53,36 @@ export function groupSessionEvents(events: SessionEvent[]): RenderItem[] {
 
       if (j < events.length && events[j].eventType === 'tool_result') {
         const firstEndIdx = j;
+        const isSubagent = SUBAGENT_TOOL_NAMES.has(toolName);
         const calls: CallPair[] = [
           { textEvent: events[startIdx], resultEvent: events[firstEndIdx] },
         ];
         i = firstEndIdx + 1;
 
-        while (i < events.length) {
-          const nextToolName = getToolNameFromTextEvent(events[i]);
-          if (nextToolName !== toolName) break;
+        // Each subagent invocation is rendered as its own distinct block,
+        // so consecutive Task/Agent calls are never merged into one group.
+        if (!isSubagent) {
+          while (i < events.length) {
+            const nextToolName = getToolNameFromTextEvent(events[i]);
+            if (nextToolName !== toolName) break;
 
-          let k = i + 1;
-          while (k < events.length && events[k].eventType === 'tool_use') k++;
+            let k = i + 1;
+            while (k < events.length && events[k].eventType === 'tool_use') k++;
 
-          if (k < events.length && events[k].eventType === 'tool_result') {
-            calls.push({ textEvent: events[i], resultEvent: events[k] });
-            i = k + 1;
-          } else {
-            break;
+            if (k < events.length && events[k].eventType === 'tool_result') {
+              calls.push({ textEvent: events[i], resultEvent: events[k] });
+              i = k + 1;
+            } else {
+              break;
+            }
           }
         }
 
-        items.push({ kind: 'group', toolName, calls });
+        items.push({
+          kind: isSubagent ? 'subagent' : 'group',
+          toolName,
+          calls,
+        });
       } else {
         items.push({ kind: 'event', event: events[i] });
         i++;

@@ -19,6 +19,7 @@ export type TopView =
   | 'prs'
   | 'analytics'
   | 'gate'
+  | 'architecture'
   | 'settings';
 
 interface AutoLaunchTogglePatch {
@@ -171,6 +172,15 @@ export function Header({
         aria-label="Gate Readiness"
       >
         🚦
+      </button>
+      <button
+        type="button"
+        className={`${styles.navLink} ${styles.navLinkIcon}${activeView === 'architecture' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('architecture')}
+        title="Architecture"
+        aria-label="Architecture"
+      >
+        🏛️
       </button>
       <button
         type="button"

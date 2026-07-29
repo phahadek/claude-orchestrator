@@ -73,6 +73,12 @@ export interface MergeCompletedPayload {
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const PUSH_REVIEW_TIMEOUT_MS = 240_000;
 const PENDING_REREVIEW_TTL_MS = 5 * 60 * 1000;
+/**
+ * Cadence for the escalated-open stale sweep — deliberately slower than the
+ * 5-minute merge poll, since a stale escalated row is cosmetic-but-misleading
+ * (dashboard "needs attention" noise), not urgent.
+ */
+const STALE_OPEN_SWEEP_INTERVAL_MS = 20 * 60 * 1000; // 20 minutes
 
 /**
  * Pause reasons where mergeability polling is pointless — AutoMerger has given
@@ -187,6 +193,91 @@ export class PRMergeWatcher extends EventEmitter {
       onError: (err: unknown) =>
         logger.warn('[PRMergeWatcher] poll error:', (err as Error).message),
     });
+    scheduler.register({
+      name: 'pr_merge_watcher_stale_open_sweep',
+      intervalMs: () => STALE_OPEN_SWEEP_INTERVAL_MS,
+      runOnBoot: true,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        const items_processed = await this.sweepEscalatedStalePRs();
+        return { items_processed };
+      },
+      onError: (err: unknown) =>
+        logger.warn(
+          '[PRMergeWatcher] stale-open sweep error:',
+          (err as Error).message,
+        ),
+    });
+  }
+
+  /**
+   * Targeted sweep over rows every scheduled loop otherwise skips forever:
+   * state='open' with pause_reason.reason='stalled_reconcile_cap'. Both
+   * poll() (via isTerminalStalePR) and StalledPRReconciler deliberately skip
+   * these rows to stop per-PR GitHub churn on parked PRs, but that means
+   * nothing ever re-queries GitHub for them — so a PR that reaches merged or
+   * closed on GitHub after escalation stays stuck at state='open' with a
+   * stale pause_reason forever, showing as a false "needs attention" entry.
+   *
+   * Filters the escalated set in-code from getAllOpenPRs() rather than a
+   * dedicated query, and calls getPRState() per-row — O(this orchestrator's
+   * escalated-open rows), never listOpenPRs(repo) (O(the repo's total open
+   * PRs), which would paginate thousands of unrelated PRs on a busy repo).
+   * A row still open on GitHub (e.g. a PR that's genuinely stuck) is left
+   * untouched by reconcileTerminalState.
+   */
+  async sweepEscalatedStalePRs(): Promise<number> {
+    const escalated = getAllOpenPRs().filter(
+      (pr) =>
+        parsePauseReason(pr.pause_reason)?.reason === 'stalled_reconcile_cap',
+    );
+    let items_processed = 0;
+    for (const pr of escalated) {
+      if (!getProjectByGithubRepo(pr.repo)) {
+        logger.warn(
+          `[PRMergeWatcher] stale-open sweep: PR #${pr.pr_number}: no project for repo ${pr.repo} — skipping`,
+        );
+        continue;
+      }
+      await this.reconcileTerminalState(pr);
+      items_processed++;
+    }
+    return items_processed;
+  }
+
+  /**
+   * Shared terminal-transition handler: queries GitHub for a PR's live state
+   * and, if it has reached merged or closed, applies the transition
+   * (handleMerged / updatePRState + clearTerminalPRFlags). Used by both the
+   * escalated-open sweep above and the /api/prs panel-load reconciliation so
+   * the two paths can't drift. A GitHub error is logged and the row is left
+   * unchanged — never silently swallowed. Returns the observed state, or
+   * null on error.
+   */
+  async reconcileTerminalState(pr: PullRequestRow): Promise<string | null> {
+    let prStateResult: { state: string; headSha: string | null };
+    try {
+      prStateResult = await this.github.getPRState(pr.pr_number, pr.repo);
+    } catch (err) {
+      if (err instanceof GitHubRateLimitError) {
+        this.handleRateLimit(err);
+        return null;
+      }
+      logger.warn(
+        `[PRMergeWatcher] reconcileTerminalState: getPRState failed for PR #${pr.pr_number}:`,
+        (err as Error).message,
+      );
+      return null;
+    }
+
+    const { state } = prStateResult;
+    if (state === 'merged') {
+      await this.handleMerged(pr, null);
+    } else if (state === 'closed') {
+      updatePRState(pr.pr_number, pr.repo, 'closed');
+      clearTerminalPRFlags(pr.pr_number, pr.repo, 'closed');
+    }
+    return state;
   }
 
   private handleRateLimit(err: GitHubRateLimitError): void {
@@ -467,9 +558,13 @@ export class PRMergeWatcher extends EventEmitter {
 
   private async runMergeabilityCheck(pr: PullRequestRow): Promise<void> {
     if (pr.state === 'merged' || pr.state === 'closed') return;
-    // Skip PRs paused for terminal reasons — AutoMerger has given up or human
-    // intervention is needed. Polling GitHub's merge state can't change the outcome.
-    if (isTerminalMergePause(pr.pause_reason)) return;
+    // PRs paused for terminal reasons (AutoMerger given up / human intervention
+    // needed) still get their observability columns (merge_state/failing_checks)
+    // refreshed below — otherwise the CI-failing pill freezes at whatever GitHub
+    // state existed the instant the pause fired. Only the remediation side
+    // effects (autofix, conflict nudges, pause clearing, AutoMerger retries) are
+    // skipped, since polling can't change a terminal outcome.
+    const terminalPause = isTerminalMergePause(pr.pause_reason);
 
     const project = getProjectByGithubRepo(pr.repo);
     const config = project ? loadOrchestratorConfig(project.projectDir) : null;
@@ -478,7 +573,15 @@ export class PRMergeWatcher extends EventEmitter {
     // When test: commands are configured, the per-SHA test result is the
     // authoritative CI signal — GitHub CI is disabled on private repos so
     // GitHub reports the PR mergeable; we gate on F1's result instead.
-    if (config && config.test.length > 0 && pr.head_sha && pr.session_id) {
+    // Skipped for terminally-paused PRs so we fall through to the read-only
+    // GitHub merge-state refresh below instead of remediating.
+    if (
+      !terminalPause &&
+      config &&
+      config.test.length > 0 &&
+      pr.head_sha &&
+      pr.session_id
+    ) {
       const testResult = getTestResult(pr.pr_number, pr.repo, pr.head_sha);
       if (testResult && !testResult.passed) {
         if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
@@ -555,7 +658,7 @@ export class PRMergeWatcher extends EventEmitter {
     // CI-failure remediation: decoupled from stateChanged via per-SHA dedup.
     // Fires whenever we observe ci_failed for a SHA we haven't remediated yet,
     // regardless of whether AutoMerger already wrote merge_state='ci_failed'.
-    if (category.category === 'ci_failed' && pr.session_id) {
+    if (!terminalPause && category.category === 'ci_failed' && pr.session_id) {
       if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
         // Reserve this SHA atomically before running remediation so a restart
         // can't re-fire for the same SHA.
@@ -597,7 +700,7 @@ export class PRMergeWatcher extends EventEmitter {
     // Conflict path: SHA-deduped nudge runs regardless of stateChanged.
     // PRs already conflicted at first poll (or whose transition happened during
     // a backend restart) are correctly nudged because dedup is state-based.
-    if (category.category === 'conflict') {
+    if (!terminalPause && category.category === 'conflict') {
       logger.info(
         `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has merge conflicts`,
       );
@@ -606,7 +709,7 @@ export class PRMergeWatcher extends EventEmitter {
 
     // Only update + broadcast if something actually changed.
     if (!stateChanged && !failingChecksChanged) {
-      this.tryCIFailingRecovery(pr, category);
+      if (!terminalPause) this.tryCIFailingRecovery(pr, category);
       return;
     }
 
@@ -631,7 +734,7 @@ export class PRMergeWatcher extends EventEmitter {
       emitTaskUpdated(pr.task_id);
     }
 
-    this.tryCIFailingRecovery(pr, category);
+    if (!terminalPause) this.tryCIFailingRecovery(pr, category);
 
     if (stateChanged && category.category === 'blocked') {
       logger.info(

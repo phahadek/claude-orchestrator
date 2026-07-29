@@ -12,10 +12,19 @@ interface Props {
   groomCheckedIds?: Set<string>;
   onGroomCheckChange?: (taskId: string, checked: boolean) => void;
   /** When provided, tasks matching isOpsEligible render an Ops(N) selection checkbox — takes
-   * precedence over the Groom checkbox when a task qualifies for both. */
+   * precedence over the Design and Groom checkboxes when a task qualifies for multiple. */
   opsCheckedIds?: Set<string>;
   onOpsCheckChange?: (taskId: string, checked: boolean) => void;
   isOpsEligible?: (task: TaskView) => boolean;
+  /** When provided, tasks matching isOpsDepBlocked render a disabled Ops checkbox with a
+   * "waiting on <dep>" reason instead of no checkbox — surfaces dep-blocked ops tasks rather
+   * than letting them be selected and silently dropped by /ops/launch. */
+  isOpsDepBlocked?: (task: TaskView) => boolean;
+  /** When provided, tasks matching isDesignEligible render a Design(N) selection checkbox —
+   * takes precedence over the Groom checkbox when a task qualifies for both. */
+  designCheckedIds?: Set<string>;
+  onDesignCheckChange?: (taskId: string, checked: boolean) => void;
+  isDesignEligible?: (task: TaskView) => boolean;
 }
 
 const TYPE_ORDER = [
@@ -60,6 +69,10 @@ export function NonCodeTypeSection({
   opsCheckedIds,
   onOpsCheckChange,
   isOpsEligible,
+  isOpsDepBlocked,
+  designCheckedIds,
+  onDesignCheckChange,
+  isDesignEligible,
 }: Props) {
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
 
@@ -135,19 +148,35 @@ export function NonCodeTypeSection({
                   const opsEligible =
                     opsCheckedIds !== undefined &&
                     (isOpsEligible?.(task) ?? false);
+                  const opsBlocked =
+                    !opsEligible &&
+                    opsCheckedIds !== undefined &&
+                    (isOpsDepBlocked?.(task) ?? false);
+                  const designEligible =
+                    !opsEligible &&
+                    !opsBlocked &&
+                    designCheckedIds !== undefined &&
+                    (isDesignEligible?.(task) ?? false);
                   const groomable =
                     !opsEligible &&
+                    !opsBlocked &&
+                    !designEligible &&
                     groomCheckedIds !== undefined &&
                     task.displayStatus === 'backlog';
-                  const showCheckbox = opsEligible || groomable;
+                  const showCheckbox =
+                    opsEligible || designEligible || groomable;
                   const checked = opsEligible
                     ? opsCheckedIds!.has(task.taskId)
-                    : groomable && groomCheckedIds!.has(task.taskId);
+                    : designEligible
+                      ? designCheckedIds!.has(task.taskId)
+                      : groomable && groomCheckedIds!.has(task.taskId);
                   const onCheckChange = opsEligible
                     ? (onOpsCheckChange ?? (() => {}))
-                    : groomable
-                      ? (onGroomCheckChange ?? (() => {}))
-                      : () => {};
+                    : designEligible
+                      ? (onDesignCheckChange ?? (() => {}))
+                      : groomable
+                        ? (onGroomCheckChange ?? (() => {}))
+                        : () => {};
                   return (
                     <CompactTaskCard
                       key={task.taskId}
@@ -155,6 +184,9 @@ export function NonCodeTypeSection({
                       showCheckbox={showCheckbox}
                       checked={checked}
                       onCheckChange={onCheckChange}
+                      blockedReason={
+                        opsBlocked ? task.opsDepBlockedReason : null
+                      }
                       onClick={() => onSelectTask(task.taskId)}
                       showStatus
                     />

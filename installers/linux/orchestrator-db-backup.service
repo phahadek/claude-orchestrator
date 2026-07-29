@@ -1,0 +1,12 @@
+[Unit]
+Description=Claude Orchestrator DB off-box backup (dashboard.db)
+After=network-online.target
+Wants=network-online.target
+OnFailure=orchestrator-db-backup-alert.service
+
+[Service]
+Type=oneshot
+User=orchestrator
+WorkingDirectory=/home/orchestrator/claude-orchestrator
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node scripts/backup-database.mjs --env-file /etc/orchestrator/backup.env

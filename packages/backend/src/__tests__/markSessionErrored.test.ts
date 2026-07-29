@@ -64,6 +64,7 @@ vi.mock('../tasks/TaskBackend', () => ({
 }));
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   insertSession: vi.fn(),
   updateSessionStatus: vi.fn(),
   getSession: vi.fn(),
@@ -502,6 +503,107 @@ describe('SessionManager.markSessionErrored() — session_type guard', () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(mockUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('SessionManager.markSessionErrored() — planning session (design) crash path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ session_type: 'design' }) as never,
+    );
+  });
+
+  it('reverts the design target to 🔲 Backlog and does NOT surface on first crash', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    const messages: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => messages.push(m));
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'notion-task-id',
+      '🔲 Backlog',
+      expect.anything(),
+    );
+    expect(queries.setTaskPauseReason).not.toHaveBeenCalled();
+    expect(
+      messages.find((m) => m.type === 'auto_launch_paused'),
+    ).toBeUndefined();
+  });
+
+  it('surfaces needs_attention (planning_crashed) on the second consecutive crash', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
+    setupFakeBackend();
+    const sm = new SessionManager();
+    const messages: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => messages.push(m));
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(queries.setTaskPauseReason).toHaveBeenCalledWith(
+      'notion-task-id',
+      'planning_crashed',
+      'runner_non_zero',
+    );
+    const paused = messages.find((m) => m.type === 'auto_launch_paused') as
+      | { reason: string; taskId: string }
+      | undefined;
+    expect(paused).toBeDefined();
+    expect(paused!.reason).toBe('planning_crashed');
+    expect(paused!.taskId).toBe('notion-task-id');
+  });
+
+  it('never redirects a groom session target (never left Backlog, nothing to revert)', async () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ session_type: 'groom' }) as never,
+    );
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does NOT count user_kill against the planning crash budget or revert', async () => {
+    setupFakeBackend();
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(queries.incrementTaskCrashCount).not.toHaveBeenCalled();
+    expect(queries.setTaskPauseReason).not.toHaveBeenCalled();
+  });
+});
+
+describe('SessionManager.markSessionErrored() — planning session (ops) crash path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ session_type: 'ops' }) as never,
+    );
+  });
+
+  it('reverts the ops target to 🗂️ Ready (not Backlog) on first crash', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'notion-task-id',
+      '🗂️ Ready',
+      expect.anything(),
+    );
   });
 });
 

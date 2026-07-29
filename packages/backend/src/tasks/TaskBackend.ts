@@ -49,6 +49,18 @@ export interface UpdateStatusOptions {
    * the command-layer successor to the retired groom-gate.mjs PreToolUse hook.
    */
   groomingGate?: GroomingGateEntry;
+  /**
+   * Approve-by-standard marker for a 📐 Design task promoted on a
+   * consolidated milestone triage verdict rather than a per-item human
+   * decision (planning/triage.ts). When set and no explicit
+   * `readinessOverride` is given, TaskWriteCommands.setStatus derives the
+   * readiness_override reason from the standard template
+   * (standardTriageCleanDesignOverrideReason in readinessGate.ts) instead of
+   * requiring the caller to author one. Only honored for a task whose
+   * authoritative type resolves to 📐 Design — auto-dispatched types
+   * (💻 Code) stay per-task-gated and ignore this field.
+   */
+  triageCleanDesign?: { milestoneLabel: string };
 }
 
 /** Provenance options shared by the write-side port methods (create / deps). */
@@ -68,6 +80,15 @@ export interface NewTaskFields {
   priority?: string;
   /** Task IDs (prefixed, e.g. 'notion:abc123') this task depends on. */
   dependsOn?: string[];
+  /**
+   * Full page body as raw markdown, written verbatim (no reformatting or
+   * truncation) in the same call that creates the page. Optional — an
+   * omitted body creates a task with empty content, matching prior
+   * behavior. This is the sole way to give a task its spec at birth;
+   * task.updateBody remains the tool for revising a task that already
+   * exists.
+   */
+  body?: string;
 }
 
 /**
@@ -81,6 +102,17 @@ export interface TaskPropertiesPatch {
   /** Task Name (title property), plain text. */
   title?: string;
 }
+
+/**
+ * task.patchBodySection's targeted operation against a single heading-bounded
+ * section of a task page body. `section` is the heading's plain text — the
+ * section is created (append) or must already exist (replace/remove), never
+ * guessed at.
+ */
+export type PatchBodySectionOperation =
+  | { operation: 'append'; content: string }
+  | { operation: 'replace'; find: string; replaceWith: string }
+  | { operation: 'remove' };
 
 /**
  * Project-scoped task tracker. An instance is bound to a single project via the
@@ -165,6 +197,30 @@ export interface TaskBackend {
   updateBody?(
     taskId: string,
     sections: TaskBodySections,
+    options?: TaskWriteOptions,
+  ): Promise<void>;
+
+  /**
+   * Overwrite the page body from raw markdown, converted directly to blocks
+   * (bypassing the section-template renderer) — used to carry a body
+   * verbatim, e.g. for a cross-milestone move. Optional for the same reason
+   * as createTask.
+   */
+  updateBodyRaw?(
+    taskId: string,
+    markdown: string,
+    options?: TaskWriteOptions,
+  ): Promise<void>;
+
+  /**
+   * Apply a heading-bounded append/replace/remove patch to one named section
+   * of a task page body, without touching the rest of the page. Optional for
+   * the same reason as createTask.
+   */
+  patchBodySection?(
+    taskId: string,
+    section: string,
+    operation: PatchBodySectionOperation,
     options?: TaskWriteOptions,
   ): Promise<void>;
 
@@ -343,6 +399,51 @@ export class AuditingTaskBackend implements TaskBackend {
       project_id: this.projectId,
       task_id: taskId,
       payload: { source },
+    });
+  }
+
+  async updateBodyRaw(
+    taskId: string,
+    markdown: string,
+    options?: TaskWriteOptions,
+  ): Promise<void> {
+    if (!this.inner.updateBodyRaw) {
+      throw new Error(
+        `[AuditingTaskBackend] updateBodyRaw is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    await this.inner.updateBodyRaw(taskId, markdown);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_body_updated',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { source, raw: true },
+    });
+  }
+
+  async patchBodySection(
+    taskId: string,
+    section: string,
+    operation: PatchBodySectionOperation,
+    options?: TaskWriteOptions,
+  ): Promise<void> {
+    if (!this.inner.patchBodySection) {
+      throw new Error(
+        `[AuditingTaskBackend] patchBodySection is not supported by backend type "${this.inner.type}"`,
+      );
+    }
+    await this.inner.patchBodySection(taskId, section, operation);
+    const source = options?.source ?? 'orchestrator';
+    recordEvent({
+      event_type: 'task_body_updated',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: options?.sessionId ?? null,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: { source, section, operation: operation.operation },
     });
   }
 

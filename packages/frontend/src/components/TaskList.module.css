@@ -257,6 +257,15 @@
   cursor: not-allowed;
 }
 
+.select {
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}
+
 .groomBtn {
   font-size: 11px;
   padding: 2px 8px;
@@ -279,13 +288,6 @@
 .groomBtn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-
-/* No-op groom launch placeholder — stands in for the future groom-session right panel */
-.groomPlaceholderPanel {
-  border-top: 1px solid var(--border-subtle);
-  padding-top: 8px;
-  margin-top: 4px;
 }
 
 .opsBtn {

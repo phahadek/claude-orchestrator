@@ -107,9 +107,14 @@ const REVIEW_JSON_SCHEMA_BLOCK = `Respond ONLY with a JSON object — no preambl
 
 ## Manual verification items — DO NOT evaluate
 
-The task spec may contain a section titled "### 👁️ Manual verification" (or similar).
-Items under that heading require a human reviewer — they CANNOT be verified by automated
-code review. You MUST:
+💻 Code tasks do not carry a "### 👁️ Manual verification" section — runtime/manual
+verification for a Code task is owned by the milestone's Manual Verification Gate, not
+by this review. Do not look for one, and do not treat its absence as a gap.
+
+A non-Code task spec (📐 Design, 🔧 Operational, 🔎 Investigation) may legitimately contain
+a section titled "### 👁️ Manual verification" (or similar). Items under that heading
+require a human reviewer — they CANNOT be verified by automated code review. When present,
+you MUST:
 - Exclude them entirely from your pass/fail evaluation of the "Diff vs Acceptance Criteria" dimension.
 - Never fail the verdict solely because manual verification items are not demonstrated in the PR.
 - List them verbatim in the "manualItemsForHuman" array so downstream tooling can surface them to a human.

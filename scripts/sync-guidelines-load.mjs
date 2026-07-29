@@ -81,10 +81,11 @@ const SCRIPT_SOURCES = [
     dir: join('packages', 'backend', 'scripts'),
     names: [
       'groom-context-client.mjs',
+      'groom-flip-client.mjs',
       'gate-state-client.mjs',
       'seed-state-client.mjs',
-      'stage-task-intent.mjs',
       'staged-intents-client.mjs',
+      'read-session-record.mjs',
     ],
   },
 ];

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   upsertTaskCache: vi.fn(),
 }));
 vi.mock('../projects/ProjectService', () => ({

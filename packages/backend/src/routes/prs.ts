@@ -181,17 +181,23 @@ export function createPrsRouter(
         (r) => r.state === 'open' && !openNumbers.has(r.pr_number),
       );
       for (const pr of stale) {
+        if (mergeWatcher) {
+          const state = await mergeWatcher.reconcileTerminalState(pr);
+          if (state) reconciledStates.set(pr.pr_number, state);
+          continue;
+        }
         const prStateResult = await github.getPRState(pr.pr_number, repo);
         const state = prStateResult.state;
-        if (state === 'merged' && mergeWatcher) {
-          await mergeWatcher.handleMerged(pr, null);
-        } else {
-          updatePRState(pr.pr_number, repo, state);
-        }
+        updatePRState(pr.pr_number, repo, state);
         reconciledStates.set(pr.pr_number, state);
       }
-    } catch {
-      // reconciliation is best-effort; return cached data on GitHub error
+    } catch (err) {
+      // reconciliation is best-effort; return cached data on GitHub error,
+      // but the error itself must not be swallowed silently.
+      logger.warn(
+        `[prs] PR reconciliation failed for ${repo}:`,
+        (err as Error).message,
+      );
     }
 
     const items = rows.map((pr) => ({
@@ -474,9 +480,10 @@ export function createPrsRouter(
         // cleanup, origin-branch deletion, session/task completion, broadcast)
         // to the same path the detected-merge flows (AutoMerger, poll, ingest)
         // use, so operator merges get identical cleanup.
-        if (mergeWatcher && prRow) {
-          await mergeWatcher.handleMerged(
-            prRow,
+        const usedWatcher = Boolean(mergeWatcher && prRow);
+        if (usedWatcher) {
+          await mergeWatcher!.handleMerged(
+            prRow!,
             (result as { sha?: string }).sha ?? null,
           );
         } else {
@@ -495,6 +502,8 @@ export function createPrsRouter(
             pr_number: prNumber,
             repo,
             merge_sha: (result as { sha?: string }).sha ?? null,
+            source: 'manual',
+            handling: usedWatcher ? 'full' : 'fallback',
           },
         });
 

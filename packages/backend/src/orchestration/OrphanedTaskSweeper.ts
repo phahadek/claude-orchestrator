@@ -10,6 +10,7 @@ import type { ServerMessage } from '../ws/types';
 import {
   getLatestCodeSessionByNotionTaskId,
   hasActiveSessionForTask,
+  hasNonTerminalPlanningSessionForTask,
   getPRBySessionId,
   getLocalBranchBySession,
   setSessionPauseReason,
@@ -24,6 +25,13 @@ import {
 import type { Session, PullRequestRow } from '../db/types';
 import { GitHubClient } from '../github/GitHubClient';
 import type { PullRequest } from '../github/types';
+
+/** Task types the orchestrator moves to In Progress itself on dispatch — eligible for orphan sweep. */
+const SWEEPABLE_TYPES = new Set([
+  '💻 Code',
+  '🔧 Operational',
+  '🔎 Investigation',
+]);
 
 const IN_PROGRESS_STATUS = '🔄 In Progress';
 const READY_STATUS = '🗂️ Ready';
@@ -126,9 +134,11 @@ export class OrphanedTaskSweeper {
         if (!taskId || seen.has(taskId)) continue;
         seen.add(taskId);
 
-        // Only sweep Code tasks — non-Code types (Planning, Testing, Tooling) are
-        // never auto-dispatched, so In Progress with no session is normal, not orphaned.
-        if (resolved.task.type !== '💻 Code') continue;
+        // Only sweep task types the orchestrator actually auto-dispatches (moving
+        // them to In Progress itself). Design/Planning tasks are never auto-dispatched
+        // the same way (a groom launch never moves its target), so In Progress with
+        // no session there is normal, not orphaned — leave them alone.
+        if (!SWEEPABLE_TYPES.has(resolved.task.type)) continue;
 
         try {
           await this.maybeRevertTask(taskId, project.id, backend);
@@ -172,6 +182,13 @@ export class OrphanedTaskSweeper {
 
     // Skip if any non-terminal session exists for this task.
     if (hasActiveSessionForTask(taskId)) return;
+
+    // Planning sessions (groom/design) are legitimately idle awaiting operator
+    // disposition (no abandonment timeout — see Q1-B) — never treat one as an
+    // orphan. getLatestCodeSessionByNotionTaskId/hasActiveSessionForTask above
+    // only ever see 'standard' sessions, so an idle planning session would
+    // otherwise fall through to the revert/nudge paths below unnoticed.
+    if (hasNonTerminalPlanningSessionForTask(taskId)) return;
 
     // Orphan confirmed: Notion shows In Progress, no live session.
     const lastSeenAt =

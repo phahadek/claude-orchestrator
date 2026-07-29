@@ -27,12 +27,14 @@ import type { NonMilestoneSourceConfig } from '../tasks/TaskBackend';
 import { recordEvent } from '../audit/AuditLog';
 import { normalizePath } from '../config';
 import { logger } from '../logger';
+import { extractMilestoneToken } from './milestoneToken';
 
 export interface ProjectMilestone {
   id: string;
   projectId: string;
   name: string;
   sourceId: string | null;
+  canonicalShortId: string | null;
   displayOrder: number;
   createdAt: number;
   updatedAt: number;
@@ -54,6 +56,8 @@ export interface Project {
   taskSourceConfig: string | null;
   dataResidencyConfirmed: boolean;
   baseBranch: string;
+  /** True once this project reads architecture from the arch_unit store instead of Notion. */
+  archStoreAdopted: boolean;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -80,6 +84,7 @@ export interface CreateMilestoneInput {
   projectId: string;
   name: string;
   sourceId?: string | null;
+  canonicalShortId?: string | null;
   displayOrder?: number;
 }
 
@@ -89,6 +94,7 @@ function rowToMilestone(row: MilestoneRow): ProjectMilestone {
     projectId: row.project_id,
     name: row.name,
     sourceId: row.source_id,
+    canonicalShortId: row.canonical_short_id,
     displayOrder: row.display_order,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -122,6 +128,7 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
     taskSourceConfig: row.task_source_config ?? null,
     dataResidencyConfirmed: (row.data_residency_confirmed ?? 0) === 1,
     baseBranch: row.base_branch ?? 'dev',
+    archStoreAdopted: (row.arch_store_adopted ?? 0) === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     milestones: milestones.map(rowToMilestone),
@@ -203,11 +210,22 @@ export const ProjectService = {
   },
 
   createMilestone(input: CreateMilestoneInput): ProjectMilestone {
+    let canonicalShortId = input.canonicalShortId ?? null;
+    if (canonicalShortId === null) {
+      canonicalShortId = extractMilestoneToken(input.name) ?? null;
+      if (canonicalShortId === null) {
+        canonicalShortId = input.name;
+        logger.warn(
+          `[ProjectService] createMilestone: "${input.name}" has no leading M<n> token — using full name as canonical_short_id`,
+        );
+      }
+    }
     const row = insertMilestone({
       id: input.id,
       project_id: input.projectId,
       name: input.name,
       source_id: input.sourceId ?? null,
+      canonical_short_id: canonicalShortId,
       display_order: input.displayOrder ?? 0,
     });
     return rowToMilestone(row);
@@ -258,11 +276,14 @@ export const ProjectService = {
     for (let i = 0; i < yamlMilestones.length; i++) {
       const ym = yamlMilestones[i];
       const displayOrder = i;
+      const canonicalShortId =
+        extractMilestoneToken(ym.name) ?? ym.id ?? ym.name;
 
       const bySourceId = existing.find((r) => r.source_id === ym.id);
       if (bySourceId) {
         updateMilestone(bySourceId.id, {
           name: ym.name,
+          canonical_short_id: canonicalShortId,
           display_order: displayOrder,
         });
         continue;
@@ -275,6 +296,7 @@ export const ProjectService = {
         updateMilestone(byName.id, {
           name: ym.name,
           source_id: ym.id,
+          canonical_short_id: canonicalShortId,
           display_order: displayOrder,
         });
         continue;
@@ -285,6 +307,7 @@ export const ProjectService = {
         project_id: projectId,
         name: ym.name,
         source_id: ym.id,
+        canonical_short_id: canonicalShortId,
         display_order: displayOrder,
       });
     }
@@ -303,6 +326,30 @@ export const ProjectService = {
     if (!row) return undefined;
     recordEvent({
       event_type: 'data_residency_flag_toggled',
+      actor_type: 'human',
+      project_id: projectId,
+      payload: { projectId, previousValue, newValue },
+    });
+    return rowToProject(row, listMilestonesByProject(projectId));
+  },
+
+  /**
+   * Flips the project's dual-read source. A whole project migrates at once —
+   * no per-page split-brain between the arch_unit store and Notion.
+   */
+  setArchStoreAdopted(
+    projectId: string,
+    newValue: boolean,
+  ): Project | undefined {
+    const existing = getProjectRowById(projectId);
+    if (!existing) return undefined;
+    const previousValue = (existing.arch_store_adopted ?? 0) === 1;
+    const row = updateProject(projectId, {
+      arch_store_adopted: newValue ? 1 : 0,
+    });
+    if (!row) return undefined;
+    recordEvent({
+      event_type: 'arch_store_adopted_toggled',
       actor_type: 'human',
       project_id: projectId,
       payload: { projectId, previousValue, newValue },

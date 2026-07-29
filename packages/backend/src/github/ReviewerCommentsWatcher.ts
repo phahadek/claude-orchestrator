@@ -56,6 +56,13 @@ export class ReviewerCommentsWatcher {
   private pausedUntil: Date | null = null;
   private rateLimitBroadcasted = false;
   private readonly buffer = new Map<string, BufferEntry>();
+  /**
+   * The orchestrator's own GitHub posting identity (the GITHUB_TOKEN owner),
+   * resolved at boot via GitHubClient.probe(). Kept distinct from
+   * bot_comment_deny_list so its origin is clear in logging/observability;
+   * layered on top of the manual deny-list, never replacing it.
+   */
+  private readonly selfIdentities = new Set<string>();
 
   constructor(
     private github: GitHubClient,
@@ -69,6 +76,11 @@ export class ReviewerCommentsWatcher {
       id: ReturnType<typeof setTimeout>,
     ) => void = globalThis.clearTimeout.bind(globalThis),
   ) {}
+
+  /** Registers a GitHub login the watcher must always exclude as self-authored (e.g. the token owner). */
+  setSelfIdentity(login: string): void {
+    this.selfIdentities.add(login);
+  }
 
   register(scheduler: Scheduler): void {
     scheduler.register({
@@ -152,6 +164,7 @@ export class ReviewerCommentsWatcher {
       routedIds.has(id) || bufferedIds.has(id);
 
     const shouldExclude = (author: string, authorType: string): boolean =>
+      this.selfIdentities.has(author) ||
       aiUsernames.has(author) ||
       isBotAuthor(author, authorType, botDenyList, botAllowList);
 

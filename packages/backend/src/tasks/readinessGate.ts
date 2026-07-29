@@ -11,8 +11,18 @@
  * Tier 2 (lexical): a curated deferral-phrase list, matched case-insensitively
  * against prose only — occurrences inside fenced code blocks, inline code
  * spans, and block-quoted lines are ignored so a task that merely quotes a
- * phrase is not falsely blocked.
+ * phrase is not falsely blocked. Tier 2 also carries a grooming-instruction-
+ * residue class (FM2 — see the M12 design task hardening /groom against
+ * grooming-integrity failure modes): unambiguous leftover grooming
+ * instructions ("confirm ... at grooming", "pin at grooming", "decide during
+ * grooming") that should have been resolved before Ready, not carried into
+ * the artifact. Deliberately narrow regex patterns, not a bare substring list
+ * like `and/or` — that phrase is common in legitimate prose and is instead a
+ * Files/paths-section-only hedge token (see groomGate.ts's resolve-in-artifact
+ * check), too broad for this general prose scan.
  */
+
+import { renderTaskBodyMarkdown, type TaskBodySections } from './bodyRender';
 
 export interface ReadinessViolation {
   tier: 'structural' | 'lexical';
@@ -21,12 +31,27 @@ export interface ReadinessViolation {
 }
 
 /**
+ * Composes the body the eager gate should evaluate: when a live
+ * task.updateBody exists for this task in the same intent group,
+ * checkReadiness must see that *proposed* body — updateBody replaces the
+ * whole body, so it fully supersedes the stored one — rather than the stale
+ * stored body the page still carries until the group actually commits.
+ */
+export function composeProposedBody(
+  storedBody: string,
+  proposedSections: TaskBodySections | null | undefined,
+): string {
+  if (!proposedSections) return storedBody;
+  return renderTaskBodyMarkdown(proposedSections);
+}
+
+/**
  * Seed list decided at implementation time (task 39a22f91: "Seed list:
  * decide at implementation time..."). Owned by the command layer as an
  * in-repo backend constant — NOT read from the config tree. Runtime-tunable
  * phrase lists are Future Scope.
  */
-const DEFERRAL_PHRASES: readonly string[] = [
+export const DEFERRAL_PHRASES: readonly string[] = [
   'decide at implementation time',
   'decide during implementation',
   'decided by the implementer',
@@ -38,6 +63,18 @@ const DEFERRAL_PHRASES: readonly string[] = [
   'figure out during implementation',
   'leave to the implementer',
   'determine at implementation time',
+];
+
+/**
+ * Grooming-instruction residue — unambiguous, seed set (refinable). Each
+ * pattern requires both the instruction verb and the "at/during grooming"
+ * anchor on the same line so ordinary prose mentioning grooming, or an
+ * unrelated "confirm ..."/"pin ..." sentence, doesn't false-positive.
+ */
+const GROOMING_RESIDUE_PATTERNS: readonly RegExp[] = [
+  /\bconfirm\b[^\n]{0,80}\bat grooming\b/i,
+  /\bpin\b[^\n]{0,80}\bat grooming\b/i,
+  /\bdecide\b[^\n]{0,80}\bduring grooming\b/i,
 ];
 
 function normalizeHeadingText(text: string): string {
@@ -117,12 +154,80 @@ function checkDeferralPhrases(body: string): ReadinessViolation[] {
   return violations;
 }
 
-/** Run both deterministic tiers against a task page body. */
+/** Tier 2 — leftover grooming-instruction residue found in prose. */
+function checkGroomingResidue(body: string): ReadinessViolation[] {
+  const violations: ReadinessViolation[] = [];
+  const lines = stripNonProse(body);
+  lines.forEach((line, idx) => {
+    for (const pattern of GROOMING_RESIDUE_PATTERNS) {
+      const match = line.match(pattern);
+      if (match) {
+        violations.push({
+          tier: 'lexical',
+          detail: `grooming-instruction residue found ("${match[0].trim()}")`,
+          location: `line ${idx + 1}`,
+        });
+      }
+    }
+  });
+  return violations;
+}
+
+/**
+ * Task types whose readiness is about their own scope/method being clear,
+ * not about the questions they exist to answer being pre-resolved (see
+ * config/task-writing.md § Readiness gate carve-out #4). For these types,
+ * Open Questions is the deliverable the task carries into execution — for
+ * 📐 Design/📋 Planning it is the /design worklist; for 🔎 Investigation
+ * (and observational 🧪 Testing, an Investigation variant) it is the
+ * falsification question the task is dispatched to answer, not a defect
+ * to clear before Ready. A decision-space body legitimately weighs
+ * deferral-shaped phrasing — neither is a readiness violation for these
+ * types. checkGroomingResidue still applies to every type.
+ */
+const OPEN_QUESTIONS_EXEMPT_TYPES: ReadonlySet<string> = new Set([
+  '📐 Design',
+  '📋 Planning',
+  '🔎 Investigation',
+  '🧪 Testing',
+]);
+
+/**
+ * Run the deterministic tiers against a task page body. `type` is the
+ * task's display-format Type (e.g. '💻 Code'); when it is 📐 Design,
+ * 📋 Planning, 🔎 Investigation, or 🧪 Testing, the Open Questions and
+ * deferral-phrase checks are skipped — see OPEN_QUESTIONS_EXEMPT_TYPES.
+ * checkGroomingResidue is type-agnostic.
+ */
 export function checkReadiness(
   body: string | null | undefined,
+  type?: string | null,
 ): ReadinessViolation[] {
   const text = body ?? '';
-  return [...checkOpenQuestionsSection(text), ...checkDeferralPhrases(text)];
+  const exempt = type != null && OPEN_QUESTIONS_EXEMPT_TYPES.has(type);
+  return [
+    ...(exempt ? [] : checkOpenQuestionsSection(text)),
+    ...(exempt ? [] : checkDeferralPhrases(text)),
+    ...checkGroomingResidue(text),
+  ];
+}
+
+/**
+ * Standard readiness_override reason for a 📐 Design task promoted
+ * approve-by-standard (planning/triage.ts) — triaged 'clean' in a
+ * consolidated milestone Design triage rather than decided per-item. This is
+ * the one human decision approve-by-standard removes for interactive types;
+ * every other per-task server-enforced record (checkGroomingPromotionGate)
+ * still applies unchanged. `milestoneLabel` is the milestone id the triage
+ * ran under (e.g. "M12").
+ */
+export function standardTriageCleanDesignOverrideReason(
+  milestoneLabel: string,
+): string {
+  return (
+    'Design task — open questions are the /design worklist, resolved at execution; ' +
+    `triaged clean in the ${milestoneLabel} consolidated Design triage`
+  );
 }
 
 /** Thrown by the command layer when a Ready transition is blocked. */

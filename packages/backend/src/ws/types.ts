@@ -3,6 +3,7 @@ import type { DisplayStatus } from '../tasks/TaskStatusEngine';
 import type { PauseReason } from '../db/types';
 import type { EventKind } from '../session/eventKind';
 import type { RecoveryDescriptor } from '../db/pauseReason';
+import type { StagedIntent } from '../routes/stagedIntents';
 
 // ── Server → Client ──────────────────────────────────────────────
 export interface PermissionDenial {
@@ -74,6 +75,10 @@ export interface TaskView {
   blocked: boolean;
   blockerNames: string[];
   wave: number;
+  /** Ops-eligible task's dependency satisfaction (deploy-aware, not just ✅ Done) — absent for non-ops task types. */
+  opsDepBlocked?: boolean;
+  /** Human-readable reason when opsDepBlocked, e.g. "waiting on <dep title>". */
+  opsDepBlockedReason?: string | null;
   codeSession: {
     sessionId: string;
     status: string;
@@ -86,6 +91,16 @@ export interface TaskView {
     context_occupancy_tokens?: number;
     compaction_count?: number;
     model?: string | null;
+  } | null;
+  /** Latest launched planning (groom/design/ops) session for this task, if any. */
+  planningSession: {
+    sessionId: string;
+    status: string;
+    sessionType: string;
+    startedAt: number;
+    endedAt: number | null;
+    inputTokens: number;
+    outputTokens: number;
   } | null;
   pr: {
     prNumber: number;
@@ -263,6 +278,17 @@ export type ServerMessage =
   | { type: 'task_status_changed'; notionTaskId: string; newStatus: string }
   | { type: 'task_updated'; task: TaskView }
   | {
+      /**
+       * Streams staged-intent lifecycle changes (create/approve/reject/
+       * commit/supersede) for the SessionPanel decision panel — mirrors the
+       * REST-truth + WS-notification pattern of task_updated: the frontend
+       * treats `intent` as a live snapshot, never a delta, and REST
+       * (stagedIntentsApi) stays the source of truth for apply/reject.
+       */
+      type: 'staged_intent_changed';
+      intent: StagedIntent;
+    }
+  | {
       type: 'auto_launch';
       projectId: string;
       taskId: string;
@@ -272,7 +298,10 @@ export type ServerMessage =
   | {
       type: 'auto_launch_paused';
       taskId: string;
-      reason: 'launch_failed';
+      reason:
+        | 'launch_failed'
+        | 'planning_crashed'
+        | 'planning_first_turn_empty';
       detail: string;
     }
   | { type: 'session_launch_failed'; taskId: string; sessionId: string }
@@ -418,7 +447,8 @@ export type ServerMessage =
         | 'analyze_failing'
         | 'pre_review_interrupted'
         | 'conflict_dead_session'
-        | 'undelivered_review_feedback';
+        | 'undelivered_review_feedback'
+        | 'orphaned_no_task_link';
     };
 
 // ── Client → Server ──────────────────────────────────────────────

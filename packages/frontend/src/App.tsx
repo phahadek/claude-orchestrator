@@ -32,6 +32,7 @@ import { UpdateBanner } from './components/UpdateBanner';
 import { RateLimitBanner } from './components/RateLimitBanner';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { GateReadinessPanel } from './components/GateReadinessPanel';
+import { ArchitecturePanel } from './components/ArchitecturePanel';
 import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
 import { SessionFilterBar } from './components/SessionFilterBar';
@@ -1117,6 +1118,8 @@ export default function App() {
       : null;
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
+  const activeBoardMilestone =
+    activeProject?.boards?.find((b) => b.id === activeBoardId)?.name ?? null;
 
   const anyDragging = isDragging;
 
@@ -1563,7 +1566,23 @@ export default function App() {
         {topView === 'gate' && (
           <ErrorBoundary name="GateReadinessView">
             <div className={styles.analyticsView}>
-              <GateReadinessPanel activeProjectId={activeProjectId} />
+              <GateReadinessPanel
+                activeProjectId={activeProjectId}
+                activeBoardMilestone={activeBoardMilestone}
+                sessions={sessions}
+                send={send}
+                setSessionArchived={setSessionArchived}
+                setSessionFavorited={setSessionFavorited}
+                project={activeProject}
+              />
+            </div>
+          </ErrorBoundary>
+        )}
+
+        {topView === 'architecture' && (
+          <ErrorBoundary name="ArchitectureView">
+            <div className={styles.analyticsView}>
+              <ArchitecturePanel />
             </div>
           </ErrorBoundary>
         )}

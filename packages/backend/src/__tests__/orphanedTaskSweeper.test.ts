@@ -28,6 +28,7 @@ vi.mock('node:fs', () => ({
 vi.mock('../db/queries.js', () => ({
   getLatestCodeSessionByNotionTaskId: vi.fn(),
   hasActiveSessionForTask: vi.fn(),
+  hasNonTerminalPlanningSessionForTask: vi.fn(() => false),
   getPRBySessionId: vi.fn(() => null),
   getLocalBranchBySession: vi.fn(() => undefined),
   setSessionPauseReason: vi.fn(),
@@ -54,6 +55,7 @@ import fs from 'node:fs';
 import {
   getLatestCodeSessionByNotionTaskId,
   hasActiveSessionForTask,
+  hasNonTerminalPlanningSessionForTask,
   getPRBySessionId,
   getLocalBranchBySession,
   setSessionPauseReason,
@@ -136,6 +138,7 @@ describe('OrphanedTaskSweeper', () => {
     ]);
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
     vi.mocked(getPRBySessionId).mockReturnValue(null);
     vi.mocked(getLocalBranchBySession).mockReturnValue(undefined);
     vi.mocked(setSessionPauseReason).mockClear();
@@ -887,7 +890,7 @@ describe('OrphanedTaskSweeper', () => {
 
   // ── Type filter (non-Code tasks must be skipped) ──────────────────────────
 
-  it.each(['📋 Planning', '🧪 Testing', '🛠️ Tooling', '🚦 Gate'])(
+  it.each(['📋 Planning', '🧪 Testing', '🛠️ Tooling', '🚦 Gate', '📐 Design'])(
     'does not revert or nudge a non-Code In-Progress task with no session (type: %s)',
     async (taskType) => {
       const backend = makeBackend([
@@ -958,6 +961,119 @@ describe('OrphanedTaskSweeper', () => {
 
     expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
     expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  it('skips a task whose only session is a parked (idle) planning session', async () => {
+    // getLatestCodeSessionByNotionTaskId/hasActiveSessionForTask only ever see
+    // 'standard' sessions, so they report nothing for a task whose only
+    // session is a groom/design one — hasNonTerminalPlanningSessionForTask is
+    // the dedicated exclusion for that case.
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '💻 Code'),
+    ]);
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(true);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  // ── Ops/Investigation sweep (widened type filter) ─────────────────────────
+
+  it.each(['🔧 Operational', '🔎 Investigation'])(
+    'reverts a %s task at In Progress whose only session is killed',
+    async (taskType) => {
+      const backend = makeBackend([
+        makeTask('notion:abc', '🔄 In Progress', taskType),
+      ]);
+      // getLatestCodeSessionByNotionTaskId only ever sees 'standard' sessions,
+      // so an ops session (even a killed one) never surfaces here — it's undefined.
+      vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
+      vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+      // The ops session is killed (terminal), so the planning-session guard
+      // correctly reports no non-terminal planning session.
+      vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
+
+      const sweeper = new OrphanedTaskSweeper(broadcast, {
+        listProjects: () => [
+          { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+        ],
+        resolveBackend: () => backend,
+      });
+
+      await sweeper.sweepOnce();
+
+      expect(backend.updateStatus).toHaveBeenCalledWith(
+        'notion:abc',
+        '🗂️ Ready',
+      );
+      expect(recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'task_orphan_reverted',
+          task_id: 'notion:abc',
+        }),
+      );
+    },
+  );
+
+  it('does not revert an Operational task whose ops session is idle (parked awaiting disposition)', async () => {
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '🔧 Operational'),
+    ]);
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    // The parked ops session is idle — non-terminal — so the guard reports true.
+    vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(true);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  it('never touches an Operational task already at In Review or Done', async () => {
+    // listTasksByStatus is scoped to IN_PROGRESS_STATUS, so a task already past
+    // In Progress never appears in the sweep's candidate list at all.
+    const backend = makeBackend([]);
+    vi.mocked(getAllProjects).mockReturnValue([
+      { id: 'proj-1', name: 'P1' } as ReturnType<typeof getAllProjects>[number],
+    ]);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.listTasksByStatus).toHaveBeenCalledWith('🔄 In Progress');
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'task_orphan_reverted' }),
     );
   });

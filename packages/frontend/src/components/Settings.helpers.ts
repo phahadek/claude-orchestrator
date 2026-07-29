@@ -1,5 +1,6 @@
 export interface SettingsValues {
   max_concurrent_code_sessions: string;
+  max_concurrent_planning_sessions: string;
   auto_review_concurrency: string;
   auto_review: string;
   card_preview_lines: string;
@@ -7,6 +8,10 @@ export interface SettingsValues {
   review_session_model: string;
   code_session_effort: string;
   review_session_effort: string;
+  planning_session_model: string;
+  planning_session_effort: string;
+  ops_session_model: string;
+  ops_session_effort: string;
   session_mode: string;
   auto_launch_concurrency: string;
   auto_launch_poll_interval_ms: string;
@@ -21,18 +26,41 @@ export interface SettingsValues {
   auto_archive_sweep_interval_minutes: string;
   large_task_model: string;
   large_task_effort: string;
+  tier3_classifier_model: string;
 }
 
 export const MIN_POLL_INTERVAL_MS = 5000;
+
+export const MODEL_OPTIONS = [
+  { label: '(CLI default)', value: '' },
+  { label: 'claude-opus-4-6', value: 'claude-opus-4-6' },
+  { label: 'claude-sonnet-5', value: 'claude-sonnet-5' },
+  { label: 'claude-sonnet-4-6', value: 'claude-sonnet-4-6' },
+  { label: 'claude-haiku-4-5', value: 'claude-haiku-4-5' },
+];
+
+export const EFFORT_OPTIONS = [
+  { label: 'Default', value: '' },
+  { label: 'low', value: 'low' },
+  { label: 'medium', value: 'medium' },
+  { label: 'high', value: 'high' },
+  { label: 'xhigh', value: 'xhigh' },
+  { label: 'max', value: 'max' },
+];
 
 const NON_NUMERIC_KEYS = new Set<keyof SettingsValues>([
   'code_session_model',
   'review_session_model',
   'code_session_effort',
   'review_session_effort',
+  'planning_session_model',
+  'planning_session_effort',
+  'ops_session_model',
+  'ops_session_effort',
   'session_mode',
   'large_task_model',
   'large_task_effort',
+  'tier3_classifier_model',
   'auto_review',
   'auto_archive_enabled',
 ]);

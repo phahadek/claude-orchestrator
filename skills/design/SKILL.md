@@ -18,7 +18,7 @@ description: >-
 Design Execution is the **upstream** sister to grooming. A 📐 Design or 📋 Planning
 task arrives with an unresolved decision space; this skill drives that space to a
 locked spec, applies the spec into the live architecture pages, and files the
-follow-on Code / Tooling tasks that `/groom` will then bring to Ready.
+follow-on Code / Operational / Investigation tasks that `/groom` will then bring to Ready.
 
 ```
 📐 Design / 📋 Planning  ──/design──▶  🔲 Backlog Code  ──/groom──▶  🗂️ Ready  ──implement──▶  ✅ Done
@@ -31,7 +31,7 @@ follow-on Code / Tooling tasks that `/groom` will then bring to Ready.
 > identically. The only material difference in practice: Planning tasks more
 > often have an empty `Notion pages affected` list (planning produces task
 > sequencing, not architecture lock-ins), which is handled transparently by
-> Step 3.4 (the page-edits loop just iterates a possibly-empty list).
+> Step 3.5 (the page-edits loop just iterates a possibly-empty list).
 
 This skill exists because the procedure is **load-bearing but routinely improvised**:
 under context pressure a session executing a Design task tends to batch-lock
@@ -105,7 +105,12 @@ On success it has written, under `.skill-cache/design/<milestone>/`:
   survive; new questions in the task body are appended.
 
 Read the context-page bodies in `context/` — Master Context, Technical Architecture,
-Coding Guidelines, Research Goals, Future Scope, Project Milestones. Also read the
+Coding Guidelines, Research Goals, Future Scope, Project Milestones. **Future Scope is
+always present**, but its shape varies by project: a **standalone page** in some
+(e.g. polimarket-analyser), a **`## Future Scope` section of the Master Context page**
+in others (e.g. claude-orchestrator). Either way it is the home for defer-to-future
+decisions — locate it in the loaded bundle before you ever conclude "there's nowhere to
+put this" (see § the silent-non-capture anti-pattern). Also read the
 universal task-authoring standard at `config/task-writing.md` (no longer a Notion
 context page — read it from local disk). **This is non-negotiable**: executing a design task
 without the
@@ -132,6 +137,20 @@ any question in Step 3, do the read-only investigation it implies:
 - **Architecture-page reads** for any question that touches a load-bearing
   constraint already locked in an arch page. Cite the page section verbatim when
   the constraint binds.
+- **Cross-project prior-art reads** for any question that designs a capability a
+  **sister / more-mature managed project may already have solved** — a backup
+  strategy, a deploy trigger surface, an arch-page structure, a resource-isolation
+  model. Before recommending an invented answer, read that project's arch pages /
+  `context.md` / code as prior art (the project index in `procedures.md` lists the
+  managed projects). A validated answer beats an invented one — this is among the
+  highest-leverage moves in a design session. Cite what the sister project does when
+  presenting the question.
+- **Premise checks on the task body itself.** The Open Questions are not the only
+  thing to investigate — the **facts the body asserts** can be stale. A body that
+  says a method/field already exists, that "there's no single target task," that a
+  subset "isn't session-stageable," or any other stated premise, must be **verified
+  against current reality**, not taken on faith. Falsify before you build on it; a
+  wrong premise silently invalidates every decision layered on top of it.
 
 Keep package reads in subagents so the main window stays small — same reason as
 grooming's Step 1b: the procedure must survive context pressure.
@@ -143,6 +162,12 @@ fail-loud posture as `/groom`.
 ---
 
 ## Step 2 — Prioritization proposal
+
+> **Scale this to the milestone.** For a **small milestone (≤ ~4 executable tasks)**
+> the full thematic-prioritization machinery is usually a no-op — collapse it to one
+> line ("N tasks, deps allow any order; proposed order: …, objections?") and move on.
+> Reserve the full grouping-by-theme treatment for milestones large enough that
+> sequencing actually changes the outcome.
 
 Follow `reference/presentation.md` § **Prioritization**. In short:
 
@@ -172,6 +197,18 @@ For the current Design task (in the approved order):
 1. **Move task to 🔄 In Progress** via `mcp__claude_ai_Notion__notion-update-page`
    (`command: "update_properties"`). Confirm in chat. Stamp
    `design-state.json` → task entry → `moved_to_in_progress_at`.
+   - **Reconcile body-locked decisions before presenting anything.** A resumed or
+     reclassified task often already carries locked answers in its body (a
+     `LOCKED →` marker in Implementation notes, or an "Open questions resolved"
+     row) that the loader seeded into `design-state.json` as *unlocked* — so it
+     looks fresh when it isn't. Check the body first; for each already-settled
+     question, reconcile it into `design-state.json` (`locked_decision` +
+     `signed_off_at`) and **confirm with the human** rather than re-litigating it.
+     If body and state disagree, surface the conflict; don't silently pick one.
+   - **Surface inbound carries.** Scan `design-state.json` for any **carry aimed at
+     this task** — a `carries: [{to_task, note}]` entry recorded on a *sibling*
+     task pointing `to_task` here (Step 3.2). Surface each note before you start; a
+     sibling's earlier lock may already constrain a decision on this task.
 
 2. **For each open question, one at a time, in the order written in the task body:**
    - Present the question + the investigation findings from Step 1b + 2–3 viable
@@ -180,19 +217,89 @@ For the current Design task (in the approved order):
      is ready to be wrong; the human is the decider. Iterate as long as the human
      wants to debate.
    - On explicit sign-off, record the locked decision in `design-state.json` →
-     `open_questions[i].locked_decision` + `signed_off_at`. **Never batch-lock
-     multiple questions in one message.**
+     `open_questions[i].locked_decision` + `signed_off_at` — **immediately, before
+     you present the next question.** The write is load-bearing for resume-safety:
+     a crash mid-task must lose nothing, so never defer the state-writes to
+     finalization (that is a distinct anti-pattern from batch-*locking* — see
+     `anti-patterns.md`). After each edit, **re-read the file to confirm it is still
+     valid JSON** (a bad edit once corrupted it). **Never batch-lock multiple
+     questions in one message.**
+   - **Record cross-task carries structurally, not in prose.** If the locked
+     decision **constrains or feeds a sibling task** (an atomic-apply another task
+     must honor, a shared hard-block, a cap the sibling enforces), record it as an
+     outbound carry: `design-state.json` → this task → `carries: [{to_task, note}]`.
+     That way the constraint travels to the sibling (surfaced at its Step 3.1)
+     instead of living only in this task's `locked_decision` prose or your head —
+     where cross-task threads get dropped. **Reach for `carries` first, not the
+     follow-on task's `Dependencies`/prose.** A constraint threaded into a follow-on
+     body reads as ordering, not as the specific decision the sibling must honor, and
+     it's easy to under-use the field precisely when you're deep in a decision — the
+     moment you say "…and that means task X must…" is the cue to write a carry.
 
-3. **Once every question for this task is signed off, compose the Implementation
-   notes** for the Design task body:
+3. **Completeness-critic pass — mandatory, once every question is signed off,
+   *before* composing the Implementation notes.** Ask the load-bearing question:
+   _"What would an implementer of this task's locked spec hit that no open
+   question owns?"_ Probe deliberately for the gap classes that recur:
+   - **Durability / failure modes** — crash, restart, partial write, empty input,
+     the backup / recovery path no question asked about.
+   - **Dual-read / consumer-set gaps** — who *else* reads or writes this surface? A
+     decision made for one consumer can be wrong for a second that no question named.
+   - **Interaction bugs** — does the locked spec collide with an existing component
+     (a sweeper, a scheduler, a sibling analyzer, a hot-reload path)?
+   - **Missing scaffolding** — a loader, a trigger surface, a deploy step, a
+     config-seed the spec silently assumes.
+   - **State-mutation granularity** — for *any* design that mutates state (a store
+     write, an apply, a supersede, a status flip), probe **granularity + atomicity +
+     partial-failure** explicitly: per-item or grouped? atomic group or piecemeal?
+     content-idempotent on replay? what state results from a partial failure? The
+     pull is consistently toward finer granularity, atomic group semantics, and
+     content-idempotency — surface those before presenting, not after pushback.
+   - **Unstated premises** — a fact the spec leans on that no question verified.
+
+   Consume the orchestrator's advisory **trace-coverage** signal as an aid —
+   `POST /api/design/:taskId/trace-coverage` maps each follow-on Code task's regions
+   + this task's acceptance criteria against the locked decisions and flags any output
+   that traces back to **no** locked decision as a _possibly-unasked question_. It is
+   **advisory, never a gate** (no error, no promotion block, no question-count
+   threshold) — a clean signal is not evidence the critic ran.
+
+   For **each** gap, classify and **dispose — never drop** (disposition-don't-drop):
+   - **fold** → it belongs to an existing open question: reopen it, investigate,
+     re-present, re-lock.
+   - **note** → real but already-decided detail: record it in the Implementation
+     notes.
+   - **file-sibling** → a distinct decision needing its own design: file a sibling
+     📐 Design task at 🔲 Backlog (via Step 3.6's create path).
+   - **sibling-owned** → another task already covers it: note the reference and
+     move on.
+
+   Run the pass **even when the task feels complete** — it earns its keep exactly on
+   the tasks that feel done. Surface the critic's findings + your proposed
+   dispositions to the human and get sign-off before composing the Implementation
+   notes; the human can add gaps or redirect a disposition. **Record every candidate's
+   disposition in the durable completeness-disposition store** — `POST
+   /api/design/:taskId/completeness-disposition` (one row per critic run: `{question,
+   disposition: accepted|dismissed, reason}`) — **never** as body prose and **never**
+   silently dropped.
+
+4. **Once every question for this task is signed off *and the completeness-critic
+   pass is dispositioned*, compose the Implementation notes** for the Design task
+   body:
    - One-paragraph **decision summary** at the top.
    - An **"Open questions resolved"** table if there are ≥2 questions (the
      convention from closed Design tasks in the corpus).
-   - A **"Notion pages updated"** list — filled in as Step 3.4 progresses.
-   - A **"Follow-on tasks filed"** list — filled in as Step 3.5 progresses.
+   - A **"Notion pages updated"** list — filled in as Step 3.5 progresses.
+   - A **"Follow-on tasks filed"** list — filled in as Step 3.6 progresses.
      Draft inline and show the human before writing to Notion.
 
-4. **For each entry in "Notion pages affected"** — per `reference/page-edits.md`:
+5. **For each entry in "Notion pages affected"** — per `reference/page-edits.md`.
+   **If the list is empty, don't just skip this step — ask the durable-home question
+   explicitly:** _"where do these locked decisions durably land?"_ A terse Design task
+   often under-declares its arch home (declares no pages-affected while clearly
+   warranting a Technical Architecture edit); catch that here by default, not by
+   leaning on the completeness-critic to find it. If the answer is a real arch page,
+   add it and proceed; if the decisions genuinely live only in the Implementation
+   notes / a follow-on, say so deliberately.
    - Fetch the target page via `notion-page.mjs` (full body, not MCP search).
    - Identify the exact section to amend; quote enough context to disambiguate.
    - Compose the exact addition/edit.
@@ -201,14 +308,28 @@ For the current Design task (in the approved order):
    - On sign-off, apply via `notion-update-page`. Stamp `design-state.json` →
      `pages_affected[i].applied_at`. **Never write to a context page silently.**
 
-5. **For each follow-on Code / Tooling task identified during the design:**
+6. **For each follow-on Code / Operational / Investigation task identified during the design:**
    - **Pick the Type deliberately** (it determines downstream execution — see
      `procedures.md` § _Task types — what Ready triggers_). Pure code-generation
      work that does **not** depend on implementation-time data → 💻 **Code** (so the
-     orchestrator auto-dispatches it once Ready). Interactive / observational work
-     (running a tool, wiring it, inspecting results) → 🛠️ **Tooling** / 🧪 **Testing**.
-     If a single follow-on mixes both, **file two tasks** — never bury dispatchable
-     code-gen inside a Tooling/Testing task, where no worker will pick it up.
+     orchestrator auto-dispatches it once Ready). Work that *changes* prod/environment
+     state through a sanctioned surface → 🔧 **Operational**; work that *diagnoses*
+     from live data and files follow-ons → 🔎 **Investigation**; observational / E2E
+     runs → 🧪 **Testing** (an Investigation variant). (🛠️ **Tooling** is **retired** —
+     it split into 🔧 Operational / 🔎 Investigation.) If a single follow-on mixes
+     dispatchable code-gen with interactive/observational work, **file two tasks** —
+     never bury dispatchable code-gen inside an Operational/Investigation/Testing
+     task, where the orchestrator won't auto-dispatch it.
+   - **If the decision implies machine enforcement, file the orchestrator-side Code
+     task — not just skill/docs.** When a locked decision says an invariant should
+     be *enforced* (a gate, a validation, a write-path check) rather than merely
+     *documented*, its durable home is orchestrator/backend code — the
+     "machine-enforced > skill prose" principle. Scoping the follow-on as
+     Docs/skill-only when the real fix is a backend enforcement point is the exact
+     **skill-first scoping of an orchestrator surface** trap `task-writing.md`
+     warns against: scope the owned surface (the orchestrator API / gate / check)
+     first, the skill/UI as its consumer. If in doubt whether the decision needs a
+     machine home, it does — file the Code task.
    - Draft the full body inline per `config/task-writing.md` (Summary /
      Dependencies / Context / Files paths affected / Acceptance criteria /
      Implementation notes-placeholder).
@@ -222,11 +343,11 @@ For the current Design task (in the approved order):
      can override after the fact.
    - Record the new page ID in `design-state.json` → `followon_tasks[]`.
 
-6. **Write the Implementation notes to the Design task body** via
+7. **Write the Implementation notes to the Design task body** via
    `notion-update-page`. Move task → ✅ **Done**. **Confirm in chat. Move to the
    next Design task.** A Design task's "doneness" is the spec being locked, the
-   pages being updated, and the follow-on tasks being filed — all of which this
-   step has just completed. There is no PR to merge or human review step
+   completeness-critic being dispositioned, the pages being updated, and the
+   follow-on tasks being filed — all of which this step has just completed. There is no PR to merge or human review step
    downstream for the Design task itself; Done means done.
 
 ---
@@ -246,6 +367,12 @@ session summary:
 
 ## Rules (hard)
 
+See `../_shared/reference/hard-rules.md` for the planning-procedure core this
+skill shares with `/groom` and `/ops` (deterministic load, the human as the
+gate, no silent writes, `git -C` not `cd`, and cache/state files via the
+Edit/Write tool) — canonical source
+`packages/backend/src/planning/procedureCore.ts`. Design-specific rules below:
+
 - **Source of truth**: Notion for architectural rules, decisions, and task
   definitions. For _implemented_ detail (DDL, signatures, analyzer specs), the code
   under `source_root` wins; on intent/rationale, Notion wins.
@@ -258,9 +385,36 @@ session summary:
   execution = file a sibling Design task at 🔲 Backlog (and let `/groom` handle it).
 - **No silent architecture-page or Design-task-body writes.** Every arch-page
   edit and every Design-task status flip is confirmed in chat first. Follow-on
-  Code/Tooling tasks are the exception — they are created without per-body
-  sign-off (Backlog status only; the human reviews at groom time or edits in
-  Notion directly).
+  Code/Operational/Investigation tasks are the exception — they are created without
+  per-body sign-off (Backlog status only; the human reviews at groom time or edits
+  in Notion directly).
+- **Never silently drop a needed capture.** When a decision must be recorded and its
+  obvious destination isn't in the pre-loaded context bundle, you do **not** get to
+  quietly decide "there's nowhere to put this." Find the destination (Future Scope
+  and the arch pages are always in Notion, trivially searchable — the loaded bundle
+  is a convenience, not the boundary of what exists) or surface the gap to the human
+  — then capture. A silent non-capture of something explicitly needed is a defect,
+  not a judgment call.
+- **Persist each lock the instant it's signed off.** Write to `design-state.json`
+  before presenting the next question — never batch the state-writes to
+  finalization. Resume-safety depends on it: a mid-task crash must lose nothing.
+  Re-read the file after each edit to confirm it's still valid JSON.
+- **The completeness-critic pass (Step 3) is mandatory, not optional.** Run it after
+  every question locks and before composing Implementation notes, even when the task
+  feels done. Dispose every gap it finds (fold / note / file-sibling / sibling-owned)
+  — never drop one. The orchestrator's advisory **trace-coverage** signal feeds this
+  pass as an **aid, never a gate**; record each candidate's disposition in the durable
+  **completeness-disposition store** (`accepted|dismissed` + reason), never as body
+  prose and never silently.
+- **Split-don't-trim.** A too-large decision space is handled by the **`file-sibling`**
+  disposition — file sibling Design tasks and carry the questions there — **never** by
+  trimming questions to shrink the set. Question-count is a **soft diagnostic** (`>~6`
+  is a prompt to consider splitting), **not** a numeric trigger and **not** wired into
+  `size_check`.
+- **Check sister projects for prior art, and verify the task body's premises.**
+  Before inventing an answer another managed project may already have validated, read
+  its arch pages / `context.md` / code. And investigate the *facts the body asserts*,
+  not just its open questions — a stale premise invalidates everything built on it.
 - **Cache/state files are edited with the Edit/Write tool, never a shell script.**
   `design-state.json` / `code-map.json` are loader-seeded JSON on disk — Edit them (or
   Read + Write the whole file). Never `node _q6lock.cjs && rm …` or any `cd … && …`
@@ -270,7 +424,10 @@ session summary:
   any directory-change-before-git as a hook-execution risk, regardless of allowlist).
   `git -C <repo> show/log/diff …` is allowlisted and silent. Use path flags for other repo
   tools too (`npm --prefix`, `uv --project`), not `cd`.
-- **No batch-locking.** One open question per message; one sign-off per question.
+- **No question-bundling.** One open question per `decision.pickOne` intent, one
+  sign-off per question — but independent questions can each be staged as their own
+  intent in the same turn; only a question that depends on another still-unresolved
+  one waits.
 - **Investigate before deciding.** Code reads / API calls / arch-page reads come
   before presenting a question. "Decide at implementation time" is a _defer_, not
   a _resolve_ — it becomes an explicit Open Question in the follow-on Code task.

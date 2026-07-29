@@ -20,7 +20,7 @@ batch from your summary alone, without re-reading the task page or the code.
 
 ## Dependencies — hard-block vs soft-order
 
-Every Code/Tooling task in a batch is examined for its **dependencies on other
+Every Code task in a batch is examined for its **dependencies on other
 tasks**, and each dependency is classified as one of:
 
 - **Hard-block (prerequisite).** Task B _cannot start_ until Task A is at ✅ Done
@@ -79,17 +79,17 @@ investigation_.
   Always include the _Hard-block:_ line — write _none._ if independent.
   Implicit-by-omission is how the previous failure mode happened.
 
-## Size check (mandatory, per 💻 Code or 🛠️ Tooling task in the batch)
+## Size check (mandatory, per 💻 Code task in the batch)
 
 The size check is **load-bearing**, not advisory. It runs **for every** Code
-or Tooling task in the batch, and the result lands as a required line in that
+task in the batch, and the result lands as a required line in that
 task's header (see below). Skipping it is a procedure violation — the
 promotion gate enforces this (a Ready promotion without a recorded size
 classification is blocked, same as missing `hard_block_deps`).
 
 ### Estimate
 
-Code and Tooling tasks default to **under 500 LoC** estimated diff. Estimate
+Code tasks default to **under 500 LoC** estimated diff. Estimate
 cheaply from the code-map digest: files touched × ~50–100 lines each, or by
 recalling what similar past tasks in this repo landed at (CI / git history is
 the ground truth — `git -C <repo> diff --stat` on the closest prior task is a
@@ -110,29 +110,34 @@ One of three outcomes per task:
 - **Split now** (estimate > 500 LoC and splittable) — see procedure below.
 - **Unsplittable** (estimate > 500 LoC and **demonstrably** must land atomically) — proceed with the original task as-is, with explicit reason in the header.
 
-### Split procedure (when "split now")
+### Split procedure (when "split now") — nominate, don't perform
 
-**Keep the original task; edit it down. Create N-1 new siblings.** Do **NOT**
-demote the original to Deferred or mark it "superseded" — Deferred has a
-specific meaning (_"scope superseded by another task"_) and it produces stale
-state where the original carries history, comments, and inbound dep refs but
-isn't usable. The cleaner shape:
+**Splitting is orchestrator-driven. A grooming session *nominates* a split
+candidate; it never edits the task set into N pieces in-session.** Record the
+nomination in `size_check` — `{ …, "decision": "split_now", "split_into":
+[<planned subset ids/labels>] }` — and surface it in the batch. The
+orchestrator's split-candidate detector runs **detect → confirm → route**: it
+confirms the trip (a candidate far over the floor auto-confirms; one near the
+floor waits for operator sign-off) and **routes the split to a dedicated split
+session**, which performs the actual edit. The groomer's job stops at the
+nomination.
 
-1. Pick **one** of the planned N subsets as the original's new scope —
-   typically the one that's foundational (most others depend on it) or the
-   one whose title fits most naturally as a narrowed version of the original
-   title.
-2. **Edit the original task in Notion** to that scope: update title, Summary,
-   Files/paths affected, acceptance criteria, and any sections referencing
-   the wider scope. The original retains its Notion ID, history, and any
-   inbound dep references — which is the point.
-3. **Create N-1 new sibling tasks at 🔲 Backlog** for the remaining subsets,
-   each ≤ 500 LoC, each properly scoped. They go through the same grooming
-   pass — each gets its own 4-point summary and hard-block-vs-soft-order
-   classification.
-4. All N tasks (the now-narrowed original + the N-1 new) appear in the
-   current batch and proceed to Ready together. Hard-block deps among them
-   are classified per the Dependencies section above.
+The shape the **dedicated split session** follows (and the reason a split is
+never a Deferred-and-recreate):
+
+1. **Keep the original task; edit it down to one subset** — typically the
+   foundational one (most others depend on it), or the one whose title fits most
+   naturally as a narrowed version of the original. The original retains its
+   Notion ID, history, and inbound dep references — which is the point.
+2. **Create N-1 new sibling tasks at 🔲 Backlog** for the remaining subsets, each
+   properly scoped. They go through their own grooming pass.
+3. Do **NOT** demote the original to ⏭️ Deferred or mark it "superseded" —
+   Deferred means _"scope superseded by another task,"_ which doesn't fit a
+   split; it strands the original's history, comments, and inbound dep refs.
+
+**Merging** two tasks is the same shape in reverse: nominate the merge candidate;
+the orchestrator confirms and routes it. A grooming session never performs the
+merge itself.
 
 ### Unsplittable test
 
@@ -148,13 +153,13 @@ reasons.
 
 ### Per-task header line (required, not optional)
 
-Every Code/Tooling task in the batch carries an explicit _Size:_ line in its
+Every Code task in the batch carries an explicit _Size:_ line in its
 header — alongside _Hard-block:_ — same shape as the dep line, same
 "implicit-by-omission is how it gets skipped" lesson:
 
 > **① 💻 Code — Add HLTV RSS dedupe by GUID** · _Hard-block:_ none. · _Size:_ ~120 LoC.
 > **② 💻 Code — Backfill GUID column on existing raw_queue_files** · _Hard-block:_ ① (this batch). · _Size:_ ~80 LoC.
-> **③ 🛠️ Tooling — Migrate phase-deriver state into Postgres** · _Hard-block:_ none. · _Size:_ ~720 LoC, **unsplittable** (migration + reader rollout must land together — intermediate state leaves resolution_review pointing at a dropped table).
+> **③ 🔧 Operational — Migrate phase-deriver state into Postgres** · _Hard-block:_ none. · _Size:_ ~720 LoC, **unsplittable** (migration + reader rollout must land together — intermediate state leaves resolution_review pointing at a dropped table).
 
 Always write the _Size:_ line. _Skipping it is the failure mode this section
 exists to prevent._
@@ -164,12 +169,12 @@ _Size:_ line is optional on those (or write _Size: n/a (Design/Planning)_).
 
 ## The 4-point summary (per 🔲 Backlog task)
 
-Each task's header line carries its **Type** marker (💻 Code / 📐 Design / 🛠️ Tooling /
-📋 Planning / 🧪 Testing / 🚦 Gate / 📝 Docs / 🎨 Assets) before the title — so the reader sees at
-a glance what kind of work is being groomed. Code and Design tasks need different
-review attention (Design locks specs; Code consumes them; Tooling sits beside both);
-surfacing the type makes that judgment immediate and reduces "wait, is this the one
-that…" friction during sign-off.
+Each task's header line carries its **Type** marker (💻 Code / 📐 Design / 🔧 Operational /
+🔎 Investigation / 📋 Planning / 🧪 Testing / 🚦 Gate / 📝 Docs / 🎨 Assets) before the title —
+so the reader sees at a glance what kind of work is being groomed. Code and Design tasks need
+different review attention (Design locks specs; Code consumes them; Operational /
+Investigation sit beside both); surfacing the type makes that judgment immediate and reduces
+"wait, is this the one that…" friction during sign-off.
 
 Type is not cosmetic here — it determines **what happens when you flip the task to
 🗂️ Ready** (see `procedures.md` § _Task types — what Ready triggers_):
@@ -181,11 +186,12 @@ Type is not cosmetic here — it determines **what happens when you flip the tas
   - size gates exist.
 - **📐 Design / 📋 Planning** Ready → **not** auto-dispatched; it waits for `/design`.
   Do not groom these expecting a worker to pick them up.
-- **🛠️ Tooling / 🧪 Testing** Ready → interactive (a human runs it), not auto-dispatched.
-  Before promoting one, check it isn't smuggling dispatchable code: any pure
+- **🔧 Operational / 🔎 Investigation / 🧪 Testing** Ready → interactive (a human runs it), not
+  auto-dispatched. Before promoting one, check it isn't smuggling dispatchable code: any pure
   code-generation portion with no dependency on implementation-time data should be
   **split out into a separate 💻 Code task** (per the size/split procedure) so it flows
-  through auto-dispatch — the Tooling/Testing task keeps only the interactive remainder.
+  through auto-dispatch — the Operational/Investigation/Testing task keeps only the
+  interactive remainder.
 - **🚦 Gate** Ready → never auto-dispatched; a human runs the Manual Verification Gate
   once, at the end of the milestone. It rests at 🗂️ Ready and **accretes** manual-
   verification items as code tasks are groomed (its type's defined lifecycle), and is
@@ -201,13 +207,15 @@ Then the five points:
    alone. Write **_None._** if genuinely clean. A `# TODO` / `pass` placeholder upstream
    means the chain is contaminated — surface it, don't paper over it.
 3. **Automated tests** — what the task's `### 🤖 Automated tests` section will verify.
-4. **Manual verification** — enumerate the stripped runtime / launch-and-observe items
-   this task contributes to the milestone gate. These are the items removed from the
-   task body with _"Covered by the Manual Verification Gate."_ If the task has no
-   standalone runtime item, write _None._ The groomer accretes these items onto the
-   milestone gate store via the gate-accretion route before the Ready-flip (see Step 4
-   — Gate accretion). Omitting accretion loses the test permanently: the item is
-   stripped from the body and never lands on the gate store.
+4. **Manual verification** — enumerate the runtime / launch-and-observe items this
+   task contributes to the milestone gate, read from the task body's pre-groom
+   `### 👁️ Manual verification` section when present. If the task has no such
+   section, or no standalone runtime item, write _None._ The groomer accretes these
+   items onto the milestone gate store via the gate-accretion route before the
+   Ready-flip (see Step 4 — Gate accretion), then removes the section from the task
+   body entirely — it is not replaced with boilerplate. Omitting accretion loses the
+   test permanently: the item is stripped from the body and never lands on the gate
+   store.
 5. **Operational seed** — the operational data/config seed this task contributes to the
    milestone config-seed run: a prod-data row/flag/default deliberately kept out of its
    auto-dispatched PR (e.g. an `analyzer_configs` row, config defaults, alias/cohort flags).
@@ -223,6 +231,49 @@ main entries so the type-at-a-glance reading holds across both blocks.
 Close every batch with exactly this ask:
 
 > Any changes or questions before I mark these Ready and continue?
+
+## Consolidated triage (interactive 📐 Design / 📋 Planning types)
+
+Interactive types don't get a per-task 4-point summary + per-item sign-off. They
+get **one consolidated triage** for the batch — the presentation side of
+approve-by-standard (`../SKILL.md` Step 2 / Step 4 § approve-by-standard).
+Auto-dispatched **💻 Code is unaffected**: it keeps the per-task summary + per-task
+human decision above (a wrong Code Ready launches an unattended worktree, so the
+stakes demand per-item gating). A mixed milestone runs both flows.
+
+**Format — three groups, one message:**
+
+- **Clean** — a **names-only** list. Each is a genuine, decision-shaped,
+  answerable-now, scoped open-question set. These promote **by default (visible +
+  veto-able)**; the human need not stamp each.
+- **Blocked** — one row per task **+ its blocking dep** (an upstream Design/Planning
+  task not yet ✅ Done). Answerable only once the upstream locks.
+- **Needs-attention** — one row per task **+ the reason** (no real questions /
+  already-decided / not-answerable / mis-shaped / missing `## Open Questions`
+  heading / a routed constraint-conflict).
+
+The human engages **only** the blocked + needs-attention rows; silence on the clean
+list is approval. Close with the same sign-off ask.
+
+### The clean-verdict standard
+
+A proposed `clean` verdict is the groomer's judgment call — earned by the
+investigation posture (arch-page reading, code exploration, anchor grounding), **the
+sole non-server backstop** once the per-item decision is removed. The server then
+applies a **deterministic floor** that can only ever **downgrade** a proposed
+`clean`; it never upgrades a judged `blocked` / `needs-attention` back to `clean`:
+
+- **Hard-block dep not ✅ Done → `blocked`.**
+- **Missing `## Open Questions` heading → `needs-attention`.**
+- **A binding constraint dispositioned `conflict→route` → `needs-attention`**
+  (force-downgrade — not clean until the routed Design task resolves).
+
+The floor deliberately does **not** consult the Tier-2 deferral-phrase lexicon: that
+lexicon is **advisory-only for Design** (a legitimate design deferral like _"decide
+during implementation"_ trips the phrase but is normal design scoping, not a
+readiness violation). Taxonomy: `clean` = an answerable-now, decision-shaped
+question; `blocked` = answerable only after an upstream locks; `needs-attention` = no
+real questions / already-decided / not-answerable / mis-shaped / missing heading.
 
 ## Sign-off vs iteration
 
@@ -259,10 +310,10 @@ whole batch for re-presentation?"_
 >   don't reprocess. Matters because the raw queue is single-writer and append-only.
 > - _Open questions:_ None. (Verified `RawPayload.guid` exists in `ingestion/rss`.)
 > - _Automated tests:_ dedupe drops a duplicate GUID; distinct GUIDs pass through.
-> - _Manual verification:_ Covered by gate only.
+> - _Manual verification:_ None (task body carried no manual-verification section).
 >
 > **② 📐 Design — …**
 >
-> **Context (no action needed):** ④ 🛠️ Tooling — Wire CI table audit (🗂️ Ready) · ⑤ 📐 Design — … (🔄 In Progress)
+> **Context (no action needed):** ④ 🔧 Operational — Wire CI table audit (🗂️ Ready) · ⑤ 📐 Design — … (🔄 In Progress)
 >
 > Any changes or questions before I mark these Ready and continue?

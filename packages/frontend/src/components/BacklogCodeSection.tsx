@@ -16,6 +16,7 @@ interface Props {
   groomSelectedCount?: number;
   onGroomSelectAll?: () => void;
   onGroomLaunch?: () => void;
+  groomLoading?: boolean;
 }
 
 /** Compact single-line section for backlog code tasks — sits directly below the Code section. */
@@ -30,6 +31,7 @@ export function BacklogCodeSection({
   groomSelectedCount = 0,
   onGroomSelectAll,
   onGroomLaunch,
+  groomLoading = false,
 }: Props) {
   if (tasks.length === 0) return null;
 
@@ -62,7 +64,7 @@ export function BacklogCodeSection({
             <button
               className={styles.selectAllBtn}
               onClick={onGroomSelectAll}
-              disabled={groomableCount === 0}
+              disabled={groomableCount === 0 || groomLoading}
               data-testid="groom-select-all-btn"
             >
               Select All
@@ -70,10 +72,10 @@ export function BacklogCodeSection({
             <button
               className={styles.groomBtn}
               onClick={onGroomLaunch}
-              disabled={groomSelectedCount === 0}
+              disabled={groomSelectedCount === 0 || groomLoading}
               data-testid="groom-btn"
             >
-              Groom ({groomSelectedCount})
+              {groomLoading ? 'Loading…' : `Groom (${groomSelectedCount})`}
             </button>
           </div>
         )}

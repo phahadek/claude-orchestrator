@@ -154,6 +154,7 @@ vi.mock('../orchestration/localBranchHelpers', () => ({
 }));
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   getSessionsByStatus: vi.fn(() => []),
   getSession: vi.fn(),
   getEventsBySession: vi.fn(() => []),

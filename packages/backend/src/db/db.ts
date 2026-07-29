@@ -6,6 +6,23 @@ import { logger } from '../logger';
 const _configDbPath = getOrchestratorConfig().db.path;
 const dbPath = _configDbPath || path.join(process.cwd(), 'dashboard.db');
 
+// A test process (vitest, or anything with NODE_ENV=test) must never bind a
+// real on-disk database file: an inherited/misconfigured DB_PATH pointing at
+// the production database would otherwise be opened and written to silently.
+// The vitest setup file (see vitest.config.ts) forces DB_PATH=':memory:'
+// ahead of this module's first import; if it's anything else here, either
+// that setup didn't run or something is bypassing it — fail loudly rather
+// than risk writing to a real file.
+const isTestMode =
+  process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST);
+if (isTestMode && dbPath !== ':memory:') {
+  throw new Error(
+    `[db] Refusing to open database at "${dbPath}" while running in test mode ` +
+      `(NODE_ENV=test / VITEST set). Test runs must use an in-memory database ` +
+      `(DB_PATH=':memory:'); binding a real file risks writing to production data.`,
+  );
+}
+
 export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
@@ -129,6 +146,30 @@ db.exec(`
     error           TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_scheduler_audit_job ON scheduler_audit(job, started_at DESC);
+  CREATE TABLE IF NOT EXISTS staged_intent (
+    id           TEXT    PRIMARY KEY,
+    kind         TEXT    NOT NULL,
+    payload      TEXT    NOT NULL,
+    payload_hash TEXT    NOT NULL,
+    task_id      TEXT,
+    project_id   TEXT    NOT NULL,
+    session_id   TEXT,
+    group_id     TEXT,
+    state        TEXT    NOT NULL DEFAULT 'staged',
+    supersedes   TEXT,
+    annotation   TEXT,
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_staged_intent_project_state ON staged_intent(project_id, state);
+  CREATE INDEX IF NOT EXISTS idx_staged_intent_group ON staged_intent(group_id);
+  CREATE INDEX IF NOT EXISTS idx_staged_intent_dedup ON staged_intent(project_id, kind, task_id, state);
+  CREATE TABLE IF NOT EXISTS staged_intent_group (
+    group_id         TEXT    PRIMARY KEY,
+    route_back_count INTEGER NOT NULL DEFAULT 0,
+    escalated        INTEGER NOT NULL DEFAULT 0,
+    updated_at       INTEGER NOT NULL
+  );
 `);
 
 // ── Column rename migrations (run before queries.ts imports so prepared statements

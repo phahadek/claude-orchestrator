@@ -13,6 +13,7 @@ const zodBoolCoerce = z.union([
 const SettingsSchema = z.object({
   // Numeric settings (z.coerce accepts both numbers and parseable strings)
   max_concurrent_code_sessions: z.coerce.number().int().min(1),
+  max_concurrent_planning_sessions: z.coerce.number().int().min(1),
   auto_review_concurrency: z.coerce.number().int().min(1),
   card_preview_lines: z.coerce.number().int().min(1),
   auto_launch_concurrency: z.coerce.number().int().min(1),
@@ -43,6 +44,9 @@ const SettingsSchema = z.object({
   code_session_model: z.string(),
   review_session_model: z.string(),
   large_task_model: z.string(),
+  planning_session_model: z.string(),
+  ops_session_model: z.string(),
+  tier3_classifier_model: z.string(),
 
   // Enum settings — only accepted values are valid
   session_mode: z.enum(['cli', 'api']),
@@ -51,6 +55,15 @@ const SettingsSchema = z.object({
   code_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
   review_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
   large_task_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
+  planning_session_effort: z.enum([
+    '',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+  ]),
+  ops_session_effort: z.enum(['', 'low', 'medium', 'high', 'xhigh', 'max']),
 
   // JSON-serialised string arrays
   ai_reviewer_usernames: z.array(z.string()),
@@ -63,6 +76,7 @@ export type SettingKey = keyof Settings;
 
 export const SETTING_DEFAULTS: Settings = {
   max_concurrent_code_sessions: 20,
+  max_concurrent_planning_sessions: 5,
   auto_review_concurrency: 20,
   card_preview_lines: 3,
   auto_launch_concurrency: 1,
@@ -89,12 +103,17 @@ export const SETTING_DEFAULTS: Settings = {
   code_session_model: '',
   review_session_model: '',
   large_task_model: '',
+  planning_session_model: '',
+  ops_session_model: '',
+  tier3_classifier_model: 'claude-haiku-4-5-20251001',
   session_mode: 'cli',
   release_channel: 'stable',
   corporate_mode: 'personal',
   code_session_effort: '',
   review_session_effort: '',
   large_task_effort: '',
+  planning_session_effort: '',
+  ops_session_effort: '',
   ai_reviewer_usernames: [],
   bot_comment_deny_list: [],
   bot_comment_allow_list: [],

@@ -1359,6 +1359,25 @@ export class GitHubClient {
     }
     return res.json() as Promise<{ login: string }>;
   }
+
+  /**
+   * Resolve the GitHub login owning `token`, for self-identity exclusion
+   * (e.g. ReviewerCommentsWatcher). Never throws: a failed probe (network
+   * error, revoked token, missing scope) logs a warning and returns null so
+   * callers can fall back to their existing behavior instead of crashing boot.
+   */
+  static async resolveViewerLogin(token: string): Promise<string | null> {
+    try {
+      const { login } = await GitHubClient.probe(token);
+      return login;
+    } catch (err) {
+      logger.warn(
+        '[GitHubClient] failed to resolve token owner login:',
+        (err as Error).message,
+      );
+      return null;
+    }
+  }
 }
 
 // ---- helpers ----------------------------------------------------------------

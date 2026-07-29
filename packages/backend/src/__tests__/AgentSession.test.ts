@@ -36,6 +36,7 @@ vi.mock('child_process', () => ({
 
 // Mock DB queries — these would hit a real SQLite db otherwise
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   upsertSessionEvent: vi.fn(() => 1),
   insertPermissionEvent: vi.fn(),
   updateSessionStatus: vi.fn(),

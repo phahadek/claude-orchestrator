@@ -5,7 +5,12 @@ import path from 'path';
 import {
   loadOrchestratorConfig,
   getSessionAllowedTools,
+  isGrantable,
+  sessionRecordReadCapability,
+  parseSessionRecordReadCapability,
 } from '../orchestrator-config';
+import { NOTION_READ_MCP_TOOLS } from '../../config';
+import { NOTION_MCP_SERVER_NAME } from '../../mcp/toolNaming';
 
 describe('loadOrchestratorConfig', () => {
   let tmpDir: string;
@@ -166,27 +171,289 @@ describe('loadOrchestratorConfig', () => {
 });
 
 describe('getSessionAllowedTools', () => {
-  it('merges base ALLOWED_TOOLS with per-project allowed_tools', () => {
-    const merged = getSessionAllowedTools({
+  it('merges base ALLOWED_TOOLS with per-project allowed_tools for standard sessions', () => {
+    const merged = getSessionAllowedTools('standard', {
       allowed_tools: ['Bash(custom:*)'],
     });
     expect(merged).toContain('Bash(git:*)');
     expect(merged).toContain('Bash(custom:*)');
   });
 
-  it('grants no Notion tool — read or write — to orchestrator-launched sessions', () => {
-    const merged = getSessionAllowedTools({ allowed_tools: [] });
+  it('grants no Notion tool — read or write — to standard orchestrator-launched sessions', () => {
+    const merged = getSessionAllowedTools('standard', { allowed_tools: [] });
     expect(merged.some((t) => t.startsWith('mcp__claude_ai_Notion__'))).toBe(
       false,
     );
   });
 
   it('still excludes Notion tools when a project grants extra allowed_tools', () => {
-    const merged = getSessionAllowedTools({
+    const merged = getSessionAllowedTools('standard', {
       allowed_tools: ['Bash(custom:*)'],
     });
     expect(merged.some((t) => t.startsWith('mcp__claude_ai_Notion__'))).toBe(
       false,
     );
+  });
+
+  const FORBIDDEN_FOR_PLANNING = [
+    'Write',
+    'Edit',
+    'Bash(git:*)',
+    'mcp__github__create_pull_request',
+    'mcp__github__merge_pull_request',
+    'mcp__github__push_files',
+    'mcp__github__create_or_update_file',
+    'mcp__claude_ai_Notion__notion-create-pages',
+    'mcp__claude_ai_Notion__notion-update-page',
+  ];
+
+  it.each(['groom', 'design'] as const)(
+    '%s tool set excludes Write/Edit, git-mutation, PR/github MCP, and Notion-write MCP',
+    (sessionType) => {
+      const tools = getSessionAllowedTools(sessionType, {
+        allowed_tools: ['Bash(rm:*)'],
+      });
+      for (const forbidden of FORBIDDEN_FOR_PLANNING) {
+        expect(tools).not.toContain(forbidden);
+      }
+      expect(tools.some((t) => t.startsWith('mcp__github__'))).toBe(false);
+      expect(
+        tools.some((t) => t.startsWith('mcp__claude_ai_Notion__notion-create')),
+      ).toBe(false);
+      expect(
+        tools.some((t) => t.startsWith('mcp__claude_ai_Notion__notion-update')),
+      ).toBe(false);
+      // per-project extras (which may include mutating commands) are never merged in
+      expect(tools).not.toContain('Bash(rm:*)');
+    },
+  );
+
+  it('groom and design each return a dedicated per-type set, not the base ALLOWED_TOOLS', () => {
+    const groom = getSessionAllowedTools('groom', { allowed_tools: [] });
+    const design = getSessionAllowedTools('design', { allowed_tools: [] });
+    expect(groom).not.toEqual(design);
+    expect(design.some((t) => t.startsWith('Bash(git '))).toBe(true);
+  });
+
+  it('ops tool set excludes Write/Edit, git-mutation, PR/github MCP, and Notion-write MCP', () => {
+    const tools = getSessionAllowedTools('ops', { allowed_tools: [] });
+    for (const forbidden of FORBIDDEN_FOR_PLANNING) {
+      expect(tools).not.toContain(forbidden);
+    }
+    expect(tools.some((t) => t.startsWith('mcp__github__'))).toBe(false);
+  });
+
+  it('ops merges the per-project allowed_tools extras (its audited live-data read surface), unlike groom/design', () => {
+    const tools = getSessionAllowedTools('ops', {
+      allowed_tools: ['mcp__analyst__query_alarm_rules'],
+    });
+    expect(tools).toContain('mcp__analyst__query_alarm_rules');
+  });
+
+  it('ops base profile is read + stage + safe live-data surface, distinct from groom/design/standard', () => {
+    const ops = getSessionAllowedTools('ops', { allowed_tools: [] });
+    const groom = getSessionAllowedTools('groom', { allowed_tools: [] });
+    const standard = getSessionAllowedTools('standard', { allowed_tools: [] });
+    expect(ops).not.toEqual(standard);
+    expect(ops).not.toEqual(groom);
+    expect(ops.some((t) => t.startsWith('Bash(git '))).toBe(true);
+    // Shared read-only Bash + Notion-read base carries over even though each
+    // type's orchestrator MCP stage-proposal tools are scoped to its own
+    // staged-intent kinds (see config.ts's PLANNING_INTENT_KINDS-mirrored
+    // GROOM_MCP_TOOLS/OPS_MCP_TOOLS) rather than being one shared set.
+    const opsSet = new Set(ops);
+    for (const tool of groom) {
+      if (tool.startsWith('mcp__orchestrator__')) continue;
+      expect(opsSet.has(tool)).toBe(true);
+    }
+  });
+
+  it('ops and groom each get only the orchestrator MCP stage-proposal tools for their own staged-intent kinds', () => {
+    const ops = getSessionAllowedTools('ops', { allowed_tools: [] });
+    const groom = getSessionAllowedTools('groom', { allowed_tools: [] });
+    expect(ops).toContain('mcp__orchestrator__journal_setState');
+    expect(ops).toContain('mcp__orchestrator__session_requestCapability');
+    expect(ops).toContain('mcp__orchestrator__gate_verify');
+    expect(ops).not.toContain('mcp__orchestrator__gate_accrete');
+    expect(ops).not.toContain('mcp__orchestrator__task_setDependsOn');
+    expect(groom).toContain('mcp__orchestrator__gate_accrete');
+    expect(groom).toContain('mcp__orchestrator__task_setDependsOn');
+    expect(groom).not.toContain('mcp__orchestrator__journal_setState');
+    expect(groom).not.toContain('mcp__orchestrator__gate_verify');
+  });
+
+  describe('task-source-gated Notion read tools', () => {
+    it.each(['groom', 'design', 'ops'] as const)(
+      "merges NOTION_READ_MCP_TOOLS into a %s session's allow-list for a Notion-task-source project",
+      (sessionType) => {
+        const tools = getSessionAllowedTools(
+          sessionType,
+          { allowed_tools: [] },
+          [],
+          'notion',
+        );
+        for (const notionTool of NOTION_READ_MCP_TOOLS) {
+          expect(tools).toContain(notionTool);
+        }
+      },
+    );
+
+    it.each(['jira', 'yaml', 'github', undefined] as const)(
+      'grants no Notion tool to a %s-task-source planning session',
+      (taskSource) => {
+        for (const sessionType of ['groom', 'design', 'ops'] as const) {
+          const tools = getSessionAllowedTools(
+            sessionType,
+            { allowed_tools: [] },
+            [],
+            taskSource,
+          );
+          expect(tools.some((t) => t.startsWith('mcp__notion__'))).toBe(false);
+        }
+      },
+    );
+
+    it('every Notion entry composed into a Notion-sourced allow-list carries the prefix derived from the registered server key', () => {
+      const tools = getSessionAllowedTools(
+        'groom',
+        { allowed_tools: [] },
+        [],
+        'notion',
+      );
+      const notionEntries = tools.filter((t) =>
+        NOTION_READ_MCP_TOOLS.includes(t),
+      );
+      expect(notionEntries.length).toBeGreaterThan(0);
+      for (const entry of notionEntries) {
+        expect(entry.startsWith(`mcp__${NOTION_MCP_SERVER_NAME}__`)).toBe(true);
+      }
+    });
+
+    it('never merges Notion tools into a standard/code session, even for a Notion-task-source project', () => {
+      const tools = getSessionAllowedTools(
+        'standard',
+        { allowed_tools: [] },
+        [],
+        'notion',
+      );
+      expect(tools.some((t) => t.startsWith('mcp__notion__'))).toBe(false);
+    });
+  });
+
+  describe('granted-capability composition', () => {
+    it('an empty granted set equals the base profile', () => {
+      const withEmpty = getSessionAllowedTools(
+        'standard',
+        { allowed_tools: [] },
+        [],
+      );
+      const withoutArg = getSessionAllowedTools('standard', {
+        allowed_tools: [],
+      });
+      expect(withEmpty).toEqual(withoutArg);
+    });
+
+    it('composes base ∪ granted for a standard session', () => {
+      const merged = getSessionAllowedTools('standard', { allowed_tools: [] }, [
+        'Bash(psql:*)',
+      ]);
+      expect(merged).toContain('Bash(git:*)');
+      expect(merged).toContain('Bash(psql:*)');
+    });
+
+    it('composes base ∪ granted for a planning session, still excluding project extras', () => {
+      const merged = getSessionAllowedTools(
+        'groom',
+        { allowed_tools: ['Bash(rm:*)'] },
+        ['Bash(psql:*)'],
+      );
+      expect(merged).toContain('Bash(psql:*)');
+      expect(merged).not.toContain('Bash(rm:*)');
+    });
+
+    it('dedupes a grant that overlaps the base profile', () => {
+      const merged = getSessionAllowedTools('standard', { allowed_tools: [] }, [
+        'Bash(git:*)',
+      ]);
+      expect(merged.filter((t) => t === 'Bash(git:*)')).toHaveLength(1);
+    });
+
+    it.each([
+      'Bash(node ~/.claude/scripts/apply-task-intent.mjs:*)',
+      'Bash(node ~/.claude/scripts/resolve-task.mjs:*)',
+      'mark-task-done',
+    ])('never merges a resolved/apply/done-scoped grant (%s)', (capability) => {
+      const merged = getSessionAllowedTools('standard', { allowed_tools: [] }, [
+        capability,
+      ]);
+      expect(merged).not.toContain(capability);
+    });
+
+    it.each(['Write', 'Edit'])(
+      'never merges a %s grant, even for a standard session',
+      (capability) => {
+        const merged = getSessionAllowedTools(
+          'standard',
+          { allowed_tools: [] },
+          [capability],
+        );
+        expect(merged).not.toContain(capability);
+      },
+    );
+  });
+});
+
+describe('isGrantable', () => {
+  it.each(['Write', 'Edit', 'NotebookEdit', 'MultiEdit'])(
+    'returns false for %s (un-grantable)',
+    (capability) => {
+      expect(isGrantable(capability)).toBe(false);
+    },
+  );
+
+  it('returns true for a normal Bash grant', () => {
+    expect(isGrantable('Bash(psql:*)')).toBe(true);
+  });
+
+  it('returns true for an audited operational-record read an ops/gate-verify session might request', () => {
+    // e.g. a gate-verify session asking to read dashboard.db directly, since
+    // its base profile has no such tool — the sanctioned ask path, not
+    // speculative pre-provisioning by the gate mechanism.
+    expect(isGrantable('Bash(sqlite3 dashboard.db:*)')).toBe(true);
+  });
+
+  it('returns true for the own-record read capability — the never-grantable set stays unchanged', () => {
+    expect(isGrantable(sessionRecordReadCapability('session-abc'))).toBe(true);
+  });
+});
+
+describe('sessionRecordReadCapability / parseSessionRecordReadCapability', () => {
+  it('round-trips the target session id through the capability string', () => {
+    const capability = sessionRecordReadCapability('session-abc');
+    expect(capability).toBe('read:session-record:session-abc');
+    expect(parseSessionRecordReadCapability(capability)).toBe('session-abc');
+  });
+
+  it('returns null for a capability that is not an own-record-read grant', () => {
+    expect(parseSessionRecordReadCapability('Bash(psql:*)')).toBeNull();
+    expect(
+      parseSessionRecordReadCapability('mcp__github__merge_pull_request'),
+    ).toBeNull();
+  });
+
+  it('is read-only: there is no write/mutation counterpart capability string', () => {
+    // The own-record read has exactly one grantable form — a read keyed by
+    // target session id. There is no `write:session-record:...` or similar,
+    // and this prefix never widens into anything other than that one read.
+    const capability = sessionRecordReadCapability('session-xyz');
+    expect(capability).not.toMatch(/write|mutate|delete|update/i);
+  });
+
+  it("is never merged into the spawned session's CLI --allowed-tools — it names no tool the CLI resolves, only a route-level grant check", () => {
+    const capability = sessionRecordReadCapability('session-abc');
+    const merged = getSessionAllowedTools('ops', { allowed_tools: [] }, [
+      capability,
+    ]);
+    expect(merged).not.toContain(capability);
   });
 });

@@ -28,6 +28,7 @@ import {
   getAccretionMarker,
   recordAccretionMarker,
   rehomeItemsBySourceTask,
+  rollbackContribution,
 } from '../gateStore.js';
 
 beforeEach(() => {
@@ -122,6 +123,32 @@ describe('gateStore', () => {
       operator: 'pedro',
       evidence: { observed: 'threshold fired correctly', source: 'manual-run' },
     });
+  });
+
+  it('stamps updated_at on a non-resolving needs-setup event without touching state or current_disposition', () => {
+    const created = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Verify the read-only report renders',
+      classification: 'Read-Only',
+      sources: [{ sourceTaskId: 'notion:n1', sourceTaskTitle: 'Add report' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+    expect(created.updatedAt).toBe(new Date(0).toISOString());
+
+    appendEvent(created.id, {
+      disposition: 'needs-setup',
+      evidence: { note: 'missing test fixture' },
+      operator: 'pedro',
+      at: new Date(5).toISOString(),
+    });
+
+    const item = getItem(created.id);
+    expect(item?.updatedAt).toBe(new Date(5).toISOString());
+    expect(item?.state).toBe('open');
+    expect(item?.currentDisposition).toBeUndefined();
+    expect(item?.events).toHaveLength(1);
+    expect(item?.events[0]).toMatchObject({ disposition: 'needs-setup' });
   });
 
   it('advances the denormalized state and current_disposition', () => {
@@ -364,6 +391,37 @@ describe('gate_accretion marker', () => {
     expect(getAccretionMarker('notion:na-src')?.decision).toBe('n/a');
   });
 
+  it('round-trips the reason field on a bare none/n-a decision', () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:none-with-reason',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'none',
+      reason:
+        'The change only adds a pure formatting helper with no I/O or user-visible effect.',
+      accretedAt: new Date(0).toISOString(),
+    });
+
+    const marker = getAccretionMarker('notion:none-with-reason');
+    expect(marker?.reason).toBe(
+      'The change only adds a pure formatting helper with no I/O or user-visible effect.',
+    );
+  });
+
+  it('leaves reason undefined when not supplied (e.g. an "items" decision)', () => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:items-no-reason',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'items',
+      accretedAt: new Date(0).toISOString(),
+    });
+
+    expect(
+      getAccretionMarker('notion:items-no-reason')?.reason,
+    ).toBeUndefined();
+  });
+
   it('replaces an existing marker for the same source task', () => {
     recordAccretionMarker({
       sourceTaskId: 'notion:src-2',
@@ -380,6 +438,69 @@ describe('gate_accretion marker', () => {
       accretedAt: new Date(1).toISOString(),
     });
 
+    expect(getAccretionMarker('notion:src-2')?.decision).toBe('items');
+  });
+});
+
+describe('gateStore.rollbackContribution', () => {
+  it('deletes the minted gate_item rows and the source task marker, leaving no orphan', () => {
+    const item = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Verify the webhook fires',
+      classification: 'Read-Only',
+      sources: [
+        { sourceTaskId: 'notion:src-1', sourceTaskTitle: 'Add the webhook' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    recordAccretionMarker({
+      sourceTaskId: 'notion:src-1',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'items',
+      accretedAt: new Date(0).toISOString(),
+    });
+
+    rollbackContribution([item.id], 'notion:src-1');
+
+    expect(getItem(item.id)).toBeUndefined();
+    expect(getAccretionMarker('notion:src-1')).toBeUndefined();
+  });
+
+  it("leaves other source tasks' items and markers untouched", () => {
+    const rolledBack = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Rolled back item',
+      classification: 'Read-Only',
+      sources: [
+        { sourceTaskId: 'notion:src-1', sourceTaskTitle: 'Add the webhook' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    const untouched = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Untouched item',
+      classification: 'Read-Only',
+      sources: [
+        { sourceTaskId: 'notion:src-2', sourceTaskTitle: 'Add retries' },
+      ],
+      updatedAt: new Date(0).toISOString(),
+    });
+    recordAccretionMarker({
+      sourceTaskId: 'notion:src-2',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'items',
+      accretedAt: new Date(0).toISOString(),
+    });
+
+    rollbackContribution([rolledBack.id], 'notion:src-1');
+
+    expect(getItem(rolledBack.id)).toBeUndefined();
+    expect(getItem(untouched.id)).toBeDefined();
     expect(getAccretionMarker('notion:src-2')?.decision).toBe('items');
   });
 });

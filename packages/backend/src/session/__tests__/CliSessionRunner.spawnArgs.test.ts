@@ -6,6 +6,15 @@ vi.mock('../../config', () => ({
   config: { claudePath: '/fake/claude' },
   BASH_MAX_OUTPUT_LENGTH: 30000,
   BASH_DEFAULT_TIMEOUT_MS: 300000,
+  PLANNING_DISALLOWED_TOOLS: [
+    'Skill',
+    'Write',
+    'Edit',
+    'ScheduleWakeup',
+    'CronCreate',
+    'CronDelete',
+    'CronList',
+  ],
 }));
 
 // We capture the args and options passed to spawn so we can assert on them.
@@ -44,6 +53,15 @@ vi.mock('child_process', () => ({
     },
   ),
   execSync: vi.fn(() => ''),
+}));
+
+// planningScratchDir does real fs work (mkdir/rm the scratch dir) —
+// irrelevant to these spawn-arg assertions and unsafe against a fake
+// '/fake/worktree' path.
+vi.mock('../planningScratchDir', () => ({
+  createScratchDir: vi.fn(() => '/fake/worktree/.claude/scratch/fake'),
+  removeScratchDir: vi.fn(),
+  getScratchDir: vi.fn(() => '/fake/worktree/.claude/scratch/fake'),
 }));
 
 import { CliSessionRunner } from '../CliSessionRunner';
@@ -185,5 +203,169 @@ describe('CliSessionRunner spawn args', () => {
 
     expect(argsWithDisabled).toContain('--settings');
     expect(argsWithEnabled).not.toContain('--settings');
+  });
+});
+
+describe('CliSessionRunner --permission-mode', () => {
+  it('uses acceptEdits for a standard (code) session', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, sessionType: 'standard' },
+      () => {},
+    );
+
+    const idx = capturedSpawnArgs.indexOf('--permission-mode');
+    expect(idx).not.toBe(-1);
+    expect(capturedSpawnArgs[idx + 1]).toBe('acceptEdits');
+  });
+
+  it('uses acceptEdits when sessionType is absent (back-compat default)', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    const idx = capturedSpawnArgs.indexOf('--permission-mode');
+    expect(capturedSpawnArgs[idx + 1]).toBe('acceptEdits');
+  });
+
+  it.each(['groom', 'design', 'ops'] as const)(
+    'does not use acceptEdits for a %s (planning) session',
+    async (sessionType) => {
+      const runner = new CliSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      const idx = capturedSpawnArgs.indexOf('--permission-mode');
+      expect(idx).not.toBe(-1);
+      expect(capturedSpawnArgs[idx + 1]).not.toBe('acceptEdits');
+    },
+  );
+});
+
+describe('CliSessionRunner --disallowed-tools', () => {
+  it.each(['groom', 'design', 'ops'] as const)(
+    'includes --disallowed-tools Skill, Write, Edit, ScheduleWakeup, CronCreate, CronDelete, CronList for a %s (planning) session',
+    async (sessionType) => {
+      const runner = new CliSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      const idx = capturedSpawnArgs.indexOf('--disallowed-tools');
+      expect(idx).not.toBe(-1);
+      expect(capturedSpawnArgs[idx + 1]).toBe('Skill');
+      expect(capturedSpawnArgs[idx + 2]).toBe('Write');
+      expect(capturedSpawnArgs[idx + 3]).toBe('Edit');
+      expect(capturedSpawnArgs[idx + 4]).toBe('ScheduleWakeup');
+      expect(capturedSpawnArgs[idx + 5]).toBe('CronCreate');
+      expect(capturedSpawnArgs[idx + 6]).toBe('CronDelete');
+      expect(capturedSpawnArgs[idx + 7]).toBe('CronList');
+    },
+  );
+
+  it.each(['standard', 'review'] as const)(
+    'omits --disallowed-tools for a %s (non-planning) session',
+    async (sessionType) => {
+      const runner = new CliSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      expect(capturedSpawnArgs).not.toContain('--disallowed-tools');
+    },
+  );
+
+  it('omits --disallowed-tools when sessionType is absent', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    expect(capturedSpawnArgs).not.toContain('--disallowed-tools');
+  });
+});
+
+describe('CliSessionRunner --add-dir (directory sandbox lift)', () => {
+  it.each(['groom', 'design', 'ops'] as const)(
+    'includes --add-dir / for a %s (planning) session — no project-dir confinement',
+    async (sessionType) => {
+      const runner = new CliSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      const idx = capturedSpawnArgs.indexOf('--add-dir');
+      expect(idx).not.toBe(-1);
+      expect(capturedSpawnArgs[idx + 1]).toBe('/');
+    },
+  );
+
+  it('gate-verify sessions (dispatched with sessionType "ops") get the same lift', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, sessionType: 'ops' },
+      () => {},
+    );
+
+    expect(capturedSpawnArgs).toContain('--add-dir');
+  });
+
+  it.each(['standard', 'review'] as const)(
+    'omits --add-dir for a %s (non-planning) session — stays confined to its worktree',
+    async (sessionType) => {
+      const runner = new CliSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      expect(capturedSpawnArgs).not.toContain('--add-dir');
+    },
+  );
+
+  it('omits --add-dir when sessionType is absent', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    expect(capturedSpawnArgs).not.toContain('--add-dir');
+  });
+
+  it('a granted capability naming an out-of-tree host path is executable for an ops session (allowlisted + not dir-confined)', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    const grantedTool = 'Bash(find /srv/orchestrator/data:*)';
+    await runner.run(
+      'hello',
+      undefined,
+      {
+        ...defaultOptions,
+        sessionType: 'ops',
+        allowedTools: ['Bash', grantedTool],
+      },
+      () => {},
+    );
+
+    const allowedIdx = capturedSpawnArgs.indexOf('--allowed-tools');
+    expect(allowedIdx).not.toBe(-1);
+    expect(capturedSpawnArgs).toContain(grantedTool);
+    expect(capturedSpawnArgs).toContain('--add-dir');
+    expect(capturedSpawnArgs[capturedSpawnArgs.indexOf('--add-dir') + 1]).toBe(
+      '/',
+    );
   });
 });

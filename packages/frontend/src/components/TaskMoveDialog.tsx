@@ -130,16 +130,12 @@ export function TaskMoveDialog({
       };
       const content: MoveTaskContent = {
         title: task.taskName,
-        // The task body has no structured section parser (only a renderer),
-        // so the full spec markdown is carried verbatim in `summary` — the
-        // moved page's other sections stay empty rather than lossily guessed.
-        sections: {
-          summary: body.markdown ?? '',
-          dependencies: [],
-          context: [],
-          automatedCriteria: [],
-          manualCriteria: [],
-        },
+        // Carried verbatim as raw markdown (converted directly to blocks —
+        // see bodyRender.ts's markdownToBlocks) rather than threaded through
+        // the structured section renderer, which has no inverse parser and
+        // would otherwise nest the whole body under a fresh Summary heading
+        // plus an empty section skeleton.
+        bodyMarkdown: body.markdown ?? '',
         type: task.taskType,
         priority: task.priority,
         status: toCanonicalStatus(task.notionStatus) ?? 'Backlog',

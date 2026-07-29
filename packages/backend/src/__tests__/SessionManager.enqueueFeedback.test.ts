@@ -12,8 +12,13 @@
  *   sendOrResume (a direct send() for a live session) and marked delivered.
  * - Idle/exited session (not in-map): item is enqueued, then delivered
  *   immediately via a clean respawn (sendOrResume) and marked delivered.
- * - Terminal session (done/error/killed): item is enqueued but left
- *   undelivered without resending, matching reconcileInboxAtBoot's handling.
+ * - Terminal session (done/error/killed): a resume is attempted (bypassing
+ *   the normal terminal refusal, via sendOrResume({allowTerminal: true})) so
+ *   a pushback/verification-error to an ended session is not silently
+ *   record-only. Only when that resume attempt itself yields nothing is the
+ *   item marked delivered-without-resend — and even then a needs-attention
+ *   signal (pause reason + session_action_failed) is surfaced instead of a
+ *   silent drop.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -67,6 +72,8 @@ function seedInbox(
 }
 
 vi.mock('../db/queries', () => ({
+  TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
+  getGrantedCapabilities: vi.fn(() => []),
   insertSession: vi.fn(),
   updateSessionStatus: vi.fn(),
   updateSessionWorktreePath: vi.fn(),
@@ -307,14 +314,14 @@ describe('SessionManager.enqueueFeedback()', () => {
     expect(queries.listUndeliveredInboxItems('sess-idle-2')).toHaveLength(1);
   });
 
-  it('terminal session: enqueues but marks delivered without resending', async () => {
+  it('terminal, resumable session: attempts a resume (bypassing the terminal refusal) and delivers on success', async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'sess-done',
       status: 'done',
     } as never);
 
     const sm = new SessionManager();
-    const sendSpy = vi.spyOn(sm, 'sendOrResume');
+    const sendSpy = vi.spyOn(sm, 'sendOrResume').mockResolvedValue('sess-done');
 
     await sm.enqueueFeedback('sess-done', 'ci-failure', 'stale failure');
 
@@ -323,9 +330,65 @@ describe('SessionManager.enqueueFeedback()', () => {
       'ci-failure',
       'stale failure',
     );
-    expect(sendSpy).not.toHaveBeenCalled();
+    expect(sendSpy).toHaveBeenCalledWith(
+      'sess-done',
+      expect.stringContaining('stale failure'),
+      { allowTerminal: true },
+    );
     expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
     expect(queries.listUndeliveredInboxItems('sess-done')).toHaveLength(0);
+    expect(queries.setSessionPauseReason).not.toHaveBeenCalled();
+  });
+
+  it('terminal, unresumable session: surfaces needs-attention instead of silently dropping the feedback', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-dead',
+      status: 'error',
+    } as never);
+
+    const sm = new SessionManager();
+    const emitSpy = vi.spyOn(sm, 'emit');
+    vi.spyOn(sm, 'sendOrResume').mockResolvedValue(null);
+
+    await sm.enqueueFeedback(
+      'sess-dead',
+      'operator-disposition',
+      'pushback reason',
+    );
+
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-dead',
+      'feedback_undelivered_terminal',
+    );
+    expect(emitSpy).toHaveBeenCalledWith(
+      'message',
+      expect.objectContaining({
+        type: 'session_action_failed',
+        sessionId: 'sess-dead',
+        reason: 'terminal_session_unresumable',
+      }),
+    );
+    // Marked delivered even though unresumable — recorded, and surfaced, never silently retried forever.
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
+    expect(queries.listUndeliveredInboxItems('sess-dead')).toHaveLength(0);
+  });
+
+  it('terminal session: a resume attempt that throws also surfaces needs-attention rather than crashing', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_id: 'sess-killed',
+      status: 'killed',
+    } as never);
+
+    const sm = new SessionManager();
+    vi.spyOn(sm, 'sendOrResume').mockRejectedValue(new Error('worktree gone'));
+
+    await sm.enqueueFeedback('sess-killed', 'ci-failure', 'stale failure');
+
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-killed',
+      'feedback_undelivered_terminal',
+    );
+    expect(queries.markInboxItemsDelivered).toHaveBeenCalled();
   });
 
   it('unknown session: enqueues only, no crash', async () => {

@@ -27,8 +27,11 @@
 ## Core principles
 
 1. **A task should be completable in one session.** Code tasks: ~2 hours of
-   focused implementation, ceiling ~500 lines of diff / ~10 files. Design/Planning
-   tasks: a single discussion-and-document session that locks the decision.
+   focused implementation. The **500-LoC default is a split *threshold* — a floor
+   that trips a split nomination, not a hard ceiling**: a task estimated over it is
+   nominated for splitting, but a **sub-500-LoC task may legitimately split too** (a
+   natural seam is reason enough), and there is **no hard file-count ceiling**.
+   Design/Planning tasks: a single discussion-and-document session that locks the decision.
    🔧 Operational / 🔎 Investigation tasks: one coherent change set (Operational) or one
    question/anomaly (Investigation) — if it balloons past a handful of investigation steps
    or uncovers a code gap that blocks its own completion, it stops and files follow-ons
@@ -106,14 +109,16 @@ Guidelines / Technical Architecture pages — link them; don't paraphrase. If a 
 disagrees with one of those constraints, the task is wrong, not the constraint.
 
 ### Acceptance criteria
-Checkboxes split into two mandatory subsections — **every task uses both**:
+Checkboxes split into two subsections:
 - `### 🤖 Automated tests` — items verifiable by the type checker, linter, unit
   tests, or a script, with **no human in the loop**. Use the project's verify
   commands (from its `context.md` / `.claude-orchestrator.yml`). For Design tasks,
-  write `*N/A — design task only.*`.
+  write `*N/A — design task only.*`. Mandatory for every task.
 - `### 👁️ Manual verification` — items requiring a running app/pipeline, a browser,
   observed runtime behaviour, or a human read-through of an updated Notion page (for
-  Design tasks).
+  Design tasks). Mandatory for every non-Code type. **For 💻 Code tasks it is
+  authoring-time-optional** (real runtime items only, see below) and grooming removes
+  it post-accretion — a post-groom Code task carries no manual-verification section.
 
 Each item must be independently verifiable — pass/fail obvious without judgment.
 Aim for **5–10 items total** across both subsections.
@@ -124,10 +129,16 @@ Aim for **5–10 items total** across both subsections.
 
 **Code tasks must not put runtime/launch-and-observe items in their own
 acceptance criteria** — those belong to the milestone's **Manual Verification Gate**
-(below; orchestrator-tracked state, not a task). A Code task's manual-verification subsection reads:
-`Covered by the **Manual Verification Gate**.` *(🔧 Operational / 🔎 Investigation
-tasks are the exception — they verify in-session and do NOT accrete to the gate; see
-their section below.)*
+(below; orchestrator-tracked state, not a task). A Code task's `### 👁️ Manual
+verification` subsection is **authoring-time-optional**: write it only when there are
+real runtime items to list (author judgment, not boilerplate). Grooming strips those
+items to the gate and then **removes the section entirely** — it is not replaced with
+`Covered by the Manual Verification Gate.` boilerplate. A post-groom (🗂️ Ready or
+later) Code task therefore carries **no** manual-verification section at all; its
+absence *is* the signal that verification is gate-owned. *(🔧 Operational / 🔎 Investigation
+tasks always carry the section — see their section below. 🔎 Investigation is the exception
+that never accretes it to the gate (it self-verifies in-session); 🔧 Operational can
+legitimately accrete like Code.)*
 
 ### Notion pages affected *(Design/Planning tasks only)*
 Bulleted list of every Notion page this task creates or edits, with `*(new)*` or
@@ -192,6 +203,28 @@ For the procedure that applies this gate across a milestone's backlog, that is t
 **`/groom` skill** — the single source of truth for the grooming procedure (there is
 no Notion grooming-procedure page).
 
+### Grooming-time promotion artifacts (size_check · type_check · split/merge)
+
+When `/groom` promotes a task, it records structured **promotion-gate artifacts** the
+orchestrator enforces server-side (`groomGate.ts`). Authors don't write these — the groomer
+does — but the standard names them so authoring and grooming stay aligned:
+
+- **`size_check`** — the size classification, shape
+  `{ loc, loc_method, files, decision, split_into?, reason? }`. `decision` is one of
+  `no_split` / `split_now` / `unsplittable` / `n/a` (Design/Planning). `split_into` carries the
+  sibling task ids when `split_now`; `reason` the one-line justification when `unsplittable`.
+  **Present-and-dispositioned, not a correctness gate**: the promotion gate blocks a Ready-flip
+  that omits it, but it enforces that a decision was *recorded* — it does not itself judge the
+  LoC number.
+- **`type_check`** — the type/content-mismatch scan (does the body's shape match its declared
+  Type?). Also **present-and-dispositioned and advisory**: a flagged `type_check` never
+  hard-blocks promotion on its own; the groomer must record a disposition, not clear the scan.
+- **Split / merge are orchestrator-driven — a grooming session *nominates*, never *performs*.**
+  When a task trips the split threshold (or two tasks should merge), the groomer **records a
+  nomination**; the **orchestrator confirms and routes the split/merge to a dedicated session**.
+  A grooming session never itself edits the task set into N pieces. (Detect → confirm → route;
+  a candidate far over the floor may auto-confirm, otherwise it waits for the operator.)
+
 ---
 
 ## Manual Verification Gate
@@ -206,8 +239,12 @@ record — there is no dated run-note written back into a task body).
   context-switching and re-launching. One focused gate keeps the automated/manual
   split clean inside every code task.
 - **In code tasks:** include only what's verifiable without a running app (type
-  check, lint, unit tests, build). Strip every "launch and observe" item; the code task's
-  manual-verification subsection reads `Covered by the **Manual Verification Gate**.`
+  check, lint, unit tests, build). Strip every "launch and observe" item; after
+  accretion, the groomer **removes** the code task's manual-verification section from
+  the body — it does not leave a boilerplate line behind. A Code task's manual/runtime
+  verification is owned by the gate at that point; sessions must not try to run or
+  evaluate it (this default lives in the coding and review session prompts, not in the
+  task body).
 - **The gate items:** each `gate_item` row carries a **classification** (e.g. `Prod-Mutating`
   vs read-only) and a **state machine** — `open` → `runnable` → `pass` / `fail` / `deferred`,
   with `Prod-Mutating` passes parked at `pending-approval` until a human consents. Items become
@@ -217,6 +254,36 @@ record — there is no dated run-note written back into a task body).
   loop over the gate-state API (`readiness` → pull runnable items by tier → human disposition →
   record the `gate_item_event`). `readiness` reports `green` when every item is `pass` or
   `deferred`, `blocked` otherwise (the blocking items are the worklist). Nothing is auto-dispatched.
+- **Author proposes, groomer validates — accretion is not relocation.** The pre-groom
+  `### 👁️ Manual verification` section's lines, when present, are the author's *advisory
+  candidates* — a hypothesis about what will need observing, never an instruction and never
+  the input this step transcribes wholesale. Grooming's job is to independently assess the
+  change's own runtime-observable behaviour from the code regions it touches — the groomer has
+  read the code, so it is better placed than the author to know what must be observed — and
+  then engage with each author candidate on its substance: accept it, correct it, or reject it
+  with a reason, since the author may simply be wrong. Grooming also adds runtime verifications
+  of its own that the change requires and the author did not foresee. Every candidate —
+  author-proposed or groomer-added — is classified as one of three outcomes:
+  `runtime-observable` (only knowable by running the system and looking — accrete it as a gate
+  item), `config-or-code-determined` (answerable from source, settings, or a unit test — never
+  accrete it; relocate the line to the task's `### 🤖 Automated tests` section instead of
+  dropping it), or `needs-triage` (genuinely unclear — accrete it flagged, as today). **The
+  deciding question:** would a headless verifier be able to cite a behavioural trace for this,
+  or only cite the code? If only the code, it is a test, not a gate item. **Disposition, don't
+  drop:** the count of candidates in must equal the count accreted plus the count relocated to
+  `### 🤖 Automated tests` — this is what prevents re-opening the exact silent-coverage leak
+  (below) the mandatory-accretion rule exists to close. **Present-and-dispositioned, not a
+  correctness gate:** the promotion gate requires a classification to be recorded for every
+  candidate; it never re-judges which classification the groomer chose — same posture as
+  `size_check` / `type_check`. **`none` must be a judgement, not a byproduct.** Some changes
+  genuinely have no runtime-observable behaviour, and a task must not be forced to invent a fake
+  gate item to avoid saying so — a padded gate is worse than an empty one, since it burns
+  operator attention at milestone end on checks that verify nothing. But a bare
+  `{"decision":"none"}` (or `"n/a"`) must carry a **substantive reason tied to the change's
+  behaviour**, never to the state of the pre-groom body section — "the section was empty" is
+  not a reason; "the change only adds a pure formatting helper with no I/O, no config read, and
+  no user-visible effect" is. A `gate_contribution` recording a bare decision without one is
+  rejected at the promotion gate.
 - **Accretion is mandatory and promotion-gated — not best-effort.** Because a
   💻 Code task's body is *required* to strip its runtime items (above),
   those items live nowhere else — if the groomer doesn't accrete them to the gate, they
@@ -228,7 +295,9 @@ record — there is no dated run-note written back into a task body).
   (which writes the `gate_item` rows, keyed by milestone display name, grouped by source task),
   or (b) confirm it has none — and record the outcome as a `gate_contribution`
   artifact in `grooming-state.json`: `{ "items": [...], "accreted_at": "…" }`
-  or `{ "decision": "none" }`. This is symmetric with `size_check` / `hard_block_deps` /
+  or `{ "decision": "none", "reason": "…" }`, with each item in `items` carrying its recorded
+  classification and the bare-decision form carrying the substantive reason described above.
+  This is symmetric with `size_check` / `hard_block_deps` /
   `signoff` — same shape, same load-bearing weight. A Ready-flip that strips manual items
   from the body without accreting them to the gate is the same class of failure as locking
   sequencing in the task body instead of the `Depends On` property: the downstream artifact
@@ -307,10 +376,19 @@ Verification Gate.
 
 ## 🔧 Operational & 🔎 Investigation tasks
 
-These two Types replace the retired `🛠️ Tooling`. Both are **interactive, judgment-bound,
-and never auto-dispatched** — they are executed by the **`ops` skill** (see `procedures.md`
+These two Types replace the retired `🛠️ Tooling`. Both are **judgment-bound and never
+auto-dispatched** — they are executed by the **`ops` skill** (see `procedures.md`
 § Task types). They are distinguished by their **primary deliverable**, and each carries a
 **Mode declaration** line at the top of its Context.
+
+> **Two run postures, distinct by whether an operator is in the loop** (see `procedures.md`
+> § Task types). An **autonomous** (unattended) ops run **stages only** — provisional
+> findings / staged proposals to the journal, never verdicts, never ✅ Done. A **dispatched /
+> interactive** ops run is **write-capable**: it earns capabilities on request and **drives
+> the `ops_journal` to `applied-pending-confirm`** (change applied, reconciled, evidence
+> captured) via the request → grant → apply → reconcile loop, with the operator making only
+> the final `applied-pending-confirm` → `resolved` confirmation. "Stages only" describes the
+> autonomous posture, not a ceiling on what a dispatched ops session does.
 
 ### 🔧 Operational — change prod/environment state through a sanctioned surface
 The deliverable is a **verified change** to production or the operating environment
@@ -329,8 +407,9 @@ uncertainty is **breadth / source / mechanics**, never *whether* or *what*.
 - **Acceptance criteria:** `### 🤖 Automated tests` is usually `*N/A — operational task;
   verification is by reconcile + capture.*` `### 👁️ Manual verification` lists the **in-session**
   checks (seed present on prod; worker reconciled; correct breadth authored; "Done ≠ deployed ≠
-  seeded ≠ working"). **Operational tasks do NOT accrete to the Manual Verification Gate** — they
-  self-verify when run.
+  seeded ≠ working"). **Operational tasks can legitimately accrete to the Manual Verification
+  Gate** — unlike Investigation (below), an Operational task's runtime/launch-and-observe items
+  are not categorically exempt from grooming's strip-and-accrete pass.
 - **Milestone config-seed accretion (grooming-time).** A 💻 Code task's *operational data/config
   seed* — a prod-data row/flag/default deliberately kept **out** of its auto-dispatched PR — accretes
   at grooming time to the milestone's one **config-seed** `🔧 Operational` task, the operational twin
@@ -351,7 +430,10 @@ follow-on tasks**. The uncertainty is **the conclusion itself**.
   look?"). Treat any registered number as a claim to re-derive, not a fact.
 - **Acceptance criteria:** `### 🤖 Automated tests` is usually `*N/A — investigation task.*`
   `### 👁️ Manual verification` lists: the decision reached is defensible (falsification run);
-  evidence recorded with provenance; follow-on tasks filed with **accurate priority**.
+  evidence recorded with provenance; follow-on tasks filed with **accurate priority**. **An
+  Investigation task does NOT accrete to the Manual Verification Gate, and its `### 👁️ Manual
+  verification` section is never stripped** — it self-verifies in-session; grooming must reject
+  both an accretion from it and a removal of that section.
 - Use a **Deliverables** section (the decision + the follow-on tasks it will file) in place of
   *Files / paths affected*. **Never** put "implement module X" in an Investigation's acceptance
   criteria — a code fix it surfaces is a *separate* `💻 Code` task it files (an Investigation

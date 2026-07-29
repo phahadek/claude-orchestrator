@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   renderTaskBody,
+  renderTaskBodyMarkdown,
+  markdownToBlocks,
   isShellCommandLine,
   type TaskBodySections,
 } from '../bodyRender';
+import { blockToLine } from '../../notion/NotionClient';
 
 function baseSections(
   overrides: Partial<TaskBodySections> = {},
@@ -163,6 +166,86 @@ describe('renderTaskBody — acceptance criteria 🤖/👁️ split', () => {
   });
 });
 
+describe('renderTaskBody / renderTaskBodyMarkdown — Code-task manual section retirement', () => {
+  it('omits the 👁️ Manual verification heading and boilerplate for a post-groom Code task (Notion blocks)', () => {
+    const blocks = renderTaskBody(
+      baseSections({
+        automatedCriteria: ['tsc passes'],
+        manualCriteria: [],
+        taskType: '💻 Code',
+      }),
+    );
+    const manualHeading = blocks.find(
+      (b) =>
+        b.type === 'heading_3' &&
+        JSON.stringify(b.heading_3).includes('👁️ Manual verification'),
+    );
+    expect(manualHeading).toBeUndefined();
+    const boilerplate = blocks.find(
+      (b) =>
+        b.type === 'paragraph' &&
+        JSON.stringify(b.paragraph).includes(
+          'Covered by the Manual Verification Gate',
+        ),
+    );
+    expect(boilerplate).toBeUndefined();
+  });
+
+  it('omits the 👁️ Manual verification heading and boilerplate for a post-groom Code task (markdown)', () => {
+    const markdown = renderTaskBodyMarkdown(
+      baseSections({
+        automatedCriteria: ['tsc passes'],
+        manualCriteria: [],
+        taskType: '💻 Code',
+      }),
+    );
+    expect(markdown).not.toContain('👁️ Manual verification');
+    expect(markdown).not.toContain('Covered by the Manual Verification Gate');
+  });
+
+  it('still renders the manual-verification section for a Code task carrying real pre-groom content', () => {
+    const blocks = renderTaskBody(
+      baseSections({
+        automatedCriteria: ['tsc passes'],
+        manualCriteria: ['Launch the app and click the widget'],
+        taskType: '💻 Code',
+      }),
+    );
+    const manualHeading = blocks.find(
+      (b) =>
+        b.type === 'heading_3' &&
+        JSON.stringify(b.heading_3).includes('👁️ Manual verification'),
+    );
+    expect(manualHeading).toBeDefined();
+  });
+
+  it('still renders the manual-verification section (with gate-note fallback) for a non-Code type', () => {
+    const blocks = renderTaskBody(
+      baseSections({
+        automatedCriteria: ['N/A — design task only.'],
+        manualCriteria: [],
+        taskType: '📐 Design',
+      }),
+    );
+    const manualHeading = blocks.find(
+      (b) =>
+        b.type === 'heading_3' &&
+        JSON.stringify(b.heading_3).includes('👁️ Manual verification'),
+    );
+    expect(manualHeading).toBeDefined();
+
+    const markdown = renderTaskBodyMarkdown(
+      baseSections({
+        automatedCriteria: ['N/A — design task only.'],
+        manualCriteria: ['Reviewed the updated architecture page'],
+        taskType: '📐 Design',
+      }),
+    );
+    expect(markdown).toContain('👁️ Manual verification');
+    expect(markdown).toContain('Reviewed the updated architecture page');
+  });
+});
+
 describe('WAF-safe command-line rendering', () => {
   it('detects interpreter module invocations and service-restart lines', () => {
     expect(isShellCommandLine('python3 -m http.server --bind 0.0.0.0')).toBe(
@@ -251,6 +334,94 @@ describe('WAF-safe command-line rendering', () => {
     expect(codeBlock).toMatchObject({
       code: {
         rich_text: [{ text: { content: 'const x = 1;\nconst y = 2;' } }],
+      },
+    });
+  });
+});
+
+describe('markdownToBlocks — move round-trip (blockToLine inverse)', () => {
+  /** Mirrors NotionClient.fetchTaskPage: one blockToLine per block, joined. */
+  function toMarkdown(blocks: ReturnType<typeof renderTaskBody>): string {
+    return blocks
+      .map((b) =>
+        blockToLine(b as unknown as Parameters<typeof blockToLine>[0]),
+      )
+      .join('\n');
+  }
+
+  it('reproduces the source body plus only the appended provenance line — no duplicate Summary, no empty skeleton', () => {
+    const sourceBlocks = renderTaskBody(
+      baseSections({
+        summary: 'Do the thing.',
+        dependencies: ['Some dependency'],
+        context: [
+          { type: 'heading_3', text: 'Root cause' },
+          { type: 'paragraph', text: 'Some prose about the bug.' },
+          { type: 'bulleted_list_item', text: 'A context bullet' },
+        ],
+        automatedCriteria: ['Unit test passes'],
+        manualCriteria: ['Covered by the Manual Verification Gate task.'],
+      }),
+    );
+    const sourceMarkdown = toMarkdown(sourceBlocks);
+
+    const movedBlocks = markdownToBlocks(sourceMarkdown);
+    const provenanceLine = 'Moved from notion:abc (milestone m1).';
+    movedBlocks.push({
+      object: 'block',
+      type: 'paragraph',
+      paragraph: {
+        rich_text: [{ type: 'text', text: { content: provenanceLine } }],
+      },
+    });
+
+    const movedMarkdown = toMarkdown(movedBlocks);
+    expect(movedMarkdown).toBe(`${sourceMarkdown}\n${provenanceLine}`);
+
+    const summaryHeadings = movedMarkdown
+      .split('\n')
+      .filter((l) => l === '## Summary');
+    const implHeadings = movedMarkdown
+      .split('\n')
+      .filter((l) => l === '## Implementation notes');
+    expect(summaryHeadings).toHaveLength(1);
+    expect(implHeadings).toHaveLength(1);
+  });
+
+  it('parses headings, lists, quotes, dividers, and fenced code blocks', () => {
+    const markdown = [
+      '## Summary',
+      'Some summary text.',
+      '## Dependencies',
+      '- Task A',
+      '- Task B',
+      '### Sub-heading',
+      '> A quoted line',
+      '---',
+      '```typescript',
+      'const x = 1;',
+      'const y = 2;',
+      '```',
+      '1. A numbered item',
+    ].join('\n');
+
+    const blocks = markdownToBlocks(markdown);
+    expect(blocks.map((b) => b.type)).toEqual([
+      'heading_2',
+      'paragraph',
+      'heading_2',
+      'bulleted_list_item',
+      'bulleted_list_item',
+      'heading_3',
+      'quote',
+      'divider',
+      'code',
+      'numbered_list_item',
+    ]);
+    expect(blocks[8]).toMatchObject({
+      code: {
+        rich_text: [{ text: { content: 'const x = 1;\nconst y = 2;' } }],
+        language: 'typescript',
       },
     });
   });

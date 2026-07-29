@@ -4,6 +4,7 @@ import {
   config,
   BASH_MAX_OUTPUT_LENGTH,
   BASH_DEFAULT_TIMEOUT_MS,
+  PLANNING_DISALLOWED_TOOLS,
 } from '../config';
 import type {
   ISessionRunner,
@@ -12,6 +13,12 @@ import type {
 } from './SessionRunner';
 import { logger } from '../logger';
 import { placeSessionPid } from './sessionCgroup';
+import { isPlanningSession } from './sessionPredicates';
+import {
+  createScratchDir,
+  removeScratchDir,
+  getScratchDir,
+} from './planningScratchDir';
 
 function log(sessionId: string, ...args: unknown[]) {
   logger.info(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
@@ -48,8 +55,46 @@ export class CliSessionRunner implements ISessionRunner {
       systemPromptFilePath,
       disableAutoCompact,
       extraEnv,
+      sessionType,
     } = options;
 
+    // Planning/ops sessions must never silently auto-accept a tool call
+    // outside their allowlist — a write/capability escalation needs to hit a
+    // real permission denial so it can route through grant-on-re-dispatch.
+    // Code/review sessions keep the existing acceptEdits behavior.
+    const permissionMode =
+      sessionType && isPlanningSession(sessionType) ? 'default' : 'acceptEdits';
+
+    // Dispatched planning sessions run entirely from their injected
+    // procedure — the interactive /groom, /design, and /ops skills must
+    // never be reachable from one. The built-in Skill tool is NOT denied by
+    // --allowed-tools omission (the CLI resolves skills via /skill-name
+    // regardless of the allowlist), so it must be explicitly disallowed.
+    // Write/Edit are disallowed here too (not just omitted from the
+    // allowlist) so a denial can never be resolved by an operator granting
+    // the capability on re-dispatch — see GRANT_DENYLIST_PATTERNS.
+    const isPlanning = Boolean(sessionType && isPlanningSession(sessionType));
+
+    // Planning sessions share `cwd` === the project checkout across
+    // concurrent sessions (no worktree of their own — see below).
+    // `worktreePath` is the project dir for planning sessions; give it a
+    // writable per-session scratch dir for output that shouldn't land in
+    // tracked files. The checkout itself is left read-write — see
+    // SessionManager's post-session drift-detection audit event.
+    if (isPlanning) {
+      createScratchDir(worktreePath, this.sessionId);
+    }
+
+    // Planning/ops/gate-verify sessions have no worktree of their own (they
+    // run with cwd === projectDir) and, per the settled design, are not
+    // meant to be filesystem-jailed to the project checkout: the gate read
+    // model needs host/DB/audit-log reach, and the ops write model needs to
+    // execute granted commands against out-of-tree host paths. The
+    // capability-grant allowlist (--allowed-tools) plus the Write/Edit/Skill
+    // denylist above are the write-safety boundary for these session
+    // types — not the CLI's directory sandbox — so it's lifted here via
+    // `--add-dir /`. Coding/review sessions keep the default worktree-only
+    // sandbox.
     const spawnArgs = [
       ...(resumeSessionId
         ? ['--resume', resumeSessionId]
@@ -61,7 +106,7 @@ export class CliSessionRunner implements ISessionRunner {
       'stream-json',
       '--verbose',
       '--permission-mode',
-      'acceptEdits',
+      permissionMode,
       ...(model ? ['--model', model] : []),
       ...(effort ? ['--effort', effort] : []),
       ...(disableAutoCompact
@@ -75,9 +120,13 @@ export class CliSessionRunner implements ISessionRunner {
         : []),
       '--allowed-tools',
       ...allowedTools,
+      ...(isPlanning
+        ? ['--disallowed-tools', ...PLANNING_DISALLOWED_TOOLS]
+        : []),
+      ...(isPlanning ? ['--add-dir', '/'] : []),
     ];
 
-    const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR', 'DB_PATH'] as const;
+    const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR'] as const;
     const envStr = envKeys
       .filter((k) => process.env[k] !== undefined)
       .map((k) => `${k}=${process.env[k]}`)
@@ -87,11 +136,18 @@ export class CliSessionRunner implements ISessionRunner {
       `spawning: cwd=${worktreePath} cmd=${config.claudePath} ${spawnArgs.join(' ')} env={${envStr}}`,
     );
 
+    // Strip production data-plane env vars before they reach the child. A
+    // session runs arbitrary code (including test suites) inside a worktree;
+    // DB_PATH pointing at the live orchestrator database must never be
+    // forwarded, or a `vitest run` inside the session would open and write
+    // to production data. Session code has no legitimate need for this var.
+    const { DB_PATH: _productionDbPath, ...inheritedEnv } = process.env;
+
     this.proc = spawn(config.claudePath, spawnArgs, {
       cwd: worktreePath,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
-        ...process.env,
+        ...inheritedEnv,
         BASH_MAX_OUTPUT_LENGTH: String(BASH_MAX_OUTPUT_LENGTH),
         BASH_DEFAULT_TIMEOUT_MS: String(BASH_DEFAULT_TIMEOUT_MS),
         ...extraEnv,
@@ -175,6 +231,10 @@ export class CliSessionRunner implements ISessionRunner {
         }, 5_000),
       ),
     ]);
+
+    if (isPlanning) {
+      removeScratchDir(getScratchDir(worktreePath, this.sessionId));
+    }
 
     return exitCode;
   }

@@ -6,9 +6,11 @@ const mockRuntimeSettings = vi.hoisted(() => ({
   large_task_model: '',
   code_session_model: '',
   review_session_model: '',
+  planning_session_model: '',
   large_task_effort: '',
   code_session_effort: '',
   review_session_effort: '',
+  planning_session_effort: '',
   corporate_mode_enabled: false,
 }));
 
@@ -80,6 +82,8 @@ vi.mock('child_process', () => ({
 
 vi.mock('../../config', () => ({
   ALLOWED_TOOLS: [],
+  GROOM_ALLOWED_TOOLS: [],
+  DESIGN_ALLOWED_TOOLS: [],
   GITHUB_REPO: 'owner/repo',
   BASH_MAX_OUTPUT_LENGTH: 30000,
   BASH_DEFAULT_TIMEOUT_MS: 300000,
@@ -112,7 +116,9 @@ vi.mock('../CliSessionRunner', () => ({
 
 import { AgentSession } from '../AgentSession';
 
-function makeSession(sessionType: 'standard' | 'review' = 'standard') {
+function makeSession(
+  sessionType: 'standard' | 'review' | 'groom' | 'design' = 'standard',
+) {
   return new AgentSession(
     'test-session-effort',
     'https://notion.so/task',
@@ -135,9 +141,11 @@ beforeEach(() => {
   mockRuntimeSettings.large_task_model = '';
   mockRuntimeSettings.code_session_model = '';
   mockRuntimeSettings.review_session_model = '';
+  mockRuntimeSettings.planning_session_model = '';
   mockRuntimeSettings.large_task_effort = '';
   mockRuntimeSettings.code_session_effort = '';
   mockRuntimeSettings.review_session_effort = '';
+  mockRuntimeSettings.planning_session_effort = '';
   vi.clearAllMocks();
 });
 
@@ -178,6 +186,36 @@ describe('AgentSession — per-class effort resolution', () => {
     mockRuntimeSettings.large_task_effort = 'max';
 
     const session = makeSession('standard');
+    session.setProactiveEscalation('claude-opus-4-7[1m]', 'continue');
+    await session.run();
+
+    expect(runCalls).toHaveLength(1);
+    expect(runCalls[0].options.model).toBe('claude-opus-4-7[1m]');
+    expect(runCalls[0].options.effort).toBe('max');
+  });
+
+  it.each(['groom', 'design'] as const)(
+    '%s session uses planning_session_model/effort',
+    async (sessionType) => {
+      mockRuntimeSettings.planning_session_model = 'claude-haiku-4-5';
+      mockRuntimeSettings.planning_session_effort = 'low';
+      mockRuntimeSettings.code_session_model = 'claude-opus-4-8';
+      mockRuntimeSettings.review_session_model = 'claude-sonnet-4-6';
+
+      const session = makeSession(sessionType);
+      await session.run();
+
+      expect(runCalls).toHaveLength(1);
+      expect(runCalls[0].options.model).toBe('claude-haiku-4-5');
+      expect(runCalls[0].options.effort).toBe('low');
+    },
+  );
+
+  it('large-task/escalation spawn on a planning session uses large_task_effort instead of planning_session_effort', async () => {
+    mockRuntimeSettings.planning_session_effort = 'low';
+    mockRuntimeSettings.large_task_effort = 'max';
+
+    const session = makeSession('design');
     session.setProactiveEscalation('claude-opus-4-7[1m]', 'continue');
     await session.run();
 

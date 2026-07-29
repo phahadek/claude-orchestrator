@@ -1,6 +1,6 @@
 {
   "name": "@claude-orchestrator/backend",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
   "description": "Backend (Node.js + Express + WebSocket) for Claude Code Orchestrator.",
   "main": "dist/server.js",
@@ -17,11 +17,12 @@
   "license": "MIT",
   "scripts": {
     "dev": "ts-node src/server.ts",
-    "build": "tsc",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc",
     "test": "vitest run"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.91",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/better-sqlite3": "^7.6.13",
     "better-sqlite3": "^12.8.0",
     "dotenv": "^16.4.7",

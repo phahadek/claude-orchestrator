@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildOrchestratorClaudeMd } from '../orchestrator-claudemd';
+import { buildSessionContext } from '../ContextBuilder';
 
 const BASE_PARAMS = {
   taskName: 'test-task',
@@ -63,6 +64,33 @@ describe('buildOrchestratorClaudeMd', () => {
     });
   });
 
+  describe('Pre-PR Gate section (no CLAUDE.md stash step)', () => {
+    it('does not instruct stashing or restoring CLAUDE.md', () => {
+      const output = buildOrchestratorClaudeMd(BASE_PARAMS);
+      expect(output).not.toContain('Stash CLAUDE.md');
+      expect(output).not.toContain('git stash push CLAUDE.md');
+      expect(output).not.toContain('git stash pop');
+      expect(output).not.toContain('Restore CLAUDE.md');
+      expect(output).not.toContain('never stage `CLAUDE.md`');
+    });
+
+    it('renumbers the remaining Pre-PR Gate steps starting from the rebase step', () => {
+      const output = buildOrchestratorClaudeMd({
+        ...BASE_PARAMS,
+        verify: ['npx tsc --noEmit', 'npm run build'],
+      });
+      const gateSection = output
+        .split('## Pre-PR Gate')[1]
+        .split('## Forbidden Actions')[0];
+      expect(gateSection).toContain('1. Rebase onto `dev`');
+      expect(gateSection).toContain('2. `npx tsc --noEmit` — must pass.');
+      expect(gateSection).toContain('3. `npm run build` — must pass.');
+      expect(gateSection).toContain(
+        '4. Stage only your implementation files for commit.',
+      );
+    });
+  });
+
   describe('PR body marker (no scratch-file instructions)', () => {
     it('instructs sessions to emit a <pr-body> marker, not write a file', () => {
       const output = buildOrchestratorClaudeMd(BASE_PARAMS);
@@ -100,5 +128,59 @@ describe('buildOrchestratorClaudeMd', () => {
       expect(output).not.toContain('## Local Context');
       expect(output).not.toContain('local-context.md');
     });
+  });
+
+  describe('Responding to Review Comments section (MCP verdict-delivery tool)', () => {
+    it('documents the review.disposition tool and the three disposition values', () => {
+      const output = buildOrchestratorClaudeMd(BASE_PARAMS);
+      expect(output).toContain('## Responding to Review Comments');
+      expect(output).toContain('mcp__orchestrator__review_disposition');
+      expect(output).toContain('comment_id');
+      expect(output).toContain('disposition');
+      expect(output).toContain('"addressed"');
+      expect(output).toContain('"wont_fix"');
+      expect(output).toContain('"out_of_scope"');
+      expect(output).toContain('reason');
+    });
+
+    it('omits the section for local-only git mode (no PR review threads)', () => {
+      const output = buildOrchestratorClaudeMd({
+        ...BASE_PARAMS,
+        gitMode: 'local-only',
+      });
+      expect(output).not.toContain('## Responding to Review Comments');
+    });
+  });
+});
+
+describe('assembled session instructions include the review.disposition MCP tool', () => {
+  const contextParams = {
+    taskName: 'test-task',
+    taskUrl: 'https://example.com/task',
+    projectContextUrl: 'https://example.com/project',
+    targetBranch: 'dev',
+    projectDir: '/tmp/project',
+    worktreePath: '/tmp/worktree',
+  };
+
+  it('initial-dispatch path (buildSessionContext without pre-fetched task content)', () => {
+    // Mirrors SessionManager's initial dispatch call site (SessionManager.ts,
+    // the `buildSessionContext` call inside the non-planning/non-review branch).
+    const output = buildSessionContext(contextParams);
+    expect(output).toContain('## Responding to Review Comments');
+    expect(output).toContain('mcp__orchestrator__review_disposition');
+  });
+
+  it('resume-rebuild path (buildSessionContext rebuilt from a persisted session row)', () => {
+    // Mirrors SessionManager's `_buildAndWriteResumeSystemPrompt`, which rebuilds
+    // the system prompt for a resumed session from the DB row rather than fresh
+    // dispatch params — guards against a cached/short-circuited resume path that
+    // silently skips this instruction.
+    const output = buildSessionContext({
+      ...contextParams,
+      taskContent: 'pre-fetched task spec markdown',
+    });
+    expect(output).toContain('## Responding to Review Comments');
+    expect(output).toContain('mcp__orchestrator__review_disposition');
   });
 });

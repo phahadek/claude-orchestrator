@@ -4,6 +4,15 @@ import { Readable, Writable } from 'stream';
 
 vi.mock('../../config', () => ({
   config: { claudePath: '/fake/claude' },
+  PLANNING_DISALLOWED_TOOLS: [
+    'Skill',
+    'Write',
+    'Edit',
+    'ScheduleWakeup',
+    'CronCreate',
+    'CronDelete',
+    'CronList',
+  ],
 }));
 
 // Capture the args passed to spawn('docker', ...) so we can assert on them.
@@ -38,6 +47,14 @@ vi.mock('child_process', () => ({
     return makeMockProc();
   }),
   execSync: vi.fn(() => ''),
+}));
+
+// planningScratchDir does real fs work (mkdir/rm the scratch dir) —
+// irrelevant to these spawn-arg assertions and unsafe against a fake
+// '/fake/worktree' path.
+vi.mock('../planningScratchDir', () => ({
+  createScratchDir: vi.fn(() => '/fake/worktree/.claude/scratch/fake'),
+  removeScratchDir: vi.fn(),
 }));
 
 import { DockerSessionRunner } from '../DockerSessionRunner';
@@ -81,5 +98,185 @@ describe('DockerSessionRunner spawn args', () => {
     expect(claudeArgs).not.toContain('--session-id');
     const idx = claudeArgs.indexOf('--resume');
     expect(claudeArgs[idx + 1]).toBe(RESUME_ID);
+  });
+});
+
+describe('DockerSessionRunner --permission-mode', () => {
+  it('uses acceptEdits for a standard (code) session', async () => {
+    const runner = new DockerSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, sessionType: 'standard' },
+      () => {},
+    );
+
+    const claudeArgs = capturedDockerArgs.slice(4);
+    const idx = claudeArgs.indexOf('--permission-mode');
+    expect(idx).not.toBe(-1);
+    expect(claudeArgs[idx + 1]).toBe('acceptEdits');
+  });
+
+  it('uses acceptEdits when sessionType is absent (back-compat default)', async () => {
+    const runner = new DockerSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    const claudeArgs = capturedDockerArgs.slice(4);
+    const idx = claudeArgs.indexOf('--permission-mode');
+    expect(claudeArgs[idx + 1]).toBe('acceptEdits');
+  });
+
+  it.each(['groom', 'design', 'ops'] as const)(
+    'does not use acceptEdits for a %s (planning) session',
+    async (sessionType) => {
+      const runner = new DockerSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      const claudeArgs = capturedDockerArgs.slice(4);
+      const idx = claudeArgs.indexOf('--permission-mode');
+      expect(idx).not.toBe(-1);
+      expect(claudeArgs[idx + 1]).toBe('default');
+    },
+  );
+});
+
+describe('DockerSessionRunner --disallowed-tools', () => {
+  it.each(['groom', 'design', 'ops'] as const)(
+    'includes --disallowed-tools Skill, Write, Edit, ScheduleWakeup, CronCreate, CronDelete, CronList for a %s (planning) session',
+    async (sessionType) => {
+      const runner = new DockerSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      const claudeArgs = capturedDockerArgs.slice(4);
+      const idx = claudeArgs.indexOf('--disallowed-tools');
+      expect(idx).not.toBe(-1);
+      expect(claudeArgs[idx + 1]).toBe('Skill');
+      expect(claudeArgs[idx + 2]).toBe('Write');
+      expect(claudeArgs[idx + 3]).toBe('Edit');
+      expect(claudeArgs[idx + 4]).toBe('ScheduleWakeup');
+      expect(claudeArgs[idx + 5]).toBe('CronCreate');
+      expect(claudeArgs[idx + 6]).toBe('CronDelete');
+      expect(claudeArgs[idx + 7]).toBe('CronList');
+    },
+  );
+
+  it.each(['standard', 'review'] as const)(
+    'omits --disallowed-tools for a %s (non-planning) session',
+    async (sessionType) => {
+      const runner = new DockerSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      const claudeArgs = capturedDockerArgs.slice(4);
+      expect(claudeArgs).not.toContain('--disallowed-tools');
+    },
+  );
+});
+
+describe('DockerSessionRunner --add-dir (directory sandbox lift)', () => {
+  it.each(['groom', 'design', 'ops'] as const)(
+    'includes --add-dir / for a %s (planning) session',
+    async (sessionType) => {
+      const runner = new DockerSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      const claudeArgs = capturedDockerArgs.slice(4);
+      const idx = claudeArgs.indexOf('--add-dir');
+      expect(idx).not.toBe(-1);
+      expect(claudeArgs[idx + 1]).toBe('/');
+    },
+  );
+
+  it.each(['standard', 'review'] as const)(
+    'omits --add-dir for a %s (non-planning) session',
+    async (sessionType) => {
+      const runner = new DockerSessionRunner(SESSION_ID);
+      await runner.run(
+        'hello',
+        undefined,
+        { ...defaultOptions, sessionType },
+        () => {},
+      );
+
+      const claudeArgs = capturedDockerArgs.slice(4);
+      expect(claudeArgs).not.toContain('--add-dir');
+    },
+  );
+
+  it('omits --add-dir when sessionType is absent', async () => {
+    const runner = new DockerSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    const claudeArgs = capturedDockerArgs.slice(4);
+    expect(claudeArgs).not.toContain('--add-dir');
+  });
+});
+
+describe('DockerSessionRunner --mcp-config / --append-system-prompt-file', () => {
+  it('passes --mcp-config <path> --strict-mcp-config when mcpConfigPath is set', async () => {
+    const runner = new DockerSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, mcpConfigPath: '/fake/mcp-config.json' },
+      () => {},
+    );
+
+    const claudeArgs = capturedDockerArgs.slice(4);
+    const idx = claudeArgs.indexOf('--mcp-config');
+    expect(idx).not.toBe(-1);
+    expect(claudeArgs[idx + 1]).toBe('/fake/mcp-config.json');
+    expect(claudeArgs).toContain('--strict-mcp-config');
+  });
+
+  it('omits --mcp-config when mcpConfigPath is absent', async () => {
+    const runner = new DockerSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    const claudeArgs = capturedDockerArgs.slice(4);
+    expect(claudeArgs).not.toContain('--mcp-config');
+    expect(claudeArgs).not.toContain('--strict-mcp-config');
+  });
+
+  it('passes --append-system-prompt-file <path> when systemPromptFilePath is set', async () => {
+    const runner = new DockerSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, systemPromptFilePath: '/fake/system-prompt.txt' },
+      () => {},
+    );
+
+    const claudeArgs = capturedDockerArgs.slice(4);
+    const idx = claudeArgs.indexOf('--append-system-prompt-file');
+    expect(idx).not.toBe(-1);
+    expect(claudeArgs[idx + 1]).toBe('/fake/system-prompt.txt');
+  });
+
+  it('omits --append-system-prompt-file when systemPromptFilePath is absent', async () => {
+    const runner = new DockerSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    const claudeArgs = capturedDockerArgs.slice(4);
+    expect(claudeArgs).not.toContain('--append-system-prompt-file');
   });
 });

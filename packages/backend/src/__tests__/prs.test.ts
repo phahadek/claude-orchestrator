@@ -815,6 +815,37 @@ describe('POST /api/prs/:prNumber/merge', () => {
           pr_number: 42,
           repo: 'owner/repo',
           merge_sha: 'abc123',
+          source: 'manual',
+          handling: 'fallback',
+        }),
+      }),
+    );
+  });
+
+  it('emits pr_merged audit event with handling: full when mergeWatcher is wired up', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const mergeWatcher = makeMockMergeWatcher();
+    const res = await supertest(
+      buildApp(
+        makeMockGitHub(),
+        makeMockPRReviewService(),
+        makeMockSessionManager(),
+        makeMockNotionClient(),
+        mergeWatcher,
+      ),
+    )
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(vi.mocked(auditLog.recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_merged',
+        payload: expect.objectContaining({
+          pr_number: 42,
+          repo: 'owner/repo',
+          merge_sha: 'abc123',
+          source: 'manual',
+          handling: 'full',
         }),
       }),
     );

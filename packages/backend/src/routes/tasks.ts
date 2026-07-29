@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { logger } from '../logger';
-import { getProjectById, runtimeSettings } from '../config';
+import { getProjectById, getAllProjects, runtimeSettings } from '../config';
 import { getProjectRepos } from '../projects/ProjectService';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
@@ -26,6 +26,8 @@ import { DependencyResolver } from '../notion/DependencyResolver';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
 import { parsePauseReason, deriveRecoveryDescriptor } from '../db/pauseReason';
+import { computeOpsBlockingDeps, isOpsEligibleType } from '../ops/opsLoad';
+import { normalizeTaskId } from '../tasks/taskId';
 import yaml from 'js-yaml';
 export type { TaskView } from '../ws/types';
 
@@ -38,6 +40,133 @@ export interface TasksActiveResponse {
 
 function getReviewIterationCap(): number {
   return typedGetSetting('max_review_iterations');
+}
+
+/**
+ * Mutates `views` in place with blocked/blockerNames/wave, resolved against
+ * `contextTasks`. This is the single place dependency resolution happens —
+ * both list endpoints and the single-task task_updated broadcast route
+ * through here so they can never drift out of sync (see emitTaskUpdated /
+ * collectDependencyContext for how the broadcast path builds its context).
+ */
+function resolveDependencyBlocking(
+  views: TaskView[],
+  contextTasks: NotionTask[],
+): void {
+  try {
+    const resolver = new DependencyResolver();
+    const resolved = resolver.resolve(contextTasks);
+    const resolvedMap = new Map(resolved.map((r) => [r.task.id, r]));
+    for (const view of views) {
+      const r = resolvedMap.get(view.taskId);
+      if (r) {
+        view.blocked = r.blocked;
+        view.blockerNames = r.blockers.map((b) => b.title);
+        view.wave = r.wave;
+      }
+    }
+  } catch {
+    // ignore — views retain their default blocked: false
+  }
+}
+
+/**
+ * Walks `rootTask.dependsOn` (and each dependency's own dependsOn,
+ * transitively) via the per-task cache rows, returning the root task plus
+ * every reachable dependency. This gives DependencyResolver enough context
+ * to resolve a single task's blocked/blockerNames/wave without paying for a
+ * full board fetch — important since emitTaskUpdated fires on every task
+ * status change. A dependency missing from the cache is simply omitted,
+ * which DependencyResolver already treats as "outside this board" (satisfied).
+ */
+function collectDependencyContext(rootTask: NotionTask): NotionTask[] {
+  const tasks: NotionTask[] = [rootTask];
+  const seen = new Set<string>([normalizeTaskId(rootTask.id)]);
+  const queue: string[] = [...rootTask.dependsOn];
+  while (queue.length > 0) {
+    const depId = normalizeTaskId(queue.shift()!);
+    if (seen.has(depId)) continue;
+    seen.add(depId);
+    const cacheRow = getTaskCache(depId);
+    if (!cacheRow) continue;
+    try {
+      const depTask = JSON.parse(cacheRow.raw_json) as NotionTask;
+      tasks.push(depTask);
+      queue.push(...depTask.dependsOn);
+    } catch {
+      // ignore malformed cache entry
+    }
+  }
+  return tasks;
+}
+
+/**
+ * Best-effort lookup of the project a task belongs to, for the ops
+ * dep-blocking check (which needs a project to resolve deploy ancestry).
+ * Only called for ops-eligible tasks, so the board-cache scan this performs
+ * stays off the hot path for the common 💻 Code task_updated broadcasts.
+ */
+function findProjectIdForTask(notionTaskId: string): string | null {
+  for (const project of getAllProjects()) {
+    const boardRow = getTaskCache(`board:${project.boardId}`);
+    if (boardRow) {
+      try {
+        const boardTasks = JSON.parse(boardRow.raw_json) as NotionTask[];
+        if (boardTasks.some((t) => t.id === notionTaskId)) return project.id;
+      } catch {
+        // ignore malformed cache entry
+      }
+    }
+    const nonMilestoneRow = getTaskCache(`non_milestone:${project.id}`);
+    if (nonMilestoneRow) {
+      try {
+        const nmTasks = JSON.parse(nonMilestoneRow.raw_json) as NotionTask[];
+        if (nmTasks.some((t) => t.id === notionTaskId)) return project.id;
+      } catch {
+        // ignore malformed cache entry
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Mutates `views` in place with opsDepBlocked/opsDepBlockedReason for every
+ * ops-eligible task (🔧 Operational / 🔎 Investigation / 🧪 Testing) —
+ * mirrors the frontend's OPS_TASK_TYPES gate so the Ops(N) checkbox can be
+ * disabled up front instead of the task silently being dropped by
+ * /ops/launch's worklist.executable filter. Uses the local_branches-only
+ * (`fast`) merge-commit lookup — this runs on every poll of a frequently
+ * refetched list, so it can't afford a GitHub round trip per dependency.
+ */
+async function annotateOpsDepBlocking(
+  views: TaskView[],
+  allTasks: NotionTask[],
+  projectId: string,
+): Promise<void> {
+  const opsTasks = allTasks.filter((t) => isOpsEligibleType(t.type));
+  if (opsTasks.length === 0) return;
+  try {
+    const blocking = await computeOpsBlockingDeps(
+      allTasks,
+      opsTasks,
+      projectId,
+      {
+        fast: true,
+      },
+    );
+    for (const view of views) {
+      const info = blocking.get(view.taskId);
+      if (!info) continue;
+      view.opsDepBlocked = info.blockingDepIds.length > 0;
+      view.opsDepBlockedReason =
+        info.blockingDepTitles.length > 0
+          ? `waiting on ${info.blockingDepTitles.join(', ')}`
+          : null;
+    }
+  } catch {
+    // ignore — views retain default (undefined) ops dep-block fields
+  }
 }
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
@@ -61,15 +190,37 @@ export function setTaskCacheRefresher(
 /** Build a TaskView for a single notionTaskId and broadcast it as task_updated. */
 export function emitTaskUpdated(notionTaskId: string): void {
   if (!taskBroadcastFn) return;
-  const task = buildTaskView(notionTaskId);
-  if (task) taskBroadcastFn({ type: 'task_updated', task });
+  void buildTaskView(notionTaskId).then((task) => {
+    if (task && taskBroadcastFn)
+      taskBroadcastFn({ type: 'task_updated', task });
+  });
 }
 
 /** Build a TaskView for a single notionTaskId from current DB state. Returns null if not found. */
-function buildTaskView(notionTaskId: string): TaskView | null {
+async function buildTaskView(notionTaskId: string): Promise<TaskView | null> {
   const rows = getActiveTaskAggregates([notionTaskId]);
   if (rows.length === 0) return null;
-  return buildTaskViewFromRow(rows[0], getReviewIterationCap());
+  const view = buildTaskViewFromRow(rows[0], getReviewIterationCap());
+
+  let notionTask: NotionTask | null = null;
+  try {
+    notionTask = JSON.parse(rows[0].raw_json) as NotionTask;
+  } catch {
+    // leave as null
+  }
+  if (notionTask) {
+    const contextTasks = collectDependencyContext(notionTask);
+    resolveDependencyBlocking([view], contextTasks);
+
+    if (isOpsEligibleType(notionTask.type)) {
+      const projectId = findProjectIdForTask(notionTaskId);
+      if (projectId) {
+        await annotateOpsDepBlocking([view], contextTasks, projectId);
+      }
+    }
+  }
+
+  return view;
 }
 
 // ── Row → TaskView mapping ───────────────────────────────────────────────────
@@ -103,6 +254,19 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
         row.code_session_context_occupancy_tokens ?? undefined,
       compaction_count: row.code_session_compaction_count ?? undefined,
       model: row.code_session_model ?? null,
+    };
+  }
+
+  let planningSession: TaskView['planningSession'] = null;
+  if (row.planning_session_id) {
+    planningSession = {
+      sessionId: row.planning_session_id,
+      status: row.planning_session_status ?? '',
+      sessionType: row.planning_session_type ?? '',
+      startedAt: row.planning_session_started_at ?? 0,
+      endedAt: row.planning_session_ended_at ?? null,
+      inputTokens: row.planning_session_input_tokens ?? 0,
+      outputTokens: row.planning_session_output_tokens ?? 0,
     };
   }
 
@@ -185,6 +349,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     blockerNames: [],
     wave: 1,
     codeSession,
+    planningSession,
     pr,
     review,
     totalTokens,
@@ -436,7 +601,7 @@ export function createTasksRouter(
   });
 
   // ── GET /api/tasks/non-milestone?projectId=<id> ─────────────────────────
-  router.get('/tasks/non-milestone', (req: Request, res: Response) => {
+  router.get('/tasks/non-milestone', async (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : '';
     if (!projectId) {
@@ -472,28 +637,15 @@ export function createTasksRouter(
       .map((row) => buildTaskViewFromRow(row, cap))
       .filter((v) => !v.notionStatus.includes('Deferred'));
 
-    // Resolve blocked status from the full non-milestone task list
-    try {
-      const resolver = new DependencyResolver();
-      const resolved = resolver.resolve(notionTasks);
-      const resolvedMap = new Map(resolved.map((r) => [r.task.id, r]));
-      for (const view of views) {
-        const r = resolvedMap.get(view.taskId);
-        if (r) {
-          view.blocked = r.blocked;
-          view.blockerNames = r.blockers.map((b) => b.title);
-          view.wave = r.wave;
-        }
-      }
-    } catch {
-      // ignore — views retain their default blocked: false
-    }
+    resolveDependencyBlocking(views, notionTasks);
+
+    await annotateOpsDepBlocking(views, notionTasks, projectId);
 
     res.json(views);
   });
 
   // ── GET /api/tasks/active?projectId=<id>&boardId=<id> ────────────────────
-  router.get('/tasks/active', (req: Request, res: Response) => {
+  router.get('/tasks/active', async (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : '';
     if (!projectId) {
@@ -530,14 +682,13 @@ export function createTasksRouter(
       return;
     }
 
-    let taskIds: string[];
+    let allBoardTasks: NotionTask[];
     try {
-      taskIds = (JSON.parse(boardCacheRow.raw_json) as NotionTask[]).map(
-        (t) => t.id,
-      );
+      allBoardTasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
     } catch {
-      taskIds = [];
+      allBoardTasks = [];
     }
+    const taskIds = allBoardTasks.map((t) => t.id);
 
     const aggregates = getActiveTaskAggregates(taskIds);
     const cap = getReviewIterationCap();
@@ -545,23 +696,9 @@ export function createTasksRouter(
       .map((row) => buildTaskViewFromRow(row, cap))
       .filter((v) => !v.notionStatus.includes('Deferred'));
 
-    // Resolve blocked status from the full board task list
-    try {
-      const allBoardTasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
-      const resolver = new DependencyResolver();
-      const resolved = resolver.resolve(allBoardTasks);
-      const resolvedMap = new Map(resolved.map((r) => [r.task.id, r]));
-      for (const view of views) {
-        const r = resolvedMap.get(view.taskId);
-        if (r) {
-          view.blocked = r.blocked;
-          view.blockerNames = r.blockers.map((b) => b.title);
-          view.wave = r.wave;
-        }
-      }
-    } catch {
-      // ignore — views retain their default blocked: false
-    }
+    resolveDependencyBlocking(views, allBoardTasks);
+
+    await annotateOpsDepBlocking(views, allBoardTasks, projectId);
 
     const stale =
       Date.now() - boardCacheRow.fetched_at >

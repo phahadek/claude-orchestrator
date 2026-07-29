@@ -1,8 +1,9 @@
 import type Database from 'better-sqlite3';
+import { createHash } from 'crypto';
 import { db } from './db';
 import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
-import { normalizeTaskId } from '../tasks/taskId';
+import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
@@ -42,12 +43,26 @@ import type {
   NewGateItemEventRow,
   GateAccretionRow,
   GateItemClassification,
+  DeployRunRow,
+  DeployRunEventRow,
+  NewDeployRunEventRow,
   SeedItemRow,
   SeedItemSourceRow,
   NewSeedItemSourceRow,
   SeedItemEventRow,
   NewSeedItemEventRow,
   SeedAccretionRow,
+  ArchUnitRow,
+  NewArchUnitRow,
+  ArchUnitEventRow,
+  NewArchUnitEventRow,
+  ArchUnitQuery,
+  CompletenessDispositionRow,
+  NewCompletenessDispositionRow,
+  CompletenessDispositionQuestion,
+  StagedIntentRow,
+  StagedIntentState,
+  StagedIntentGroupRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -160,6 +175,49 @@ const stmtMarkSessionDone = db.prepare<{
   WHERE session_id = @session_id
 `);
 
+// pending_done_* are prepared lazily (inline, per-call) rather than as
+// module-level consts — unlike the sessions table's long-standing columns,
+// these are new, and some callers of queries.ts run against a `db` handle
+// that was never taken through schema.ts's runMigrations (only db.ts's own
+// bootstrap schema — see production callers vs. test fixtures that don't
+// mock db.ts). A module-level db.prepare() against a column that handle
+// doesn't have would fail at import time for every such caller, not just
+// ones that actually use pending-done. Preparing inline defers that check to
+// first actual use, matching the existing convention for other newer
+// optional columns in this file (e.g. addGrantedCapability).
+function setPendingDone(
+  sessionId: string,
+  endedAt: number,
+  prUrl: string | null,
+  callSite: string,
+): void {
+  db.prepare<{
+    session_id: string;
+    pending_done_ended_at: number;
+    pending_done_pr_url: string | null;
+    pending_done_call_site: string;
+  }>(
+    `UPDATE sessions
+     SET pending_done_ended_at = @pending_done_ended_at,
+         pending_done_pr_url = @pending_done_pr_url,
+         pending_done_call_site = @pending_done_call_site
+     WHERE session_id = @session_id`,
+  ).run({
+    session_id: sessionId,
+    pending_done_ended_at: endedAt,
+    pending_done_pr_url: prUrl,
+    pending_done_call_site: callSite,
+  });
+}
+
+function clearPendingDone(sessionId: string): void {
+  db.prepare<{ session_id: string }>(
+    `UPDATE sessions
+     SET pending_done_ended_at = NULL, pending_done_pr_url = NULL, pending_done_call_site = NULL
+     WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId });
+}
+
 const stmtMarkSessionIdle = db.prepare<{
   session_id: string;
   ended_at: number;
@@ -221,30 +279,44 @@ export function getOtherRunningSessionsForTask(
  * also persists pr_url without a second round-trip.
  * pr_url is only overwritten when non-null — existing value is preserved otherwise.
  *
- * Advisory guard: if the current session status is 'running', emits a
- * session_marked_done_while_running audit event to surface premature transitions
- * in production data. The write proceeds regardless (advisory only).
+ * In-flight guard: if the current session status is 'running', a turn may
+ * still be in progress (or about to be — e.g. a resume race), so writing
+ * 'done' now would either stomp an active turn or get silently reverted by
+ * that turn's own terminal write once it finishes. Instead of writing, the
+ * transition is deferred onto pending_done_* and a session_done_deferred_while_running
+ * audit event is recorded. The deferred transition is applied once the turn
+ * completes — see applyPendingDone, called from SessionManager's run()-settle
+ * handler and its boot-time sweep — so it is never silently lost.
+ *
+ * opts.skipInFlightGuard bypasses the guard for callers that have already
+ * independently confirmed there is no live process for this session (e.g.
+ * SessionManager's boot-time orphan recovery, reconciling a row stuck at
+ * 'running' from a crash before any process for it exists again this run) —
+ * never set this from a caller that cannot make that guarantee.
  */
 export function markSessionDone(
   sessionId: string,
   endedAt: number,
   prUrl?: string | null,
   callSite?: string,
+  opts?: { skipInFlightGuard?: boolean },
 ): void {
   const current = stmtGetSession.get({ session_id: sessionId }) as
     | { status: string; task_id: string | null }
     | undefined;
-  if (current?.status === 'running') {
+  if (current?.status === 'running' && !opts?.skipInFlightGuard) {
     logger.warn(
-      `[markSessionDone] running→done for ${sessionId.slice(0, 8)} call_site=${callSite ?? 'unknown'} — emitting audit event`,
+      `[markSessionDone] deferring running→done for ${sessionId.slice(0, 8)} call_site=${callSite ?? 'unknown'} — turn still in flight`,
     );
     recordEvent({
-      event_type: 'session_marked_done_while_running',
+      event_type: 'session_done_deferred_while_running',
       actor_type: 'system',
       actor_id: sessionId,
       task_id: current.task_id ?? null,
       payload: { call_site: callSite ?? 'unknown', status_before: 'running' },
     });
+    setPendingDone(sessionId, endedAt, prUrl ?? null, callSite ?? 'unknown');
+    return;
   }
   stmtMarkSessionDone.run({
     session_id: sessionId,
@@ -254,15 +326,117 @@ export function markSessionDone(
 }
 
 /**
+ * Applies a done-transition previously deferred by markSessionDone, once the
+ * session's turn has genuinely completed (i.e. its process has exited — the
+ * caller is responsible for only invoking this at that point, never while a
+ * turn might still be in flight). No-op if nothing is pending. If the session
+ * already reached a terminal status via another path in the meantime, the
+ * stale pending mark is dropped rather than applied (that other terminal
+ * status wins — it reflects something more recent).
+ * Returns true if a deferred done-transition was applied.
+ */
+export function applyPendingDone(sessionId: string): boolean {
+  const current = stmtGetSession.get({ session_id: sessionId }) as
+    | {
+        status: string;
+        task_id: string | null;
+        pending_done_ended_at: number | null;
+        pending_done_pr_url: string | null;
+        pending_done_call_site: string | null;
+      }
+    | undefined;
+  if (!current || current.pending_done_ended_at == null) return false;
+  if (TERMINAL_SESSION_STATUSES.has(current.status)) {
+    clearPendingDone(sessionId);
+    return false;
+  }
+  stmtMarkSessionDone.run({
+    session_id: sessionId,
+    ended_at: current.pending_done_ended_at,
+    pr_url: current.pending_done_pr_url,
+  });
+  clearPendingDone(sessionId);
+  recordEvent({
+    event_type: 'session_done_deferred_applied',
+    actor_type: 'system',
+    actor_id: sessionId,
+    task_id: current.task_id ?? null,
+    payload: { call_site: current.pending_done_call_site ?? 'unknown' },
+  });
+  return true;
+}
+
+/**
+ * Sessions with an unapplied deferred done-transition (pending_done_ended_at
+ * set) that are not currently 'running' — these can arise if the backend
+ * restarted between the pending write and applyPendingDone's own call (e.g.
+ * mid-way through a clean-exit). Running rows are excluded because they are
+ * already covered by the ordinary orphan-resume path: once resumed and the
+ * turn completes again, applyPendingDone fires from the settle handler same
+ * as any other session. Used by SessionManager's boot sweep to close the
+ * loop on the rest.
+ */
+export function getSessionsWithUnappliedPendingDone(): Session[] {
+  return db
+    .prepare(
+      `SELECT * FROM sessions WHERE pending_done_ended_at IS NOT NULL AND status != 'running'`,
+    )
+    .all() as Session[];
+}
+
+/**
+ * Terminal session statuses shared across the codebase. A session in one of
+ * these states has concluded and must never be reverted by a stale write
+ * from an in-flight subprocess (e.g. a clean-exit that races a merge).
+ * SessionManager's own TERMINAL_STATUSES additionally includes 'superseded'
+ * for its branch-deletion gate — that's a distinct, wider vocabulary and is
+ * derived from this one rather than duplicated.
+ */
+export const TERMINAL_SESSION_STATUSES = new Set(['done', 'error', 'killed']);
+
+const stmtBackfillPrUrlIfNull = db.prepare<{
+  session_id: string;
+  pr_url: string | null;
+}>(`
+  UPDATE sessions
+  SET pr_url = COALESCE(pr_url, @pr_url)
+  WHERE session_id = @session_id
+`);
+
+/**
  * Atomically mark a session as idle (process exited, PR open, waiting for
  * review/merge). Sets ended_at and pr_url in a single write. The session
  * remains resumable via sendOrResume; it becomes done only when the PR merges.
+ *
+ * Terminal guard: if the session has already concluded (done/error/killed —
+ * e.g. its PR merged and PRMergeWatcher/_concludeSessions already marked it
+ * done), a subsequent clean-exit write must not revert that terminal status
+ * back to idle. The write is skipped and a session_idle_write_skipped_terminal
+ * audit event is recorded. Any scraped pr_url is still backfilled onto the
+ * row when it currently has none, so recoverSession/SessionAuditor can still
+ * find it.
  */
 export function markSessionIdle(
   sessionId: string,
   endedAt: number,
   prUrl?: string | null,
 ): void {
+  const current = stmtGetSession.get({ session_id: sessionId }) as
+    | { status: string; task_id: string | null }
+    | undefined;
+  if (current && TERMINAL_SESSION_STATUSES.has(current.status)) {
+    recordEvent({
+      event_type: 'session_idle_write_skipped_terminal',
+      actor_type: 'system',
+      actor_id: sessionId,
+      task_id: current.task_id ?? null,
+      payload: { status_before: current.status },
+    });
+    if (prUrl) {
+      stmtBackfillPrUrlIfNull.run({ session_id: sessionId, pr_url: prUrl });
+    }
+    return;
+  }
   stmtMarkSessionIdle.run({
     session_id: sessionId,
     ended_at: endedAt,
@@ -442,6 +616,72 @@ export function getTerminalSessionsForTask(taskId: string): Session[] {
     .all({ task_id: norm }) as Session[];
 }
 
+const GATE_ITEM_TASK_PREFIX = 'gate-item:';
+
+export interface GateItemVerifySession {
+  itemId: string;
+  sessionId: string;
+  sessionStatus: string;
+  startedAt: number;
+  endedAt: number | null;
+}
+
+/**
+ * Resolves the gate-item ↔ verify-session linkage: sessions whose task_id
+ * is 'gate-item:<id>' (set by GateItemVerifier on dispatch), for the given
+ * gate item ids. Most recent first, so callers can take the live/latest one.
+ */
+export function getVerifySessionsForGateItems(
+  itemIds: string[],
+): GateItemVerifySession[] {
+  if (itemIds.length === 0) return [];
+  const taskIds = itemIds.map((id) => `${GATE_ITEM_TASK_PREFIX}${id}`);
+  const placeholders = taskIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare(
+      `SELECT session_id, task_id, status, started_at, ended_at
+       FROM sessions
+       WHERE task_id IN (${placeholders})
+       ORDER BY started_at DESC`,
+    )
+    .all(...taskIds) as {
+    session_id: string;
+    task_id: string | null;
+    status: string;
+    started_at: number;
+    ended_at: number | null;
+  }[];
+  return rows
+    .filter((r): r is typeof r & { task_id: string } => r.task_id !== null)
+    .map((r) => ({
+      itemId: r.task_id.slice(GATE_ITEM_TASK_PREFIX.length),
+      sessionId: r.session_id,
+      sessionStatus: r.status,
+      startedAt: r.started_at,
+      endedAt: r.ended_at,
+    }));
+}
+
+/**
+ * True if this task has a non-terminal planning (groom/design/ops) session —
+ * including one parked idle awaiting operator disposition. Per the no-timeout
+ * decision for planning sessions, an idle groom/design/ops session is never
+ * an orphan: OrphanedTaskSweeper must skip revert/nudge for such a task.
+ */
+export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
+  const norm = normalizeBoardId(taskId);
+  const rows = db
+    .prepare<[], { task_id: string | null }>(
+      `
+    SELECT task_id FROM sessions
+    WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
+      AND session_type IN ('groom', 'design', 'ops')
+  `,
+    )
+    .all();
+  return rows.some((row) => normalizeBoardId(row.task_id ?? '') === norm);
+}
+
 export function hasActiveSessionForTask(taskId: string): boolean {
   const norm = taskId.replace(/-/g, '');
   const row = db
@@ -592,6 +832,44 @@ export function getSessionTags(sessionId: string): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * Read the durable per-session granted-capabilities set — operator-approved
+ * grants (a Bash command prefix or named MCP write verb) sticky for the
+ * session's life. Rehydrated on boot so a restart mid-session doesn't lose
+ * them.
+ */
+export function getGrantedCapabilities(sessionId: string): string[] {
+  const row = db
+    .prepare('SELECT granted_capabilities FROM sessions WHERE session_id = ?')
+    .get(sessionId) as { granted_capabilities: string | null } | undefined;
+  if (!row?.granted_capabilities) return [];
+  try {
+    const parsed = JSON.parse(row.granted_capabilities);
+    return Array.isArray(parsed) ? (parsed as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Add a capability to the session's durable granted set (idempotent — a
+ * capability already granted is not duplicated). Scoped to this one session;
+ * discarded at session end (the row persists but is no longer read).
+ */
+export function addGrantedCapability(
+  sessionId: string,
+  capability: string,
+): string[] {
+  const existing = getGrantedCapabilities(sessionId);
+  const next = existing.includes(capability)
+    ? existing
+    : [...existing, capability];
+  db.prepare(
+    'UPDATE sessions SET granted_capabilities = ? WHERE session_id = ?',
+  ).run(JSON.stringify(next), sessionId);
+  return next;
 }
 
 export function setDerivedTitle(sessionId: string, title: string): void {
@@ -1378,6 +1656,28 @@ export function lookupSessionByBranch(
   return null;
 }
 
+/**
+ * Link a previously-orphaned PR row (task_id/session_id null) to a task and
+ * session re-derived from its head_branch. Used by StalledPRReconciler to
+ * recover PRs that PRBootSweep inserted with no session match.
+ */
+export function linkPRTaskAndSession(
+  prNumber: number,
+  repo: string,
+  taskId: string,
+  sessionId: string | null,
+): void {
+  db.prepare<{
+    task_id: string;
+    session_id: string | null;
+    pr_number: number;
+    repo: string;
+  }>(
+    `UPDATE pull_requests SET task_id = @task_id, session_id = COALESCE(@session_id, session_id)
+     WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ task_id: taskId, session_id: sessionId, pr_number: prNumber, repo });
+}
+
 // ─── settings ────────────────────────────────────────────────────────────────
 
 export function getSetting(key: string): string | undefined {
@@ -1979,6 +2279,14 @@ export interface TaskAggregateRow {
   code_session_compaction_count: number | null;
   code_session_model: string | null;
   code_session_type: string | null;
+  // planning session (session_type IN ('groom', 'design', 'ops'))
+  planning_session_id: string | null;
+  planning_session_status: string | null;
+  planning_session_started_at: number | null;
+  planning_session_ended_at: number | null;
+  planning_session_input_tokens: number | null;
+  planning_session_output_tokens: number | null;
+  planning_session_type: string | null;
   // review session (session_type = 'review')
   review_session_id: string | null;
   review_session_status: string | null;
@@ -2023,6 +2331,15 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
         FROM sessions
         WHERE session_type = 'standard' OR session_type IS NULL
       ),
+      ranked_planning AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY task_id
+            ORDER BY started_at DESC
+          ) AS rn
+        FROM sessions
+        WHERE session_type IN ('groom', 'design', 'ops')
+      ),
       ranked_review AS (
         SELECT *,
           ROW_NUMBER() OVER (
@@ -2059,6 +2376,13 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       cs.compaction_count          AS code_session_compaction_count,
       cs.model                     AS code_session_model,
       cs.session_type              AS code_session_type,
+      ps.session_id           AS planning_session_id,
+      ps.status               AS planning_session_status,
+      ps.started_at           AS planning_session_started_at,
+      ps.ended_at             AS planning_session_ended_at,
+      ps.total_input_tokens   AS planning_session_input_tokens,
+      ps.total_output_tokens  AS planning_session_output_tokens,
+      ps.session_type         AS planning_session_type,
       rs.session_id          AS review_session_id,
       rs.status              AS review_session_status,
       rs.total_input_tokens  AS review_session_input_tokens,
@@ -2084,6 +2408,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       END                    AS session_pr_creation_failed_pause_reason
     FROM task_cache tc
     LEFT JOIN ranked_code cs ON cs.task_id = tc.task_id AND cs.rn = 1
+    LEFT JOIN ranked_planning ps ON ps.task_id = tc.task_id AND ps.rn = 1
     LEFT JOIN ranked_review rs ON rs.task_id = tc.task_id AND rs.rn = 1
     LEFT JOIN ranked_pr pr ON pr.task_id = tc.task_id AND pr.rn = 1
     WHERE tc.task_id IN (${placeholders})
@@ -2174,6 +2499,7 @@ export interface ProjectPatch {
   task_source_config?: string | null;
   data_residency_confirmed?: number;
   base_branch?: string;
+  arch_store_adopted?: number;
 }
 
 export function updateProject(
@@ -2199,6 +2525,7 @@ export function updateProject(
     task_source_config: string | null;
     data_residency_confirmed: number;
     base_branch: string;
+    arch_store_adopted: number;
     updated_at: number;
   }>(
     `
@@ -2217,6 +2544,7 @@ export function updateProject(
         task_source_config = @task_source_config,
         data_residency_confirmed = @data_residency_confirmed,
         base_branch = @base_branch,
+        arch_store_adopted = @arch_store_adopted,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -2263,6 +2591,10 @@ export function updateProject(
         ? patch.data_residency_confirmed
         : (existing.data_residency_confirmed ?? 0),
     base_branch: patch.base_branch ?? existing.base_branch ?? 'dev',
+    arch_store_adopted:
+      patch.arch_store_adopted !== undefined
+        ? patch.arch_store_adopted
+        : (existing.arch_store_adopted ?? 0),
     updated_at: now,
   });
   return getProjectRowById(id);
@@ -2277,21 +2609,52 @@ export function deleteProject(id: string): boolean {
 
 // ─── milestones ────────────────────────────────────────────────────────────
 
+/**
+ * Thrown when an insert/update would give a project two milestones with the
+ * same canonical_short_id — surfaced from the idx_milestones_project_canonical_short_id
+ * partial unique index (case-insensitive), since resolveMilestoneForProject's
+ * first-match lookup would otherwise silently pick one of the collision.
+ */
+export class MilestoneCanonicalShortIdCollisionError extends Error {
+  constructor(canonicalShortId: string) {
+    super(
+      `canonical_short_id "${canonicalShortId}" is already used by another milestone in this project`,
+    );
+    this.name = 'MilestoneCanonicalShortIdCollisionError';
+  }
+}
+
+function isCanonicalShortIdCollision(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.message.includes('idx_milestones_project_canonical_short_id')
+  );
+}
+
 export function insertMilestone(m: NewMilestoneRow): MilestoneRow {
   const now = Date.now();
-  db.prepare<NewMilestoneRow>(
-    `
+  try {
+    db.prepare<NewMilestoneRow>(
+      `
     INSERT INTO milestones
-      (id, project_id, name, source_id, display_order, created_at, updated_at)
+      (id, project_id, name, source_id, canonical_short_id, display_order, created_at, updated_at)
     VALUES
-      (@id, @project_id, @name, @source_id, @display_order, @created_at, @updated_at)
+      (@id, @project_id, @name, @source_id, @canonical_short_id, @display_order, @created_at, @updated_at)
   `,
-  ).run({
-    ...m,
-    display_order: m.display_order ?? 0,
-    created_at: m.created_at ?? now,
-    updated_at: m.updated_at ?? now,
-  });
+    ).run({
+      ...m,
+      display_order: m.display_order ?? 0,
+      created_at: m.created_at ?? now,
+      updated_at: m.updated_at ?? now,
+    });
+  } catch (err) {
+    if (isCanonicalShortIdCollision(err)) {
+      throw new MilestoneCanonicalShortIdCollisionError(
+        m.canonical_short_id ?? '',
+      );
+    }
+    throw err;
+  }
   return getMilestoneById(m.id)!;
 }
 
@@ -2316,6 +2679,7 @@ export function listMilestonesByProject(projectId: string): MilestoneRow[] {
 export interface MilestonePatch {
   name?: string;
   source_id?: string | null;
+  canonical_short_id?: string | null;
   display_order?: number;
 }
 
@@ -2326,29 +2690,45 @@ export function updateMilestone(
   const existing = getMilestoneById(id);
   if (!existing) return undefined;
   const now = Date.now();
-  db.prepare<{
-    id: string;
-    name: string;
-    source_id: string | null;
-    display_order: number;
-    updated_at: number;
-  }>(
-    `
+  const nextCanonicalShortId =
+    patch.canonical_short_id !== undefined
+      ? patch.canonical_short_id
+      : existing.canonical_short_id;
+  try {
+    db.prepare<{
+      id: string;
+      name: string;
+      source_id: string | null;
+      canonical_short_id: string | null;
+      display_order: number;
+      updated_at: number;
+    }>(
+      `
     UPDATE milestones
     SET name = @name,
         source_id = @source_id,
+        canonical_short_id = @canonical_short_id,
         display_order = @display_order,
         updated_at = @updated_at
     WHERE id = @id
   `,
-  ).run({
-    id,
-    name: patch.name ?? existing.name,
-    source_id:
-      patch.source_id !== undefined ? patch.source_id : existing.source_id,
-    display_order: patch.display_order ?? existing.display_order,
-    updated_at: now,
-  });
+    ).run({
+      id,
+      name: patch.name ?? existing.name,
+      source_id:
+        patch.source_id !== undefined ? patch.source_id : existing.source_id,
+      canonical_short_id: nextCanonicalShortId,
+      display_order: patch.display_order ?? existing.display_order,
+      updated_at: now,
+    });
+  } catch (err) {
+    if (isCanonicalShortIdCollision(err)) {
+      throw new MilestoneCanonicalShortIdCollisionError(
+        nextCanonicalShortId ?? '',
+      );
+    }
+    throw err;
+  }
   return getMilestoneById(id);
 }
 
@@ -2571,10 +2951,15 @@ export async function getMergeCommitForTask(
 // ─── pr_review_comments_routed ────────────────────────────────────────────────
 
 /**
- * Returns comment IDs that have been fully acknowledged (routed_state='acked').
- * Used by ReviewerCommentsWatcher as the dedup filter — acked comments are
- * never re-delivered. Pending comments are NOT included so they can be
- * re-delivered on the next poll if the consuming session died before acking.
+ * Returns comment IDs that should not be re-delivered: those fully
+ * acknowledged (routed_state='acked'), plus 'pending' comments whose owning
+ * session is still alive (not done/error/killed). A pending comment is
+ * excluded from redelivery while the session might still ack it — otherwise
+ * it gets re-buffered and re-flushed every quiescence window, triggering a
+ * fresh (duplicate) disposition from an alive-but-idle session. Pending
+ * comments owned by a crashed/terminal session (or with no resolvable
+ * session) are NOT included, preserving at-least-once delivery for a session
+ * that died before acking.
  */
 export function getRoutedCommentIds(
   prNumber: number,
@@ -2585,7 +2970,23 @@ export function getRoutedCommentIds(
       pr_number: number;
       repo: string;
     }>(
-      `SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo AND routed_state = 'acked'`,
+      `
+    SELECT r.comment_id
+    FROM pr_review_comments_routed r
+    WHERE r.pr_number = @pr_number AND r.repo = @repo
+      AND (
+        r.routed_state = 'acked'
+        OR (
+          r.routed_state = 'pending'
+          AND EXISTS (
+            SELECT 1 FROM pull_requests pr
+            JOIN sessions s ON s.session_id = pr.session_id
+            WHERE pr.pr_number = r.pr_number AND pr.repo = r.repo
+              AND s.status NOT IN ('done', 'error', 'killed')
+          )
+        )
+      )
+  `,
     )
     .all({ pr_number: prNumber, repo }) as { comment_id: string }[];
   return new Set(rows.map((r) => r.comment_id));
@@ -2616,6 +3017,60 @@ export function markCommentsPending(
   for (const comment_id of commentIds) {
     stmt.run({ pr_number: prNumber, repo, comment_id, routed_at: now });
   }
+}
+
+// ─── pr_review_comment_disposition_replies ─────────────────────────────────
+
+/**
+ * Returns true if a GitHub reply has already been posted for this exact
+ * (comment_id, disposition) pair. Used by ReviewOrchestrator.handleDispositions
+ * to guard against re-posting a duplicate reply when a 'pending' comment is
+ * redelivered and re-dispositioned by the session.
+ */
+export function hasDispositionReplyBeenPosted(
+  prNumber: number,
+  repo: string,
+  commentId: string,
+  disposition: string,
+): boolean {
+  const row = db
+    .prepare<{
+      pr_number: number;
+      repo: string;
+      comment_id: string;
+      disposition: string;
+    }>(
+      `SELECT 1 FROM pr_review_comment_disposition_replies
+       WHERE pr_number = @pr_number AND repo = @repo AND comment_id = @comment_id AND disposition = @disposition`,
+    )
+    .get({ pr_number: prNumber, repo, comment_id: commentId, disposition });
+  return row !== undefined;
+}
+
+/** Records that a GitHub reply has been posted for this (comment_id, disposition) pair. */
+export function recordDispositionReply(
+  prNumber: number,
+  repo: string,
+  commentId: string,
+  disposition: string,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    comment_id: string;
+    disposition: string;
+    replied_at: number;
+  }>(
+    `INSERT OR IGNORE INTO pr_review_comment_disposition_replies
+       (pr_number, repo, comment_id, disposition, replied_at)
+     VALUES (@pr_number, @repo, @comment_id, @disposition, @replied_at)`,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    comment_id: commentId,
+    disposition,
+    replied_at: Date.now(),
+  });
 }
 
 /**
@@ -2749,6 +3204,108 @@ export function getProjectDeployedShaRow(
     )
     .get(projectId) as { sha: string; recordedAt: string } | undefined;
   return row ?? null;
+}
+
+// ─── deploy_run ───────────────────────────────────────────────────────────
+// Statements are cached lazily (prepared on first use, not at module load) so
+// importing this module doesn't fail on a not-yet-migrated db handle.
+
+let _stmtGetDeployRun: Database.Statement | null = null;
+let _stmtGetActiveDeployRunForProject: Database.Statement | null = null;
+let _stmtGetLatestDeployRunForProject: Database.Statement | null = null;
+let _stmtInsertDeployRun: Database.Statement | null = null;
+let _stmtUpdateDeployRunStep: Database.Statement | null = null;
+let _stmtUpdateDeployRunStatus: Database.Statement | null = null;
+let _stmtListDeployRunEvents: Database.Statement | null = null;
+let _stmtInsertDeployRunEvent: Database.Statement | null = null;
+
+export function getDeployRun(runId: string): DeployRunRow | undefined {
+  _stmtGetDeployRun ??= db.prepare<{ run_id: string }>(
+    `SELECT * FROM deploy_run WHERE run_id = @run_id`,
+  );
+  return _stmtGetDeployRun.get({ run_id: runId }) as DeployRunRow | undefined;
+}
+
+/** The project's in-flight run, if any — relies on the at-most-one-active-run-per-project index. */
+export function getActiveDeployRunForProject(
+  project: string,
+): DeployRunRow | undefined {
+  _stmtGetActiveDeployRunForProject ??= db.prepare<{ project: string }>(
+    `SELECT * FROM deploy_run WHERE project = @project AND status = 'running'`,
+  );
+  return _stmtGetActiveDeployRunForProject.get({ project }) as
+    | DeployRunRow
+    | undefined;
+}
+
+/** The project's most recently started run (running or terminal), if any. */
+export function getLatestDeployRunForProject(
+  project: string,
+): DeployRunRow | undefined {
+  _stmtGetLatestDeployRunForProject ??= db.prepare<{ project: string }>(
+    `SELECT * FROM deploy_run WHERE project = @project ORDER BY started_at DESC LIMIT 1`,
+  );
+  return _stmtGetLatestDeployRunForProject.get({ project }) as
+    | DeployRunRow
+    | undefined;
+}
+
+/**
+ * Inserts a new deploy_run row. Throws (SQLITE_CONSTRAINT_UNIQUE) if the
+ * project already has a run with status = 'running' — enforced by
+ * idx_deploy_run_active_per_project rather than a read-then-write check.
+ */
+export function insertDeployRun(row: DeployRunRow): void {
+  _stmtInsertDeployRun ??= db.prepare<DeployRunRow>(`
+    INSERT INTO deploy_run
+      (run_id, project, target_sha, current_step, status, started_at, completed_at)
+    VALUES
+      (@run_id, @project, @target_sha, @current_step, @status, @started_at, @completed_at)
+  `);
+  _stmtInsertDeployRun.run(row);
+}
+
+export function updateDeployRunStep(runId: string, step: string): void {
+  _stmtUpdateDeployRunStep ??= db.prepare<{ run_id: string; step: string }>(
+    `UPDATE deploy_run SET current_step = @step WHERE run_id = @run_id`,
+  );
+  _stmtUpdateDeployRunStep.run({ run_id: runId, step });
+}
+
+export function updateDeployRunStatus(
+  runId: string,
+  status: string,
+  completedAt: string | null,
+): void {
+  _stmtUpdateDeployRunStatus ??= db.prepare<{
+    run_id: string;
+    status: string;
+    completed_at: string | null;
+  }>(
+    `UPDATE deploy_run SET status = @status, completed_at = @completed_at WHERE run_id = @run_id`,
+  );
+  _stmtUpdateDeployRunStatus.run({
+    run_id: runId,
+    status,
+    completed_at: completedAt,
+  });
+}
+
+export function listDeployRunEvents(runId: string): DeployRunEventRow[] {
+  _stmtListDeployRunEvents ??= db.prepare<{ run_id: string }>(
+    `SELECT * FROM deploy_run_event WHERE run_id = @run_id ORDER BY id ASC`,
+  );
+  return _stmtListDeployRunEvents.all({ run_id: runId }) as DeployRunEventRow[];
+}
+
+export function insertDeployRunEvent(row: NewDeployRunEventRow): void {
+  _stmtInsertDeployRunEvent ??= db.prepare<NewDeployRunEventRow>(`
+    INSERT INTO deploy_run_event
+      (run_id, step, event_type, disposition, detail, at)
+    VALUES
+      (@run_id, @step, @event_type, @disposition, @detail, @at)
+  `);
+  _stmtInsertDeployRunEvent.run(row);
 }
 
 // ─── orchestrator_autofix_shas ────────────────────────────────────────────────
@@ -3688,6 +4245,20 @@ export function updateGateItemMinDeployedCommit(
   });
 }
 
+let _stmtTouchGateItemUpdatedAt: Database.Statement | null = null;
+
+/** Stamps updated_at only — never touches state/current_disposition. For non-resolving events (e.g. needs-setup). */
+export function touchGateItemUpdatedAt(id: string, updatedAt: string): void {
+  _stmtTouchGateItemUpdatedAt ??= db.prepare<{
+    id: string;
+    updated_at: string;
+  }>(`UPDATE gate_item SET updated_at = @updated_at WHERE id = @id`);
+  _stmtTouchGateItemUpdatedAt.run({
+    id,
+    updated_at: updatedAt,
+  });
+}
+
 let _stmtRehomeGateItemsBySourceTask: Database.Statement | null = null;
 
 /**
@@ -3784,15 +4355,23 @@ function buildGateItemWhereClause(filter: GateItemFilter): {
   };
 }
 
+/** List-ordering options for listGateItemsFiltered: 'default' is recency; 'not-done-first' surfaces unresolved items first. */
+export type GateItemListOrder = 'default' | 'not-done-first';
+
 /** Paginated, filtered read of gate_item — never an unbounded load; caller supplies limit/offset. */
 export function listGateItemsFiltered(
   filter: GateItemFilter,
   limit: number,
   offset: number,
+  order: GateItemListOrder = 'default',
 ): GateItemRow[] {
   const { clause, params } = buildGateItemWhereClause(filter);
+  const orderClause =
+    order === 'not-done-first'
+      ? `CASE WHEN state IN ('pass', 'deferred', 'discarded') THEN 1 ELSE 0 END ASC, updated_at DESC, id ASC`
+      : `updated_at DESC, id ASC`;
   const stmt = db.prepare(
-    `SELECT * FROM gate_item ${clause} ORDER BY updated_at DESC, id ASC LIMIT @limit OFFSET @offset`,
+    `SELECT * FROM gate_item ${clause} ORDER BY ${orderClause} LIMIT @limit OFFSET @offset`,
   );
   return stmt.all({ ...params, limit, offset }) as GateItemRow[];
 }
@@ -3823,18 +4402,48 @@ export function getGateAccretion(
 
 export function upsertGateAccretion(row: GateAccretionRow): void {
   _stmtUpsertGateAccretion ??= db.prepare<GateAccretionRow>(`
-    INSERT INTO gate_accretion (source_task_id, project, milestone, decision, accreted_at)
-    VALUES (@source_task_id, @project, @milestone, @decision, @accreted_at)
+    INSERT INTO gate_accretion (source_task_id, project, milestone, decision, reason, accreted_at)
+    VALUES (@source_task_id, @project, @milestone, @decision, @reason, @accreted_at)
     ON CONFLICT(source_task_id) DO UPDATE SET
       project = excluded.project,
       milestone = excluded.milestone,
       decision = excluded.decision,
+      reason = excluded.reason,
       accreted_at = excluded.accreted_at
   `);
   _stmtUpsertGateAccretion.run({
     ...row,
     source_task_id: normalizeTaskId(row.source_task_id),
   });
+}
+
+let _stmtDeleteGateItem: Database.Statement | null = null;
+let _stmtDeleteGateAccretion: Database.Statement | null = null;
+
+/**
+ * Rolls back a gate accretion: deletes the given gate_item rows (cascades to
+ * their gate_item_source/gate_item_event rows) and the source task's
+ * gate_accretion marker. Used by the atomic Ready-flip transaction
+ * (TaskWriteCommands.flipToReady) to undo a completed accretion when a later
+ * step in the flip fails, so no orphan gate_item survives a failed flip.
+ */
+export function deleteGateContribution(
+  itemIds: string[],
+  sourceTaskId: string,
+): void {
+  _stmtDeleteGateItem ??= db.prepare<{ id: string }>(
+    `DELETE FROM gate_item WHERE id = @id`,
+  );
+  _stmtDeleteGateAccretion ??= db.prepare<{ source_task_id: string }>(
+    `DELETE FROM gate_accretion WHERE source_task_id = @source_task_id`,
+  );
+  const tx = db.transaction((ids: string[], normalizedSourceTaskId: string) => {
+    for (const id of ids) _stmtDeleteGateItem!.run({ id });
+    _stmtDeleteGateAccretion!.run({
+      source_task_id: normalizedSourceTaskId,
+    });
+  });
+  tx(itemIds, normalizeTaskId(sourceTaskId));
 }
 
 // ─── seed_item ────────────────────────────────────────────────────────────
@@ -3932,15 +4541,23 @@ function buildSeedItemWhereClause(filter: SeedItemFilter): {
   };
 }
 
+/** List-ordering options for listSeedItemsFiltered: 'default' is recency; 'not-done-first' surfaces unconfirmed items first. */
+export type SeedItemListOrder = 'default' | 'not-done-first';
+
 /** Paginated, filtered read of seed_item — never an unbounded load; caller supplies limit/offset. */
 export function listSeedItemsFiltered(
   filter: SeedItemFilter,
   limit: number,
   offset: number,
+  order: SeedItemListOrder = 'default',
 ): SeedItemRow[] {
   const { clause, params } = buildSeedItemWhereClause(filter);
+  const orderClause =
+    order === 'not-done-first'
+      ? `CASE WHEN state = 'confirmed' THEN 1 ELSE 0 END ASC, updated_at DESC, id ASC`
+      : `updated_at DESC, id ASC`;
   const stmt = db.prepare(
-    `SELECT * FROM seed_item ${clause} ORDER BY updated_at DESC, id ASC LIMIT @limit OFFSET @offset`,
+    `SELECT * FROM seed_item ${clause} ORDER BY ${orderClause} LIMIT @limit OFFSET @offset`,
   );
   return stmt.all({ ...params, limit, offset }) as SeedItemRow[];
 }
@@ -4135,6 +4752,35 @@ export function upsertSeedAccretion(row: SeedAccretionRow): void {
   });
 }
 
+let _stmtDeleteSeedItem: Database.Statement | null = null;
+let _stmtDeleteSeedAccretion: Database.Statement | null = null;
+
+/**
+ * Rolls back a seed accretion: deletes the given seed_item rows (cascades to
+ * their seed_item_source/seed_item_event rows) and the source task's
+ * seed_accretion marker. Used by the atomic Ready-flip transaction
+ * (TaskWriteCommands.flipToReady) to undo a completed accretion when a later
+ * step in the flip fails, so no orphan seed_item survives a failed flip.
+ */
+export function deleteSeedContribution(
+  itemIds: string[],
+  sourceTaskId: string,
+): void {
+  _stmtDeleteSeedItem ??= db.prepare<{ id: string }>(
+    `DELETE FROM seed_item WHERE id = @id`,
+  );
+  _stmtDeleteSeedAccretion ??= db.prepare<{ source_task_id: string }>(
+    `DELETE FROM seed_accretion WHERE source_task_id = @source_task_id`,
+  );
+  const tx = db.transaction((ids: string[], normalizedSourceTaskId: string) => {
+    for (const id of ids) _stmtDeleteSeedItem!.run({ id });
+    _stmtDeleteSeedAccretion!.run({
+      source_task_id: normalizedSourceTaskId,
+    });
+  });
+  tx(itemIds, normalizeTaskId(sourceTaskId));
+}
+
 // ─── session_feedback_inbox ─────────────────────────────────────────────────
 
 export function enqueueFeedbackItem(
@@ -4185,4 +4831,790 @@ export function countUndeliveredInboxItems(sessionId: string): number {
     )
     .get(sessionId) as { count: number };
   return row.count;
+}
+
+// ─── completeness_disposition ───────────────────────────────────────────────
+
+let _stmtInsertCompletenessDisposition: Database.Statement | null = null;
+let _stmtListCompletenessDispositions: Database.Statement | null = null;
+
+/** Durable write-through for a /design completeness-critic run — symmetric with the gate/seed accretion markers. */
+export function insertCompletenessDisposition(
+  row: NewCompletenessDispositionRow,
+): CompletenessDispositionRow {
+  _stmtInsertCompletenessDisposition ??=
+    db.prepare<NewCompletenessDispositionRow>(`
+    INSERT INTO completeness_disposition
+      (source_task_id, project, milestone, questions, run_at)
+    VALUES
+      (@source_task_id, @project, @milestone, @questions, @run_at)
+  `);
+  const result = _stmtInsertCompletenessDisposition.run({
+    ...row,
+    source_task_id: normalizeTaskId(row.source_task_id),
+  });
+  return {
+    id: Number(result.lastInsertRowid),
+    ...row,
+    source_task_id: normalizeTaskId(row.source_task_id),
+  };
+}
+
+/** Audit read of every completeness-disposition run recorded for a source design task, newest first. */
+export function listCompletenessDispositions(
+  sourceTaskId: string,
+): CompletenessDispositionRow[] {
+  _stmtListCompletenessDispositions ??= db.prepare<{
+    source_task_id: string;
+  }>(`
+    SELECT * FROM completeness_disposition
+    WHERE source_task_id = @source_task_id
+    ORDER BY run_at DESC, id DESC
+  `);
+  return _stmtListCompletenessDispositions.all({
+    source_task_id: normalizeTaskId(sourceTaskId),
+  }) as CompletenessDispositionRow[];
+}
+
+let _stmtGetCompletenessDisposition: Database.Statement | null = null;
+let _stmtUpdateCompletenessDispositionApproval: Database.Statement | null =
+  null;
+
+/** Point read of one completeness-disposition run by id — the row a staged `completeness.disposition` intent's payload names. */
+function getCompletenessDisposition(
+  id: number,
+): CompletenessDispositionRow | undefined {
+  _stmtGetCompletenessDisposition ??= db.prepare<{ id: number }>(`
+    SELECT * FROM completeness_disposition WHERE id = @id
+  `);
+  return _stmtGetCompletenessDisposition.get({ id }) as
+    | CompletenessDispositionRow
+    | undefined;
+}
+
+/**
+ * Advances every question in one completeness-disposition run off `proposed`
+ * — `approved` once the operator approves the run's staged intent, `rejected`
+ * once they reject it. The durable write-through at critic time (`proposed`)
+ * happens immediately, before this ever runs, so a session dying mid-pass
+ * never loses the findings; this only resolves the lifecycle once the
+ * operator has actually disposed of them.
+ */
+export function updateCompletenessDispositionApproval(
+  id: number,
+  approvalStatus: 'approved' | 'rejected',
+): CompletenessDispositionRow | undefined {
+  const row = getCompletenessDisposition(id);
+  if (!row) return undefined;
+  const questions = (
+    JSON.parse(row.questions) as CompletenessDispositionQuestion[]
+  ).map((q) => ({ ...q, approvalStatus }));
+  const updatedQuestions = JSON.stringify(questions);
+  _stmtUpdateCompletenessDispositionApproval ??= db.prepare<{
+    id: number;
+    questions: string;
+  }>(`
+    UPDATE completeness_disposition SET questions = @questions WHERE id = @id
+  `);
+  _stmtUpdateCompletenessDispositionApproval.run({
+    id,
+    questions: updatedQuestions,
+  });
+  return { ...row, questions: updatedQuestions };
+}
+
+/**
+ * Shared row-shape builder for the completeness-disposition durable write —
+ * used identically by the completeness.disposition MCP tool
+ * (mcp/tools/completenessTools.ts) and the device-authed HTTP route
+ * (routes/design.ts), so the two writers can never diverge on defaulting.
+ * Every question defaults to `approvalStatus: 'proposed'` (recorded is not
+ * approved), and `runAt` is normalized to a full ISO timestamp — a bare
+ * date-only string (or any other Date-parseable value) round-trips to one via
+ * `toISOString()`; a value Date cannot parse is passed through unchanged
+ * rather than silently coerced to "Invalid Date".
+ */
+export function buildCompletenessDispositionRow(input: {
+  taskId: string;
+  project: string | null;
+  milestone: string | null;
+  questions: CompletenessDispositionQuestion[];
+  runAt: string;
+}): NewCompletenessDispositionRow {
+  const parsedRunAt = new Date(input.runAt);
+  const runAt = Number.isNaN(parsedRunAt.getTime())
+    ? input.runAt
+    : parsedRunAt.toISOString();
+  return {
+    source_task_id: input.taskId,
+    project: input.project,
+    milestone: input.milestone,
+    questions: JSON.stringify(
+      input.questions.map((q) => ({
+        approvalStatus: 'proposed' as const,
+        ...q,
+      })),
+    ),
+    run_at: runAt,
+  };
+}
+
+// ─── staged_intent ────────────────────────────────────────────────────────
+// The durable per-intent lifecycle store: staged -> approved -> committed |
+// rejected | superseded. Content-idempotent dedup keys on (project_id, kind,
+// task_id, payload_hash) — see findActiveStagedIntentForTask / stageOrDedup
+// callers in routes/stagedIntents.ts.
+
+/** Canonical (key-sorted) JSON stringify so structurally-equal payloads hash equal regardless of key order. */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      sorted[key] = canonicalize((value as Record<string, unknown>)[key]);
+    }
+    return sorted;
+  }
+  return value;
+}
+
+export function hashIntentPayload(payload: unknown): string {
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalize(payload ?? null)))
+    .digest('hex');
+}
+
+// staged -> committed is legal directly (not only via approved): apply today
+// is a single human-gated action with no separate approve step yet (that's
+// the M12 decision-surface task) — apply implicitly approves-then-commits.
+const STAGED_INTENT_TRANSITIONS: Record<
+  StagedIntentState,
+  StagedIntentState[]
+> = {
+  staged: [
+    'pending_verification',
+    'approved',
+    'committed',
+    'rejected',
+    'needs_revision',
+    'superseded',
+    'withdrawn',
+  ],
+  pending_verification: ['staged', 'needs_revision'],
+  needs_revision: ['rejected', 'superseded'],
+  approved: [
+    'staged',
+    'committed',
+    'rejected',
+    'needs_revision',
+    'superseded',
+    'withdrawn',
+  ],
+  committed: [],
+  rejected: [],
+  superseded: [],
+  withdrawn: [],
+};
+
+export class IllegalStagedIntentTransitionError extends Error {
+  constructor(id: string, from: StagedIntentState, to: StagedIntentState) {
+    super(`[staged_intent] illegal transition for "${id}": ${from} -> ${to}`);
+    this.name = 'IllegalStagedIntentTransitionError';
+  }
+}
+
+let _stmtInsertStagedIntent: Database.Statement | null = null;
+let _stmtGetStagedIntent: Database.Statement | null = null;
+let _stmtListStagedIntentsByProject: Database.Statement | null = null;
+let _stmtListStagedIntentsByGroup: Database.Statement | null = null;
+let _stmtFindActiveStagedIntentForTask: Database.Statement | null = null;
+let _stmtUpdateStagedIntentState: Database.Statement | null = null;
+let _stmtHasStagedIntentForSession: Database.Statement | null = null;
+let _stmtHasActiveCapabilityRequestForSession: Database.Statement | null = null;
+
+export function insertStagedIntent(row: StagedIntentRow): void {
+  _stmtInsertStagedIntent ??= db.prepare<StagedIntentRow>(`
+    INSERT INTO staged_intent
+      (id, kind, payload, payload_hash, task_id, project_id, session_id,
+       group_id, state, supersedes, annotation, decision_proposal, groom_proposal,
+       advisory, disposition_reason, answer, created_at, updated_at)
+    VALUES
+      (@id, @kind, @payload, @payload_hash, @task_id, @project_id, @session_id,
+       @group_id, @state, @supersedes, @annotation, @decision_proposal, @groom_proposal,
+       @advisory, @disposition_reason, @answer, @created_at, @updated_at)
+  `);
+  _stmtInsertStagedIntent.run(row);
+}
+
+export function getStagedIntent(id: string): StagedIntentRow | undefined {
+  _stmtGetStagedIntent ??= db.prepare<{ id: string }>(
+    `SELECT * FROM staged_intent WHERE id = @id`,
+  );
+  return _stmtGetStagedIntent.get({ id }) as StagedIntentRow | undefined;
+}
+
+/**
+ * True if this session ever staged at least one intent (any lifecycle state —
+ * even a since-rejected one still proves the session produced *something*
+ * that passed validation). Used to distinguish a planning session's
+ * first-turn-empty (surfaces needs_attention) from a later-turn-empty
+ * (natural completion).
+ */
+export function hasStagedIntentForSession(sessionId: string): boolean {
+  _stmtHasStagedIntentForSession ??= db.prepare<{ session_id: string }>(
+    `SELECT 1 FROM staged_intent WHERE session_id = @session_id LIMIT 1`,
+  );
+  return (
+    _stmtHasStagedIntentForSession.get({ session_id: sessionId }) !== undefined
+  );
+}
+
+/**
+ * True if this session has an unresolved `session.requestCapability` intent
+ * (state `staged` or `approved`) awaiting an operator decision — the sanctioned
+ * ask-permission path a dispatched verify/ops session uses instead of being
+ * silently blocked or fabricating a result. A gate-verify (one-shot) session
+ * with an outstanding request must park idle for grant-on-re-dispatch rather
+ * than being concluded done (see AgentSession.handleCleanExit).
+ */
+export function hasActiveCapabilityRequestForSession(
+  sessionId: string,
+): boolean {
+  _stmtHasActiveCapabilityRequestForSession ??= db.prepare<{
+    session_id: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE session_id = @session_id
+       AND kind = 'session.requestCapability'
+       AND state IN ('staged', 'approved')
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasActiveCapabilityRequestForSession.get({ session_id: sessionId }) !==
+    undefined
+  );
+}
+
+/** Active (non-terminal-tombstone) intents for a project — superseded rows are always hidden. */
+export function listStagedIntentsByProject(
+  projectId: string,
+): StagedIntentRow[] {
+  _stmtListStagedIntentsByProject ??= db.prepare<{ project_id: string }>(
+    `SELECT * FROM staged_intent
+     WHERE project_id = @project_id AND state IN ('staged', 'approved')
+     ORDER BY created_at ASC`,
+  );
+  return _stmtListStagedIntentsByProject.all({
+    project_id: projectId,
+  }) as StagedIntentRow[];
+}
+
+export function listAllActiveStagedIntents(): StagedIntentRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM staged_intent WHERE state IN ('staged', 'approved') ORDER BY created_at ASC`,
+    )
+    .all() as StagedIntentRow[];
+}
+
+/** All intents (any state, including tombstones) for a group — used by group-scoped invariant checks. */
+export function listStagedIntentsByGroup(groupId: string): StagedIntentRow[] {
+  _stmtListStagedIntentsByGroup ??= db.prepare<{ group_id: string }>(
+    `SELECT * FROM staged_intent WHERE group_id = @group_id ORDER BY created_at ASC`,
+  );
+  return _stmtListStagedIntentsByGroup.all({
+    group_id: groupId,
+  }) as StagedIntentRow[];
+}
+
+let _stmtListStagedIntentsBySession: Database.Statement | null = null;
+
+/**
+ * All intents (any state, including tombstones) originated by a session —
+ * used by PlanningOrchestrator to correlate operator dispositions back to
+ * the parked planning session and to detect end-of-turn terminal state.
+ */
+export function listStagedIntentsBySession(
+  sessionId: string,
+): StagedIntentRow[] {
+  _stmtListStagedIntentsBySession ??= db.prepare<{ session_id: string }>(
+    `SELECT * FROM staged_intent WHERE session_id = @session_id ORDER BY created_at ASC`,
+  );
+  return _stmtListStagedIntentsBySession.all({
+    session_id: sessionId,
+  }) as StagedIntentRow[];
+}
+
+/** The standing staged/approved intent (if any) for this project+kind+task — the dedup slot. */
+export function findActiveStagedIntentForTask(
+  projectId: string,
+  kind: string,
+  taskId: string,
+): StagedIntentRow | undefined {
+  _stmtFindActiveStagedIntentForTask ??= db.prepare<{
+    project_id: string;
+    kind: string;
+    task_id: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE project_id = @project_id AND kind = @kind AND task_id = @task_id
+       AND state IN ('staged', 'approved')
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  );
+  return _stmtFindActiveStagedIntentForTask.get({
+    project_id: projectId,
+    kind,
+    task_id: taskId,
+  }) as StagedIntentRow | undefined;
+}
+
+let _stmtFindActiveStagedIntentByTitleForSession: Database.Statement | null =
+  null;
+
+/**
+ * The standing staged/approved intent (if any) for this project+kind+session
+ * whose payload title normalizes to the same value — the dedup slot for
+ * kinds with no pre-existing task to key on (task.create, arch.createUnit).
+ * Scoped to session_id, not just project_id: two different sessions
+ * proposing similarly-titled tasks are not duplicates (see
+ * findActiveStagedIntentForTask for the task-scoped counterpart).
+ */
+export function findActiveStagedIntentByTitleForSession(
+  projectId: string,
+  kind: string,
+  sessionId: string,
+  normalizedTitle: string,
+): StagedIntentRow | undefined {
+  _stmtFindActiveStagedIntentByTitleForSession ??= db.prepare<{
+    project_id: string;
+    kind: string;
+    session_id: string;
+    normalized_title: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE project_id = @project_id AND kind = @kind AND session_id = @session_id
+       AND state IN ('staged', 'approved')
+       AND lower(trim(json_extract(payload, '$.title'))) = @normalized_title
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  );
+  return _stmtFindActiveStagedIntentByTitleForSession.get({
+    project_id: projectId,
+    kind,
+    session_id: sessionId,
+    normalized_title: normalizedTitle,
+  }) as StagedIntentRow | undefined;
+}
+
+let _stmtFindActiveDecisionPickOneForSession: Database.Statement | null = null;
+
+/**
+ * The standing staged/approved decision.pickOne (if any) for this session
+ * whose payload prompt normalizes to the same value — the dedup slot for
+ * question-intents, which carry no taskId to dedup on. Keyed on
+ * (sessionId, normalized prompt) rather than session alone, mirroring
+ * findActiveStagedIntentByTitleForSession's title-keying for task.create:
+ * a session staging several independent open questions must keep them all
+ * live, while re-staging the same question still retires its own prior
+ * draft (see findActiveStagedIntentForTask for the task-scoped counterpart).
+ */
+export function findActiveDecisionPickOneForSession(
+  sessionId: string,
+  normalizedPrompt: string,
+): StagedIntentRow | undefined {
+  _stmtFindActiveDecisionPickOneForSession ??= db.prepare<{
+    session_id: string;
+    normalized_prompt: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE session_id = @session_id AND kind = 'decision.pickOne'
+       AND state IN ('staged', 'approved')
+       AND lower(trim(json_extract(payload, '$.prompt'))) = @normalized_prompt
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  );
+  return _stmtFindActiveDecisionPickOneForSession.get({
+    session_id: sessionId,
+    normalized_prompt: normalizedPrompt,
+  }) as StagedIntentRow | undefined;
+}
+
+/**
+ * Enforces the per-intent lifecycle state machine. `committed` is a terminal,
+ * immutable state — no outgoing transition is legal. Throws
+ * IllegalStagedIntentTransitionError on any other disallowed edge.
+ */
+export function transitionStagedIntent(
+  id: string,
+  toState: StagedIntentState,
+  opts?: {
+    annotation?: string | null;
+    updatedAt?: number;
+    /** Operator rationale for a reject disposition — set on the rejected transition, left untouched otherwise. */
+    dispositionReason?: string | null;
+    /** JSON-serialized StagedIntentAnswer — set on a decision.pickOne's answered (committed) transition, left untouched otherwise. */
+    answer?: string | null;
+  },
+): StagedIntentRow {
+  const current = getStagedIntent(id);
+  if (!current) {
+    throw new Error(`[staged_intent] "${id}" not found`);
+  }
+  const allowed = STAGED_INTENT_TRANSITIONS[current.state] ?? [];
+  if (!allowed.includes(toState)) {
+    throw new IllegalStagedIntentTransitionError(id, current.state, toState);
+  }
+  _stmtUpdateStagedIntentState ??= db.prepare<{
+    id: string;
+    state: StagedIntentState;
+    annotation: string | null;
+    disposition_reason: string | null;
+    answer: string | null;
+    updated_at: number;
+  }>(
+    `UPDATE staged_intent SET state = @state, annotation = @annotation, disposition_reason = @disposition_reason, answer = @answer, updated_at = @updated_at WHERE id = @id`,
+  );
+  const updatedAt = opts?.updatedAt ?? Date.now();
+  const annotation =
+    opts && 'annotation' in opts
+      ? (opts.annotation ?? null)
+      : current.annotation;
+  const dispositionReason =
+    opts && 'dispositionReason' in opts
+      ? (opts.dispositionReason ?? null)
+      : current.disposition_reason;
+  const answer =
+    opts && 'answer' in opts ? (opts.answer ?? null) : current.answer;
+  _stmtUpdateStagedIntentState.run({
+    id,
+    state: toState,
+    annotation,
+    disposition_reason: dispositionReason,
+    answer,
+    updated_at: updatedAt,
+  });
+  return {
+    ...current,
+    state: toState,
+    annotation,
+    disposition_reason: dispositionReason,
+    answer,
+    updated_at: updatedAt,
+  };
+}
+
+let _stmtExpireStagedIntentsForSession: Database.Statement | null = null;
+
+/**
+ * Reap a session's uncommitted staged intents when the session terminates
+ * (see SessionManager's terminal-status hook): bulk-transitions its
+ * `staged`/`approved` rows to `superseded` with a disposition reason,
+ * preserving the audit trail. Committed, rejected, already-superseded, and
+ * in-flight-verification (`pending_verification`/`needs_revision`) rows are
+ * left untouched — the latter resolve through their own verify loop.
+ * Returns the number of rows reaped.
+ */
+export function expireStagedIntentsForSession(
+  sessionId: string,
+  reason: string,
+  now: number,
+): number {
+  _stmtExpireStagedIntentsForSession ??= db.prepare<{
+    session_id: string;
+    reason: string;
+    now: number;
+  }>(`
+    UPDATE staged_intent
+    SET state = 'superseded', disposition_reason = @reason, updated_at = @now
+    WHERE session_id = @session_id AND state IN ('staged', 'approved')
+  `);
+  const result = _stmtExpireStagedIntentsForSession.run({
+    session_id: sessionId,
+    reason,
+    now,
+  });
+  return result.changes;
+}
+
+let _stmtSweepStagedIntentsForTerminalSessions: Database.Statement | null =
+  null;
+
+/**
+ * Backstop sweep for expireStagedIntentsForSession: reaps `staged`/`approved`
+ * intents whose owning session already sits at a terminal DB status
+ * (done/error/killed) but never went through the terminal-transition hook —
+ * e.g. a process crash, or a write path that predates this reaper. Safe to
+ * run repeatedly (idempotent: nothing left to reap after the first pass).
+ * Returns the number of rows reaped.
+ */
+export function sweepStagedIntentsForTerminalSessions(
+  reason: string,
+  now: number,
+): number {
+  _stmtSweepStagedIntentsForTerminalSessions ??= db.prepare<{
+    reason: string;
+    now: number;
+  }>(`
+    UPDATE staged_intent
+    SET state = 'superseded', disposition_reason = @reason, updated_at = @now
+    WHERE state IN ('staged', 'approved')
+      AND session_id IN (
+        SELECT session_id FROM sessions WHERE status IN ('done', 'error', 'killed')
+      )
+  `);
+  const result = _stmtSweepStagedIntentsForTerminalSessions.run({
+    reason,
+    now,
+  });
+  return result.changes;
+}
+
+/**
+ * Supersedes `oldId` (tombstones it, retained for audit, hidden from the
+ * active surface) and inserts `newRow` pointing back at it via `supersedes`.
+ * Per-intent: only this one row transitions, a sibling's approval in the
+ * same group is untouched.
+ */
+export function supersedeStagedIntent(
+  oldId: string,
+  newRow: StagedIntentRow,
+): StagedIntentRow {
+  const tx = db.transaction(() => {
+    transitionStagedIntent(oldId, 'superseded');
+    insertStagedIntent({ ...newRow, supersedes: oldId });
+  });
+  tx();
+  return getStagedIntent(newRow.id) as StagedIntentRow;
+}
+
+let _stmtSetStagedIntentAnnotation: Database.Statement | null = null;
+
+/** Sets the blocked-apply annotation without moving the intent off its current state. */
+export function setStagedIntentAnnotation(
+  id: string,
+  annotation: string | null,
+): void {
+  _stmtSetStagedIntentAnnotation ??= db.prepare<{
+    id: string;
+    annotation: string | null;
+    updated_at: number;
+  }>(
+    `UPDATE staged_intent SET annotation = @annotation, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtSetStagedIntentAnnotation.run({
+    id,
+    annotation,
+    updated_at: Date.now(),
+  });
+}
+
+let _stmtSetStagedIntentGroup: Database.Statement | null = null;
+
+/**
+ * Sets group_id on a matched re-stage without moving the intent off its
+ * current state or minting a new row — group_id is settable grouping
+ * metadata, not part of the content-idempotent (task_id, payload_hash)
+ * identity a re-stage dedups on. See stageIntent (routes/stagedIntents.ts).
+ */
+export function setStagedIntentGroup(
+  id: string,
+  groupId: string,
+): StagedIntentRow {
+  _stmtSetStagedIntentGroup ??= db.prepare<{
+    id: string;
+    group_id: string;
+    updated_at: number;
+  }>(
+    `UPDATE staged_intent SET group_id = @group_id, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtSetStagedIntentGroup.run({
+    id,
+    group_id: groupId,
+    updated_at: Date.now(),
+  });
+  return getStagedIntent(id) as StagedIntentRow;
+}
+
+let _stmtSetStagedIntentAdvisory: Database.Statement | null = null;
+
+/**
+ * Sets the Tier-3 semantic readiness advisory without moving the intent off
+ * its current state or touching `annotation` — the two channels are
+ * independent (advisory-only, never gates a transition).
+ */
+export function setStagedIntentAdvisory(
+  id: string,
+  advisory: string | null,
+): void {
+  _stmtSetStagedIntentAdvisory ??= db.prepare<{
+    id: string;
+    advisory: string | null;
+    updated_at: number;
+  }>(
+    `UPDATE staged_intent SET advisory = @advisory, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtSetStagedIntentAdvisory.run({
+    id,
+    advisory,
+    updated_at: Date.now(),
+  });
+}
+
+let _stmtGetStagedIntentGroup: Database.Statement | null = null;
+let _stmtUpsertStagedIntentGroup: Database.Statement | null = null;
+
+export function getStagedIntentGroup(
+  groupId: string,
+): StagedIntentGroupRow | undefined {
+  _stmtGetStagedIntentGroup ??= db.prepare<{ group_id: string }>(
+    `SELECT * FROM staged_intent_group WHERE group_id = @group_id`,
+  );
+  return _stmtGetStagedIntentGroup.get({
+    group_id: groupId,
+  }) as StagedIntentGroupRow | undefined;
+}
+
+const DEFAULT_ROUTE_BACK_CAP = 3;
+
+/**
+ * Increments a group's automatic Tier-3 route-back counter. Once the count
+ * reaches `cap` (default 3, mirroring max_review_iterations), the group is
+ * marked escalated and further automatic route-backs should stop — callers
+ * check `.escalated` and surface the group to the operator instead.
+ */
+export function incrementRouteBackCount(
+  groupId: string,
+  cap = DEFAULT_ROUTE_BACK_CAP,
+): StagedIntentGroupRow {
+  const existing = getStagedIntentGroup(groupId);
+  const nextCount = (existing?.route_back_count ?? 0) + 1;
+  const escalated = nextCount >= cap ? 1 : (existing?.escalated ?? 0);
+  const updatedAt = Date.now();
+  _stmtUpsertStagedIntentGroup ??= db.prepare<{
+    group_id: string;
+    route_back_count: number;
+    escalated: number;
+    updated_at: number;
+  }>(`
+    INSERT INTO staged_intent_group (group_id, route_back_count, escalated, updated_at)
+    VALUES (@group_id, @route_back_count, @escalated, @updated_at)
+    ON CONFLICT(group_id) DO UPDATE SET
+      route_back_count = excluded.route_back_count,
+      escalated = excluded.escalated,
+      updated_at = excluded.updated_at
+  `);
+  _stmtUpsertStagedIntentGroup.run({
+    group_id: groupId,
+    route_back_count: nextCount,
+    escalated,
+    updated_at: updatedAt,
+  });
+  return {
+    group_id: groupId,
+    route_back_count: nextCount,
+    escalated,
+    updated_at: updatedAt,
+  };
+}
+
+// ─── arch_unit ────────────────────────────────────────────────────────────
+// Statements are cached lazily (prepared on first use, not at module load) so
+// importing this module doesn't fail on a not-yet-migrated db handle.
+
+let _stmtGetArchUnit: Database.Statement | null = null;
+let _stmtInsertArchUnit: Database.Statement | null = null;
+let _stmtUpdateArchUnit: Database.Statement | null = null;
+let _stmtListArchUnitEvents: Database.Statement | null = null;
+let _stmtInsertArchUnitEvent: Database.Statement | null = null;
+
+export function getArchUnit(id: string): ArchUnitRow | undefined {
+  _stmtGetArchUnit ??= db.prepare<{ id: string }>(
+    `SELECT * FROM arch_unit WHERE id = @id`,
+  );
+  return _stmtGetArchUnit.get({ id }) as ArchUnitRow | undefined;
+}
+
+export function insertArchUnit(row: NewArchUnitRow): void {
+  _stmtInsertArchUnit ??= db.prepare<ArchUnitRow>(`
+    INSERT INTO arch_unit
+      (id, title, kind, topic, regions, status, body, supersedes, superseded_by, version, created_at, updated_at)
+    VALUES
+      (@id, @title, @kind, @topic, @regions, @status, @body, @supersedes, @superseded_by, @version, @created_at, @updated_at)
+  `);
+  _stmtInsertArchUnit.run({
+    ...row,
+    superseded_by: row.superseded_by ?? null,
+  });
+}
+
+export function updateArchUnit(row: ArchUnitRow): void {
+  _stmtUpdateArchUnit ??= db.prepare<ArchUnitRow>(`
+    UPDATE arch_unit SET
+      title = @title,
+      kind = @kind,
+      topic = @topic,
+      regions = @regions,
+      status = @status,
+      body = @body,
+      supersedes = @supersedes,
+      superseded_by = @superseded_by,
+      version = @version,
+      updated_at = @updated_at
+    WHERE id = @id
+  `);
+  _stmtUpdateArchUnit.run(row);
+}
+
+export function listArchUnitEvents(archUnitId: string): ArchUnitEventRow[] {
+  _stmtListArchUnitEvents ??= db.prepare<{ arch_unit_id: string }>(
+    `SELECT * FROM arch_unit_event WHERE arch_unit_id = @arch_unit_id ORDER BY id ASC`,
+  );
+  return _stmtListArchUnitEvents.all({
+    arch_unit_id: archUnitId,
+  }) as ArchUnitEventRow[];
+}
+
+export function insertArchUnitEvent(row: NewArchUnitEventRow): void {
+  _stmtInsertArchUnitEvent ??= db.prepare<NewArchUnitEventRow>(`
+    INSERT INTO arch_unit_event
+      (arch_unit_id, event_type, payload, at)
+    VALUES
+      (@arch_unit_id, @event_type, @payload, @at)
+  `);
+  _stmtInsertArchUnitEvent.run(row);
+}
+
+/**
+ * Query the arch_unit table by topic/kind/region/status. Active-set by
+ * default (superseded excluded) unless includeSuperseded is set or status
+ * explicitly requests 'superseded'.
+ */
+export function queryArchUnits(query: ArchUnitQuery = {}): ArchUnitRow[] {
+  const clauses: string[] = [];
+  const params: Record<string, string> = {};
+
+  if (query.topic) {
+    clauses.push('topic = @topic');
+    params.topic = query.topic;
+  }
+  if (query.kind) {
+    clauses.push('kind = @kind');
+    params.kind = query.kind;
+  }
+  if (query.region) {
+    clauses.push('regions LIKE @region');
+    params.region = `%${query.region}%`;
+  }
+  if (query.status) {
+    clauses.push('status = @status');
+    params.status = query.status;
+  } else if (!query.includeSuperseded) {
+    clauses.push(`status != 'superseded'`);
+  }
+
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+  return db
+    .prepare(`SELECT * FROM arch_unit ${where} ORDER BY updated_at DESC`)
+    .all(params) as ArchUnitRow[];
 }

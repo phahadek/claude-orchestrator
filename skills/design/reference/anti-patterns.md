@@ -28,6 +28,19 @@ own message, recorded in `design-state.json` before the next one starts. The
 Implementation Notes are _the closing artifact_ — they get composed after every
 question is locked, not as a running draft.
 
+**Batching the state-write breaks resume-safety.** Distinct from batch-*locking*
+above (which is about composing the Implementation Notes): this is deferring the
+per-question **write to `design-state.json`** until finalization. Even when you
+debate and sign off each question one at a time, if you only *persist* the locks
+in a burst at the end, a crash mid-task loses every un-persisted lock — and the
+skill's entire resume-safety promise (the loader preserves signed-off decisions
+across runs) is void. Observed: Q2–Q4 of one task and all four questions of two
+others were held un-written until finalization, and one late catch-up edit
+corrupted the JSON. Write each lock the instant it's signed off, before the next
+question — and **re-read the file after each edit to confirm it's still valid
+JSON**. The Edit tool does this in one auto-approved call; there is no reason to
+defer it.
+
 **Treating pushback as sign-off.** The closing prompt is _"Debate this — where am
 I wrong?"_ — so the human's reply is _expected to contain content_: a reframe, a
 counter-assertion, a missing premise, an unconsidered option, a strong assertive
@@ -56,6 +69,27 @@ assumes, a store-interface method that doesn't yet exist, a `RawPayload` shape
 that diverges from what a downstream task expects. Open the actual code (or its
 cached code-map digest) before declaring a question resolved.
 
+**The task body's premise can be stale — verify it, don't just answer it.** A
+Design task's Open Questions are not the only thing to investigate; the **facts the
+body states** are equally suspect. A body written a milestone ago may assert a
+method or field already exists, that "there's no single target task," that some
+subset "isn't session-stageable" — and be wrong now. Investigation repeatedly
+caught exactly these (an `updateBody` that *was* already session-stageable, a "no
+single target" that *had* one, a mis-scoped stageable subset) — but only because a
+premise happened to get checked. Make it deliberate: **falsify the body's premises
+before you build decisions on them.** A wrong premise silently poisons every lock
+layered on top of it, and no downstream groomer will catch it.
+
+**Inventing an answer a sister project already validated.** When a question designs
+a capability a more-mature managed project has likely already solved — an off-box
+backup, a real deploy trigger surface, an arch-page structure, a resource-isolation
+model — reaching for a from-scratch recommendation without checking that project is
+a wasted, lower-confidence guess. Read the sister project's arch pages / `context.md`
+/ code as prior art *first* (the project index in `procedures.md` names them). The
+highest-leverage moves in real sessions have been exactly these cross-project
+checks — each turned an invented answer into a validated one. Cite what the sister
+project does when you present the question.
+
 **Calling something resolved when it's just deferred.** "Decide at implementation
 time" is a _defer_, not a _resolve_. Either lock the answer now, or carry it
 forward as an explicit Open Question in the body of the follow-on Code task.
@@ -74,8 +108,8 @@ the exact added/replaced text in chat and wait for _"okay"_ before calling
 load-bearing for every downstream session — silent edits there are the most
 damaging mistake this skill can make. See `page-edits.md` for the protocol.
 
-**Filing follow-on Code tasks past 🔲 Backlog.** New Code/Tooling tasks always
-start at Backlog. The `check-task-status.mjs` PreToolUse hook will block
+**Filing follow-on Code tasks past 🔲 Backlog.** New Code / Operational /
+Investigation tasks always start at Backlog. The `check-task-status.mjs` PreToolUse hook will block
 creation at any other status, and the block is the gate, not the smell — the
 smell is _trying_. If a follow-on task feels ready-to-implement, that's the
 groomer's call, not yours. File it Backlog and let `/groom` decide.
@@ -88,6 +122,49 @@ to "here are my recommendations" is the load-bearing failure mode. Without code
 reads / live API calls / arch-page reads, the recommendations are guesses
 dressed up as analysis. Step 1b is what separates this skill from a chat
 session about the task.
+
+**Skipping the completeness-critic pass.** Answering every Open Question is not the
+same as designing the whole task. The questions cover the decisions the *author*
+foresaw; they routinely miss the gap an *implementer* will hit — a durability /
+recovery path, a second consumer that also reads the surface, an interaction with an
+existing sweeper or scheduler, a loader / trigger / deploy step the spec silently
+assumes, an unstated premise. The mandatory Step-3 critic pass ("what would an
+implementer hit that no question owns?") exists precisely because these gaps don't
+announce themselves. Run it on **every** task, including — especially — the ones that
+feel complete; the surprises surface on exactly those. Then **dispose every gap**
+(fold / note / file-sibling / sibling-owned); a found-but-undispositioned gap is the
+same failure as never running the pass. The orchestrator's advisory **trace-coverage**
+signal feeds the sweep as an **aid, never a gate** — a clean signal is not evidence the
+critic ran — and every candidate's disposition is recorded in the durable
+**completeness-disposition store** (`accepted|dismissed` + reason), never body prose and
+never silently.
+
+**Trimming the question set to make it "feel right-sized."** A design task with many open
+questions is not a signal to *drop* questions down to a tidy count — question-count is a
+soft diagnostic (`>~6` is a prompt to look at splitting), not a numeric gate, and it is
+**not** wired into `size_check`. A genuinely too-large decision space is **split**: file
+sibling Design tasks (the `file-sibling` disposition) and carry the questions there.
+Trimming to hit a number silently discards decisions the implementer still has to make.
+
+**Silently deciding not to capture something explicitly needed.** The worst outcome
+of a defer isn't a wrong destination — it's *no* destination, chosen quietly. When a
+decision needs recording (a defer-to-future-scope, a superseded assumption, a
+cross-cutting note) and its obvious home isn't in the pre-loaded context bundle, the
+failure mode is to conclude "there's nowhere to put this" and move on. There almost
+always **is** somewhere: Future Scope always exists (a standalone page in some
+projects, a `## Future Scope` section of the Master Context page in others), and every
+arch page is in Notion, trivially searchable. The loaded bundle is a convenience, not
+the edge of what exists. If you can't find the home, **surface the gap to the human**
+— never let a needed capture die silently. A design session that quietly drops a
+required capture has left the project's record wrong without anyone deciding to.
+
+**Folding the decision summary straight into the Notion write.** After every question
+locks (and the critic pass is dispositioned), the in-chat **decision-summary draft**
+is a hard checkpoint, not a formality — draft it in chat, show it, get the _yes_,
+*then* write. The drift this prevents: skipping the draft and composing the summary
+directly into the `notion-update-page` call, so the human never sees the closing
+synthesis before it lands in the task body. The draft is cheap and the last place a
+misframed lock gets caught; don't optimize it away.
 
 **Promoting unilaterally.** Even when a decision looks obvious — even when the
 human says "I trust your call" in some earlier message — the explicit sign-off
@@ -125,6 +202,63 @@ single raw-queue writer, UI-as-read-API-consumer, etc.), the constraint wins.
 Surface the conflict; don't silently lock a decision that violates it. If the
 constraint _should_ be revised, that's its own Design task on the arch page —
 not a side-effect of this one.
+
+---
+
+## Recommendation-quality checks — how you form the recommendation
+
+The entries above mostly catch *process* failures; these catch a subtler class — how the
+**recommendation itself** is formed before you present it. They cluster with **Treating
+pushback as sign-off**: the places a human pushes back are the richest signal, and each of
+these is a recurring push-back direction made preventable. Run them as a pre-flight on every
+recommendation.
+
+**Reaching for new machinery before checking reuse.** The instinct to *build a mechanism* —
+a new surface, message type, store, or field — before asking whether existing primitives
+already compose to the need. (Real case: a proposed new message surface that `send_message`
+already covered.) This is the code-review "reuse before you add" instinct applied to design.
+**Before recommending any new surface / message / store / table, state explicitly why the
+existing primitives don't compose.** If you can't articulate the gap, there probably isn't
+one — recommend the reuse.
+
+**Under-reading "advisory / non-blocking" as "toothless."** When a constraint calls a
+component *advisory* or *non-blocking*, that does not mean it does nothing. (Real case: a
+Tier-3 signal framed as "informs but never decides" that the human actually wanted to **route
+back**.) The failure is collapsing "holds no hard veto" into "has no effect." **Pin exactly
+what authority the thing is advisory _to_, and what it still drives** — routes, annotates,
+escalates, feeds a later gate. "Advisory" scopes authority; it doesn't remove it.
+
+**Claiming system state — "exists / shipped / runs" — without checking.** _"The task body's
+premise can be stale"_ applies just as hard to your **own** premises about the system. (Real
+cases, some this very session: "the critic is already shipped" when it was local-only, not in
+the repo; "the CLI doesn't wrap reclassify" read off a stale vendored copy; "the reopen bug is
+fixed" without confirming the deploy.) Three axes are load-bearing and routinely mis-asserted:
+**shipped-vs-designed**, **local-vs-repo**, and **runs-the-skill-vs-adapts-the-precepts** — the
+M12-era **dispatch model** (whether a session *consumes the skill* or is *injected procedure*)
+is itself a premise that, mis-modeled, flips downstream answers. Never state "exists / shipped
+/ runs / is fixed" as a premise of a recommendation without a check. Verify, then assert.
+
+**Recommending a mechanism you haven't verified _works_.** The sibling of the entry above:
+that one is about premises on *existing* state; this is about the mechanism a recommendation
+*proposes*. It is just as easy to confidently float a mechanism that doesn't actually work —
+and lock a decision on it. (Real case: a confirm-gate and a PreToolUse hook were both floated
+as the enforcement path *as if they worked*, and neither did; the decision only came right
+after a cheap test proved `--resume` **does** re-read `--allowed-tools`.) **When a
+recommendation rests on an unverified mechanism — "this hook fires," "resume re-reads X,"
+"that API rejects Y," "the classifier blocks Z" — falsify it with the cheapest possible probe
+_before_ you lock, not after.** An "extraordinary claim" about how a mechanism behaves is a cue
+to run the one-line test, not to assert harder. The lock is only as sound as the mechanism
+under it — and a mechanism is cheap to check and expensive to discover broken at implementation
+time.
+
+**Defaulting to recommend-broad when the operator wants minimal scope.** The pull to apply a
+good safeguard *everywhere* it could plausibly help (a new check in /design + /groom +
+authoring + dispatched, when the operator wanted "only in /design for now"). This sits in real
+tension with **disposition-don't-drop** (surface everything), and the resolution is precise:
+**surface the broad option, recommend the minimal scope, let the operator expand.** Don't drop
+the wider possibilities — name them — but default the *recommendation* to the smallest scope
+that solves the actual problem, not the largest that could. Broad-by-default spends the
+operator's review budget arguing scope back down.
 
 ---
 

@@ -17,6 +17,7 @@ vi.mock('../../hooks/useWebSocket', () => ({
 
 const defaultSettings = {
   max_concurrent_code_sessions: '4',
+  max_concurrent_planning_sessions: '6',
   auto_review_concurrency: '2',
   auto_review: 'false',
   card_preview_lines: '5',
@@ -233,6 +234,76 @@ describe('validateField — non-numeric keys', () => {
   it('still returns minimum error for auto_launch_concurrency set to 0', () => {
     expect(validateField('auto_launch_concurrency', '0')).toBe('Minimum is 1');
   });
+
+  it('returns "Must be a whole number" for max_concurrent_planning_sessions given a non-integer', () => {
+    expect(validateField('max_concurrent_planning_sessions', 'abc')).toBe(
+      'Must be a whole number',
+    );
+  });
+
+  it('has no minimum-value check for max_concurrent_planning_sessions', () => {
+    expect(validateField('max_concurrent_planning_sessions', '0')).toBeNull();
+  });
+});
+
+describe('Settings — max_concurrent_planning_sessions', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', makeFetch());
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn().mockReturnValue(null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+  });
+
+  it('renders max_concurrent_planning_sessions input with the value from the API', async () => {
+    render(<Settings />);
+    const input = await screen.findByDisplayValue('6');
+    expect(input).toBeDefined();
+  });
+
+  it('fires PATCH with max_concurrent_planning_sessions when a valid value is entered', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByDisplayValue('6');
+
+    const inputs = screen.getAllByRole('spinbutton');
+    const planningInput = inputs.find(
+      (el) => (el as HTMLInputElement).value === '6',
+    )!;
+    fireEvent.change(planningInput, { target: { value: '8' } });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).max_concurrent_planning_sessions ===
+            '8',
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
+
+  it('leaves the code-session cap field rendering, value, and validation unaffected', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    const codeInput = await screen.findByDisplayValue('4');
+    expect(codeInput).toBeDefined();
+
+    fireEvent.change(codeInput, { target: { value: '7' } });
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).max_concurrent_code_sessions === '7',
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
 });
 
 describe('Settings — non-numeric settings PATCH', () => {
@@ -313,12 +384,12 @@ describe('Settings — effort dropdowns', () => {
       );
   }
 
-  it('renders three effort selects, each listing Default first then the levels', async () => {
+  it('renders five effort selects, each listing Default first then the levels', async () => {
     render(<Settings />);
     await screen.findByText('(off)');
 
     const effortSelects = findEffortSelects();
-    expect(effortSelects).toHaveLength(3);
+    expect(effortSelects).toHaveLength(5);
 
     for (const select of effortSelects) {
       const labels = Array.from((select as HTMLSelectElement).options).map(
@@ -355,13 +426,53 @@ describe('Settings — effort dropdowns', () => {
     });
   });
 
+  it('fires PATCH with planning_session_effort when the planning effort select changes', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByText('(off)');
+
+    const [, , planningEffortSelect] = findEffortSelects();
+    fireEvent.change(planningEffortSelect, { target: { value: 'high' } });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).planning_session_effort === 'high',
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
+
+  it('fires PATCH with ops_session_effort when the ops effort select changes', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByText('(off)');
+
+    const [, , , opsEffortSelect] = findEffortSelects();
+    fireEvent.change(opsEffortSelect, { target: { value: 'low' } });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).ops_session_effort === 'low',
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
+
   it('fires PATCH with large_task_effort when the large-task effort select changes', async () => {
     const fetchMock = makeFetch();
     vi.stubGlobal('fetch', fetchMock);
     render(<Settings />);
     await screen.findByText('(off)');
 
-    const [, , largeTaskEffortSelect] = findEffortSelects();
+    const [, , , , largeTaskEffortSelect] = findEffortSelects();
     fireEvent.change(largeTaskEffortSelect, { target: { value: 'max' } });
 
     await waitFor(() => {
@@ -373,6 +484,25 @@ describe('Settings — effort dropdowns', () => {
       );
       expect(patchCall).toBeDefined();
     });
+  });
+});
+
+describe('Settings — planning/ops model selectors', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', makeFetch());
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn().mockReturnValue(null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+  });
+
+  it('renders planning_session_model and ops_session_model selectors', async () => {
+    render(<Settings />);
+    await screen.findByText('(off)');
+
+    expect(screen.getByText('Planning session model')).toBeDefined();
+    expect(screen.getByText('Ops session model')).toBeDefined();
   });
 });
 

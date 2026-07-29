@@ -6,6 +6,7 @@ import {
   nextRunnableGateItems,
   getGateItem,
   getGateItemDetail,
+  getVerifySessionsForGateItem,
   listGateItems,
   listMilestoneReadiness,
   appendGateItemEvent,
@@ -14,6 +15,7 @@ import {
   reclassifyGateItem,
   backfillGateTask,
 } from '../gate/gateService';
+import { dispatchGateItemVerification } from '../gate/gateReconciler';
 import type { GateItemClassification } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { BackendTaskWriteCommands } from '../tasks/TaskWriteCommands';
@@ -125,6 +127,11 @@ export function createGateStateRouter(): Router {
       }
       throw err;
     }
+    const orderRaw = stringParam('order');
+    if (orderRaw !== undefined && orderRaw !== 'not-done-first') {
+      res.status(400).json({ error: `unknown order: ${orderRaw}` });
+      return;
+    }
     res.json(
       listGateItems({
         project,
@@ -137,6 +144,7 @@ export function createGateStateRouter(): Router {
           runnableRaw === undefined ? undefined : runnableRaw === 'true',
         page: numberParam('page'),
         limit: numberParam('limit'),
+        order: orderRaw,
       }),
     );
   });
@@ -168,6 +176,17 @@ export function createGateStateRouter(): Router {
     res.json(detail);
   });
 
+  // GET /api/gate/items/:id/verify-sessions
+  // The gate-item ↔ verify-session linkage: sessions dispatched by the
+  // GateItemVerifier for this item (task_id = 'gate-item:<id>'), most
+  // recent first.
+  router.get(
+    '/gate/items/:id/verify-sessions',
+    (req: Request, res: Response) => {
+      res.json(getVerifySessionsForGateItem(String(req.params.id)));
+    },
+  );
+
   // POST /api/gate/items/:id/events  { disposition, evidence, filedFollowon, deploySha, operator }
   router.post('/gate/items/:id/events', (req: Request, res: Response) => {
     const id = String(req.params.id);
@@ -178,12 +197,16 @@ export function createGateStateRouter(): Router {
       deploySha?: unknown;
       operator?: unknown;
     };
-    const disposition =
-      typeof body.disposition === 'string' ? body.disposition : null;
-    if (!disposition) {
-      res.status(400).json({ error: 'disposition is required' });
+    if (
+      body.disposition !== undefined &&
+      typeof body.disposition !== 'string'
+    ) {
+      res
+        .status(400)
+        .json({ error: 'disposition must be a string when present' });
       return;
     }
+    const disposition = body.disposition as string | undefined;
     try {
       const updated = appendGateItemEvent(id, {
         disposition,
@@ -341,6 +364,7 @@ export function createGateStateRouter(): Router {
         milestone?: unknown;
         classification?: unknown;
         items?: unknown;
+        reason?: unknown;
       };
       const project = typeof body.project === 'string' ? body.project : null;
       const taskId = typeof body.taskId === 'string' ? body.taskId : null;
@@ -351,6 +375,7 @@ export function createGateStateRouter(): Router {
         typeof body.classification === 'string'
           ? (body.classification as GateContributionDecision)
           : null;
+      const reason = typeof body.reason === 'string' ? body.reason : undefined;
       if (!project) {
         res.status(400).json({ error: 'project is required' });
         return;
@@ -393,6 +418,7 @@ export function createGateStateRouter(): Router {
           { id: taskId, title, project, milestone: canonicalMilestone },
           items,
           classification,
+          reason,
         );
         res.json(result);
       } catch (err) {
@@ -402,6 +428,33 @@ export function createGateStateRouter(): Router {
       }
     },
   );
+
+  // POST /api/gate/verify-launch  { itemIds }
+  // The Manual Verification Gate's operator dispatch surface (M12) —
+  // analog of the Groom(N)/Ops(N) launch routes, but for the
+  // GateItemVerifier: starts a verify for each selected item/batch and
+  // returns immediately (a verify can run for the verifier's full budget).
+  router.post('/gate/verify-launch', (req: Request, res: Response) => {
+    const body = req.body as { itemIds?: unknown };
+    const itemIds =
+      Array.isArray(body.itemIds) &&
+      body.itemIds.every((id) => typeof id === 'string')
+        ? (body.itemIds as string[])
+        : null;
+    if (!itemIds || itemIds.length === 0) {
+      res.status(400).json({ error: 'a non-empty itemIds[] is required' });
+      return;
+    }
+    try {
+      const result = dispatchGateItemVerification(itemIds);
+      res.status(202).json(result);
+    } catch (err) {
+      res.status(400).json({
+        error:
+          err instanceof Error ? err.message : 'gate verify dispatch failed',
+      });
+    }
+  });
 
   return router;
 }

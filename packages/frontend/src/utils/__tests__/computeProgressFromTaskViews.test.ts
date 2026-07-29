@@ -20,6 +20,7 @@ function makeTaskView(
     blockerNames: [],
     wave,
     codeSession: null,
+    planningSession: null,
     pr: null,
     review: null,
     totalTokens: { input: 0, output: 0 },

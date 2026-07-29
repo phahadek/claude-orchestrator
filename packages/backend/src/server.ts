@@ -8,6 +8,7 @@ import { runMigrations } from './db/schema';
 import { db } from './db/db';
 import { SessionManager } from './session/SessionManager';
 import { handleMessage, setWsRouterRefreshFn } from './ws/router';
+import { setTaskWriteRefreshFn } from './tasks/TaskWriteCommands';
 import { sendInitialStateBurst } from './ws/initialStateBurst';
 import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
@@ -44,15 +45,20 @@ import {
   createGatedEnrollmentRouter,
   setEnrollmentBroadcast,
 } from './auth/Enrollment';
-import { getActiveDeviceCount, pruneSchedulerAudit } from './db/queries';
+import {
+  getActiveDeviceCount,
+  pruneSchedulerAudit,
+  listProjectRows,
+} from './db/queries';
 import { importProjectsFromEnv } from './projects/projectImport';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
+import { PlanningOrchestrator } from './orchestration/PlanningOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AutoMerger } from './github/AutoMerger';
 import { ReviewerCommentsWatcher } from './github/ReviewerCommentsWatcher';
-import { AUTO_REVIEW_ENABLED } from './config';
+import { AUTO_REVIEW_ENABLED, GITHUB_TOKEN } from './config';
 import { getCorporateMode } from './config/corporateMode';
 import { getOrchestratorConfig } from './config/appConfig';
 import { AutoLauncher } from './orchestration/AutoLauncher';
@@ -64,25 +70,44 @@ import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiv
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
 import { Scheduler } from './orchestration/Scheduler';
 import { register as registerWorktreeReconciler } from './orchestration/WorktreeReconciler';
-import { register as registerGateReconciler } from './gate/gateReconciler';
+import {
+  register as registerGateReconciler,
+  configureGateVerification,
+} from './gate/gateReconciler';
 import { registerGateMergeConsumer } from './gate/gateMergeConsumer';
+import { SessionGateItemVerifier } from './gate/gateItemVerifier';
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
 import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
-import { createDeployRouter, setDeployScheduler } from './routes/deploy';
+import {
+  createDeployRouter,
+  setDeployScheduler,
+  resumeActiveDeployRuns,
+} from './routes/deploy';
 import { createPlanUsageRouter, setPlanUsagePoller } from './routes/planUsage';
-import { createStagedIntentsRouter } from './routes/stagedIntents';
-import { createTaskIntentsRouter } from './routes/taskIntents';
+import {
+  createStagedIntentsRouter,
+  setStagedIntentBroadcast,
+} from './routes/stagedIntents';
+import { createOrchestratorMcpRouter } from './mcp/orchestratorMcpServer';
+import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
 import { createOpsJournalRouter } from './routes/opsJournal';
 import { createGateStateRouter } from './routes/gateState';
 import { createSeedStateRouter } from './routes/seedState';
+import { createArchitectureRouter } from './routes/architecture';
+import { createDesignRouter } from './routes/design';
+import { createDesignContextRouter } from './routes/designContext';
 import { createGroomContextRouter } from './routes/groomContext';
+import { createGroomFlipRouter } from './routes/groomFlip';
 import { createMergeCandidatesRouter } from './routes/mergeCandidates';
 import { createOpsContextRouter } from './routes/opsContext';
-import { createOpsLaunchRouter } from './routes/opsLaunch';
-import { OpsSessionLauncher } from './orchestration/OpsSessionLauncher';
+import { createPlanningLaunchRouter } from './routes/planningLaunch';
+import {
+  OpsSessionLauncher,
+  setOpsSessionLauncherRefreshFn,
+} from './orchestration/OpsSessionLauncher';
 import { runBootSequence, getActiveBootTracker } from './bootSequence';
 import { logger } from './logger';
 import {
@@ -95,6 +120,19 @@ runMigrations(db);
 loadRuntimeSettingsFromDb();
 setupSessionCgroup();
 importProjectsFromEnv(process.env.PROJECTS);
+
+// Resume-at-boot: a project's deploy_run left `running` by a self-deploy
+// restart (the restart step reboots this very backend) never finalizes on
+// its own — verify/report-in/record-sha only run if something re-drives
+// it. Guarded and non-blocking so one project's resume failure can't stall
+// the rest of boot.
+try {
+  resumeActiveDeployRuns(listProjectRows());
+} catch (err) {
+  logger.error(
+    `[server] boot deploy-run resume failed: ${err instanceof Error ? err.message : String(err)}`,
+  );
+}
 
 const _cm = getCorporateMode();
 logger.info(
@@ -137,6 +175,7 @@ const reviewOrchestrator = new ReviewOrchestrator(
   githubClient,
 );
 setSettingsReviewOrchestrator(reviewOrchestrator);
+const planningOrchestrator = new PlanningOrchestrator(sessionManager);
 
 const PORT = getOrchestratorConfig().server.port;
 
@@ -144,11 +183,24 @@ const app = express();
 app.use(express.json());
 // Public enrollment routes (bootstrap, request, status) — no token required
 app.use('/api/enrollment', createPublicEnrollmentRouter());
-// Loopback-only session stage endpoint: authed by its own scoped session
-// credential (never a device token), so it is mounted ahead of
-// requireDeviceAuth deliberately — it must stay reachable only via
-// requireSessionStageAuth, never fall back to the device-auth surface.
-app.use('/api', createTaskIntentsRouter());
+// Long-lived, loopback-only orchestrator MCP server (streamable-HTTP): the
+// sole session-facing write edge for staged task-write intents and verdict
+// delivery, authed by its own scoped session stage credential (never a
+// device token), so it is mounted ahead of requireDeviceAuth deliberately —
+// it must stay reachable only via requireSessionStageAuth, never fall back
+// to the device-auth surface. Supersedes the retired POST /api/task-intents
+// REST route + its sanctioned stage-task-intent.mjs CLI client.
+app.use('/api', createOrchestratorMcpRouter(sessionManager));
+// The own-record read (session_events + audit_log, by target session id) an
+// operator-approved session.requestCapability grant materialises — same
+// loopback-only, stage-credential auth as above, plus its own per-request
+// granted-capability check (see routes/sessionRecordRead.ts).
+app.use('/api', createSessionRecordReadRouter());
+// Ops-journal read + operator-resolve surface — device-authed only; the
+// dispatched-session write path (a scoped journal-write credential) has
+// been retired in favor of staging journal.setState through the MCP tool
+// surface above.
+app.use('/api', createOpsJournalRouter());
 // Setup endpoints are public — wizard UI uses them before credentials exist
 app.use('/api', setupRouter);
 // Gate all other /api routes when setup has not been completed
@@ -194,6 +246,16 @@ const reviewerCommentsWatcher = new ReviewerCommentsWatcher(
   sessionManager,
   broadcast,
 );
+// Resolve the orchestrator's own GitHub posting identity so the watcher never
+// re-ingests its own disposition replies as fresh human feedback. Never
+// blocks boot: a failed probe just falls back to the manual deny-list.
+void GitHubClient.resolveViewerLogin(GITHUB_TOKEN).then((login) => {
+  if (!login) return;
+  reviewerCommentsWatcher.setSelfIdentity(login);
+  logger.info(
+    `[server] resolved orchestrator GitHub identity for reviewer-comment self-exclusion: @${login}`,
+  );
+});
 app.use(
   '/api',
   createPrsRouter(
@@ -213,16 +275,22 @@ app.use('/api', configRouter);
 app.use('/api', updateRouter);
 app.use('/api/diagnostics', createDiagnosticsRouter());
 app.use('/api', createPlanUsageRouter());
-app.use('/api', createStagedIntentsRouter());
-app.use('/api', createOpsJournalRouter());
+app.use(
+  '/api',
+  createStagedIntentsRouter(planningOrchestrator, sessionManager),
+);
 app.use('/api', createGateStateRouter());
 app.use('/api', createDeployRouter());
 app.use('/api', createSeedStateRouter());
+app.use('/api', createArchitectureRouter());
+app.use('/api', createDesignRouter());
+app.use('/api', createDesignContextRouter());
 app.use('/api', createGroomContextRouter());
+const opsSessionLauncher = new OpsSessionLauncher(sessionManager);
+app.use('/api', createGroomFlipRouter(opsSessionLauncher));
 app.use('/api', createMergeCandidatesRouter());
 app.use('/api', createOpsContextRouter());
-const opsSessionLauncher = new OpsSessionLauncher(sessionManager);
-app.use('/api', createOpsLaunchRouter(opsSessionLauncher));
+app.use('/api', createPlanningLaunchRouter(opsSessionLauncher));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')),
@@ -248,6 +316,8 @@ setPRBroadcast(broadcast);
 setTaskBroadcast(broadcast);
 // Wire broadcast into enrollment (for enrollment_request events)
 setEnrollmentBroadcast(broadcast);
+// Wire broadcast into the staged-intents route (for staged_intent_changed WS messages)
+setStagedIntentBroadcast(broadcast);
 
 // Scheduler: constructed once, broadcast wired in, exposed to diagnostics route
 const scheduler = new Scheduler();
@@ -261,6 +331,16 @@ scheduler.register({
   runOnBoot: false,
   run: async () => {
     pruneSchedulerAudit(1000);
+  },
+});
+// Backstop for the terminal-status reap hook in SessionManager: catches
+// staged intents left behind by sessions that crashed past the hook.
+scheduler.register({
+  name: 'staged_intent_reaper_sweep',
+  intervalMs: 30 * 60_000,
+  runOnBoot: true,
+  run: async () => {
+    sessionManager.reapStagedIntentsBackstopSweep();
   },
 });
 
@@ -349,6 +429,12 @@ setTaskCacheRefresher((projectId, skipCache) =>
 setWsRouterRefreshFn((projectId, skipCache) =>
   taskCacheRefresher.refreshProjectById(projectId, skipCache),
 );
+setTaskWriteRefreshFn((projectId, skipCache) =>
+  taskCacheRefresher.refreshProjectById(projectId, skipCache),
+);
+setOpsSessionLauncherRefreshFn((projectId, skipCache) =>
+  taskCacheRefresher.refreshProjectById(projectId, skipCache),
+);
 
 // Auto-updater: polls GitHub Releases on startup + every 24h
 const updateChecker = new UpdateChecker(broadcast);
@@ -404,12 +490,21 @@ sessionEventsPruner.register(scheduler);
 stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 registerWorktreeReconciler(scheduler);
-// Gate-verification reconciler: built but not activated (no-coexistence rule) —
-// gated off by runtimeSettings.gate_verification_enabled until an operator
-// opts in. /api/deploy/report-in triggers this job immediately on report
-// (event-driven, nothing polled) but the same enabled flag still applies —
-// a report while disabled is a no-op tick.
+// Gate-verification reconciler: runnability/readiness reconcile on every
+// tick; auto-run verification stays inert here (no verifier passed to
+// register()) — M12 excludes reconciler auto-launch, that's the deferred
+// M13+ phase. The verifier + followupFiler + concurrency config are wired
+// via configureGateVerification instead, for the sibling manual-dispatch
+// surface (an operator-triggered /gate verify) to read back and invoke
+// directly on selected items.
 registerGateReconciler(scheduler);
+configureGateVerification({
+  verifier: new SessionGateItemVerifier(sessionManager),
+  concurrency: {
+    maxDispatchAttempts: 3,
+    maxFixAttempts: 3,
+  },
+});
 
 void runBootSequence({
   jsonlReader,

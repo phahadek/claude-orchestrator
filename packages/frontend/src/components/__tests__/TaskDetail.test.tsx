@@ -22,6 +22,7 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     blockerNames: [],
     wave: 1,
     codeSession: null,
+    planningSession: null,
     pr: null,
     review: null,
     totalTokens: { input: 0, output: 0 },
@@ -61,6 +62,21 @@ function makeCodeSession(
     lastMessage: 'Working on implementation…',
     inputTokens: 1000,
     outputTokens: 500,
+    ...overrides,
+  };
+}
+
+function makePlanningSession(
+  overrides?: Partial<NonNullable<TaskView['planningSession']>>,
+): NonNullable<TaskView['planningSession']> {
+  return {
+    sessionId: 'plan-sess-1',
+    status: 'running',
+    sessionType: 'groom',
+    startedAt: Date.now() - 60000,
+    endedAt: null,
+    inputTokens: 500,
+    outputTokens: 200,
     ...overrides,
   };
 }
@@ -425,6 +441,64 @@ describe('TaskDetail', () => {
 
   // ── No task-level Overview/Diff tabs ──
 
+  // ── Planning session — embedded, collapsible SessionPanel ──
+
+  it('does not render planning session section when planningSession is null', () => {
+    render(
+      <TaskDetail
+        task={makeTask({ planningSession: null })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('planning-session-header')).toBeNull();
+  });
+
+  it('renders an inline collapsible SessionPanel for a launched planning session', () => {
+    const planningSession = makePlanningSession({ sessionId: 'plan-sess-1' });
+    const sessions: SessionState[] = [
+      makeSessionState({
+        sessionId: 'plan-sess-1',
+        sessionType: 'groom',
+        events: [],
+      }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ planningSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+      />,
+    );
+
+    const header = screen.getByTestId('planning-session-header');
+    const section = screen.getByTestId('planning-session-section');
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+    expect(section.getAttribute('data-expanded')).toBe('true');
+    // Rendered as a live SessionPanel (transcript area), not just a banner.
+    expect(screen.getByText('No events yet.')).toBeTruthy();
+    expect(screen.getByTestId('planning-session-body')).toBeTruthy();
+
+    fireEvent.click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    expect(section.getAttribute('data-expanded')).toBe('false');
+    expect(screen.queryByTestId('planning-session-body')).toBeNull();
+  });
+
+  it('shows placeholder when planningSession is set but not in sessions store', () => {
+    const planningSession = makePlanningSession();
+    render(
+      <TaskDetail
+        task={makeTask({ planningSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={[]}
+      />,
+    );
+    expect(screen.getByText(/Transcript not available/)).toBeTruthy();
+  });
+
   it('has no Overview tab at task level', () => {
     const pr = makePr();
     render(
@@ -608,7 +682,7 @@ describe('TaskDetail', () => {
       />,
     );
     // Expanded by default, shows placeholder
-    expect(screen.getByText('Review transcript not available.')).toBeTruthy();
+    expect(screen.getByText(/Review transcript not available/)).toBeTruthy();
   });
 
   it('renders review SessionPanel when review session is in store', () => {
@@ -631,6 +705,25 @@ describe('TaskDetail', () => {
     );
     // ReviewDetailView renders "No result" when there are no events
     expect(screen.getByText('No result')).toBeTruthy();
+  });
+
+  it('review section carries a data-expanded hook matching aria-expanded', () => {
+    const review = makeReview({ verdict: 'approved' });
+    render(
+      <TaskDetail
+        task={makeTask({ review })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const section = screen.getByTestId('review-session-section');
+    const header = screen.getByRole('button', { name: /^review/i });
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+    expect(section.getAttribute('data-expanded')).toBe('true');
+
+    fireEvent.click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    expect(section.getAttribute('data-expanded')).toBe('false');
   });
 
   // ── Merge button ──
@@ -870,14 +963,14 @@ describe('TaskDetail', () => {
       />,
     );
     // Initially REVIEW is open (body visible), PR body is collapsed
-    expect(screen.getByText('Review transcript not available.')).toBeTruthy();
+    expect(screen.getByText(/Review transcript not available/)).toBeTruthy();
     expect(screen.queryByText('#42')).toBeNull();
 
     // Expand PR section → REVIEW body should collapse
     fireEvent.click(
       screen.getByRole('button', { name: /pull request/i, hidden: true }),
     );
-    expect(screen.queryByText('Review transcript not available.')).toBeNull();
+    expect(screen.queryByText(/Review transcript not available/)).toBeNull();
     expect(screen.getByText('#42')).toBeTruthy();
   });
 
@@ -958,15 +1051,28 @@ describe('TaskDetail', () => {
       />,
     );
     // Review is expanded by default
-    expect(screen.getByText('Review transcript not available.')).toBeTruthy();
+    expect(screen.getByText(/Review transcript not available/)).toBeTruthy();
     const prHeader = screen.getByRole('button', { name: /pull request/i });
     fireEvent.click(prHeader);
     // PR is now expanded, review is collapsed
     expect(screen.getByText('#42')).toBeTruthy();
-    expect(screen.queryByText('Review transcript not available.')).toBeNull();
+    expect(screen.queryByText(/Review transcript not available/)).toBeNull();
   });
 
   // ── Review dead-space: CSS cap applied ──
+
+  it('TaskDetail.module.css planningSection only claims flex:1 when expanded', () => {
+    const cssPath = path.join(__dirname, '../TaskDetail.module.css');
+    const css = fs.readFileSync(cssPath, 'utf-8');
+    const baseMatch = css.match(/\.planningSection\s*\{([^}]+)\}/);
+    expect(baseMatch).toBeTruthy();
+    expect(baseMatch![1]).not.toContain('flex: 1');
+    const expandedMatch = css.match(
+      /\.planningSection\[data-expanded='true'\]\s*\{([^}]+)\}/,
+    );
+    expect(expandedMatch).toBeTruthy();
+    expect(expandedMatch![1]).toContain('flex: 1');
+  });
 
   it('TaskDetail.module.css reviewBody uses max-height cap (no flex:1 dead space)', () => {
     const cssPath = path.join(__dirname, '../TaskDetail.module.css');

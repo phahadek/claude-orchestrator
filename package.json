@@ -1,6 +1,6 @@
 {
   "name": "claude-orchestrator",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
   "description": "A local web dashboard for browsing, managing, and orchestrating Claude Code sessions.",
   "main": "index.js",
@@ -18,7 +18,7 @@
   ],
   "scripts": {
     "dev": "concurrently \"npm run dev -w packages/backend\" \"npm run dev -w packages/frontend\"",
-    "build": "npm run build -w packages/frontend && npm run build -w packages/backend",
+    "build": "npm run build -w packages/backend && npm run build -w packages/frontend",
     "start": "node packages/backend/dist/server.js",
     "restart": "npx kill-port 3000 5173 && npm run dev",
     "restart:backend": "npx kill-port 3000 && npm run dev -w packages/backend",
@@ -29,6 +29,7 @@
     "lint:fix": "eslint packages/backend/src packages/frontend/src --fix --cache",
     "test": "echo \"Error: no test specified\" && exit 1",
     "scan:identifiers": "node scripts/scan-identifiers.mjs",
+    "backup:db": "node scripts/backup-database.mjs",
     "audit:licenses": "npx --yes license-checker --failOn 'GPL;AGPL'",
     "start:win": "powershell -ExecutionPolicy Bypass -File start.ps1",
     "stop:win": "powershell -ExecutionPolicy Bypass -File stop.ps1",
@@ -37,7 +38,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "better-sqlite3": "^12.8.0",
-    "concurrently": "^8.0.0",
+    "concurrently": "^9.2.4",
     "eslint": "^10.4.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",

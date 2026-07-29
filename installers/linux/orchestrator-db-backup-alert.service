@@ -1,0 +1,6 @@
+[Unit]
+Description=Alert on Claude Orchestrator DB backup failure
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -t orchestrator-db-backup -p daemon.crit "dashboard.db off-box backup FAILED — see journalctl -u orchestrator-db-backup.service"

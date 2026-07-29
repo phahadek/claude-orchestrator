@@ -3,12 +3,14 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
+import type { GateItemClassification } from '../db/types';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { mintStageCredential } from '../auth/SessionStageAuth';
 import {
   upsertSessionEvent,
   updateSessionStatus,
   markSessionIdle,
+  markSessionDone,
   getEventsBySession,
   insertPermissionDenial,
   upsertPullRequest,
@@ -30,6 +32,10 @@ import {
   markInboxItemsDelivered,
   getSession,
   markSessionInitiatedPRClose,
+  setTaskPauseReason,
+  hasStagedIntentForSession,
+  hasActiveCapabilityRequestForSession,
+  getGrantedCapabilities,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -45,13 +51,24 @@ import {
   getSessionAllowedTools,
 } from './orchestrator-config';
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
-import { recordEvent, countPushFailureEvents } from '../audit/AuditLog';
+import {
+  recordEvent,
+  countPushFailureEvents,
+  countEventsBySessionAndType,
+} from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import type { ISessionManager } from './SessionAuditor';
 import { detectInFlightEscape } from './SessionAuditor';
 import type { ISessionRunner } from './SessionRunner';
 import { CliSessionRunner } from './CliSessionRunner';
 import { recoverSession } from './sessionRecovery';
+import {
+  isCodeSession,
+  isPlanningSession,
+  isGateVerifySession,
+  opensPr,
+} from './sessionPredicates';
+import { hasPendingGateVerifyAppeal } from '../gate/gateItemVerifier';
 import {
   VALID_EVENT_TYPES,
   SILENT_SKIP_TYPES,
@@ -75,107 +92,33 @@ const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
 
 /**
- * Extract and validate a dispositions block from session assistant text.
- * Returns the array of parsed items on success, null when absent or malformed.
- * Exported for unit testing.
+ * Classifications a gate-verify session may propose reclassifying its item
+ * to — a self-correction channel, not a free-form retag. Both targets add
+ * oversight (route the item out of auto-run), matching the grooming
+ * decision that only downgrade-style reclassifications are permitted from
+ * this channel; a verifier can never propose an auto-run tier.
  */
-export function parseDispositionBlock(
-  text: string,
-): ParsedDispositionItem[] | null {
-  const idx = text.indexOf('"dispositions"');
-  if (idx === -1) return null;
-  // Walk back to find the opening brace
-  const openBrace = text.lastIndexOf('{', idx);
-  if (openBrace === -1) return null;
-  // Find the matching closing brace (brace-counting)
-  let depth = 0;
-  let closeBrace = -1;
-  for (let i = openBrace; i < text.length; i++) {
-    if (text[i] === '{') depth++;
-    else if (text[i] === '}') {
-      depth--;
-      if (depth === 0) {
-        closeBrace = i;
-        break;
-      }
-    }
-  }
-  if (closeBrace === -1) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.slice(openBrace, closeBrace + 1));
-  } catch {
-    return null;
-  }
-  if (
-    typeof parsed !== 'object' ||
-    parsed === null ||
-    !Array.isArray((parsed as Record<string, unknown>).dispositions)
-  ) {
-    return null;
-  }
-  const items: ParsedDispositionItem[] = [];
-  for (const item of (parsed as { dispositions: unknown[] }).dispositions) {
-    if (
-      typeof item !== 'object' ||
-      item === null ||
-      typeof (item as Record<string, unknown>).comment_id !== 'number' ||
-      !['addressed', 'wont_fix', 'out_of_scope'].includes(
-        (item as Record<string, unknown>).disposition as string,
-      )
-    ) {
-      continue;
-    }
-    const d = item as Record<string, unknown>;
-    items.push({
-      comment_id: d.comment_id as number,
-      disposition: d.disposition as ParsedDispositionItem['disposition'],
-      reason: typeof d.reason === 'string' ? d.reason : undefined,
-    });
-  }
-  return items.length > 0 ? items : null;
+export const VERIFIER_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
+  'Human-Observation',
+  'needs-triage',
+]);
+
+export interface GateVerifyReclassifyProposal {
+  to: GateItemClassification;
+  reason: string;
 }
 
-/**
- * Extract and validate a verified-flaky disposition block from session assistant
- * text — emitted when the session has cleared the flake-verification bar (ran the
- * failing test in isolation, re-ran the full suite, confirmed the failure is
- * unrelated to its diff) instead of pushing an empty commit. Exported for testing.
- */
-export function parseVerifiedFlakyDisposition(
-  text: string,
-): VerifiedFlakyDisposition | null {
-  const idx = text.indexOf('"verified_flaky"');
-  if (idx === -1) return null;
-  const openBrace = text.lastIndexOf('{', idx);
-  if (openBrace === -1) return null;
-  let depth = 0;
-  let closeBrace = -1;
-  for (let i = openBrace; i < text.length; i++) {
-    if (text[i] === '{') depth++;
-    else if (text[i] === '}') {
-      depth--;
-      if (depth === 0) {
-        closeBrace = i;
-        break;
-      }
-    }
-  }
-  if (closeBrace === -1) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.slice(openBrace, closeBrace + 1));
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== 'object' || parsed === null) return null;
-  const block = (parsed as Record<string, unknown>).verified_flaky;
-  if (typeof block !== 'object' || block === null) return null;
-  const gate = (block as Record<string, unknown>).gate;
-  const reason = (block as Record<string, unknown>).reason;
-  if (gate !== 'ci' && gate !== 'f2') return null;
-  if (typeof reason !== 'string' || reason.length === 0) return null;
-  return { gate, reason };
+export interface GateVerifyDisposition {
+  gateItemId: string;
+  disposition: 'pass' | 'fail' | 'needs-setup';
+  evidence?: unknown;
+  /** The session's self-correction: "this item is mis-classified" — see gateItemVerifier's report contract. */
+  reclassify?: GateVerifyReclassifyProposal;
+}
+
+export interface GateVerifyDispositionPayload {
+  sessionId: string;
+  disposition: GateVerifyDisposition;
 }
 
 /** Maximum number of rebase nudges sent to a session before escalating to needs_attention. */
@@ -228,6 +171,36 @@ export function isPRCloseCommand(toolName: string, toolInput: string): boolean {
   return /\bgh\s+pr\s+(close|reopen)\b/.test(toolInput);
 }
 
+/**
+ * Returns true if the PR is parked in a pre-review gate-failure state
+ * (autofix/verify/analyze blocked, or a failure verdict already recorded)
+ * with no review session yet established. The turn-complete push signal is
+ * normally gated on review_session_id existing; this lets a self-fix push
+ * made while blocked still surface push_detected so PRMergeWatcher's
+ * post-gate-failure recovery can fire instead of stranding the PR.
+ * Exported for unit testing.
+ */
+export function isPreReviewBlocked(pr: {
+  review_session_id?: string | null;
+  pre_review_stage?: string | null;
+  review_result?: string | null;
+}): boolean {
+  if (pr.review_session_id) return false;
+  if (pr.pre_review_stage?.startsWith('blocked_')) return true;
+  if (pr.review_result) {
+    try {
+      const verdict = (JSON.parse(pr.review_result) as { verdict?: string })
+        .verdict;
+      if (typeof verdict === 'string' && /_failed$/.test(verdict)) {
+        return true;
+      }
+    } catch {
+      // malformed review_result — ignore
+    }
+  }
+  return false;
+}
+
 export interface GitHubPRShape {
   number?: number;
   html_url?: string;
@@ -255,6 +228,79 @@ export function extractTextFromToolResultEvent(
       .join('');
   }
   return '';
+}
+
+/** Max size (bytes, serialized) of a subagent tool_result's content kept in full. */
+export const MAX_SUBAGENT_RESULT_BYTES = 4000;
+
+/**
+ * Bound the content of a single tool_result block if its tool_use_id belongs to a
+ * subagent (Task/Agent) invocation and its serialized content exceeds the size cap.
+ * Preserves the invocation fact (tool_use_id, is_error) plus a bounded head of the
+ * output rather than the full dump. Deletes the id from `subagentToolUseIds` once
+ * matched so the set doesn't grow unbounded across a long session.
+ */
+function capSubagentToolResultBlock(
+  block: Record<string, unknown>,
+  subagentToolUseIds: Set<string>,
+): Record<string, unknown> {
+  const toolUseId = block.tool_use_id as string | undefined;
+  if (!toolUseId || !subagentToolUseIds.has(toolUseId)) return block;
+  subagentToolUseIds.delete(toolUseId);
+
+  const original = block.content;
+  const serialized =
+    typeof original === 'string' ? original : JSON.stringify(original);
+  if (Buffer.byteLength(serialized, 'utf8') <= MAX_SUBAGENT_RESULT_BYTES) {
+    return block;
+  }
+
+  const head = serialized.slice(0, MAX_SUBAGENT_RESULT_BYTES);
+  return {
+    ...block,
+    content: `${head}\n… [subagent result truncated: ${serialized.length} chars elided of ${serialized.length} total]`,
+    subagent_result_capped: true,
+  };
+}
+
+/**
+ * Bound subagent (Task/Agent) tool_result content in an event before it is persisted
+ * to SQLite / broadcast, so a large subagent output doesn't bloat the context
+ * re-hydrated into a resumed session or fed into a downstream prompt (e.g. the no-op
+ * investigator, which re-serializes stored session_events into a new session's prompt).
+ * Returns the original event unchanged (same reference) when no subagent tool_use_id
+ * is currently pending, or when the event has nothing to cap.
+ */
+export function capSubagentToolResults(
+  event: Record<string, unknown>,
+  subagentToolUseIds: Set<string>,
+): Record<string, unknown> {
+  if (subagentToolUseIds.size === 0) return event;
+
+  if (event.type === 'tool_result') {
+    return capSubagentToolResultBlock(event, subagentToolUseIds);
+  }
+
+  if (event.type === 'user') {
+    const msg = event.message as Record<string, unknown> | undefined;
+    const content = (msg?.content ?? event.content) as unknown;
+    if (!Array.isArray(content)) return event;
+
+    let changed = false;
+    const newContent = (content as Array<Record<string, unknown>>).map((b) => {
+      if (b?.type !== 'tool_result') return b;
+      const capped = capSubagentToolResultBlock(b, subagentToolUseIds);
+      if (capped !== b) changed = true;
+      return capped;
+    });
+    if (!changed) return event;
+
+    return msg?.content
+      ? { ...event, message: { ...msg, content: newContent } }
+      : { ...event, content: newContent };
+  }
+
+  return event;
 }
 
 function sessionLog(sessionId: string, ...args: unknown[]) {
@@ -289,6 +335,22 @@ export function parseNotionPageIdDashed(url: string): string {
 function extractPRNumberFromError(msg: string): number | null {
   const m = msg.match(/pull\/(\d+)/i);
   return m ? parseInt(m[1], 10) : null;
+}
+
+/**
+ * Resolves a project's task source for gating Notion read tools into a
+ * spawned session's allow-list (see getSessionAllowedTools). getProjectById
+ * lazily requires ProjectService — this runs on every session spawn/resume,
+ * so a transient resolution failure must not take the whole spawn down.
+ */
+function resolveProjectTaskSource(
+  projectId: string,
+): 'notion' | 'yaml' | 'jira' | 'github' | undefined {
+  try {
+    return getProjectById(projectId)?.taskSource;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -341,6 +403,10 @@ export class AgentSession extends EventEmitter {
   private pendingBashCommands = new Map<string, string>();
   /** Tracks mcp__github__push_files tool_use IDs awaiting a successful tool_result. */
   private pendingPushFileToolUseIds = new Set<string>();
+  /** Tracks Task/Agent (subagent) tool_use IDs so their tool_result payload can be
+   *  bounded before persisting/broadcasting — a subagent's full output would otherwise
+   *  bloat the context re-hydrated into a resumed session. */
+  private subagentToolUseIds = new Set<string>();
   /** True once a PR was detected and inserted during the live session. */
   private prDetectedLive = false;
   /** Accumulated token counts for this session (in-memory, synced to SQLite). */
@@ -377,15 +443,12 @@ export class AgentSession extends EventEmitter {
   private lastSignalledHeadSha: string | null = null;
   /** Tracks message IDs whose <pr-body> marker has already been processed (deduplicate streaming chunks). */
   private readonly processedPRBodyMessageIds = new Set<string>();
-  /** Tracks message IDs whose disposition block has already been parsed (deduplicate streaming chunks). */
-  private readonly processedDispositionMessageIds = new Set<string>();
-  /** Dispositions parsed from the current turn's assistant text; cleared after result event. */
-  private pendingParsedDispositions: ParsedDispositionItem[] | null = null;
-  /** Tracks message IDs whose verified-flaky disposition block has already been parsed (deduplicate streaming chunks). */
-  private readonly processedVerifiedFlakyMessageIds = new Set<string>();
-  /** Verified-flaky disposition parsed from the current turn's assistant text; cleared after result event. */
-  private pendingVerifiedFlakyDisposition: VerifiedFlakyDisposition | null =
-    null;
+  /** Last-recorded verdict per key, serialized — MCP verdict tools dedup a
+   *  same-content repeat call against these before emitting (see recordReviewDisposition,
+   *  recordVerifiedFlakyDisposition, recordGateVerifyDisposition below). */
+  private readonly recordedDispositions = new Map<number, string>();
+  private recordedVerifiedFlaky: string | null = null;
+  private recordedGateVerify: string | null = null;
   /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
   private readonly warnedEscapeToolUseIds = new Set<string>();
   /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
@@ -459,6 +522,14 @@ export class AgentSession extends EventEmitter {
      * without any file written inside the managed git repo.
      */
     private readonly systemPromptFilePath?: string,
+    /**
+     * Per-launch model/effort override, threaded from StartOptions.model /
+     * StartOptions.effort (e.g. the Ops(N)/Groom(N)/Design(N) launch picker).
+     * Takes precedence over the runtimeSettings.*_session_model/_effort
+     * default when set to a non-empty value.
+     */
+    private readonly launchModel?: string,
+    private readonly launchEffort?: string,
   ) {
     super();
     this.runner = runner ?? new CliSessionRunner(sessionId);
@@ -479,7 +550,35 @@ export class AgentSession extends EventEmitter {
 
     const initialPrompt =
       this.customPrompt ??
-      `
+      (isPlanningSession(this.sessionType)
+        ? `
+You are a Claude Code session managed by Claude Code Orchestrator, running a
+dispatched planning session.
+
+## Task
+Task page: ${this.taskUrl}
+
+The planning procedure, digest, and all rules are in your system prompt. Run
+the workflow it describes directly.
+
+## Lifecycle
+1. Follow the injected planning procedure end to end for this single task.
+2. Stage every proposed change via the staged-intent transport described in
+   your system prompt — never write code, open a branch, or open a pull
+   request.
+3. When you reach a natural stopping point (every open item presented and
+   either staged or explicitly deferred), end the turn instead of waiting.
+
+## What the dashboard handles (do NOT do these yourself)
+- Applying staged intents — a human reviews and applies them.
+- Task status updates — the backend manages these.
+
+## Rules
+- One task per session. No scope creep.
+- This session has no worktree and no feature branch — never attempt to
+  commit, branch, or open a PR.
+`.trim()
+        : `
 You are a Claude Code session managed by Claude Code Orchestrator.
 
 ## Task
@@ -504,7 +603,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 - One task per session. No scope creep.
 - Never commit to the base branch directly.
 - Never merge your own PR.
-`.trim();
+`.trim());
 
     // Backoff schedule for transient API errors: 5s, 10s, 20s, 40s, 80s (5 attempts).
     const BACKOFF_DELAYS_MS = [5_000, 10_000, 20_000, 40_000, 80_000];
@@ -516,13 +615,23 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     let resumeIdForSpawn: string | undefined = this.resumeSessionId;
 
     const modelSetting =
-      this.sessionType === 'review'
-        ? runtimeSettings.review_session_model
-        : runtimeSettings.code_session_model;
+      this.launchModel ||
+      (this.sessionType === 'ops'
+        ? runtimeSettings.ops_session_model
+        : isPlanningSession(this.sessionType)
+          ? runtimeSettings.planning_session_model
+          : isCodeSession(this.sessionType)
+            ? runtimeSettings.code_session_model
+            : runtimeSettings.review_session_model);
     const effortSetting =
-      this.sessionType === 'review'
-        ? runtimeSettings.review_session_effort
-        : runtimeSettings.code_session_effort;
+      this.launchEffort ||
+      (this.sessionType === 'ops'
+        ? runtimeSettings.ops_session_effort
+        : isPlanningSession(this.sessionType)
+          ? runtimeSettings.planning_session_effort
+          : isCodeSession(this.sessionType)
+            ? runtimeSettings.code_session_effort
+            : runtimeSettings.review_session_effort);
 
     // Per-iteration overrides set by tryEscalateForOverflow() (T3b).
     // Instance fields _escalationModel and _escalationDisableAutoCompact hold these
@@ -608,9 +717,13 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             (this._escalationModel
               ? runtimeSettings.large_task_effort
               : effortSetting) || undefined,
-          allowedTools: getSessionAllowedTools({
-            allowed_tools: this.extraAllowedTools,
-          }),
+          allowedTools: getSessionAllowedTools(
+            this.sessionType,
+            { allowed_tools: this.extraAllowedTools },
+            getGrantedCapabilities(this.sessionId),
+            resolveProjectTaskSource(this.projectId),
+          ),
+          sessionType: this.sessionType,
           systemPrompt: this.systemPromptContent,
           mcpConfigPath: this.mcpConfigPath,
           systemPromptFilePath: this.systemPromptFilePath,
@@ -622,11 +735,13 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             ORCHESTRATOR_BACKEND_PORT: String(
               getOrchestratorConfig().server.port,
             ),
+            // Sessions stage task-write intents and deliver verdicts through
+            // the orchestrator MCP tool surface (see mcpConfigPath above),
+            // authenticated by this same per-session stage credential. The
+            // token is also read directly by the vendored
+            // ~/.claude/scripts/read-session-record.mjs client for the one
+            // brokered REST read this session may hold no other way to reach.
             ORCHESTRATOR_STAGE_TOKEN: stageToken,
-            // Sessions submit staged task-write intents via the vendored
-            // ~/.claude/scripts/stage-task-intent.mjs client (curl/wget are
-            // off the auto-dispatch allowlist; node is) — re-vendored via
-            // scripts/sync-guidelines-load.mjs (the /sync-guidelines skill).
           },
         },
         (event) => {
@@ -991,6 +1106,12 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             ) {
               this.pendingPushFileToolUseIds.add(block.id);
             }
+            if (
+              (block.name === 'Task' || block.name === 'Agent') &&
+              typeof block.id === 'string'
+            ) {
+              this.subagentToolUseIds.add(block.id);
+            }
 
             // In-flight worktree-escape detection: warn and continue.
             if (this.worktreePath && typeof block.name === 'string') {
@@ -1076,6 +1197,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             if (toolUseId && this.pendingBashCommands.has(toolUseId)) {
               const cmd = this.pendingBashCommands.get(toolUseId)!;
               this.pendingBashCommands.delete(toolUseId);
+              if (isPushCommand('Bash', cmd)) {
+                void this.handlePushDetected();
+              }
               if (isPRCreateCommand('Bash', cmd) && !this.prDetectedLive) {
                 const innerText = extractTextFromToolResultEvent(block);
                 void this.handlePRCreatedFromBashOutput(innerText);
@@ -1094,7 +1218,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     if (rawType === 'result') {
       this._turnInFlight = false;
       const pr = getPRBySessionId(this.sessionId);
-      if (pr?.review_session_id) {
+      if (pr?.review_session_id || (pr && isPreReviewBlocked(pr))) {
         // Gate on actual HEAD SHA advance — skip when no new commits were made.
         let currentHeadSha: string | null = null;
         if (this.worktreePath) {
@@ -1114,13 +1238,13 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         ) {
           sessionLog(
             this.sessionId,
-            `turn complete — PR #${pr.pr_number} has review session, signalling push_detected (head=${currentHeadSha?.slice(0, 7) ?? 'unknown'})`,
+            `turn complete — PR #${pr.pr_number} eligible for push signal, signalling push_detected (head=${currentHeadSha?.slice(0, 7) ?? 'unknown'})`,
           );
           void this.handlePushDetected();
         } else {
           sessionLog(
             this.sessionId,
-            `turn complete — PR #${pr.pr_number} has review session, skipping push_detected (head unchanged at ${currentHeadSha.slice(0, 7)})`,
+            `turn complete — PR #${pr.pr_number} eligible for push signal, skipping push_detected (head unchanged at ${currentHeadSha.slice(0, 7)})`,
           );
         }
       }
@@ -1129,69 +1253,6 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       // next poll doesn't re-deliver already-consumed feedback.
       if (pr && event.is_error !== true) {
         ackPendingComments(pr.pr_number, pr.repo);
-      }
-
-      // Drive review-thread disposition actions (reply/resolve) for any
-      // dispositions the session emitted this turn. Fires after ack so the
-      // ack is never gated on disposition success.
-      if (
-        pr &&
-        event.is_error !== true &&
-        this.pendingParsedDispositions !== null
-      ) {
-        const dispositions = this.pendingParsedDispositions;
-        this.pendingParsedDispositions = null;
-        let headSha: string | null = null;
-        if (this.worktreePath) {
-          try {
-            headSha = execSync('git rev-parse HEAD', {
-              cwd: this.worktreePath,
-            })
-              .toString()
-              .trim();
-          } catch {
-            // non-fatal
-          }
-        }
-        const payload: DispositionsParsedPayload = {
-          sessionId: this.sessionId,
-          prNumber: pr.pr_number,
-          repo: pr.repo,
-          headSha,
-          dispositions,
-        };
-        this.emit('dispositions_parsed', payload);
-      }
-
-      // Actuate a verified-flaky disposition the session emitted this turn —
-      // same-commit gate re-run, not a new push.
-      if (
-        pr &&
-        event.is_error !== true &&
-        this.pendingVerifiedFlakyDisposition !== null
-      ) {
-        const disposition = this.pendingVerifiedFlakyDisposition;
-        this.pendingVerifiedFlakyDisposition = null;
-        let headSha: string | null = null;
-        if (this.worktreePath) {
-          try {
-            headSha = execSync('git rev-parse HEAD', {
-              cwd: this.worktreePath,
-            })
-              .toString()
-              .trim();
-          } catch {
-            // non-fatal
-          }
-        }
-        const payload: VerifiedFlakyDispositionPayload = {
-          sessionId: this.sessionId,
-          prNumber: pr.pr_number,
-          repo: pr.repo,
-          headSha,
-          disposition,
-        };
-        this.emit('verified_flaky_disposition', payload);
       }
 
       // Deliver any undelivered inbox items at the turn boundary.
@@ -1244,7 +1305,8 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
     // Persist event to SQLite then broadcast
     const eventType = toEventType(rawType);
-    let payload = JSON.stringify(event);
+    const cappedEvent = capSubagentToolResults(event, this.subagentToolUseIds);
+    let payload = JSON.stringify(cappedEvent);
 
     // Extract message ID from assistant/message events for deduplication.
     // The Claude CLI emits multiple incremental streaming events per message,
@@ -1277,39 +1339,19 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           message: { ...msg, content: mergedContent },
         });
 
-        // Detect <pr-body>…</pr-body> marker or disposition block in session text.
-        // Both are guarded by message ID so streaming chunks don't fire multiple times.
-        if (
-          !this.processedPRBodyMessageIds.has(messageId) ||
-          !this.processedDispositionMessageIds.has(messageId) ||
-          !this.processedVerifiedFlakyMessageIds.has(messageId)
-        ) {
+        // Detect the <pr-body>…</pr-body> marker in session text, guarded by
+        // message ID so streaming chunks don't fire multiple times.
+        if (!this.processedPRBodyMessageIds.has(messageId)) {
           const accumulatedText = mergedContent
             .filter((b) => b.type === 'text' && typeof b.text === 'string')
             .map((b) => b.text as string)
             .join('');
-          if (!this.processedPRBodyMessageIds.has(messageId)) {
-            const markerMatch = accumulatedText.match(PR_BODY_MARKER_REGEX);
-            if (markerMatch) {
-              this.processedPRBodyMessageIds.add(messageId);
-              this.prBodyMarkerPromise = this.handlePRBodyMarker(
-                markerMatch[1].trim(),
-              );
-            }
-          }
-          if (!this.processedDispositionMessageIds.has(messageId)) {
-            const dispositions = parseDispositionBlock(accumulatedText);
-            if (dispositions !== null) {
-              this.processedDispositionMessageIds.add(messageId);
-              this.pendingParsedDispositions = dispositions;
-            }
-          }
-          if (!this.processedVerifiedFlakyMessageIds.has(messageId)) {
-            const disposition = parseVerifiedFlakyDisposition(accumulatedText);
-            if (disposition !== null) {
-              this.processedVerifiedFlakyMessageIds.add(messageId);
-              this.pendingVerifiedFlakyDisposition = disposition;
-            }
+          const markerMatch = accumulatedText.match(PR_BODY_MARKER_REGEX);
+          if (markerMatch) {
+            this.processedPRBodyMessageIds.add(messageId);
+            this.prBodyMarkerPromise = this.handlePRBodyMarker(
+              markerMatch[1].trim(),
+            );
           }
         }
       }
@@ -1892,7 +1934,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     if (this.taskId) resetTaskCrashCount(this.taskId);
 
     let upsertSucceeded = true;
-    if (this.sessionType === 'standard') {
+    if (opensPr(this.sessionType)) {
       this.taskBackend()
         .attachPR(this.taskId, prUrl)
         .catch((e) => logger.error(`[AgentSession] attachPR failed: ${e}`));
@@ -2373,6 +2415,101 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       payload: { session_id: this.sessionId },
     });
     const endedAt = Date.now();
+
+    // A gate-verify session (task_id `gate-item:<id>`) is one-shot: it exists
+    // to settle a single gate item and has no resume purpose once it has
+    // reported (a re-verify is a fresh session, not a resume of this one).
+    // Conclude it done/archived rather than parking it idle forever — unless
+    // it ended this turn with an unresolved session.requestCapability intent
+    // (the sanctioned ask-permission path — see stagedIntents.ts's
+    // resumeCapabilityRequester) or a pending gate-verify appeal (see
+    // gateItemVerifier.ts's hasPendingGateVerifyAppeal): either needs the
+    // session to still be parkable so it can be resumed with the operator's
+    // decision, or the appeal feedback, rather than archived out from under it.
+    if (
+      isPlanningSession(this.sessionType) &&
+      isGateVerifySession(this.taskId) &&
+      !hasActiveCapabilityRequestForSession(this.sessionId) &&
+      !hasPendingGateVerifyAppeal(this.sessionId)
+    ) {
+      markSessionDone(this.sessionId, endedAt, null, 'gate_verify_clean_exit');
+      resetTaskCrashCount(this.taskId);
+      recordEvent({
+        event_type: 'handle_clean_exit_session_marked_done',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId ?? null,
+        task_id: this.taskId || null,
+        payload: { session_id: this.sessionId, pr_url: null },
+      });
+      this.broadcast({
+        type: 'session_ended',
+        sessionId: this.sessionId,
+        status: 'done',
+        ...(this.taskId && { taskId: this.taskId }),
+      });
+      return;
+    }
+
+    // Planning sessions (groom/design) never scrape for a PR URL and never
+    // enter the PR/recovery chain — they park into idle awaiting disposition
+    // (human/dashboard action on the session's findings), not a merge.
+    if (isPlanningSession(this.sessionType)) {
+      // First-turn-empty / garbage: a first turn that stages nothing (or only
+      // validation-rejected intents, which never make it into staged_intent)
+      // surfaces as needs_attention — distinct from a later turn staging
+      // nothing, which is the natural-completion signal.
+      const isFirstTurn =
+        countEventsBySessionAndType(
+          this.sessionId,
+          'handle_clean_exit_session_marked_idle',
+        ) === 0;
+      if (
+        isFirstTurn &&
+        this.taskId &&
+        !hasStagedIntentForSession(this.sessionId)
+      ) {
+        const detail =
+          'First planning turn completed without staging any task-write intents.';
+        setTaskPauseReason(this.taskId, 'planning_first_turn_empty', detail);
+        recordEvent({
+          event_type: 'auto_launch_paused',
+          actor_type: 'system',
+          actor_id: this.sessionId,
+          project_id: this.projectId ?? null,
+          task_id: this.taskId,
+          payload: {
+            reason: 'planning_first_turn_empty',
+            sessionId: this.sessionId,
+          },
+        });
+        this.broadcast({
+          type: 'auto_launch_paused',
+          taskId: this.taskId,
+          reason: 'planning_first_turn_empty',
+          detail,
+        });
+      }
+
+      markSessionIdle(this.sessionId, endedAt, null);
+      if (this.taskId) resetTaskCrashCount(this.taskId);
+      recordEvent({
+        event_type: 'handle_clean_exit_session_marked_idle',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId ?? null,
+        task_id: this.taskId || null,
+        payload: { session_id: this.sessionId, pr_url: null },
+      });
+      this.broadcast({
+        type: 'session_ended',
+        sessionId: this.sessionId,
+        status: 'idle',
+        ...(this.taskId && { taskId: this.taskId }),
+      });
+      return;
+    }
+
     let prUrl: string | undefined;
 
     // Await any in-flight PR creation from the <pr-body> marker so that the PR
@@ -2492,6 +2629,91 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         `[AgentSession] injectContextFile: failed to write ${filename}: ${err}`,
       );
     }
+  }
+
+  /** Current worktree HEAD SHA, or null if unavailable — best-effort, non-fatal on failure. */
+  private currentHeadSha(): string | null {
+    if (!this.worktreePath) return null;
+    try {
+      return execSync('git rev-parse HEAD', { cwd: this.worktreePath })
+        .toString()
+        .trim();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Record a review-thread disposition delivered via the review.disposition
+   * MCP tool and emit the same `dispositions_parsed` event the retired
+   * stdout parser (parseDispositionBlock) used to emit, so ReviewOrchestrator
+   * is unaffected. Idempotent per (session, comment_id): an identical repeat
+   * call is a dedup no-op; a changed disposition for the same comment_id is
+   * last-write-wins and re-emits.
+   */
+  recordReviewDisposition(item: ParsedDispositionItem): void {
+    const pr = getPRBySessionId(this.sessionId);
+    if (!pr) return;
+    const serialized = JSON.stringify(item);
+    if (this.recordedDispositions.get(item.comment_id) === serialized) {
+      return;
+    }
+    this.recordedDispositions.set(item.comment_id, serialized);
+    const payload: DispositionsParsedPayload = {
+      sessionId: this.sessionId,
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+      headSha: this.currentHeadSha(),
+      dispositions: [item],
+    };
+    this.emit('dispositions_parsed', payload);
+  }
+
+  /**
+   * Record a verified-flaky disposition delivered via the flaky.confirm MCP
+   * tool and emit the same `verified_flaky_disposition` event the retired
+   * stdout parser (parseVerifiedFlakyDisposition) used to emit, so
+   * PRMergeWatcher is unaffected. Idempotent per session: an identical
+   * repeat call is a dedup no-op; a changed disposition is last-write-wins.
+   */
+  recordVerifiedFlakyDisposition(disposition: VerifiedFlakyDisposition): void {
+    const pr = getPRBySessionId(this.sessionId);
+    if (!pr) return;
+    const serialized = JSON.stringify(disposition);
+    if (this.recordedVerifiedFlaky === serialized) {
+      return;
+    }
+    this.recordedVerifiedFlaky = serialized;
+    const payload: VerifiedFlakyDispositionPayload = {
+      sessionId: this.sessionId,
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+      headSha: this.currentHeadSha(),
+      disposition,
+    };
+    this.emit('verified_flaky_disposition', payload);
+  }
+
+  /**
+   * Record a gate-verify disposition delivered via the gate.verify MCP tool
+   * and emit the same `gate_verify_disposition` event the retired stdout
+   * parser (parseGateVerifyDisposition) used to emit, so GateItemVerifier is
+   * unaffected. Fires unconditionally (no PR gating) — a read-only
+   * gate-verify session has no PR of its own. Idempotent per session: an
+   * identical repeat call is a dedup no-op; a changed disposition is
+   * last-write-wins.
+   */
+  recordGateVerifyDisposition(disposition: GateVerifyDisposition): void {
+    const serialized = JSON.stringify(disposition);
+    if (this.recordedGateVerify === serialized) {
+      return;
+    }
+    this.recordedGateVerify = serialized;
+    const payload: GateVerifyDispositionPayload = {
+      sessionId: this.sessionId,
+      disposition,
+    };
+    this.emit('gate_verify_disposition', payload);
   }
 
   /** No-op — CLI does not support mid-session permission approval. */

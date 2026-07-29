@@ -12,6 +12,8 @@ import {
   nextRunnableGateItems,
   appendGateItemEvent,
   createLocalGitAncestrySource,
+  isFollowupTaskDone,
+  proposeGateItemReclassification,
   type GateReadiness,
   type ReconcileGateRunnabilityResult,
   type DeployAncestrySource,
@@ -34,9 +36,28 @@ const defaultDeployAdvanceTrigger: DeployAdvanceTrigger = {
   },
 };
 
-interface GateVerificationResult {
-  disposition: 'pass' | 'fail';
+export interface GateVerificationResult {
+  /**
+   * `needs-setup` is the bounded best-effort abstain: the verifier could not
+   * settle pass/fail within its read/time/turn budget. It is not a new gate
+   * state — appendGateItemEvent records it as a non-terminal disposition
+   * (like `noted`), leaving the item runnable; nextRunnableGateItems skips
+   * it on the next pull until a reclassify/reopen/new-source event
+   * supersedes it as the item's latest event.
+   */
+  disposition: 'pass' | 'fail' | 'needs-setup';
   evidence?: unknown;
+  /**
+   * A self-correction: the session determined the item is mis-classified
+   * and proposes the correct tier instead of forcing a pass/fail (or a bare
+   * abstain) on a tier it structurally cannot verify. Supersedes
+   * `disposition` for routing purposes when the backend accepts it — see
+   * gateService.proposeGateItemReclassification.
+   */
+  reclassify?: {
+    to: GateItemClassification;
+    reason: string;
+  };
 }
 
 /**
@@ -93,15 +114,44 @@ const defaultFollowupFiler: FollowupFixTaskFiler = {
 
 /**
  * Classifications the reconciler auto-runs, one tier at a time. Read-Only
- * auto-disposes on pass (gateService resolves it straight to 'pass');
- * Prod-Mutating is run the same way but gateService routes its pass to
- * 'pending-approval' — held until an operator calls approveGateItem.
- * Opportunistic and needs-triage are excluded: on-demand / requires human
- * triage before they can be routed at all.
+ * and Opportunistic auto-dispose on pass (gateService resolves it straight
+ * to 'pass'); Prod-Mutating is run the same way but never mutates — its
+ * verifier only gathers read-only evidence, and gateService routes a pass to
+ * 'pending-approval' (held until an operator calls approveGateItem) rather
+ * than resolving it. needs-triage is excluded: it requires human
+ * classification before it can be routed at all. Human-Observation is
+ * excluded too, but for a different reason: it is not merely unrouted, it
+ * is unverifiable by any headless session (UI/visual/interactive behavior
+ * can only be judged by a human observing the running app) so it never
+ * enters the tick's auto-run loop. It can still be manually dispatched (the
+ * operator-triggered verify surface, dispatchGateItemVerification) to
+ * gather advisory pre-check evidence, but gateService.appendGateItemEvent
+ * refuses to let a verifier-originated pass resolve it regardless of how it
+ * was dispatched.
  */
-const AUTO_RUN_TIERS: GateItemClassification[] = ['Read-Only', 'Prod-Mutating'];
+const AUTO_RUN_TIERS: GateItemClassification[] = [
+  'Read-Only',
+  'Opportunistic',
+  'Prod-Mutating',
+];
 
 const DEFAULT_TIER_LIMIT = 10;
+
+/** Bounded escalation thresholds for the auto-run safety envelope. */
+const DEFAULT_MAX_DISPATCH_ATTEMPTS = 3;
+const DEFAULT_MAX_FIX_ATTEMPTS = 3;
+
+export interface GateVerificationConcurrencyConfig {
+  /** Consecutive verifier crashes (thrown errors) before the item is forced to needs-setup. */
+  maxDispatchAttempts?: number;
+  /** Fix cycles (fail -> follow-up filed) before further fails escalate to needs-setup instead of refiling. */
+  maxFixAttempts?: number;
+}
+
+/** Per-item in-flight guard: item ids currently mid-verify, across ticks/manual dispatch — never double-dispatched. */
+const inFlightVerifications = new Set<string>();
+/** Consecutive verifier-crash counts per item, reset on a clean result. */
+const crashCounts = new Map<string, number>();
 
 export interface GateReconcilerOptions {
   deployAdvanceTrigger?: DeployAdvanceTrigger;
@@ -110,12 +160,15 @@ export interface GateReconcilerOptions {
   tierLimit?: number;
   /** Per-project git-ancestry source; defaults to a local clone at that project's projectDir. */
   ancestrySourceForProject?: (project: string) => DeployAncestrySource;
+  concurrency?: GateVerificationConcurrencyConfig;
 }
 
 interface ProcessedGateItem {
   itemId: string;
   classification: GateItemClassification;
-  disposition: 'pass' | 'fail';
+  disposition: 'pass' | 'fail' | 'needs-setup';
+  /** Set when this run applied a verifier-proposed self-correction — `classification` above already reflects it. */
+  reclassifiedTo?: GateItemClassification;
 }
 
 export interface GateReconcileTickResult {
@@ -137,36 +190,222 @@ function defaultAncestrySourceForProject(
   return createLocalGitAncestrySource(projectDir);
 }
 
-/** Appends the verifier's outcome and, on failure, files + attaches a follow-up fix task and re-opens the item. */
+/** Most recent `fail` event carrying a filedFollowon, or undefined if the item has never failed-with-followup. */
+function latestFailFollowon(item: GateItem): string | undefined {
+  for (let i = item.events.length - 1; i >= 0; i--) {
+    const e = item.events[i];
+    if (e.disposition === 'fail' && e.filedFollowon) return e.filedFollowon;
+  }
+  return undefined;
+}
+
+/** Fix cycles already spent on this item — a `fail` event that filed a follow-up. */
+function countFixAttempts(item: GateItem): number {
+  return item.events.filter((e) => e.disposition === 'fail' && e.filedFollowon)
+    .length;
+}
+
+/** Wraps verifier evidence with the bookkeeping reconcileGateRunnability's auto-reopen needs to tell "already covered" from "a fix just deployed". */
+function failEvidence(item: GateItem, verifierEvidence: unknown): unknown {
+  return {
+    verifierEvidence,
+    minDeployedCommitAtFail: item.minDeployedCommit ?? null,
+  };
+}
+
+/**
+ * Appends the verifier's outcome and routes it:
+ *  - pass/needs-setup: appendGateItemEvent as-is (pass is provenance-tagged
+ *    operator='gate-verifier'; needs-setup is the non-terminal abstain).
+ *  - fail: dedup — while a prior filed follow-up is still open (not Done),
+ *    log the fresh failure against it instead of refiling; escalate to
+ *    needs-setup instead of refiling once maxFixAttempts is spent; otherwise
+ *    file a fresh follow-up, attach it as a new source, and re-open the item.
+ *
+ * The per-item in-flight guard (inFlightVerifications) and the
+ * per-item crash counter (crashCounts, escalating to needs-setup after
+ * maxDispatchAttempts) wrap the verifier dispatch itself — this function
+ * returns null when guarded (duplicate dispatch) or when a crash hasn't yet
+ * hit the escalation threshold (no event recorded this attempt).
+ */
+/**
+ * Synchronous reserve-or-refuse against the in-flight guard — must complete
+ * with no intervening `await`, so two dispatchers racing for the same item
+ * (a tick and a manual dispatch, or two manual dispatches) can never both
+ * win it. Callers that win are responsible for releasing it.
+ */
+function tryReserveInFlight(itemId: string): boolean {
+  if (inFlightVerifications.has(itemId)) return false;
+  inFlightVerifications.add(itemId);
+  return true;
+}
+
 async function processItem(
   item: GateItem,
   verifier: GateItemVerifier,
   followupFiler: FollowupFixTaskFiler,
   deploySha: string | null,
-): Promise<ProcessedGateItem> {
-  const result = await verifier.verify(item);
+  concurrency: GateVerificationConcurrencyConfig = {},
+): Promise<ProcessedGateItem | null> {
+  if (!tryReserveInFlight(item.id)) {
+    return null;
+  }
+  return runReservedVerification(
+    item,
+    verifier,
+    followupFiler,
+    deploySha,
+    concurrency,
+  );
+}
 
-  if (result.disposition === 'fail') {
-    const followup = await followupFiler.fileFollowupFixTask(item, result);
+/** The verify-dispatch-and-route body, assuming the in-flight slot is already reserved (by processItem or dispatchGateItemVerification). Always releases it. */
+async function runReservedVerification(
+  item: GateItem,
+  verifier: GateItemVerifier,
+  followupFiler: FollowupFixTaskFiler,
+  deploySha: string | null,
+  concurrency: GateVerificationConcurrencyConfig = {},
+): Promise<ProcessedGateItem | null> {
+  const maxDispatchAttempts =
+    concurrency.maxDispatchAttempts ?? DEFAULT_MAX_DISPATCH_ATTEMPTS;
+  const maxFixAttempts = concurrency.maxFixAttempts ?? DEFAULT_MAX_FIX_ATTEMPTS;
+
+  let result: GateVerificationResult;
+  try {
+    result = await verifier.verify(item);
+  } catch (err) {
+    inFlightVerifications.delete(item.id);
+    const attempts = (crashCounts.get(item.id) ?? 0) + 1;
+    if (attempts < maxDispatchAttempts) {
+      crashCounts.set(item.id, attempts);
+      logger.warn(
+        `[GateReconciler] verify crashed for gate item ${item.id} (attempt ${attempts}/${maxDispatchAttempts}): ${err instanceof Error ? err.message : err}`,
+      );
+      return null;
+    }
+    crashCounts.delete(item.id);
     appendGateItemEvent(item.id, {
-      disposition: 'fail',
-      evidence: result.evidence,
-      filedFollowon: followup.taskId,
-      deploySha: deploySha ?? undefined,
+      disposition: 'needs-setup',
+      evidence: {
+        reason: 'verifier crashed repeatedly',
+        attempts,
+        error: err instanceof Error ? err.message : String(err),
+      },
     });
-    const now = new Date().toISOString();
-    gateStore.addSource(
-      item.id,
-      { sourceTaskId: followup.taskId, sourceTaskTitle: followup.taskTitle },
-      now,
-    );
-    gateStore.advanceState(item.id, 'open', 'fail', now);
-  } else {
-    appendGateItemEvent(item.id, {
-      disposition: result.disposition,
-      evidence: result.evidence,
-      deploySha: deploySha ?? undefined,
-    });
+    return {
+      itemId: item.id,
+      classification: item.classification,
+      disposition: 'needs-setup',
+    };
+  }
+  crashCounts.delete(item.id);
+
+  try {
+    if (result.reclassify) {
+      const outcome = proposeGateItemReclassification(
+        item.id,
+        result.reclassify.to,
+        result.reclassify.reason,
+      );
+      if (outcome.applied) {
+        logger.info(
+          `[GateReconciler] gate item ${item.id} reclassified ${item.classification} -> ${outcome.item.classification} by verifier: ${result.reclassify.reason}`,
+        );
+        return {
+          itemId: item.id,
+          classification: outcome.item.classification,
+          disposition: 'needs-setup',
+          reclassifiedTo: outcome.item.classification,
+        };
+      }
+      // Rejected (invalid target, no-op, or the ping-pong guard) — abstain
+      // rather than silently drop the run; the rejection reason and the
+      // session's original evidence both ride along for a human to see.
+      appendGateItemEvent(item.id, {
+        disposition: 'needs-setup',
+        evidence: {
+          reason: 'verifier-proposed reclassification rejected',
+          rejectedReason: outcome.rejectedReason,
+          proposedReclassify: result.reclassify,
+          verifierEvidence: result.evidence,
+        },
+        deploySha: deploySha ?? undefined,
+      });
+      return {
+        itemId: item.id,
+        classification: item.classification,
+        disposition: 'needs-setup',
+      };
+    }
+    if (result.disposition === 'needs-setup') {
+      appendGateItemEvent(item.id, {
+        disposition: 'needs-setup',
+        evidence: result.evidence,
+        deploySha: deploySha ?? undefined,
+      });
+    } else if (result.disposition === 'fail') {
+      const priorFollowon = latestFailFollowon(item);
+      const dedup =
+        priorFollowon !== undefined && !isFollowupTaskDone(priorFollowon);
+      const fixAttempts = countFixAttempts(item);
+
+      if (dedup) {
+        appendGateItemEvent(item.id, {
+          disposition: 'fail',
+          evidence: failEvidence(item, result.evidence),
+          filedFollowon: priorFollowon,
+          deploySha: deploySha ?? undefined,
+        });
+        gateStore.advanceState(
+          item.id,
+          'open',
+          'fail',
+          new Date().toISOString(),
+        );
+      } else if (fixAttempts >= maxFixAttempts) {
+        appendGateItemEvent(item.id, {
+          disposition: 'needs-setup',
+          evidence: {
+            verifierEvidence: result.evidence,
+            reason: `max-fix-attempts (${maxFixAttempts}) reached — escalate to operator`,
+          },
+        });
+        return {
+          itemId: item.id,
+          classification: item.classification,
+          disposition: 'needs-setup',
+        };
+      } else {
+        const followup = await followupFiler.fileFollowupFixTask(item, result);
+        appendGateItemEvent(item.id, {
+          disposition: 'fail',
+          evidence: failEvidence(item, result.evidence),
+          filedFollowon: followup.taskId,
+          deploySha: deploySha ?? undefined,
+        });
+        const now = new Date().toISOString();
+        gateStore.addSource(
+          item.id,
+          {
+            sourceTaskId: followup.taskId,
+            sourceTaskTitle: followup.taskTitle,
+          },
+          now,
+        );
+        gateStore.advanceState(item.id, 'open', 'fail', now);
+      }
+    } else {
+      // pass — auto-pass is provenance-tagged, never anonymous.
+      appendGateItemEvent(item.id, {
+        disposition: result.disposition,
+        evidence: result.evidence,
+        deploySha: deploySha ?? undefined,
+        operator: 'gate-verifier',
+      });
+    }
+  } finally {
+    inFlightVerifications.delete(item.id);
   }
 
   return {
@@ -238,14 +477,14 @@ export async function runGateReconcilerTick(
           limit,
         });
         for (const item of batch) {
-          processed.push(
-            await processItem(
-              item,
-              verifier,
-              followupFiler,
-              deployShaByProject[item.project] ?? null,
-            ),
+          const outcome = await processItem(
+            item,
+            verifier,
+            followupFiler,
+            deployShaByProject[item.project] ?? null,
+            options.concurrency,
           );
+          if (outcome) processed.push(outcome);
         }
       }
     }
@@ -259,7 +498,91 @@ export async function runGateReconcilerTick(
   return { deployShaByProject, reconciled, processed, readiness };
 }
 
-/** Registers the reconciler with the Scheduler. Built, not activated — gated off by runtimeSettings.gate_verification_enabled. */
+let configuredVerificationOptions: GateReconcilerOptions | null = null;
+
+/**
+ * Wires the verifier + followupFiler + concurrency config for gate
+ * verification. Deliberately NOT threaded into `register()`'s scheduled tick
+ * below — M12 excludes reconciler auto-launch (that's the deferred M13+
+ * phase); until then, the sibling manual-dispatch surface is the only
+ * caller that reads this back (via getGateVerificationOptions) to invoke
+ * verification on operator-selected items.
+ */
+export function configureGateVerification(
+  options: GateReconcilerOptions,
+): void {
+  configuredVerificationOptions = options;
+}
+
+/** The manual-dispatch surface's accessor for the wired verification config. */
+export function getGateVerificationOptions(): GateReconcilerOptions | null {
+  return configuredVerificationOptions;
+}
+
+export interface GateManualDispatchResult {
+  /** Item ids a verification session was just started for. */
+  dispatched: string[];
+  /** Item ids not dispatched this call, with why. */
+  skipped: { itemId: string; reason: string }[];
+}
+
+/**
+ * The manual-dispatch surface's entry point (M12): operator-triggered
+ * verify-item/verify-batch. Starts each item's verification via the wired
+ * verifier (configureGateVerification) and returns immediately — a single
+ * verify can run for the verifier's full budget (SessionGateItemVerifier
+ * defaults to 20 minutes), so this never awaits completion. The dashboard
+ * reflects the resulting disposition by re-polling the item afterward (its
+ * event log gets the same appendGateItemEvent write processItem always
+ * makes, indistinguishable from the reconciler's own tiered auto-run).
+ */
+export function dispatchGateItemVerification(
+  itemIds: string[],
+): GateManualDispatchResult {
+  const configured = configuredVerificationOptions;
+  if (!configured?.verifier) {
+    throw new Error('no gate verifier configured');
+  }
+  const verifier = configured.verifier;
+  const followupFiler = configured.followupFiler ?? defaultFollowupFiler;
+  const trigger =
+    configured.deployAdvanceTrigger ?? defaultDeployAdvanceTrigger;
+  const concurrency = configured.concurrency;
+
+  const dispatched: string[] = [];
+  const skipped: { itemId: string; reason: string }[] = [];
+
+  for (const itemId of itemIds) {
+    const item = gateStore.getItem(itemId);
+    if (!item) {
+      skipped.push({ itemId, reason: 'not found' });
+      continue;
+    }
+    if (!tryReserveInFlight(itemId)) {
+      skipped.push({ itemId, reason: 'already in flight' });
+      continue;
+    }
+    dispatched.push(itemId);
+    void (async () => {
+      const deploySha = await trigger.latestDeploySha(item.project);
+      await runReservedVerification(
+        item,
+        verifier,
+        followupFiler,
+        deploySha,
+        concurrency,
+      );
+    })().catch((err) => {
+      logger.error(
+        `[GateReconciler] manual dispatch failed for gate item ${itemId}: ${err instanceof Error ? err.message : err}`,
+      );
+    });
+  }
+
+  return { dispatched, skipped };
+}
+
+/** Registers the reconciler with the Scheduler. Runnability/readiness always run; auto-run verification stays inert (no verifier passed) until M13+. */
 export function register(
   scheduler: Scheduler,
   options: GateReconcilerOptions = {},

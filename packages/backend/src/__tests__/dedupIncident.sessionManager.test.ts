@@ -66,6 +66,7 @@ vi.mock('../config', () => ({
 }));
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   insertSession: vi.fn(),
   updateSessionStatus: vi.fn(),
   getPRByNotionTaskId: vi.fn().mockReturnValue(null),
@@ -178,7 +179,6 @@ vi.mock('../config/corporateMode', () => ({
       requireHumanApproval: false,
       requireZDR: false,
       validatePRBody: false,
-      secretsViaSeam: false,
     },
   }),
 }));

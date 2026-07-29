@@ -40,7 +40,7 @@ vi.mock('../db/queries', async () => {
 
 import { StuckSessionMonitor } from '../orchestration/StuckSessionMonitor';
 import type { SessionManager } from '../session/SessionManager';
-import { markSessionDone } from '../db/queries';
+import { markSessionDone, applyPendingDone } from '../db/queries';
 import { db } from '../db/db.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -105,15 +105,15 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-// ── Advisory guard in markSessionDone ────────────────────────────────────────
+// ── In-flight guard in markSessionDone ───────────────────────────────────────
 
-describe('markSessionDone advisory guard', () => {
-  it('writes session_marked_done_while_running to audit_log when status=running', () => {
+describe('markSessionDone in-flight guard', () => {
+  it('defers instead of writing done when status=running, recording session_done_deferred_while_running', () => {
     insertSession('sess-run', 'running', 'task-abc');
 
     markSessionDone('sess-run', Date.now(), null, 'test_call_site');
 
-    const rows = getAuditRows('session_marked_done_while_running');
+    const rows = getAuditRows('session_done_deferred_while_running');
     expect(rows).toHaveLength(1);
     const payload = JSON.parse(rows[0].payload) as {
       call_site: string;
@@ -122,16 +122,16 @@ describe('markSessionDone advisory guard', () => {
     expect(payload.call_site).toBe('test_call_site');
     expect(payload.status_before).toBe('running');
     expect(rows[0].actor_id).toBe('sess-run');
-    // Transition proceeds despite advisory
-    expect(getStatus('sess-run')).toBe('done');
+    // No immediate write — the transition is deferred, not lost.
+    expect(getStatus('sess-run')).toBe('running');
   });
 
-  it('does NOT write audit event when status=idle (legitimate idle→done transition)', () => {
+  it('does NOT defer or write audit event when status=idle (legitimate idle→done transition)', () => {
     insertSession('sess-idle', 'idle');
 
     markSessionDone('sess-idle', Date.now(), null, 'boot_idle_merged_pr');
 
-    expect(getAuditRows('session_marked_done_while_running')).toHaveLength(0);
+    expect(getAuditRows('session_done_deferred_while_running')).toHaveLength(0);
     expect(getStatus('sess-idle')).toBe('done');
   });
 
@@ -140,9 +140,62 @@ describe('markSessionDone advisory guard', () => {
 
     markSessionDone('sess-no-site', Date.now(), null);
 
-    const rows = getAuditRows('session_marked_done_while_running');
+    const rows = getAuditRows('session_done_deferred_while_running');
     expect(rows).toHaveLength(1);
     expect(JSON.parse(rows[0].payload)).toMatchObject({ call_site: 'unknown' });
+  });
+
+  it('skipInFlightGuard bypasses deferral for callers that already confirmed no live process exists', () => {
+    insertSession('sess-confirmed-dead', 'running');
+
+    markSessionDone('sess-confirmed-dead', Date.now(), null, 'boot_sweep', {
+      skipInFlightGuard: true,
+    });
+
+    expect(getAuditRows('session_done_deferred_while_running')).toHaveLength(0);
+    expect(getStatus('sess-confirmed-dead')).toBe('done');
+  });
+
+  it('applyPendingDone applies a deferred transition once the turn completes', () => {
+    insertSession('sess-deferred', 'running', 'task-abc');
+    markSessionDone(
+      'sess-deferred',
+      Date.now(),
+      'https://github.com/o/r/pull/9',
+      'test_call_site',
+    );
+    expect(getStatus('sess-deferred')).toBe('running');
+
+    const applied = applyPendingDone('sess-deferred');
+
+    expect(applied).toBe(true);
+    expect(getStatus('sess-deferred')).toBe('done');
+    const rows = getAuditRows('session_done_deferred_applied');
+    expect(rows).toHaveLength(1);
+    expect(JSON.parse(rows[0].payload)).toMatchObject({
+      call_site: 'test_call_site',
+    });
+  });
+
+  it('applyPendingDone is a no-op when nothing is pending', () => {
+    insertSession('sess-clean', 'idle');
+
+    expect(applyPendingDone('sess-clean')).toBe(false);
+    expect(getStatus('sess-clean')).toBe('idle');
+  });
+
+  it('applyPendingDone drops a stale deferred mark when the session already reached a terminal status via another path', () => {
+    insertSession('sess-raced', 'running', 'task-abc');
+    markSessionDone('sess-raced', Date.now(), null, 'test_call_site');
+    expect(getStatus('sess-raced')).toBe('running');
+
+    // Some other path (e.g. error handling) already concluded the session.
+    db.prepare(`UPDATE sessions SET status = 'error' WHERE session_id = ?`).run(
+      'sess-raced',
+    );
+
+    expect(applyPendingDone('sess-raced')).toBe(false);
+    expect(getStatus('sess-raced')).toBe('error');
   });
 });
 
@@ -194,7 +247,7 @@ describe('StuckSessionMonitor.scanForStuckSessions — liveness guard (no PR row
     expect(getStatus('sess-dead')).toBe('done');
   });
 
-  it('records session_marked_done_while_running with call_site=stuck_session_no_pr_periodic when subprocess dead', async () => {
+  it('does not defer or emit session_done_deferred_while_running when subprocess is confirmed dead — StuckSessionMonitor already verified liveness itself', async () => {
     insertSession('sess-dead-audit', 'running');
     insertResultEvent('sess-dead-audit');
 
@@ -203,10 +256,7 @@ describe('StuckSessionMonitor.scanForStuckSessions — liveness guard (no PR row
 
     await monitor.scanForStuckSessions();
 
-    const rows = getAuditRows('session_marked_done_while_running');
-    expect(rows).toHaveLength(1);
-    expect(JSON.parse(rows[0].payload)).toMatchObject({
-      call_site: 'stuck_session_no_pr_periodic',
-    });
+    expect(getAuditRows('session_done_deferred_while_running')).toHaveLength(0);
+    expect(getStatus('sess-dead-audit')).toBe('done');
   });
 });

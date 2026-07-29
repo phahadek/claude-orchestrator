@@ -145,12 +145,14 @@ skill (a reconcile, never a file-copy deploy):
 
 - **Vendored artifacts:** `scripts/{design-load,check-task-status,sync-guidelines-load,
 notion-page,ops-client}.mjs`, `packages/backend/scripts/{groom-context-client,
-gate-state-client,seed-state-client,stage-task-intent,staged-intents-client}.mjs`,
+gate-state-client,seed-state-client,staged-intents-client}.mjs`,
   `skills/{groom,design,ops,deploy,wrap,sync-guidelines}/**`, and `config-template/**` (the
   Remote Control bootstrap — see below). `groom-load.mjs`, `ops-load.mjs`,
-  `ops-journal-set.mjs` and the `groom-gate.mjs` PreToolUse hook are retired — groom/ops
-  context and journal writes go through the device-authed route clients above, and the
-  promotion gate is enforced server-side (`groomGate.ts`) on staged-intent apply.
+  `ops-journal-set.mjs`, `stage-task-intent.mjs`, and the `groom-gate.mjs` PreToolUse hook
+  are retired — groom/ops context reads go through the device-authed route clients above,
+  dispatched-session task-write staging and verdict delivery go through the orchestrator
+  MCP tool surface, and the promotion gate is enforced server-side (`groomGate.ts`) on
+  staged-intent apply.
 - **Deploy — one mechanism, always a reconcile.** Re-vendoring anything this repo deploys — the
   scripts into `~/.claude/scripts/`, the skill trees into `~/.claude/skills/`, the hook into the
   central config tree, and the guideline docs — goes through the **`/sync-guidelines` skill**

@@ -2,7 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { logger } from '../logger';
-import { ALLOWED_TOOLS } from '../config';
+import {
+  ALLOWED_TOOLS,
+  GROOM_ALLOWED_TOOLS,
+  DESIGN_ALLOWED_TOOLS,
+  OPS_ALLOWED_TOOLS,
+  NOTION_READ_MCP_TOOLS,
+} from '../config';
 
 export interface OrchestratorConfig {
   /**
@@ -192,13 +198,116 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
 }
 
 /**
- * The full allowlist a spawned session is granted: the base ALLOWED_TOOLS plus
- * the per-project extras from .claude-orchestrator.yml. This is the exact array
- * passed as `allowedTools` at spawn (see AgentSession) — extracted so tests can
- * assert on the merged result rather than just the base const.
+ * Capability strings a grant can never widen the allowlist with, regardless
+ * of what an operator approved. Resolved/Done/task-intent-apply stay
+ * device-authed — a session-scoped grant is not a substitute for that auth
+ * boundary. No orchestrator MCP tool ever names an apply/resolve/Done
+ * transition (the tool surface is staging + verdict-delivery + read-only
+ * lookups only, see mcp/tools/stageProposalTools.ts,
+ * mcp/tools/verdictTools.ts, and mcp/tools/architectureReadTools.ts — apply
+ * lives solely on the device-authed /api/staged-intents REST surface), so
+ * these patterns never need to special-case an `mcp__orchestrator__*` tool
+ * name; a session may freely request a grant for any of them. Write/Edit
+ * stay off ops/planning sessions entirely — file authorship is a Code task,
+ * not something an operator grant can approve. Matched against the raw
+ * granted-capability string.
+ */
+const GRANT_DENYLIST_PATTERNS = [
+  /task-intent/i,
+  /apply/i,
+  /resolve/i,
+  /done/i,
+  /^Write$/i,
+  /^Edit$/i,
+  /^NotebookEdit$/i,
+  /^MultiEdit$/i,
+];
+
+export function isGrantable(capability: string): boolean {
+  return !GRANT_DENYLIST_PATTERNS.some((re) => re.test(capability));
+}
+
+/**
+ * Prefix for the one grantable own-record read capability: the
+ * orchestrator's own runtime records (session_events + audit_log) for a
+ * single named target session id, brokered loopback via
+ * `routes/sessionRecordRead.ts` and the sanctioned
+ * `read-session-record.mjs` client — never a Bash-command prefix or MCP
+ * verb, since the read reaches the orchestrator's own DB (outside a
+ * dispatched session's worktree sandbox and its device-authed API) rather
+ * than a tool this session's shell can already invoke. Read-only: there is
+ * no write counterpart, and `isGrantable` never denies this prefix.
+ */
+const SESSION_RECORD_READ_PREFIX = 'read:session-record:';
+
+/** Builds the exact capability string for reading one target session's own record. */
+export function sessionRecordReadCapability(targetSessionId: string): string {
+  return `${SESSION_RECORD_READ_PREFIX}${targetSessionId}`;
+}
+
+/** Extracts the target session id from a granted own-record-read capability, or null if it isn't one. */
+export function parseSessionRecordReadCapability(
+  capability: string,
+): string | null {
+  return capability.startsWith(SESSION_RECORD_READ_PREFIX)
+    ? capability.slice(SESSION_RECORD_READ_PREFIX.length)
+    : null;
+}
+
+/**
+ * A granted capability shaped like an actual CLI tool permission — a Bash
+ * command prefix or a named MCP verb. Only these widen `--allowed-tools` at
+ * spawn (see `getSessionAllowedTools` below); the own-record-read capability
+ * is checked directly by `routes/sessionRecordRead.ts` against
+ * `getGrantedCapabilities`, not merged into the CLI tool allowlist, since it
+ * names no tool the CLI resolves.
+ */
+export function isToolShapedCapability(capability: string): boolean {
+  return capability.startsWith('Bash(') || capability.startsWith('mcp__');
+}
+
+/**
+ * The full allowlist a spawned session is granted. For code/review sessions
+ * this is the base ALLOWED_TOOLS plus the per-project extras from
+ * .claude-orchestrator.yml. Planning sessions (groom/design) get a dedicated,
+ * stage-only/read-only tool set instead — per-project extras are never merged
+ * in, since those may include mutating commands. ops sessions get a similar
+ * stage-only/read-only base, but DO merge in the per-project extras from
+ * .claude-orchestrator.yml — that's where a project's audited live-data read
+ * surface (analyst MCP read verbs, read-only DB role, alarm/operational read
+ * endpoints) is declared, and none of it is prod-mutating. This is the exact
+ * array passed as `allowedTools` at spawn (see AgentSession) — extracted so
+ * tests can assert on the merged result rather than just the base const.
+ *
+ * `granted` is the session's durable, operator-approved capability set (see
+ * getGrantedCapabilities/addGrantedCapability in db/queries.ts) — composed
+ * into every (re)spawn's allowlist as base ∪ granted, deduplicated. A grant
+ * matching GRANT_DENYLIST_PATTERNS is dropped rather than merged in: the
+ * mechanism widens tool access, never the resolved/apply/Done boundary.
+ *
+ * `taskSource` gates NOTION_READ_MCP_TOOLS into a planning session's
+ * allow-list: only a Notion-task-source project's groom/design/ops sessions
+ * get those entries, matching the notion MCP server only being registered
+ * for Notion-sourced projects in SessionManager.ts#writeMcpConfig. A
+ * Jira/GitHub/YAML project gets no Notion entries — granting them here
+ * without the server being registered would be permissions for tools that
+ * are structurally absent, the exact bug this gating fixes.
  */
 export function getSessionAllowedTools(
+  sessionType: string,
   orchConfig: Pick<OrchestratorConfig, 'allowed_tools'>,
+  granted: string[] = [],
+  taskSource?: 'notion' | 'yaml' | 'jira' | 'github',
 ): string[] {
-  return [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
+  const grantable = granted.filter(isGrantable).filter(isToolShapedCapability);
+  const notionExtras = taskSource === 'notion' ? NOTION_READ_MCP_TOOLS : [];
+  const base =
+    sessionType === 'groom'
+      ? [...GROOM_ALLOWED_TOOLS, ...notionExtras]
+      : sessionType === 'design'
+        ? [...DESIGN_ALLOWED_TOOLS, ...notionExtras]
+        : sessionType === 'ops'
+          ? [...OPS_ALLOWED_TOOLS, ...notionExtras, ...orchConfig.allowed_tools]
+          : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
+  return [...new Set([...base, ...grantable])];
 }

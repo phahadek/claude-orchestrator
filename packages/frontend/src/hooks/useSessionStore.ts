@@ -5,6 +5,8 @@ import type {
 } from '@claude-orchestrator/backend/src/ws/types';
 import type { ResolvedTask } from '@claude-orchestrator/backend/src/notion/types';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
+import type { StagedIntent } from '../api/stagedIntents';
+import { publishStagedIntentChange } from './stagedIntentBus';
 
 const DISMISSED_DENIALS_KEY = 'permission_denials_dismissed';
 
@@ -72,6 +74,15 @@ export interface SessionState {
    * to suppress fireNotification for replayed transitions.
    */
   lastStatusReplay?: boolean;
+  /**
+   * True for a placeholder session created by a session_status message that
+   * arrived before session_started (e.g. a live "running" broadcast racing
+   * ahead of the session_started that normally seeds the store — see
+   * SessionManager.completeStart). Cleared once session_started applies the
+   * real metadata, so that a later session_started still hydrates taskName/
+   * notionTaskUrl/etc. instead of being skipped as a stale hydration replay.
+   */
+  uninitialized?: boolean;
 }
 
 export interface IncompleteReview {
@@ -136,6 +147,8 @@ export function useSessionStore() {
     IncompleteReview[]
   >([]);
   const [lastTaskUpdate, setLastTaskUpdate] = useState<TaskView | null>(null);
+  const [lastStagedIntentChange, setLastStagedIntentChange] =
+    useState<StagedIntent | null>(null);
   const [taskListRefreshTrigger, setTaskListRefreshTrigger] = useState(0);
   const [lastPrMergedEvent, setLastPrMergedEvent] = useState<{
     prNumber: number;
@@ -208,10 +221,13 @@ export function useSessionStore() {
       switch (msg.type) {
         case 'session_started': {
           const existing = next.get(msg.sessionId);
-          // Do not wipe a live (non-terminal) session with a hydration snapshot.
-          // Terminal sessions (done/error/killed) and new sessions are replaced normally.
+          // Do not wipe a live (non-terminal), already-initialized session with
+          // a hydration snapshot. Terminal sessions (done/error/killed), new
+          // sessions, and uninitialized stubs (created by a session_status
+          // that raced ahead of this session_started) are populated normally.
           if (
             existing &&
+            !existing.uninitialized &&
             !['done', 'error', 'killed'].includes(existing.status)
           ) {
             break;
@@ -222,8 +238,11 @@ export function useSessionStore() {
             notionTaskUrl: msg.notionTaskUrl,
             taskType: msg.taskType,
             sessionType: msg.sessionType,
-            status: 'starting',
-            events: [],
+            // Preserve a live status already applied to an uninitialized stub
+            // (e.g. 'running' arrived before this session_started) instead of
+            // regressing it back to 'starting'.
+            status: existing?.uninitialized ? existing.status : 'starting',
+            events: existing?.uninitialized ? existing.events : [],
             started_at: msg.started_at,
             ended_at: msg.ended_at,
             archived: msg.archived ?? false,
@@ -293,12 +312,28 @@ export function useSessionStore() {
         }
         case 'session_status': {
           const s = next.get(msg.sessionId);
-          if (s)
+          if (s) {
             next.set(msg.sessionId, {
               ...s,
               status: msg.status,
               lastStatusReplay: msg.replay === true,
             });
+          } else {
+            // The session isn't in the store yet — most likely a live status
+            // update raced ahead of session_started. Upsert a minimal stub so
+            // the update isn't silently dropped; session_started will hydrate
+            // the remaining metadata (taskName, notionTaskUrl, etc.) when it
+            // arrives, without regressing this status back to 'starting'.
+            next.set(msg.sessionId, {
+              sessionId: msg.sessionId,
+              taskName: '',
+              notionTaskUrl: '',
+              status: msg.status,
+              events: [],
+              uninitialized: true,
+              lastStatusReplay: msg.replay === true,
+            });
+          }
           break;
         }
         case 'permission_request': {
@@ -371,7 +406,9 @@ export function useSessionStore() {
           break;
         }
         case 'session_archived': {
-          next.delete(msg.sessionId);
+          const existing = next.get(msg.sessionId);
+          if (!existing) break;
+          next.set(msg.sessionId, { ...existing, archived: true });
           break;
         }
         default:
@@ -424,6 +461,10 @@ export function useSessionStore() {
     }
     if (msg.type === 'task_updated') {
       setLastTaskUpdate(msg.task);
+    }
+    if (msg.type === 'staged_intent_changed') {
+      setLastStagedIntentChange(msg.intent);
+      publishStagedIntentChange(msg.intent);
     }
     if (msg.type === 'pr_merged') {
       setLastPrMergedEvent({
@@ -723,6 +764,7 @@ export function useSessionStore() {
     incompleteReviews,
     dismissIncompleteReviews,
     lastTaskUpdate,
+    lastStagedIntentChange,
     taskListRefreshTrigger,
     lastAutofixEvent,
     lastReviewStartedEvent,

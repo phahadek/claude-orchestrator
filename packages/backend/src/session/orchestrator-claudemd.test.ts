@@ -676,6 +676,15 @@ describe('buildReviewClaudeMd', () => {
     expect(result).toContain('Do NOT pressure the coding session');
   });
 
+  it('instructs reviewer that Code tasks carry no manual-verification section and not to look for one', () => {
+    const result = buildReviewClaudeMd('Add feature X');
+
+    expect(result).toContain(
+      'Code tasks do not carry a "### 👁️ Manual verification" section',
+    );
+    expect(result).toContain('Do NOT look for one');
+  });
+
   it('contains task name in the output', () => {
     const result = buildReviewClaudeMd('My special task');
 

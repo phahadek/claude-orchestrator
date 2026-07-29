@@ -63,6 +63,8 @@ vi.mock('../../db/queries', () => ({
   upsertAnalyzeResult: vi.fn(),
   getAnalyzeResult: vi.fn().mockReturnValue(null),
   enqueueFeedbackItem: vi.fn(),
+  hasDispositionReplyBeenPosted: vi.fn().mockReturnValue(false),
+  recordDispositionReply: vi.fn(),
 }));
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
@@ -70,6 +72,10 @@ vi.mock('../../db/queries', () => ({
 import { ReviewOrchestrator } from '../ReviewOrchestrator';
 import type { PRReviewService } from '../PRReviewService';
 import type { DispositionsParsedPayload } from '../types';
+import {
+  hasDispositionReplyBeenPosted,
+  recordDispositionReply,
+} from '../../db/queries';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -162,6 +168,34 @@ describe('ReviewOrchestrator.handleDispositions — addressed', () => {
       'Addressed in deadbee',
     );
     expect(github.resolveReviewThread).toHaveBeenCalledWith('PRRT_thread_xyz');
+  });
+
+  it('includes the reason in the reply when present', async () => {
+    const github = makeGitHubClient({ 303: 'PRRT_thread_reason' });
+    const sm = makeSessionManager();
+    const rs = makeReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true, github as any);
+
+    await orch.handleDispositions(
+      makePayload({
+        headSha: 'abc1234',
+        dispositions: [
+          {
+            comment_id: 303,
+            disposition: 'addressed',
+            reason: 'switched to a null check',
+          },
+        ],
+      }),
+    );
+
+    expect(github.addPullRequestReviewThreadReply).toHaveBeenCalledWith(
+      'PRRT_thread_reason',
+      'Addressed in abc1234: switched to a null check',
+    );
+    expect(github.resolveReviewThread).toHaveBeenCalledWith(
+      'PRRT_thread_reason',
+    );
   });
 });
 
@@ -282,6 +316,52 @@ describe('ReviewOrchestrator.handleDispositions — comment_id mapping', () => {
     expect(github.addPullRequestReviewThreadReply).toHaveBeenCalledTimes(2);
     expect(github.resolveReviewThread).toHaveBeenCalledWith('PRRT_A');
     expect(github.resolveReviewThread).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── idempotency: no duplicate reply for an already-posted disposition ────────
+
+describe('ReviewOrchestrator.handleDispositions — idempotency', () => {
+  it('posts a reply for a given (comment_id, disposition) exactly once, and records it', async () => {
+    const github = makeGitHubClient({ 111: 'PRRT_thread_idem' });
+    const sm = makeSessionManager();
+    const rs = makeReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true, github as any);
+
+    await orch.handleDispositions(
+      makePayload({
+        dispositions: [{ comment_id: 111, disposition: 'addressed' }],
+      }),
+    );
+
+    expect(github.addPullRequestReviewThreadReply).toHaveBeenCalledTimes(1);
+    expect(recordDispositionReply).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      '111',
+      'addressed',
+    );
+  });
+
+  it('is a no-op on a second invocation for the same (comment_id, disposition)', async () => {
+    const github = makeGitHubClient({ 222: 'PRRT_thread_idem2' });
+    const sm = makeSessionManager();
+    const rs = makeReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true, github as any);
+
+    // Simulate the reply already having been posted (e.g. redelivered comment).
+    vi.mocked(hasDispositionReplyBeenPosted).mockReturnValueOnce(true);
+
+    await orch.handleDispositions(
+      makePayload({
+        dispositions: [{ comment_id: 222, disposition: 'addressed' }],
+      }),
+    );
+
+    expect(github.findThreadByCommentId).not.toHaveBeenCalled();
+    expect(github.addPullRequestReviewThreadReply).not.toHaveBeenCalled();
+    expect(github.resolveReviewThread).not.toHaveBeenCalled();
+    expect(recordDispositionReply).not.toHaveBeenCalled();
   });
 });
 

@@ -12,6 +12,7 @@ import { opsJournalApi } from '../api/opsJournal';
 import { useDispatch } from '../hooks/useDispatch';
 import { projectsApi } from '../api/projects';
 import { sortByPriority } from '../utils/taskSort';
+import { bareTaskId } from '../utils/taskId';
 import styles from './TaskList.module.css';
 
 interface Props {
@@ -64,10 +65,60 @@ const GROUP_LABELS: Record<DisplayStatus, string> = {
 // /ops/launch's worklist.executable filter (the frontend can't see Mode to exclude them).
 const OPS_TASK_TYPES = ['🔧 Operational', '🔎 Investigation', '🧪 Testing'];
 
-/** An ops intent with no task IDs has nothing to stage/apply — not actionable. */
-function opsIntentHasTasks(intent: StagedIntent): boolean {
-  const payload = intent.payload as { taskIds?: unknown } | null | undefined;
-  return Array.isArray(payload?.taskIds) && payload.taskIds.length > 0;
+// Task types eligible for the Design(N) checkbox — Ready/In Progress 📐 Design and
+// 📋 Planning tasks. Backlog tasks of these types remain groomable instead (they
+// need promotion to Ready first).
+const DESIGN_TASK_TYPES = ['📐 Design', '📋 Planning'];
+
+/**
+ * Reconciles a Groom(N)/Ops(N)/Design(N) launch response against the tasks the
+ * operator selected, producing operator-facing messages:
+ * - deferred: waiting on dependencies (unchanged from before failed[] existed).
+ * - failed: the launcher attempted dispatch and it failed — names the reason
+ *   (e.g. a saturated planning pool) rather than a generic "did not launch".
+ * - not accounted for at all (e.g. dropped by a server-side eligibility
+ *   filter before the launcher ever saw them) — falls back to a generic
+ *   "not executable" message, since the API has no reason to report here.
+ */
+function formatLaunchMessages(
+  selectedIds: string[],
+  result: {
+    launched: string[];
+    deferred: string[];
+    failed?: { taskId: string; reason: string }[];
+  },
+  notExecutableLabel: string,
+): string | null {
+  const launchedIds = new Set(result.launched.map(bareTaskId));
+  const deferredIds = new Set(result.deferred.map(bareTaskId));
+  const failed = result.failed ?? [];
+  const failedIds = new Set(failed.map((f) => bareTaskId(f.taskId)));
+  const deferred = selectedIds.filter((id) => deferredIds.has(bareTaskId(id)));
+  const notAccountedFor = selectedIds.filter(
+    (id) =>
+      !launchedIds.has(bareTaskId(id)) &&
+      !deferredIds.has(bareTaskId(id)) &&
+      !failedIds.has(bareTaskId(id)),
+  );
+
+  const messages: string[] = [];
+  if (deferred.length > 0) {
+    messages.push(
+      `${deferred.length} selected task${deferred.length === 1 ? '' : 's'} waiting on dependencies — will launch when unblocked: ${deferred.join(', ')}`,
+    );
+  }
+  if (failed.length > 0) {
+    const details = failed.map((f) => `${f.taskId} (${f.reason})`).join(', ');
+    messages.push(
+      `${failed.length} selected task${failed.length === 1 ? '' : 's'} failed to launch: ${details}`,
+    );
+  }
+  if (notAccountedFor.length > 0) {
+    messages.push(
+      `${notAccountedFor.length} selected task${notAccountedFor.length === 1 ? '' : 's'} did not launch (${notExecutableLabel}): ${notAccountedFor.join(', ')}`,
+    );
+  }
+  return messages.length > 0 ? messages.join(' ') : null;
 }
 
 /** Group tasks by wave number, returning a map of wave → sorted tasks. */
@@ -276,18 +327,20 @@ export function TaskList({
   const [groomCheckedIds, setGroomCheckedIds] = useState<Set<string>>(
     new Set(),
   );
-  // No-op launch placeholder — real groom-session staging lands with the launch mechanism.
-  const [groomStubIntent, setGroomStubIntent] = useState<StagedIntent | null>(
-    null,
-  );
+  const [groomLoading, setGroomLoading] = useState(false);
+  const [groomError, setGroomError] = useState<string | null>(null);
   // Ops(N): launches one individual, dependency-ordered session per selected
-  // task (mirrors the manual-UI launch path), then renders the ops_journal
-  // rows for the launched set. Apply/reject of the resulting staged intents
-  // is a separate, later surface.
-  const [opsIntent, setOpsIntent] = useState<StagedIntent | null>(null);
+  // task (mirrors the manual-UI launch path).
   const [opsLoading, setOpsLoading] = useState(false);
   const [opsError, setOpsError] = useState<string | null>(null);
   const [opsCheckedIds, setOpsCheckedIds] = useState<Set<string>>(new Set());
+  // Design(N): mirrors Ops(N) — launches one individual design/planning session
+  // per selected task via the same unified planning-launch route.
+  const [designLoading, setDesignLoading] = useState(false);
+  const [designError, setDesignError] = useState<string | null>(null);
+  const [designCheckedIds, setDesignCheckedIds] = useState<Set<string>>(
+    new Set(),
+  );
   // Cross-milestone move: the shared staged-intent display renders whichever
   // task.move intent was most recently staged from a TaskCard on this board.
   const [moveIntent, setMoveIntent] = useState<StagedIntent | null>(null);
@@ -295,10 +348,11 @@ export function TaskList({
   // Reset the shared staged-intent display when the active milestone/project
   // changes so a stale intent from the previous board never carries over.
   useEffect(() => {
-    setGroomStubIntent(null);
-    setOpsIntent(null);
+    setGroomError(null);
     setOpsError(null);
     setOpsCheckedIds(new Set());
+    setDesignError(null);
+    setDesignCheckedIds(new Set());
     setMoveIntent(null);
   }, [activeProjectId, boardId]);
 
@@ -509,32 +563,61 @@ export function TaskList({
     setGroomCheckedIds(new Set(groomableTasks.map((t) => t.taskId)));
   }
 
-  // No-op launch: stub a StagedIntent client-side so the right panel can preview the
-  // future groom-session surface. No groom-load call, no command-layer write.
-  function handleGroomLaunch() {
+  // Launches one individual grooming session per selected Backlog task via the
+  // unified planning-launch route, mirroring handleOpsLaunch.
+  async function handleGroomLaunch() {
     const selectedIds = groomableTasks
       .filter((t) => groomCheckedIds.has(t.taskId))
       .map((t) => t.taskId);
-    if (selectedIds.length === 0) return;
-    setGroomStubIntent({
-      id: 'groom-stub',
-      kind: 'groom',
-      payload: {
-        placeholder: true,
-        taskIds: selectedIds,
-        message: 'Grooming session staging is not yet wired up.',
-      },
-      projectId: activeProjectId ?? '',
-      createdAt: 0,
-    });
+    if (!activeProjectId || !boardId || selectedIds.length === 0) return;
+    setGroomLoading(true);
+    setGroomError(null);
+    try {
+      const result = await opsJournalApi.launch(
+        'groom',
+        activeProjectId,
+        boardId,
+        selectedIds,
+      );
+      setGroomError(formatLaunchMessages(selectedIds, result, 'not groomable'));
+      setGroomCheckedIds(new Set());
+    } catch (err) {
+      setGroomError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to launch grooming sessions',
+      );
+    } finally {
+      setGroomLoading(false);
+    }
   }
 
-  // Ops(N) checkbox eligibility: every not-Done 🔧/🔎/observational-🧪 task on the board.
-  // Type-based only — the frontend can't see Mode, so an authoring-Testing task also
-  // renders a checkbox here; /ops/launch drops it server-side and handleOpsLaunch
-  // surfaces the gap via the launched[] reconciliation below.
+  // A dep-blocked ops task (its dependency isn't ✅ Done + deployed, per the
+  // backend's opsLoad.ts classification) would otherwise render a selectable
+  // checkbox here, get selected, and then be silently dropped by
+  // /ops/launch's worklist.executable filter. Surface it as disabled +
+  // reasoned instead — see opsDepBlocked/opsDepBlockedReason on TaskView.
+  function isOpsDepBlocked(t: TaskView): boolean {
+    return (
+      OPS_TASK_TYPES.includes(t.taskType) &&
+      (t.displayStatus === 'ready' || t.displayStatus === 'in_progress') &&
+      !!t.opsDepBlocked
+    );
+  }
+
+  // Ops(N) checkbox eligibility: mirrors the backend's executable predicate
+  // (opsLoad.ts) — only 🗂️ Ready / 🔄 In Progress 🔧/🔎/observational-🧪 tasks are
+  // launchable. Type-based only — the frontend can't see Mode, so an
+  // authoring-Testing task also renders a checkbox here; /ops/launch drops it
+  // server-side and handleOpsLaunch surfaces the gap via the launched[]
+  // reconciliation below. Backlog ops-type tasks fall through to the Groom
+  // checkbox instead (see groomableTasks above).
   function isOpsEligible(t: TaskView): boolean {
-    return OPS_TASK_TYPES.includes(t.taskType) && t.displayStatus !== 'done';
+    return (
+      OPS_TASK_TYPES.includes(t.taskType) &&
+      (t.displayStatus === 'ready' || t.displayStatus === 'in_progress') &&
+      !isOpsDepBlocked(t)
+    );
   }
   const opsEligibleTasks = tasks.filter(isOpsEligible);
   const opsSelectedCount = opsEligibleTasks.filter((t) =>
@@ -566,32 +649,18 @@ export function TaskList({
     const selectedIds = opsEligibleTasks
       .filter((t) => opsCheckedIds.has(t.taskId))
       .map((t) => t.taskId);
-    if (!boardId || selectedIds.length === 0) return;
+    if (!activeProjectId || !boardId || selectedIds.length === 0) return;
     setOpsLoading(true);
     setOpsError(null);
     try {
-      const result = await opsJournalApi.launch(boardId, selectedIds);
-      const launchedIds = new Set(result.launched);
-      const entries = await opsJournalApi.listForMilestone(boardId);
-      const rows = entries.filter((e) => launchedIds.has(e.taskId));
-      // An ops intent with no launched task IDs has nothing to stage/apply —
-      // don't render it as an actionable panel.
-      setOpsIntent(
-        result.launched.length > 0
-          ? {
-              id: 'ops-stub',
-              kind: 'ops',
-              payload: { taskIds: result.launched, rows },
-              projectId: activeProjectId ?? '',
-              createdAt: 0,
-            }
-          : null,
+      const result = await opsJournalApi.launch(
+        'ops',
+        activeProjectId,
+        boardId,
+        selectedIds,
       );
-      const notLaunched = selectedIds.filter((id) => !launchedIds.has(id));
       setOpsError(
-        notLaunched.length > 0
-          ? `${notLaunched.length} selected task${notLaunched.length === 1 ? '' : 's'} did not launch (not ops-executable): ${notLaunched.join(', ')}`
-          : null,
+        formatLaunchMessages(selectedIds, result, 'not ops-executable'),
       );
       setOpsCheckedIds(new Set());
     } catch (err) {
@@ -600,6 +669,79 @@ export function TaskList({
       );
     } finally {
       setOpsLoading(false);
+    }
+  }
+
+  // Design(N) checkbox eligibility: Ready/In Progress 📐 Design and 📋 Planning
+  // tasks. Backlog tasks of these types fall through to the Groom checkbox
+  // instead (see groomableTasks above).
+  function isDesignEligible(t: TaskView): boolean {
+    return (
+      DESIGN_TASK_TYPES.includes(t.taskType) &&
+      (t.displayStatus === 'ready' || t.displayStatus === 'in_progress')
+    );
+  }
+  const designEligibleTasks = tasks.filter(isDesignEligible);
+  const designSelectedCount = designEligibleTasks.filter((t) =>
+    designCheckedIds.has(t.taskId),
+  ).length;
+
+  function toggleDesignCheck(taskId: string, checked: boolean) {
+    setDesignCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(taskId);
+      else next.delete(taskId);
+      return next;
+    });
+  }
+
+  function handleDesignSelectAll() {
+    setDesignCheckedIds(new Set(designEligibleTasks.map((t) => t.taskId)));
+  }
+
+  function handleDesignClearSelection() {
+    setDesignCheckedIds(new Set());
+  }
+
+  // Shared Select All / Clear for the NON-CODE panel — selects each eligible
+  // task into its own bucket (Ops/Design types never overlap, so there's no
+  // precedence to resolve here); the two launch buttons stay separate.
+  function handleNonCodeSelectAll() {
+    handleOpsSelectAll();
+    handleDesignSelectAll();
+  }
+
+  function handleNonCodeClearSelection() {
+    handleOpsClearSelection();
+    handleDesignClearSelection();
+  }
+
+  // Launches one individual design/planning session per checked, design-eligible
+  // task via the unified planning-launch route, mirroring handleOpsLaunch.
+  async function handleDesignLaunch() {
+    const selectedIds = designEligibleTasks
+      .filter((t) => designCheckedIds.has(t.taskId))
+      .map((t) => t.taskId);
+    if (!activeProjectId || !boardId || selectedIds.length === 0) return;
+    setDesignLoading(true);
+    setDesignError(null);
+    try {
+      const result = await opsJournalApi.launch(
+        'design',
+        activeProjectId,
+        boardId,
+        selectedIds,
+      );
+      setDesignError(
+        formatLaunchMessages(selectedIds, result, 'not design-executable'),
+      );
+      setDesignCheckedIds(new Set());
+    } catch (err) {
+      setDesignError(
+        err instanceof Error ? err.message : 'Failed to launch design sessions',
+      );
+    } finally {
+      setDesignLoading(false);
     }
   }
 
@@ -685,8 +827,14 @@ export function TaskList({
           groomableCount={groomableTasks.length}
           groomSelectedCount={groomSelectedCount}
           onGroomSelectAll={handleGroomSelectAll}
-          onGroomLaunch={handleGroomLaunch}
+          onGroomLaunch={() => void handleGroomLaunch()}
+          groomLoading={groomLoading}
         />
+        {groomError && (
+          <div className={styles.error} data-testid="groom-error">
+            {groomError}
+          </div>
+        )}
 
         {/* 📋 Non-code, by type */}
         {nonCodeNotDone.length > 0 && (
@@ -697,38 +845,66 @@ export function TaskList({
             <div className={styles.sectionHeading}>
               <span className={styles.groupLabel}>📋 Non-code</span>
               <span className={styles.groupCount}>{nonCodeNotDone.length}</span>
-              {opsEligibleTasks.length > 0 && (
+              {(opsEligibleTasks.length > 0 ||
+                designEligibleTasks.length > 0) && (
                 <div className={styles.launchControls}>
                   <button
                     className={styles.selectAllBtn}
-                    onClick={handleOpsSelectAll}
-                    disabled={opsLoading}
-                    data-testid="ops-select-all-btn"
+                    onClick={handleNonCodeSelectAll}
+                    disabled={opsLoading || designLoading}
+                    data-testid="non-code-select-all-btn"
                   >
                     Select All
                   </button>
                   <button
                     className={styles.selectAllBtn}
-                    onClick={handleOpsClearSelection}
-                    disabled={opsLoading || opsSelectedCount === 0}
-                    data-testid="ops-clear-btn"
+                    onClick={handleNonCodeClearSelection}
+                    disabled={
+                      opsLoading ||
+                      designLoading ||
+                      (opsSelectedCount === 0 && designSelectedCount === 0)
+                    }
+                    data-testid="non-code-clear-btn"
                   >
                     Clear
                   </button>
-                  <button
-                    className={styles.opsBtn}
-                    onClick={() => void handleOpsLaunch()}
-                    disabled={opsLoading || !boardId || opsSelectedCount === 0}
-                    data-testid="ops-btn"
-                  >
-                    {opsLoading ? 'Loading…' : `Ops (${opsSelectedCount})`}
-                  </button>
+                  {opsEligibleTasks.length > 0 && (
+                    <button
+                      className={styles.opsBtn}
+                      onClick={() => void handleOpsLaunch()}
+                      disabled={
+                        opsLoading || !boardId || opsSelectedCount === 0
+                      }
+                      data-testid="ops-btn"
+                    >
+                      {opsLoading ? 'Loading…' : `Ops (${opsSelectedCount})`}
+                    </button>
+                  )}
+                  {designEligibleTasks.length > 0 && (
+                    <button
+                      className={styles.opsBtn}
+                      onClick={() => void handleDesignLaunch()}
+                      disabled={
+                        designLoading || !boardId || designSelectedCount === 0
+                      }
+                      data-testid="design-btn"
+                    >
+                      {designLoading
+                        ? 'Loading…'
+                        : `Design (${designSelectedCount})`}
+                    </button>
+                  )}
                 </div>
               )}
             </div>
             {opsError && (
               <div className={styles.error} data-testid="ops-error">
                 {opsError}
+              </div>
+            )}
+            {designError && (
+              <div className={styles.error} data-testid="design-error">
+                {designError}
               </div>
             )}
             <NonCodeTypeSection
@@ -739,31 +915,10 @@ export function TaskList({
               opsCheckedIds={opsCheckedIds}
               onOpsCheckChange={toggleOpsCheck}
               isOpsEligible={isOpsEligible}
-            />
-          </div>
-        )}
-
-        {groomStubIntent && (
-          <div
-            className={styles.groomPlaceholderPanel}
-            data-testid="groom-placeholder-panel"
-          >
-            <StagedIntentPanel
-              intent={groomStubIntent}
-              onApplied={() => setGroomStubIntent(null)}
-              onRejected={() => setGroomStubIntent(null)}
-              onDismiss={() => setGroomStubIntent(null)}
-            />
-          </div>
-        )}
-
-        {opsIntent && opsIntentHasTasks(opsIntent) && (
-          <div className={styles.opsPlaceholderPanel} data-testid="ops-panel">
-            <StagedIntentPanel
-              intent={opsIntent}
-              onApplied={() => setOpsIntent(null)}
-              onRejected={() => setOpsIntent(null)}
-              onDismiss={() => setOpsIntent(null)}
+              isOpsDepBlocked={isOpsDepBlocked}
+              designCheckedIds={designCheckedIds}
+              onDesignCheckChange={toggleDesignCheck}
+              isDesignEligible={isDesignEligible}
             />
           </div>
         )}
@@ -772,7 +927,14 @@ export function TaskList({
           <div className={styles.opsPlaceholderPanel} data-testid="move-panel">
             <StagedIntentPanel
               intent={moveIntent}
-              onApplied={() => setMoveIntent(null)}
+              onApplied={() => {
+                setMoveIntent(null);
+                // A move touches two milestones' task_cache rows server-side;
+                // the WS task_cache_updated broadcast alone won't repaint this
+                // view unless it happens to be one of the affected boards, so
+                // force the same re-fetch path the Sync button uses.
+                void onForceRefetch?.();
+              }}
               onRejected={() => setMoveIntent(null)}
               onDismiss={() => setMoveIntent(null)}
             />

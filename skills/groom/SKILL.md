@@ -89,8 +89,9 @@ url}`), and `neighbourBoards` — the same shape for neighbour milestones
   `filesSection` / `rawMarkdown`, plus **already-computed** judgment seeds:
   `readinessViolations` (the shared readiness gate run ahead of time),
   `sizeCheckSeed` (`{files, loc_method}` — a deterministic size-check seed),
-  `typeCheck` (the type/content-mismatch scan), and `regions` (resolved
-  package/file scope).
+  `typeCheck` (the type/content-mismatch scan), `regions` (resolved
+  package/file scope), and its dual-read architecture (`archSource` +
+  `archUnits` — see below).
 - `codeWorklist` — per-package deduped file paths declared across target task
   bodies (object form: package path → file list).
 - `gitFreshness` — per-package freshness (`fresh` / `stale` / `missing`) vs. the
@@ -117,11 +118,36 @@ longer a live non-Done target) with the **Edit** tool. This is what makes
 **resume** mode work and is unchanged from before the cutover — only the
 _source_ of the bundle moved from a shell-out to the route.
 
-Read the context-page bodies from `contextPages[].markdown`. Also read the
-universal task-authoring standard at `config/task-writing.md` (it is not a
-Notion context page — the skill reads it from local disk). **This is
-non-negotiable**: resolving a task without the architectural constraints loaded is how
-grooming produces confidently-wrong decisions.
+Read the non-architecture context-page bodies from `contextPages[].markdown`
+(project context, product design doc, dev setup, future scope — always
+populated, regardless of `archSource`). Also read the universal
+task-authoring standard at `config/task-writing.md` (it is not a Notion
+context page — the skill reads it from local disk).
+
+Read each target task's architecture from `targetTasks[].archUnits`, dual-read
+per `archSource`:
+- `archSource: 'notion'` — the milestone's fixed Notion architecture pages
+  (Technical Architecture, Coding Guidelines), each `{id, title}` here and its
+  body available via `contextPages[].markdown`.
+- `archSource: 'store'` — `archUnits[]` carries region-intersected arch_unit
+  store units (plus every active invariant), each already `{id, title, body}`
+  — the body is inlined directly in the bundle, no extra fetch needed. If a
+  unit's `body` is ever absent, dereference it with the
+  `mcp__orchestrator__architecture_getUnit` tool (`{id}`), or broaden the
+  selection with `mcp__orchestrator__architecture_queryUnits`.
+
+**This is non-negotiable**: resolving a task without the architectural
+constraints loaded is how grooming produces confidently-wrong decisions.
+
+**Disposition the constraints — don't just "read the pages."** The loader surfaces each
+task's **binding constraints** (`targetTasks[].bindingConstraints` — the
+`CONSTRAINT_CATALOG × regions` intersection). Before a task can promote, **disposition
+every one** of its binding constraints as one of `complies` / `n-a` (+ a mandatory
+`why`) / `conflict→route` (naming the routed 📐 Design task) — recorded in
+`grooming-state.json` as `constraints_dispositioned` and re-derived + enforced
+server-side (`groomGate.ts`, FM1). The mandatory architecture read **is** the
+disposition, not a page-turn: a constraint you didn't disposition is a constraint you
+didn't check.
 
 ---
 
@@ -189,6 +215,20 @@ Follow `reference/presentation.md`. In short:
 - End the batch with: _"Any changes or questions before I mark these Ready and continue?"_
 - **One batch at a time. Never present the next before the current is signed off.**
 
+**Presentation is type-dependent — a mixed milestone runs both flows:**
+
+- **💻 Code (auto-dispatched)** → the per-batch, per-task flow above: each task gets
+  its 4-point summary and its own human decision (a wrong Ready launches an
+  unattended worktree, so the stakes demand it).
+- **📐 Design / 📋 Planning (interactive, picked up by `/design`)** →
+  **approve-by-standard**: present **ONE consolidated triage**, not per-item asks —
+  a **clean** list (names-only), **blocked** rows (+ the blocking dep), and
+  **needs-attention** rows (+ the reason). The human engages **only** the
+  needs-attention + blocked rows; **the clean set promotes by default (visible +
+  veto-able)** — no per-item or bulk positive stamp. The clean-verdict standard, its
+  taxonomy, and the deterministic floor that can only ever downgrade a proposed
+  clean verdict live in `reference/presentation.md` § Consolidated triage.
+
 ---
 
 ## Step 3 — Incorporate feedback (one item at a time)
@@ -217,25 +257,52 @@ Only after explicit sign-off on the batch (_"looks good"_, _"ship it"_, _"next"_
 1. **First**, record the sign-off in `grooming-state.json` for each task **in that
    batch**: fill `achieves`, `open_questions`, `tests`, `manual`, confirm `regions`,
    fill `hard_block_deps` (see `presentation.md` § Dependencies for the hard-block
-   vs soft-order distinction), fill `size_check` (an object recording the size
-   classification — see `presentation.md` § Size check — one of: `{ "loc": <number>,
-"decision": "no_split" }` for ≤500 LoC tasks, `{ "loc": <number>, "decision":
-"split_now", "split_into": ["<task-id>", …] }` after splitting, `{ "loc":
-<number>, "decision": "unsplittable", "reason": "<one-line>" }` for the atomic
-   case, or `{ "decision": "n/a" }` for Design/Planning tasks), run **Gate accretion**
-   and **Seed accretion** below for 💻 Code / 🛠️ Tooling tasks, and set
-   `signoff: { "by": "<human>", "at": "<iso>" }`. _(`signoff`, `hard_block_deps`, and
-   `size_check` are gated by the promotion hook and must be written in
-   `grooming-state.json` **before** the status flip, or the gate blocks the update.
-   `gate_contribution` / `seed_contribution` are no longer local `grooming-state.json`
-   fields — the accretion calls below write their durable record straight to the
-   gate/seed DB store, keyed by this task's id.)_
+   vs soft-order distinction), fill `size_check` (the size classification — see
+   `presentation.md` § Size check — shape `{ loc, loc_method, files, decision,
+   split_into?, reason? }`, where `decision` is one of: `"no_split"` (≤500 LoC —
+   proceed), `"split_now"` with `split_into: ["<task-id>", …]` (over the threshold and
+   splittable — you **nominate** the split; the orchestrator confirms and routes it to
+   a dedicated session, see § Size check), `"unsplittable"` with `reason: "<one-line>"`
+   (over the threshold but must land atomically), or `{ "decision": "n/a" }` for
+   Design/Planning tasks) and `type_check` (the present-and-dispositioned
+   type/content-mismatch scan — advisory, never a hard block on its own), determine the
+   **Gate accretion** and **Seed accretion** content below for 💻 Code
+   tasks (write it into the entry as `gate_contribution` / `seed_contribution` —
+   these are transient staging fields the flip command below reads and submits;
+   the durable record is still the gate/seed DB marker the flip call writes, keyed
+   by this task's id), and set `signoff: { "by": "<human>", "at": "<iso>" }`.
+   _(`signoff`, `hard_block_deps`, and `size_check` are gated by the promotion hook
+   and must be written in `grooming-state.json` **before** the status flip, or the
+   gate blocks the update.)_
 
-**Gate accretion (💻 Code / 🛠️ Tooling tasks):** Before flipping to Ready, mint the
-task's stripped runtime/launch-and-observe items onto the milestone gate store. Read
-the task body's `### 👁️ Manual verification` section — these are the items the task
-spec says are _"Covered by the Manual Verification Gate."_ Call the accretion route
-through the vendored client, **never** a `task.updateBody` body-append:
+**One-shot Ready-flip:** once the entry above is complete, promote the task with a
+single call — no task id (or dependency id) is ever hand-typed on the command line,
+every id is resolved from the entry itself:
+
+```bash
+node ~/.claude/scripts/groom-flip-client.mjs .skill-cache/grooming/<M>/grooming-state.json <taskId>
+```
+
+This posts the whole entry to the backend's `POST /api/groom/flip` route
+(`packages/backend/src/routes/groomFlip.ts`, `TaskWriteCommands.flipToReady`), which
+runs gate accretion + seed accretion + `setDependsOn` + `setStatus(Ready)` as one
+transaction — the same order and the same `groomingGate` / dependsOn-before-Ready
+invariants as the per-call path below, but rolling back any accretion already
+committed if a later step fails, so a failed flip never leaves an orphan gate/seed
+item or a wrong status. This **replaces** the six separate calls (gate accrete, seed
+accrete, stage + apply `setDependsOn`, stage + apply `setStatus`) described next —
+read the per-call breakdown when you need to understand or troubleshoot what the
+one-shot command does, or when the discrete staged-intent surface is needed for
+something the one-shot command doesn't cover (e.g. reviewing a staged write before
+applying it).
+
+**Gate accretion (💻 Code tasks):** Before flipping to Ready, mint the
+task's stripped runtime/launch-and-observe items onto the milestone gate store. The
+accretion source is the task body's pre-groom `### 👁️ Manual verification` section,
+when present — a Code task author writes it only when there are real runtime items to
+list, so read whatever the section actually contains (never boilerplate — that
+convention is retired). Call the accretion route through the vendored client, **never**
+a `task.updateBody` body-append for the accretion itself:
 
 ```bash
 node ~/.claude/scripts/gate-state-client.mjs accrete \
@@ -254,7 +321,14 @@ the durable record; nothing further needs writing to `grooming-state.json`.
 
 Confirm the accretion in chat before the Ready-flip.
 
-**Seed accretion (💻 Code / 🛠️ Tooling tasks):** The operational twin of Gate accretion.
+Once accreted, if the task body still carries a `### 👁️ Manual verification`
+section, stage a `task.updateBody` that **removes it from the body entirely** —
+never leave it behind and never replace it with boilerplate (`Covered by the
+Manual Verification Gate.`). A post-groom 💻 Code task carries no manual-verification
+section at all; runtime/manual verification for it is owned by the gate from that
+point on, and its absence in the body is the correct post-groom state, not a gap.
+
+**Seed accretion (💻 Code tasks):** The operational twin of Gate accretion.
 Before flipping to Ready, mint the task's operational data/config seed — a prod-data
 row/flag/default deliberately kept **out** of its auto-dispatched PR (e.g. an
 `analyzer_configs` row, config-category defaults, alias/cohort flags) — onto the
@@ -285,7 +359,8 @@ Confirm the accretion in chat before the Ready-flip.
    use (`POST /api/staged-intents`, authenticated by
    `$ORCHESTRATOR_DEVICE_TOKEN` — **not** the stage-only
    `ORCHESTRATOR_STAGE_TOKEN` transport, which is reserved for unattended
-   orchestrator-launched worktree sessions, see `stage-task-intent.mjs`).
+   orchestrator-launched worktree sessions staging through the orchestrator
+   MCP tool surface).
    After conversational sign-off in this session, apply each staged intent
    with `node ~/.claude/scripts/staged-intents-client.mjs apply <intentId>`
    (`POST /api/staged-intents/:id/apply`) — the readiness/groomGate guards
@@ -318,8 +393,31 @@ Confirm the accretion in chat before the Ready-flip.
 3. Confirm in chat what was staged (Ready flip **and** `Depends On` value) for
    each task, and that it is now waiting for human apply. Then present the next batch.
 
+### Approve-by-standard (interactive 📐 Design / 📋 Planning types)
+
+The numbered flow above is the per-task **💻 Code** path. **Interactive types promote by
+standard, not per item.** After the consolidated triage (Step 2), the human engages only
+the needs-attention + blocked rows; every task left in the **clean** set promotes by
+default (visible + veto-able) — you do **not** collect a per-item positive stamp.
+
+- **Record a `triage` verdict** per interactive task in `grooming-state.json` — one of
+  `clean` / `blocked` / `needs-attention` — alongside `constraints_dispositioned` (see
+  Step 1 § constraint disposition). The flip client carries `triage` in `groomingGate`;
+  the server re-derives the **deterministic floor** and can only ever **downgrade** a
+  proposed `clean` (a hard-block dep not ✅ Done → `blocked`; no `## Open Questions`
+  heading → `needs-attention`; a routed constraint-conflict → `needs-attention`). It
+  never upgrades a judged `blocked` / `needs-attention` back to `clean`.
+- **The `readiness_override` reason is auto-applied — never hand-typed.** For a 📐 Design
+  task promoted clean, the backend supplies the standard template reason (_"Design task —
+  open questions are the /design worklist, resolved at execution; triaged clean in the
+  `<milestone>` consolidated Design triage"_); you record the clean `triage` verdict, not
+  the reason string.
+- **`size_check` is `{"decision": "n/a"}`** for Design/Planning, and gate/seed accretion
+  does not apply (those are 💻 Code artifacts). Per-task disposition records + audited
+  applies are preserved — the ceremony removed is only the per-item *positive stamp*.
+
 **Gates last**: the milestone's **🚦 Gate** task is the final batch, after all code
-tasks are signed off. Accretion happens incrementally — as each 💻 Code / 🛠️ Tooling
+tasks are signed off. Accretion happens incrementally — as each 💻 Code
 task is promoted (Gate accretion above), its stripped items are minted onto the
 milestone gate store via the accretion route, not appended to the Gate task body. The
 final Gate batch confirms readiness (`node ~/.claude/scripts/gate-state-client.mjs
@@ -340,6 +438,12 @@ off, confirm the milestone board is fully groomed.
 
 ## Rules (hard)
 
+See `../_shared/reference/hard-rules.md` for the planning-procedure core this
+skill shares with `/design` and `/ops` (deterministic load, the human as the
+gate, no silent writes, `git -C` not `cd`, and cache/state files via the
+Edit/Write tool) — canonical source
+`packages/backend/src/planning/procedureCore.ts`. Grooming-specific rules:
+
 - **Source of truth**: Notion for architectural rules, decisions, and task
   definitions. For _implemented_ detail (DDL, signatures, analyzer specs), the code
   under `source_root` wins; on intent/rationale, Notion wins.
@@ -347,34 +451,52 @@ off, confirm the milestone board is fully groomed.
   a dependency issue is explicitly identified and the human approves it.
 - **Never** mark a ✅ Done or ⏭️ Deferred task Ready. **Never** retroactively edit any
   **ordinary** task already at 🗂️ Ready or beyond — file a sibling instead. A Ready task
-  may be in-flight: auto-dispatched if 💻 Code, human-run if 🛠️ Tooling / 🧪 Testing —
-  editing it races a live session. This holds for every ordinary type, **without
+  may be in-flight: auto-dispatched if 💻 Code, human-run if 🔧 Operational /
+  🔎 Investigation / 🧪 Testing — editing it races a live session. This holds for every ordinary type, **without
   exception**. The **🚦 Gate** is the lone non-ordinary task: an accumulator that, by its
   type's definition, accretes manual-verification items while sitting at Ready —
   appending to it is its lifecycle, not a modify-a-Ready-task exception.
-- **No silent writes.** Every change is staged through `staged-intents-client.mjs` and
-  confirmed in chat before moving on — never a direct `notion-update-page` call.
-- **Cache/state files are edited with the Edit/Write tool, never a shell script.**
-  `grooming-state.json` / `code-map.json` are loader-seeded JSON on disk — Edit them
-  (or Read + Write the whole file). Never `node _foo.cjs && rm …` or any `cd … && …`
-  shell route; that is what causes the constant permission prompts.
-- **Inspect the repo with `git -C <repo> …`, never `cd <repo> && git …`.** Grooming runs
-  from the projects-root cwd, so the repo is a subdirectory — but the `cd … && git` form
-  prompts every time (Claude Code flags any directory-change-before-git as a hook-execution
-  risk, regardless of allowlist). `git -C <repo> show/log/diff …` is allowlisted and silent.
-  Use path flags for other repo tools too (`npm --prefix`, `uv --project`), not `cd`.
+- **No silent writes** (shared rule, groom-specific mechanics): every change is
+  staged through `staged-intents-client.mjs` — never a direct `notion-update-page` call.
 - **Investigate before resolving.** Reading the code comes before deciding what's
   resolved. "Decide at implementation time" is a _defer_, not a _resolve_.
-- **The human is the promotion gate.** Even a Ready-clean task waits for sign-off.
-- **Code / Tooling tasks default to < 500 LoC estimated.** The size check is
-  **load-bearing**, not advisory — every Code/Tooling task carries an explicit
+- **Cite-or-route, never invent.** An open question that is an **architectural
+  decision** is cleared only by (a) **citing a locked decision** (an arch-page rule or
+  an already-✅-Done Design task) or (b) **routing to `/design`** — file a 📐 Design task
+  and add a hard-block `Depends On` edge to it. **Never invent the answer in-grooming.**
+  A task whose `Depends On` names a not-yet-✅-Done Design/Planning task is **not
+  promotable** (the promotion gate blocks it, FM3; for interactive types the triage
+  floor downgrades it to `blocked`).
+- **Per-task sign-off is an invariant for 💻 Code.** A batched or momentum operator
+  action ("these all look fine") **never** stands in for the per-task disposition
+  records; 💻 Code tasks are always promoted **individually**. (Interactive Design /
+  Planning types promote approve-by-standard — the *documented* batch flow, not a
+  shortcut around this invariant; see Step 4 § approve-by-standard.)
+- **The human is the promotion gate** (shared rule) — but its *granularity* is
+  type-dependent, because the stakes are. For **auto-dispatched 💻 Code**, a wrong
+  Ready launches an unattended worktree, so promotion is a **per-task human
+  decision**, taken individually — a batched/momentum action never stands in for it.
+  For **interactive 📐 Design / 📋 Planning** (which `/design` picks up, so a wrong
+  Ready is a reversible glance, not a launch), promotion is **approve-by-standard**:
+  under one consolidated triage the clean set promotes **by default (visible +
+  veto-able)** — no per-item or bulk positive stamp (see Step 2 § consolidated triage
+  and Step 4 § approve-by-standard). The gate is preserved either way; per-task
+  disposition records + audited applies are preserved either way. **Reduced ceremony
+  is not reduced rigor** — the investigation posture (arch-page reading, code
+  exploration, anchor grounding) is the sole non-server backstop once the per-item
+  decision is removed, and stays non-negotiable.
+- **Code tasks default to < 500 LoC estimated.** The size check is
+  **load-bearing**, not advisory — every Code task carries an explicit
   _Size:_ line in its presentation header, and `size_check` is a required field
-  in `grooming-state.json` that the promotion gate enforces. Larger tasks split
-  unless **demonstrably unsplittable** (see `presentation.md` § Size check).
-  **When splitting: edit the original task down to one of the new subsets and
-  create N-1 new siblings — do NOT demote the original to ⏭️ Deferred** (that
-  loses history, comments, and inbound dep refs; Deferred has a specific
-  meaning that doesn't fit splits). Design and Planning tasks are sized in
+  in `grooming-state.json` that the promotion gate enforces. The 500-LoC default
+  is a **split *threshold*, not a hard ceiling** — a task over it is nominated for
+  splitting (and a sub-500 task may split on a natural seam); there is **no hard
+  file-count ceiling**; a task that must land atomically records `"unsplittable"` +
+  `reason`. **Splitting and merging are orchestrator-driven: a grooming session
+  *nominates* a split/merge candidate (`decision: "split_now"` + `split_into`),
+  never performs it in-session — the orchestrator confirms the nomination and
+  routes the split to a dedicated session** (detect → confirm → route; see
+  `presentation.md` § Size check). Design and Planning tasks are sized in
   open-question count, not LoC; write `{"decision": "n/a"}` for them.
 - **Hard-block dependencies live in the Notion `Depends On` property, never in
   the task body.** Soft-order observations are batch-level conversation only —

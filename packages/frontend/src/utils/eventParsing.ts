@@ -42,6 +42,32 @@ export function extractText(payload: unknown, rawContent: string): string {
   return rawContent;
 }
 
+/** Extract the first tool_use block's input from a text/assistant event. */
+export function extractCallInput(textEvent: { content: string }): unknown {
+  const payload = tryParseJson(textEvent.content);
+  if (typeof payload !== 'object' || payload === null) return null;
+  const p = payload as Record<string, unknown>;
+  const msg = p.message as Record<string, unknown> | undefined;
+  const blocks = msg ? msg.content : p.content;
+  if (!Array.isArray(blocks)) return null;
+  for (const block of blocks) {
+    if (typeof block !== 'object' || block === null) continue;
+    const b = block as Record<string, unknown>;
+    if (b.type === 'tool_use') {
+      let input = b.input;
+      if (typeof input === 'string') {
+        try {
+          input = JSON.parse(input);
+        } catch {
+          /* leave as string */
+        }
+      }
+      return input;
+    }
+  }
+  return null;
+}
+
 /** Extract the command string from a Bash tool input object. */
 export function extractBashCommand(input: unknown): string | null {
   if (typeof input !== 'object' || input === null) return null;

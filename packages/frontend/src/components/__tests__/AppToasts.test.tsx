@@ -86,6 +86,7 @@ function baseStoreReturn(sessions: object[] = []) {
     incompleteReviews: [],
     dismissIncompleteReviews: vi.fn(),
     lastTaskUpdate: null,
+    lastStagedIntentChange: null,
     taskListRefreshTrigger: 0,
     lastAutofixEvent: null,
     lastReviewStartedEvent: null,

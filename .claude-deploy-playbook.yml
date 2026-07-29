@@ -1,0 +1,105 @@
+# Structured deploy playbook for the claude-orchestrator repo.
+# Read by loadDeployPlaybook() and validated against playbookSchema.ts.
+#
+# The engine runs `shell`/`validation`/`confirm-gate` steps' command_or_prompt
+# (and validation's poll_until) verbatim as shell commands — it performs no
+# variable substitution (see DeployOrchestrator.executeStep). Since this
+# playbook is per-repo (loadPlaybook.ts reads it from THIS checkout only),
+# this host's concrete paths (checkout root, /srv/orchestrator/runtime/, the
+# orchestrator.service unit, the DEPLOYED_SHA marker location) are embedded
+# directly in the steps below rather than in context.md.
+#
+# `restart`'s identity_capture runs BEFORE its own command_or_prompt: the
+# engine reads the outgoing MainPID and persists it as a deploy_run_event, so
+# `verify`'s poll_until can't green until a differing MainPID plus a healthy
+# response are both observed — otherwise verify would report the outgoing
+# process healthy while the new build is still booting (or crash-looping).
+
+steps:
+  - id: fetch
+    kind: shell
+    command_or_prompt: 'git fetch origin'
+    is_prod_mutating: false
+    supports_dry_run: true
+
+  - id: merge-dev
+    kind: shell
+    command_or_prompt: 'git merge --ff-only origin/dev'
+    is_prod_mutating: false
+    supports_dry_run: true
+    rollback_ref: fetch
+
+  - id: install-deps
+    kind: shell
+    command_or_prompt: 'npm ci'
+    is_prod_mutating: false
+    supports_dry_run: false
+    rollback_ref: merge-dev
+
+  - id: build
+    kind: shell
+    command_or_prompt: 'npm run build'
+    is_prod_mutating: false
+    supports_dry_run: false
+    rollback_ref: install-deps
+
+  - id: sync-runtime
+    kind: shell
+    command_or_prompt: "rsync -a --delete --exclude='.git/' --exclude='.claude/' --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' --exclude='.env' ./ /srv/orchestrator/runtime/"
+    is_prod_mutating: true
+    supports_dry_run: true
+    rollback_ref: build
+
+  - id: confirm-restart
+    kind: confirm-gate
+    command_or_prompt: 'operator approval to restart orchestrator.service now that the synced build is in place'
+    is_prod_mutating: false
+    rollback_ref: sync-runtime
+
+  - id: restart
+    kind: shell
+    command_or_prompt: 'sudo systemctl restart orchestrator.service'
+    identity_capture: 'systemctl show -p MainPID --value orchestrator.service'
+    is_prod_mutating: true
+    rollback_ref: sync-runtime
+
+  - id: verify
+    kind: validation
+    command_or_prompt: 'systemctl is-active --quiet orchestrator.service && curl -sf -o /dev/null http://localhost:3000/'
+    is_prod_mutating: false
+    poll_until: 'systemctl is-active --quiet orchestrator.service && curl -sf -o /dev/null http://localhost:3000/'
+    rollback_ref: restart
+
+  - id: report-in
+    kind: report-in
+    is_prod_mutating: false
+
+  - id: record-deployed-sha
+    kind: shell
+    command_or_prompt: 'git rev-parse HEAD > /srv/orchestrator/projects/config/projects/claude-orchestrator/DEPLOYED_SHA'
+    is_prod_mutating: true
+
+hazards:
+  - 'never sync or restart before build succeeds — a partial build must never reach the runtime directory'
+  - 'never overwrite .env, *.db*, .git, or .claude in the runtime directory during sync'
+  - 'never merge anything other than a fast-forward from origin/dev — a non-ff merge means the runtime is out of sync with dev and must be investigated before deploying'
+  - 'never restart without a successful sync immediately before it'
+
+failure_diagnoses:
+  - symptom: 'merge --ff-only fails'
+    cause: 'the runtime checkout has diverged from origin/dev (local commits or a prior non-ff state)'
+    action: 'stop and investigate the divergence before forcing any merge — do not force-push or reset the runtime checkout'
+
+  - symptom: 'npm ci fails'
+    cause: 'a lockfile/registry mismatch or a stale node_modules incompatible with the new lockfile'
+    action: 'inspect the npm ci error output; do not fall back to npm install as a substitute without operator confirmation'
+
+  - symptom: 'npm run build fails'
+    cause: 'a type error or build-time failure introduced by the merged changes'
+    action: 'stop the deploy — do not sync a failed build into the runtime directory'
+
+  - symptom: 'service fails health checks after restart'
+    cause: 'the new build is broken at runtime, or the restart did not pick up the synced files'
+    action: 'roll back to the prior DEPLOYED_SHA by re-running sync-runtime and restart against that sha, then re-verify'
+
+companions: []

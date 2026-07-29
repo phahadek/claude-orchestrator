@@ -90,3 +90,156 @@
 .denyButton:hover {
   background: rgba(243, 139, 168, 0.25);
 }
+
+.stateBadge {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.rationale {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.withdrawnBadge {
+  font-size: 0.7rem;
+  color: var(--ctp-yellow);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.withdrawnReason {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--ctp-yellow);
+  font-style: italic;
+}
+
+.groomProposal {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0.4rem 0;
+  font-size: 0.82rem;
+}
+
+.groomProposal dt {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.groomProposal dd {
+  margin: 0;
+}
+
+.bodyDiff {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+}
+
+.diffSection {
+  border-left: 2px solid var(--border);
+  padding-left: 8px;
+}
+
+.diffSectionHeading {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.diffAdded {
+  color: var(--ctp-green);
+  white-space: pre-wrap;
+}
+
+.diffRemoved {
+  color: var(--ctp-red);
+  text-decoration: line-through;
+  white-space: pre-wrap;
+}
+
+.diffUnchanged {
+  color: var(--text-faint);
+  white-space: pre-wrap;
+}
+
+.blockingRegister {
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  background: rgba(243, 139, 168, 0.1);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 0.8rem;
+}
+
+.advisoryRegister {
+  border: 1px solid rgba(249, 226, 175, 0.4);
+  background: rgba(249, 226, 175, 0.1);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 0.8rem;
+}
+
+.registerLabel {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.overrideBox {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.feedbackInput {
+  font-size: 0.82rem;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  resize: vertical;
+  min-height: 48px;
+}
+
+.rejectForm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.outcomeToggle {
+  display: flex;
+  gap: 6px;
+}
+
+.outcomeOption {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 4px 10px;
+}
+
+.outcomeOption:hover {
+  color: var(--text-primary);
+}
+
+.outcomeOptionActive {
+  background: rgba(243, 139, 168, 0.15);
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-red);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 4px 10px;
+}

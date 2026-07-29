@@ -20,6 +20,7 @@ import { SessionAuditor } from './SessionAuditor';
 import { NoOpInvestigator } from '../github/NoOpInvestigator';
 import type { INoOpSessionManager } from '../github/NoOpInvestigator';
 import { recordEvent } from '../audit/AuditLog';
+import { isCodeSession } from './sessionPredicates';
 
 export interface RecoverSessionOpts {
   scope: 'clean_exit' | 'boot' | 'periodic';
@@ -79,7 +80,7 @@ export async function recoverSession(
   const projectRow = getProjectRowById(projectId);
   const baseBranch = opts.baseBranch ?? projectRow?.base_branch ?? 'dev';
 
-  if (sessionType === 'standard') {
+  if (isCodeSession(sessionType)) {
     try {
       let hasDiff = false;
       let featureBranchName: string | undefined;
@@ -249,7 +250,7 @@ export async function recoverSession(
     ...(taskId && { taskId }),
   });
 
-  if (sessionType !== 'review') {
+  if (isCodeSession(sessionType)) {
     const auditor = new SessionAuditor(
       taskBackend,
       githubClient,

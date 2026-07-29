@@ -194,6 +194,23 @@ describe('squashMergeLocal — worktree model (base checked out in primary tree)
     const branches = await git(['branch', '--list'], primaryDir);
     expect(branches).not.toContain('feature/my-task');
   });
+
+  it('reconciles the primary checkout working tree/index with the advanced base ref', async () => {
+    await squashMergeLocal({
+      worktreePath: linkedDir,
+      baseBranch: 'dev',
+      featureBranch: 'feature/my-task',
+      taskName: 'my task name',
+    });
+
+    // No spurious staged deletions / drift relative to the new HEAD.
+    const status = await git(['status', '--porcelain'], primaryDir);
+    expect(status).toBe('');
+
+    // The merged file is actually present on disk, not just in the commit.
+    const content = fs.readFileSync(path.join(primaryDir, 'new.txt'), 'utf-8');
+    expect(content).toBe('feature content\n');
+  });
 });
 
 describe('squashMergeLocal — conflict path', () => {

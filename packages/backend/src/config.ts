@@ -1,6 +1,8 @@
 import { getSecret } from './security/secrets';
 import { getOrchestratorConfig } from './config/appConfig';
 import type { NonMilestoneSourceConfig } from './tasks/TaskBackend';
+import { orchestratorMcpToolName, notionMcpToolName } from './mcp/toolNaming';
+import { PLANNING_INTENT_KINDS } from './planning/planningIntentKinds';
 
 interface Board {
   /** Milestone row id — used as the milestoneId for WS fetch_tasks. */
@@ -143,6 +145,203 @@ export const ALLOWED_TOOLS = [
   'mcp__github__search_users',
   'mcp__github__update_issue',
   'mcp__github__update_pull_request_branch',
+  // Orchestrator MCP verdict-delivery tools — a standard/review session
+  // reports how it addressed a PR review comment or whether a CI/gate
+  // failure is verified-flaky through these, replacing the retired
+  // stdout-scraped `dispositions`/`verified_flaky` JSON blocks (see
+  // mcp/tools/verdictTools.ts, AgentSession.recordReviewDisposition /
+  // recordVerifiedFlakyDisposition).
+  orchestratorMcpToolName('health'),
+  orchestratorMcpToolName('review.disposition'),
+  orchestratorMcpToolName('flaky.confirm'),
+];
+
+// Read-only Bash subset shared by planning sessions (groom/design/ops) — no
+// mutating commands (git commit/push/checkout/etc, rm, write redirects) and
+// no PR/github MCP or Notion-write MCP tools.
+const PLANNING_READONLY_BASH_TOOLS = [
+  'Bash(cd:*)',
+  'Bash(which:*)',
+  'Bash(where:*)',
+  'Bash(ls:*)',
+  'Bash(cat:*)',
+  'Bash(echo:*)',
+  'Bash(head:*)',
+  'Bash(tail:*)',
+  'Bash(wc:*)',
+  'Bash(find:*)',
+  'Bash(grep:*)',
+  'Bash(sort:*)',
+  'Bash(pwd:*)',
+];
+
+// Read-only Notion MCP tool names, exactly as the registered `notion` server
+// (mcp/notionMcpServer.ts) exposes them — search/fetch/get/query verbs only,
+// never create/update/move/delete (a Notion integration token grants write;
+// the allow-list boundary here is a permission boundary, not a credential
+// boundary). Derived through notionMcpToolName so the exposed prefix can
+// never drift from the server key it's registered under (see toolNaming.ts).
+// Only merged into a session's allow-list for Notion-task-source projects
+// (see orchestrator-config.ts#getSessionAllowedTools) — a Jira/GitHub/YAML
+// project gets no Notion server and no Notion entries here.
+export const NOTION_READ_MCP_TOOLS = [
+  'API-post-search',
+  'API-retrieve-page-markdown',
+  'API-retrieve-a-comment',
+  'API-get-users',
+  'API-get-user',
+  'API-get-self',
+  'API-retrieve-a-page',
+  'API-retrieve-a-page-property',
+  'API-retrieve-a-block',
+  'API-get-block-children',
+  'API-query-data-source',
+  'API-retrieve-a-data-source',
+  'API-retrieve-a-database',
+  'API-list-data-source-templates',
+].map(notionMcpToolName);
+
+// Orchestrator MCP handshake tool — every session type that holds a stage
+// credential gets this (see mcp/orchestratorMcpServer.ts).
+const ORCHESTRATOR_MCP_HEALTH_TOOL = orchestratorMcpToolName('health');
+
+// Orchestrator MCP stage-proposal tools, one per staged-intent kind each
+// planning workflow is allowed to stage — derived directly from
+// PLANNING_INTENT_KINDS (planning/planningIntentKinds.ts), the single source
+// of truth shared with procedureAssembler.ts's injected prompt, so this
+// allow-list and the prompt's "DO stage as a `<kind>` intent" instructions
+// cannot drift apart (see planningIntentKindsParity.test.ts for the guard).
+// Supersedes the retired 'Bash(node:*)' + stage-task-intent.mjs.
+// Plus groom.precheck — the read-only Ready-flip-payload precheck
+// (mcp/tools/groomPrecheckTool.ts). Not a staged-intent kind (it stages
+// nothing — see the tool's doc comment), so it isn't in
+// PLANNING_INTENT_KINDS.groom — added here explicitly, mirroring how
+// gate.verify is added to OPS_MCP_TOOLS below.
+// architecture.getUnit / architecture.queryUnits — the read-only arch_unit
+// store surface (mcp/tools/architectureReadTools.ts), always-on for
+// groom/design/ops (see that module's doc comment). Not a staged-intent
+// kind, so it isn't in PLANNING_INTENT_KINDS — added here explicitly,
+// mirroring groom.precheck.
+const ARCHITECTURE_READ_MCP_TOOLS = [
+  orchestratorMcpToolName('architecture.getUnit'),
+  orchestratorMcpToolName('architecture.queryUnits'),
+];
+
+const GROOM_MCP_TOOLS = [
+  ORCHESTRATOR_MCP_HEALTH_TOOL,
+  ...PLANNING_INTENT_KINDS.groom.map(orchestratorMcpToolName),
+  orchestratorMcpToolName('groom.precheck'),
+  ...ARCHITECTURE_READ_MCP_TOOLS,
+];
+
+// Plus completeness.disposition / completeness.traceCoverage — the /design
+// completeness safeguard's tool surface (mcp/tools/completenessTools.ts).
+// completeness.traceCoverage is a direct advisory read, never staged.
+// completeness.disposition durably writes the critic's findings immediately
+// (disposition-don't-drop) and additionally stages a completeness.disposition
+// StagedIntent for operator approval — but it's registered via its own
+// bespoke tool (not the generic one-tool-per-PLANNING_INTENT_KINDS-entry
+// mechanism in stageProposalTools.ts), since it must always durably write
+// first, so it isn't in PLANNING_INTENT_KINDS.design — added here explicitly,
+// mirroring how gate.verify is added to OPS_MCP_TOOLS below. See
+// routes/stagedIntents.ts's KNOWN_INTENT_KINDS for the registry it does
+// belong to (approve/reject/the completeness-approval gate).
+const DESIGN_MCP_TOOLS = [
+  ORCHESTRATOR_MCP_HEALTH_TOOL,
+  ...PLANNING_INTENT_KINDS.design.map(orchestratorMcpToolName),
+  orchestratorMcpToolName('completeness.disposition'),
+  orchestratorMcpToolName('completeness.traceCoverage'),
+  ...ARCHITECTURE_READ_MCP_TOOLS,
+];
+
+// Plus gate.verify — a gate-item-verification session is sessionType 'ops'
+// (see sessionPredicates.ts#isGateVerifySession) and reports its finding
+// through this same verdict-delivery tool (mcp/tools/verdictTools.ts),
+// replacing the retired stdout-scraped `gate_verify` JSON block. gate.verify
+// is not a staged-intent kind (it's a direct verdict call, not something a
+// procedure stages), so it isn't in PLANNING_INTENT_KINDS.ops — it's added
+// here explicitly instead.
+const OPS_MCP_TOOLS = [
+  ORCHESTRATOR_MCP_HEALTH_TOOL,
+  ...PLANNING_INTENT_KINDS.ops.map(orchestratorMcpToolName),
+  orchestratorMcpToolName('gate.verify'),
+  ...ARCHITECTURE_READ_MCP_TOOLS,
+];
+
+/**
+ * Dispatched planning sessions (groom/design/ops) are one-shot turns that end
+ * and park idle, re-driven only by an operator disposition. Any built-in
+ * that grants a scheduling or re-entry path the orchestrator doesn't own —
+ * self-scheduled wakeups, cron management — must be explicitly disallowed
+ * here (--allowed-tools omission alone doesn't gate CLI built-ins), same as
+ * Skill/Write/Edit.
+ */
+export const PLANNING_DISALLOWED_TOOLS = [
+  'Skill',
+  'Write',
+  'Edit',
+  'ScheduleWakeup',
+  'CronCreate',
+  'CronDelete',
+  'CronList',
+];
+
+/**
+ * groom session tool set: deterministic backlog grooming — stage-only/read-only.
+ * The orchestrator MCP stage-proposal tools + light read-only code tools.
+ * Excludes Write/Edit, git-mutation, PR/github MCP, and Notion-write MCP.
+ * NOTION_READ_MCP_TOOLS is merged in separately, only for Notion-task-source
+ * projects (see orchestrator-config.ts#getSessionAllowedTools) — this base
+ * constant stays task-source-agnostic.
+ */
+export const GROOM_ALLOWED_TOOLS = [
+  ...PLANNING_READONLY_BASH_TOOLS,
+  ...GROOM_MCP_TOOLS,
+];
+
+/**
+ * design session tool set: investigative planning — everything groom has,
+ * plus read-only git inspection for reviewing the existing codebase.
+ * Excludes Write/Edit, git-mutation, PR/github MCP, and Notion-write MCP.
+ */
+export const DESIGN_ALLOWED_TOOLS = [
+  ...PLANNING_READONLY_BASH_TOOLS,
+  ...DESIGN_MCP_TOOLS,
+  'Bash(git log:*)',
+  'Bash(git diff:*)',
+  'Bash(git show:*)',
+  'Bash(git status:*)',
+  'Bash(git blame:*)',
+  'Bash(git ls-files:*)',
+  'Bash(git rev-parse:*)',
+  'Bash(git branch --list:*)',
+];
+
+/**
+ * ops session base tool set: read + stage + the safe live-data/audited-read
+ * surface — same read-only git inspection as design, plus the per-project
+ * audited MCP/read-endpoint tools merged in separately from
+ * .claude-orchestrator.yml (see getSessionAllowedTools). No prod-mutating
+ * tool is ever in this base; write capability is earned per-session via
+ * grant-on-re-dispatch, not by widening this constant.
+ * 'Bash(node ~/.claude/scripts/read-session-record.mjs:*)' is scoped to that
+ * one vendored client — the granted-capability read it authenticates
+ * (`read:session-record:<id>`) isn't tool-shaped so it never widens the CLI
+ * allowlist itself (see orchestrator-config.ts#isToolShapedCapability); the
+ * session still needs Bash access to invoke the script.
+ */
+export const OPS_ALLOWED_TOOLS = [
+  ...PLANNING_READONLY_BASH_TOOLS,
+  ...OPS_MCP_TOOLS,
+  'Bash(node ~/.claude/scripts/read-session-record.mjs:*)',
+  'Bash(git log:*)',
+  'Bash(git diff:*)',
+  'Bash(git show:*)',
+  'Bash(git status:*)',
+  'Bash(git blame:*)',
+  'Bash(git ls-files:*)',
+  'Bash(git rev-parse:*)',
+  'Bash(git branch --list:*)',
 ];
 
 function hydrateProject(p: {
@@ -287,12 +486,28 @@ export interface RuntimeSettings {
   large_task_model: string;
   /** Reasoning effort for large-task/escalation spawns; empty string = model default. */
   large_task_effort: string;
+  /** Model used for groom/design planning sessions; empty string = model default. */
+  planning_session_model: string;
+  /** Reasoning effort for planning sessions passed via --effort; empty string = model default. */
+  planning_session_effort: string;
+  /** Model used for ops sessions; empty string = model default. */
+  ops_session_model: string;
+  /** Reasoning effort for ops sessions passed via --effort; empty string = model default. */
+  ops_session_effort: string;
+  /**
+   * Shared concurrency cap across all planning session types (groom/design/ops).
+   * One pool, not per-type caps — they compete for the same operator review
+   * attention.
+   */
+  max_concurrent_planning_sessions: number;
   /** TaskCacheRefresher: how often (ms) to refresh per-project board caches in background. */
   task_cache_refresh_interval_ms: number;
   /** GateReconciler: built but not activated by default (no-coexistence rule) — off until an operator opts in. */
   gate_verification_enabled: boolean;
   /** GateReconciler: interval in milliseconds between reconcile ticks. */
   gate_verification_interval_ms: number;
+  /** Model used by the Tier-3 semantic readiness advisory (paraphrased-deferral) classifier. */
+  tier3_classifier_model: string;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -307,6 +522,13 @@ export const runtimeSettings: RuntimeSettings = {
   review_session_model: '',
   code_session_effort: '',
   review_session_effort: '',
+  planning_session_model: '',
+  planning_session_effort: '',
+  ops_session_model: '',
+  ops_session_effort: '',
+  max_concurrent_planning_sessions: Number(
+    process.env.MAX_CONCURRENT_PLANNING_SESSIONS ?? 5,
+  ),
   session_mode: process.env.SESSION_MODE === 'api' ? 'api' : 'cli',
   auto_launch_concurrency: Number(process.env.AUTO_LAUNCH_CONCURRENCY ?? 1),
   auto_launch_poll_interval_ms: Number(
@@ -356,4 +578,5 @@ export const runtimeSettings: RuntimeSettings = {
   gate_verification_interval_ms: Number(
     process.env.GATE_VERIFICATION_INTERVAL_MS ?? 60_000,
   ),
+  tier3_classifier_model: 'claude-haiku-4-5-20251001',
 };

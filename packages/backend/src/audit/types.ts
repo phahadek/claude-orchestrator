@@ -10,6 +10,7 @@ type EventType =
   | 'attribution_missing'
   | 'session_launch_refused_zdr'
   | 'data_residency_flag_toggled'
+  | 'arch_store_adopted_toggled'
   | 'file_pollution_reverted'
   | 'file_pollution_checked'
   | 'file_pollution_re_injected_blocked'
@@ -33,8 +34,14 @@ type EventType =
   | 'auto_launch_done_update_stuck'
   | 'auto_launch_paused'
   | 'session_marked_done_while_running'
+  | 'session_done_deferred_while_running'
+  | 'session_done_deferred_applied'
+  | 'session_idle_write_skipped_terminal'
+  | 'session_terminal_reopened'
   | 'conflict_nudge_delivery_failed'
   | 'worktree_remove_failed'
+  | 'worktree_teardown_refused'
+  | 'planning_session_checkout_drift'
   | 'stale_branch_abandoned'
   | 'review_side_effect_failed'
   | 'pipeline_stage_entered'
@@ -72,9 +79,15 @@ type EventType =
   | 'task_archived'
   | 'task_moved'
   | 'readiness_override'
+  | 'staged_intent_disposition'
   | 'flake_recovery_attempted'
   | 'flake_recovery_f2_invalidated'
-  | 'flake_recovery_f2_rerun';
+  | 'flake_recovery_f2_rerun'
+  | 'arch_unit_created'
+  | 'arch_unit_updated'
+  | 'arch_unit_superseded'
+  | 'project_record_access_guide_missing'
+  | 'project_record_access_guide_blocks_escalation';
 
 type ActorType = 'ai' | 'human' | 'system';
 

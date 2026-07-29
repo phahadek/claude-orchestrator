@@ -4,7 +4,6 @@ import type { TaskView, DisplayStatus, PauseReason } from '../types/taskView';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { parsePauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
-import { useDispatch } from '../hooks/useDispatch';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { CIBadges, PipelineStageBadge } from './CIBadges';
 import { ContextBadge } from './ContextBadge';
@@ -102,6 +101,10 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Session could not be resumed at boot (missing worktree, or the resumed process failed immediately) — review and redispatch when ready.',
   review_rules_escalation:
     'Reviewer escalated per project-specific review rules — see the review summary for details and resolve manually.',
+  planning_crashed:
+    'Planning session crashed repeatedly — review the session and redispatch planning when ready.',
+  planning_first_turn_empty:
+    'Planning session finished its first turn without staging anything — review the transcript and redispatch or close.',
 };
 
 function verdictLabel(verdict: string): string {
@@ -111,18 +114,10 @@ function verdictLabel(verdict: string): string {
   return verdict;
 }
 
-function launchTooltip(task: TaskView): string {
-  if (task.notionStatus !== '🗂️ Ready') return 'Task is not Ready';
-  if (!task.taskType.includes('💻')) return 'Non-code task';
-  if (task.blocked) return `Blocked by ${task.blockerNames.join(', ')}`;
-  return '';
-}
-
 export function TaskCard({
   task,
   selected,
   onClick,
-  send,
   project,
   boardId = null,
   onMoveStaged,
@@ -151,30 +146,8 @@ export function TaskCard({
       return 'reviewing';
     return null;
   })();
-  const dispatchTask = useDispatch(send, project);
   const isNonCode = !task.taskType.includes('💻');
   const pauseStruct = parsePauseReason(task.pauseReason);
-
-  // Only Ready code tasks that aren't blocked can be launched.
-  // In Progress and In Review tasks already have an active session — launching
-  // another would create a duplicate.
-  const isLaunchable =
-    task.notionStatus === '🗂️ Ready' && !isNonCode && !task.blocked;
-
-  const tooltip = isLaunchable ? '' : launchTooltip(task);
-
-  const handleLaunch = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!isLaunchable) return;
-    dispatchTask([
-      {
-        notionUrl: task.notionUrl,
-        taskId: task.taskId,
-        taskType: task.taskType,
-        taskName: task.taskName,
-      },
-    ]);
-  };
 
   const handleRecover = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -331,30 +304,17 @@ export function TaskCard({
         {isNonCode ? (
           <span className={styles.taskTypeLabel}>{task.taskType}</span>
         ) : (
-          <>
-            {task.recoveryDescriptor?.available && (
-              <button
-                className={styles.unblockButton}
-                disabled={recoveryInFlight}
-                onClick={(e) => void handleRecover(e)}
-                title={task.recoveryDescriptor.label}
-                aria-label={`${task.recoveryDescriptor.label} ${task.taskName}`}
-              >
-                ↩ {task.recoveryDescriptor.label}
-              </button>
-            )}
+          task.recoveryDescriptor?.available && (
             <button
-              className={styles.launchButton}
-              disabled={!isLaunchable}
-              onClick={handleLaunch}
-              title={tooltip || 'Launch session'}
-              aria-label={
-                isLaunchable ? `Launch session for ${task.taskName}` : tooltip
-              }
+              className={styles.unblockButton}
+              disabled={recoveryInFlight}
+              onClick={(e) => void handleRecover(e)}
+              title={task.recoveryDescriptor.label}
+              aria-label={`${task.recoveryDescriptor.label} ${task.taskName}`}
             >
-              🚀
+              ↩ {task.recoveryDescriptor.label}
             </button>
-          </>
+          )
         )}
         {project?.id && (
           <button

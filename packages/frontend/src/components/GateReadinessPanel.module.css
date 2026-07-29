@@ -39,30 +39,80 @@
   font-size: 0.875rem;
 }
 
-.readinessRow {
-  display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.readinessCard {
+.rollupHeader {
   border: 1px solid var(--border, #313244);
   border-radius: 8px;
   padding: 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  flex: 1;
-  min-width: 240px;
+  gap: 10px;
 }
 
-.readinessCardTitle {
+.rollupHeaderTop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.rollupTitle {
   font-size: 0.8125rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.02em;
   color: var(--text-muted, #a6adc8);
   margin: 0;
+}
+
+.progressBar {
+  display: flex;
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-secondary, #1e1e2e);
+}
+
+.progressSegment {
+  height: 100%;
+}
+
+.progressDone {
+  background: var(--success, #a6e3a1);
+}
+
+.progressPending {
+  background: var(--error, #f38ba8);
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  background: var(--bg-secondary, #1e1e2e);
+  border: 1px solid var(--border, #313244);
+  border-radius: 999px;
+  color: var(--text-secondary, #bac2de);
+  font-size: 0.75rem;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  background: var(--bg-hover, #313244);
+}
+
+.chipActive {
+  border-color: var(--accent, #89b4fa);
+  color: var(--text-primary, #cdd6f4);
+  font-weight: 700;
+}
+
+.chipDone {
+  color: var(--success, #a6e3a1);
 }
 
 .statusBadge {
@@ -81,36 +131,6 @@
 .statusBlocked {
   background: rgba(243, 139, 168, 0.15);
   color: var(--error, #f38ba8);
-}
-
-.blockingList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.blockingItem {
-  display: flex;
-  gap: 8px;
-  font-size: 0.875rem;
-  color: var(--text-secondary, #bac2de);
-}
-
-.blockingState {
-  font-weight: 600;
-  color: var(--error, #f38ba8);
-  min-width: 90px;
-}
-
-.blockingText {
-  flex: 1;
-}
-
-.blockingClassification {
-  color: var(--text-muted, #a6adc8);
 }
 
 .filters {
@@ -167,6 +187,12 @@
   background: var(--bg-secondary, #1e1e2e);
 }
 
+.itemActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 .detailBody {
   display: flex;
   gap: 24px;
@@ -194,4 +220,140 @@
 .pagination button:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+.deploySection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border, #313244);
+  border-radius: 8px;
+  background: var(--bg-secondary, #1e1e2e);
+}
+
+.deployRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.deployShaInput {
+  background: var(--bg-primary, #11111b);
+  border: 1px solid var(--border, #313244);
+  border-radius: 6px;
+  color: var(--text-primary, #cdd6f4);
+  padding: 4px 8px;
+  font-family: monospace;
+  font-size: 0.8125rem;
+  min-width: 220px;
+}
+
+.deployButton {
+  background: var(--accent, #89b4fa);
+  border: none;
+  border-radius: 6px;
+  color: var(--bg-primary, #11111b);
+  padding: 6px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.deployButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.deployRunStatus {
+  font-size: 0.8125rem;
+  color: var(--text-muted, #a6adc8);
+}
+
+.deployEventList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.75rem;
+  color: var(--text-muted, #a6adc8);
+  font-family: monospace;
+}
+
+.eventList {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.eventItem {
+  font-size: 0.8125rem;
+  color: var(--text-secondary, #bac2de);
+}
+
+.evidenceDetails {
+  margin: 4px 0 0;
+  font-size: 0.75rem;
+}
+
+.evidenceSummary {
+  cursor: pointer;
+  color: var(--text-muted, #a6adc8);
+}
+
+.evidenceBody {
+  margin: 4px 0 0 4px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border, #313244);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.evidenceRow {
+  margin: 0;
+  color: var(--text-secondary, #bac2de);
+  word-break: break-word;
+}
+
+.evidenceProse {
+  margin: 4px 0 0 4px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border, #313244);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.evidenceFieldList {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.evidenceKey {
+  color: var(--text-muted, #a6adc8);
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .rollupHeaderTop {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .chipRow {
+    gap: 6px;
+  }
+
+  .chip {
+    font-size: 0.7rem;
+    padding: 3px 8px;
+  }
 }

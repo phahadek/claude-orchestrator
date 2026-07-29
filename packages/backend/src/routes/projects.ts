@@ -7,11 +7,15 @@ import yaml from 'js-yaml';
 import { normalizePath } from '../config';
 import {
   ProjectService,
+  type Project,
   type ProjectPatch,
   type MilestonePatch,
 } from '../projects/ProjectService';
 import type { AutoMerger } from '../github/AutoMerger';
-import { getMergeReadyPRs } from '../db/queries';
+import {
+  getMergeReadyPRs,
+  MilestoneCanonicalShortIdCollisionError,
+} from '../db/queries';
 import { NotionClient, normalizeNotionId } from '../notion/NotionClient';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { GitHubClient } from '../github/GitHubClient';
@@ -454,24 +458,39 @@ projectsRouter.patch('/projects/:id', async (req: Request, res: Response) => {
     patch.base_branch = body.baseBranch;
   }
 
-  // dataResidencyConfirmed triggers audit logging via the dedicated service method.
+  // dataResidencyConfirmed and archStoreAdopted each trigger audit logging via
+  // their own dedicated service methods, applied before the plain patch.
+  let auditedUpdate: Project | undefined;
   if ('dataResidencyConfirmed' in body) {
-    const updated = ProjectService.setDataResidencyConfirmed(
+    auditedUpdate = ProjectService.setDataResidencyConfirmed(
       id,
       body.dataResidencyConfirmed === true,
     );
-    if (!updated) {
+    if (!auditedUpdate) {
       res.status(404).json({ error: `Project '${id}' not found` });
       return;
     }
-    // Apply any remaining patch fields on top.
-    delete (patch as Record<string, unknown>).data_residency_confirmed;
+  }
+  if ('archStoreAdopted' in body) {
+    auditedUpdate = ProjectService.setArchStoreAdopted(
+      id,
+      body.archStoreAdopted === true,
+    );
+    if (!auditedUpdate) {
+      res.status(404).json({ error: `Project '${id}' not found` });
+      return;
+    }
+  }
+  if (auditedUpdate) {
+    // Apply any remaining patch fields on top (neither dataResidencyConfirmed
+    // nor archStoreAdopted is ever added to `patch` — both are handled solely
+    // through their dedicated, audited service methods above).
     if (Object.keys(patch).length === 0) {
-      res.json(updated);
+      res.json(auditedUpdate);
       return;
     }
     const final = ProjectService.update(id, patch);
-    res.json(final ?? updated);
+    res.json(final ?? auditedUpdate);
     return;
   }
 
@@ -543,14 +562,23 @@ projectsRouter.post(
       return;
     }
 
-    const milestone = ProjectService.createMilestone({
-      id,
-      projectId,
-      name,
-      sourceId: rawSourceId,
-      displayOrder:
-        typeof body.displayOrder === 'number' ? body.displayOrder : 0,
-    });
+    let milestone;
+    try {
+      milestone = ProjectService.createMilestone({
+        id,
+        projectId,
+        name,
+        sourceId: rawSourceId,
+        displayOrder:
+          typeof body.displayOrder === 'number' ? body.displayOrder : 0,
+      });
+    } catch (err) {
+      if (err instanceof MilestoneCanonicalShortIdCollisionError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
     res.status(201).json(milestone);
   },
 );
@@ -586,10 +614,23 @@ projectsRouter.patch('/milestones/:id', (req: Request, res: Response) => {
   if ('sourceId' in body) {
     patch.source_id = typeof body.sourceId === 'string' ? body.sourceId : null;
   }
+  if ('canonicalShortId' in body) {
+    patch.canonical_short_id =
+      typeof body.canonicalShortId === 'string' ? body.canonicalShortId : null;
+  }
   if (typeof body.displayOrder === 'number')
     patch.display_order = body.displayOrder;
 
-  const updated = ProjectService.updateMilestone(id, patch);
+  let updated;
+  try {
+    updated = ProjectService.updateMilestone(id, patch);
+  } catch (err) {
+    if (err instanceof MilestoneCanonicalShortIdCollisionError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    throw err;
+  }
   if (!updated) {
     res.status(404).json({ error: `Milestone '${id}' not found` });
     return;

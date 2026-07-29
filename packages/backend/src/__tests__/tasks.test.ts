@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
 import yaml from 'js-yaml';
@@ -32,6 +32,7 @@ vi.mock('../config.js', () => ({
     }
     return undefined;
   }),
+  getAllProjects: vi.fn().mockReturnValue([]),
   runtimeSettings: { task_cache_refresh_interval_ms: 60_000 },
 }));
 
@@ -43,15 +44,26 @@ vi.mock('../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
 }));
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   createTasksRouter,
   summarizeEvent,
   setTaskBroadcast,
+  emitTaskUpdated,
 } from '../routes/tasks.js';
 import * as queries from '../db/queries.js';
 import { getTaskBackend } from '../tasks/TaskBackend.js';
 import { recordEvent } from '../audit/AuditLog.js';
 import type { NotionTask } from '../notion/types.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+function flushAsync(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1317,5 +1329,186 @@ describe('POST /api/tasks/:taskId/recover', () => {
         }),
       );
     });
+  });
+});
+
+describe('emitTaskUpdated — single-task dependency resolution', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    setTaskBroadcast(null as never);
+  });
+
+  function taskCacheRow(task: NotionTask) {
+    return {
+      cache_key: task.id,
+      raw_json: JSON.stringify(task),
+      fetched_at: Date.now(),
+    } as never;
+  }
+
+  it('broadcasts blocked: true with a non-empty blockerNames for a task with an unsatisfied dependency', async () => {
+    const taskA: NotionTask = {
+      id: 'notion:task-a',
+      title: 'Task A',
+      status: '🗂️ Ready',
+      type: '💻 Code',
+      dependsOn: ['notion:task-b'],
+      notionUrl: '',
+    };
+    const taskB: NotionTask = {
+      id: 'notion:task-b',
+      title: 'Task B',
+      status: '🗂️ Ready',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('notion:task-a', taskA.status, {
+        raw_json: JSON.stringify(taskA),
+      }),
+    ]);
+    vi.mocked(queries.getTaskCache).mockImplementation(((key: string) =>
+      key === 'notion:task-b'
+        ? taskCacheRow(taskB)
+        : undefined) as typeof queries.getTaskCache);
+
+    const broadcasts: Array<{ type: string; task?: NotionTask & object }> = [];
+    setTaskBroadcast((msg) => broadcasts.push(msg as never));
+
+    emitTaskUpdated('notion:task-a');
+    await flushAsync();
+
+    const updated = broadcasts.find((m) => m.type === 'task_updated');
+    expect(updated).toBeDefined();
+    const task = updated!.task as unknown as {
+      taskId: string;
+      blocked: boolean;
+      blockerNames: string[];
+    };
+    expect(task.taskId).toBe('notion:task-a');
+    expect(task.blocked).toBe(true);
+    expect(task.blockerNames).toContain('Task B');
+  });
+
+  it('broadcasts blocked: false when all dependencies are ✅ Done', async () => {
+    const taskA: NotionTask = {
+      id: 'notion:task-a',
+      title: 'Task A',
+      status: '🗂️ Ready',
+      type: '💻 Code',
+      dependsOn: ['notion:task-b'],
+      notionUrl: '',
+    };
+    const taskB: NotionTask = {
+      id: 'notion:task-b',
+      title: 'Task B',
+      status: '✅ Done',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('notion:task-a', taskA.status, {
+        raw_json: JSON.stringify(taskA),
+      }),
+    ]);
+    vi.mocked(queries.getTaskCache).mockImplementation(((key: string) =>
+      key === 'notion:task-b'
+        ? taskCacheRow(taskB)
+        : undefined) as typeof queries.getTaskCache);
+
+    const broadcasts: Array<{ type: string; task?: object }> = [];
+    setTaskBroadcast((msg) => broadcasts.push(msg as never));
+
+    emitTaskUpdated('notion:task-a');
+    await flushAsync();
+
+    const updated = broadcasts.find((m) => m.type === 'task_updated');
+    expect(updated).toBeDefined();
+    const task = updated!.task as unknown as {
+      blocked: boolean;
+      blockerNames: string[];
+    };
+    expect(task.blocked).toBe(false);
+    expect(task.blockerNames).toEqual([]);
+  });
+
+  it('the board-wide and non-milestone list endpoints resolve blocked/blockerNames identically to the single-task broadcast', async () => {
+    const taskA: NotionTask = {
+      id: 'notion:task-a',
+      title: 'Task A',
+      status: '🗂️ Ready',
+      type: '💻 Code',
+      dependsOn: ['notion:task-b'],
+      notionUrl: '',
+    };
+    const taskB: NotionTask = {
+      id: 'notion:task-b',
+      title: 'Task B',
+      status: '🗂️ Ready',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const boardTasks = [taskA, taskB];
+
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('notion:task-a', taskA.status, {
+        raw_json: JSON.stringify(taskA),
+      }),
+    ]);
+    vi.mocked(queries.getTaskCache).mockImplementation(((key: string) => {
+      if (key === 'board:board-1' || key === 'non_milestone:proj-1') {
+        return {
+          cache_key: key,
+          raw_json: JSON.stringify(boardTasks),
+          fetched_at: Date.now(),
+        } as never;
+      }
+      if (key === 'notion:task-b') return taskCacheRow(taskB);
+      return undefined;
+    }) as typeof queries.getTaskCache);
+
+    const activeRes = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    const nonMilestoneRes = await supertest(buildApp()).get(
+      '/api/tasks/non-milestone?projectId=proj-1',
+    );
+
+    const broadcasts: Array<{ type: string; task?: object }> = [];
+    setTaskBroadcast((msg) => broadcasts.push(msg as never));
+    emitTaskUpdated('notion:task-a');
+    await flushAsync();
+    const broadcastTask = broadcasts.find((m) => m.type === 'task_updated')!
+      .task as unknown as { blocked: boolean; blockerNames: string[] };
+
+    const activeTask = activeRes.body.tasks.find(
+      (t: { taskId: string }) => t.taskId === 'notion:task-a',
+    );
+    const nonMilestoneTask = nonMilestoneRes.body.find(
+      (t: { taskId: string }) => t.taskId === 'notion:task-a',
+    );
+
+    expect(activeTask.blocked).toBe(true);
+    expect(activeTask.blockerNames).toEqual(broadcastTask.blockerNames);
+    expect(nonMilestoneTask.blocked).toBe(activeTask.blocked);
+    expect(nonMilestoneTask.blockerNames).toEqual(activeTask.blockerNames);
+    expect(broadcastTask.blocked).toBe(activeTask.blocked);
+  });
+});
+
+describe('dependency resolution — single source of truth', () => {
+  it('only constructs DependencyResolver in one place in tasks.ts', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '../routes/tasks.ts'),
+      'utf-8',
+    );
+    const matches = source.match(/new DependencyResolver\(\)/g) ?? [];
+    expect(matches.length).toBe(1);
   });
 });

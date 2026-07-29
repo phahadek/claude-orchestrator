@@ -25,6 +25,35 @@ function makeSession(
 }
 
 describe('SessionGrid', () => {
+  it('excludes archived sessions from the grid', () => {
+    const sessions = [
+      makeSession({
+        sessionId: 's1',
+        taskName: 'Active Task',
+        status: 'running',
+      }),
+      makeSession({
+        sessionId: 's2',
+        taskName: 'Archived Task',
+        status: 'idle',
+        archived: true,
+      }),
+    ];
+    render(
+      <SessionGrid
+        sessions={sessions}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Active Task')).toBeDefined();
+    expect(screen.queryByText('Archived Task')).toBeNull();
+  });
+
   it('renders all sessions as cards', () => {
     const sessions = [
       makeSession({ sessionId: 's1', taskName: 'Task One', status: 'running' }),

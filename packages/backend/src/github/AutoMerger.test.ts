@@ -87,7 +87,6 @@ vi.mock('../config/corporateMode.js', () => ({
       requireHumanApproval: false,
       requireZDR: false,
       validatePRBody: false,
-      secretsViaSeam: false,
     },
   })),
 }));
@@ -341,6 +340,16 @@ describe('AutoMerger.attempt() — CI green', () => {
     expect(github.mergePR).toHaveBeenCalledWith(42, 'feat: test', 'owner/repo');
     expect(watcher.handleMerged).toHaveBeenCalled();
     expect(setPauseReason).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_merged',
+        payload: expect.objectContaining({
+          pr_number: 42,
+          repo: 'owner/repo',
+          source: 'poll',
+        }),
+      }),
+    );
   });
 });
 
@@ -901,6 +910,18 @@ describe('AutoMerger.pollOnce() — local branch dispatch', () => {
         commitSha: 'abc123',
       }),
     );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_merged',
+        payload: expect.objectContaining({
+          branch_name: 'feature/my-task',
+          base_branch: 'dev',
+          merge_sha: 'abc123',
+          local_branch_id: 10,
+          source: 'auto-merger',
+        }),
+      }),
+    );
   });
 
   it('pauses with merge_conflict when squashMergeLocal returns conflict', async () => {
@@ -1023,7 +1044,6 @@ function makeCorporateMode(requireHumanApproval: boolean) {
       requireHumanApproval,
       requireZDR: requireHumanApproval,
       validatePRBody: requireHumanApproval,
-      secretsViaSeam: requireHumanApproval,
     },
   };
 }
@@ -1436,6 +1456,17 @@ describe('AutoMerger.attemptMerge() — 405 still-draft retry', () => {
       42,
       'owner/repo',
       'auto_merge_failed',
+    );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_merged',
+        payload: expect.objectContaining({
+          pr_number: 42,
+          repo: 'owner/repo',
+          merge_sha: 'retry-sha',
+          source: 'ingest',
+        }),
+      }),
     );
   });
 

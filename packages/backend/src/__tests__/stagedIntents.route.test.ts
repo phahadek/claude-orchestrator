@@ -22,10 +22,24 @@ vi.mock('../audit/AuditLog', () => ({
   recordEvent: mockRecordEvent,
 }));
 
-vi.mock('../db/queries', () => ({
-  getTaskCache: vi.fn().mockReturnValue(null),
-}));
+// Isolated in-memory db (test/helpers/setupTestDb.ts) instead of the real
+// file-backed singleton — otherwise staged_intent rows persist across test
+// cases (and test files, and CI runs) and produce spurious dedup/lock
+// collisions.
+vi.mock('../db/db', async () => {
+  const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
+});
 
+vi.mock('../db/queries', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../db/queries')>();
+  return {
+    ...actual,
+    getTaskCache: vi.fn().mockReturnValue(null),
+  };
+});
+
+import { db } from '../db/db';
 import { createStagedIntentsRouter } from '../routes/stagedIntents';
 
 function makeApp() {
@@ -38,9 +52,67 @@ function makeApp() {
 beforeEach(() => {
   mockGetTaskBackend.mockReset();
   mockRecordEvent.mockReset();
+  db.prepare('DELETE FROM staged_intent').run();
+  db.prepare('DELETE FROM staged_intent_group').run();
 });
 
-describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
+/**
+ * A Ready-transition apply also runs through the DependsOnCompleteness
+ * invariant (stagedIntents.ts) and the grooming promotion gate
+ * (TaskWriteCommands.setStatus) before it ever reaches the readiness gate
+ * under test here — stage a satisfying task.setDependsOn sibling in the
+ * same group plus a fully-dispositioned groomingGate so those two clear and
+ * only the readiness gate is exercised.
+ */
+async function stageReadyStatus(
+  agent: ReturnType<typeof supertest>,
+  projectId: string,
+  taskId: string,
+  groupId: string,
+) {
+  await agent.post('/api/staged-intents').send({
+    kind: 'task.setDependsOn',
+    projectId,
+    groupId,
+    payload: { taskId, dependsOn: [] },
+  });
+  return agent.post('/api/staged-intents').send({
+    kind: 'task.setStatus',
+    projectId,
+    groupId,
+    payload: {
+      taskId,
+      status: 'Ready',
+      groomingGate: {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'none' },
+      },
+    },
+  });
+}
+
+/**
+ * Grouped intents are only ever written through the group's atomic commit
+ * route (Approve->Commit unification) — POST /:id/apply is standalone-only
+ * and 409s for any intent carrying a group_id. Approves every live intent
+ * in the group, then commits it, mirroring the panel's Approve -> Commit flow.
+ */
+async function approveAndCommitGroup(
+  agent: ReturnType<typeof supertest>,
+  groupId: string,
+  body: Record<string, unknown> = {},
+) {
+  const list = await agent.get('/api/staged-intents').query({});
+  for (const intent of list.body.intents.filter(
+    (i: { groupId: string | null; state: string }) =>
+      i.groupId === groupId && i.state === 'staged',
+  )) {
+    await agent.post(`/api/staged-intents/${intent.id}/approve`).send({});
+  }
+  return agent.post(`/api/staged-intents/group/${groupId}/commit`).send(body);
+}
+
+describe('POST /api/staged-intents/group/:groupId/commit — readiness gate', () => {
   it('blocks a Ready transition with an unresolved Open Questions section, and keeps the intent staged with an annotation', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
@@ -48,30 +120,32 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
         .fn()
         .mockResolvedValue('## Open Questions\n- Still unresolved?\n'),
       updateStatus: vi.fn(),
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
     const app = makeApp();
     const agent = supertest(app);
 
-    const staged = await agent.post('/api/staged-intents').send({
-      kind: 'task.setStatus',
-      projectId: 'proj-blocked',
-      payload: { taskId: 'notion:abc', status: 'Ready' },
-    });
+    const staged = await stageReadyStatus(
+      agent,
+      'proj-blocked',
+      'notion:abc',
+      'group-blocked',
+    );
     expect(staged.status).toBe(201);
 
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
-      .send({});
-    expect(applied.status).toBe(409);
-    expect(applied.body.violations).toEqual([
+    const committed = await approveAndCommitGroup(agent, 'group-blocked');
+    expect(committed.status).toBe(409);
+    expect(committed.body.violations).toEqual([
       expect.objectContaining({ tier: 'structural' }),
     ]);
 
     const list = await agent
       .get('/api/staged-intents')
       .query({ projectId: 'proj-blocked' });
-    expect(list.body.intents).toHaveLength(1);
-    expect(list.body.intents[0].annotation).toEqual({
+    const statusIntent = list.body.intents.find(
+      (i: { kind: string }) => i.kind === 'task.setStatus',
+    );
+    expect(statusIntent.annotation).toEqual({
       blocked: true,
       violations: expect.arrayContaining([
         expect.objectContaining({ tier: 'structural' }),
@@ -87,21 +161,25 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
         .fn()
         .mockResolvedValue('## Open Questions\n- Still unresolved?\n'),
       updateStatus,
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
     const app = makeApp();
     const agent = supertest(app);
 
-    const staged = await agent.post('/api/staged-intents').send({
-      kind: 'task.setStatus',
-      projectId: 'proj-2',
-      payload: { taskId: 'notion:abc', status: 'Ready' },
+    const staged = await stageReadyStatus(
+      agent,
+      'proj-2',
+      'notion:abc',
+      'group-2',
+    );
+    expect(staged.status).toBe(201);
+
+    const committed = await approveAndCommitGroup(agent, 'group-2', {
+      override: true,
+      reason: 'reviewed manually, safe to proceed',
     });
 
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
-      .send({ override: true, reason: 'reviewed manually, safe to proceed' });
-
-    expect(applied.status).toBe(200);
+    expect(committed.status).toBe(200);
     expect(updateStatus).toHaveBeenCalledWith(
       'notion:abc',
       '🗂️ Ready',
@@ -121,7 +199,11 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
     const list = await agent
       .get('/api/staged-intents')
       .query({ projectId: 'proj-2' });
-    expect(list.body.intents).toHaveLength(0);
+    expect(
+      list.body.intents.some(
+        (i: { kind: string }) => i.kind === 'task.setStatus',
+      ),
+    ).toBe(false);
   });
 
   it('requires a reason when override is true', async () => {
@@ -151,20 +233,21 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll clear.'),
       updateStatus,
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
     const app = makeApp();
     const agent = supertest(app);
 
-    const staged = await agent.post('/api/staged-intents').send({
-      kind: 'task.setStatus',
-      projectId: 'proj-clean',
-      payload: { taskId: 'notion:abc', status: 'Ready' },
-    });
+    const staged = await stageReadyStatus(
+      agent,
+      'proj-clean',
+      'notion:abc',
+      'group-clean',
+    );
+    expect(staged.status).toBe(201);
 
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
-      .send({});
-    expect(applied.status).toBe(200);
+    const committed = await approveAndCommitGroup(agent, 'group-clean');
+    expect(committed.status).toBe(200);
     expect(updateStatus).toHaveBeenCalledWith(
       'notion:abc',
       '🗂️ Ready',
@@ -173,20 +256,28 @@ describe('POST /api/staged-intents/:id/apply — readiness gate', () => {
   });
 });
 
-describe('POST /api/staged-intents/:id/apply — grooming promotion gate', () => {
+describe('POST /api/staged-intents/group/:groupId/commit — grooming promotion gate', () => {
   it('blocks a Ready transition whose staged groomingGate entry is undispositioned, and keeps the intent staged with an annotation', async () => {
     const updateStatus = vi.fn();
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll clear.'),
       updateStatus,
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
     const app = makeApp();
     const agent = supertest(app);
 
+    await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-groom-blocked',
+      groupId: 'group-groom-blocked',
+      payload: { taskId: 'notion:abc', dependsOn: [] },
+    });
     const staged = await agent.post('/api/staged-intents').send({
       kind: 'task.setStatus',
       projectId: 'proj-groom-blocked',
+      groupId: 'group-groom-blocked',
       payload: {
         taskId: 'notion:abc',
         status: 'Ready',
@@ -195,17 +286,18 @@ describe('POST /api/staged-intents/:id/apply — grooming promotion gate', () =>
     });
     expect(staged.status).toBe(201);
 
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
-      .send({});
-    expect(applied.status).toBe(409);
-    expect(applied.body.reasons.join(' ')).toMatch(/size_check/);
+    const committed = await approveAndCommitGroup(agent, 'group-groom-blocked');
+    expect(committed.status).toBe(409);
+    expect(committed.body.reasons.join(' ')).toMatch(/size_check/);
     expect(updateStatus).not.toHaveBeenCalled();
 
     const list = await agent
       .get('/api/staged-intents')
       .query({ projectId: 'proj-groom-blocked' });
-    expect(list.body.intents[0].annotation).toEqual({
+    const statusIntent = list.body.intents.find(
+      (i: { kind: string }) => i.kind === 'task.setStatus',
+    );
+    expect(statusIntent.annotation).toEqual({
       blocked: true,
       reasons: expect.arrayContaining([expect.stringMatching(/size_check/)]),
     });
@@ -217,13 +309,21 @@ describe('POST /api/staged-intents/:id/apply — grooming promotion gate', () =>
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nAll clear.'),
       updateStatus,
+      setDependsOn: vi.fn().mockResolvedValue(undefined),
     });
     const app = makeApp();
     const agent = supertest(app);
 
+    await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-groom-clean',
+      groupId: 'group-groom-clean',
+      payload: { taskId: 'notion:abc', dependsOn: [] },
+    });
     const staged = await agent.post('/api/staged-intents').send({
       kind: 'task.setStatus',
       projectId: 'proj-groom-clean',
+      groupId: 'group-groom-clean',
       payload: {
         taskId: 'notion:abc',
         status: 'Ready',
@@ -233,11 +333,10 @@ describe('POST /api/staged-intents/:id/apply — grooming promotion gate', () =>
         },
       },
     });
+    expect(staged.status).toBe(201);
 
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
-      .send({});
-    expect(applied.status).toBe(200);
+    const committed = await approveAndCommitGroup(agent, 'group-groom-clean');
+    expect(committed.status).toBe(200);
     expect(updateStatus).toHaveBeenCalledWith(
       'notion:abc',
       '🗂️ Ready',
@@ -257,6 +356,9 @@ describe('POST /api/staged-intents — kind validation', () => {
       'task.setType',
       'task.archive',
       'task.move',
+      'gate.accrete',
+      'seed.stage',
+      'journal.setState',
     ]) {
       const res = await agent.post('/api/staged-intents').send({
         kind,
@@ -457,5 +559,218 @@ describe('POST /api/staged-intents/:id/apply — task.setType', () => {
       .send({ actorType: 'session' });
     expect(applied.status).toBe(403);
     expect(setType).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / journal.setState', () => {
+  it('applies gate.accrete by dispatching through accreteGateContribution', async () => {
+    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'gate.accrete',
+      projectId: 'proj-gate',
+      payload: {
+        sourceTask: {
+          id: 'notion:abc',
+          title: 'Some Task',
+          project: 'proj-gate',
+          milestone: 'M1',
+        },
+        items: [{ text: 'Launch-and-observe the new endpoint' }],
+        classification: 'Read-Only',
+      },
+    });
+    expect(staged.status).toBe(201);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(200);
+    expect(applied.body.result.itemIds).toHaveLength(1);
+    expect(applied.body.result.marker).toEqual(
+      expect.objectContaining({
+        sourceTaskId: 'notion:abc',
+        decision: 'items',
+      }),
+    );
+  });
+
+  it('applies seed.stage by dispatching through stageSeedContribution', async () => {
+    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'seed.stage',
+      projectId: 'proj-seed',
+      payload: {
+        sourceTask: {
+          id: 'notion:def',
+          title: 'Some Config Task',
+          project: 'proj-seed',
+          milestone: 'M1',
+        },
+        seeds: [{ spec: 'Add feature flag FOO' }],
+        decision: 'seeds',
+      },
+    });
+    expect(staged.status).toBe(201);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(200);
+    expect(applied.body.result.itemIds).toHaveLength(1);
+    expect(applied.body.result.marker).toEqual(
+      expect.objectContaining({
+        sourceTaskId: 'notion:def',
+        decision: 'seeds',
+      }),
+    );
+  });
+
+  it('applies journal.setState by dispatching through the validated setEntryState', async () => {
+    const { upsertOpsJournalEntry } = await import('../db/queries');
+    upsertOpsJournalEntry({
+      task_id: 'notion:ghi',
+      project: 'proj-journal',
+      milestone: 'M1',
+      state: 'pending',
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date().toISOString(),
+    });
+
+    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'journal.setState',
+      projectId: 'proj-journal',
+      payload: { taskId: 'notion:ghi', state: 'candidate' },
+    });
+    expect(staged.status).toBe(201);
+
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+    expect(applied.status).toBe(200);
+
+    const { getOpsJournalEntry } = await import('../db/queries');
+    expect(getOpsJournalEntry('notion:ghi')?.state).toBe('candidate');
+  });
+
+  it('rejects applying gate.accrete, seed.stage, and journal.setState with a session credential (human-apply-only)', async () => {
+    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    for (const [kind, payload] of [
+      [
+        'gate.accrete',
+        {
+          sourceTask: {
+            id: 'notion:jkl',
+            title: 'T',
+            project: 'proj-session-2',
+            milestone: 'M1',
+          },
+          items: [],
+          classification: 'n/a',
+        },
+      ],
+      [
+        'seed.stage',
+        {
+          sourceTask: {
+            id: 'notion:mno',
+            title: 'T',
+            project: 'proj-session-2',
+            milestone: 'M1',
+          },
+          seeds: [],
+          decision: 'n/a',
+        },
+      ],
+      ['journal.setState', { taskId: 'notion:pqr', state: 'candidate' }],
+    ] as const) {
+      const staged = await agent.post('/api/staged-intents').send({
+        kind,
+        projectId: 'proj-session-2',
+        payload,
+      });
+      const applied = await agent
+        .post(`/api/staged-intents/${staged.body.id}/apply`)
+        .send({ actorType: 'session' });
+      expect(applied.status).toBe(403);
+    }
+  });
+});
+
+describe('POST /api/staged-intents — decision-proposal annotation', () => {
+  it('round-trips the decisionProposal field through staging and listing', async () => {
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'journal.setState',
+      projectId: 'proj-proposal',
+      payload: { taskId: 'notion:stu', state: 'candidate' },
+      decisionProposal:
+        'Config drift observed; promote to candidate for review.',
+    });
+    expect(staged.status).toBe(201);
+    expect(staged.body.decisionProposal).toBe(
+      'Config drift observed; promote to candidate for review.',
+    );
+
+    const list = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-proposal' });
+    const found = list.body.intents.find(
+      (i: { id: string }) => i.id === staged.body.id,
+    );
+    expect(found.decisionProposal).toBe(
+      'Config drift observed; promote to candidate for review.',
+    );
+  });
+
+  it('stages a task.setStatus -> Deferred discard/defer proposal with its rationale, and it round-trips to the decision surface', async () => {
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-proposal',
+      payload: { taskId: 'notion:xyz', status: 'Deferred' },
+      decisionProposal:
+        'Superseded by task notion:abc — defer instead of grooming to Ready.',
+    });
+    expect(staged.status).toBe(201);
+    expect(staged.body.kind).toBe('task.setStatus');
+    expect(staged.body.payload.status).toBe('Deferred');
+    expect(staged.body.decisionProposal).toBe(
+      'Superseded by task notion:abc — defer instead of grooming to Ready.',
+    );
+
+    const list = await agent
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-proposal' });
+    const found = list.body.intents.find(
+      (i: { id: string }) => i.id === staged.body.id,
+    );
+    expect(found.payload.status).toBe('Deferred');
+    expect(found.decisionProposal).toBe(
+      'Superseded by task notion:abc — defer instead of grooming to Ready.',
+    );
   });
 });

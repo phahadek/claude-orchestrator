@@ -27,6 +27,8 @@ import {
   getAnalyzeResult,
   setPreReviewStage,
   enqueueFeedbackItem,
+  hasDispositionReplyBeenPosted,
+  recordDispositionReply,
 } from '../db/queries';
 import { syncToOrigin } from './PRFileReverter';
 import type {
@@ -462,15 +464,18 @@ export class ReviewOrchestrator {
   /**
    * Enqueue a review for the given PR via the same path as pr_opened.
    * Skips when the orchestrator is disabled or the job has no taskId.
+   * Returns whether the job was actually queued, so callers can tell a real
+   * dispatch apart from a silent no-op.
    */
-  enqueueReview(job: ReviewJob): void {
-    if (!this.enabled) return;
-    if (!job.taskId) return;
+  enqueueReview(job: ReviewJob): boolean {
+    if (!this.enabled) return false;
+    if (!job.taskId) return false;
     logger.info(
       `[ReviewOrchestrator] enqueueReview for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
     );
     this.queue.push(job);
     void this.drain();
+    return true;
   }
 
   /**
@@ -604,6 +609,20 @@ export class ReviewOrchestrator {
     const shaLabel = headSha ? headSha.slice(0, 7) : 'unknown';
 
     for (const d of dispositions) {
+      const commentIdStr = String(d.comment_id);
+      if (
+        hasDispositionReplyBeenPosted(
+          prNumber,
+          repo,
+          commentIdStr,
+          d.disposition,
+        )
+      ) {
+        logger.debug(
+          `[ReviewOrchestrator] disposition: reply already posted for comment_id ${d.comment_id} (${d.disposition}) — skipping duplicate`,
+        );
+        continue;
+      }
       let threadId: string | null;
       try {
         threadId = await this.github.findThreadByCommentId(
@@ -625,9 +644,10 @@ export class ReviewOrchestrator {
       }
       try {
         if (d.disposition === 'addressed') {
+          const reasonSuffix = d.reason ? `: ${d.reason}` : '';
           await this.github.addPullRequestReviewThreadReply(
             threadId,
-            `Addressed in ${shaLabel}`,
+            `Addressed in ${shaLabel}${reasonSuffix}`,
           );
           await this.github.resolveReviewThread(threadId);
         } else if (d.disposition === 'wont_fix') {
@@ -641,6 +661,7 @@ export class ReviewOrchestrator {
             `Out of scope for this PR: ${d.reason ?? ''}`,
           );
         }
+        recordDispositionReply(prNumber, repo, commentIdStr, d.disposition);
         logger.info(
           `[ReviewOrchestrator] disposition: ${d.disposition} for comment_id ${d.comment_id} → thread ${threadId}`,
         );

@@ -19,8 +19,9 @@ import {
   insertSeedItemEvent,
   getSeedAccretion,
   upsertSeedAccretion,
+  deleteSeedContribution,
 } from '../db/queries';
-import type { SeedItemFilter } from '../db/queries';
+import type { SeedItemFilter, SeedItemListOrder } from '../db/queries';
 import type {
   SeedItemState,
   SeedItemEventOutcome,
@@ -151,8 +152,9 @@ export function listFiltered(
   filter: SeedItemFilter,
   limit: number,
   offset: number,
+  order?: SeedItemListOrder,
 ): ListFilteredResult {
-  const items = listSeedItemsFiltered(filter, limit, offset)
+  const items = listSeedItemsFiltered(filter, limit, offset, order)
     .map((row) => getItem(row.id))
     .filter((item): item is SeedItem => item !== undefined);
   const total = countSeedItemsFiltered(filter);
@@ -383,4 +385,17 @@ export function recordAccretionMarker(marker: SeedAccretionMarker): void {
     decision: marker.decision,
     accreted_at: marker.accretedAt,
   });
+}
+
+/**
+ * Undoes a completed accretion (the minted seed_item rows and the
+ * seed_accretion marker) — the rollback half of insertItem +
+ * recordAccretionMarker, used when a later step of an atomic Ready-flip
+ * transaction fails after seed accretion already committed.
+ */
+export function rollbackContribution(
+  itemIds: string[],
+  sourceTaskId: string,
+): void {
+  deleteSeedContribution(itemIds, sourceTaskId);
 }

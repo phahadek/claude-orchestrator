@@ -1,0 +1,202 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  min-width: 280px;
+  max-width: 380px;
+}
+
+.headingRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.heading {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.dismissButton {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  padding: 4px 8px;
+  flex-shrink: 0;
+}
+
+.dismissButton:hover {
+  color: var(--text-primary);
+}
+
+/* Collapsed state: a small reachable badge instead of the full panel, so
+   the decision surface never traps the rest of the UI on narrow viewports. */
+.collapsedBar {
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+}
+
+.expandButton {
+  width: 100%;
+  background: var(--bg-secondary);
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.expandButton:hover {
+  color: var(--text-primary);
+}
+
+/* ── Mobile (<=768px): stacked below the transcript, bounded height, and
+   always dismissible so it can never cover the whole screen ── */
+@media (max-width: 768px) {
+  .panel {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+    max-height: 45vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .collapsedBar {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.commitButton {
+  background: rgba(137, 180, 250, 0.15);
+  border: 1px solid rgba(137, 180, 250, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-blue);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 4px 10px;
+}
+
+.commitButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.groupError {
+  font-size: 0.78rem;
+  color: var(--ctp-red);
+}
+
+/* The clean-verdict signal: an annotation on the standard group element, not
+   a route to a separate surface — see DecisionPanel's `isClean`. */
+.cleanBadge {
+  background: rgba(166, 227, 161, 0.15);
+  border: 1px solid rgba(166, 227, 161, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-green);
+  font-size: 0.72rem;
+  padding: 2px 6px;
+  margin-left: 4px;
+}
+
+/*
+ * The group-level atomic disposition bar: one Approve action commits the
+ * whole grooming decision, and one Pushback/Decline form rejects it as a
+ * unit — replaces per-item approve/reject controls for a grouped intent
+ * (see StagedIntentPanel's `hideActions`).
+ */
+.groupActions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+}
+
+.denyButton {
+  background: rgba(243, 139, 168, 0.15);
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-red);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 6px 14px;
+  transition: background 0.15s;
+}
+
+.denyButton:disabled,
+.commitButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.outcomeToggle {
+  display: flex;
+  gap: 6px;
+}
+
+.outcomeOption {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 4px 10px;
+}
+
+.outcomeOption:hover {
+  color: var(--text-primary);
+}
+
+.outcomeOptionActive {
+  background: rgba(243, 139, 168, 0.15);
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-red);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 4px 10px;
+}
+
+.reasonInput {
+  font-size: 0.82rem;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  resize: vertical;
+  min-height: 40px;
+}

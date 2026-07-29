@@ -29,7 +29,10 @@ vi.mock('../../projects/milestoneResolver', () => ({
 }));
 
 import { planMove, MoveTaskError, type MoveGraphTask } from '../moveTask';
-import { BackendTaskWriteCommands } from '../../tasks/TaskWriteCommands';
+import {
+  BackendTaskWriteCommands,
+  setTaskWriteRefreshFn,
+} from '../../tasks/TaskWriteCommands';
 import type { TaskBackend } from '../../tasks/TaskBackend';
 import { ReadinessGateError } from '../../tasks/readinessGate';
 
@@ -149,6 +152,27 @@ describe('planMove', () => {
         isLaterMove: true,
       }),
     ).toThrow(MoveTaskError);
+  });
+
+  it('tolerates a dangling Depends On on an unrelated task in the source milestone', () => {
+    const graph: MoveGraphTask[] = [
+      { id: 'notion:a', dependsOn: [] },
+      { id: 'notion:dep1', dependsOn: ['notion:a'] },
+      // Unrelated to the move: a stale dangling dep on a task with no
+      // relationship to the moved task or its cascade set.
+      { id: 'notion:unrelated', dependsOn: ['notion:ghost'] },
+    ];
+
+    const plan = planMove({
+      taskId: 'notion:a',
+      sourceMilestoneTasks: graph,
+      isLaterMove: true,
+    });
+
+    expect(plan.cascadeSet).toEqual(['notion:dep1']);
+    expect(plan.droppedEdges).toEqual(
+      expect.arrayContaining([{ from: 'notion:dep1', to: 'notion:a' }]),
+    );
   });
 
   it('throws when the moved task is not in the source milestone task set', () => {
@@ -381,6 +405,28 @@ describe('BackendTaskWriteCommands.moveTask', () => {
 
     expect(mockDeleteTaskCacheRow).toHaveBeenCalledWith('board:m-source');
     expect(mockDeleteTaskCacheRow).toHaveBeenCalledWith('board:m-target');
+  });
+
+  it('eagerly re-warms the affected project boards instead of waiting for the next TaskCacheRefresher tick', async () => {
+    const mockRefresh = vi.fn().mockResolvedValue(undefined);
+    setTaskWriteRefreshFn(mockRefresh);
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend, 'proj-1');
+
+    await commands.moveTask(baseParams());
+
+    expect(mockRefresh).toHaveBeenCalledWith('proj-1', true);
+  });
+
+  it('skips the eager re-warm when no projectId is configured', async () => {
+    const mockRefresh = vi.fn().mockResolvedValue(undefined);
+    setTaskWriteRefreshFn(mockRefresh);
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.moveTask(baseParams());
+
+    expect(mockRefresh).not.toHaveBeenCalled();
   });
 
   it('carries the gate_item and seed_item accretion re-home, after the Depends On rewrites, using the normalized (unprefixed) source task id and the target milestone display name', async () => {

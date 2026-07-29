@@ -2,7 +2,9 @@
 // Sanctioned session-side client for the shared, device-authed staged-intent
 // surface (see packages/backend/src/routes/stagedIntents.ts): POST
 // /api/staged-intents (create), POST /api/staged-intents/:id/apply (apply),
-// and POST /api/staged-intents/:id/reject (reject).
+// POST /api/staged-intents/:id/reject (reject), GET /api/staged-intents
+// (list), POST /api/staged-intents/:id/approve (approve), and POST
+// /api/staged-intents/group/:groupId/commit (group-commit).
 //
 // This is the surface the interactive skills (/groom, /design, /ops) use to
 // stage and apply task-write intents: they run in the trusted Remote-Control
@@ -10,17 +12,20 @@
 // like the dashboard panels and the other device-authed clients
 // (groom-context-client.mjs, gate-state-client.mjs, seed-state-client.mjs).
 //
-// It is NOT a replacement for stage-task-intent.mjs, which remains the
-// correct transport for unattended orchestrator-launched worktree sessions —
-// those are authenticated by a per-session, stage-only scoped credential
-// minted at spawn time (see SessionStageAuth.ts), never the static device
-// token, and can never apply an intent, only stage one.
+// It is NOT a replacement for the orchestrator MCP tool surface (see
+// mcp/orchestratorMcpServer.ts), which remains the correct transport for
+// unattended orchestrator-launched worktree sessions — those are
+// authenticated by a per-session, stage-only scoped credential minted at
+// spawn time (see SessionStageAuth.ts), never the static device token, and
+// can never apply an intent, only stage one.
 //
 // Usage:
 //   node staged-intents-client.mjs create <kind> <json-payload> <projectId> [groupId]
 //   node staged-intents-client.mjs apply <intentId> [--override <reason>] [--actorType human|session]
-//   node staged-intents-client.mjs reject <intentId>
+//   node staged-intents-client.mjs reject <intentId> --outcome pushback|decline --reason <reason>
 //   node staged-intents-client.mjs list [--projectId <projectId>]
+//   node staged-intents-client.mjs approve <intentId>
+//   node staged-intents-client.mjs group-commit <groupId> [--override <reason>] [--actorType human|session]
 //
 // Example:
 //   node staged-intents-client.mjs create task.setDependsOn \
@@ -29,6 +34,14 @@
 //     '{"taskId":"notion-abc123","status":"Ready","groomingGate":{"size_check":{"decision":"no_split","loc":120},"type_check":"Code"}}' \
 //     proj-1 grp-notion-abc123
 //   node staged-intents-client.mjs apply <intentId>
+//
+// A grouped staged intent (create ... groupId) can no longer be applied
+// individually — POST /:id/apply returns "must be committed atomically".
+// Instead, approve each intent in the group, then group-commit the group:
+//   node staged-intents-client.mjs approve <intentId>
+//   node staged-intents-client.mjs group-commit <groupId>
+// A 📐 Design/📋 Planning flip additionally needs an override reason:
+//   node staged-intents-client.mjs group-commit <groupId> --override "reason"
 //
 // Env:
 //   ORCHESTRATOR_BACKEND_HOST backend loopback host (default 127.0.0.1)
@@ -143,14 +156,54 @@ export function applyStagedIntent({
   });
 }
 
-export function rejectStagedIntent({ host, port, token, intentId }) {
+export function rejectStagedIntent({
+  host,
+  port,
+  token,
+  intentId,
+  outcome,
+  reason,
+}) {
   return requestStagedIntents({
     host,
     port,
     token,
     method: 'POST',
     path: `/api/staged-intents/${encodeURIComponent(intentId)}/reject`,
+    payload: { outcome, reason },
+  });
+}
+
+export function approveStagedIntent({ host, port, token, intentId }) {
+  return requestStagedIntents({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/staged-intents/${encodeURIComponent(intentId)}/approve`,
     payload: {},
+  });
+}
+
+export function groupCommitStagedIntents({
+  host,
+  port,
+  token,
+  groupId,
+  override,
+  reason,
+  actorType,
+}) {
+  return requestStagedIntents({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/staged-intents/group/${encodeURIComponent(groupId)}/commit`,
+    payload: {
+      ...(override ? { override: true, reason } : {}),
+      ...(actorType ? { actorType } : {}),
+    },
   });
 }
 
@@ -164,6 +217,8 @@ function parseFlags(argv) {
     override: option('--override'),
     actorType: option('--actorType'),
     projectId: option('--projectId'),
+    outcome: option('--outcome'),
+    reason: option('--reason'),
   };
 }
 
@@ -171,8 +226,10 @@ const USAGE =
   'usage:\n' +
   '  node staged-intents-client.mjs create <kind> <json-payload> <projectId> [groupId]\n' +
   '  node staged-intents-client.mjs apply <intentId> [--override <reason>] [--actorType human|session]\n' +
-  '  node staged-intents-client.mjs reject <intentId>\n' +
-  '  node staged-intents-client.mjs list [--projectId <projectId>]';
+  '  node staged-intents-client.mjs reject <intentId> --outcome pushback|decline --reason <reason>\n' +
+  '  node staged-intents-client.mjs list [--projectId <projectId>]\n' +
+  '  node staged-intents-client.mjs approve <intentId>\n' +
+  '  node staged-intents-client.mjs group-commit <groupId> [--override <reason>] [--actorType human|session]';
 
 async function main() {
   function fail(message) {
@@ -231,12 +288,43 @@ async function main() {
         actorType,
       });
     } else if (command === 'reject') {
-      const [intentId] = rest;
+      const [intentId, ...flagArgv] = rest;
       if (!intentId) return fail(USAGE);
-      result = await rejectStagedIntent({ host, port, token, intentId });
+      const { outcome, reason } = parseFlags(flagArgv);
+      if (outcome !== 'pushback' && outcome !== 'decline') {
+        return fail('--outcome must be "pushback" or "decline"');
+      }
+      if (!reason || !reason.trim()) {
+        return fail('--reason is required and must not be blank');
+      }
+      result = await rejectStagedIntent({
+        host,
+        port,
+        token,
+        intentId,
+        outcome,
+        reason,
+      });
     } else if (command === 'list') {
       const { projectId } = parseFlags(rest);
       result = await listStagedIntents({ host, port, token, projectId });
+    } else if (command === 'approve') {
+      const [intentId] = rest;
+      if (!intentId) return fail(USAGE);
+      result = await approveStagedIntent({ host, port, token, intentId });
+    } else if (command === 'group-commit') {
+      const [groupId, ...flagArgv] = rest;
+      if (!groupId) return fail(USAGE);
+      const { override, actorType } = parseFlags(flagArgv);
+      result = await groupCommitStagedIntents({
+        host,
+        port,
+        token,
+        groupId,
+        override: override !== undefined,
+        reason: override,
+        actorType,
+      });
     } else {
       return fail(USAGE);
     }

@@ -60,6 +60,7 @@ vi.mock('../tasks/TaskBackend', () => ({
 }));
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   insertSession: vi.fn(),
   updateSessionStatus: vi.fn(),
   getSession: vi.fn(),
@@ -313,6 +314,34 @@ describe('SessionManager.abortSession() — task status reset', () => {
   it('does not update task for review sessions', async () => {
     vi.mocked(queries.getSession).mockReturnValue(
       makeSessionRow({ session_type: 'review' }) as never,
+    );
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    await sm.abortSession('test-session');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('resets an ops session target to 🗂️ Ready (abandoned without a resolving disposition)', async () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ session_type: 'ops' }) as never,
+    );
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    await sm.abortSession('test-session');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'notion-task-id',
+      '🗂️ Ready',
+      expect.anything(),
+    );
+  });
+
+  it('does not update task for groom sessions (never left Backlog)', async () => {
+    vi.mocked(queries.getSession).mockReturnValue(
+      makeSessionRow({ session_type: 'groom' }) as never,
     );
     const mockUpdate = setupFakeBackend();
     const sm = new SessionManager();

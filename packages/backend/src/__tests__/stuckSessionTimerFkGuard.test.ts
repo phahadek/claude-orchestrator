@@ -33,6 +33,7 @@ vi.mock('../config', () => ({
 }));
 
 vi.mock('../db/queries', () => ({
+  getGrantedCapabilities: vi.fn(() => []),
   getPRBySessionId: vi.fn(() => null),
   setPauseReason: vi.fn(),
   insertPauseInterval: vi.fn(),

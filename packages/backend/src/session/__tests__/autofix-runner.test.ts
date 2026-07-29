@@ -1096,6 +1096,148 @@ describe('runAutofix — exit-128 classified as git infrastructure failure', () 
   });
 });
 
+// ── runAutofix — committed-deletion inherited in changedFiles ─────────────────
+
+describe('runAutofix — changedFiles path absent from worktree (committed deletion)', () => {
+  it('succeeds when changedFiles includes a path already deleted in HEAD', async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p === '/worktree') return true;
+      if (p === '/worktree/deleted.ts') return false;
+      if (p === '/worktree/src/foo.ts') return true;
+      return false;
+    });
+
+    const addArgs: string[][] = [];
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  src/foo.ts\n');
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
+        return makeProc(0, 'deleted.ts\nsrc/foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add') {
+        addArgs.push(a);
+        return makeProc(0, '');
+      }
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, 'src/foo.ts\n');
+      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'rev-parse') return makeProc(0, 'abc123\n');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run lint'],
+      () => {},
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.isGitInfraFailure).toBeUndefined();
+    expect(addArgs[0]).toEqual(['add', '--', 'src/foo.ts']);
+  });
+
+  it('still stages and commits genuinely modified files (no regression)', async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p === '/worktree') return true;
+      if (p === '/worktree/src/foo.ts') return true;
+      return false;
+    });
+
+    const addArgs: string[][] = [];
+    let committed = false;
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  src/foo.ts\n');
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
+        return makeProc(0, 'src/foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add') {
+        addArgs.push(a);
+        return makeProc(0, '');
+      }
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, 'src/foo.ts\n');
+      if (cmd === 'git' && a[0] === 'commit') {
+        committed = true;
+        return makeProc(0, '');
+      }
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'rev-parse') return makeProc(0, 'abc123\n');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run lint'],
+      () => {},
+    );
+
+    expect(result.success).toBe(true);
+    expect(addArgs[0]).toEqual(['add', '--', 'src/foo.ts']);
+    expect(committed).toBe(true);
+  });
+
+  it('handles a changedFiles entry that is a real pending (uncommitted) deletion without erroring', async () => {
+    // A pending deletion (staged/unstaged but not committed) is still absent
+    // from the worktree, so it is filtered the same as a committed deletion —
+    // `git add --` never needs to see it, and there's nothing left for it to fix.
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p === '/worktree') return true;
+      if (p === '/worktree/pending-deleted.ts') return false;
+      return false;
+    });
+
+    const addArgs: string[][] = [];
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, ' D pending-deleted.ts\n');
+      if (
+        cmd === 'git' &&
+        a[0] === 'diff' &&
+        a[1] === '--name-only' &&
+        a[2] === 'dev...HEAD'
+      )
+        return makeProc(0, 'pending-deleted.ts\n');
+      if (cmd === 'git' && a[0] === 'add') {
+        addArgs.push(a);
+        return makeProc(0, '');
+      }
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
+        return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'rev-parse') return makeProc(0, 'abc123\n');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run lint'],
+      () => {},
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.isGitInfraFailure).toBeUndefined();
+    // No worktree-present changed files → the scoped `git add` step is skipped entirely.
+    expect(addArgs.length).toBe(0);
+  });
+});
+
 // ── expandAutofixCommand — unit ───────────────────────────────────────────────
 
 describe('expandAutofixCommand', () => {

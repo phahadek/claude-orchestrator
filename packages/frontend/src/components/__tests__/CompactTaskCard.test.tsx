@@ -17,6 +17,7 @@ function makeTask(overrides: Partial<TaskView> = {}): TaskView {
     blockerNames: [],
     wave: 1,
     codeSession: null,
+    planningSession: null,
     pr: null,
     review: null,
     totalTokens: { input: 0, output: 0 },
@@ -162,6 +163,36 @@ describe('CompactTaskCard', () => {
       />,
     );
     expect(screen.queryByTestId('blocker-names')).toBeNull();
+  });
+
+  it('hides the checkbox and shows the reason for a dep-blocked task', () => {
+    render(
+      <CompactTaskCard
+        task={makeTask({ taskType: '🔧 Operational' })}
+        showCheckbox={false}
+        checked={false}
+        onCheckChange={vi.fn()}
+        onClick={vi.fn()}
+        blockedReason="waiting on Dep Task"
+      />,
+    );
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.getByTestId('ops-dep-blocked-reason').textContent).toContain(
+      'waiting on Dep Task',
+    );
+  });
+
+  it('does not show the blocked-reason section when not blocked', () => {
+    render(
+      <CompactTaskCard
+        task={makeTask()}
+        showCheckbox={true}
+        checked={false}
+        onCheckChange={vi.fn()}
+        onClick={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('ops-dep-blocked-reason')).toBeNull();
   });
 
   it('has data-status attribute matching the task displayStatus', () => {

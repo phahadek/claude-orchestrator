@@ -749,17 +749,20 @@ describe('useSessionStore', () => {
   });
 
   describe('session_archived handling', () => {
-    it('removes the session from the in-memory map on session_archived', () => {
+    it('marks the session archived instead of removing it from the in-memory map', () => {
       const { result } = renderHook(() => useSessionStore());
       act(() => result.current.dispatch(msg.session_started()));
       expect(result.current.sessions).toHaveLength(1);
+      expect(result.current.sessions[0].archived).toBeFalsy();
 
       const archivedMsg: ServerMessage = {
         type: 'session_archived',
         sessionId: SESSION_ID,
       };
       act(() => result.current.dispatch(archivedMsg));
-      expect(result.current.sessions).toHaveLength(0);
+      expect(result.current.sessions).toHaveLength(1);
+      expect(result.current.sessions[0].sessionId).toBe(SESSION_ID);
+      expect(result.current.sessions[0].archived).toBe(true);
     });
 
     it('session_archived for unknown id is a no-op', () => {
@@ -966,6 +969,45 @@ describe('useSessionStore', () => {
       );
       expect(result.current.sessions[0].lastStatusReplay).toBe(false);
       expect(result.current.sessions[0].status).toBe('running');
+    });
+  });
+
+  describe('session_status / session_started ordering race', () => {
+    it('applies a live "running" status that arrives before session_started, and session_started does not regress it back to starting', () => {
+      const { result } = renderHook(() => useSessionStore());
+
+      // session_status arrives first — session is not yet in the store.
+      act(() => result.current.dispatch(msg.session_status()));
+      expect(result.current.sessions[0].status).toBe('running');
+
+      // session_started arrives afterwards and should hydrate metadata
+      // without wiping out the already-applied live status.
+      act(() => result.current.dispatch(msg.session_started()));
+
+      const session = result.current.sessions[0];
+      expect(session.status).toBe('running');
+      expect(session.taskName).toBe('Test Task');
+      expect(session.notionTaskUrl).toBe('https://notion.so/task');
+    });
+
+    it('applies status normally when session_started arrives first (no race)', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      act(() => result.current.dispatch(msg.session_status()));
+
+      const session = result.current.sessions[0];
+      expect(session.status).toBe('running');
+      expect(session.taskName).toBe('Test Task');
+    });
+
+    it('does not drop a session_status for a completely unknown session — upserts a stub', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_status()));
+
+      const session = result.current.sessions[0];
+      expect(session).toBeDefined();
+      expect(session.sessionId).toBe(SESSION_ID);
+      expect(session.status).toBe('running');
     });
   });
 });

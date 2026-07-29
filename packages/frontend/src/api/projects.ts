@@ -1,4 +1,8 @@
 import { getDeviceToken } from '../auth/deviceToken';
+import type {
+  Session,
+  EventType,
+} from '@claude-orchestrator/backend/src/db/types';
 
 export type TaskSource = 'notion' | 'yaml' | 'github' | 'jira';
 export type GitMode = 'github' | 'local-only';
@@ -368,6 +372,18 @@ export const projectsApi = {
   },
 };
 
+export interface SessionEventRecord {
+  eventType: EventType;
+  content: string;
+  timestamp: number;
+  messageId?: string;
+}
+
+export interface SessionWithEvents {
+  session: Session;
+  events: SessionEventRecord[];
+}
+
 export const sessionsApi = {
   markMerged(sessionId: string): Promise<{ ok: boolean }> {
     return request<{ ok: boolean }>(
@@ -379,6 +395,17 @@ export const sessionsApi = {
     return request<{ ok: boolean }>(
       `/api/sessions/${encodeURIComponent(sessionId)}/abort`,
       { method: 'POST' },
+    );
+  },
+  /**
+   * Fetches a session by id regardless of archived state — the dedicated
+   * `/archived` list route excludes it from the sidebar, but this route
+   * resolves any session row directly, which is what lets an archived
+   * session referenced by a task still be rendered inline.
+   */
+  getById(sessionId: string): Promise<SessionWithEvents> {
+    return request<SessionWithEvents>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/events`,
     );
   },
 };

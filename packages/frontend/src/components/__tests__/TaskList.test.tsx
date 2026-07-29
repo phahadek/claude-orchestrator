@@ -35,6 +35,7 @@ function makeTask(
     blockerNames: [],
     wave: 1,
     codeSession: null,
+    planningSession: null,
     pr: null,
     review: null,
     totalTokens: { input: 0, output: 0 },
@@ -991,7 +992,314 @@ describe('TaskList', () => {
       expect(groomBtn.textContent).toContain('Groom (2)');
     });
 
-    it('clicking Groom(N) shows the StagedIntentPanel placeholder without a network write', () => {
+    it('reconciles launched against a source-prefixed taskId (notion:<uuid>) without a false "did not launch" error', async () => {
+      const bareUuid = 'abc-uuid';
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched: [bareUuid], deferred: [] }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({}),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'bc-companion-1',
+            taskName: 'Backlog Code Task',
+            displayStatus: 'backlog',
+            taskType: '💻 Code',
+          }),
+          makeTask({
+            taskId: `notion:${bareUuid}`,
+            taskName: 'Backlog Design Task',
+            displayStatus: 'backlog',
+            taskType: '📐 Design',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      const nonCodeSection = screen.getByTestId('non-code-section');
+      fireEvent.click(
+        within(nonCodeSection).getByTestId('type-card-header-design'),
+      );
+      fireEvent.click(
+        within(nonCodeSection)
+          .getByTestId('type-card-design')
+          .querySelector('input[type="checkbox"]') as HTMLInputElement,
+      );
+
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      fireEvent.click(groomBtn);
+
+      await waitFor(() => {
+        expect(groomBtn.textContent).toContain('Groom (0)');
+      });
+      expect(screen.queryByTestId('groom-error')).toBeNull();
+    });
+
+    it('renders no launched-sessions banner after a successful batch launch', async () => {
+      const bareUuid = 'no-banner-uuid';
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched: [bareUuid], deferred: [] }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({}),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'bc-companion-no-banner',
+            taskName: 'Backlog Code Task',
+            displayStatus: 'backlog',
+            taskType: '💻 Code',
+          }),
+          makeTask({
+            taskId: bareUuid,
+            taskName: 'Backlog Design Task',
+            displayStatus: 'backlog',
+            taskType: '📐 Design',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      const nonCodeSection = screen.getByTestId('non-code-section');
+      fireEvent.click(
+        within(nonCodeSection).getByTestId('type-card-header-design'),
+      );
+      fireEvent.click(
+        within(nonCodeSection)
+          .getByTestId('type-card-design')
+          .querySelector('input[type="checkbox"]') as HTMLInputElement,
+      );
+
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      fireEvent.click(groomBtn);
+
+      await waitFor(() => {
+        expect(groomBtn.textContent).toContain('Groom (0)');
+      });
+
+      // Acceptance criterion: a successful batch launch renders no
+      // launched-sessions banner anywhere in the task list.
+      expect(screen.queryByTestId('groom-launched-panel')).toBeNull();
+      expect(screen.queryByTestId('groom-error')).toBeNull();
+    });
+
+    it('reconciles launched when the server returns source-prefixed ids (notion:<uuid>) without a false "did not launch" error', async () => {
+      const bareUuid = 'def-uuid';
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                launched: [`notion:${bareUuid}`],
+                deferred: [],
+              }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({}),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'bc-companion-2',
+            taskName: 'Backlog Code Task',
+            displayStatus: 'backlog',
+            taskType: '💻 Code',
+          }),
+          makeTask({
+            taskId: `notion:${bareUuid}`,
+            taskName: 'Backlog Design Task',
+            displayStatus: 'backlog',
+            taskType: '📐 Design',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      const nonCodeSection = screen.getByTestId('non-code-section');
+      fireEvent.click(
+        within(nonCodeSection).getByTestId('type-card-header-design'),
+      );
+      fireEvent.click(
+        within(nonCodeSection)
+          .getByTestId('type-card-design')
+          .querySelector('input[type="checkbox"]') as HTMLInputElement,
+      );
+
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      fireEvent.click(groomBtn);
+
+      await waitFor(() => {
+        expect(groomBtn.textContent).toContain('Groom (0)');
+      });
+      expect(screen.queryByTestId('groom-error')).toBeNull();
+    });
+
+    it('reports a genuinely-failed task with its failure reason even when launched[] holds prefixed ids', async () => {
+      const launchedUuid = 'launched-uuid';
+      const notLaunchedUuid = 'not-launched-uuid';
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                launched: [`notion:${launchedUuid}`],
+                deferred: [],
+                failed: [
+                  {
+                    taskId: `notion:${notLaunchedUuid}`,
+                    reason: 'Max concurrent planning sessions (5) reached',
+                  },
+                ],
+              }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({}),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'bc-companion-3',
+            taskName: 'Backlog Code Task',
+            displayStatus: 'backlog',
+            taskType: '💻 Code',
+          }),
+          makeTask({
+            taskId: `notion:${launchedUuid}`,
+            taskName: 'Backlog Design Task',
+            displayStatus: 'backlog',
+            taskType: '📐 Design',
+          }),
+          makeTask({
+            taskId: `notion:${notLaunchedUuid}`,
+            taskName: 'Backlog Design Task 2',
+            displayStatus: 'backlog',
+            taskType: '📐 Design',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      const nonCodeSection = screen.getByTestId('non-code-section');
+      fireEvent.click(
+        within(nonCodeSection).getByTestId('type-card-header-design'),
+      );
+      const designCheckboxes = within(nonCodeSection)
+        .getByTestId('type-card-design')
+        .querySelectorAll('input[type="checkbox"]');
+      designCheckboxes.forEach((checkbox) => fireEvent.click(checkbox));
+
+      const groomBtn = within(backlogSection).getByTestId('groom-btn');
+      fireEvent.click(groomBtn);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('groom-error')).toBeDefined();
+      });
+      expect(screen.getByTestId('groom-error').textContent).toContain(
+        `notion:${notLaunchedUuid}`,
+      );
+      expect(screen.getByTestId('groom-error').textContent).toContain(
+        'Max concurrent planning sessions (5) reached',
+      );
+      expect(screen.getByTestId('groom-error').textContent).not.toContain(
+        `notion:${launchedUuid},`,
+      );
+    });
+
+    it('includes a Backlog 🔧 Operational task in groomableTasks and renders a Groom checkbox', () => {
+      renderList([
+        makeTask({
+          taskId: 'bo1',
+          taskName: 'Backlog Operational Task',
+          displayStatus: 'backlog',
+          taskType: '🔧 Operational',
+        }),
+      ]);
+
+      const nonCodeSection = screen.getByTestId('non-code-section');
+      fireEvent.click(
+        within(nonCodeSection).getByTestId('type-card-header-operational'),
+      );
+      const checkbox = within(nonCodeSection)
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      expect(checkbox).not.toBeNull();
+
+      fireEvent.click(checkbox);
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      expect(groomBtn.textContent).toContain('Groom (1)');
+    });
+
+    it('clicking Groom(N) without a selected board is a no-op (no network write, no panel)', () => {
       (global.fetch as ReturnType<typeof vi.fn>).mockClear();
       renderList([
         makeTask({
@@ -1009,7 +1317,7 @@ describe('TaskList', () => {
       fireEvent.click(within(backlogSection).getByRole('checkbox'));
       fireEvent.click(within(backlogSection).getByTestId('groom-btn'));
 
-      expect(screen.getByTestId('groom-placeholder-panel')).toBeDefined();
+      expect(screen.queryByTestId('groom-launched-panel')).toBeNull();
       expect(fetch).not.toHaveBeenCalled();
     });
   });
@@ -1018,7 +1326,7 @@ describe('TaskList', () => {
     function mockOpsEndpoints(launched: string[], entries: unknown[]) {
       (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
         (url: string) => {
-          if (url.includes('/api/ops/launch')) {
+          if (url.includes('/api/planning/launch')) {
             return Promise.resolve({
               ok: true,
               status: 200,
@@ -1113,8 +1421,50 @@ describe('TaskList', () => {
           .querySelector('input[type="checkbox"]'),
       ).toBeNull();
 
-      fireEvent.click(screen.getByTestId('ops-select-all-btn'));
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
       expect(opsBtn.textContent).toContain('Ops (3)');
+    });
+
+    it('hides the checkbox for a dep-blocked ops task and shows the reason, instead of allowing select-then-silent-drop', () => {
+      renderList(
+        [
+          makeTask({
+            taskId: 'op-blocked',
+            taskName: 'Blocked Op Task',
+            displayStatus: 'ready',
+            taskType: '🔧 Operational',
+            opsDepBlocked: true,
+            opsDepBlockedReason: 'waiting on Dependency Task',
+          }),
+          makeTask({
+            taskId: 'op-ready',
+            taskName: 'Ready Op Task',
+            displayStatus: 'ready',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+
+      const typeCard = screen.getByTestId('type-card-operational');
+      const checkboxes = typeCard.querySelectorAll(
+        'input[type="checkbox"]',
+      ) as NodeListOf<HTMLInputElement>;
+      // Only the eligible task renders a checkbox — the dep-blocked task renders none.
+      expect(checkboxes).toHaveLength(1);
+      expect(checkboxes[0].disabled).toBe(false);
+
+      expect(
+        within(typeCard).getByTestId('ops-dep-blocked-reason').textContent,
+      ).toContain('waiting on Dependency Task');
+
+      // Select All only picks up the non-blocked task — the blocked one has no
+      // checkbox at all, so it can't be selected and then silently dropped server-side.
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      expect(opsBtn.textContent).toContain('Ops (1)');
     });
 
     it('clicking Ops(N) launches only the checked subset, not every eligible task', async () => {
@@ -1181,12 +1531,14 @@ describe('TaskList', () => {
       fireEvent.click(opsBtn);
 
       await waitFor(() => {
-        expect(screen.getByTestId('ops-panel')).toBeDefined();
+        expect(opsBtn.textContent).toContain('Ops (0)');
       });
 
       const launchCall = (
         global.fetch as ReturnType<typeof vi.fn>
-      ).mock.calls.find(([url]) => (url as string).includes('/api/ops/launch'));
+      ).mock.calls.find(([url]) =>
+        (url as string).includes('/api/planning/launch'),
+      );
       expect(launchCall).toBeDefined();
       const body = JSON.parse((launchCall![1] as RequestInit).body as string);
       expect(body.taskIds.sort()).toEqual(['op1', 'test1']);
@@ -1218,7 +1570,181 @@ describe('TaskList', () => {
       await waitFor(() => {
         expect(screen.getByTestId('ops-error')).toBeDefined();
       });
-      expect(screen.queryByTestId('ops-panel')).toBeNull();
+      expect(screen.queryByTestId('ops-launched-panel')).toBeNull();
+    });
+
+    it('reconciles launched against a source-prefixed taskId (notion:<uuid>) without a false "did not launch" error', async () => {
+      const bareUuid = 'abc-uuid';
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched: [bareUuid], deferred: [] }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              entries: [
+                {
+                  taskId: bareUuid,
+                  project: 'proj-1',
+                  milestone: 'milestone-1',
+                  state: 'candidate',
+                  updatedAt: '2026-01-01T00:00:00.000Z',
+                },
+              ],
+            }),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: `notion:${bareUuid}`,
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      const checkbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(checkbox);
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      fireEvent.click(opsBtn);
+
+      await waitFor(() => {
+        expect(opsBtn.textContent).toContain('Ops (0)');
+      });
+      expect(screen.queryByTestId('ops-error')).toBeNull();
+    });
+
+    it('reconciles launched when the server returns source-prefixed ids (notion:<uuid>) without a false "did not launch" error', async () => {
+      const bareUuid = 'def-uuid';
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                launched: [`notion:${bareUuid}`],
+                deferred: [],
+              }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              entries: [
+                {
+                  taskId: bareUuid,
+                  project: 'proj-1',
+                  milestone: 'milestone-1',
+                  state: 'candidate',
+                  updatedAt: '2026-01-01T00:00:00.000Z',
+                },
+              ],
+            }),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: `notion:${bareUuid}`,
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      const checkbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(checkbox);
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      fireEvent.click(opsBtn);
+
+      await waitFor(() => {
+        expect(opsBtn.textContent).toContain('Ops (0)');
+      });
+      expect(screen.queryByTestId('ops-error')).toBeNull();
+    });
+
+    it('renders no model/effort selector and launches Ops(N) without a model argument', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched: ['op1'], deferred: [] }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ entries: [] }),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'op1',
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      const checkbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(checkbox);
+
+      expect(screen.queryByTestId('ops-model-select')).toBeNull();
+      expect(screen.queryByTestId('ops-effort-select')).toBeNull();
+      expect(screen.queryByTestId('design-model-select')).toBeNull();
+      expect(screen.queryByTestId('design-effort-select')).toBeNull();
+      expect(screen.queryByTestId('groom-model-select')).toBeNull();
+      expect(screen.queryByTestId('groom-effort-select')).toBeNull();
+
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      fireEvent.click(opsBtn);
+
+      await waitFor(() => {
+        expect(opsBtn.textContent).toContain('Ops (0)');
+      });
+
+      const launchCall = (
+        global.fetch as ReturnType<typeof vi.fn>
+      ).mock.calls.find(([url]) =>
+        (url as string).includes('/api/planning/launch'),
+      );
+      expect(launchCall).toBeDefined();
+      const body = JSON.parse((launchCall![1] as RequestInit).body as string);
+      expect(body.model).toBeUndefined();
+      expect(body.effort).toBeUndefined();
     });
 
     it('resets the staged ops panel when switching to a different milestone', async () => {
@@ -1261,10 +1787,11 @@ describe('TaskList', () => {
         .getByTestId('type-card-operational')
         .querySelector('input[type="checkbox"]') as HTMLInputElement;
       fireEvent.click(checkbox);
-      fireEvent.click(screen.getByTestId('ops-btn'));
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      fireEvent.click(opsBtn);
 
       await waitFor(() => {
-        expect(screen.getByTestId('ops-panel')).toBeDefined();
+        expect(opsBtn.textContent).toContain('Ops (0)');
       });
 
       rerender(
@@ -1281,7 +1808,370 @@ describe('TaskList', () => {
         />,
       );
 
-      expect(screen.queryByTestId('ops-panel')).toBeNull();
+      // With no tasks on the new board, the Ops(N) button (and any staged
+      // launch state from the previous board) doesn't render at all.
+      expect(screen.queryByTestId('ops-btn')).toBeNull();
+    });
+
+    it('excludes a 🔲 Backlog ops-type task from Ops eligibility, routing it to Groom instead', () => {
+      renderList([
+        makeTask({
+          taskId: 'op-backlog',
+          taskName: 'Backlog Op Task',
+          displayStatus: 'backlog',
+          taskType: '🔧 Operational',
+        }),
+        makeTask({
+          taskId: 'op-ready',
+          taskName: 'Ready Op Task',
+          displayStatus: 'ready',
+          taskType: '🔧 Operational',
+        }),
+        makeTask({
+          taskId: 'op-inprogress',
+          taskName: 'In Progress Op Task',
+          displayStatus: 'in_progress',
+          taskType: '🔧 Operational',
+        }),
+      ]);
+
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      // Only the ready + in_progress tasks are ops-eligible; the backlog one is not.
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
+      expect(opsBtn.textContent).toContain('Ops (2)');
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      fireEvent.click(
+        within(backlogSection).getByTestId('groom-select-all-btn'),
+      );
+      expect(groomBtn.textContent).toContain('Groom (1)');
+    });
+
+    it('surfaces deferred launches distinctly from the not-ops-executable message', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched: [], deferred: ['op1'] }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ entries: [] }),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'op1',
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      const checkbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(checkbox);
+      fireEvent.click(screen.getByTestId('ops-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('ops-error')).toBeDefined();
+      });
+      const errorText = screen.getByTestId('ops-error').textContent ?? '';
+      expect(errorText).toContain('waiting on dependencies');
+      expect(errorText).not.toContain('not ops-executable');
+    });
+  });
+
+  describe('Design(N) button', () => {
+    function mockPlanningEndpoint(
+      launched: string[],
+      entries: unknown[],
+      failed: { taskId: string; reason: string }[] = [],
+    ) {
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched, deferred: [], failed }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({ entries }),
+          });
+        },
+      );
+    }
+
+    it('renders a Design checkbox for a Ready 📐 Design task and a Groom checkbox for a Backlog 📐 Design task', () => {
+      renderList([
+        makeTask({
+          taskId: 'design-ready',
+          taskName: 'Ready Design Task',
+          displayStatus: 'ready',
+          taskType: '📐 Design',
+        }),
+        makeTask({
+          taskId: 'design-backlog',
+          taskName: 'Backlog Design Task',
+          displayStatus: 'backlog',
+          taskType: '📐 Design',
+        }),
+      ]);
+
+      expect(screen.getByTestId('design-btn')).toBeDefined();
+
+      fireEvent.click(screen.getByTestId('type-card-header-design'));
+      const readyCheckbox = screen
+        .getByTestId('type-card-design')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      expect(readyCheckbox).not.toBeNull();
+
+      const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
+      fireEvent.click(readyCheckbox);
+      expect(designBtn.textContent).toContain('Design (1)');
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      fireEvent.click(
+        within(backlogSection).getByTestId('groom-select-all-btn'),
+      );
+      expect(groomBtn.textContent).toContain('Groom (1)');
+    });
+
+    it('clicking Design(N) posts workflow "design" with the selected task ids and reconciles launched without a false error', async () => {
+      mockPlanningEndpoint(
+        ['design1', 'plan1'],
+        [
+          {
+            taskId: 'design1',
+            project: 'proj-1',
+            milestone: 'milestone-1',
+            state: 'candidate',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+          {
+            taskId: 'plan1',
+            project: 'proj-1',
+            milestone: 'milestone-1',
+            state: 'candidate',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'design1',
+            taskName: 'Design Task',
+            displayStatus: 'ready',
+            taskType: '📐 Design',
+          }),
+          makeTask({
+            taskId: 'plan1',
+            taskName: 'Planning Task',
+            displayStatus: 'in_progress',
+            taskType: '📋 Planning',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
+      const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
+      expect(designBtn.textContent).toContain('Design (2)');
+
+      fireEvent.click(designBtn);
+
+      await waitFor(() => {
+        expect(designBtn.textContent).toContain('Design (0)');
+      });
+      expect(screen.queryByTestId('design-error')).toBeNull();
+
+      const launchCall = (
+        global.fetch as ReturnType<typeof vi.fn>
+      ).mock.calls.find(([url]) =>
+        (url as string).includes('/api/planning/launch'),
+      );
+      expect(launchCall).toBeDefined();
+      const body = JSON.parse((launchCall![1] as RequestInit).body as string);
+      expect(body.workflow).toBe('design');
+      expect(body.taskIds.sort()).toEqual(['design1', 'plan1']);
+    });
+
+    it('reconciles launched when the server returns source-prefixed ids (notion:<uuid>) without a false "did not launch" error', async () => {
+      const bareUuid = 'design-uuid';
+      mockPlanningEndpoint(
+        [`notion:${bareUuid}`],
+        [
+          {
+            taskId: bareUuid,
+            project: 'proj-1',
+            milestone: 'milestone-1',
+            state: 'candidate',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: `notion:${bareUuid}`,
+            taskName: 'Design Task',
+            displayStatus: 'ready',
+            taskType: '📐 Design',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
+      const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
+      fireEvent.click(designBtn);
+
+      await waitFor(() => {
+        expect(designBtn.textContent).toContain('Design (0)');
+      });
+      expect(screen.queryByTestId('design-error')).toBeNull();
+    });
+
+    it('reports a genuinely-failed task with its failure reason even when launched[] holds prefixed ids', async () => {
+      const launchedUuid = 'design-launched-uuid';
+      const notLaunchedUuid = 'design-not-launched-uuid';
+      mockPlanningEndpoint(
+        [`notion:${launchedUuid}`],
+        [],
+        [
+          {
+            taskId: `notion:${notLaunchedUuid}`,
+            reason: 'Max concurrent planning sessions (5) reached',
+          },
+        ],
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: `notion:${launchedUuid}`,
+            taskName: 'Design Task',
+            displayStatus: 'ready',
+            taskType: '📐 Design',
+          }),
+          makeTask({
+            taskId: `notion:${notLaunchedUuid}`,
+            taskName: 'Design Task 2',
+            displayStatus: 'ready',
+            taskType: '📐 Design',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
+      fireEvent.click(screen.getByTestId('design-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('design-error')).toBeDefined();
+      });
+      expect(screen.getByTestId('design-error').textContent).toContain(
+        `notion:${notLaunchedUuid}`,
+      );
+      expect(screen.getByTestId('design-error').textContent).toContain(
+        'Max concurrent planning sessions (5) reached',
+      );
+      expect(screen.getByTestId('design-error').textContent).not.toContain(
+        `notion:${launchedUuid},`,
+      );
+    });
+  });
+
+  describe('shared NON-CODE Select All / Clear', () => {
+    function renderMixedNonCode() {
+      renderList(
+        [
+          makeTask({
+            taskId: 'op1',
+            taskName: 'Op Task',
+            displayStatus: 'in_progress',
+            taskType: '🔧 Operational',
+          }),
+          makeTask({
+            taskId: 'inv1',
+            taskName: 'Investigation Task',
+            displayStatus: 'ready',
+            taskType: '🔎 Investigation',
+          }),
+          makeTask({
+            taskId: 'design1',
+            taskName: 'Design Task',
+            displayStatus: 'ready',
+            taskType: '📐 Design',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+    }
+
+    it('renders exactly one Select All and one Clear control in the NON-CODE panel', () => {
+      renderMixedNonCode();
+      const nonCodeSection = screen.getByTestId('non-code-section');
+      expect(within(nonCodeSection).getAllByText('Select All').length).toBe(1);
+      expect(within(nonCodeSection).getAllByText('Clear').length).toBe(1);
+    });
+
+    it('shared Select All selects both Ops-eligible and Design-eligible tasks into their own buckets', () => {
+      renderMixedNonCode();
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
+      expect(opsBtn.textContent).toContain('Ops (0)');
+      expect(designBtn.textContent).toContain('Design (0)');
+
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
+
+      expect(opsBtn.textContent).toContain('Ops (2)');
+      expect(designBtn.textContent).toContain('Design (1)');
+    });
+
+    it('shared Clear resets both Ops and Design selections to zero', () => {
+      renderMixedNonCode();
+      const opsBtn = screen.getByTestId('ops-btn') as HTMLButtonElement;
+      const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
+
+      fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
+      expect(opsBtn.textContent).toContain('Ops (2)');
+      expect(designBtn.textContent).toContain('Design (1)');
+
+      fireEvent.click(screen.getByTestId('non-code-clear-btn'));
+
+      expect(opsBtn.textContent).toContain('Ops (0)');
+      expect(designBtn.textContent).toContain('Design (0)');
     });
   });
 
@@ -1587,6 +2477,152 @@ describe('TaskList', () => {
         />,
       );
       expect(screen.queryByTestId('merge-ready-btn')).toBeNull();
+    });
+  });
+
+  describe('task.move apply triggers a list refresh', () => {
+    const project = {
+      id: 'proj-1',
+      name: 'Proj',
+      projectDir: '/tmp/proj',
+      contextUrl: '',
+      boardId: 'ms-1',
+      taskSource: 'notion' as const,
+      gitMode: 'github' as const,
+      autoLaunchEnabled: false,
+      autoLaunchMilestoneId: null,
+      autoMergeEnabled: false,
+      dataResidencyConfirmed: true,
+      baseBranch: 'dev',
+    };
+
+    function mockMoveEndpoints() {
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string, init?: RequestInit) => {
+          if (url.includes('/milestones')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => [
+                {
+                  id: 'ms-1',
+                  projectId: 'proj-1',
+                  name: 'M1',
+                  sourceId: 'db-1',
+                  displayOrder: 1,
+                  createdAt: 0,
+                  updatedAt: 0,
+                },
+                {
+                  id: 'ms-2',
+                  projectId: 'proj-1',
+                  name: 'M2',
+                  sourceId: 'db-2',
+                  displayOrder: 2,
+                  createdAt: 0,
+                  updatedAt: 0,
+                },
+              ],
+            });
+          }
+          if (url.includes('/page?')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ markdown: '' }),
+            });
+          }
+          if (url.includes('/api/tasks/move-preview')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                ok: true,
+                isLaterMove: false,
+                cascadeSet: [],
+                droppedEdges: [],
+              }),
+            });
+          }
+          if (
+            url.includes('/api/staged-intents') &&
+            !url.includes('/apply') &&
+            init?.method === 'POST'
+          ) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                id: 'intent-1',
+                kind: 'task.move',
+                payload: {
+                  taskName: 'Task t1',
+                  sourceMilestoneName: 'M1',
+                  targetMilestoneName: 'M2',
+                },
+                projectId: 'proj-1',
+                createdAt: 0,
+              }),
+            });
+          }
+          if (url.includes('/api/staged-intents/intent-1/apply')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ ok: true, result: {} }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({}),
+          });
+        },
+      );
+    }
+
+    it('calls onForceRefetch once the staged move intent is applied', async () => {
+      mockMoveEndpoints();
+      const onForceRefetch = vi.fn().mockResolvedValue(undefined);
+
+      renderList(
+        [
+          makeTask({
+            taskId: 't1',
+            taskName: 'Task t1',
+            displayStatus: 'in_progress',
+          }),
+        ],
+        { boardId: 'ms-1', project, onForceRefetch },
+      );
+
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: /move task t1 to another milestone/i,
+        }),
+      );
+
+      const select = await screen.findByRole('combobox');
+      fireEvent.change(select, { target: { value: 'ms-2' } });
+
+      const stageButton = await screen.findByRole('button', {
+        name: /stage move/i,
+      });
+      await waitFor(() =>
+        expect(stageButton.hasAttribute('disabled')).toBe(false),
+      );
+      fireEvent.click(stageButton);
+
+      const applyButton = await screen.findByRole('button', {
+        name: /apply/i,
+      });
+      expect(onForceRefetch).not.toHaveBeenCalled();
+
+      fireEvent.click(applyButton);
+
+      await waitFor(() => expect(onForceRefetch).toHaveBeenCalledTimes(1));
+      // The staged-intent panel is dismissed once applied.
+      expect(screen.queryByTestId('move-panel')).toBeNull();
     });
   });
 });

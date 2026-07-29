@@ -2,8 +2,9 @@
  * In-backend grooming promotion gate — the enforcement point the /groom
  * skill's gate usage rewires to as grooming state moves off the file-cache
  * PreToolUse hook (scripts/groom-gate.mjs) and into the orchestrator. Covers
- * the size_check, type_check, gate_contribution, and seed_contribution
- * artifacts; the hook's other checks (signoff, hard_block_deps,
+ * the size_check, type_check, gate_contribution, seed_contribution,
+ * bindingConstraints (FM1), Files/paths resolve-in-artifact (FM2), and
+ * cite-or-route (FM3) artifacts; the hook's other checks (signoff,
  * repo_assignment) migrate here in follow-on tasks as their state moves
  * backend-side.
  *
@@ -14,11 +15,41 @@
  * durable marker (gate_accretion / seed_accretion, written by
  * accreteGateContribution / stageSeedContribution) rather than a field on the
  * grooming-state entry, since it must survive independent of whatever cache
- * produced the Ready-flip intent.
+ * produced the Ready-flip intent. gate_contribution's per-candidate triage
+ * (`entry.gateContributionCandidates` — runtime-observable /
+ * config-or-code-determined / needs-triage, see procedureCore.ts's
+ * accrete-gate-and-seed principle) is the one present-and-dispositioned check
+ * that *is* a plain entry field rather than a durable marker: it fails open
+ * when absent, same as the marker check does for a non-Code type.
+ *
+ * bindingConstraints (FM1), Files/paths resolution (FM2), and the
+ * Design/Planning/Investigation Depends On + cite-or-route signals (FM3) are re-derived
+ * from `entry.regions` / `entry.filesPathsEntries` / `entry.dependsOnTasks`
+ * rather than trusted as a caller-asserted "this is fine" — a session can
+ * misreport a disposition's shape, but it can't misreport which constraints
+ * apply (CONSTRAINT_CATALOG × regions is computed here) or launder a hedge
+ * token out of a Files/paths entry (the hedge scan re-runs here too).
+ *
+ * For interactive (📐 Design / 📋 Planning) types, one further gate applies:
+ * approve-by-standard promotion (planning/triage.ts) — a recorded triage
+ * verdict that floors to 'clean', re-derived server-side from the same
+ * `dependsOnTasks` / `constraintsDispositioned` facts above rather than
+ * trusted as a caller-asserted final verdict. Auto-dispatched types
+ * (💻 Code) are unaffected and keep the unchanged per-task human gate.
  */
 
 import { getAccretionMarker as getGateAccretionMarker } from '../gate/gateStore';
 import { getAccretionMarker as getSeedAccretionMarker } from '../seed/seedStore';
+import {
+  bindingConstraintIdsForRegions,
+  type RegionsLike,
+} from './constraintCatalog';
+import {
+  applyTriageFloor,
+  isInteractiveTaskType,
+  INTERACTIVE_TASK_TYPES,
+  type TriageVerdict,
+} from '../planning/triage';
 
 const SIZE_CHECK_DECISIONS = new Set([
   'no_split',
@@ -28,10 +59,85 @@ const SIZE_CHECK_DECISIONS = new Set([
 ]);
 
 /** Task types that require a gate_contribution accretion marker before Ready. */
-const GATE_CONTRIBUTION_TYPES = new Set(['💻 Code', '🛠️ Tooling']);
+const GATE_CONTRIBUTION_TYPES = new Set(['💻 Code']);
 
 /** Task types that require a seed_contribution accretion marker before Ready. */
-const SEED_CONTRIBUTION_TYPES = new Set(['💻 Code', '🛠️ Tooling']);
+const SEED_CONTRIBUTION_TYPES = new Set(['💻 Code']);
+
+/** Statuses that clear a Depends On edge / a cited Design task as "settled". */
+const DONE_STATUSES = new Set(['✅ Done', '⏭️ Deferred']);
+
+/**
+ * Types whose non-Done presence in Depends On blocks promotion (FM3 signal
+ * a): their outcome may still reshape the task and invalidate the grooming
+ * already recorded against it. Deliberately decoupled from
+ * INTERACTIVE_TASK_TYPES (planning/triage.ts) — that set also gates
+ * approve-by-standard eligibility, and widening it would silently grant a
+ * new type approve-by-standard promotion as a side effect of fixing this
+ * gate. 🔎 Investigation is included because it has the most direct
+ * scope-reshaping mechanism after Design/Planning: "An Investigation
+ * legitimately produces Code tasks as its output" (procedures.md § Task
+ * types), so a task depending on a non-Done Investigation is groomed against
+ * a scope the Investigation may reshape, supersede, or split.
+ */
+const DEPENDS_ON_GATE_TYPES = new Set([
+  ...INTERACTIVE_TASK_TYPES,
+  '🔎 Investigation',
+]);
+
+/** and/or is a Files/paths-section hedge token only — see readinessGate.ts's Tier-2 class for the general-prose scan, which deliberately excludes it. */
+const FILES_PATHS_HEDGE_TOKENS = ['and/or', 'confirm', 'tbd', 'exact file'];
+
+/** One parsed `## Files / paths affected` list item (groomLoad.ts produces these with git-validated `existsInRepo`). */
+export interface FilesPathsEntry {
+  /** The raw list-item text as it appeared in the task body. */
+  raw: string;
+  /** True when the entry explicitly marks a not-yet-created path via `*(new)*`. */
+  isNew: boolean;
+  /** True when the entry's path resolves to an existing tracked file in the repo. */
+  existsInRepo: boolean;
+}
+
+/** A Depends On task's last-known type/status, as resolved by groomLoad.ts against the board/neighbour boards. */
+export interface DependsOnTaskRef {
+  id: string;
+  type?: string;
+  status?: string;
+}
+
+/**
+ * The groomer's recorded disposition for one binding constraint:
+ *  - complies: the task's regions comply with the constraint as written.
+ *    `citedDesignTaskId`, when present, instead cites an already-✅-Done
+ *    Design task as the locked decision the task complies against (FM3
+ *    cite-a-locked-decision) — it must resolve or the disposition doesn't
+ *    clear the constraint.
+ *  - n/a: the constraint doesn't actually bind this task despite the region
+ *    match; `why` is mandatory.
+ *  - conflict_route: the task's scope conflicts with the constraint;
+ *    `routedTaskId` must name a recorded 📐 Design Depends On task (FM3
+ *    route-to-/design).
+ */
+type ConstraintDisposition =
+  | { disposition: 'complies'; citedDesignTaskId?: string }
+  | { disposition: 'n/a'; why: string }
+  | { disposition: 'conflict_route'; routedTaskId: string };
+
+/**
+ * One line from the task body's pre-groom "### 👁️ Manual verification"
+ * section, triaged before it is either accreted to the gate or relocated to
+ * "### 🤖 Automated tests" — see procedureCore.ts's accrete-gate-and-seed
+ * principle, which states the same three outcomes and the same deciding
+ * question (behavioural trace vs code-only) as config-template/task-writing.md
+ * § Manual Verification Gate.
+ */
+interface GateContributionCandidate {
+  text: string;
+  classification?:
+    | 'runtime-observable'
+    | 'config-or-code-determined'
+    | 'needs-triage';
+}
 
 export interface GroomingGateEntry {
   size_check?: { decision?: unknown; [key: string]: unknown } | null;
@@ -42,11 +148,71 @@ export interface GroomingGateEntry {
   } | null;
   /** Display-format Task Type, e.g. '💻 Code' — decides whether gate_contribution is required. */
   type?: string;
+  /** This task's resolved code regions (codeWorklist.ts's resolveTaskRegions) — drives bindingConstraints re-derivation. */
+  regions?: RegionsLike;
+  /** Per-binding-constraint-id disposition recorded during grooming (grooming-state.json's constraints_dispositioned). */
+  constraintsDispositioned?: Record<string, ConstraintDisposition>;
+  /** For 💻 Code tasks: parsed `## Files / paths affected` entries — the resolve-in-artifact check (FM2). */
+  filesPathsEntries?: FilesPathsEntry[];
+  /** This task's declared Depends On, resolved to type/status — drives FM3's Design/Planning liveness + cite-or-route signals. */
+  dependsOnTasks?: DependsOnTaskRef[];
+  /**
+   * Approve-by-standard triage input for an interactive (📐 Design /
+   * 📋 Planning) task — see planning/triage.ts. Required for those types
+   * before promotion; ignored for auto-dispatched types (💻 Code stays
+   * per-task-gated). `proposedVerdict` is the groomer's judgment-primary
+   * call; `hasOpenQuestionsHeading` is a structural fact groomLoad.ts
+   * computes from the task body. The deterministic floor is re-applied here
+   * from server-derived facts (hard-block Depends On, routed constraint
+   * conflicts) rather than trusting a caller-asserted final verdict.
+   */
+  triage?: {
+    proposedVerdict: TriageVerdict;
+    hasOpenQuestionsHeading: boolean;
+  };
+  /**
+   * The per-line triage of the pre-groom "### 👁️ Manual verification"
+   * section's candidates for gate_contribution, when the groomer recorded
+   * one. Absent entirely, this check fails open (mirrors gate_contribution's
+   * own durable-marker check) — a task with no Manual verification section
+   * (or a caller that hasn't started passing this yet) records nothing here
+   * and is unaffected.
+   */
+  gateContributionCandidates?: GateContributionCandidate[];
+  /**
+   * True when this task's pre-groom body (at Ready-flip staging time) still
+   * carried a "### 👁️ Manual verification" section — a structural fact
+   * groomLoad.ts computes from the body, same posture as
+   * `triage.hasOpenQuestionsHeading`. Used by stagedIntents.ts's
+   * group-liveness check (mirroring `hasGroupDependsOn` /
+   * `DependsOnCompletenessError`) to require the intent group also carry a
+   * live `task.patchBodySection` remove targeting that heading before the
+   * Ready flip may commit — this field only signals the fact is worth
+   * checking; the group-liveness check itself lives in stagedIntents.ts,
+   * which alone knows about sibling staged intents.
+   */
+  hasManualVerificationSection?: boolean;
 }
 
 export interface GroomingGateResult {
   allowed: boolean;
   reasons: string[];
+}
+
+/**
+ * Lets a caller that already knows a matching gate.accrete/seed.stage intent
+ * will apply for real (same task, same intent group, ordered ahead of the
+ * arming task.setStatus -> Ready — see stagedIntents.ts's group-commit
+ * ordering) skip re-deriving that specific durable-marker check ahead of
+ * time. This never substitutes a durable marker for the check: the real
+ * commit-time call (TaskWriteCommands.setStatus, reached only after the
+ * group's gate.accrete/seed.stage intents have actually applied and written
+ * their markers) is always made without these flags, so the marker remains
+ * the sole source of truth for whether the flip is actually allowed to land.
+ */
+export interface AccretionCheckOptions {
+  skipGateContributionCheck?: boolean;
+  skipSeedContributionCheck?: boolean;
 }
 
 function isSizeCheckClassified(entry: GroomingGateEntry): boolean {
@@ -78,39 +244,314 @@ function isTypeCheckDispositioned(entry: GroomingGateEntry): boolean {
 /**
  * gate_contribution requires a durable gate_accretion marker for the task
  * being promoted (accreteGateContribution writes it, keyed by source task id
- * — the task being promoted is its own source). Absent `type`, or a type
- * outside Code/Tooling, fail-open (allow) — mirrors groom-gate.mjs's
- * needsGate check.
+ * — the task being promoted is its own source). Absent a resolved type, or a
+ * type outside Code, fail-open (allow) — mirrors groom-gate.mjs's
+ * needsGate check. A marker recording a bare 'none'/'n/a' decision must also
+ * carry a substantive, non-empty `reason` — the judgement that the change's
+ * behaviour was assessed and found to have nothing runtime-observable,
+ * distinguishing an assessed none from one that fell out of an empty
+ * pre-groom body section. An 'items' decision needs no reason: the items
+ * themselves are the evidence of assessment.
  */
 function isGateContributionRecorded(
-  entry: GroomingGateEntry,
+  type: string | undefined,
   taskId: string,
-): boolean {
-  if (!entry.type || !GATE_CONTRIBUTION_TYPES.has(entry.type)) return true;
-  return getGateAccretionMarker(taskId) !== undefined;
+): { ok: boolean; reasons: string[] } {
+  if (!type || !GATE_CONTRIBUTION_TYPES.has(type))
+    return { ok: true, reasons: [] };
+  const marker = getGateAccretionMarker(taskId);
+  if (!marker) return { ok: false, reasons: [] };
+  if (
+    (marker.decision === 'none' || marker.decision === 'n/a') &&
+    !marker.reason?.trim()
+  ) {
+    return {
+      ok: false,
+      reasons: [
+        `gate_contribution is recorded as "${marker.decision}" without a substantive reason — a none/n/a ` +
+          "decision must record why the groomer's own assessment of the change's runtime-observable " +
+          'behaviour found nothing gate-worthy, not merely that the input section was empty.',
+      ],
+    };
+  }
+  return { ok: true, reasons: [] };
 }
 
 /**
  * seed_contribution requires a durable seed_accretion marker for the task
  * being promoted (stageSeedContribution writes it, keyed by source task id —
- * the task being promoted is its own source). Absent `type`, or a type
- * outside Code/Tooling, fail-open (allow) — mirrors gate_contribution's
+ * the task being promoted is its own source). Absent a resolved type, or a
+ * type outside Code, fail-open (allow) — mirrors gate_contribution's
  * treatment and groom-gate.mjs's needsSeed check.
  */
 function isSeedContributionRecorded(
-  entry: GroomingGateEntry,
+  type: string | undefined,
   taskId: string,
 ): boolean {
-  if (!entry.type || !SEED_CONTRIBUTION_TYPES.has(entry.type)) return true;
+  if (!type || !SEED_CONTRIBUTION_TYPES.has(type)) return true;
   return getSeedAccretionMarker(taskId) !== undefined;
 }
 
-/** Checks the size_check / type_check / gate_contribution / seed_contribution artifacts of a grooming-state entry ahead of a Ready promotion. */
+/**
+ * Present-and-dispositioned, same posture as size_check/type_check: every
+ * gate_contribution candidate must carry a non-empty classification string,
+ * but the content of that classification is never judged — a groomer's
+ * "needs-triage" call is accepted exactly as readily as "runtime-observable".
+ * Absent an `entry.gateContributionCandidates` array entirely, this check
+ * fails open (nothing to disposition).
+ */
+function isGateContributionCandidatesClassified(
+  candidates: GateContributionCandidate[] | undefined,
+): { ok: boolean; reasons: string[] } {
+  if (!candidates || candidates.length === 0) return { ok: true, reasons: [] };
+  const reasons = candidates
+    .filter((c) => !c.classification || !`${c.classification}`.trim())
+    .map(
+      (c) =>
+        `gate_contribution candidate "${c.text}" has no recorded classification — every candidate ` +
+        'must be triaged runtime-observable / config-or-code-determined / needs-triage before promotion.',
+    );
+  return { ok: reasons.length === 0, reasons };
+}
+
+/**
+ * Word-boundary match, excluding hyphenated compounds (e.g. `confirm-gate`,
+ * `confirm-restart`) — a bare `includes` flagged those StepKind/playbook step
+ * ids alongside real hedges. `\b` alone still rejects `Confirmed` (no
+ * boundary between the two word characters at `m`/`e`).
+ */
+function tokenToHedgeRegex(token: string): RegExp {
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // eslint-disable-next-line security/detect-non-literal-regexp -- token is always one of the fixed FILES_PATHS_HEDGE_TOKENS constants above, never external input.
+  return new RegExp(`\\b${escaped}\\b(?!-)`, 'i');
+}
+
+function filesPathsHedgeTokens(raw: string): string[] {
+  return FILES_PATHS_HEDGE_TOKENS.filter((t) => tokenToHedgeRegex(t).test(raw));
+}
+
+/**
+ * FM2 — resolve-in-artifact. For 💻 Code tasks, every Files/paths entry must
+ * be free of hedge tokens and resolve to a concrete file: either
+ * git-validated existing, or explicitly marked `*(new)*`. Non-Code types
+ * fail-open (not the artifact this check governs).
+ */
+function isFilesPathsResolved(
+  type: string | undefined,
+  entries: FilesPathsEntry[] | undefined,
+): { ok: boolean; reasons: string[] } {
+  if (type !== '💻 Code') return { ok: true, reasons: [] };
+  const reasons: string[] = [];
+  if (!entries || entries.length === 0) {
+    return {
+      ok: false,
+      reasons: [
+        'Files / paths affected has no parseable entries for a 💻 Code task — every entry must resolve ' +
+          'to a concrete existing file or an explicit *(new)* file.',
+      ],
+    };
+  }
+  for (const e of entries) {
+    const hedges = filesPathsHedgeTokens(e.raw);
+    if (hedges.length) {
+      reasons.push(
+        `Files/paths entry "${e.raw}" contains hedge token(s) [${hedges.join(', ')}] — pin a concrete path before promotion.`,
+      );
+      continue;
+    }
+    if (!e.isNew && !e.existsInRepo) {
+      reasons.push(
+        `Files/paths entry "${e.raw}" does not resolve to an existing tracked file and is not marked *(new)*.`,
+      );
+    }
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
+/**
+ * FM3 signal (a) — a non-Done 📐 Design / 📋 Planning / 🔎 Investigation
+ * Depends On task can still reshape this task's scope, invalidating whatever
+ * was groomed against it. Blocks promotion until that dependency reaches
+ * ✅ Done (or is ⏭️ Deferred).
+ */
+function isDependsOnGateClear(dependsOnTasks: DependsOnTaskRef[] | undefined): {
+  ok: boolean;
+  reasons: string[];
+} {
+  const reasons: string[] = [];
+  for (const dep of dependsOnTasks ?? []) {
+    if (
+      dep.type &&
+      DEPENDS_ON_GATE_TYPES.has(dep.type) &&
+      !(dep.status && DONE_STATUSES.has(dep.status))
+    ) {
+      reasons.push(
+        `Depends On task "${dep.id}" is a non-Done ${dep.type} task — its outcome may reshape this task's ` +
+          'scope; it must reach ✅ Done before this task can promote.',
+      );
+    }
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
+/**
+ * FM1 + FM3 signal (b)/(c) — re-derive this task's binding constraints from
+ * `regions` (never trust a caller-supplied id list), require a disposition
+ * per constraint, and validate each disposition's shape: n/a needs a reason,
+ * conflict_route needs a recorded routed 📐 Design Depends On task, and a
+ * complies citing a Design decision needs that citation to resolve to
+ * ✅ Done.
+ */
+function isConstraintsDispositioned(entry: GroomingGateEntry): {
+  ok: boolean;
+  reasons: string[];
+} {
+  const ids = bindingConstraintIdsForRegions(
+    entry.regions ?? { packages: [], files: [] },
+  );
+  const dispositioned = entry.constraintsDispositioned ?? {};
+  const dependsOnTasks = entry.dependsOnTasks ?? [];
+  const reasons: string[] = [];
+
+  for (const id of ids) {
+    const d = dispositioned[id];
+    if (!d) {
+      reasons.push(
+        `binding constraint "${id}" has no recorded disposition — comply / n-a (+why) / conflict→route is ` +
+          'required before promotion.',
+      );
+      continue;
+    }
+    if (d.disposition === 'n/a' && !d.why?.trim()) {
+      reasons.push(
+        `binding constraint "${id}" is dispositioned n/a without a reason.`,
+      );
+    }
+    if (d.disposition === 'conflict_route') {
+      const routed = dependsOnTasks.find((t) => t.id === d.routedTaskId);
+      if (!d.routedTaskId || !routed || routed.type !== '📐 Design') {
+        reasons.push(
+          `binding constraint "${id}" is dispositioned conflict→route without a recorded, routed 📐 Design ` +
+            'Depends On task.',
+        );
+      }
+    }
+    if (d.disposition === 'complies' && d.citedDesignTaskId) {
+      const cited = dependsOnTasks.find((t) => t.id === d.citedDesignTaskId);
+      if (!cited || cited.status !== '✅ Done') {
+        reasons.push(
+          `binding constraint "${id}" cites Design task "${d.citedDesignTaskId}" as its locked decision, but ` +
+            'that task does not resolve to a ✅ Done Depends On task.',
+        );
+      }
+    }
+  }
+
+  return { ok: reasons.length === 0, reasons };
+}
+
+/**
+ * Approve-by-standard triage is defined for interactive (📐 Design /
+ * 📋 Planning) types only — 💻 Code (and any other non-interactive type,
+ * e.g. 🔎 Investigation, 🔧 Operational) keeps the per-task human gate that
+ * approve-by-standard would otherwise remove. `entry.triage` is
+ * session-supplied, like `entry.type`: a dispatched session could otherwise
+ * attach a triage verdict to any task type to buy it batched treatment. A
+ * Ready-flip carrying `entry.triage` for a resolved type outside
+ * INTERACTIVE_TASK_TYPES is therefore rejected outright (never silently
+ * stripped), so the staging session sees the mismatch and can re-stage
+ * without a triage block. `type` here is always the caller's resolved type
+ * (authoritative when available — see checkGroomingPromotionGate), never
+ * `entry.type` on its own.
+ */
+function isTriageEligibleForType(
+  type: string | undefined,
+  entry: GroomingGateEntry,
+): { ok: boolean; reasons: string[] } {
+  if (!entry.triage || isInteractiveTaskType(type))
+    return { ok: true, reasons: [] };
+  return {
+    ok: false,
+    reasons: [
+      `groomingGate.triage was recorded for task type "${type ?? 'unknown'}" — approve-by-standard triage ` +
+        'applies only to interactive types (📐 Design / 📋 Planning); this type keeps the per-task human ' +
+        'gate and must not carry a triage verdict. Re-stage without groomingGate.triage.',
+    ],
+  };
+}
+
+/**
+ * Approve-by-standard promotion path for interactive (📐 Design /
+ * 📋 Planning) types — the per-task server-enforced records above stay
+ * required and type-agnostic; this is the one additional gate that stands in
+ * for the per-item human decision those types no longer carry. An
+ * interactive-type task promotes only once its triage input floors to
+ * 'clean'. 💻 Code (and any other non-interactive type) fails open — this
+ * check does not apply to it, so auto-dispatched promotion is unaffected.
+ */
+function isInteractiveTriageClean(
+  type: string | undefined,
+  entry: GroomingGateEntry,
+): { ok: boolean; reasons: string[] } {
+  if (!isInteractiveTaskType(type)) return { ok: true, reasons: [] };
+  if (!entry.triage) {
+    return {
+      ok: false,
+      reasons: [
+        `interactive task type "${type}" requires a recorded triage verdict before promotion — see planning/triage.ts.`,
+      ],
+    };
+  }
+  const dependsOnTasks = entry.dependsOnTasks ?? [];
+  const hardBlockDepNotDone = dependsOnTasks.some(
+    (dep) =>
+      dep.type &&
+      DEPENDS_ON_GATE_TYPES.has(dep.type) &&
+      !(dep.status && DONE_STATUSES.has(dep.status)),
+  );
+  const hasRoutedConstraintConflict = Object.values(
+    entry.constraintsDispositioned ?? {},
+  ).some((d) => d.disposition === 'conflict_route');
+
+  const floored = applyTriageFloor({
+    proposedVerdict: entry.triage.proposedVerdict,
+    hardBlockDepNotDone,
+    hasOpenQuestionsHeading: entry.triage.hasOpenQuestionsHeading,
+    hasRoutedConstraintConflict,
+  });
+
+  if (floored.verdict !== 'clean') {
+    return {
+      ok: false,
+      reasons: [
+        `triage verdict is "${floored.verdict}" (${floored.reasons.join('; ') || 'not proposed as clean'}) — ` +
+          `an interactive (${type}) task promotes without a per-item sign-off only once triaged clean.`,
+      ],
+    };
+  }
+  return { ok: true, reasons: [] };
+}
+
+/**
+ * Checks the size_check / type_check / gate_contribution / seed_contribution
+ * artifacts of a grooming-state entry ahead of a Ready promotion.
+ *
+ * `authoritativeType` is the task's real, server-derived display-format Type
+ * (e.g. read from the task cache by the command layer). It takes precedence
+ * over `entry.type` — the caller-supplied payload — when deciding whether
+ * gate_contribution / seed_contribution are required, since `entry.type`
+ * alone is not trustworthy: a caller can omit it to dodge accretion
+ * enforcement. `entry.type` is only used as a fallback when no authoritative
+ * type could be resolved.
+ */
 export function checkGroomingPromotionGate(
   entry: GroomingGateEntry,
   taskId: string,
+  authoritativeType?: string,
+  accretionOpts?: AccretionCheckOptions,
 ): GroomingGateResult {
   const reasons: string[] = [];
+  const resolvedType = authoritativeType ?? entry.type;
 
   if (!isSizeCheckClassified(entry)) {
     reasons.push(
@@ -127,21 +568,71 @@ export function checkGroomingPromotionGate(
     );
   }
 
-  if (!isGateContributionRecorded(entry, taskId)) {
-    reasons.push(
-      'gate_contribution is not recorded — for 💻 Code and 🛠️ Tooling tasks, accreteGateContribution ' +
-        'must record a gate_accretion marker (items appended to the milestone gate, or an explicit ' +
-        '"none"/"n/a" decision) for this task before promotion.',
-    );
+  reasons.push(
+    ...checkAccretionContributions(entry, taskId, resolvedType, accretionOpts)
+      .reasons,
+  );
+
+  reasons.push(
+    ...isFilesPathsResolved(resolvedType, entry.filesPathsEntries).reasons,
+  );
+  reasons.push(...isDependsOnGateClear(entry.dependsOnTasks).reasons);
+  reasons.push(...isConstraintsDispositioned(entry).reasons);
+  reasons.push(...isTriageEligibleForType(resolvedType, entry).reasons);
+  reasons.push(...isInteractiveTriageClean(resolvedType, entry).reasons);
+
+  return { allowed: reasons.length === 0, reasons };
+}
+
+/**
+ * The gate_contribution/seed_contribution subset of checkGroomingPromotionGate
+ * — every other artifact (size_check, type_check, Files/paths, constraints,
+ * triage) is only knowable from the full grooming-state entry a dispatched
+ * session builds up over a turn, but the accretion markers are durable
+ * cross-turn state a session can (and does) skip recording. Run at stage time
+ * (POST /staged-intents) so a session that stages a Ready flip with no
+ * gate/seed accretion sees the gap in-turn instead of discovering it only
+ * when a human later tries to apply — that eager check never blocks staging
+ * itself; checkGroomingPromotionGate at commit time remains the sole hard
+ * authority.
+ */
+export function checkAccretionContributions(
+  entry: GroomingGateEntry,
+  taskId: string,
+  authoritativeType?: string,
+  opts?: AccretionCheckOptions,
+): GroomingGateResult {
+  const reasons: string[] = [];
+  const resolvedType = authoritativeType ?? entry.type;
+
+  if (!opts?.skipGateContributionCheck) {
+    const gateCheck = isGateContributionRecorded(resolvedType, taskId);
+    if (!gateCheck.ok && gateCheck.reasons.length === 0) {
+      reasons.push(
+        'gate_contribution is not recorded — for 💻 Code tasks, accreteGateContribution ' +
+          'must record a gate_accretion marker (items appended to the milestone gate, or an explicit ' +
+          '"none"/"n/a" decision with a substantive reason) for this task before promotion.',
+      );
+    } else {
+      reasons.push(...gateCheck.reasons);
+    }
   }
 
-  if (!isSeedContributionRecorded(entry, taskId)) {
+  if (
+    !opts?.skipSeedContributionCheck &&
+    !isSeedContributionRecorded(resolvedType, taskId)
+  ) {
     reasons.push(
-      'seed_contribution is not recorded — for 💻 Code and 🛠️ Tooling tasks, stageSeedContribution ' +
+      'seed_contribution is not recorded — for 💻 Code tasks, stageSeedContribution ' +
         'must record a seed_accretion marker (config-change seeds minted onto the milestone seed store, ' +
         'or an explicit "none"/"n/a" decision) for this task before promotion.',
     );
   }
+
+  reasons.push(
+    ...isGateContributionCandidatesClassified(entry.gateContributionCandidates)
+      .reasons,
+  );
 
   return { allowed: reasons.length === 0, reasons };
 }

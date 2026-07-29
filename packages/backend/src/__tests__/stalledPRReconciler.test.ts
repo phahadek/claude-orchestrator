@@ -26,6 +26,9 @@ vi.mock('../db/queries.js', () => ({
   clearTerminalPRFlags: vi.fn(),
   countUndeliveredInboxItems: vi.fn(() => 0),
   updateMergeState: vi.fn(),
+  lookupSessionByBranch: vi.fn(() => null),
+  linkPRTaskAndSession: vi.fn(),
+  setPendingPush: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -51,6 +54,9 @@ import {
   clearTerminalPRFlags,
   countUndeliveredInboxItems,
   updateMergeState,
+  lookupSessionByBranch,
+  linkPRTaskAndSession,
+  setPendingPush,
 } from '../db/queries.js';
 import { recordEvent } from '../audit/AuditLog.js';
 import { typedGetSetting } from '../config/settings.js';
@@ -98,10 +104,10 @@ function makePR(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makeReviewOrchestrator(inFlight = false) {
+function makeReviewOrchestrator(inFlight = false, enqueueReturns = true) {
   return {
     isReviewInFlight: vi.fn(() => inFlight),
-    enqueueReview: vi.fn(),
+    enqueueReview: vi.fn(() => enqueueReturns),
   };
 }
 
@@ -521,15 +527,16 @@ describe('StalledPRReconciler', () => {
     expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
   });
 
-  it('skips gate-failed PR with pending_push (normal push flow handles it)', async () => {
-    const pr = makePR({
+  it('consumes a stuck pending_push and re-drives via enqueueReview for a gate-failed PR, bounded by the retry cap', async () => {
+    const prBelowCap = makePR({
       review_result: JSON.stringify({ verdict: 'autofix_failed' }),
       head_sha: 'sha1',
       last_reviewed_sha: 'sha1',
       review_session_id: null,
-      pending_push: 1, // push is pending
+      pending_push: 1, // stuck push — no live session to notify it
+      stalled_pr_retry_count: 1,
     });
-    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(getAllOpenPRs).mockReturnValue([prBelowCap] as any);
 
     const { fn: broadcast } = makeBroadcast();
     const ro = makeReviewOrchestrator();
@@ -538,7 +545,36 @@ describe('StalledPRReconciler', () => {
 
     await reconciler.reconcileOnce();
 
+    expect(setPendingPush).toHaveBeenCalledWith(42, 'org/repo', 0);
+    expect(ro.enqueueReview).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42, repo: 'org/repo' }),
+    );
+    expect(incrementStalledPRRetryCount).toHaveBeenCalledWith(42, 'org/repo');
+    expect(setPauseReason).not.toHaveBeenCalled();
+
+    // Once the retry cap is reached, the same stuck-pending_push state
+    // escalates instead of looping.
+    vi.clearAllMocks();
+    const prAtCap = makePR({
+      review_result: JSON.stringify({ verdict: 'autofix_failed' }),
+      head_sha: 'sha1',
+      last_reviewed_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 1,
+      stalled_pr_retry_count: 2,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([prAtCap] as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(setPendingPush).not.toHaveBeenCalled();
     expect(ro.enqueueReview).not.toHaveBeenCalled();
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      'stalled_reconcile_cap',
+      expect.stringContaining('gate_failed'),
+    );
   });
 
   it('does nothing when reviewOrchestrator is not set', async () => {
@@ -860,5 +896,120 @@ describe('StalledPRReconciler', () => {
 
     expect(sm.redeliverUndeliveredFeedback).not.toHaveBeenCalled();
     expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+  });
+
+  // ── Honest attempt accounting / orphaned-PR handling ──────────────────────
+
+  it('does not increment the retry count for a null-task_id pre_review_interrupted PR when no dispatch occurs (task re-derivation fails)', async () => {
+    const pr = makePR({
+      task_id: null,
+      session_id: null,
+      review_result: null,
+      head_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+      pause_reason: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(lookupSessionByBranch).mockReturnValue(null);
+
+    const { fn: broadcast, messages } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'stalled_pr_reconcile_attempt' }),
+    );
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      'stalled_reconcile_cap',
+      expect.stringContaining('orphaned'),
+    );
+    expect(
+      messages.find((m) => m.type === 'pr_stalled_escalated'),
+    ).toMatchObject({
+      type: 'pr_stalled_escalated',
+      prNumber: 42,
+      repo: 'org/repo',
+      kind: 'orphaned_no_task_link',
+    });
+  });
+
+  it('reDrive returns false and does not increment the retry count when enqueueReview does not queue the job', async () => {
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+      pause_reason: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator(false, false); // enqueueReview reports it did not queue
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(ro.enqueueReview).toHaveBeenCalled();
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'stalled_pr_reconcile_attempt' }),
+    );
+  });
+
+  it('re-derives task_id from head_branch and re-drives an orphaned but mergeable PR on the first reconcile cycle', async () => {
+    const pr = makePR({
+      task_id: null,
+      session_id: null,
+      review_result: null,
+      head_sha: 'sha1',
+      review_session_id: null,
+      pending_push: 0,
+      pause_reason: null,
+      head_branch: 'feature/orphaned-pr',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+    vi.mocked(lookupSessionByBranch).mockReturnValue({
+      session_id: 'derived-session',
+      task_id: 'notion:derived-task',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      status: 'done',
+      session_id: 'derived-session',
+      task_url: 'https://notion.so/derived-task',
+    } as any);
+
+    const { fn: broadcast, messages } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(linkPRTaskAndSession).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      'notion:derived-task',
+      'derived-session',
+    );
+    expect(ro.enqueueReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prNumber: 42,
+        repo: 'org/repo',
+        taskId: 'notion:derived-task',
+      }),
+    );
+    expect(incrementStalledPRRetryCount).toHaveBeenCalledWith(42, 'org/repo');
+    expect(
+      messages.find((m) => m.type === 'pr_stalled_escalated'),
+    ).toBeUndefined();
   });
 });

@@ -11,6 +11,8 @@ interface Props {
   onClick: () => void;
   /** Show a status emoji badge — used where rows mix multiple statuses (e.g. non-code type cards). */
   showStatus?: boolean;
+  /** Reason shown below the row (e.g. a dep-blocked ops task), e.g. "waiting on <dep>". No checkbox is rendered when set. */
+  blockedReason?: string | null;
 }
 
 const PRIORITY_ICONS: Record<string, string> = {
@@ -26,6 +28,7 @@ export function CompactTaskCard({
   onCheckChange,
   onClick,
   showStatus = false,
+  blockedReason = null,
 }: Props) {
   const priorityIcon = PRIORITY_ICONS[task.priority] ?? '';
   const isBlocked = task.blocked;
@@ -92,6 +95,12 @@ export function CompactTaskCard({
               ↳ +{task.blockerNames.length - 2} more
             </span>
           )}
+        </div>
+      )}
+
+      {blockedReason && (
+        <div className={styles.blockers} data-testid="ops-dep-blocked-reason">
+          <span className={styles.blockerName}>↳ {blockedReason}</span>
         </div>
       )}
     </div>

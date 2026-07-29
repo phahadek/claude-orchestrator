@@ -19,6 +19,7 @@ const router = Router();
 
 const SETTING_KEYS = [
   'max_concurrent_code_sessions',
+  'max_concurrent_planning_sessions',
   'auto_review_concurrency',
   'auto_review',
   'card_preview_lines',
@@ -46,6 +47,11 @@ const SETTING_KEYS = [
   'auto_archive_sweep_interval_minutes',
   'large_task_model',
   'large_task_effort',
+  'planning_session_model',
+  'planning_session_effort',
+  'ops_session_model',
+  'ops_session_effort',
+  'tier3_classifier_model',
 ] as const satisfies readonly SettingKey[];
 
 type RouteSettingKey = (typeof SETTING_KEYS)[number];
@@ -57,6 +63,9 @@ function applyToRuntime(
   switch (key) {
     case 'max_concurrent_code_sessions':
       runtimeSettings.max_concurrent_code_sessions = value as number;
+      break;
+    case 'max_concurrent_planning_sessions':
+      runtimeSettings.max_concurrent_planning_sessions = value as number;
       break;
     case 'auto_review_concurrency':
       runtimeSettings.auto_review_concurrency = value as number;
@@ -143,6 +152,21 @@ function applyToRuntime(
     case 'large_task_effort':
       runtimeSettings.large_task_effort = value as string;
       break;
+    case 'planning_session_model':
+      runtimeSettings.planning_session_model = value as string;
+      break;
+    case 'planning_session_effort':
+      runtimeSettings.planning_session_effort = value as string;
+      break;
+    case 'ops_session_model':
+      runtimeSettings.ops_session_model = value as string;
+      break;
+    case 'ops_session_effort':
+      runtimeSettings.ops_session_effort = value as string;
+      break;
+    case 'tier3_classifier_model':
+      runtimeSettings.tier3_classifier_model = value as string;
+      break;
   }
 }
 
@@ -157,6 +181,9 @@ function runtimeSettingsAsRecord(): Record<RouteSettingKey, string> {
   return {
     max_concurrent_code_sessions: String(
       runtimeSettings.max_concurrent_code_sessions,
+    ),
+    max_concurrent_planning_sessions: String(
+      runtimeSettings.max_concurrent_planning_sessions,
     ),
     auto_review_concurrency: String(runtimeSettings.auto_review_concurrency),
     auto_review: String(runtimeSettings.auto_review),
@@ -203,6 +230,11 @@ function runtimeSettingsAsRecord(): Record<RouteSettingKey, string> {
     ),
     large_task_model: runtimeSettings.large_task_model,
     large_task_effort: runtimeSettings.large_task_effort,
+    planning_session_model: runtimeSettings.planning_session_model,
+    planning_session_effort: runtimeSettings.planning_session_effort,
+    ops_session_model: runtimeSettings.ops_session_model,
+    ops_session_effort: runtimeSettings.ops_session_effort,
+    tier3_classifier_model: runtimeSettings.tier3_classifier_model,
   };
 }
 

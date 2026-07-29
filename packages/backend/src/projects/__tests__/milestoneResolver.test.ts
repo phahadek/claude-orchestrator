@@ -22,6 +22,7 @@ vi.mock('../ProjectService.js', () => ({
 import {
   resolveMilestoneForProject,
   resolveMilestoneAnyProject,
+  resolveMilestoneDatabaseId,
   UnknownMilestoneError,
 } from '../milestoneResolver.js';
 
@@ -30,15 +31,23 @@ const M11 = {
   projectId: 'p1',
   name: 'M11',
   sourceId: null,
+  canonicalShortId: 'M11',
   displayOrder: 0,
   createdAt: 0,
   updatedAt: 0,
 };
-const M12 = { ...M11, id: 'ms-uuid-12', name: 'M12', displayOrder: 1 };
+const M12 = {
+  ...M11,
+  id: 'ms-uuid-12',
+  name: 'M12',
+  canonicalShortId: 'M12',
+  displayOrder: 1,
+};
 const M13_FULL_TITLE = {
   ...M11,
   id: 'ms-uuid-13',
   name: 'M13 — Orchestrator-Owned Planning',
+  canonicalShortId: 'M13',
   displayOrder: 2,
 };
 
@@ -97,6 +106,63 @@ describe('resolveMilestoneForProject', () => {
       resolveMilestoneForProject('p1', 'M13 — Orchestrator-Owned Planning'),
     ).toBe('M13');
   });
+
+  it('resolves the M<n> token against a Notion-synced milestone (hex source_id, token-derived canonical_short_id) without throwing', () => {
+    const notionSynced = {
+      ...M11,
+      id: 'ms-uuid-11',
+      name: 'M11 — Orchestrator-Owned Planning',
+      sourceId: 'e4a105a2-1234-4abc-9def-000000000000',
+      canonicalShortId: 'M11',
+    };
+    projectServiceMock.getById.mockReturnValue(project([notionSynced, M12]));
+    expect(resolveMilestoneForProject('p1', 'M11')).toBe('M11');
+  });
+});
+
+describe('resolveMilestoneDatabaseId', () => {
+  it('resolves claude-dashboard / M12 to its Notion board source_id (task.create parent resolution)', () => {
+    const claudeDashboardM12 = {
+      ...M12,
+      id: 'ms-uuid-12',
+      name: 'M12',
+      sourceId: '6614adb5-5bec-4b9a-b9a4-208ae0f00f3c',
+      canonicalShortId: 'M12',
+    };
+    projectServiceMock.getById.mockReturnValue(
+      project([M11, claudeDashboardM12]),
+    );
+    expect(resolveMilestoneDatabaseId('claude-dashboard', 'M12')).toBe(
+      '6614adb5-5bec-4b9a-b9a4-208ae0f00f3c',
+    );
+  });
+
+  it('resolves a milestone DB id to its board source_id', () => {
+    const withSource = { ...M11, sourceId: 'db-source-11' };
+    projectServiceMock.getById.mockReturnValue(project([withSource, M12]));
+    expect(resolveMilestoneDatabaseId('p1', 'ms-uuid-11')).toBe('db-source-11');
+  });
+
+  it('throws a clear error (not an opaque Notion parent error) for an unresolvable milestone', () => {
+    projectServiceMock.getById.mockReturnValue(project());
+    expect(() => resolveMilestoneDatabaseId('p1', 'M99')).toThrow(
+      UnknownMilestoneError,
+    );
+  });
+
+  it('throws a clear error when the resolved milestone has no source_id configured', () => {
+    projectServiceMock.getById.mockReturnValue(project([M11, M12]));
+    expect(() => resolveMilestoneDatabaseId('p1', 'M11')).toThrow(
+      /no source_id/,
+    );
+  });
+
+  it('throws when the project itself is unknown', () => {
+    projectServiceMock.getById.mockReturnValue(undefined);
+    expect(() => resolveMilestoneDatabaseId('no-such-project', 'M11')).toThrow(
+      UnknownMilestoneError,
+    );
+  });
 });
 
 describe('resolveMilestoneAnyProject', () => {
@@ -129,5 +195,17 @@ describe('resolveMilestoneAnyProject', () => {
       project([M11, M12, M13_FULL_TITLE]),
     ]);
     expect(resolveMilestoneAnyProject('M13')).toBe('M13');
+  });
+
+  it('resolves the M<n> token against a Notion-synced milestone (hex source_id, token-derived canonical_short_id) without throwing', () => {
+    const notionSynced = {
+      ...M11,
+      id: 'ms-uuid-11',
+      name: 'M11 — Orchestrator-Owned Planning',
+      sourceId: 'e4a105a2-1234-4abc-9def-000000000000',
+      canonicalShortId: 'M11',
+    };
+    projectServiceMock.list.mockReturnValue([project([notionSynced, M12])]);
+    expect(resolveMilestoneAnyProject('M11')).toBe('M11');
   });
 });
