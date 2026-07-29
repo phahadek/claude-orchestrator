@@ -8,7 +8,7 @@ import type { SessionState } from '../hooks/useSessionStore';
 import { sessionsApi } from '../api/projects';
 import { useTaskPage } from '../hooks/useTaskPage';
 import { SessionPanel } from './SessionPanel';
-import { taskIdFromIntent } from './MilestoneDecisionStack';
+import { taskIdFromIntent } from '../utils/milestoneStack';
 import type { MilestoneStackSelection } from './MilestoneDecisionStack';
 import styles from './MilestoneDrilldown.module.css';
 

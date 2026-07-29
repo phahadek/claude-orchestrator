@@ -9,12 +9,6 @@ export type MilestoneStackSelection =
   | { type: 'intent'; intent: StagedIntent }
   | { type: 'task'; task: TaskView };
 
-/** Best-effort task ref carried by most staged-intent kinds — absent for task.create/decision.pickOne, which don't resolve to an existing task. */
-export function taskIdFromIntent(intent: StagedIntent): string | null {
-  const payload = intent.payload as { taskId?: unknown } | null;
-  return typeof payload?.taskId === 'string' ? payload.taskId : null;
-}
-
 interface Props {
   projectId: string;
   /** The milestone's canonical short id (e.g. "M13") — the decision-inbox lens key, distinct from the board's DB id used to fetch `tasks`. */
