@@ -2,9 +2,11 @@
  * Tests for DeployOrchestrator (packages/backend/src/deploy/DeployOrchestrator.ts).
  *
  * AC: a run executes steps in order by kind; changed_paths skip works; an
- * agentic step gates on its verdict; a step failure halts + surfaces + runs
- * rollback_ref; a simulated restart resumes at current_step; companion-diff
- * flags on a trigger-path match.
+ * agentic step gates on its verdict; a step failure always halts + surfaces
+ * the matching failure_diagnosis; a declared rollback_ref only runs its
+ * compensating step behind a confirm-gate, with no recursion on its own
+ * failure; a simulated restart resumes at current_step; companion-diff flags
+ * on a trigger-path match.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -248,48 +250,23 @@ describe('DeployOrchestrator: agentic step gating', () => {
   });
 });
 
-describe('DeployOrchestrator: step failure halts + rollback', () => {
-  it('runs rollback_ref, halts, and surfaces on step failure', async () => {
+describe('DeployOrchestrator: step failure halts + compensating step', () => {
+  it('surfaces the matching failure_diagnosis and halts without running anything when there is no rollback_ref', async () => {
     const playbook = playbookWith([
-      step({ id: 'deploy', kind: 'shell', rollback_ref: 'rollback' }),
-      step({ id: 'rollback', kind: 'shell' }),
+      step({ id: 'bookkeeping', kind: 'shell', is_prod_mutating: true }),
       step({ id: 'never-reached', kind: 'shell' }),
     ]);
-    const shellCommands: string[] = [];
+    playbook.failure_diagnoses = [
+      {
+        symptom: 'bookkeeping fails',
+        cause: 'marker write failed',
+        action: 're-write the marker',
+        step: 'bookkeeping',
+      },
+    ];
     const onNeedsAttention = vi.fn();
     const deps = makeDeps(playbook, {
       sink: { onNeedsAttention },
-      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
-        shellCommands.push(command);
-        if (command === 'run deploy')
-          return { ok: false, output: 'deploy exploded', exitCode: 1 };
-        return { ok: true, output: '', exitCode: 0 };
-      }),
-    });
-    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
-    const run = await orchestrator.startDeploy('sha-target');
-    await flush();
-
-    expect(shellCommands).toEqual(['run deploy', 'run rollback']);
-    expect(getDeployRun(run.run_id)?.status).toBe('failed');
-    expect(onNeedsAttention).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: run.run_id,
-        stepId: 'deploy',
-        reason: 'deploy exploded',
-      }),
-    );
-    const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
-    expect(events).toContain('step_failed');
-    expect(events).toContain('rollback_succeeded');
-  });
-
-  it('halts to a terminal failed state with no rollback event when the failed step has no rollback_ref', async () => {
-    const playbook = playbookWith([
-      step({ id: 'bookkeeping', kind: 'shell' }),
-      step({ id: 'never-reached', kind: 'shell' }),
-    ]);
-    const deps = makeDeps(playbook, {
       runShell: vi.fn(async (command: string): Promise<ShellResult> => {
         if (command === 'run bookkeeping')
           return { ok: false, output: 'bookkeeping exploded', exitCode: 1 };
@@ -310,10 +287,127 @@ describe('DeployOrchestrator: step failure halts + rollback', () => {
     expect(events.find((e) => e.event_type === 'step_failed')?.detail).toBe(
       'bookkeeping exploded',
     );
+    expect(events.some((e) => e.event_type === 'confirm_gate')).toBe(false);
     expect(events.some((e) => e.event_type === 'rollback_succeeded')).toBe(
       false,
     );
     expect(events.some((e) => e.event_type === 'rollback_failed')).toBe(false);
+    expect(onNeedsAttention).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.run_id,
+        stepId: 'bookkeeping',
+        reason: expect.stringContaining('marker write failed'),
+      }),
+    );
+  });
+
+  it('confirm-gates a declared compensating step and runs it only on approval', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'deploy',
+        kind: 'shell',
+        is_prod_mutating: true,
+        rollback_ref: 'compensate',
+      }),
+      step({ id: 'compensate', kind: 'shell' }),
+      step({ id: 'never-reached', kind: 'shell' }),
+    ]);
+    const shellCommands: string[] = [];
+    const onNeedsAttention = vi.fn();
+    const waitForConfirmGate = vi.fn(async () => true);
+    const deps = makeDeps(playbook, {
+      sink: { onNeedsAttention },
+      waitForConfirmGate,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        shellCommands.push(command);
+        if (command === 'run deploy')
+          return { ok: false, output: 'deploy exploded', exitCode: 1 };
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(waitForConfirmGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.run_id,
+        step: expect.objectContaining({ id: 'compensate' }),
+      }),
+    );
+    expect(shellCommands).toEqual(['run deploy', 'run compensate']);
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+    expect(onNeedsAttention).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: run.run_id,
+        stepId: 'deploy',
+        reason: expect.stringContaining('deploy exploded'),
+      }),
+    );
+    const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
+    expect(events).toContain('step_failed');
+    expect(events).toContain('confirm_gate');
+    expect(events).toContain('rollback_succeeded');
+  });
+
+  it('does not run the compensating step when the operator rejects the confirm-gate', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'deploy',
+        kind: 'shell',
+        is_prod_mutating: true,
+        rollback_ref: 'compensate',
+      }),
+      step({ id: 'compensate', kind: 'shell' }),
+    ]);
+    const shellCommands: string[] = [];
+    const deps = makeDeps(playbook, {
+      waitForConfirmGate: vi.fn(async () => false),
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        shellCommands.push(command);
+        if (command === 'run deploy')
+          return { ok: false, output: 'deploy exploded', exitCode: 1 };
+        return { ok: true, output: '', exitCode: 0 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(shellCommands).toEqual(['run deploy']);
+    const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
+    expect(events).toContain('confirm_gate');
+    expect(events.some((e) => e === 'rollback_succeeded')).toBe(false);
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+  });
+
+  it('records rollback_failed with no recursion when the compensating step itself fails', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'deploy',
+        kind: 'shell',
+        is_prod_mutating: true,
+        rollback_ref: 'compensate',
+      }),
+      step({ id: 'compensate', kind: 'shell' }),
+    ]);
+    const shellCommands: string[] = [];
+    const deps = makeDeps(playbook, {
+      waitForConfirmGate: vi.fn(async () => true),
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        shellCommands.push(command);
+        return { ok: false, output: `${command} exploded`, exitCode: 1 };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(shellCommands).toEqual(['run deploy', 'run compensate']);
+    const events = listDeployRunEvents(run.run_id).map((e) => e.event_type);
+    expect(events).toContain('rollback_failed');
+    expect(events.filter((e) => e === 'confirm_gate')).toHaveLength(1);
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
   });
 
   it('reaches a terminal failed state (not stuck running) when the final step fails with no rollback_ref', async () => {
