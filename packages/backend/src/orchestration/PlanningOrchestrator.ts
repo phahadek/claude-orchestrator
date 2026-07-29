@@ -349,7 +349,8 @@ export class PlanningOrchestrator {
     // against the target task rather than leaving them silently stranded.
     if (row.task_id) {
       const blockedMembers = listStagedIntentsBySession(sessionId).filter(
-        (i) => i.state === 'needs_revision' || i.state === 'pending_verification',
+        (i) =>
+          i.state === 'needs_revision' || i.state === 'pending_verification',
       );
       if (blockedMembers.length > 0) {
         setTaskPauseReason(

@@ -2023,7 +2023,9 @@ describe('group commit — a blocked member holds the whole group', () => {
       groupId,
       payload: { taskId, dependsOn: [] },
     });
-    await agent.post(`/api/staged-intents/${dependsOn.body.id}/approve`).send({});
+    await agent
+      .post(`/api/staged-intents/${dependsOn.body.id}/approve`)
+      .send({});
     insertUpdateBodyRow({
       id: 'ub-nr',
       groupId,
@@ -2061,7 +2063,9 @@ describe('group commit — a blocked member holds the whole group', () => {
       groupId,
       payload: { taskId, dependsOn: [] },
     });
-    await agent.post(`/api/staged-intents/${dependsOn.body.id}/approve`).send({});
+    await agent
+      .post(`/api/staged-intents/${dependsOn.body.id}/approve`)
+      .send({});
     insertUpdateBodyRow({
       id: 'ub-pv',
       groupId,
