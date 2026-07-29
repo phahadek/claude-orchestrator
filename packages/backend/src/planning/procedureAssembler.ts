@@ -831,8 +831,8 @@ function renderSkeleton(
           'no such section, stage no strip intent at all — there is nothing to ' +
           'remove.\n\n' +
           `${GATE_ITEM_TIER_SELECTION_GUIDANCE} A \`gate.accrete\` batch is not ` +
-          "forced to one tier: the top-level `classification` is the batch " +
-          "default, and any item that needs a different tier carries its own " +
+          'forced to one tier: the top-level `classification` is the batch ' +
+          'default, and any item that needs a different tier carries its own ' +
           '`classification` field overriding it for that item alone.\n\n' +
           'A finding that turns on an operator judgment this session cannot ' +
           "make on its own authority — the task's scope is wrong, a " +

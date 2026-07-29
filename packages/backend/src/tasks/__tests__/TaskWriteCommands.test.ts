@@ -1270,7 +1270,12 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
 
     await commands.accreteGateContribution(
       sourceTask,
-      [{ text: 'A human must read the rendered page', classification: 'Human-Observation' }],
+      [
+        {
+          text: 'A human must read the rendered page',
+          classification: 'Human-Observation',
+        },
+      ],
       'Read-Only',
     );
 
@@ -1313,7 +1318,10 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
       sourceTask,
       [
         { text: 'a store query', classification: 'Read-Only' },
-        { text: 'a rendered layout check', classification: 'Human-Observation' },
+        {
+          text: 'a rendered layout check',
+          classification: 'Human-Observation',
+        },
         { text: 'no override, inherits batch tier' },
       ],
       'Prod-Mutating',
@@ -1321,7 +1329,10 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
 
     expect(mockInsertItem).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ text: 'a store query', classification: 'Read-Only' }),
+      expect.objectContaining({
+        text: 'a store query',
+        classification: 'Read-Only',
+      }),
     );
     expect(mockInsertItem).toHaveBeenNthCalledWith(
       2,

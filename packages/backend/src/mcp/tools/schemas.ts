@@ -179,7 +179,13 @@ export const gateContributionSourceTaskSchema = z.object({
 export const gateContributionItemInputSchema = z.object({
   text: z.string(),
   classification: z
-    .enum(['Read-Only', 'Prod-Mutating', 'Opportunistic', 'Human-Observation', 'needs-triage'])
+    .enum([
+      'Read-Only',
+      'Prod-Mutating',
+      'Opportunistic',
+      'Human-Observation',
+      'needs-triage',
+    ])
     .optional()
     .describe(
       `${GATE_ITEM_TIER_SELECTION_GUIDANCE} Overrides the batch-level ` +
