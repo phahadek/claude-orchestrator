@@ -18,7 +18,7 @@ import type { ConvergenceSnapshotRow } from '../db/types';
  * useNotifications.ts already dedups WS-driven notifications.
  */
 
-export type AttentionTier2Type = 'aging' | 'blocked' | 'flat';
+type AttentionTier2Type = 'aging' | 'blocked' | 'flat';
 
 export interface AttentionTier2Signal {
   key: string;
@@ -31,11 +31,11 @@ export interface MilestoneAttentionSignals {
   tier2: AttentionTier2Signal[];
 }
 
-export function agingThresholdMs(): number {
+function agingThresholdMs(): number {
   return runtimeSettings.milestone_attention_aging_threshold_seconds * 1000;
 }
 
-export function flatWindowMs(): number {
+function flatWindowMs(): number {
   return (
     runtimeSettings.milestone_attention_flat_convergence_window_seconds * 1000
   );

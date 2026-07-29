@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiRequest } from '../api/projects';
 
-export type AttentionTier2Type = 'aging' | 'blocked' | 'flat';
+type AttentionTier2Type = 'aging' | 'blocked' | 'flat';
 
-export interface AttentionTier2Signal {
+interface AttentionTier2Signal {
   key: string;
   type: AttentionTier2Type;
   message: string;
 }
 
-export interface AttentionTier2Event extends AttentionTier2Signal {
+interface AttentionTier2Event extends AttentionTier2Signal {
   receivedAt: number;
 }
 
