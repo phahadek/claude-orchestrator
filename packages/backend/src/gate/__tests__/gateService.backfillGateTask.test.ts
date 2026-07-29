@@ -26,7 +26,7 @@ vi.mock('../../tasks/TaskBackend.js', () => ({
 
 import { db } from '../../db/db.js';
 import { upsertTaskCache } from '../../db/queries.js';
-import { listByMilestoneAllProjects } from '../gateStore.js';
+import { listByMilestone } from '../gateStore.js';
 import { backfillGateTask } from '../gateService.js';
 
 const GATE_BODY = `#### Add env var [notion:abc]\n- Verify the deploy script writes the new env var\n`;
@@ -59,7 +59,7 @@ describe('backfillGateTask', () => {
 
     expect(result.created).toBe(1);
     expect(mockGetTaskBackend).toHaveBeenCalledWith('polimarket-analyser');
-    expect(listByMilestoneAllProjects('M11')).toHaveLength(1);
+    expect(listByMilestone('polimarket-analyser', 'M11')).toHaveLength(1);
   });
 
   it('is idempotent: re-running mints no duplicate rows', async () => {
@@ -79,7 +79,7 @@ describe('backfillGateTask', () => {
 
     expect(second.created).toBe(0);
     expect(second.skipped).toBe(1);
-    expect(listByMilestoneAllProjects('M11')).toHaveLength(1);
+    expect(listByMilestone('polimarket-analyser', 'M11')).toHaveLength(1);
   });
 
   it('throws a not-found error when fetchTaskPage fails', async () => {

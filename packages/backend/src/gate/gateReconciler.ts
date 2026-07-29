@@ -176,6 +176,7 @@ export interface GateReconcileTickResult {
   deployShaByProject: Record<string, string | null>;
   reconciled: ReconcileGateRunnabilityResult | null;
   processed: ProcessedGateItem[];
+  /** Keyed by `${project}::${milestone}`, not milestone alone — see projectMilestones above. */
   readiness: Record<string, GateReadiness>;
 }
 
@@ -472,21 +473,34 @@ export async function runGateReconcilerTick(
       : result;
   }
 
-  const milestones = new Set(allItems.map((item) => item.milestone));
+  // Keyed by project::milestone, not milestone alone — a milestone display
+  // name is not unique across projects, so grouping by name alone would let
+  // one project's /gate session pull and disposition another project's
+  // items in the same tier pass.
+  const projectMilestones = new Map<
+    string,
+    { project: string; milestone: string }
+  >();
+  for (const item of allItems) {
+    projectMilestones.set(`${item.project}::${item.milestone}`, {
+      project: item.project,
+      milestone: item.milestone,
+    });
+  }
   const processed: ProcessedGateItem[] = [];
 
   if (!options.verifier) {
-    if (milestones.size > 0) {
+    if (projectMilestones.size > 0) {
       logger.warn(
         '[GateReconciler] no verifier wired — skipping auto-run for this tick',
       );
     }
   } else {
     const verifier = options.verifier;
-    for (const milestone of milestones) {
+    for (const { project, milestone } of projectMilestones.values()) {
       if (!getArm(milestone, 'gate-verify')) continue;
       for (const classification of AUTO_RUN_TIERS) {
-        const batch = nextRunnableGateItems(milestone, {
+        const batch = nextRunnableGateItems(project, milestone, {
           classification,
           limit,
         });
@@ -505,8 +519,8 @@ export async function runGateReconcilerTick(
   }
 
   const readiness: Record<string, GateReadiness> = {};
-  for (const milestone of milestones) {
-    readiness[milestone] = getGateReadiness(milestone);
+  for (const [key, { project, milestone }] of projectMilestones) {
+    readiness[key] = getGateReadiness(project, milestone);
   }
 
   return { deployShaByProject, reconciled, processed, readiness };

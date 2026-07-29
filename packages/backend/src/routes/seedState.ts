@@ -32,16 +32,24 @@ import {
 export function createSeedStateRouter(): Router {
   const router = Router();
 
-  // GET /api/seed/readiness?milestone=M12
+  // GET /api/seed/readiness?project=P&milestone=M12
   router.get('/seed/readiness', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : null;
     const milestone =
       typeof req.query.milestone === 'string' ? req.query.milestone : null;
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
     if (!milestone) {
       res.status(400).json({ error: 'milestone is required' });
       return;
     }
     try {
-      res.json(getSeedReadiness(resolveMilestoneAnyProject(milestone)));
+      res.json(
+        getSeedReadiness(project, resolveMilestoneForProject(project, milestone)),
+      );
     } catch (err) {
       if (err instanceof UnknownMilestoneError) {
         res.status(400).json({ error: err.message });
@@ -51,12 +59,18 @@ export function createSeedStateRouter(): Router {
     }
   });
 
-  // GET /api/seed/next?milestone=M12&deploySha=abc123&limit=1
+  // GET /api/seed/next?project=P&milestone=M12&deploySha=abc123&limit=1
   router.get('/seed/next', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : null;
     const milestone =
       typeof req.query.milestone === 'string' ? req.query.milestone : null;
     const deploySha =
       typeof req.query.deploySha === 'string' ? req.query.deploySha : null;
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
     if (!milestone) {
       res.status(400).json({ error: 'milestone is required' });
       return;
@@ -70,7 +84,8 @@ export function createSeedStateRouter(): Router {
     try {
       res.json(
         nextApplyableSeedItems(
-          resolveMilestoneAnyProject(milestone),
+          project,
+          resolveMilestoneForProject(project, milestone),
           deploySha,
           {
             limit: Number.isFinite(limit) ? limit : undefined,

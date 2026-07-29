@@ -3,7 +3,6 @@ import { recordEvent } from '../audit/AuditLog';
 import {
   getGateItem,
   listGateItemsByMilestone,
-  listGateItemsByMilestoneAllProjects,
   listAllGateItems,
   listGateItemsByProject,
   listGateItemsFiltered,
@@ -129,13 +128,6 @@ export function listByMilestone(
   milestone: string,
 ): GateItem[] {
   return listGateItemsByMilestone(project, milestone)
-    .map((row) => getItem(row.id))
-    .filter((item): item is GateItem => item !== undefined);
-}
-
-/** All gate items for a milestone, regardless of project — the readiness/runnability API's lookup. */
-export function listByMilestoneAllProjects(milestone: string): GateItem[] {
-  return listGateItemsByMilestoneAllProjects(milestone)
     .map((row) => getItem(row.id))
     .filter((item): item is GateItem => item !== undefined);
 }
