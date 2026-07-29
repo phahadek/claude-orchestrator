@@ -14,6 +14,16 @@
 # `verify`'s poll_until can't green until a differing MainPID plus a healthy
 # response are both observed — otherwise verify would report the outgoing
 # process healthy while the new build is still booting (or crash-looping).
+#
+# Rollback model: `rollback_ref` is author-declared per step, not a generic
+# "restore prior state" the engine improvises. A step's forward-chain
+# predecessor is NOT a compensating action (re-running `git fetch` doesn't
+# undo `npm ci`), so no step below declares one — an unhandled failure halts
+# and surfaces its failure_diagnoses entry instead. `sync-runtime` and
+# `restart` specifically have no compensating step because this project runs
+# forward-only DB migrations on boot: a generic "sync back + restart" would
+# leave the schema ahead of a reverted build, so the correct response is
+# operator-guided (surfaced via failure_diagnoses), not an automatic action.
 
 steps:
   - id: fetch
@@ -27,48 +37,41 @@ steps:
     command_or_prompt: 'git merge --ff-only origin/dev'
     is_prod_mutating: false
     supports_dry_run: true
-    rollback_ref: fetch
 
   - id: install-deps
     kind: shell
     command_or_prompt: 'npm ci'
     is_prod_mutating: false
     supports_dry_run: false
-    rollback_ref: merge-dev
 
   - id: build
     kind: shell
     command_or_prompt: 'npm run build'
     is_prod_mutating: false
     supports_dry_run: false
-    rollback_ref: install-deps
 
   - id: sync-runtime
     kind: shell
     command_or_prompt: "rsync -a --delete --exclude='.git/' --exclude='.claude/' --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' --exclude='.env' ./ /srv/orchestrator/runtime/"
     is_prod_mutating: true
     supports_dry_run: true
-    rollback_ref: build
 
   - id: confirm-restart
     kind: confirm-gate
     command_or_prompt: 'operator approval to restart orchestrator.service now that the synced build is in place'
     is_prod_mutating: false
-    rollback_ref: sync-runtime
 
   - id: restart
     kind: shell
     command_or_prompt: 'sudo systemctl restart orchestrator.service'
     identity_capture: 'systemctl show -p MainPID --value orchestrator.service'
     is_prod_mutating: true
-    rollback_ref: sync-runtime
 
   - id: verify
     kind: validation
     command_or_prompt: 'systemctl is-active --quiet orchestrator.service && curl -sf -o /dev/null http://localhost:3000/'
     is_prod_mutating: false
     poll_until: 'systemctl is-active --quiet orchestrator.service && curl -sf -o /dev/null http://localhost:3000/'
-    rollback_ref: restart
 
   - id: report-in
     kind: report-in
@@ -77,7 +80,10 @@ steps:
   - id: record-deployed-sha
     kind: shell
     command_or_prompt: 'git rev-parse HEAD > /srv/orchestrator/projects/config/projects/claude-orchestrator/DEPLOYED_SHA'
-    is_prod_mutating: true
+    # A post-success bookkeeping write (runs after verify already passed),
+    # not a production mutation — a failure here means "the deploy
+    # succeeded, but re-write the marker," never a rollback candidate.
+    is_prod_mutating: false
 
 hazards:
   - 'never sync or restart before build succeeds — a partial build must never reach the runtime directory'
@@ -89,17 +95,36 @@ failure_diagnoses:
   - symptom: 'merge --ff-only fails'
     cause: 'the runtime checkout has diverged from origin/dev (local commits or a prior non-ff state)'
     action: 'stop and investigate the divergence before forcing any merge — do not force-push or reset the runtime checkout'
+    step: merge-dev
 
   - symptom: 'npm ci fails'
     cause: 'a lockfile/registry mismatch or a stale node_modules incompatible with the new lockfile'
     action: 'inspect the npm ci error output; do not fall back to npm install as a substitute without operator confirmation'
+    step: install-deps
 
   - symptom: 'npm run build fails'
     cause: 'a type error or build-time failure introduced by the merged changes'
     action: 'stop the deploy — do not sync a failed build into the runtime directory'
+    step: build
+
+  - symptom: 'rsync to the runtime directory fails'
+    cause: 'a permissions issue, disk-space exhaustion, or an interrupted transfer on the runtime host'
+    action: 'inspect the rsync error output and the runtime directory state before retrying — do not restart against a partially synced tree'
+    step: sync-runtime
+
+  - symptom: 'the restart command itself fails or the service does not come back'
+    cause: 'the synced build is broken at process start, or the systemd unit failed to restart'
+    action: 'inspect `journalctl -u orchestrator.service` for the crash; this repo runs forward-only DB migrations on boot, so a blind re-sync-and-restart of the prior build can leave the schema ahead of the reverted code — diagnose before choosing a path back'
+    step: restart
 
   - symptom: 'service fails health checks after restart'
     cause: 'the new build is broken at runtime, or the restart did not pick up the synced files'
-    action: 'roll back to the prior DEPLOYED_SHA by re-running sync-runtime and restart against that sha, then re-verify'
+    action: 'inspect `journalctl -u orchestrator.service` and the health endpoint response; this repo runs forward-only DB migrations on boot, so a blind re-sync-and-restart of the prior build can leave the schema ahead of the reverted code — diagnose before choosing a path back'
+    step: verify
+
+  - symptom: 'record-deployed-sha fails to write the marker'
+    cause: 'a filesystem permissions or disk-space issue on the marker path'
+    action: 'the deploy otherwise succeeded (verify already passed) — just re-write the marker file at /srv/orchestrator/projects/config/projects/claude-orchestrator/DEPLOYED_SHA with the deployed commit SHA'
+    step: record-deployed-sha
 
 companions: []

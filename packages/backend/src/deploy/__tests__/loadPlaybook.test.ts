@@ -285,6 +285,110 @@ steps:
     expect(result.playbook.steps[0].command_or_prompt).toBeUndefined();
   });
 
+  it('rejects a rollback_ref on a non-prod-mutating step', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-deploy-playbook.yml'),
+      `
+steps:
+  - id: build
+    kind: shell
+    command_or_prompt: "npm run build"
+    is_prod_mutating: false
+    rollback_ref: build
+`,
+    );
+
+    const result = loadDeployPlaybook(tmpDir);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(
+      /rollback_ref is only permitted on an is_prod_mutating step/,
+    );
+  });
+
+  it('rejects a rollback_ref pointing at a non-existent step', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-deploy-playbook.yml'),
+      `
+steps:
+  - id: sync-runtime
+    kind: shell
+    command_or_prompt: "rsync -a ./ /srv/runtime/"
+    is_prod_mutating: true
+    rollback_ref: does-not-exist
+`,
+    );
+
+    const result = loadDeployPlaybook(tmpDir);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(
+      /rollback_ref "does-not-exist" does not match any step id/,
+    );
+  });
+
+  it('accepts the absence of rollback_ref on a prod-mutating step', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-deploy-playbook.yml'),
+      `
+steps:
+  - id: sync-runtime
+    kind: shell
+    command_or_prompt: "rsync -a ./ /srv/runtime/"
+    is_prod_mutating: true
+`,
+    );
+
+    const result = loadDeployPlaybook(tmpDir);
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts a rollback_ref on a prod-mutating step pointing at a real step', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-deploy-playbook.yml'),
+      `
+steps:
+  - id: sync-runtime
+    kind: shell
+    command_or_prompt: "rsync -a ./ /srv/runtime/"
+    is_prod_mutating: true
+    rollback_ref: compensate
+  - id: compensate
+    kind: shell
+    command_or_prompt: "rsync -a /srv/backup/ /srv/runtime/"
+    is_prod_mutating: true
+`,
+    );
+
+    const result = loadDeployPlaybook(tmpDir);
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects a failure_diagnoses step association pointing at a non-existent step', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-deploy-playbook.yml'),
+      `
+steps:
+  - id: build
+    kind: shell
+    command_or_prompt: "npm run build"
+    is_prod_mutating: false
+failure_diagnoses:
+  - symptom: "build fails"
+    cause: "type error"
+    action: "fix the type error"
+    step: does-not-exist
+`,
+    );
+
+    const result = loadDeployPlaybook(tmpDir);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toMatch(
+      /failure_diagnoses\[0\]\.step "does-not-exist" does not match any step id/,
+    );
+  });
+
   it('rejects a report-in step that also carries a command_or_prompt', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.claude-deploy-playbook.yml'),

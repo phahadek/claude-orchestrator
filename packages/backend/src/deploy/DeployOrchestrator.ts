@@ -165,6 +165,31 @@ function shellFailureDetail(stepId: string, result: ShellResult): string {
   return `step "${stepId}" failed with exit code ${result.exitCode ?? 'unknown'} and produced no output`;
 }
 
+/**
+ * Builds the operator-facing failure reason for a halted step: the step's
+ * matching `failure_diagnoses` entry (symptom → cause → action) when the
+ * playbook associates one with this step's id, else the raw failure detail
+ * plus every declared diagnosis (no single one identified as the cause).
+ */
+function describeFailure(
+  playbook: DeployPlaybook,
+  step: StepDescriptor,
+  detail: string | undefined,
+): string {
+  const base = detail ?? `step "${step.id}" failed`;
+  const matching = playbook.failure_diagnoses.find((d) => d.step === step.id);
+  if (matching) {
+    return `${base} — diagnosis: symptom="${matching.symptom}"; cause="${matching.cause}"; action="${matching.action}"`;
+  }
+  if (playbook.failure_diagnoses.length === 0) return base;
+  const all = playbook.failure_diagnoses
+    .map(
+      (d) => `symptom="${d.symptom}"; cause="${d.cause}"; action="${d.action}"`,
+    )
+    .join(' | ');
+  return `${base} — no diagnosis matched step "${step.id}"; declared diagnoses: ${all}`;
+}
+
 function gitDiffNameOnly(input: {
   projectDir: string;
   fromSha: string | null;
@@ -231,8 +256,10 @@ async function resolveDeployTarget(projectDir: string): Promise<string> {
  * gate on a verdict reported back via `reportAgenticVerdict`, confirm-gate
  * steps pause for the operator, and validation steps poll where declared. A
  * step whose `changed_paths` doesn't match the deployed→target diff is
- * skipped. On failure the step's `rollback_ref` runs, the run halts, and the
- * sink is notified — no improvising past a failed step. Resuming after a
+ * skipped. On failure the run always halts and the sink is notified with the
+ * matching `failure_diagnoses` entry (or all of them, unmatched); when the
+ * failed step declares a `rollback_ref`, its compensating step runs only
+ * after an operator confirm-gate — never silently. Resuming after a
  * restart (including a self-deploy of this orchestrator) re-drives the
  * playbook starting at the run's `current_step`.
  */
@@ -484,16 +511,19 @@ export class DeployOrchestrator {
           detail: outcome.detail ?? null,
           at: this.now(),
         });
-        await this.runRollback(runId, playbook, step, targetSha);
+        if (step.rollback_ref) {
+          await this.runCompensatingStep(runId, playbook, step, targetSha);
+        }
         completeDeployRun(runId, 'failed', this.now());
+        const reason = describeFailure(playbook, step, outcome.detail);
         logger.error(
-          `[DeployOrchestrator] run ${runId} (${this.project}) halted at step "${step.id}": ${outcome.detail ?? 'step failed'}`,
+          `[DeployOrchestrator] run ${runId} (${this.project}) halted at step "${step.id}": ${reason}`,
         );
         this.deps.sink?.onNeedsAttention?.({
           runId,
           project: this.project,
           stepId: step.id,
-          reason: outcome.detail ?? 'step failed',
+          reason,
         });
         return;
       }
@@ -521,32 +551,52 @@ export class DeployOrchestrator {
     completeDeployRun(runId, 'succeeded', this.now());
   }
 
-  private async runRollback(
+  /**
+   * Runs the failed step's declared compensating step (its `rollback_ref`),
+   * gated behind an operator confirm — the engine offers, the operator
+   * consents, never silent. A compensating step that itself fails records
+   * `rollback_failed` and returns; it is never itself rolled back
+   * (no recursion).
+   */
+  private async runCompensatingStep(
     runId: string,
     playbook: DeployPlaybook,
     failedStep: StepDescriptor,
     targetSha: string,
   ): Promise<void> {
     if (!failedStep.rollback_ref) return;
-    const rollbackStep = playbook.steps.find(
+    const compensatingStep = playbook.steps.find(
       (s) => s.id === failedStep.rollback_ref,
     );
-    if (!rollbackStep) {
+    if (!compensatingStep) {
       logger.warn(
         `[DeployOrchestrator] run ${runId}: rollback_ref "${failedStep.rollback_ref}" not found in playbook`,
       );
       return;
     }
+    const approved = await this.deps.waitForConfirmGate({
+      runId,
+      project: this.project,
+      step: compensatingStep,
+    });
+    appendDeployRunEvent({
+      runId,
+      step: compensatingStep.id,
+      eventType: 'confirm_gate',
+      disposition: approved ? 'approved' : 'rejected',
+      at: this.now(),
+    });
+    if (!approved) return;
     try {
       const result = await this.executeStep(
         runId,
-        rollbackStep,
+        compensatingStep,
         targetSha,
         playbook,
       );
       appendDeployRunEvent({
         runId,
-        step: rollbackStep.id,
+        step: compensatingStep.id,
         eventType: result.ok ? 'rollback_succeeded' : 'rollback_failed',
         detail: result.detail ?? null,
         at: this.now(),
@@ -554,7 +604,7 @@ export class DeployOrchestrator {
     } catch (err) {
       appendDeployRunEvent({
         runId,
-        step: rollbackStep.id,
+        step: compensatingStep.id,
         eventType: 'rollback_failed',
         detail: String(err),
         at: this.now(),
