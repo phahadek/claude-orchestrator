@@ -688,8 +688,7 @@ describe('resumeOrphanSessions() — planning-session resumability pre-check', (
     const warnCall = warnSpy.mock.calls.find((args) =>
       args.some(
         (a) =>
-          typeof a === 'string' &&
-          a.includes('resumability pre-check failed'),
+          typeof a === 'string' && a.includes('resumability pre-check failed'),
       ),
     );
     expect(warnCall).toBeDefined();
@@ -717,8 +716,7 @@ describe('resumeOrphanSessions() — planning-session resumability pre-check', (
     const warnCall = warnSpy.mock.calls.find((args) =>
       args.some(
         (a) =>
-          typeof a === 'string' &&
-          a.includes('resumability pre-check failed'),
+          typeof a === 'string' && a.includes('resumability pre-check failed'),
       ),
     );
     expect(warnCall).toBeDefined();
