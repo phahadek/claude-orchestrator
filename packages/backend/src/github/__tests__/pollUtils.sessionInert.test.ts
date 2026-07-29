@@ -55,23 +55,43 @@ const TEN_MIN_MS = 10 * 60 * 1000;
 
 describe('classifyStalledPR — session_inert', () => {
   it('classifies as session_inert when nothing else matches and activity age exceeds the threshold', () => {
-    const pr = makePR({ review_result: JSON.stringify({ verdict: 'approved' }) });
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
 
     expect(
-      classifyStalledPR(pr, 'done', 'running', false, TEN_MIN_MS + 1, TEN_MIN_MS),
+      classifyStalledPR(
+        pr,
+        'done',
+        'running',
+        false,
+        TEN_MIN_MS + 1,
+        TEN_MIN_MS,
+      ),
     ).toEqual({ kind: 'session_inert' });
   });
 
   it('classifies null when activity age is within the threshold', () => {
-    const pr = makePR({ review_result: JSON.stringify({ verdict: 'approved' }) });
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
 
     expect(
-      classifyStalledPR(pr, 'done', 'running', false, TEN_MIN_MS - 1, TEN_MIN_MS),
+      classifyStalledPR(
+        pr,
+        'done',
+        'running',
+        false,
+        TEN_MIN_MS - 1,
+        TEN_MIN_MS,
+      ),
     ).toBeNull();
   });
 
   it('fires for an implementing session at status running, not just idle — the PR #1225/#1228 divergence', () => {
-    const pr = makePR({ review_result: JSON.stringify({ verdict: 'approved' }) });
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
 
     const runningResult = classifyStalledPR(
       pr,
@@ -95,7 +115,9 @@ describe('classifyStalledPR — session_inert', () => {
   });
 
   it('never classifies session_inert when lastActivityAgeMs is null (unknown, e.g. pruned session_events)', () => {
-    const pr = makePR({ review_result: JSON.stringify({ verdict: 'approved' }) });
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
 
     expect(
       classifyStalledPR(pr, 'done', 'running', false, null, TEN_MIN_MS),
@@ -103,7 +125,9 @@ describe('classifyStalledPR — session_inert', () => {
   });
 
   it('performs no database access or clock read — deterministic given the same injected fixtures', () => {
-    const pr = makePR({ review_result: JSON.stringify({ verdict: 'approved' }) });
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
 
     const first = classifyStalledPR(
       pr,
@@ -145,7 +169,14 @@ describe('classifyStalledPR — session_inert', () => {
       });
 
       expect(
-        classifyStalledPR(pr, 'done', 'idle', false, TEN_MIN_MS + 1, TEN_MIN_MS),
+        classifyStalledPR(
+          pr,
+          'done',
+          'idle',
+          false,
+          TEN_MIN_MS + 1,
+          TEN_MIN_MS,
+        ),
       ).toEqual({ kind: 'analyze_failing' });
     });
 
@@ -155,7 +186,14 @@ describe('classifyStalledPR — session_inert', () => {
       });
 
       expect(
-        classifyStalledPR(pr, 'done', 'idle', false, TEN_MIN_MS + 1, TEN_MIN_MS),
+        classifyStalledPR(
+          pr,
+          'done',
+          'idle',
+          false,
+          TEN_MIN_MS + 1,
+          TEN_MIN_MS,
+        ),
       ).toEqual({ kind: 'gate_failed' });
     });
 
@@ -167,7 +205,14 @@ describe('classifyStalledPR — session_inert', () => {
       });
 
       expect(
-        classifyStalledPR(pr, 'done', 'idle', false, TEN_MIN_MS + 1, TEN_MIN_MS),
+        classifyStalledPR(
+          pr,
+          'done',
+          'idle',
+          false,
+          TEN_MIN_MS + 1,
+          TEN_MIN_MS,
+        ),
       ).toEqual({ kind: 'incomplete_verdict' });
     });
 
@@ -203,7 +248,14 @@ describe('classifyStalledPR — session_inert', () => {
       });
 
       expect(
-        classifyStalledPR(pr, 'error', 'idle', false, TEN_MIN_MS + 1, TEN_MIN_MS),
+        classifyStalledPR(
+          pr,
+          'error',
+          'idle',
+          false,
+          TEN_MIN_MS + 1,
+          TEN_MIN_MS,
+        ),
       ).toEqual({ kind: 'errored_review_session' });
     });
   });
