@@ -207,7 +207,15 @@ export class OrphanedTaskSweeper {
       // nudged — the StalledPRReconciler re-drives the review, but the idle
       // session may need a prompt to act on the incoming feedback.
       if (pr && pr.state !== 'merged' && pr.state !== 'closed') {
-        if (latestSession.status === 'idle' && !latestSession.archived) {
+        // The docs execution flow's never-auto-merged gate: an open
+        // human_merge_only PR is legitimately waiting for a human merge —
+        // it runs no review session, so there is no incoming feedback to
+        // nudge the idle session about. Skip the stalled-PR nudge entirely.
+        if (
+          !pr.human_merge_only &&
+          latestSession.status === 'idle' &&
+          !latestSession.archived
+        ) {
           await this.maybeNudgeIdleSession(
             latestSession,
             taskId,

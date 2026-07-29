@@ -355,6 +355,35 @@ describe('AutoMerger.attempt() — CI green', () => {
 
 // ── attempt() — CI red and other failure modes ───────────────────────────────
 
+describe('AutoMerger — human_merge_only gate', () => {
+  it('attempt()/run() refuses to merge a human_merge_only=1 PR even when everything else is clean/approved', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ human_merge_only: 1 }),
+    );
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    // Simulates a direct invocation that bypasses getApprovedOpenPRs entirely
+    // (e.g. PRReviewService.onReviewApproved, routes/prs.ts manual-merge,
+    // rehydrate()) — attempt()/run() must independently re-check the gate.
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).not.toHaveBeenCalled();
+    expect(watcher.handleMerged).not.toHaveBeenCalled();
+    expect(setPauseReason).not.toHaveBeenCalled();
+  });
+});
+
 describe('AutoMerger.attempt() — failure modes', () => {
   it('pauses with ci_failing on ci_failed category', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(makePRRow());

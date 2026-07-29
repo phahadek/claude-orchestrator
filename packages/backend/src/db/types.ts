@@ -359,6 +359,12 @@ export interface PullRequestRow {
   /** Count of verified-flaky same-SHA gate re-runs attempted for the current
    *  ci_failing pause; resets to 0 when the pause clears or head_sha advances. */
   flake_recovery_attempts: number;
+  /** 0 | 1 — the docs execution flow's never-auto-merged output gate: set at
+   *  PR-open for repo-file docs PRs. Excluded from getApprovedOpenPRs and
+   *  independently refused at AutoMerger's merge-attempt choke point; never
+   *  classified stalled/orphaned by the sweepers. Waits indefinitely for a
+   *  human to merge. */
+  human_merge_only: number;
 }
 
 // ─── task_repo_assignments ──────────────────────────────────────────────────
@@ -564,6 +570,7 @@ export type StagedIntentState =
 
 export interface StagedIntentRow {
   id: string;
+  /** Free-form intent-kind vocabulary — see stagedIntents.ts's KNOWN_INTENT_KINDS (e.g. "task.setStatus", "notion.pageEdit"). */
   kind: string;
   payload: string;
   payload_hash: string;

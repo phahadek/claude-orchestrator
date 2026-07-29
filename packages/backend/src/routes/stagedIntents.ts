@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   BackendTaskWriteCommands,
+  NotionWriteCommands,
   getCachedType,
   type TaskStatus,
   type TaskType,
@@ -12,6 +13,7 @@ import {
   type MoveTaskTargetMilestone,
   type CreateTaskCommandFields,
 } from '../tasks/TaskWriteCommands';
+import { NotionClient } from '../notion/NotionClient';
 import type {
   TaskPropertiesPatch,
   PatchBodySectionOperation,
@@ -569,6 +571,17 @@ interface JournalSetStatePayload {
   taskId: string;
   state: OpsState;
   fields?: Parameters<typeof setEntryState>[2];
+}
+/**
+ * Payload for the notion.pageEdit staged intent — the Notion
+ * source-of-truth-page twin of the task.* board-write kinds above. Each
+ * content_updates entry is a find/replace pair applied against the page's
+ * current full body at apply time; see NotionClient.applyPageEdit for the
+ * stale-base (old_str no longer matches) rejection behaviour.
+ */
+interface NotionPageEditPayload {
+  page_id: string;
+  content_updates: { old_str: string; new_str: string }[];
 }
 /**
  * How a dispatched session expresses a capability request: the exact
@@ -1171,6 +1184,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'completeness.disposition',
   'intent.withdraw',
   'planning.noOp',
+  'notion.pageEdit',
 ]);
 
 /**
@@ -1737,6 +1751,12 @@ async function applyIntent(
     case 'journal.setState': {
       const payload = intent.payload as JournalSetStatePayload;
       setEntryState(payload.taskId, payload.state, payload.fields);
+      return { ok: true };
+    }
+    case 'notion.pageEdit': {
+      const payload = intent.payload as NotionPageEditPayload;
+      const notionCommands = new NotionWriteCommands(new NotionClient());
+      await notionCommands.applyPageEdit(payload);
       return { ok: true };
     }
     case 'arch.createUnit': {
