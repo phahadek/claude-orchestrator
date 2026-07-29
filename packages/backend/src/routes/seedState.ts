@@ -48,7 +48,10 @@ export function createSeedStateRouter(): Router {
     }
     try {
       res.json(
-        getSeedReadiness(project, resolveMilestoneForProject(project, milestone)),
+        getSeedReadiness(
+          project,
+          resolveMilestoneForProject(project, milestone),
+        ),
       );
     } catch (err) {
       if (err instanceof UnknownMilestoneError) {

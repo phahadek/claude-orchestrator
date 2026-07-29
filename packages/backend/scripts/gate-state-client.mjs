@@ -256,7 +256,13 @@ async function main() {
     if (command === 'readiness') {
       const { project, milestone } = parseFlags(rest);
       if (!project || !milestone) return fail(USAGE);
-      result = await fetchGateReadiness({ host, port, token, project, milestone });
+      result = await fetchGateReadiness({
+        host,
+        port,
+        token,
+        project,
+        milestone,
+      });
     } else if (command === 'next') {
       const { project, milestone, classification, limit } = parseFlags(rest);
       if (!project || !milestone) return fail(USAGE);

@@ -676,9 +676,7 @@ describe('runGateReconcilerTick', () => {
     const result = await runGateReconcilerTick({
       deployAdvanceTrigger: fixedTrigger(null),
     });
-    expect(result.readiness['polimarket-analyser::M20'].status).toBe(
-      'blocked',
-    );
+    expect(result.readiness['polimarket-analyser::M20'].status).toBe('blocked');
   });
 });
 

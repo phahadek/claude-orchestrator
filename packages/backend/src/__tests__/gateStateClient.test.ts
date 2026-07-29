@@ -54,11 +54,14 @@ describe('gate-state-client.mjs', () => {
     const result = await fetchGateReadiness({
       port,
       token: 'device-token-1',
+      project: 'polimarket-analyser',
       milestone: 'M12',
     });
 
     expect(result.statusCode).toBe(200);
-    expect(receivedPath).toBe('/api/gate/readiness?milestone=M12');
+    expect(receivedPath).toBe(
+      '/api/gate/readiness?project=polimarket-analyser&milestone=M12',
+    );
     expect(receivedAuth).toBe('Bearer device-token-1');
     expect(JSON.parse(result.body)).toEqual(readiness);
   });
@@ -74,13 +77,14 @@ describe('gate-state-client.mjs', () => {
     await fetchNextRunnableGateItems({
       port,
       token: 't',
+      project: 'polimarket-analyser',
       milestone: 'M12',
       classification: 'Read-Only',
       limit: 5,
     });
 
     expect(receivedPath).toBe(
-      '/api/gate/next?milestone=M12&classification=Read-Only&limit=5',
+      '/api/gate/next?project=polimarket-analyser&milestone=M12&classification=Read-Only&limit=5',
     );
   });
 
@@ -92,9 +96,16 @@ describe('gate-state-client.mjs', () => {
       res.end('[]');
     });
 
-    await fetchNextRunnableGateItems({ port, token: 't', milestone: 'M12' });
+    await fetchNextRunnableGateItems({
+      port,
+      token: 't',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+    });
 
-    expect(receivedPath).toBe('/api/gate/next?milestone=M12');
+    expect(receivedPath).toBe(
+      '/api/gate/next?project=polimarket-analyser&milestone=M12',
+    );
   });
 
   it('fetches a single gate item by id', async () => {

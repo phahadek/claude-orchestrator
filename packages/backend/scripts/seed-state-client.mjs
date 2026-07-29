@@ -202,7 +202,13 @@ async function main() {
     if (command === 'readiness') {
       const { project, milestone } = parseFlags(rest);
       if (!project || !milestone) return fail(USAGE);
-      result = await fetchSeedReadiness({ host, port, token, project, milestone });
+      result = await fetchSeedReadiness({
+        host,
+        port,
+        token,
+        project,
+        milestone,
+      });
     } else if (command === 'next') {
       const { project, milestone, deploySha, limit } = parseFlags(rest);
       if (!project || !milestone || !deploySha) return fail(USAGE);

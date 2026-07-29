@@ -106,14 +106,20 @@ describe('getGateReadiness', () => {
 
   it('ignores items from other milestones', () => {
     makeItem({ milestone: 'M13' });
-    expect(getGateReadiness('polimarket-analyser', 'M12').status).toBe(
-      'green',
-    );
+    expect(getGateReadiness('polimarket-analyser', 'M12').status).toBe('green');
   });
 
   it('ignores items from another project sharing the same milestone display name', () => {
-    makeItem({ project: 'claude-dashboard', milestone: 'M13', text: 'dashboard item' });
-    makeItem({ project: 'polimarket-analyser', milestone: 'M13', text: 'polimarket item' });
+    makeItem({
+      project: 'claude-dashboard',
+      milestone: 'M13',
+      text: 'dashboard item',
+    });
+    makeItem({
+      project: 'polimarket-analyser',
+      milestone: 'M13',
+      text: 'polimarket item',
+    });
 
     const readiness = getGateReadiness('claude-dashboard', 'M13');
     expect(readiness.blocking).toHaveLength(1);
@@ -351,7 +357,7 @@ describe('nextRunnableGateItems', () => {
     expect(batch.every((it) => it.classification === 'Read-Only')).toBe(true);
   });
 
-  it('never returns another project\'s items under the same milestone display name', () => {
+  it("never returns another project's items under the same milestone display name", () => {
     const own = makeItem({
       project: 'claude-dashboard',
       milestone: 'M13',
@@ -397,7 +403,9 @@ describe('nextRunnableGateItems', () => {
     });
     expect(getGateItem(item.id)?.state).toBe('runnable');
 
-    const batch = nextRunnableGateItems('polimarket-analyser', 'M12', { classification: 'Read-Only' });
+    const batch = nextRunnableGateItems('polimarket-analyser', 'M12', {
+      classification: 'Read-Only',
+    });
     expect(batch.map((it) => it.id)).not.toContain(item.id);
   });
 
@@ -410,16 +418,16 @@ describe('nextRunnableGateItems', () => {
       evidence: { reason: 'budget exceeded' },
     });
     expect(
-      nextRunnableGateItems('polimarket-analyser', 'M12', { classification: 'Read-Only' }).map(
-        (it) => it.id,
-      ),
+      nextRunnableGateItems('polimarket-analyser', 'M12', {
+        classification: 'Read-Only',
+      }).map((it) => it.id),
     ).not.toContain(item.id);
 
     reclassifyGateItem(item.id, 'Read-Only', 'pedro');
     expect(
-      nextRunnableGateItems('polimarket-analyser', 'M12', { classification: 'Read-Only' }).map(
-        (it) => it.id,
-      ),
+      nextRunnableGateItems('polimarket-analyser', 'M12', {
+        classification: 'Read-Only',
+      }).map((it) => it.id),
     ).toContain(item.id);
   });
 });
@@ -582,9 +590,9 @@ describe('reopenGateItem', () => {
     reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
     expect(getGateItem(item.id)?.state).toBe('runnable');
     expect(
-      nextRunnableGateItems('polimarket-analyser', 'M12', { classification: 'Read-Only' }).map(
-        (it) => it.id,
-      ),
+      nextRunnableGateItems('polimarket-analyser', 'M12', {
+        classification: 'Read-Only',
+      }).map((it) => it.id),
     ).toContain(item.id);
   });
 

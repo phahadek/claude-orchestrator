@@ -56,7 +56,10 @@ export function createGateStateRouter(): Router {
     }
     try {
       res.json(
-        getGateReadiness(project, resolveMilestoneForProject(project, milestone)),
+        getGateReadiness(
+          project,
+          resolveMilestoneForProject(project, milestone),
+        ),
       );
     } catch (err) {
       if (err instanceof UnknownMilestoneError) {

@@ -78,9 +78,7 @@ describe('getSeedReadiness', () => {
 
   it('ignores seeds from other milestones', () => {
     makeItem({ milestone: 'M13' });
-    expect(getSeedReadiness('polimarket-analyser', 'M12').status).toBe(
-      'green',
-    );
+    expect(getSeedReadiness('polimarket-analyser', 'M12').status).toBe('green');
   });
 
   it('ignores seeds from another project sharing the same milestone display name', () => {
@@ -125,19 +123,27 @@ describe('nextApplyableSeedItems', () => {
     const notYetDeployed = makeItem({ spec: 'ahead of the deploy' });
     setMinDeployedCommit(notYetDeployed.id, 'sha5', new Date(1).toISOString());
 
-    const applyable = nextApplyableSeedItems('polimarket-analyser', 'M12', 'sha3', {
-      ancestrySource: orderedAncestry,
-      limit: 10,
-    });
+    const applyable = nextApplyableSeedItems(
+      'polimarket-analyser',
+      'M12',
+      'sha3',
+      {
+        ancestrySource: orderedAncestry,
+        limit: 10,
+      },
+    );
 
     expect(applyable.map((i) => i.id)).toEqual([deployed.id]);
     expect(applyable.map((i) => i.id)).not.toContain(notDeployed.id);
     expect(applyable.map((i) => i.id)).not.toContain(notYetDeployed.id);
   });
 
-  it('never returns another project\'s seed items under the same milestone display name', () => {
+  it("never returns another project's seed items under the same milestone display name", () => {
     const own = makeItem({ project: 'claude-dashboard', milestone: 'M13' });
-    const other = makeItem({ project: 'polimarket-analyser', milestone: 'M13' });
+    const other = makeItem({
+      project: 'polimarket-analyser',
+      milestone: 'M13',
+    });
     setMinDeployedCommit(own.id, 'sha1', new Date(1).toISOString());
     setMinDeployedCommit(other.id, 'sha1', new Date(1).toISOString());
 
@@ -156,10 +162,15 @@ describe('nextApplyableSeedItems', () => {
     appendSeedItemEvent(item.id, { outcome: 'applied' });
     appendSeedItemEvent(item.id, { outcome: 'confirmed' });
 
-    const applyable = nextApplyableSeedItems('polimarket-analyser', 'M12', 'sha9', {
-      ancestrySource: orderedAncestry,
-      limit: 10,
-    });
+    const applyable = nextApplyableSeedItems(
+      'polimarket-analyser',
+      'M12',
+      'sha9',
+      {
+        ancestrySource: orderedAncestry,
+        limit: 10,
+      },
+    );
     expect(applyable).toEqual([]);
   });
 
@@ -171,15 +182,25 @@ describe('nextApplyableSeedItems', () => {
       setMinDeployedCommit(item.id, 'sha1', new Date(1).toISOString());
     }
 
-    const defaultBatch = nextApplyableSeedItems('polimarket-analyser', 'M12', 'sha9', {
-      ancestrySource: orderedAncestry,
-    });
+    const defaultBatch = nextApplyableSeedItems(
+      'polimarket-analyser',
+      'M12',
+      'sha9',
+      {
+        ancestrySource: orderedAncestry,
+      },
+    );
     expect(defaultBatch.length).toBe(1);
 
-    const smallBatch = nextApplyableSeedItems('polimarket-analyser', 'M12', 'sha9', {
-      ancestrySource: orderedAncestry,
-      limit: 3,
-    });
+    const smallBatch = nextApplyableSeedItems(
+      'polimarket-analyser',
+      'M12',
+      'sha9',
+      {
+        ancestrySource: orderedAncestry,
+        limit: 3,
+      },
+    );
     expect(smallBatch.length).toBe(3);
     expect(smallBatch.length).toBeLessThan(items.length);
   });
