@@ -259,6 +259,7 @@ export function runMigrations(target: Database.Database): void {
       filed_followon TEXT,
       deploy_sha     TEXT,
       operator       TEXT,
+      unattended     INTEGER,
       at             TEXT    NOT NULL,
       FOREIGN KEY (gate_item_id) REFERENCES gate_item(id) ON DELETE CASCADE
     );
@@ -1519,6 +1520,19 @@ export function runMigrations(target: Database.Database): void {
     target.exec(
       `ALTER TABLE sessions ADD COLUMN pending_approve_terminal_at INTEGER`,
     );
+  } catch {
+    /* already exists */
+  }
+
+  // gate_item_event.unattended: distinguishes a fully-unattended reconciler
+  // auto-launch pass from an operator-triggered manual dispatch — both write
+  // through the same appendGateItemEvent path (gateReconciler.ts's
+  // processItem / dispatchGateItemVerification) and were previously
+  // indistinguishable in the event log. 1 = auto-launched with zero human
+  // involvement, 0 = manual dispatch, NULL = not a verifier-originated event
+  // (pre-existing rows, or an operator/system event with no dispatch mode).
+  try {
+    target.exec(`ALTER TABLE gate_item_event ADD COLUMN unattended INTEGER`);
   } catch {
     /* already exists */
   }

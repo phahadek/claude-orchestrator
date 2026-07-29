@@ -4233,9 +4233,9 @@ export function listGateItemEvents(gateItemId: string): GateItemEventRow[] {
 export function insertGateItemEvent(row: NewGateItemEventRow): void {
   _stmtInsertGateItemEvent ??= db.prepare<NewGateItemEventRow>(`
     INSERT INTO gate_item_event
-      (gate_item_id, disposition, evidence, filed_followon, deploy_sha, operator, at)
+      (gate_item_id, disposition, evidence, filed_followon, deploy_sha, operator, unattended, at)
     VALUES
-      (@gate_item_id, @disposition, @evidence, @filed_followon, @deploy_sha, @operator, @at)
+      (@gate_item_id, @disposition, @evidence, @filed_followon, @deploy_sha, @operator, @unattended, @at)
   `);
   _stmtInsertGateItemEvent.run(row);
 }
@@ -5617,6 +5617,128 @@ export function incrementRouteBackCount(
     route_back_count: nextCount,
     escalated,
     updated_at: updatedAt,
+  };
+}
+
+// ─── trust-precision signals ───────────────────────────────────────────────
+
+/** The auto-dispatch flows the trust-precision rejection/abstain-rate signal covers. */
+export type TrustPrecisionFlow = 'groom' | 'design' | 'ops' | 'gate-verify';
+
+const STAGED_INTENT_FLOWS: ReadonlySet<TrustPrecisionFlow> = new Set([
+  'groom',
+  'design',
+  'ops',
+]);
+
+/** A staged intent an operator sent back for revision or outright declined, vs one they approved through. */
+const STAGED_INTENT_REJECTED_STATES: StagedIntentState[] = [
+  'needs_revision',
+  'rejected',
+];
+/** Terminal-or-dispositioned states — the denominator for the staging-flow rejection rate; excludes still-pending states (staged, pending_verification, superseded, withdrawn). */
+const STAGED_INTENT_DISPOSITIONED_STATES: StagedIntentState[] = [
+  ...STAGED_INTENT_REJECTED_STATES,
+  'approved',
+  'committed',
+];
+
+export interface FlowRejectionRateResult {
+  flow: TrustPrecisionFlow;
+  project: string;
+  milestone: string;
+  /** Dispositioned items this rate was computed over (rejected + approved for staging flows; pass + fail + needs-setup for gate-verify). */
+  total: number;
+  /** Rejected/abstained items within `total`. */
+  rejected: number;
+  /** `rejected / total`, or null when there's no denominator yet. */
+  rate: number | null;
+}
+
+/**
+ * Per-flow rejection/abstain rate — the Milestone panel's trust-precision
+ * read on auto-dispatch output (Technical Architecture § "Auto-dispatch
+ * trust gates"). Flow-family-specific:
+ *  - groom/design/ops: the rate at which a staged intent from that flow's
+ *    sessions was rejected by the operator — pushback (-> needs_revision) or
+ *    decline (-> rejected) — rather than approved (-> approved/committed).
+ *    staged_intent carries no milestone column, so these three flows are
+ *    scoped by project only; `milestone` is accepted for a uniform signature
+ *    across all four flows but not filterable here.
+ *  - gate-verify: auto-disposes on pass, so there is no operator
+ *    "rejection" — the signal instead is the abstain rate, needs-setup
+ *    dispositions read off gate_item_event, scoped to the given
+ *    project+milestone via gate_item.
+ * Informative only — no auto-disarm; the operator reads this and disarms
+ * auto-dispatch manually via the arm toggle if it looks untrustworthy.
+ */
+export function getFlowRejectionRate(
+  project: string,
+  milestone: string,
+  flow: TrustPrecisionFlow,
+): FlowRejectionRateResult {
+  if (!STAGED_INTENT_FLOWS.has(flow)) {
+    const row = db
+      .prepare(
+        `
+        SELECT
+          SUM(CASE WHEN e.disposition = 'needs-setup' THEN 1 ELSE 0 END) AS rejected,
+          COUNT(*) AS total
+        FROM gate_item_event e
+        JOIN gate_item i ON i.id = e.gate_item_id
+        WHERE i.project = ? AND i.milestone = ?
+          AND e.disposition IN ('pass', 'fail', 'needs-setup')
+      `,
+      )
+      .get(project, milestone) as {
+      rejected: number | null;
+      total: number | null;
+    };
+    const total = row.total ?? 0;
+    const rejected = row.rejected ?? 0;
+    return {
+      flow,
+      project,
+      milestone,
+      total,
+      rejected,
+      rate: total > 0 ? rejected / total : null,
+    };
+  }
+
+  const rejectedPlaceholders = STAGED_INTENT_REJECTED_STATES.map(
+    () => '?',
+  ).join(', ');
+  const dispositionedPlaceholders = STAGED_INTENT_DISPOSITIONED_STATES.map(
+    () => '?',
+  ).join(', ');
+  const row = db
+    .prepare(
+      `
+      SELECT
+        SUM(CASE WHEN si.state IN (${rejectedPlaceholders}) THEN 1 ELSE 0 END) AS rejected,
+        COUNT(*) AS total
+      FROM staged_intent si
+      JOIN sessions s ON s.session_id = si.session_id
+      WHERE s.project_id = ? AND s.session_type = ?
+        AND si.state IN (${dispositionedPlaceholders})
+    `,
+    )
+    .get(
+      ...STAGED_INTENT_REJECTED_STATES,
+      project,
+      flow,
+      ...STAGED_INTENT_DISPOSITIONED_STATES,
+    ) as { rejected: number | null; total: number | null };
+  const total = row.total ?? 0;
+  const rejected = row.rejected ?? 0;
+  return {
+    flow,
+    project,
+    milestone,
+    total,
+    rejected,
+    rate: total > 0 ? rejected / total : null,
   };
 }
 
