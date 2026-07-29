@@ -1,12 +1,14 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { loadOpsContext } from '../ops/opsLoad';
+import { loadOpsContext, type OpsLoadResult } from '../ops/opsLoad';
 import {
   getMilestoneById,
   getProjectRowById,
   getTaskTitleFromCache,
 } from '../db/queries';
+import type { MilestoneRow, ProjectRow } from '../db/types';
 import type {
+  OpsLaunchResult,
   OpsSessionLauncher,
   PlanningSessionType,
   PlanningTaskEntry,
@@ -45,6 +47,84 @@ export function resolveSessionType(
     default:
       return null;
   }
+}
+
+export interface DispatchPlanningFlowOptions {
+  model?: string;
+  effort?: string;
+  /** Pre-loaded ops context — lets a caller that already loaded it once (the route) skip a second load. */
+  opsContext?: OpsLoadResult;
+}
+
+/**
+ * Planning-flow dispatch shared by the /planning/launch route (one call per
+ * request, batching every selected task id) and DispatchTriggerEvaluator
+ * (one call per groom candidate, no self-HTTP). Resolves `flow` to a
+ * sessionType and builds the PlanningTaskEntry/OpsTaskEntry the launcher
+ * needs, mirroring what the route used to build inline for each of its
+ * three flow types.
+ */
+export async function dispatchPlanningFlow(
+  launcher: OpsSessionLauncher,
+  milestone: MilestoneRow,
+  project: ProjectRow,
+  flow: string,
+  taskIds: string[],
+  opts: DispatchPlanningFlowOptions = {},
+): Promise<OpsLaunchResult> {
+  const sessionType = resolveSessionType(flow);
+  if (!sessionType) {
+    return {
+      launched: [],
+      deferred: [],
+      failed: taskIds.map((taskId) => ({
+        taskId,
+        reason: `unsupported workflow "${flow}"`,
+      })),
+    };
+  }
+
+  if (sessionType === 'ops') {
+    // ops / investigation workflow: reuse the ops loader's classification
+    // and Depends-On dependency ordering.
+    const opsContext = opts.opsContext ?? (await loadOpsContext(milestone.id));
+    const selectedIds = new Set(taskIds.map(bareId));
+    const tasks = opsContext.worklist.executable.filter((t) =>
+      selectedIds.has(bareId(t.id)),
+    );
+    return launcher.launchSelected({
+      projectId: project.id,
+      projectContextUrl: project.context_url ?? '',
+      milestoneId: milestone.id,
+      sessionType,
+      opsContext,
+      tasks,
+      model: opts.model,
+      effort: opts.effort,
+    });
+  }
+
+  // groom / design: dispatch directly per task id. No dependency gating
+  // here — the evaluator's candidate scan (or a human's selection) is where
+  // gating belongs, not the dispatch step itself.
+  const tasks: PlanningTaskEntry[] = taskIds.map((id) => {
+    const normalizedId = normalizeTaskId(id);
+    return {
+      id: normalizedId,
+      title: getTaskTitleFromCache(normalizedId) || bareId(id),
+      url: '',
+      blockingDepIds: [],
+    };
+  });
+  return launcher.launchSelected({
+    projectId: project.id,
+    projectContextUrl: project.context_url ?? '',
+    milestoneId: milestone.id,
+    sessionType,
+    tasks,
+    model: opts.model,
+    effort: opts.effort,
+  });
 }
 
 /**
@@ -114,57 +194,14 @@ export function createPlanningLaunchRouter(
     }
 
     try {
-      if (sessionType === 'ops') {
-        // ops / investigation workflow: reuse the ops loader's classification
-        // and Depends-On dependency ordering, unchanged from /api/ops/launch.
-        const opsContext = await loadOpsContext(milestoneId);
-        const selectedIds = new Set(taskIds.map(bareId));
-        const tasks = opsContext.worklist.executable.filter((t) =>
-          selectedIds.has(bareId(t.id)),
-        );
-        const result = await launcher.launchSelected({
-          projectId: milestone.project_id,
-          projectContextUrl: project.context_url ?? '',
-          milestoneId,
-          sessionType,
-          opsContext,
-          tasks,
-          model,
-          effort,
-        });
-        res.status(202).json(result);
-        return;
-      }
-
-      // groom / design: dispatch directly per selected task id. No
-      // dependency gating and no rich per-task context yet — building that
-      // out is the injected-assembler's job, not this dispatch seam's.
-      //
-      // Title is resolved from the task cache so the session name reads as
-      // the task, not its uuid; the assembler (buildInjectedProcedure) may
-      // still supply a richer title later, but this is the floor for when
-      // it doesn't. The id itself stays the normalized notion:-prefixed
-      // form every downstream lookup keys on — only the display title uses
-      // the cache lookup, with the bare id as the last-resort fallback.
-      const tasks: PlanningTaskEntry[] = taskIds.map((id) => {
-        const cleanId = bareId(id);
-        const normalizedId = normalizeTaskId(id);
-        return {
-          id: normalizedId,
-          title: getTaskTitleFromCache(normalizedId) || cleanId,
-          url: '',
-          blockingDepIds: [],
-        };
-      });
-      const result = await launcher.launchSelected({
-        projectId: milestone.project_id,
-        projectContextUrl: project.context_url ?? '',
-        milestoneId,
-        sessionType,
-        tasks,
-        model,
-        effort,
-      });
+      const result = await dispatchPlanningFlow(
+        launcher,
+        milestone,
+        project,
+        workflow,
+        taskIds,
+        { model, effort },
+      );
       res.status(202).json(result);
     } catch (err) {
       res.status(500).json({
