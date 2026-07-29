@@ -32,9 +32,11 @@ import {
   insertLocalBranch,
   markLocalBranchMerged,
   recordProjectDeployedSha,
+  updateProject,
 } from '../../db/queries.js';
 import { loadOpsContext } from '../opsLoad.js';
 import { getEntry } from '../opsJournal.js';
+import { createUnit } from '../../architecture/ArchUnitStore.js';
 
 const TARGET_BOARD = 'target-board-id';
 const PROJECT = 'proj-1';
@@ -292,6 +294,78 @@ describe('loadOpsContext — classification', () => {
     expect(result.contextPages).toHaveLength(1);
     expect(result.contextPages[0].id).toBe(CONTEXT_PAGE_ID);
     expect(result.contextPages[0].title).toBe('Project Context');
+  });
+});
+
+describe('loadOpsContext — architecture dual-read', () => {
+  it('resolves archUnits/archSource via selectUnitsFromStore({}) (no regions/topic) to exactly the active-invariant set when archStoreAdopted is true', async () => {
+    updateProject(PROJECT, { arch_store_adopted: 1 });
+    createUnit({
+      title: 'Sessions dispatch through the SessionManager invariant',
+      kind: 'invariant',
+      topic: 'general',
+      regions: [],
+      body: 'invariant body',
+      at: '2026-01-01T00:00:00Z',
+    });
+    // Region- and topic-matched units must NOT surface — an ops task has no
+    // file scope and no topic (see selectUnitsFromStore's no-regions/no-topic
+    // behaviour).
+    createUnit({
+      title: 'Region-matched unit that must not surface',
+      kind: 'subsystem',
+      topic: 'sessions',
+      regions: ['packages/backend/src/sessions'],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+
+    rows = [
+      {
+        id: 'task-op-ready',
+        name: 'Op ready no deps',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+    ];
+
+    const result = await loadOpsContext(MILESTONE);
+
+    expect(result.archSource).toBe('store');
+    const task = result.worklist.executable.find(
+      (t) => t.id === 'task-op-ready',
+    );
+    expect(task?.archSource).toBe('store');
+    expect(task?.archUnits.map((u) => u.title)).toEqual([
+      'Sessions dispatch through the SessionManager invariant',
+    ]);
+  });
+
+  it("keeps returning the project's Notion architecture pages (source: notion) when archStoreAdopted is not set", async () => {
+    createUnit({
+      title: 'Should never surface — project has not adopted the store',
+      kind: 'invariant',
+      topic: 'general',
+      regions: [],
+      body: 'body',
+      at: '2026-01-01T00:00:00Z',
+    });
+    rows = [
+      {
+        id: 'task-op-ready',
+        name: 'Op ready no deps',
+        type: '🔧 Operational',
+        status: '🗂️ Ready',
+      },
+    ];
+
+    const result = await loadOpsContext(MILESTONE);
+
+    expect(result.archSource).toBe('notion');
+    const task = result.worklist.executable.find(
+      (t) => t.id === 'task-op-ready',
+    );
+    expect(task?.archSource).toBe('notion');
   });
 });
 

@@ -32,6 +32,7 @@ import {
   getMergeCommitFromLocalBranches,
 } from '../db/queries';
 import { NotionClient, normalizeNotionId } from '../notion/NotionClient';
+import { selectArchitectureContext } from '../architecture/selectiveInjection';
 import type { NotionTask } from '../notion/types';
 import { reconcileJournal, type OpsBoardTaskRow } from './opsJournal';
 import { formatTaskId } from '../tasks/taskId';
@@ -190,6 +191,11 @@ interface TaskRef {
   url: string;
 }
 
+export interface OpsArchUnitRef {
+  id: string;
+  title: string;
+}
+
 export interface OpsTaskEntry extends TaskRef {
   type: string;
   mode: 'operational' | 'investigation';
@@ -199,6 +205,15 @@ export interface OpsTaskEntry extends TaskRef {
   /** Titles of the blocking deps, parallel to blockingDepIds — surfaced to the UI as a reason. */
   blockingDepTitles: string[];
   depStatus: 'ready' | 'blocked';
+  /** Which dual-read branch produced `archUnits` — driven by the project's `archStoreAdopted` flag. */
+  archSource: 'store' | 'notion';
+  /**
+   * An ops task carries no resolved code regions and no topic (see
+   * `selectUnitsFromStore`'s no-regions/no-topic behaviour), so the store
+   * branch resolves to just the active `kind='invariant'` units — the same
+   * value for every task entry in a given loadOpsContext run.
+   */
+  archUnits: OpsArchUnitRef[];
 }
 
 interface OpsBoardSummary {
@@ -216,6 +231,8 @@ interface OpsBoardSummary {
 }
 
 export interface OpsLoadResult {
+  /** Which dual-read branch produced every task entry's `archUnits` — uniform across the run (see `OpsTaskEntry.archSource`). */
+  archSource: 'store' | 'notion';
   contextPages: PageDoc[];
   boards: { target: OpsBoardSummary; neighbours: BoardRef[] };
   worklist: {
@@ -306,6 +323,19 @@ export async function loadOpsContext(
   }
 
   // ── Job 2: query target + neighbour boards, resolve deps, classify ──────
+  // Dual-read: an ops task carries no resolved code regions and no topic
+  // (see `OpsTaskEntry.archUnits`'s doc comment), so `selectArchitectureContext`
+  // is called with no `regions`/`topic` — the store branch degrades to just
+  // the active `kind='invariant'` units, the same selection for every task in
+  // this run. A non-migrated project keeps the pre-migration behaviour: the
+  // project's full Notion architecture page set.
+  const archContext = await selectArchitectureContext({ projectId: project });
+  const archSource: 'store' | 'notion' = archContext.source;
+  const archUnits: OpsArchUnitRef[] =
+    archContext.source === 'store'
+      ? archContext.units.map((u) => ({ id: u.id, title: u.title }))
+      : archContext.pages.map((p) => ({ id: p.id, title: p.title }));
+
   const targetRows = await notion.fetchBoardTasks(board);
   const neighbourRowSets = await Promise.all(
     neighbours.map((n) => notion.fetchBoardTasks(n.board)),
@@ -388,6 +418,8 @@ export async function loadOpsContext(
       blockingDepIds,
       blockingDepTitles,
       depStatus,
+      archSource,
+      archUnits,
     };
 
     if (isExecutable) {
@@ -432,6 +464,7 @@ export async function loadOpsContext(
   reconcileJournal(liveBoard);
 
   return {
+    archSource,
     contextPages,
     boards: {
       target: {

@@ -160,6 +160,10 @@ export interface DesignDigestSlice {
 export interface OpsDigestSlice {
   task: OpsTaskEntry;
   journalEntry: OpsJournalEntry | null;
+  /** Which dual-read branch produced `archUnits` — see `OpsTaskEntry.archSource`. */
+  archSource: OpsTaskEntry['archSource'];
+  /** Active-invariant units (an ops task has no file scope/topic) once adopted, else the fixed Notion context pages. Titles/ids only — never inlined (see `renderOpsDigest`). */
+  archUnits: OpsTaskEntry['archUnits'];
 }
 
 /**
@@ -285,7 +289,12 @@ export function deriveOpsDigestSlice(
       `procedureAssembler: task ${taskId} not found in ops worklist`,
     );
   }
-  return { task, journalEntry };
+  return {
+    task,
+    journalEntry,
+    archSource: task.archSource,
+    archUnits: task.archUnits,
+  };
 }
 
 // ─── skeleton (written once) ───────────────────────────────────────────────
@@ -1097,6 +1106,22 @@ function renderGroomDigest(
   return lines.join('\n');
 }
 
+/**
+ * The arch-unit dereference hint — shared verbatim by `renderDesignDigest`
+ * and `renderOpsDigest` so the two can't drift (same drift-guard rationale as
+ * `PLANNING_INTENT_KINDS`). Both digests render only titles/ids for a
+ * store-sourced selection (too large to inline wholesale, unlike groom's
+ * region-intersected selection — see `renderGroomDigest`); this is the
+ * pointer to the two MCP tools a session uses to fetch a unit's full body.
+ */
+function archUnitDereferenceHint(): string {
+  return (
+    `_This selection is titles/ids only — too large to inline wholesale. Fetch a unit's full body with ` +
+    `${orchestratorMcpToolName('architecture.getUnit')} ({ id }), or run a broader query with ` +
+    `${orchestratorMcpToolName('architecture.queryUnits')} ({ topic / kind / region })._`
+  );
+}
+
 function renderDesignDigest(data: DesignDigestSlice): string {
   const lines: string[] = [
     '## Design Investigation Slice',
@@ -1116,12 +1141,7 @@ function renderDesignDigest(data: DesignDigestSlice): string {
     ...data.archUnits.map((u) => `- ${u.title} (${u.id})`),
   );
   if (data.archSource === 'store' && data.archUnits.length) {
-    lines.push(
-      '',
-      `_This selection is titles/ids only — too large to inline wholesale. Fetch a unit's full body with ` +
-        `${orchestratorMcpToolName('architecture.getUnit')} ({ id }), or run a broader query with ` +
-        `${orchestratorMcpToolName('architecture.queryUnits')} ({ topic / kind / region })._`,
-    );
+    lines.push('', archUnitDereferenceHint());
   }
   if (data.unresolvedPageRefs.length) {
     lines.push(
@@ -1148,6 +1168,16 @@ function renderOpsDigest(data: OpsDigestSlice): string {
     `- Depends On: ${data.task.dependsOn.length ? data.task.dependsOn.join(', ') : '(none)'}`,
     `- Dep status: ${data.task.depStatus}`,
   ];
+  if (data.archSource === 'store' && data.archUnits.length) {
+    lines.push(
+      '',
+      `### Arch-store-selected units (${data.archUnits.length})`,
+      '',
+      ...data.archUnits.map((u) => `- ${u.title} (${u.id})`),
+      '',
+      archUnitDereferenceHint(),
+    );
+  }
   lines.push(
     '',
     '### Existing ops_journal entry',
