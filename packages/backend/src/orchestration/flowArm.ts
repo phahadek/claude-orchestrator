@@ -2,8 +2,8 @@
  * Single-sourced FlowId enum + flow->dispatch map + read-path arm defaults
  * for the per-flow auto-dispatch arm model (Technical Architecture §
  * "Per-flow auto-dispatch arm model"). C1 (trigger evaluator) and the
- * Milestone panel toggle UI import FlowId/FLOW_IDS/DEFAULT_ARM from here
- * rather than duplicating the flow list.
+ * Milestone panel's FlowArmToggle import FlowId/FLOW_IDS/DEFAULT_ARM from
+ * here rather than duplicating the flow list.
  *
  * Note: session/sessionPredicates.ts's isPlanningSession also matches
  * 'split', which is not a flow and must not be added to FlowId — 'split' is
