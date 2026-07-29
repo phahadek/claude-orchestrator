@@ -1939,7 +1939,11 @@ describe('start() — bootstrap gate', () => {
       taskSource: 'jira',
     });
 
-    sm.start('https://jira.example.com/task', 'https://jira.example.com/project', START_OPTS);
+    sm.start(
+      'https://jira.example.com/task',
+      'https://jira.example.com/project',
+      START_OPTS,
+    );
 
     await vi.waitFor(() =>
       expect(vi.mocked(buildSessionContext)).toHaveBeenCalled(),
