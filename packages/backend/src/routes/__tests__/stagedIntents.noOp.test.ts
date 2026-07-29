@@ -44,7 +44,13 @@ describe('planning.noOp decision-surface kind', () => {
 
   it('rejects at stage time when reason is missing, before any row is written', () => {
     expect(() =>
-      stageIntent('planning.noOp', { taskId: 'task-1' }, 'proj-1', null, 'sess-2'),
+      stageIntent(
+        'planning.noOp',
+        { taskId: 'task-1' },
+        'proj-1',
+        null,
+        'sess-2',
+      ),
     ).toThrow(/reason.*required/i);
 
     const rows = db

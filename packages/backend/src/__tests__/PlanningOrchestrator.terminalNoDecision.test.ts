@@ -58,7 +58,9 @@ function seedSession(sessionId = SESSION_ID, sessionType = 'groom'): void {
 }
 
 let counter = 0;
-function stageIntent(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow {
+function stageIntent(
+  overrides: Partial<StagedIntentRow> = {},
+): StagedIntentRow {
   counter += 1;
   const now = Date.now();
   const row: StagedIntentRow = {
@@ -88,7 +90,9 @@ function stageIntent(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow 
 
 function crashCountFor(taskId: string): number {
   const row = db
-    .prepare('SELECT consecutive_crashes FROM task_crash_counts WHERE task_id = ?')
+    .prepare(
+      'SELECT consecutive_crashes FROM task_crash_counts WHERE task_id = ?',
+    )
     .get(taskId) as { consecutive_crashes: number } | undefined;
   return row?.consecutive_crashes ?? 0;
 }
@@ -109,9 +113,9 @@ describe('PlanningOrchestrator.checkTerminal — kind-aware "staged a decision" 
 
     const intent = stageIntent({ kind: 'task.setStatus' });
     orchestrator.checkTerminal(SESSION_ID); // prime snapshot
-    db.prepare(
-      `UPDATE staged_intent SET state = 'committed' WHERE id = ?`,
-    ).run(intent.id);
+    db.prepare(`UPDATE staged_intent SET state = 'committed' WHERE id = ?`).run(
+      intent.id,
+    );
 
     expect(orchestrator.checkTerminal(SESSION_ID)).toBe(true);
     expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
@@ -129,9 +133,9 @@ describe('PlanningOrchestrator.checkTerminal — kind-aware "staged a decision" 
       payload: JSON.stringify({ taskId: TASK_ID, state: 'candidate' }),
     });
     orchestrator.checkTerminal(SESSION_ID);
-    db.prepare(
-      `UPDATE staged_intent SET state = 'committed' WHERE id = ?`,
-    ).run(intent.id);
+    db.prepare(`UPDATE staged_intent SET state = 'committed' WHERE id = ?`).run(
+      intent.id,
+    );
 
     expect(orchestrator.checkTerminal(SESSION_ID)).toBe(true);
     expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
@@ -166,9 +170,9 @@ describe('PlanningOrchestrator.checkTerminal — kind-aware "staged a decision" 
       payload: JSON.stringify({ prompt: 'which?', options: [{ label: 'a' }] }),
     });
     orchestrator.checkTerminal(SESSION_ID);
-    db.prepare(
-      `UPDATE staged_intent SET state = 'rejected' WHERE id = ?`,
-    ).run(intent.id);
+    db.prepare(`UPDATE staged_intent SET state = 'rejected' WHERE id = ?`).run(
+      intent.id,
+    );
 
     // Reaches terminal (nothing pending, nothing new) but with no staged
     // decision — the first occurrence nudges rather than surfacing a pause.
