@@ -1036,19 +1036,33 @@ describe('AutoMerger.sweepApprovedLocalBranches() — scheduled local-branch mer
     const watcher = makeMockWatcher();
     const merger = new AutoMerger(github, watcher, () => {});
 
-    const registered: { name: string; run: () => Promise<void> }[] = [];
+    const registered: {
+      name: string;
+      concurrency?: string;
+      run: () => Promise<void>;
+    }[] = [];
     const fakeScheduler = {
-      register: vi.fn((opts: { name: string; run: () => Promise<void> }) => {
-        registered.push(opts);
-      }),
+      register: vi.fn(
+        (opts: {
+          name: string;
+          concurrency?: string;
+          run: () => Promise<void>;
+        }) => {
+          registered.push(opts);
+        },
+      ),
     };
 
     merger.register(
       fakeScheduler as unknown as import('../orchestration/Scheduler').Scheduler,
     );
 
-    expect(fakeScheduler.register).toHaveBeenCalledTimes(1);
-    expect(registered[0].name).toBe('auto_merger_local_branch_sweep');
+    expect(fakeScheduler.register).toHaveBeenCalledTimes(2);
+    const localBranchJob = registered.find(
+      (j) => j.name === 'auto_merger_local_branch_sweep',
+    );
+    expect(localBranchJob).toBeDefined();
+    expect(localBranchJob?.concurrency).toBe('skip-if-running');
 
     const attemptSpy = vi.spyOn(merger, 'attempt');
     vi.mocked(getApprovedOpenPRs).mockReturnValue([makePRRow()]);
@@ -1056,8 +1070,49 @@ describe('AutoMerger.sweepApprovedLocalBranches() — scheduled local-branch mer
 
     // Running the registered job must only sweep local branches, never touch
     // the PR path — that stays driven by PRMergeWatcher/PRReviewService.
-    return registered[0].run().then(() => {
+    return localBranchJob!.run().then(() => {
       expect(attemptSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it('register() also schedules the conflict-nudge sweep with skip-if-running concurrency', () => {
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+
+    const registered: {
+      name: string;
+      concurrency?: string;
+      run: () => Promise<void>;
+    }[] = [];
+    const fakeScheduler = {
+      register: vi.fn(
+        (opts: {
+          name: string;
+          concurrency?: string;
+          run: () => Promise<void>;
+        }) => {
+          registered.push(opts);
+        },
+      ),
+    };
+
+    merger.register(
+      fakeScheduler as unknown as import('../orchestration/Scheduler').Scheduler,
+    );
+
+    const conflictJob = registered.find(
+      (j) => j.name === 'auto_merger_conflict_nudge_sweep',
+    );
+    expect(conflictJob).toBeDefined();
+    expect(conflictJob?.concurrency).toBe('skip-if-running');
+
+    const sweepSpy = vi
+      .spyOn(merger, 'conflictNudgeSweep')
+      .mockResolvedValue(undefined);
+
+    return conflictJob!.run().then(() => {
+      expect(sweepSpy).toHaveBeenCalledTimes(1);
     });
   });
 });
