@@ -140,26 +140,28 @@ vi.mock('../ApiSessionRunner', () => ({
 // chain takes far longer than the admission check.
 vi.mock(import('../AgentSession'), async (importOriginal) => {
   const actual = await importOriginal();
-  const AgentSession = vi.fn().mockImplementation(
-    (
-      _sid: string,
-      _url: string,
-      _ctx: string,
-      _override: unknown,
-      _wt: string,
-      _tid: string,
-      _resume: string,
-      _prompt: string,
-      sessionType: string,
-    ) => ({
-      sessionType: sessionType ?? 'standard',
-      taskId: null,
-      prUrl: null,
-      hasEnded: true,
-      on: vi.fn(),
-      run: vi.fn().mockReturnValue(new Promise(() => {})),
-    }),
-  );
+  const AgentSession = vi
+    .fn()
+    .mockImplementation(
+      (
+        _sid: string,
+        _url: string,
+        _ctx: string,
+        _override: unknown,
+        _wt: string,
+        _tid: string,
+        _resume: string,
+        _prompt: string,
+        sessionType: string,
+      ) => ({
+        sessionType: sessionType ?? 'standard',
+        taskId: null,
+        prUrl: null,
+        hasEnded: true,
+        on: vi.fn(),
+        run: vi.fn().mockReturnValue(new Promise(() => {})),
+      }),
+    );
   return {
     ...actual,
     AgentSession,
@@ -227,7 +229,9 @@ describe('SessionManager code-session concurrency cap', () => {
     expect(admitted).toHaveLength(4);
     expect(rejected).toHaveLength(16);
     for (const r of rejected as PromiseRejectedResult[]) {
-      expect(String(r.reason)).toMatch(/Max concurrent code sessions \(4\) reached/);
+      expect(String(r.reason)).toMatch(
+        /Max concurrent code sessions \(4\) reached/,
+      );
     }
     expect(sm.getLiveCodeSessionCount()).toBe(4);
   });

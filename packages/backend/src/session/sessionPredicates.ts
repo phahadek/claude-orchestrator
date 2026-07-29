@@ -67,7 +67,9 @@ export function countsAgainstConcurrency(sessionType: string): boolean {
 export function countsAgainstCodeSessionConcurrency(
   sessionType: string,
 ): boolean {
-  return countsAgainstConcurrency(sessionType) && !isPlanningSession(sessionType);
+  return (
+    countsAgainstConcurrency(sessionType) && !isPlanningSession(sessionType)
+  );
 }
 
 /** True for session types that author task status changes (e.g. Blocked/Ready on error). */
