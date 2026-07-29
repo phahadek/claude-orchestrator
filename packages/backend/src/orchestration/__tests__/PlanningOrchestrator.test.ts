@@ -833,7 +833,9 @@ describe('PlanningOrchestrator.endSession', () => {
 describe('PlanningOrchestrator.reconcilePendingApproveTerminals', () => {
   it('applies every durably-pending approve-terminal transition at boot, since no live process exists yet for any session this early', () => {
     const sm = makeSessionManager();
-    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'running' }));
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }),
+    );
     vi.mocked(getSessionsWithPendingApproveTerminal).mockReturnValue([
       makeSessionRow({ session_id: 'planning-session-1' }),
     ] as any);
@@ -873,7 +875,10 @@ describe('PlanningOrchestrator.reconcilePendingApproveTerminals', () => {
     sm1.getLiveSession.mockReturnValue(makeLiveSession(true));
     const orch1 = new PlanningOrchestrator(sm1 as any);
     await orch1.handleDisposition({
-      intent: makeIntent({ session_id: 'planning-session-1', state: 'committed' }),
+      intent: makeIntent({
+        session_id: 'planning-session-1',
+        state: 'committed',
+      }),
       disposition: 'approve',
     });
     expect(setPendingApproveTerminal).toHaveBeenCalledWith(
@@ -895,7 +900,9 @@ describe('PlanningOrchestrator.reconcilePendingApproveTerminals', () => {
     // Boot-sweep path for a row still carrying the durable marker after a
     // restart (in-memory Set is empty in a fresh process).
     vi.clearAllMocks();
-    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'running' }));
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }),
+    );
     vi.mocked(getSessionsWithPendingApproveTerminal).mockReturnValue([
       makeSessionRow({ session_id: 'planning-session-2' }),
     ] as any);
