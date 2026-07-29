@@ -27,6 +27,7 @@ export interface SettingsValues {
   large_task_model: string;
   large_task_effort: string;
   tier3_classifier_model: string;
+  capability_auto_approve_allowlist: string[];
 }
 
 export const MIN_POLL_INTERVAL_MS = 5000;

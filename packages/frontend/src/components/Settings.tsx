@@ -70,6 +70,7 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(
     () => localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) !== 'false',
   );
+  const [allowlistInput, setAllowlistInput] = useState('');
   const notificationPermission =
     typeof Notification !== 'undefined' ? Notification.permission : 'default';
 
@@ -122,6 +123,38 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
     setSaveError(null);
     try {
       await patchSettings({ [key]: value });
+    } catch {
+      setSaveError('Failed to save setting');
+    }
+  }
+
+  async function handleAddAllowlistEntry() {
+    if (!settings) return;
+    const entry = allowlistInput.trim();
+    if (!entry) return;
+    const existing = settings.capability_auto_approve_allowlist ?? [];
+    if (existing.includes(entry)) {
+      setAllowlistInput('');
+      return;
+    }
+    const capability_auto_approve_allowlist = [...existing, entry];
+    setAllowlistInput('');
+    setSettings({ ...settings, capability_auto_approve_allowlist });
+    try {
+      await patchSettings({ capability_auto_approve_allowlist });
+    } catch {
+      setSaveError('Failed to save setting');
+    }
+  }
+
+  async function handleRemoveAllowlistEntry(entry: string) {
+    if (!settings) return;
+    const capability_auto_approve_allowlist = (
+      settings.capability_auto_approve_allowlist ?? []
+    ).filter((e) => e !== entry);
+    setSettings({ ...settings, capability_auto_approve_allowlist });
+    try {
+      await patchSettings({ capability_auto_approve_allowlist });
     } catch {
       setSaveError('Failed to save setting');
     }
@@ -610,6 +643,48 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                   1,
                   'How often the archiver checks for eligible sessions',
                 )}
+
+                <h3 className={styles.sectionTitle}>
+                  Capability Auto-Approve Allowlist
+                </h3>
+                <p className={styles.hint}>
+                  Sanctioned read-only capability strings that
+                  session.requestCapability auto-approves without an operator
+                  park. Exact-string match only.
+                </p>
+                <div className={styles.field}>
+                  <div className={styles.listRow}>
+                    {(settings?.capability_auto_approve_allowlist ?? []).map(
+                      (entry) => (
+                        <span key={entry} className={styles.listPill}>
+                          {entry}
+                          <button
+                            type="button"
+                            className={styles.listRemove}
+                            onClick={() =>
+                              void handleRemoveAllowlistEntry(entry)
+                            }
+                            aria-label={`Remove ${entry}`}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ),
+                    )}
+                    <input
+                      className={styles.listInput}
+                      value={allowlistInput}
+                      onChange={(e) => setAllowlistInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void handleAddAllowlistEntry();
+                        }
+                      }}
+                      placeholder="Add capability string..."
+                    />
+                  </div>
+                </div>
 
                 <h3 className={styles.sectionTitle}>About</h3>
                 <div className={styles.field}>

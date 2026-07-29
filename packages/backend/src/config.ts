@@ -527,6 +527,13 @@ export interface RuntimeSettings {
    * either way — this only gates the auto-approve fast path.
    */
   capability_auto_approve_enabled: boolean;
+  /**
+   * Curated allowlist of sanctioned read-only capability strings that
+   * session.requestCapability auto-approves without an operator park (see
+   * orchestrator-config.ts#isSanctionedAutoApproveCapability). Operator-
+   * editable from the Settings UI; empty by default.
+   */
+  capability_auto_approve_allowlist: string[];
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -600,4 +607,5 @@ export const runtimeSettings: RuntimeSettings = {
   tier3_classifier_model: 'claude-haiku-4-5-20251001',
   capability_auto_approve_enabled:
     process.env.CAPABILITY_AUTO_APPROVE_ENABLED !== 'false',
+  capability_auto_approve_allowlist: [],
 };
