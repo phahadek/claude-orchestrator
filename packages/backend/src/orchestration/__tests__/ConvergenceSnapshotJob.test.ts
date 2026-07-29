@@ -39,10 +39,6 @@ import {
   getLatestConvergenceSnapshot,
 } from '../../db/queries.js';
 import { getMilestoneConvergence } from '../../convergence/convergenceService.js';
-import { getGateReadiness } from '../../gate/gateService.js';
-import { getSeedReadiness } from '../../seed/seedService.js';
-import { getOpsReadiness } from '../../convergence/opsReadiness.js';
-import { ProjectService } from '../../projects/ProjectService.js';
 
 function milestone(overrides: Partial<any> = {}) {
   return {
