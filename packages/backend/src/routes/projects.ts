@@ -663,13 +663,12 @@ projectsRouter.post(
       return;
     }
     if (existing.wrappedAt != null) {
-      res
-        .status(409)
-        .json({ error: `Milestone '${id}' is already wrapped` });
+      res.status(409).json({ error: `Milestone '${id}' is already wrapped` });
       return;
     }
     const body = (req.body as Record<string, unknown>) ?? {};
-    const operator = typeof body.operator === 'string' ? body.operator : undefined;
+    const operator =
+      typeof body.operator === 'string' ? body.operator : undefined;
 
     const wrappedAt = Date.now();
     const updated = ProjectService.updateMilestone(id, {

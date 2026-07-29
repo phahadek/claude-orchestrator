@@ -21,7 +21,9 @@ beforeEach(() => {
   db.prepare('DELETE FROM ops_journal').run();
 });
 
-function entry(overrides: Partial<Parameters<typeof upsertOpsJournalEntry>[0]> = {}) {
+function entry(
+  overrides: Partial<Parameters<typeof upsertOpsJournalEntry>[0]> = {},
+) {
   upsertOpsJournalEntry({
     task_id: 'notion:1',
     project: 'p1',
@@ -45,7 +47,9 @@ describe('getOpsReadiness', () => {
     entry({ task_id: 'notion:1', state: 'candidate' });
     const readiness = getOpsReadiness('p1', 'M12');
     expect(readiness.status).toBe('blocked');
-    expect(readiness.blocking).toEqual([{ task_id: 'notion:1', state: 'candidate' }]);
+    expect(readiness.blocking).toEqual([
+      { task_id: 'notion:1', state: 'candidate' },
+    ]);
     expect(readiness.blockingCount).toBe(1);
   });
 
@@ -64,19 +68,51 @@ describe('getOpsReadiness', () => {
   });
 
   it('scopes strictly to the given (project, milestone) pair', () => {
-    entry({ task_id: 'notion:1', project: 'p1', milestone: 'M12', state: 'candidate' });
-    entry({ task_id: 'notion:2', project: 'p2', milestone: 'M12', state: 'candidate' });
-    entry({ task_id: 'notion:3', project: 'p1', milestone: 'M13', state: 'candidate' });
+    entry({
+      task_id: 'notion:1',
+      project: 'p1',
+      milestone: 'M12',
+      state: 'candidate',
+    });
+    entry({
+      task_id: 'notion:2',
+      project: 'p2',
+      milestone: 'M12',
+      state: 'candidate',
+    });
+    entry({
+      task_id: 'notion:3',
+      project: 'p1',
+      milestone: 'M13',
+      state: 'candidate',
+    });
     const readiness = getOpsReadiness('p1', 'M12');
-    expect(readiness.blocking).toEqual([{ task_id: 'notion:1', state: 'candidate' }]);
+    expect(readiness.blocking).toEqual([
+      { task_id: 'notion:1', state: 'candidate' },
+    ]);
   });
 });
 
 describe('listOpsMilestoneReadiness', () => {
   it('rolls up per (project, milestone), terminal = resolved', () => {
-    entry({ task_id: 'notion:1', project: 'p1', milestone: 'M12', state: 'candidate' });
-    entry({ task_id: 'notion:2', project: 'p1', milestone: 'M12', state: 'resolved' });
-    entry({ task_id: 'notion:3', project: 'p2', milestone: 'M12', state: 'resolved' });
+    entry({
+      task_id: 'notion:1',
+      project: 'p1',
+      milestone: 'M12',
+      state: 'candidate',
+    });
+    entry({
+      task_id: 'notion:2',
+      project: 'p1',
+      milestone: 'M12',
+      state: 'resolved',
+    });
+    entry({
+      task_id: 'notion:3',
+      project: 'p2',
+      milestone: 'M12',
+      state: 'resolved',
+    });
 
     const rollup = listOpsMilestoneReadiness();
     expect(rollup).toEqual([
@@ -86,8 +122,18 @@ describe('listOpsMilestoneReadiness', () => {
   });
 
   it('filters to a single project when requested', () => {
-    entry({ task_id: 'notion:1', project: 'p1', milestone: 'M12', state: 'candidate' });
-    entry({ task_id: 'notion:2', project: 'p2', milestone: 'M12', state: 'candidate' });
+    entry({
+      task_id: 'notion:1',
+      project: 'p1',
+      milestone: 'M12',
+      state: 'candidate',
+    });
+    entry({
+      task_id: 'notion:2',
+      project: 'p2',
+      milestone: 'M12',
+      state: 'candidate',
+    });
 
     const rollup = listOpsMilestoneReadiness({ project: 'p1' });
     expect(rollup).toEqual([

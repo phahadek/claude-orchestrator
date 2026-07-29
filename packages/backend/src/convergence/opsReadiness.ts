@@ -16,7 +16,10 @@ export interface OpsReadiness {
 }
 
 /** Headline output: green once every ops_journal row for this (project, milestone) is resolved. */
-export function getOpsReadiness(project: string, milestone: string): OpsReadiness {
+export function getOpsReadiness(
+  project: string,
+  milestone: string,
+): OpsReadiness {
   const entries = listOpsJournalEntries().filter(
     (e) => e.project === project && e.milestone === milestone,
   );

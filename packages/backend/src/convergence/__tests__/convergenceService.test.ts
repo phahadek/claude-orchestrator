@@ -48,10 +48,19 @@ function project(milestones = [MILESTONE]) {
 }
 
 function boardRow(tasks: { id: string; title: string; status: string }[]) {
-  return { task_id: 'board:ms-uuid-12', fetched_at: Date.now(), raw_json: JSON.stringify(tasks) };
+  return {
+    task_id: 'board:ms-uuid-12',
+    fetched_at: Date.now(),
+    raw_json: JSON.stringify(tasks),
+  };
 }
 
-const GREEN_GATE = { status: 'green' as const, blocking: [], bespokeStates: [], counts: {} };
+const GREEN_GATE = {
+  status: 'green' as const,
+  blocking: [],
+  bespokeStates: [],
+  counts: {},
+};
 const GREEN_SEED = { status: 'green' as const, blocking: [], counts: {} };
 const GREEN_OPS = { status: 'green' as const, blocking: [], blockingCount: 0 };
 
@@ -92,7 +101,14 @@ describe('getMilestoneConvergence', () => {
     gateServiceMock.getGateReadiness.mockReturnValue({
       status: 'blocked',
       blocking: [
-        { id: 'g1', project: 'p1', milestone: 'M12', text: 'gate item', classification: 'Read-Only', state: 'open' },
+        {
+          id: 'g1',
+          project: 'p1',
+          milestone: 'M12',
+          text: 'gate item',
+          classification: 'Read-Only',
+          state: 'open',
+        },
       ],
       bespokeStates: [],
       counts: {},
@@ -109,7 +125,15 @@ describe('getMilestoneConvergence', () => {
   it('is blocked when the seed axis is blocked', () => {
     seedServiceMock.getSeedReadiness.mockReturnValue({
       status: 'blocked',
-      blocking: [{ id: 's1', project: 'p1', milestone: 'M12', spec: 'seed spec', state: 'pending' }],
+      blocking: [
+        {
+          id: 's1',
+          project: 'p1',
+          milestone: 'M12',
+          spec: 'seed spec',
+          state: 'pending',
+        },
+      ],
       counts: {},
     });
     const result = getMilestoneConvergence('p1', 'M12');
@@ -139,15 +163,37 @@ describe('getMilestoneConvergence', () => {
     gateServiceMock.getGateReadiness.mockReturnValue({
       status: 'blocked',
       blocking: [
-        { id: 'g1', project: 'p1', milestone: 'M12', text: 'gate item', classification: 'Read-Only', state: 'open' },
-        { id: 'g2', project: 'p1', milestone: 'M12', text: 'gate item 2', classification: 'Read-Only', state: 'open' },
+        {
+          id: 'g1',
+          project: 'p1',
+          milestone: 'M12',
+          text: 'gate item',
+          classification: 'Read-Only',
+          state: 'open',
+        },
+        {
+          id: 'g2',
+          project: 'p1',
+          milestone: 'M12',
+          text: 'gate item 2',
+          classification: 'Read-Only',
+          state: 'open',
+        },
       ],
       bespokeStates: [],
       counts: {},
     });
     seedServiceMock.getSeedReadiness.mockReturnValue({
       status: 'blocked',
-      blocking: [{ id: 's1', project: 'p1', milestone: 'M12', spec: 'seed spec', state: 'pending' }],
+      blocking: [
+        {
+          id: 's1',
+          project: 'p1',
+          milestone: 'M12',
+          spec: 'seed spec',
+          state: 'pending',
+        },
+      ],
       counts: {},
     });
     opsReadinessMock.getOpsReadiness.mockReturnValue({
@@ -198,7 +244,16 @@ describe('getMilestoneConvergence', () => {
 describe('listProjectConvergence', () => {
   it('scopes to non-wrapped milestones only', () => {
     projectServiceMock.getById.mockReturnValue(
-      project([MILESTONE, { ...MILESTONE, id: 'ms-uuid-13', name: 'M13', canonicalShortId: 'M13', wrappedAt: Date.now() }]),
+      project([
+        MILESTONE,
+        {
+          ...MILESTONE,
+          id: 'ms-uuid-13',
+          name: 'M13',
+          canonicalShortId: 'M13',
+          wrappedAt: Date.now(),
+        },
+      ]),
     );
     const result = listProjectConvergence('p1');
     expect(result).toHaveLength(1);
