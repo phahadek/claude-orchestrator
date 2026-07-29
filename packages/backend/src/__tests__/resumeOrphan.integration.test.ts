@@ -42,23 +42,42 @@ function createMockProc() {
 
 let mockProc: ReturnType<typeof createMockProc>;
 
-vi.mock('child_process', () => ({
-  spawn: vi.fn(() => mockProc.proc),
-  execSync: vi.fn(() => ''),
-  execFile: vi.fn(),
-  exec: vi
-    .fn()
-    .mockImplementation(
-      (
-        _cmd: string,
-        _opts: unknown,
-        cb: (err: null, result: { stdout: string; stderr: string }) => void,
-      ) => {
-        const callback = typeof _opts === 'function' ? _opts : cb;
-        process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
-      },
-    ),
-}));
+vi.mock('child_process', () => {
+  // SessionManager calls `promisify(exec)` at module load. util.promisify's
+  // generic callback-detection wrapper around a vi.fn() has been observed to
+  // never invoke its scheduled callback in this test file's full-suite run
+  // order (isolated single-test runs are unaffected), stalling any test whose
+  // code path awaits promisify(exec)(...) forever. Defining the well-known
+  // promisify.custom symbol makes promisify use this direct
+  // promise-returning implementation instead, sidestepping that interaction.
+  const EXEC_PROMISIFY_CUSTOM = Symbol.for('nodejs.util.promisify.custom');
+  const execMock = Object.assign(
+    vi
+      .fn()
+      .mockImplementation(
+        (
+          _cmd: string,
+          _opts: unknown,
+          cb: (err: null, result: { stdout: string; stderr: string }) => void,
+        ) => {
+          const callback = typeof _opts === 'function' ? _opts : cb;
+          callback(null, { stdout: '', stderr: '' });
+        },
+      ),
+    {
+      [EXEC_PROMISIFY_CUSTOM]: vi.fn(async () => ({
+        stdout: '',
+        stderr: '',
+      })),
+    },
+  );
+  return {
+    spawn: vi.fn(() => mockProc.proc),
+    execSync: vi.fn(() => ''),
+    execFile: vi.fn(),
+    exec: execMock,
+  };
+});
 
 // fs is mocked so existsSync can be controlled per-test; readFileSync /
 // statSync / writeFileSync are no-ops because the SessionManager paths under
@@ -71,14 +90,18 @@ vi.mock('fs', async () => {
     default: {
       ...actual,
       existsSync: vi.fn(() => true),
-      readFileSync: vi.fn(() => ''),
+      readFileSync: vi.fn(() => '{}'),
       writeFileSync: vi.fn(),
       statSync: vi.fn(() => ({ isFile: () => true })),
+      mkdirSync: vi.fn(),
+      chmodSync: vi.fn(),
     },
     existsSync: vi.fn(() => true),
     readFileSync: vi.fn(() => ''),
     writeFileSync: vi.fn(),
     statSync: vi.fn(() => ({ isFile: () => true })),
+    mkdirSync: vi.fn(),
+    chmodSync: vi.fn(),
   };
 });
 
@@ -95,6 +118,10 @@ const projectFixture = {
 vi.mock('../config', () => ({
   AUTO_REVIEW_ENABLED: false,
   ALLOWED_TOOLS: [],
+  PLANNING_DISALLOWED_TOOLS: [],
+  GITHUB_REPO: '',
+  BASH_MAX_OUTPUT_LENGTH: 30_000,
+  BASH_DEFAULT_TIMEOUT_MS: 120_000,
   config: {
     claudePath: '/fake/claude',
     maxConcurrentCodeSessions: 20,
@@ -116,11 +143,19 @@ vi.mock('../config', () => ({
 
 vi.mock('../session/orchestrator-config', () => ({
   loadOrchestratorConfig: vi.fn(() => ({
-    allowedTools: [],
-    prGate: { typeCheck: '', build: '' },
-    bootstrapScript: '',
-    bashRules: [],
+    autofix: [],
+    verify: [],
+    ci_check_name: [],
+    allowed_tools: [],
+    bash_rules: [],
+    session_rules: [],
+    review_rules: [],
+    required_env: [],
+    required_files: [],
+    bootstrap_script: '',
+    mcp_servers: {},
   })),
+  getSessionAllowedTools: vi.fn(() => []),
 }));
 
 vi.mock('../session/orchestrator-claudemd', () => ({
@@ -185,6 +220,12 @@ vi.mock('../db/queries', () => ({
   hasActiveSessionForTask: vi.fn(() => false),
   setTaskPauseReason: vi.fn(),
   setSessionLastErrorDetail: vi.fn(),
+  TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
+  getSessionsWithUnappliedPendingDone: vi.fn(() => []),
+  applyPendingDone: vi.fn(() => false),
+  updateSessionWorktreePath: vi.fn(),
+  listStagedIntentsBySession: vi.fn(() => []),
+  resetTaskCrashCount: vi.fn(),
 }));
 
 vi.mock('../session/sessionRecovery', () => ({
@@ -539,11 +580,14 @@ describe('resumeOrphanSessions() — spawn arg contract: --resume <session_id>',
       taskKind: 'milestone',
     });
 
-    // launchSession() is fire-and-forget — setImmediate drains its microtasks
-    // so the spawn happens before we assert.
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(spawn).toHaveBeenCalledTimes(1);
+    // launchSession() is fire-and-forget — poll until the spawn happens
+    // before asserting, rather than assuming a fixed number of ticks.
+    await vi.waitFor(
+      () => {
+        expect(spawn).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 5000, interval: 20 },
+    );
     const spawnArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
 
     // Initial spawn must use '--session-id' followed by the exact UUID, never '--resume'.
@@ -551,6 +595,178 @@ describe('resumeOrphanSessions() — spawn arg contract: --resume <session_id>',
     expect(sessionIdIdx).toBeGreaterThan(-1);
     expect(spawnArgs[sessionIdIdx + 1]).toBe(SESSION_UUID);
     expect(spawnArgs).not.toContain('--resume');
+  });
+});
+
+// ── Test 7: planning-session resumability pre-check ──────────────────────────
+// Planning sessions (groom/design/ops/split) run with cwd === the project
+// checkout and never carry a worktree_path — that's their documented shape,
+// not a broken record. The pre-check must resolve the working directory to
+// the project dir for them instead of treating worktree_path === null as
+// "worktree missing".
+describe('resumeOrphanSessions() — planning-session resumability pre-check', () => {
+  it('resumes a groom/design/ops session with worktree_path=null when the project directory exists', async () => {
+    const planning = makeRunningSession({
+      session_id: 'planning-session',
+      session_type: 'design',
+      worktree_path: null,
+    });
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([planning]);
+    // Only the project dir exists on disk (there is no worktree for this row).
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => String(p) === '/fake/project',
+    );
+    vi.mocked(execSync).mockReturnValue('');
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    expect(sm.isAlive('planning-session')).toBe(true);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    // Never flagged as a resume failure — nothing was actually broken.
+    expect(queries.setTaskPauseReason).not.toHaveBeenCalled();
+    expect(queries.updateSessionStatus).not.toHaveBeenCalledWith(
+      'planning-session',
+      'error',
+      expect.any(Number),
+    );
+  });
+
+  it('still fails a standard coding session whose recorded worktree is absent (no regression)', async () => {
+    const standard = makeRunningSession({
+      session_id: 'standard-missing',
+      session_type: 'standard',
+      worktree_path: '/fake/project/.claude/worktrees/standard-missing',
+    });
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([standard]);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      'standard-missing',
+      'error',
+      expect.any(Number),
+    );
+    expect(queries.setTaskPauseReason).toHaveBeenCalledWith(
+      'notion-task-id',
+      'resume_failed',
+      expect.any(String),
+    );
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('fails a planning session whose project directory is genuinely missing, distinguishing it from "no path recorded"', async () => {
+    const planning = makeRunningSession({
+      session_id: 'planning-no-project-dir',
+      session_type: 'ops',
+      worktree_path: null,
+    });
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([planning]);
+    // Nothing exists on disk — the project checkout itself is gone.
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      'planning-no-project-dir',
+      'error',
+      expect.any(Number),
+    );
+    expect(queries.setTaskPauseReason).toHaveBeenCalledWith(
+      'notion-task-id',
+      'resume_failed',
+      expect.stringContaining('no path recorded'),
+    );
+    expect(spawn).not.toHaveBeenCalled();
+
+    // The log line must render the actually-resolved path, never an empty ().
+    const warnCall = warnSpy.mock.calls.find((args) =>
+      args.some(
+        (a) =>
+          typeof a === 'string' && a.includes('resumability pre-check failed'),
+      ),
+    );
+    expect(warnCall).toBeDefined();
+    const warnMsg = warnCall!.join(' ');
+    expect(warnMsg).not.toContain('missing ()');
+    expect(warnMsg).toContain('/fake/project');
+
+    warnSpy.mockRestore();
+  });
+
+  it('renders the resolved worktree path (not an empty string) in the failure log for a standard session', async () => {
+    const standard = makeRunningSession({
+      session_id: 'standard-missing-2',
+      session_type: 'standard',
+      worktree_path: '/fake/project/.claude/worktrees/standard-missing-2',
+    });
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([standard]);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    const warnCall = warnSpy.mock.calls.find((args) =>
+      args.some(
+        (a) =>
+          typeof a === 'string' && a.includes('resumability pre-check failed'),
+      ),
+    );
+    expect(warnCall).toBeDefined();
+    const warnMsg = warnCall!.join(' ');
+    expect(warnMsg).not.toContain('missing ()');
+    expect(warnMsg).toContain(
+      '/fake/project/.claude/worktrees/standard-missing-2',
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it('resumes mixed orphans: planning sessions resume, a genuinely worktree-less standard session is rejected', async () => {
+    const planning = makeRunningSession({
+      session_id: 'mixed-planning',
+      session_type: 'groom',
+      worktree_path: null,
+    });
+    const standard = makeRunningSession({
+      session_id: 'mixed-standard-missing',
+      session_type: 'standard',
+      worktree_path: null,
+    });
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([
+      planning,
+      standard,
+    ]);
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => String(p) === '/fake/project',
+    );
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    // The planning session resumes.
+    expect(sm.isAlive('mixed-planning')).toBe(true);
+
+    // The standard session, with no worktree_path at all, still fails —
+    // planning-session treatment must not leak into standard sessions.
+    expect(sm.isAlive('mixed-standard-missing')).toBe(false);
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      'mixed-standard-missing',
+      'error',
+      expect.any(Number),
+    );
+    expect(queries.setTaskPauseReason).toHaveBeenCalledWith(
+      'notion-task-id',
+      'resume_failed',
+      expect.stringContaining('no path recorded'),
+    );
   });
 });
 
@@ -585,6 +801,8 @@ describe('resumeOrphanSessions() — merged/closed PR reaping', () => {
       'merged-sess',
       mergedRow.last_ts,
       mergedRow.pr_url,
+      expect.any(String),
+      expect.objectContaining({ skipInFlightGuard: true }),
     );
     expect(spawn).not.toHaveBeenCalled();
   });

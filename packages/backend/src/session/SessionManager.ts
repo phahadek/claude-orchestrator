@@ -2127,18 +2127,29 @@ export class SessionManager extends EventEmitter {
     }
 
     const projectDir = normalizePath(project.projectDir);
-    const worktreePath = row.worktree_path ?? '';
+    // Planning sessions (groom/design/ops/split) run with cwd === the project
+    // checkout and never have a worktree_path — that is their documented shape,
+    // not a broken record. Resolve the working directory accordingly instead of
+    // treating a null worktree_path as "worktree missing".
+    const planning = isPlanningSession(row.session_type);
+    const worktreePath = planning
+      ? (row.worktree_path ?? projectDir)
+      : (row.worktree_path ?? '');
 
-    // Resumability pre-check: claude --resume requires the original worktree as
-    // cwd. If the worktree was deleted (e.g. PR merged and the orchestrator
-    // cleaned it up), the spawn would exit immediately and the 30s timeout
-    // fallback would fire. Detect this upfront and mark the session as error
-    // without spawning anything.
+    // Resumability pre-check: claude --resume requires the original working
+    // directory (worktree for standard sessions, project checkout for planning
+    // sessions) as cwd. If it's gone (e.g. PR merged and the orchestrator
+    // cleaned up the worktree), the spawn would exit immediately and the 30s
+    // timeout fallback would fire. Detect this upfront and mark the session as
+    // error without spawning anything.
     if (!worktreePath || !fs.existsSync(worktreePath)) {
+      const detail = !row.worktree_path
+        ? `no path recorded (resolved to ${worktreePath || 'none'})`
+        : `path recorded but absent on disk: ${worktreePath}`;
       logger.warn(
-        `[SessionManager] resumability pre-check failed for ${row.session_id}: worktree missing (${worktreePath}) — cannot resume`,
+        `[SessionManager] resumability pre-check failed for ${row.session_id}: ${detail} — cannot resume`,
       );
-      this.flagResumeFailure(row, `worktree missing: ${worktreePath}`);
+      this.flagResumeFailure(row, detail);
       return;
     }
 
