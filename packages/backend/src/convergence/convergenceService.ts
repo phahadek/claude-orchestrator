@@ -12,8 +12,6 @@ import { getTaskCache } from '../db/queries';
 import { runtimeSettings } from '../config';
 import type { NotionTask } from '../notion/types';
 
-export { UnknownMilestoneError };
-
 /** Notion status tokens (`.includes`-matched, same convention as TaskStatusEngine) that keep a task open. */
 const OPEN_STATUS_TOKENS = [
   'Backlog',
@@ -33,51 +31,51 @@ function isClosedTaskStatus(status: string): boolean {
   return CLOSED_STATUS_TOKENS.some((token) => status.includes(token));
 }
 
-export type TaskAxisStatus = 'green' | 'blocked' | 'unavailable';
+type TaskAxisStatus = 'green' | 'blocked' | 'unavailable';
 
-export interface TaskAxisBlockingItem {
+interface TaskAxisBlockingItem {
   id: string;
   title: string;
   status: string;
 }
 
-export interface TaskAxis {
+interface TaskAxis {
   status: TaskAxisStatus;
   open: number;
   closed: number;
   blocking: TaskAxisBlockingItem[];
 }
 
-export interface GateAxisBlockingItem {
+interface GateAxisBlockingItem {
   id: string;
   text: string;
   state: string;
 }
 
-export interface GateAxis {
+interface GateAxis {
   status: 'green' | 'blocked';
   blockingCount: number;
   blocking: GateAxisBlockingItem[];
 }
 
-export interface SeedAxisBlockingItem {
+interface SeedAxisBlockingItem {
   id: string;
   text: string;
   state: string;
 }
 
-export interface SeedAxis {
+interface SeedAxis {
   status: 'green' | 'blocked';
   blockingCount: number;
   blocking: SeedAxisBlockingItem[];
 }
 
-export interface OpsAxisBlockingItem {
+interface OpsAxisBlockingItem {
   task_id: string;
   state: string;
 }
 
-export interface OpsAxis {
+interface OpsAxis {
   status: 'green' | 'blocked';
   blockingCount: number;
   blocking: OpsAxisBlockingItem[];

@@ -4,7 +4,7 @@ import type { OpsJournalState } from '../db/types';
 /** Terminal state: the ops task no longer blocks milestone completion. */
 const RESOLVED_STATE: OpsJournalState = 'resolved';
 
-export interface OpsBlockingItem {
+interface OpsBlockingItem {
   task_id: string;
   state: OpsJournalState;
 }
