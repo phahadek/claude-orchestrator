@@ -171,8 +171,7 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
     } finally {
       setBatchInFlight(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [includedCleanGroupIds.join(',')]);
+  }, [includedCleanGroupIds]);
 
   const draftFor = useCallback(
     (groupId: string): DecisionQueueGroupDraft =>
