@@ -70,6 +70,7 @@ const SKILLS = [
   'wrap',
   'sync-guidelines',
   'gate',
+  'milestone-wrap',
 ];
 const SCRIPT_SOURCES = [
   {
