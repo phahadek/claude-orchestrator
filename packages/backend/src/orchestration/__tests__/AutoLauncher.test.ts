@@ -1256,17 +1256,13 @@ describe('AutoLauncher — launch failure tracking', () => {
     };
   }
 
-  function getLaunchFailedAttempts(
-    launcher: AutoLauncher,
-  ): Map<string, { count: number; nextRetryAt: number }> {
-    return (
-      launcher as unknown as {
-        launchFailedAttempts: Map<
-          string,
-          { count: number; nextRetryAt: number }
-        >;
-      }
-    ).launchFailedAttempts;
+  interface TestCrashBudget {
+    inCooldown(taskId: string): boolean;
+  }
+
+  function getCrashBudget(launcher: AutoLauncher): TestCrashBudget {
+    return (launcher as unknown as { crashBudget: TestCrashBudget })
+      .crashBudget;
   }
 
   function fireLaunchFailed(launcher: AutoLauncher, taskId: string): void {
@@ -1298,7 +1294,7 @@ describe('AutoLauncher — launch failure tracking', () => {
     expect(sessionManager.start).not.toHaveBeenCalled();
   });
 
-  it('first launch_failed applies 30s cooldown', () => {
+  it('first launch_failed applies 30s cooldown', async () => {
     const task = makeResolvedTask({ id: 'task-backoff1' });
     const backend = makeFailingBackend(task);
     const sessionManager = makeSessionManager(0);
@@ -1308,17 +1304,19 @@ describe('AutoLauncher — launch failure tracking', () => {
       pollOnStart: false,
     });
 
-    const before = Date.now();
     fireLaunchFailed(launcher, 'task-backoff1');
 
-    const map = getLaunchFailedAttempts(launcher);
-    const entry = map.get('task-backoff1');
-    expect(entry).toBeDefined();
-    expect(entry!.count).toBe(1);
-    expect(entry!.nextRetryAt).toBeGreaterThanOrEqual(before + 30_000);
+    const budget = getCrashBudget(launcher);
+    expect(budget.inCooldown('task-backoff1')).toBe(true);
+    // Still in cooldown just before 30s.
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(budget.inCooldown('task-backoff1')).toBe(true);
+    // Cooldown clears once the 30s window elapses.
+    await vi.advanceTimersByTimeAsync(2);
+    expect(budget.inCooldown('task-backoff1')).toBe(false);
   });
 
-  it('second launch_failed applies 2m cooldown', () => {
+  it('second launch_failed applies 2m cooldown', async () => {
     const launcher = new AutoLauncher(
       makeSessionManager(0) as never,
       undefined,
@@ -1331,9 +1329,12 @@ describe('AutoLauncher — launch failure tracking', () => {
     fireLaunchFailed(launcher, 'task-backoff2');
     fireLaunchFailed(launcher, 'task-backoff2');
 
-    const entry = getLaunchFailedAttempts(launcher).get('task-backoff2');
-    expect(entry!.count).toBe(2);
-    expect(entry!.nextRetryAt).toBeGreaterThanOrEqual(Date.now() + 2 * 60_000);
+    const budget = getCrashBudget(launcher);
+    // Still in cooldown just before 2m — the second event's longer window.
+    await vi.advanceTimersByTimeAsync(2 * 60_000 - 1);
+    expect(budget.inCooldown('task-backoff2')).toBe(true);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(budget.inCooldown('task-backoff2')).toBe(false);
   });
 
   it('task is launched again after cooldown expires', async () => {
@@ -1420,7 +1421,7 @@ describe('AutoLauncher — launch failure tracking', () => {
 
     // Simulate a prior launch_failed
     fireLaunchFailed(launcher, 'task-reset');
-    expect(getLaunchFailedAttempts(launcher).has('task-reset')).toBe(true);
+    expect(getCrashBudget(launcher).inCooldown('task-reset')).toBe(true);
 
     // Advance past cooldown so task is eligible
     await vi.advanceTimersByTimeAsync(30_001);
@@ -1429,7 +1430,7 @@ describe('AutoLauncher — launch failure tracking', () => {
     await launcher.pollOnce();
 
     expect(clearTaskPauseReason).toHaveBeenCalledWith('task-reset');
-    expect(getLaunchFailedAttempts(launcher).has('task-reset')).toBe(false);
+    expect(getCrashBudget(launcher).inCooldown('task-reset')).toBe(false);
   });
 
   it('task is not retried when getTaskPauseReason returns non-null (needs_attention persisted)', async () => {

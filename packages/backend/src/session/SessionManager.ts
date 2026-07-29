@@ -2820,6 +2820,22 @@ export class SessionManager extends EventEmitter {
     return n;
   }
 
+  /**
+   * Count live planning sessions (groom/design/ops/split) — the shared pool
+   * DispatchTriggerEvaluator's backpressure check reads against, mirroring
+   * the same-shaped count start() enforces as the raw cap at launch time.
+   */
+  getLivePlanningSessionCount(): number {
+    let n = 0;
+    for (const s of this.sessions.values()) {
+      if (isPlanningSession(s.sessionType)) n++;
+    }
+    for (const [id, p] of this.pendingStarts) {
+      if (isPlanningSession(p.sessionType) && !this.sessions.has(id)) n++;
+    }
+    return n;
+  }
+
   /** Returns true if a live session exists for the given task id. */
   hasLiveSessionForTask(taskId: string): boolean {
     return this.findLiveSessionIdForTask(taskId) !== undefined;

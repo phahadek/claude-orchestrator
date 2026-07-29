@@ -24,6 +24,7 @@ import { recordEvent } from '../audit/AuditLog';
 import { runWithConcurrency } from '../utils/concurrency';
 import { getProjectRepos } from '../projects/ProjectService';
 import { hasMemoryHeadroom } from './memoryAdmission';
+import { CrashBudget } from './crashBudget';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -72,11 +73,6 @@ export class AutoLauncher {
     string,
     { count: number; nextRetryAt: number; lastError: string }
   >();
-  /** Per-task in-memory cooldown for launch_failed events (separate from crash budget). */
-  private launchFailedAttempts = new Map<
-    string,
-    { count: number; nextRetryAt: number }
-  >();
   /**
    * Task IDs observed as Ready in the previous poll cycle. Null until the first
    * poll completes — used to skip transition-based clearing on the very first
@@ -101,6 +97,11 @@ export class AutoLauncher {
   ];
   /** After this many consecutive launch_failed events, escalate to needs_attention. */
   private static readonly LAUNCH_FAILED_ESCALATE_AFTER = 3;
+  /** Per-task in-memory escalating-backoff cooldown for launch_failed events. */
+  private readonly crashBudget = new CrashBudget({
+    backoffScheduleMs: AutoLauncher.LAUNCH_FAILED_BACKOFF_MS,
+    escalateAfter: AutoLauncher.LAUNCH_FAILED_ESCALATE_AFTER,
+  });
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -138,16 +139,10 @@ export class AutoLauncher {
    * escalated to needs_attention so a human can investigate.
    */
   private onSessionLaunchFailed(taskId: string): void {
-    const prev = this.launchFailedAttempts.get(taskId);
-    const count = (prev?.count ?? 0) + 1;
-    const backoffMs =
-      AutoLauncher.LAUNCH_FAILED_BACKOFF_MS[
-        Math.min(count - 1, AutoLauncher.LAUNCH_FAILED_BACKOFF_MS.length - 1)
-      ];
-    const nextRetryAt = Date.now() + backoffMs;
-    this.launchFailedAttempts.set(taskId, { count, nextRetryAt });
+    const { count, escalated, cooldownMs } =
+      this.crashBudget.recordEvent(taskId);
 
-    if (count >= AutoLauncher.LAUNCH_FAILED_ESCALATE_AFTER) {
+    if (escalated) {
       logger.warn(
         `[AutoLauncher] task ${taskId} hit ${count} consecutive launch failures — escalating to needs_attention`,
       );
@@ -163,7 +158,7 @@ export class AutoLauncher {
       });
     } else {
       logger.warn(
-        `[AutoLauncher] task ${taskId} launch_failed (attempt ${count}) — cooldown ${backoffMs / 1000}s`,
+        `[AutoLauncher] task ${taskId} launch_failed (attempt ${count}) — cooldown ${cooldownMs / 1000}s`,
       );
     }
   }
@@ -405,7 +400,7 @@ export class AutoLauncher {
     clearTaskPauseReason(taskId);
     clearPausedPrReasonForTask(taskId);
     resetTaskCrashCount(taskId);
-    this.launchFailedAttempts.delete(taskId);
+    this.crashBudget.clear(taskId);
     logger.info(
       `[AutoLauncher] task ${taskId} transitioned to Ready — cleared stale pause state (task_pause=${hadPause}, pr_pause=${hadPrPause})`,
     );
@@ -437,8 +432,7 @@ export class AutoLauncher {
     // Skip tasks blocked by the crash budget or escalated to needs_attention (persisted).
     if (getTaskPauseReason(task.id) != null) return false;
     // Skip tasks in launch_failed cooldown (in-memory, resets on process restart).
-    const launchFailed = this.launchFailedAttempts.get(task.id);
-    if (launchFailed && Date.now() < launchFailed.nextRetryAt) return false;
+    if (this.crashBudget.inCooldown(task.id)) return false;
     // Also skip if the task's most recent PR is paused (e.g. stuck_timeout)
     // so we don't relaunch a session that was force-paused.
     if (getPausedPrReasonForTask(task.id) != null) return false;
@@ -534,7 +528,7 @@ export class AutoLauncher {
         },
       );
       clearTaskPauseReason(task.id);
-      this.launchFailedAttempts.delete(task.id);
+      this.crashBudget.clear(task.id);
       logger.info(
         `[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}${resolvedRepo ? ` repo=${resolvedRepo}` : ''}`,
       );

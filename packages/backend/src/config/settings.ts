@@ -14,6 +14,7 @@ const SettingsSchema = z.object({
   // Numeric settings (z.coerce accepts both numbers and parseable strings)
   max_concurrent_code_sessions: z.coerce.number().int().min(1),
   max_concurrent_planning_sessions: z.coerce.number().int().min(1),
+  human_reserve: z.coerce.number().int().min(0),
   auto_review_concurrency: z.coerce.number().int().min(1),
   card_preview_lines: z.coerce.number().int().min(1),
   auto_launch_concurrency: z.coerce.number().int().min(1),
@@ -78,6 +79,7 @@ export type SettingKey = keyof Settings;
 export const SETTING_DEFAULTS: Settings = {
   max_concurrent_code_sessions: 20,
   max_concurrent_planning_sessions: 5,
+  human_reserve: 1,
   auto_review_concurrency: 20,
   card_preview_lines: 3,
   auto_launch_concurrency: 1,

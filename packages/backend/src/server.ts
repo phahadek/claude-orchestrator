@@ -63,6 +63,7 @@ import { AUTO_REVIEW_ENABLED, GITHUB_TOKEN } from './config';
 import { getCorporateMode } from './config/corporateMode';
 import { getOrchestratorConfig } from './config/appConfig';
 import { AutoLauncher } from './orchestration/AutoLauncher';
+import { DispatchTriggerEvaluator } from './orchestration/DispatchTriggerEvaluator';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { PlanUsagePoller } from './orchestration/PlanUsagePoller';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
@@ -441,6 +442,15 @@ wss.on('connection', (ws, req) => {
 // orphan resume, and the Scheduler drives subsequent periodic polls.
 const autoLauncher = new AutoLauncher(sessionManager, broadcast);
 
+// DispatchTriggerEvaluator: sibling to AutoLauncher — scans armed flows
+// (groom/ops/design) across all projects' non-Done milestones and dispatches
+// planning sessions via dispatchPlanningFlow. Only the groom candidate
+// predicate is wired so far; ops/design land in a sibling task.
+const dispatchTriggerEvaluator = new DispatchTriggerEvaluator(
+  sessionManager,
+  opsSessionLauncher,
+);
+
 // TaskCacheRefresher: background loop that keeps per-project board caches warm.
 // Handlers always serve from cache; the refresher populates it on an interval.
 const taskCacheRefresher = new TaskCacheRefresher(broadcast);
@@ -504,6 +514,7 @@ updateChecker.register(scheduler);
 
 // Register all periodic sweepers with the Scheduler.
 autoLauncher.register(scheduler);
+dispatchTriggerEvaluator.register(scheduler);
 opsSessionLauncher.register(scheduler);
 // Local-branch merge sweep — independent of GitHub/PRMergeWatcher so
 // local-only projects (no PR) still get approved branches squash-merged.
