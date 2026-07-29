@@ -389,6 +389,26 @@ export function runMigrations(target: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_scheduler_audit_job ON scheduler_audit(job, started_at DESC);
 
+    CREATE TABLE IF NOT EXISTS convergence_snapshot (
+      id                TEXT    PRIMARY KEY,
+      project           TEXT    NOT NULL,
+      milestone         TEXT    NOT NULL,
+      ts                TEXT    NOT NULL,
+      tasks_open        INTEGER NOT NULL,
+      tasks_closed      INTEGER NOT NULL,
+      gate_open         INTEGER NOT NULL,
+      gate_closed       INTEGER NOT NULL,
+      seed_open         INTEGER NOT NULL,
+      seed_closed       INTEGER NOT NULL,
+      ops_open          INTEGER NOT NULL,
+      ops_closed        INTEGER NOT NULL,
+      total_scope       INTEGER NOT NULL,
+      distance_to_green INTEGER NOT NULL,
+      status            TEXT    NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_convergence_snapshot_project_milestone_ts
+      ON convergence_snapshot(project, milestone, ts DESC);
+
     CREATE TABLE IF NOT EXISTS session_feedback_inbox (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id   TEXT    NOT NULL,

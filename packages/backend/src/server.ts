@@ -33,6 +33,7 @@ import {
   setTaskCacheRefresher,
 } from './routes/tasks';
 import { TaskCacheRefresher } from './orchestration/TaskCacheRefresher';
+import { ConvergenceSnapshotJob } from './orchestration/ConvergenceSnapshotJob';
 import { analyticsRouter } from './routes/analytics';
 import { projectsRouter, setAutoMerger } from './routes/projects';
 import {
@@ -469,6 +470,10 @@ const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
 
 const sessionEventsPruner = new SessionEventsPruner();
 
+// Convergence snapshot: samples the live milestone convergence every 5
+// minutes and writes a durable burndown row only when it changes.
+const convergenceSnapshotJob = new ConvergenceSnapshotJob();
+
 const stalledPRReconciler = new StalledPRReconciler(broadcast);
 stalledPRReconciler.setReviewOrchestrator(reviewOrchestrator);
 stalledPRReconciler.setSessionManager(sessionManager);
@@ -493,6 +498,7 @@ taskCacheRefresher.register(scheduler);
 sessionEventsPruner.register(scheduler);
 stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
+convergenceSnapshotJob.register(scheduler);
 registerWorktreeReconciler(scheduler);
 // Gate-verification reconciler: runnability/readiness reconcile on every
 // tick; auto-run verification drives the same wired verifier, gated by the

@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { db } from './db';
 import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
@@ -66,6 +66,8 @@ import type {
   StagedIntentState,
   StagedIntentGroupRow,
   FlowArmRow,
+  ConvergenceSnapshotRow,
+  NewConvergenceSnapshotRow,
 } from './types';
 import { FLOW_IDS, DEFAULT_ARM, type FlowId } from '../orchestration/flowArm';
 
@@ -3982,6 +3984,66 @@ export function pruneSchedulerAudit(keepPerJob = 1000): void {
        )`,
     ).run({ job, keep: keepPerJob });
   }
+}
+
+// ─── convergence_snapshot ───────────────────────────────────────────────────
+
+let _stmtInsertConvergenceSnapshot: Database.Statement | null = null;
+let _stmtGetLatestConvergenceSnapshot: Database.Statement | null = null;
+let _stmtListConvergenceSnapshotHistory: Database.Statement | null = null;
+
+export function insertConvergenceSnapshot(
+  row: NewConvergenceSnapshotRow,
+): void {
+  _stmtInsertConvergenceSnapshot ??= db.prepare<ConvergenceSnapshotRow>(`
+    INSERT INTO convergence_snapshot
+      (id, project, milestone, ts, tasks_open, tasks_closed, gate_open, gate_closed,
+       seed_open, seed_closed, ops_open, ops_closed, total_scope, distance_to_green, status)
+    VALUES
+      (@id, @project, @milestone, @ts, @tasks_open, @tasks_closed, @gate_open, @gate_closed,
+       @seed_open, @seed_closed, @ops_open, @ops_closed, @total_scope, @distance_to_green, @status)
+  `);
+  _stmtInsertConvergenceSnapshot.run({
+    id: randomUUID(),
+    ...row,
+  });
+}
+
+/** Latest stored snapshot for a milestone — the dedup baseline for ConvergenceSnapshotJob. */
+export function getLatestConvergenceSnapshot(
+  project: string,
+  milestone: string,
+): ConvergenceSnapshotRow | undefined {
+  _stmtGetLatestConvergenceSnapshot ??= db.prepare<{
+    project: string;
+    milestone: string;
+  }>(
+    `SELECT * FROM convergence_snapshot
+     WHERE project = @project AND milestone = @milestone
+     ORDER BY ts DESC LIMIT 1`,
+  );
+  return _stmtGetLatestConvergenceSnapshot.get({ project, milestone }) as
+    | ConvergenceSnapshotRow
+    | undefined;
+}
+
+/** Full retained series for a milestone, oldest first — feeds the burndown viz's history route. */
+export function listConvergenceSnapshotHistory(
+  project: string,
+  milestone: string,
+): ConvergenceSnapshotRow[] {
+  _stmtListConvergenceSnapshotHistory ??= db.prepare<{
+    project: string;
+    milestone: string;
+  }>(
+    `SELECT * FROM convergence_snapshot
+     WHERE project = @project AND milestone = @milestone
+     ORDER BY ts ASC`,
+  );
+  return _stmtListConvergenceSnapshotHistory.all({
+    project,
+    milestone,
+  }) as ConvergenceSnapshotRow[];
 }
 
 export interface SchedulerAuditStats {

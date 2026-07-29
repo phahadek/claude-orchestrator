@@ -4,7 +4,12 @@ import {
   getMilestoneConvergence,
   listProjectConvergence,
 } from '../convergence/convergenceService';
-import { UnknownMilestoneError } from '../projects/milestoneResolver';
+import {
+  UnknownMilestoneError,
+  canonicalMilestoneKey,
+  resolveMilestoneRowForProject,
+} from '../projects/milestoneResolver';
+import { listConvergenceSnapshotHistory } from '../db/queries';
 
 /**
  * The milestone convergence read-surface: composes the four readiness axes
@@ -39,6 +44,26 @@ export function createConvergenceRouter(): Router {
       const project = String(req.params.project);
       try {
         res.json(listProjectConvergence(project));
+      } catch (err) {
+        if (err instanceof UnknownMilestoneError) {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+    },
+  );
+
+  // GET /api/milestones/:project/:milestone/convergence/history
+  router.get(
+    '/milestones/:project/:milestone/convergence/history',
+    (req: Request, res: Response) => {
+      const project = String(req.params.project);
+      const milestone = String(req.params.milestone);
+      try {
+        const row = resolveMilestoneRowForProject(project, milestone);
+        const key = canonicalMilestoneKey(row);
+        res.json(listConvergenceSnapshotHistory(project, key));
       } catch (err) {
         if (err instanceof UnknownMilestoneError) {
           res.status(400).json({ error: err.message });
