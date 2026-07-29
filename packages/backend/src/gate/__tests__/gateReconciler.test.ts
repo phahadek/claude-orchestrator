@@ -23,7 +23,7 @@ const deployServiceMock = vi.hoisted(() => ({
 vi.mock('../../deploy/deployService.js', () => deployServiceMock);
 
 import { db } from '../../db/db.js';
-import { upsertTaskCache } from '../../db/queries.js';
+import { upsertTaskCache, upsertArm } from '../../db/queries.js';
 import {
   insertItem,
   setMinDeployedCommit,
@@ -50,6 +50,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM gate_item').run();
   db.prepare('DELETE FROM audit_log').run();
   db.prepare('DELETE FROM task_cache').run();
+  db.prepare('DELETE FROM flow_arm').run();
   deployServiceMock.getProjectDeployedSha.mockReset().mockReturnValue(null);
 });
 
@@ -228,6 +229,37 @@ describe('runGateReconcilerTick', () => {
     const result = await runGateReconcilerTick({
       deployAdvanceTrigger: fixedTrigger('sha1'),
     });
+    expect(result.processed).toEqual([]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('auto-runs a runnable item when the milestone gate-verify arm is on', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    upsertArm('M12', 'gate-verify', true, 1);
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({ disposition: 'pass' })),
+    };
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).toHaveBeenCalledTimes(1);
+    expect(result.processed).toEqual([
+      { itemId: item.id, classification: 'Read-Only', disposition: 'pass' },
+    ]);
+  });
+
+  it('does not auto-run when the milestone gate-verify arm is off, even with gate_verification_enabled', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    upsertArm('M12', 'gate-verify', false, 1);
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({ disposition: 'pass' })),
+    };
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).not.toHaveBeenCalled();
     expect(result.processed).toEqual([]);
     expect(getItem(item.id)?.state).toBe('runnable');
   });

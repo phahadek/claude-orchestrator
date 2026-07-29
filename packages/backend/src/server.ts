@@ -493,20 +493,21 @@ stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 registerWorktreeReconciler(scheduler);
 // Gate-verification reconciler: runnability/readiness reconcile on every
-// tick; auto-run verification stays inert here (no verifier passed to
-// register()) — M12 excludes reconciler auto-launch, that's the deferred
-// M13+ phase. The verifier + followupFiler + concurrency config are wired
-// via configureGateVerification instead, for the sibling manual-dispatch
+// tick; auto-run verification drives the same wired verifier, gated by the
+// global gate_verification_enabled master switch and, per item, by that
+// item's milestone's (milestone, 'gate-verify') arm. The same config is
+// also stashed via configureGateVerification for the sibling manual-dispatch
 // surface (an operator-triggered /gate verify) to read back and invoke
 // directly on selected items.
-registerGateReconciler(scheduler);
-configureGateVerification({
+const gateVerificationOptions = {
   verifier: new SessionGateItemVerifier(sessionManager),
   concurrency: {
     maxDispatchAttempts: 3,
     maxFixAttempts: 3,
   },
-});
+};
+registerGateReconciler(scheduler, gateVerificationOptions);
+configureGateVerification(gateVerificationOptions);
 
 void runBootSequence({
   jsonlReader,
