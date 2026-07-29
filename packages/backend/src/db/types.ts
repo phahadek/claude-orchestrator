@@ -656,13 +656,16 @@ export interface CompletenessDispositionQuestion {
   reason: string;
   /**
    * Recorded (`proposed`, the default at critic-run time) is not approved —
-   * the same disposition is carried into the closing synthesis for operator
-   * sign-off, and only flips to `approved` once that sign-off lands. An
-   * operator pushback re-POSTs the affected question with a revised
-   * `reason`/`disposition`, still `proposed`, rather than editing history in
-   * place.
+   * the same disposition is carried into a `completeness.disposition` staged
+   * intent for operator sign-off, and only flips to `approved` once that
+   * intent is approved (or `rejected` once it is rejected) — see
+   * routes/stagedIntents.ts's completeness-disposition approve/reject
+   * handling, which is what actually advances this field on the stored row.
+   * A rejected run leaves the session free to re-run the critic and stage a
+   * revised `completeness.disposition` intent, which writes a fresh row
+   * rather than editing this one in place.
    */
-  approvalStatus?: 'proposed' | 'approved';
+  approvalStatus?: 'proposed' | 'approved' | 'rejected';
 }
 
 /**

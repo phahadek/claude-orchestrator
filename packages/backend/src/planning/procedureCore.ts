@@ -119,10 +119,17 @@ export const DESIGN_TERMINAL_ARTIFACTS_ORDERING =
   '`task.updateBody`, any `arch.createUnit` / `arch.updateUnit` / ' +
   '`arch.supersedeUnit` write, and the follow-on `task.create` set — is ' +
   'staged only once every listed Open Question is answered and the ' +
-  'completeness critic has run. This orders artifacts behind answers, and ' +
-  'answers behind each other: Open Questions stage one per turn, in the ' +
-  'order the task body lists them (see "One Open Question per turn" above), ' +
-  'never several at once. EXEMPT: a file-sibling ' +
+  "completeness critic's findings have been accepted: this is not just " +
+  '"the critic has run" — `arch.createUnit`/`arch.updateUnit`/' +
+  '`arch.supersedeUnit` and the closing-synthesis `task.updateBody` are ' +
+  "refused at stage time, naming the missing approval, until the session's " +
+  '`completeness.disposition` intent for this task is operator-approved ' +
+  '(see "Disposition-don\'t-drop" below). A rejected `completeness.disposition` ' +
+  'intent does not require a second critic pass — call the tool again with a ' +
+  'revised disposition to stage a fresh intent. This orders artifacts behind ' +
+  'answers, and answers behind each other: Open Questions stage one per turn, ' +
+  'in the order the task body lists them (see "One Open Question per turn" ' +
+  'above), never several at once. EXEMPT: a file-sibling ' +
   "`task.create` (the Split-don't-trim overflow disposition) scopes the " +
   'work rather than following from a locked decision, and may be staged ' +
   'before Open Questions resolve.';
@@ -626,13 +633,18 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'approvalStatus: "proposed"}], runAt}` at critic time, for every critic run — ' +
       'this durable store, never body prose, is the record, and it is written ' +
       'immediately so nothing is silently lost even before the operator has seen ' +
-      'it. DO NOT drop a candidate silently. DO NOT record a disposition only as ' +
-      'Implementation-notes prose; prose may summarize it, but the store call is ' +
+      'it. This same call also stages a `completeness.disposition` intent for ' +
+      'operator approval — DO wait for that intent to be approved before staging ' +
+      'any `arch.createUnit` / `arch.updateUnit` / `arch.supersedeUnit` write or the ' +
+      'closing-synthesis `task.updateBody` (see DESIGN_TERMINAL_ARTIFACTS_ORDERING ' +
+      'above) — staging one earlier is rejected at stage time, naming the missing ' +
+      'approval. DO NOT drop a candidate silently. DO NOT record a disposition only ' +
+      'as Implementation-notes prose; prose may summarize it, but the store call is ' +
       'the disposition. DO NOT confuse "recorded" with "approved": a `proposed` ' +
-      'disposition is provisional until the operator signs off on the closing ' +
-      'synthesis carrying it — a pushback there re-POSTs the affected question ' +
-      'with a revised disposition/reason rather than treating the first write as ' +
-      'final.',
+      'disposition is provisional until the operator approves the staged ' +
+      '`completeness.disposition` intent — a rejected intent is not a dead end: ' +
+      're-call the tool with a revised disposition/reason to stage a fresh intent, ' +
+      'never a second critic pass, and never treating the first write as final.',
   },
   {
     id: 'design-closing-synthesis',

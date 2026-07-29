@@ -43,6 +43,40 @@ describe('StagedIntentPanel', () => {
     expect(screen.queryByRole('button', { name: /approve/i })).toBeNull();
   });
 
+  it('renders a completeness.disposition run — its questions, and Approve/Reject with no separate Commit', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'completeness.disposition',
+          payload: {
+            taskId: 'notion:design1',
+            rowId: 1,
+            project: 'demo',
+            milestone: 'M13',
+            questions: [
+              {
+                question: 'Should X be configurable?',
+                disposition: 'dismissed',
+                reason: 'Out of scope.',
+                approvalStatus: 'proposed',
+              },
+            ],
+            runAt: '2026-07-28T00:00:00.000Z',
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText('completeness.disposition')).toBeTruthy();
+    expect(
+      screen.getByTestId('staged-intent-completeness-disposition'),
+    ).toBeTruthy();
+    expect(screen.getByText(/Should X be configurable\?/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /^approve$/i })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: /decline/i })).toBeTruthy();
+  });
+
   it('renders a task.setStatus -> Deferred intent as a distinct discard/defer proposal with its rationale', () => {
     render(
       <StagedIntentPanel

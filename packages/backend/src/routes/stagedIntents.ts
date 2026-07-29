@@ -35,6 +35,7 @@ import type {
   DecisionPickOnePayload,
   StagedIntentAnswer,
   GroomProposalFields,
+  CompletenessDispositionQuestion,
 } from '../db/types';
 import {
   hashIntentPayload,
@@ -53,6 +54,7 @@ import {
   setStagedIntentGroup,
   getTaskCache,
   getSession,
+  updateCompletenessDispositionApproval,
 } from '../db/queries';
 import { parseTaskId, normalizeTaskId } from '../tasks/taskId';
 import { NotionApiError } from '../notion/types';
@@ -538,6 +540,25 @@ interface CapabilityRequestPayload {
   evidence: string;
 }
 
+/**
+ * Payload for the completeness.disposition staged intent — the operator-
+ * approvable twin of the durable completeness_disposition write (see
+ * mcp/tools/completenessTools.ts / routes/design.ts, and
+ * db/queries.ts's buildCompletenessDispositionRow). `rowId` names the
+ * already-durably-written completeness_disposition row this intent's
+ * approval/rejection advances — the write happens immediately at critic
+ * time (disposition-don't-drop), independent of and before this intent is
+ * ever disposed of.
+ */
+export interface CompletenessDispositionIntentPayload {
+  taskId: string;
+  rowId: number;
+  project: string | null;
+  milestone: string | null;
+  questions: CompletenessDispositionQuestion[];
+  runAt: string;
+}
+
 /** The kind/topic/regions/status envelope shared by all three arch.* kinds. */
 interface ArchUnitMetadataPayload {
   kind: ArchUnitKind;
@@ -987,6 +1008,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'arch.updateUnit',
   'arch.supersedeUnit',
   'session.requestCapability',
+  'completeness.disposition',
   'intent.withdraw',
 ]);
 
@@ -1098,6 +1120,77 @@ export class ExplicitSupersedesError extends Error {
   }
 }
 
+/**
+ * The design terminal-artifacts kinds DESIGN_TERMINAL_ARTIFACTS_ORDERING
+ * (procedureCore.ts) requires the completeness critic's findings be accepted
+ * before: the three arch.* writes, and task.updateBody — which in a design
+ * session is staged exactly once, as the closing synthesis (see
+ * "design-closing-synthesis" in procedureCore.ts), so this never conflicts
+ * with a groom/ops session's unrelated task.updateBody use.
+ */
+const COMPLETENESS_GATED_KINDS: ReadonlySet<string> = new Set([
+  'arch.createUnit',
+  'arch.updateUnit',
+  'arch.supersedeUnit',
+  'task.updateBody',
+]);
+
+/**
+ * Thrown at stage time when a design session attempts one of
+ * COMPLETENESS_GATED_KINDS before its bound task's completeness.disposition
+ * intent has been approved — tightens DESIGN_TERMINAL_ARTIFACTS_ORDERING
+ * from "the critic has run" to "the critic's findings were accepted".
+ */
+class CompletenessApprovalRequiredError extends Error {
+  constructor(kind: string, taskId: string) {
+    super(
+      `[stagedIntents] "${kind}" for design task "${taskId}" is blocked: the completeness critic's ` +
+        'dispositions for this task have not been approved yet. Stage a completeness.disposition ' +
+        'intent (if one is not already staged) and get operator approval before staging architecture ' +
+        'or closing-synthesis writes.',
+    );
+    this.name = 'CompletenessApprovalRequiredError';
+  }
+}
+
+/**
+ * Stage-time enforcement of the completeness-critic approval gate: for a
+ * COMPLETENESS_GATED_KINDS write from a dispatched design session, at least
+ * one of that session's completeness.disposition intents for its own bound
+ * task must be `committed` (approve is terminal for this kind — see the
+ * POST /staged-intents/:id/approve completeness.disposition branch). Scoped
+ * to a session bound to a task (`sessions.task_id`) whose session_type is
+ * `design` — a human-staged intent with no originating session, or any
+ * non-design session, is not checked here, mirroring
+ * assertSessionTaskBinding's own scoping. A rejected completeness.disposition
+ * intent does not strand the session: re-running the critic stages a fresh
+ * intent (the prior one is terminal, so it is never matched by the dedup
+ * lookup in stageIntent), which this then re-checks the same way — no second
+ * critic run is required, only a fresh disposition + approval.
+ */
+function assertCompletenessApproval(
+  kind: string,
+  sessionId: string | null | undefined,
+): void {
+  if (!COMPLETENESS_GATED_KINDS.has(kind) || !sessionId) return;
+  const session = getSession(sessionId);
+  if (!session?.task_id || session.session_type !== 'design') return;
+  const taskId = normalizeTaskId(session.task_id);
+
+  const approved = listStagedIntentsBySession(sessionId).some((row) => {
+    if (row.kind !== 'completeness.disposition' || row.state !== 'committed') {
+      return false;
+    }
+    const payload = JSON.parse(
+      row.payload,
+    ) as CompletenessDispositionIntentPayload;
+    return normalizeTaskId(payload.taskId) === taskId;
+  });
+  if (!approved) {
+    throw new CompletenessApprovalRequiredError(kind, taskId);
+  }
+}
+
 export function stageIntent(
   kind: string,
   payload: unknown,
@@ -1113,6 +1206,7 @@ export function stageIntent(
   }
 
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
+  assertCompletenessApproval(kind, sessionId);
 
   const taskId = extractTaskId(kind, payload);
   const titleKey = extractTitleKey(kind, payload);
@@ -1566,6 +1660,18 @@ async function rejectStagedIntentRow(
     outcome,
     reason,
   );
+
+  // Records the operator's disposition on the underlying
+  // completeness_disposition row(s) too — not just the intent — so a caller
+  // reading the durable store directly (never just the intent) sees the
+  // outcome. A session left in `needs_revision` (pushback) or terminal
+  // `rejected` (decline) can, either way, re-run completeness.disposition to
+  // stage a fresh intent — no second critic pass required.
+  if (rejectedIntent.kind === 'completeness.disposition') {
+    const payload =
+      rejectedIntent.payload as CompletenessDispositionIntentPayload;
+    updateCompletenessDispositionApproval(payload.rowId, 'rejected');
+  }
 
   if (rejectedIntent.kind === 'session.requestCapability') {
     await resumeCapabilityRequester(
@@ -2523,6 +2629,12 @@ export function createStagedIntentsRouter(
         });
         return;
       }
+      if (row.kind === 'completeness.disposition') {
+        res.status(409).json({
+          error: `staged intent "${row.id}" is a completeness.disposition run — approval is terminal for it (no separate apply step); resolve it via POST /staged-intents/:id/approve or /reject`,
+        });
+        return;
+      }
       const intent = rowToApi(row);
 
       const body = req.body as {
@@ -2644,6 +2756,27 @@ export function createStagedIntentsRouter(
           committedIntent,
           'approved',
         );
+        res.json(committedIntent);
+        return;
+      }
+
+      // A completeness.disposition run has no separate apply step either —
+      // approval is terminal: it advances the underlying
+      // completeness_disposition row(s) off `proposed` to `approved` and
+      // unblocks the design session's gated arch.*/closing-synthesis writes
+      // (see assertCompletenessApproval above).
+      if (intent.kind === 'completeness.disposition') {
+        const payload = intent.payload as CompletenessDispositionIntentPayload;
+        updateCompletenessDispositionApproval(payload.rowId, 'approved');
+        const committed = transitionStagedIntent(intent.id, 'committed', {
+          annotation: null,
+        });
+        const committedIntent = rowToApi(committed);
+        broadcastIntentChange(committedIntent);
+        await planningOrchestrator?.handleDisposition({
+          intent: committed,
+          disposition: 'approve',
+        });
         res.json(committedIntent);
         return;
       }

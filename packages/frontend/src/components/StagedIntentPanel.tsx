@@ -560,8 +560,56 @@ function JournalSetStateHeadline({ intent }: { intent: StagedIntent }) {
   );
 }
 
+interface CompletenessDispositionQuestionPayload {
+  question: string;
+  disposition: 'accepted' | 'dismissed';
+  reason: string;
+  approvalStatus?: 'proposed' | 'approved' | 'rejected';
+}
+
+interface CompletenessDispositionPayload {
+  taskId: string;
+  rowId: number;
+  project: string | null;
+  milestone: string | null;
+  questions: CompletenessDispositionQuestionPayload[];
+  runAt: string;
+}
+
+/** The completeness-critic disposition kind: a design session's critic-pass findings, staged for operator approval before the task's architecture/closing-synthesis writes are allowed to stage. */
+function CompletenessDispositionHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as CompletenessDispositionPayload;
+  return (
+    <div
+      className={styles.text}
+      data-testid="staged-intent-completeness-disposition"
+    >
+      <p>
+        Completeness critic run for <strong>{payload.taskId}</strong>
+        {payload.milestone ? ` (${payload.milestone})` : ''} — {payload.runAt}
+      </p>
+      {payload.questions.length === 0 ? (
+        <p>No gaps raised — pass run, clean.</p>
+      ) : (
+        <ul>
+          {payload.questions.map((q, idx) => (
+            <li key={idx}>
+              <strong>
+                {q.disposition === 'accepted' ? 'Accepted' : 'Dismissed'}:
+              </strong>{' '}
+              {q.question} — {q.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function renderHeadline(intent: StagedIntent): ReactNode {
   switch (intent.kind) {
+    case 'completeness.disposition':
+      return <CompletenessDispositionHeadline intent={intent} />;
     case 'task.updateBody':
       return <BodySectionDiff intent={intent} />;
     case 'task.patchBodySection':
@@ -636,6 +684,12 @@ export function StagedIntentPanel({
   // The grant-approval kind: never applied — dispositioned only through
   // approve / reject / pushback, the existing consent vocabulary.
   const isCapabilityRequest = intent.kind === 'session.requestCapability';
+  // Approval is terminal for a completeness-disposition run too — approving
+  // it directly advances the underlying completeness_disposition row(s) off
+  // `proposed` and unblocks the design task's gated arch.*/closing-synthesis
+  // writes; there is no separate apply/commit step.
+  const isCompletenessDisposition = intent.kind === 'completeness.disposition';
+  const skipsApply = isCapabilityRequest || isCompletenessDisposition;
   const isGrouped = !!intent.groupId;
 
   const handleApply = async (override?: { reason: string }) => {
@@ -815,7 +869,7 @@ export function StagedIntentPanel({
           </div>
 
           <div className={styles.permissionButtons}>
-            {!isGrouped && !blocked && !isCapabilityRequest && (
+            {!isGrouped && !blocked && !skipsApply && (
               <button
                 type="button"
                 className={styles.approveButton}
@@ -825,7 +879,7 @@ export function StagedIntentPanel({
                 {inFlight === 'apply' ? 'Committing...' : '✓ Commit'}
               </button>
             )}
-            {!isGrouped && blocked && !isCapabilityRequest && !showOverride && (
+            {!isGrouped && blocked && !skipsApply && !showOverride && (
               <button
                 type="button"
                 className={styles.approveButton}
@@ -835,21 +889,20 @@ export function StagedIntentPanel({
                 Override block…
               </button>
             )}
-            {(isGrouped || isCapabilityRequest) &&
-              intent.state !== 'approved' && (
-                <button
-                  type="button"
-                  className={styles.approveButton}
-                  disabled={inFlight !== null}
-                  onClick={() => void handleApprove()}
-                >
-                  {inFlight === 'approve'
-                    ? 'Approving...'
-                    : isCapabilityRequest
-                      ? '✓ Grant'
-                      : 'Approve'}
-                </button>
-              )}
+            {(isGrouped || skipsApply) && intent.state !== 'approved' && (
+              <button
+                type="button"
+                className={styles.approveButton}
+                disabled={inFlight !== null}
+                onClick={() => void handleApprove()}
+              >
+                {inFlight === 'approve'
+                  ? 'Approving...'
+                  : isCapabilityRequest
+                    ? '✓ Grant'
+                    : 'Approve'}
+              </button>
+            )}
             <button
               type="button"
               className={styles.denyButton}

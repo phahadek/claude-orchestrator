@@ -18,16 +18,27 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerCompletenessTools } from './completenessTools';
-import { listCompletenessDispositions } from '../../db/queries';
+import {
+  listCompletenessDispositions,
+  listStagedIntentsByProject,
+} from '../../db/queries';
 import type { PlanningWorkflow } from '../../planning/planningIntentKinds';
 
 beforeEach(() => {
   db.prepare('DELETE FROM completeness_disposition').run();
+  db.prepare('DELETE FROM staged_intent').run();
 });
 
-async function connectedClient(workflow: PlanningWorkflow | null = 'design') {
+async function connectedClient(
+  workflow: PlanningWorkflow | null = 'design',
+  projectId?: string,
+) {
   const server = new McpServer({ name: 'test', version: '1.0.0' });
-  registerCompletenessTools(server, { sessionId: 'session-1', workflow });
+  registerCompletenessTools(server, {
+    sessionId: 'session-1',
+    workflow,
+    projectId,
+  });
   const [serverTransport, clientTransport] =
     InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test-client', version: '1.0.0' });
@@ -126,6 +137,70 @@ describe('completeness.disposition', () => {
     });
     const rows = listCompletenessDispositions('notion:design2');
     expect(JSON.parse(rows[0].questions)[0].approvalStatus).toBe('proposed');
+    await close();
+  });
+
+  it('normalizes a date-only runAt to a full ISO timestamp', async () => {
+    const { client, close } = await connectedClient();
+    await client.callTool({
+      name: 'completeness.disposition',
+      arguments: {
+        taskId: 'notion:design3',
+        questions: [
+          { question: 'Q?', disposition: 'accepted', reason: 'resolved' },
+        ],
+        runAt: '2026-07-28',
+      },
+    });
+    const rows = listCompletenessDispositions('notion:design3');
+    expect(rows[0].run_at).toBe('2026-07-28T00:00:00.000Z');
+    await close();
+  });
+
+  it('also stages a completeness.disposition intent for operator approval when the session resolves to a project', async () => {
+    const { client, close } = await connectedClient('design', 'proj-1');
+    const result = await client.callTool({
+      name: 'completeness.disposition',
+      arguments: {
+        taskId: 'notion:design4',
+        questions: [
+          { question: 'Q?', disposition: 'accepted', reason: 'resolved' },
+        ],
+        runAt: '2026-07-28T00:00:00.000Z',
+      },
+    });
+
+    const body = resultOf(result as never) as { intent: { id: string } };
+    expect(body.intent).toBeTruthy();
+
+    const intents = listStagedIntentsByProject('proj-1');
+    expect(intents).toHaveLength(1);
+    expect(intents[0].kind).toBe('completeness.disposition');
+    expect(intents[0].session_id).toBe('session-1');
+    expect(intents[0].state).toBe('staged');
+    await close();
+  });
+
+  it('stages no intent when the session resolves to no project — the durable write still happens', async () => {
+    const { client, close } = await connectedClient('design');
+    const result = await client.callTool({
+      name: 'completeness.disposition',
+      arguments: {
+        taskId: 'notion:design5',
+        questions: [
+          { question: 'Q?', disposition: 'accepted', reason: 'resolved' },
+        ],
+        runAt: '2026-07-28T00:00:00.000Z',
+      },
+    });
+
+    const body = resultOf(result as never) as {
+      intent: unknown;
+      source_task_id: string;
+    };
+    expect(body.intent).toBeNull();
+    expect(body.source_task_id).toBe('notion:design5');
+    expect(listCompletenessDispositions('notion:design5')).toHaveLength(1);
     await close();
   });
 });
