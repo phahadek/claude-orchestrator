@@ -5353,7 +5353,7 @@ export function backfillStagedIntentMilestones(
   );
   let updated = 0;
   for (const row of rows) {
-    let milestone: string | null = null;
+    let milestone: string | null;
     try {
       milestone = resolve(row.project_id, row.task_id);
     } catch {
