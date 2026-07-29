@@ -360,7 +360,10 @@ describe('buildOrchestratorClaudeMd — taskBackend wording', () => {
       const backends = ['notion', 'github', 'jira', 'local'] as const;
 
       for (const taskBackend of backends) {
-        const output = buildOrchestratorClaudeMd({ ...baseParams, taskBackend });
+        const output = buildOrchestratorClaudeMd({
+          ...baseParams,
+          taskBackend,
+        });
         const template = output.slice(
           output.indexOf('## PR Format Standards'),
           output.indexOf('## Branch Rules'),
