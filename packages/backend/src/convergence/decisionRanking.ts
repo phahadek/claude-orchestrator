@@ -130,7 +130,10 @@ interface RankKey {
   needsAttention: 0 | 1;
 }
 
-function computeRankKey(row: StagedIntentRow, blockingTaskIds: Set<string>): RankKey {
+function computeRankKey(
+  row: StagedIntentRow,
+  blockingTaskIds: Set<string>,
+): RankKey {
   return {
     blocking: isBlockingMember(row, blockingTaskIds) ? 1 : 0,
     kindDirection: KIND_DIRECTION_RANK[classifyKindDirection(row.kind)],
