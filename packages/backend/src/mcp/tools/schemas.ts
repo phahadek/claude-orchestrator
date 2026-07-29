@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { TRIAGE_VERDICTS } from '../../planning/triage';
+import { GATE_ITEM_TIER_SELECTION_GUIDANCE } from '../../gate/gateItemClassificationGuidance';
 
 /**
  * Shared zod schemas for the stage-proposal MCP tool surface — one shape per
@@ -29,15 +30,22 @@ export const taskStatusSchema = z.enum([
 ]);
 
 /** GateItemClassification, plus the two non-classifying accretion dispositions. */
-export const gateContributionDecisionSchema = z.enum([
-  'Read-Only',
-  'Prod-Mutating',
-  'Opportunistic',
-  'Human-Observation',
-  'needs-triage',
-  'none',
-  'n/a',
-]);
+export const gateContributionDecisionSchema = z
+  .enum([
+    'Read-Only',
+    'Prod-Mutating',
+    'Opportunistic',
+    'Human-Observation',
+    'needs-triage',
+    'none',
+    'n/a',
+  ])
+  .describe(
+    `${GATE_ITEM_TIER_SELECTION_GUIDANCE} "needs-triage" defers the tier ` +
+      'decision to a human. "none" and "n/a" are not tiers — they are the ' +
+      'bare accretion dispositions for a source task with nothing runtime-' +
+      'observable to contribute.',
+  );
 
 export const seedContributionDecisionSchema = z.enum(['seeds', 'none', 'n/a']);
 
@@ -170,6 +178,21 @@ export const gateContributionSourceTaskSchema = z.object({
 
 export const gateContributionItemInputSchema = z.object({
   text: z.string(),
+  classification: z
+    .enum([
+      'Read-Only',
+      'Prod-Mutating',
+      'Opportunistic',
+      'Human-Observation',
+      'needs-triage',
+    ])
+    .optional()
+    .describe(
+      `${GATE_ITEM_TIER_SELECTION_GUIDANCE} Overrides the batch-level ` +
+        'classification for this item only; omit to inherit it — a batch ' +
+        'mixing a rendered-UI check with record-query checks can tier each ' +
+        'item correctly in one call.',
+    ),
 });
 
 export const seedContributionSourceTaskSchema = z.object({

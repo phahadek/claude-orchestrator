@@ -1263,6 +1263,93 @@ describe('TaskWriteCommands.accreteGateContribution', () => {
     expect(result.itemIds).toEqual(['gate-item-1', 'gate-item-2']);
   });
 
+  it('mints an item at its own classification when the item overrides the batch tier', async () => {
+    mockInsertItem.mockReturnValueOnce({ id: 'gate-item-1' });
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.accreteGateContribution(
+      sourceTask,
+      [
+        {
+          text: 'A human must read the rendered page',
+          classification: 'Human-Observation',
+        },
+      ],
+      'Read-Only',
+    );
+
+    expect(mockInsertItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'A human must read the rendered page',
+        classification: 'Human-Observation',
+      }),
+    );
+  });
+
+  it('mints an item at the batch tier when the item carries no classification of its own', async () => {
+    mockInsertItem.mockReturnValueOnce({ id: 'gate-item-1' });
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.accreteGateContribution(
+      sourceTask,
+      [{ text: 'Verify the webhook fires' }],
+      'Read-Only',
+    );
+
+    expect(mockInsertItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Verify the webhook fires',
+        classification: 'Read-Only',
+      }),
+    );
+  });
+
+  it('mints each item in a mixed batch at its own respective tier', async () => {
+    mockInsertItem
+      .mockReturnValueOnce({ id: 'gate-item-1' })
+      .mockReturnValueOnce({ id: 'gate-item-2' })
+      .mockReturnValueOnce({ id: 'gate-item-3' });
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.accreteGateContribution(
+      sourceTask,
+      [
+        { text: 'a store query', classification: 'Read-Only' },
+        {
+          text: 'a rendered layout check',
+          classification: 'Human-Observation',
+        },
+        { text: 'no override, inherits batch tier' },
+      ],
+      'Prod-Mutating',
+    );
+
+    expect(mockInsertItem).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: 'a store query',
+        classification: 'Read-Only',
+      }),
+    );
+    expect(mockInsertItem).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: 'a rendered layout check',
+        classification: 'Human-Observation',
+      }),
+    );
+    expect(mockInsertItem).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        text: 'no override, inherits batch tier',
+        classification: 'Prod-Mutating',
+      }),
+    );
+  });
+
   it('records a "none" marker with its reason and mints no items', async () => {
     const backend = makeBackend();
     const commands = new BackendTaskWriteCommands(backend);

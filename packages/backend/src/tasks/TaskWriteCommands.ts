@@ -276,6 +276,8 @@ export interface GateContributionSourceTask {
 /** One stripped runtime/launch-and-observe item to mint as a gate_item. */
 export interface GateContributionItemInput {
   text: string;
+  /** Overrides the batch-level classification for this item only; defaults to it when absent. */
+  classification?: GateItemClassification;
 }
 
 /**
@@ -669,7 +671,8 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
           project: sourceTask.project,
           milestone,
           text: item.text,
-          classification: classification as GateItemClassification,
+          classification:
+            item.classification ?? (classification as GateItemClassification),
           sources: [
             {
               sourceTaskId,
