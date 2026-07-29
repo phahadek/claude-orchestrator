@@ -66,6 +66,13 @@ export interface UpdateStatusOptions {
 /** Provenance options shared by the write-side port methods (create / deps). */
 export type TaskWriteOptions = UpdateStatusOptions;
 
+/** Minimal task metadata returned by fetchTaskSummary — no body, no URL. */
+export interface TaskSummary {
+  title: string;
+  type: string;
+  status: string;
+}
+
 /**
  * Fields accepted by createTask. Status is intentionally absent — every
  * implementation hard-codes the initial Backlog status regardless of input.
@@ -145,6 +152,12 @@ export interface TaskBackend {
 
   /** Fetch the full task page body as markdown (for review/session context). */
   fetchTaskPage(taskId: string): Promise<string>;
+
+  /**
+   * Fetch just a task's title/type/status — no body, no URL. Returns null if
+   * no task exists with the given id.
+   */
+  fetchTaskSummary(taskId: string): Promise<TaskSummary | null>;
 
   /**
    * Fetch tasks ready to launch that are not tied to a milestone.
@@ -315,6 +328,10 @@ export class AuditingTaskBackend implements TaskBackend {
 
   fetchTaskPage(taskId: string) {
     return this.inner.fetchTaskPage(taskId);
+  }
+
+  fetchTaskSummary(taskId: string) {
+    return this.inner.fetchTaskSummary(taskId);
   }
 
   fetchNonMilestoneReadyTasks(

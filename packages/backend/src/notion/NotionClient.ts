@@ -787,6 +787,25 @@ export class NotionClient {
   }
 
   /**
+   * Fetch just a task page's title/type/status properties (no body, no
+   * pagination) — cheaper than fetchTaskPage for callers that don't need the
+   * body. Returns null on a 404 (task not found) rather than throwing.
+   */
+  async fetchTaskSummary(taskId: string): Promise<NotionTask | null> {
+    const externalId = toExternalId(taskId);
+    try {
+      const page = await notionRequest<NotionPage>(
+        'GET',
+        `/pages/${externalId}`,
+      );
+      return mapPageToTask(page);
+    } catch (err) {
+      if (err instanceof NotionApiError && err.statusCode === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
    * Append a PR URL to the Notes rich_text property on a Notion task page.
    * Fetches the current Notes content first so existing text is preserved.
    */

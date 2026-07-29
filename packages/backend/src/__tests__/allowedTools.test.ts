@@ -42,6 +42,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'groom.precheck',
   'architecture.getUnit',
   'architecture.queryUnits',
+  'task.getById',
 ];
 
 const REGISTERED_TOOL_NAMES = new Set(
@@ -146,6 +147,16 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
     ]) {
       expect(list).toContain('mcp__orchestrator__architecture_getUnit');
       expect(list).toContain('mcp__orchestrator__architecture_queryUnits');
+    }
+  });
+
+  it('groom/design/ops allow-lists all contain the underscore form of task_getById', () => {
+    for (const list of [
+      GROOM_ALLOWED_TOOLS,
+      DESIGN_ALLOWED_TOOLS,
+      OPS_ALLOWED_TOOLS,
+    ]) {
+      expect(list).toContain('mcp__orchestrator__task_getById');
     }
   });
 

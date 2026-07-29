@@ -146,6 +146,7 @@ describe('buildMcpServer — tool surface per session type', () => {
         'groom.precheck',
         'architecture.getUnit',
         'architecture.queryUnits',
+        'task.getById',
       ].sort(),
     );
   });
@@ -170,6 +171,7 @@ describe('buildMcpServer — tool surface per session type', () => {
         'completeness.traceCoverage',
         'architecture.getUnit',
         'architecture.queryUnits',
+        'task.getById',
       ].sort(),
     );
     expect(names).toContain('decision.pickOne');
@@ -193,6 +195,7 @@ describe('buildMcpServer — tool surface per session type', () => {
     expect(names).toContain('gate.verify');
     expect(names).toContain('architecture.getUnit');
     expect(names).toContain('architecture.queryUnits');
+    expect(names).toContain('task.getById');
     expect(names).not.toContain('review.disposition');
     expect(names).not.toContain('flaky.confirm');
   });
@@ -213,6 +216,7 @@ describe('buildMcpServer — tool surface per session type', () => {
     expect(names).toContain('flaky.confirm');
     expect(names).not.toContain('architecture.getUnit');
     expect(names).not.toContain('architecture.queryUnits');
+    expect(names).not.toContain('task.getById');
     expect(names).not.toContain('gate.verify');
   });
 });
