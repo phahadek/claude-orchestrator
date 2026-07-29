@@ -269,7 +269,7 @@ export function parseSessionRecordReadCapability(
  * setting" — until that ships, editing this constant is the only way to add
  * a sanctioned entry.
  */
-export const SANCTIONED_AUTO_APPROVE_CAPABILITIES: readonly string[] = [];
+const SANCTIONED_AUTO_APPROVE_CAPABILITIES: readonly string[] = [];
 
 /**
  * True iff `capability` is exactly the sanctioned read-only capability set
