@@ -614,6 +614,8 @@ export interface StagedIntentRow {
   project_id: string;
   session_id: string | null;
   group_id: string | null;
+  /** The milestone (canonical_short_id) this intent's target task belongs to. Null = unattributed (legacy row or unresolvable task). */
+  milestone: string | null;
   state: StagedIntentState;
   supersedes: string | null;
   annotation: string | null;

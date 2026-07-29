@@ -1,5 +1,8 @@
 import { ProjectService } from './ProjectService';
 import type { ProjectMilestone } from './ProjectService';
+import { getTaskCache } from '../db/queries';
+import { normalizeTaskId } from '../tasks/taskId';
+import type { NotionTask } from '../notion/types';
 
 /**
  * Thrown when a milestone reference doesn't resolve to exactly one known
@@ -122,6 +125,41 @@ export function resolveMilestoneRowForProject(
     );
   }
   return match;
+}
+
+/**
+ * Best-effort task -> milestone attribution: scans each of the project's
+ * milestone board caches (the same `board:${milestone.id}` task_cache rows
+ * getMilestoneConvergence's task axis reads) for the given task id, and
+ * returns the owning milestone's canonical short-form key. Used to attribute
+ * a staged_intent to a milestone at stage time when the caller doesn't
+ * already know it explicitly (e.g. a dispatched planning session).
+ * Returns null — never throws — when the project is unknown, the task isn't
+ * found in any cached board, or a board cache is missing/stale/unparseable;
+ * the caller falls back to the "unattributed" bucket in that case.
+ */
+export function resolveMilestoneForTaskId(
+  projectId: string,
+  taskId: string,
+): string | null {
+  const project = ProjectService.getById(projectId);
+  if (!project) return null;
+  const normalized = normalizeTaskId(taskId);
+  for (const milestone of project.milestones) {
+    if (!milestone.sourceId) continue;
+    const row = getTaskCache(`board:${milestone.id}`);
+    if (!row) continue;
+    let tasks: NotionTask[];
+    try {
+      tasks = JSON.parse(row.raw_json) as NotionTask[];
+    } catch {
+      continue;
+    }
+    if (tasks.some((t) => normalizeTaskId(t.id) === normalized)) {
+      return canonicalMilestoneKey(milestone);
+    }
+  }
+  return null;
 }
 
 /**

@@ -5207,11 +5207,11 @@ export function insertStagedIntent(row: StagedIntentRow): void {
   _stmtInsertStagedIntent ??= db.prepare<StagedIntentRow>(`
     INSERT INTO staged_intent
       (id, kind, payload, payload_hash, task_id, project_id, session_id,
-       group_id, state, supersedes, annotation, decision_proposal, groom_proposal,
+       group_id, milestone, state, supersedes, annotation, decision_proposal, groom_proposal,
        advisory, disposition_reason, answer, created_at, updated_at)
     VALUES
       (@id, @kind, @payload, @payload_hash, @task_id, @project_id, @session_id,
-       @group_id, @state, @supersedes, @annotation, @decision_proposal, @groom_proposal,
+       @group_id, @milestone, @state, @supersedes, @annotation, @decision_proposal, @groom_proposal,
        @advisory, @disposition_reason, @answer, @created_at, @updated_at)
   `);
   _stmtInsertStagedIntent.run(row);
@@ -5284,6 +5284,87 @@ export function listAllActiveStagedIntents(): StagedIntentRow[] {
       `SELECT * FROM staged_intent WHERE state IN ('staged', 'approved') ORDER BY created_at ASC`,
     )
     .all() as StagedIntentRow[];
+}
+
+/** The milestone key the ?milestone list lens uses to bucket legacy/unattributable rows — never a real milestone's canonical_short_id. */
+export const UNATTRIBUTED_MILESTONE_BUCKET = 'unattributed';
+
+let _stmtListStagedIntentsByMilestone: Database.Statement | null = null;
+let _stmtListStagedIntentsUnattributed: Database.Statement | null = null;
+
+/**
+ * Active (staged/approved) intents for a project scoped to one milestone —
+ * the decision-inbox's ?milestone list lens. `UNATTRIBUTED_MILESTONE_BUCKET`
+ * resolves to every row with milestone IS NULL (legacy rows, or a stage-time
+ * attribution that couldn't be resolved) instead of an exact-match filter —
+ * these rows are never dropped from the surface, just bucketed separately.
+ */
+export function listStagedIntentsByMilestone(
+  projectId: string,
+  milestone: string,
+): StagedIntentRow[] {
+  if (milestone === UNATTRIBUTED_MILESTONE_BUCKET) {
+    _stmtListStagedIntentsUnattributed ??= db.prepare<{
+      project_id: string;
+    }>(
+      `SELECT * FROM staged_intent
+       WHERE project_id = @project_id AND milestone IS NULL AND state IN ('staged', 'approved')
+       ORDER BY created_at ASC`,
+    );
+    return _stmtListStagedIntentsUnattributed.all({
+      project_id: projectId,
+    }) as StagedIntentRow[];
+  }
+  _stmtListStagedIntentsByMilestone ??= db.prepare<{
+    project_id: string;
+    milestone: string;
+  }>(
+    `SELECT * FROM staged_intent
+     WHERE project_id = @project_id AND milestone = @milestone AND state IN ('staged', 'approved')
+     ORDER BY created_at ASC`,
+  );
+  return _stmtListStagedIntentsByMilestone.all({
+    project_id: projectId,
+    milestone,
+  }) as StagedIntentRow[];
+}
+
+/**
+ * Best-effort, run-once-at-boot backfill for rows staged before the
+ * milestone column existed: for every staged_intent with milestone IS NULL
+ * and a task_id, attempts to resolve the owning milestone via
+ * resolveMilestoneForTaskId and, if found, persists it. Rows that can't be
+ * resolved (no cached board membership, non-milestone task, etc.) are left
+ * NULL — they stay visible in the "unattributed" bucket rather than being
+ * dropped. Never throws; a resolution failure for one row just skips it.
+ */
+export function backfillStagedIntentMilestones(
+  resolve: (projectId: string, taskId: string) => string | null,
+): number {
+  const rows = db
+    .prepare(
+      `SELECT id, project_id, task_id FROM staged_intent WHERE milestone IS NULL AND task_id IS NOT NULL`,
+    )
+    .all() as { id: string; project_id: string; task_id: string }[];
+  if (rows.length === 0) return 0;
+
+  const update = db.prepare<{ id: string; milestone: string }>(
+    `UPDATE staged_intent SET milestone = @milestone WHERE id = @id`,
+  );
+  let updated = 0;
+  for (const row of rows) {
+    let milestone: string | null = null;
+    try {
+      milestone = resolve(row.project_id, row.task_id);
+    } catch {
+      milestone = null;
+    }
+    if (milestone) {
+      update.run({ id: row.id, milestone });
+      updated += 1;
+    }
+  }
+  return updated;
 }
 
 /** All intents (any state, including tombstones) for a group — used by group-scoped invariant checks. */

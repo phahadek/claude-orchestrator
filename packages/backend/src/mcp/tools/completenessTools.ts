@@ -155,6 +155,10 @@ export function registerCompletenessTools(
           ctx.projectId,
           null,
           ctx.sessionId,
+          null,
+          null,
+          null,
+          row.milestone,
         );
       }
 

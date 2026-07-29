@@ -48,6 +48,8 @@ import {
   getStagedIntent as getStagedIntentRow,
   listStagedIntentsByProject,
   listAllActiveStagedIntents,
+  listStagedIntentsByMilestone,
+  UNATTRIBUTED_MILESTONE_BUCKET,
   listStagedIntentsByGroup,
   listStagedIntentsBySession,
   findActiveStagedIntentForTask,
@@ -94,6 +96,9 @@ import type { ArchUnitUpdateFields } from '../architecture/ArchUnitStore';
 import type { ArchUnitKind, ArchUnitStatus } from '../db/types';
 import type { ServerMessage } from '../ws/types';
 import { logger } from '../logger';
+import { getMilestoneConvergence } from '../convergence/convergenceService';
+import { UnknownMilestoneError } from '../projects/milestoneResolver';
+import { rankDecisions } from '../convergence/decisionRanking';
 import {
   isToolShapedCapability,
   parseSessionRecordReadCapability,
@@ -394,6 +399,8 @@ export interface StagedIntent {
    * display can present/apply them as a group rather than unrelated rows.
    */
   groupId?: string | null;
+  /** The milestone (canonical_short_id) this intent's target task belongs to. Null = unattributed (legacy row or unresolvable task). */
+  milestone?: string | null;
   /**
    * The human-facing rationale/summary the decision surface renders beside
    * the payload — the producer's proposal for why this intent should be
@@ -441,6 +448,7 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
       ? (JSON.parse(row.annotation) as StagedIntent['annotation'])
       : null,
     groupId: row.group_id,
+    milestone: row.milestone,
     decisionProposal: row.decision_proposal,
     groomProposal: row.groom_proposal
       ? (JSON.parse(row.groom_proposal) as GroomProposalFields)
@@ -1383,6 +1391,7 @@ export function stageIntent(
   decisionProposal?: string | null,
   groomProposal?: GroomProposalFields | null,
   explicitSupersedes?: string | null,
+  milestone?: string | null,
 ): StagedIntent {
   if (kind === 'decision.pickOne') {
     validateDecisionPickOnePayload(payload, groupId, decisionProposal);
@@ -1472,6 +1481,7 @@ export function stageIntent(
       project_id: projectId,
       session_id: sessionId ?? null,
       group_id: groupId ?? null,
+      milestone: milestone ?? existing.milestone ?? null,
       state: 'staged',
       supersedes: null,
       annotation: null,
@@ -1497,6 +1507,7 @@ export function stageIntent(
     project_id: projectId,
     session_id: sessionId ?? null,
     group_id: groupId ?? null,
+    milestone: milestone ?? null,
     state: 'staged',
     supersedes: null,
     annotation: null,
@@ -2889,11 +2900,41 @@ export function createStagedIntentsRouter(
   // ── GET /api/staged-intents ─────────────────────────────────────────────
   // ?sessionId=<id> is the SessionPanel decision-panel lens: correlates
   // proposals back to the session that produced them, active states only.
+  // ?milestone=<key> (with ?projectId=<id>) is the milestone decision-inbox
+  // lens: scopes to one milestone's staged decisions (or the "unattributed"
+  // bucket for legacy/unresolvable rows), ordered by unblock-impact via
+  // rankDecisions — joined against that milestone's convergence read-surface
+  // where resolvable, unranked-by-blocking (kind/direction + needs-attention
+  // only) for the unattributed bucket or an unresolvable milestone.
   router.get('/staged-intents', (req: Request, res: Response) => {
     const projectId =
       typeof req.query.projectId === 'string' ? req.query.projectId : null;
     const sessionId =
       typeof req.query.sessionId === 'string' ? req.query.sessionId : null;
+    const milestone =
+      typeof req.query.milestone === 'string' ? req.query.milestone : null;
+
+    if (milestone) {
+      if (!projectId) {
+        res
+          .status(400)
+          .json({ error: 'projectId is required when milestone is set' });
+        return;
+      }
+      const rows = listStagedIntentsByMilestone(projectId, milestone);
+      let convergence = null;
+      if (milestone !== UNATTRIBUTED_MILESTONE_BUCKET) {
+        try {
+          convergence = getMilestoneConvergence(projectId, milestone);
+        } catch (err) {
+          if (!(err instanceof UnknownMilestoneError)) throw err;
+        }
+      }
+      const ranked = rankDecisions(rows, convergence);
+      res.json({ intents: ranked.map(rowToApi) });
+      return;
+    }
+
     const rows = sessionId
       ? listStagedIntentsBySession(sessionId).filter((r) =>
           ACTIVE_STATES.includes(r.state),
@@ -2914,6 +2955,7 @@ export function createStagedIntentsRouter(
       decisionProposal?: unknown;
       groomProposal?: unknown;
       supersedes?: unknown;
+      milestone?: unknown;
     };
     const kind = typeof body.kind === 'string' ? body.kind : null;
     const projectId =
@@ -2924,6 +2966,8 @@ export function createStagedIntentsRouter(
     const groomProposal = parseGroomProposal(body.groomProposal);
     const supersedes =
       typeof body.supersedes === 'string' ? body.supersedes : null;
+    const milestone =
+      typeof body.milestone === 'string' ? body.milestone : null;
 
     if (!kind) {
       res.status(400).json({ error: 'kind is required' });
@@ -2967,6 +3011,7 @@ export function createStagedIntentsRouter(
       decisionProposal,
       groomProposal,
       supersedes,
+      milestone,
     );
 
     const checked = await runStageTimeReadyChecks(intent);

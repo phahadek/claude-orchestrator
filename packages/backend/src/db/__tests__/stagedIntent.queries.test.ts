@@ -26,6 +26,9 @@ import {
   expireStagedIntentsForSession,
   sweepStagedIntentsForTerminalSessions,
   insertSession,
+  listStagedIntentsByMilestone,
+  UNATTRIBUTED_MILESTONE_BUCKET,
+  backfillStagedIntentMilestones,
 } from '../queries.js';
 import type { StagedIntentRow } from '../types.js';
 
@@ -68,6 +71,7 @@ function makeRow(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow {
     project_id: 'proj-1',
     session_id: null,
     group_id: 'group-1',
+    milestone: null,
     state: 'staged',
     supersedes: null,
     annotation: null,
@@ -348,5 +352,121 @@ describe('sweepStagedIntentsForTerminalSessions (backstop sweep)', () => {
     const secondPass = sweepStagedIntentsForTerminalSessions('sweep', 300);
 
     expect(secondPass).toBe(0);
+  });
+});
+
+describe('listStagedIntentsByMilestone', () => {
+  it('returns only the requested milestone project intents, excluding other milestones and other projects', () => {
+    insertStagedIntent(
+      makeRow({ id: 'm12-1', group_id: null, milestone: 'M12' }),
+    );
+    insertStagedIntent(
+      makeRow({ id: 'm13-1', group_id: null, milestone: 'M13' }),
+    );
+    insertStagedIntent(
+      makeRow({
+        id: 'other-project-1',
+        group_id: null,
+        milestone: 'M12',
+        project_id: 'proj-2',
+      }),
+    );
+
+    const rows = listStagedIntentsByMilestone('proj-1', 'M12');
+
+    expect(rows.map((r) => r.id)).toEqual(['m12-1']);
+  });
+
+  it('resolves null-milestone rows to the "unattributed" bucket, and never mixes them into a real milestone', () => {
+    insertStagedIntent(
+      makeRow({ id: 'legacy-1', group_id: null, milestone: null }),
+    );
+    insertStagedIntent(
+      makeRow({ id: 'legacy-2', group_id: null, milestone: null }),
+    );
+    insertStagedIntent(
+      makeRow({ id: 'm12-1', group_id: null, milestone: 'M12' }),
+    );
+
+    const unattributed = listStagedIntentsByMilestone(
+      'proj-1',
+      UNATTRIBUTED_MILESTONE_BUCKET,
+    );
+    const m12 = listStagedIntentsByMilestone('proj-1', 'M12');
+
+    expect(unattributed.map((r) => r.id).sort()).toEqual([
+      'legacy-1',
+      'legacy-2',
+    ]);
+    expect(m12.map((r) => r.id)).toEqual(['m12-1']);
+  });
+
+  it('excludes terminal-state rows (committed/rejected/superseded), same as the project/session lenses', () => {
+    insertStagedIntent(
+      makeRow({ id: 'm12-committed', group_id: null, milestone: 'M12' }),
+    );
+    transitionStagedIntent('m12-committed', 'approved');
+    transitionStagedIntent('m12-committed', 'committed');
+    insertStagedIntent(
+      makeRow({ id: 'm12-staged', group_id: null, milestone: 'M12' }),
+    );
+
+    const rows = listStagedIntentsByMilestone('proj-1', 'M12');
+
+    expect(rows.map((r) => r.id)).toEqual(['m12-staged']);
+  });
+});
+
+describe('backfillStagedIntentMilestones', () => {
+  it('resolves and persists milestone for null-milestone rows with a task_id, via the injected resolver', () => {
+    insertStagedIntent(
+      makeRow({
+        id: 'needs-backfill',
+        group_id: null,
+        milestone: null,
+        task_id: 't-1',
+      }),
+    );
+
+    const updated = backfillStagedIntentMilestones((projectId, taskId) =>
+      projectId === 'proj-1' && taskId === 't-1' ? 'M12' : null,
+    );
+
+    expect(updated).toBe(1);
+    expect(getStagedIntent('needs-backfill')!.milestone).toBe('M12');
+  });
+
+  it('leaves a row NULL (unattributed) when the resolver finds nothing', () => {
+    insertStagedIntent(
+      makeRow({
+        id: 'unresolvable',
+        group_id: null,
+        milestone: null,
+        task_id: 't-1',
+      }),
+    );
+
+    const updated = backfillStagedIntentMilestones(() => null);
+
+    expect(updated).toBe(0);
+    expect(getStagedIntent('unresolvable')!.milestone).toBeNull();
+  });
+
+  it('never touches a row that already has a milestone', () => {
+    insertStagedIntent(
+      makeRow({
+        id: 'already-set',
+        group_id: null,
+        milestone: 'M12',
+        task_id: 't-1',
+      }),
+    );
+
+    const resolve = vi.fn(() => 'M99');
+    const updated = backfillStagedIntentMilestones(resolve);
+
+    expect(updated).toBe(0);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(getStagedIntent('already-set')!.milestone).toBe('M12');
   });
 });
