@@ -990,6 +990,35 @@ describe('assemblePlanningProcedure', () => {
     expect(output).toContain('Do the thing body.');
   });
 
+  it('inlines the full body of each store-sourced arch unit in the groom digest, not just its title', () => {
+    const result = fixtureGroomLoadResult();
+    result.archSource = 'store';
+    result.targetTasks[0].archSource = 'store';
+    result.targetTasks[0].archUnits = [
+      {
+        id: 'unit-1',
+        title: 'Selective injection contract',
+        body: 'The full architecture unit body content, verbatim.',
+      },
+    ];
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(result, 'task-1'),
+      },
+    });
+
+    expect(output).toContain('Selective injection contract');
+    expect(output).toContain(
+      'The full architecture unit body content, verbatim.',
+    );
+  });
+
   it('replaces the bare (none) with a bounded-exploration directive + orientation graft when regions resolve empty', () => {
     const result = fixtureGroomLoadResult();
     result.targetTasks[0].regions = { packages: [], files: [], planned: [] };
@@ -1086,6 +1115,28 @@ describe('assemblePlanningProcedure', () => {
     });
     expect(output).toContain('GET /api/design-context');
     expect(output).not.toContain('big blob');
+  });
+
+  it('points a store-sourced design digest at the architecture read tools instead of inlining unit bodies', () => {
+    const design = fixtureDesignLoadResult();
+    design.archSource = 'store';
+    design.archUnits = [{ id: 'unit-1', title: 'Selective injection contract' }];
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'design',
+        data: deriveDesignDigestSlice(design),
+      },
+    });
+
+    expect(output).toContain(orchestratorMcpToolName('architecture.getUnit'));
+    expect(output).toContain(
+      orchestratorMcpToolName('architecture.queryUnits'),
+    );
   });
 
   it('the ops digest section carries the journal entry and task classification only', () => {

@@ -202,8 +202,9 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
  * of what an operator approved. Resolved/Done/task-intent-apply stay
  * device-authed — a session-scoped grant is not a substitute for that auth
  * boundary. No orchestrator MCP tool ever names an apply/resolve/Done
- * transition (the tool surface is staging + verdict-delivery only, see
- * mcp/tools/stageProposalTools.ts and mcp/tools/verdictTools.ts — apply
+ * transition (the tool surface is staging + verdict-delivery + read-only
+ * lookups only, see mcp/tools/stageProposalTools.ts,
+ * mcp/tools/verdictTools.ts, and mcp/tools/architectureReadTools.ts — apply
  * lives solely on the device-authed /api/staged-intents REST surface), so
  * these patterns never need to special-case an `mcp__orchestrator__*` tool
  * name; a session may freely request a grant for any of them. Write/Edit

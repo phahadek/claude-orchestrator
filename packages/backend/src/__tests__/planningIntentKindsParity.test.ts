@@ -33,22 +33,38 @@ const COMPLETENESS_TOOLS = [
   orchestratorMcpToolName('completeness.disposition'),
   orchestratorMcpToolName('completeness.traceCoverage'),
 ];
+// groom.precheck is a read-only precheck, not a staged-intent kind — it
+// isn't in PLANNING_INTENT_KINDS.groom, so the groom guard below excludes it
+// too (see config.ts's GROOM_MCP_TOOLS comment).
+const GROOM_PRECHECK_TOOL = orchestratorMcpToolName('groom.precheck');
+// architecture.getUnit / architecture.queryUnits are read-only lookups, not
+// staged-intent kinds — they aren't in PLANNING_INTENT_KINDS, so every
+// workflow's guard below excludes them too (see
+// mcp/tools/architectureReadTools.ts).
+const ARCHITECTURE_READ_TOOLS = [
+  orchestratorMcpToolName('architecture.getUnit'),
+  orchestratorMcpToolName('architecture.queryUnits'),
+];
 
 const WORKFLOWS: {
   name: 'groom' | 'design' | 'ops';
   allowedTools: string[];
   extraNonStagedTools: string[];
 }[] = [
-  { name: 'groom', allowedTools: GROOM_ALLOWED_TOOLS, extraNonStagedTools: [] },
+  {
+    name: 'groom',
+    allowedTools: GROOM_ALLOWED_TOOLS,
+    extraNonStagedTools: [GROOM_PRECHECK_TOOL, ...ARCHITECTURE_READ_TOOLS],
+  },
   {
     name: 'design',
     allowedTools: DESIGN_ALLOWED_TOOLS,
-    extraNonStagedTools: COMPLETENESS_TOOLS,
+    extraNonStagedTools: [...COMPLETENESS_TOOLS, ...ARCHITECTURE_READ_TOOLS],
   },
   {
     name: 'ops',
     allowedTools: OPS_ALLOWED_TOOLS,
-    extraNonStagedTools: [GATE_VERIFY_TOOL],
+    extraNonStagedTools: [GATE_VERIFY_TOOL, ...ARCHITECTURE_READ_TOOLS],
   },
 ];
 

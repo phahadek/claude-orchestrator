@@ -511,14 +511,24 @@ describe('loadGroomContext', () => {
       });
 
       expect(result.archSource).toBe('store');
-      // The fixed Notion context pages are never fetched once the store is adopted.
-      expect(result.contextPages).toEqual([]);
+      // contextPages is independent of archStoreAdopted — the manifest's
+      // non-architecture context pages are still fetched from Notion.
+      expect(result.contextPages).toEqual([
+        {
+          id: 'ctx-page-1',
+          title: 'Technical Architecture',
+          markdown: '# Technical Architecture\n\nSome context.',
+        },
+      ]);
 
       const codeTask = result.targetTasks.find((t) => t.id === CODE_ROW.id);
       expect(codeTask?.archSource).toBe('store');
       expect(codeTask?.archUnits.map((u) => u.title).sort()).toEqual(
         ['Always-binding invariant', 'Notion-client subsystem unit'].sort(),
       );
+      expect(
+        codeTask?.archUnits.every((u) => typeof u.body === 'string' && u.body.length > 0),
+      ).toBe(true);
 
       const toolTask = result.targetTasks.find((t) => t.id === TOOL_ROW.id);
       // Region-intersecting units select by the task's own regions — active

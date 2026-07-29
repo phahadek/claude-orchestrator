@@ -8,6 +8,7 @@ import { registerStageProposalTools } from './tools/stageProposalTools';
 import { registerVerdictTools } from './tools/verdictTools';
 import { registerCompletenessTools } from './tools/completenessTools';
 import { registerGroomPrecheckTool } from './tools/groomPrecheckTool';
+import { registerArchitectureReadTools } from './tools/architectureReadTools';
 import type { SessionManager } from '../session/SessionManager';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import type { PlanningWorkflow } from '../planning/planningIntentKinds';
@@ -65,7 +66,11 @@ export function buildOrchestratorMcpServerEntry(
  * write/read surface (completeness.disposition / completeness.traceCoverage,
  * see mcp/tools/completenessTools.ts), and — for a 'groom' workflow session
  * resolving to a project — the read-only Ready-flip-payload precheck
- * (groom.precheck, see mcp/tools/groomPrecheckTool.ts).
+ * (groom.precheck, see mcp/tools/groomPrecheckTool.ts), and — for a
+ * 'groom' / 'design' / 'ops' workflow session — the read-only arch_unit
+ * store surface (architecture.getUnit / architecture.queryUnits, see
+ * mcp/tools/architectureReadTools.ts), always-on rather than grant-gated
+ * since architecture content is these workflows' non-negotiable input.
  */
 export function buildMcpServer(
   sessionId: string,
@@ -118,6 +123,8 @@ export function buildMcpServer(
     workflow,
   });
 
+  registerArchitectureReadTools(server, { workflow });
+
   return server;
 }
 
@@ -125,8 +132,9 @@ export function buildMcpServer(
  * Long-lived, loopback-only orchestrator MCP server mounted alongside the
  * existing REST routes (e.g. /api/task-intents), ahead of requireDeviceAuth.
  * Auth is the same per-session stage credential as the task-intents stage
- * endpoint (requireSessionStageAuth) — scope is staging + verdict reporting
- * only, never apply. Runs stateless: each request gets its own transport +
+ * endpoint (requireSessionStageAuth) — scope is staging + verdict reporting +
+ * read-only architecture lookups, never apply. Runs stateless: each request
+ * gets its own transport +
  * server instance, so no MCP-level session store is needed on top of the
  * per-session stage credential that already scopes access.
  */
