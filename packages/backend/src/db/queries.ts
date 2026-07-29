@@ -218,6 +218,40 @@ function clearPendingDone(sessionId: string): void {
   ).run({ session_id: sessionId });
 }
 
+/**
+ * Durable copy of PlanningOrchestrator's in-memory pendingApproveTerminal
+ * Set — written when an approve-driven terminal transition is deferred
+ * because the session's turn is still in flight, cleared once that
+ * transition is applied. Exported (unlike setPendingDone/clearPendingDone)
+ * because PlanningOrchestrator writes/clears it directly and
+ * SessionManager's boot-time sweep reads it to apply any transition that
+ * never got its turn-boundary drain before a restart.
+ */
+export function setPendingApproveTerminal(sessionId: string, at: number): void {
+  db.prepare<{ session_id: string; pending_approve_terminal_at: number }>(
+    `UPDATE sessions
+     SET pending_approve_terminal_at = @pending_approve_terminal_at
+     WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId, pending_approve_terminal_at: at });
+}
+
+export function clearPendingApproveTerminal(sessionId: string): void {
+  db.prepare<{ session_id: string }>(
+    `UPDATE sessions
+     SET pending_approve_terminal_at = NULL
+     WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId });
+}
+
+/** Sessions with an unapplied deferred approve-terminal transition — read by the boot-time sweep. */
+export function getSessionsWithPendingApproveTerminal(): Session[] {
+  return db
+    .prepare(
+      `SELECT * FROM sessions WHERE pending_approve_terminal_at IS NOT NULL`,
+    )
+    .all() as Session[];
+}
+
 const stmtMarkSessionIdle = db.prepare<{
   session_id: string;
   ended_at: number;

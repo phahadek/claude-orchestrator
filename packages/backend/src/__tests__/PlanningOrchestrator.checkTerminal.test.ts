@@ -31,9 +31,11 @@ function makeSessionManager() {
   return Object.assign(emitter, {
     enqueueFeedback: vi.fn().mockResolvedValue(undefined),
     endSession: vi.fn(),
+    getLiveSession: vi.fn().mockReturnValue(undefined),
   }) as unknown as SessionManager & {
     enqueueFeedback: ReturnType<typeof vi.fn>;
     endSession: ReturnType<typeof vi.fn>;
+    getLiveSession: ReturnType<typeof vi.fn>;
   };
 }
 
