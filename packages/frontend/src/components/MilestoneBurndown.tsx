@@ -163,19 +163,25 @@ export function MilestoneBurndown({
                   {segment.counts.pending > 0 && (
                     <div
                       className={`${styles.fill} ${styles.fillPending}`}
-                      style={{ width: `${(segment.counts.pending / total) * 100}%` }}
+                      style={{
+                        width: `${(segment.counts.pending / total) * 100}%`,
+                      }}
                     />
                   )}
                   {segment.counts.staged > 0 && (
                     <div
                       className={`${styles.fill} ${styles.fillStaged}`}
-                      style={{ width: `${(segment.counts.staged / total) * 100}%` }}
+                      style={{
+                        width: `${(segment.counts.staged / total) * 100}%`,
+                      }}
                     />
                   )}
                   {segment.counts.done > 0 && (
                     <div
                       className={`${styles.fill} ${styles.fillDone}`}
-                      style={{ width: `${(segment.counts.done / total) * 100}%` }}
+                      style={{
+                        width: `${(segment.counts.done / total) * 100}%`,
+                      }}
                     />
                   )}
                 </>

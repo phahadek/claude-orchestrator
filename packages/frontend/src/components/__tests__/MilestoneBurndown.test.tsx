@@ -1,9 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
-import {
-  MilestoneBurndown,
-  computePhaseBurndown,
-} from '../MilestoneBurndown';
+import { MilestoneBurndown, computePhaseBurndown } from '../MilestoneBurndown';
 import type { TaskView } from '../../types/taskView';
 import type { MilestoneConvergence } from '@claude-orchestrator/backend/src/convergence/convergenceService';
 
@@ -136,9 +133,7 @@ describe('MilestoneBurndown', () => {
     expect(screen.getByTestId('phase-segment-ops')).toBeDefined();
     expect(screen.getByTestId('phase-segment-gate')).toBeDefined();
 
-    expect(screen.getByTestId('phase-segment-code').textContent).toContain(
-      '2',
-    );
+    expect(screen.getByTestId('phase-segment-code').textContent).toContain('2');
     expect(screen.getByTestId('phase-blockers-code')).toBeDefined();
   });
 
