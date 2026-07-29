@@ -256,4 +256,36 @@ describe('session.requestCapability decision-surface kind', () => {
 
     expect(intent.state).toBe('staged');
   });
+
+  it('refuses at stage time when a groupId is supplied — a capability grant applies via SessionManager.grantCapability + respawn, never a group commit', () => {
+    expect(() =>
+      stageIntent(
+        'session.requestCapability',
+        {
+          capability: 'Bash(psql:*)',
+          plan: 'inspect prod row counts',
+          evidence: 'task asks for a row-count audit',
+        },
+        'proj-1',
+        'retire-arch-pages-proposal-2026-07-28',
+        'sess-8',
+      ),
+    ).toThrow(/cannot belong to a group/);
+  });
+
+  it('without a groupId stages normally, unaffected by the groupId guard', () => {
+    const intent = stageIntent(
+      'session.requestCapability',
+      {
+        capability: 'Bash(psql:*)',
+        plan: 'inspect prod row counts',
+        evidence: 'task asks for a row-count audit',
+      },
+      'proj-1',
+      null,
+      'sess-9',
+    );
+    expect(intent.state).toBe('staged');
+    expect(intent.groupId).toBeNull();
+  });
 });

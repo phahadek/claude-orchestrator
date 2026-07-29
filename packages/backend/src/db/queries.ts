@@ -5001,7 +5001,11 @@ const STAGED_INTENT_TRANSITIONS: Record<
     'withdrawn',
   ],
   pending_verification: ['staged', 'needs_revision'],
-  needs_revision: ['rejected', 'superseded'],
+  // 'staged' is reachable here only via the operator-initiated wedged-group
+  // recovery route (POST /staged-intents/group/:groupId/recover) — it
+  // re-surfaces an intent onto the normal staged/approved surface so the
+  // usual commit or per-item disposition routes can act on it again.
+  needs_revision: ['staged', 'rejected', 'superseded'],
   approved: [
     'staged',
     'committed',
@@ -5446,6 +5450,29 @@ export function setStagedIntentGroup(
   _stmtSetStagedIntentGroup.run({
     id,
     group_id: groupId,
+    updated_at: Date.now(),
+  });
+  return getStagedIntent(id) as StagedIntentRow;
+}
+
+let _stmtClearStagedIntentGroup: Database.Statement | null = null;
+
+/**
+ * Strips group_id back to null — the wedged-group recovery counterpart to
+ * setStagedIntentGroup. Used when recovering a needs_revision intent that
+ * should never have carried a groupId (e.g. session.requestCapability),
+ * so re-surfacing it to `staged` cannot route it back into the same
+ * group-commit apply path that wedged it in the first place.
+ */
+export function clearStagedIntentGroup(id: string): StagedIntentRow {
+  _stmtClearStagedIntentGroup ??= db.prepare<{
+    id: string;
+    updated_at: number;
+  }>(
+    `UPDATE staged_intent SET group_id = NULL, updated_at = @updated_at WHERE id = @id`,
+  );
+  _stmtClearStagedIntentGroup.run({
+    id,
     updated_at: Date.now(),
   });
   return getStagedIntent(id) as StagedIntentRow;
