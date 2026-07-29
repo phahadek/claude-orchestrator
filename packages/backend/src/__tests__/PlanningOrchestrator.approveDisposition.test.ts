@@ -32,9 +32,13 @@ function makeSessionManager() {
   return Object.assign(emitter, {
     enqueueFeedback: vi.fn().mockResolvedValue(undefined),
     endSession: vi.fn(),
+    // No live in-memory AgentSession for this test's sessions — matches the
+    // common "parked by exiting" case, i.e. hasActiveTurn() is never true.
+    getLiveSession: vi.fn().mockReturnValue(undefined),
   }) as unknown as SessionManager & {
     enqueueFeedback: ReturnType<typeof vi.fn>;
     endSession: ReturnType<typeof vi.fn>;
+    getLiveSession: ReturnType<typeof vi.fn>;
   };
 }
 
