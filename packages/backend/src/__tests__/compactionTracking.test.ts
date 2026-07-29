@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
 import * as fs from 'fs';
 import * as path from 'path';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Mock child_process.spawn ───────────────────────────────────────────────
 
@@ -37,33 +38,35 @@ vi.mock('child_process', () => ({
 
 const mockIncrementCompactionCount = vi.fn();
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  upsertSessionEvent: vi.fn(() => 1),
-  insertPermissionEvent: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getEventsBySession: vi.fn(() => []),
-  getRules: vi.fn(() => []),
-  insertPermissionDenial: vi.fn(),
-  upsertPullRequest: vi.fn(),
-  insertSessionAudit: vi.fn(),
-  incrementTokens: vi.fn(),
-  incrementCompactionCount: (...args: unknown[]) =>
-    mockIncrementCompactionCount(...args),
-  setContextOccupancy: vi.fn(),
-  setSessionModel: vi.fn(),
-  getPRBySessionId: vi.fn(() => null),
-  getPRByNotionTaskId: vi.fn(() => null),
-  getPRByNumber: vi.fn(() => null),
-  setHeadSha: vi.fn(),
-  setPauseReason: vi.fn(),
-  getSession: vi.fn(() => null),
-  getProjectRowById: vi.fn(() => null),
-  insertLocalBranch: vi.fn(),
-  setSessionMetadata: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    upsertSessionEvent: vi.fn(() => 1),
+    insertPermissionEvent: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getEventsBySession: vi.fn(() => []),
+    getRules: vi.fn(() => []),
+    insertPermissionDenial: vi.fn(),
+    upsertPullRequest: vi.fn(),
+    insertSessionAudit: vi.fn(),
+    incrementTokens: vi.fn(),
+    incrementCompactionCount: (...args: unknown[]) =>
+      mockIncrementCompactionCount(...args),
+    setContextOccupancy: vi.fn(),
+    setSessionModel: vi.fn(),
+    getPRBySessionId: vi.fn(() => null),
+    getPRByNotionTaskId: vi.fn(() => null),
+    getPRByNumber: vi.fn(() => null),
+    setHeadSha: vi.fn(),
+    setPauseReason: vi.fn(),
+    getSession: vi.fn(() => null),
+    getProjectRowById: vi.fn(() => null),
+    insertLocalBranch: vi.fn(),
+    setSessionMetadata: vi.fn(),
+  }),
+);
 
 vi.mock('../orchestration/localBranchHelpers', () => ({
   getCurrentBranch: vi.fn(async () => 'feature/some-task'),
@@ -77,7 +80,20 @@ vi.mock('../github/NoOpInvestigator', () => ({
 }));
 
 import { AgentSession } from '../session/AgentSession';
+import type { TaskBackend } from '../tasks/TaskBackend';
 import type { ServerMessage } from '../ws/types';
+
+// Stub taskBackend override: recoverSession only invokes it conditionally
+// (attachPR when a PR URL is present, NoOpInvestigator when a sessionManager
+// is wired up), neither of which applies to these tests. Passing this avoids
+// AgentSession.taskBackend() falling through to getTaskBackend(projectId),
+// which throws when no project row exists for the (unset) projectId.
+const fakeTaskBackend = {
+  type: 'notion',
+  fetchReadyTasks: async () => [],
+  attachPR: async () => {},
+  updateStatus: async () => {},
+} as unknown as TaskBackend;
 
 describe('compaction tracking — AgentSession', () => {
   beforeEach(() => {
@@ -90,7 +106,7 @@ describe('compaction tracking — AgentSession', () => {
       'cmp-session-1',
       'https://notion.so/task',
       'https://notion.so/ctx',
-      undefined,
+      fakeTaskBackend,
       '/tmp',
       'task-1',
     );
@@ -137,7 +153,7 @@ describe('compaction tracking — AgentSession', () => {
       'cmp-session-2',
       'https://notion.so/task',
       'https://notion.so/ctx',
-      undefined,
+      fakeTaskBackend,
       '/tmp',
       'task-2',
     );
@@ -186,7 +202,7 @@ describe('compaction tracking — AgentSession', () => {
       'cmp-session-3',
       'https://notion.so/task',
       'https://notion.so/ctx',
-      undefined,
+      fakeTaskBackend,
       '/tmp',
       'task-3',
     );
@@ -233,7 +249,7 @@ describe('compaction tracking — AgentSession', () => {
       'cmp-session-4',
       'https://notion.so/task',
       'https://notion.so/ctx',
-      undefined,
+      fakeTaskBackend,
       '/tmp',
       'task-4',
     );
