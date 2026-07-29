@@ -228,11 +228,18 @@ function getRegisteredJob(
   merger: AutoMerger,
   name: string,
 ): { run: () => Promise<void>; concurrency?: string } {
-  const registered: { name: string; run: () => Promise<void>; concurrency?: string }[] =
-    [];
+  const registered: {
+    name: string;
+    run: () => Promise<void>;
+    concurrency?: string;
+  }[] = [];
   const fakeScheduler = {
     register: vi.fn(
-      (opts: { name: string; run: () => Promise<void>; concurrency?: string }) => {
+      (opts: {
+        name: string;
+        run: () => Promise<void>;
+        concurrency?: string;
+      }) => {
         registered.push(opts);
       },
     ),
