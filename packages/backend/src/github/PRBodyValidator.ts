@@ -12,8 +12,8 @@ const REQUIRED_SECTIONS = [
 
 /**
  * Validate that a PR body contains all required template sections.
- * Accepts "## Task Source" as an alternative to "## Notion Task" for
- * projects that use a different task backend.
+ * Accepts "## Task Source" and "## Task" as alternatives to "## Notion Task"
+ * for projects that use a different task backend.
  */
 export function validatePRBody(
   body: string | null | undefined,
@@ -27,7 +27,8 @@ export function validatePRBody(
     if (section === '## Notion Task') {
       if (
         !body.includes('## Notion Task') &&
-        !body.includes('## Task Source')
+        !body.includes('## Task Source') &&
+        !body.includes('## Task')
       ) {
         missingSections.push(section);
       }

@@ -1583,7 +1583,9 @@ export class SessionManager extends EventEmitter {
               ? 'local'
               : project.taskSource === 'github'
                 ? 'github'
-                : 'notion',
+                : project.taskSource === 'jira'
+                  ? 'jira'
+                  : 'notion',
           taskContent,
           gitMode: project.gitMode,
         });
@@ -2026,7 +2028,9 @@ export class SessionManager extends EventEmitter {
             ? 'local'
             : project.taskSource === 'github'
               ? 'github'
-              : 'notion',
+              : project.taskSource === 'jira'
+                ? 'jira'
+                : 'notion',
         taskContent,
         gitMode: project.gitMode,
       });
