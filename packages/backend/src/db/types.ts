@@ -230,15 +230,18 @@ export interface MilestoneRow {
   source_id: string | null;
   canonical_short_id: string | null;
   display_order: number;
+  /** Set once /milestone-wrap closes out this milestone. Null = active or in-planning. */
+  wrapped_at: number | null;
   created_at: number;
   updated_at: number;
 }
 
 export type NewMilestoneRow = Omit<
   MilestoneRow,
-  'created_at' | 'updated_at' | 'display_order'
+  'created_at' | 'updated_at' | 'display_order' | 'wrapped_at'
 > & {
   display_order?: number;
+  wrapped_at?: number | null;
   created_at?: number;
   updated_at?: number;
 };

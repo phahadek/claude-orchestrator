@@ -1,4 +1,5 @@
 import { ProjectService } from './ProjectService';
+import type { ProjectMilestone } from './ProjectService';
 
 /**
  * Thrown when a milestone reference doesn't resolve to exactly one known
@@ -14,7 +15,7 @@ export class UnknownMilestoneError extends Error {
 }
 
 /** The canonical short-form key for a milestone — its stored canonical_short_id, falling back to its full name. */
-function canonicalMilestoneKey(milestone: {
+export function canonicalMilestoneKey(milestone: {
   name: string;
   canonicalShortId?: string | null;
 }): string {
@@ -94,6 +95,33 @@ export function resolveMilestoneDatabaseId(
     );
   }
   return match.sourceId;
+}
+
+/**
+ * Resolves a milestone reference to its full milestones row — the
+ * convergence read-surface's single resolution point (task-writing §
+ * "skill-first scoping of an orchestrator surface"): gate/seed/ops key on
+ * canonical_short_id, the task axis on source_id, and both need the row.
+ */
+export function resolveMilestoneRowForProject(
+  projectId: string,
+  milestone: string,
+): ProjectMilestone {
+  const project = ProjectService.getById(projectId);
+  if (!project) {
+    throw new UnknownMilestoneError(`unknown project "${projectId}"`);
+  }
+  const match = findMilestone(project.milestones, milestone);
+  if (!match) {
+    const known = project.milestones.map((m) => m.name).join(', ');
+    throw new UnknownMilestoneError(
+      `"${milestone}" is not a known milestone for project "${projectId}"` +
+        (known
+          ? ` — expected one of: ${known}`
+          : ' — project has no milestones configured'),
+    );
+  }
+  return match;
 }
 
 /**

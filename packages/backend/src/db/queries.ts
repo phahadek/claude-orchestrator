@@ -2712,13 +2712,14 @@ export function insertMilestone(m: NewMilestoneRow): MilestoneRow {
     db.prepare<NewMilestoneRow>(
       `
     INSERT INTO milestones
-      (id, project_id, name, source_id, canonical_short_id, display_order, created_at, updated_at)
+      (id, project_id, name, source_id, canonical_short_id, display_order, wrapped_at, created_at, updated_at)
     VALUES
-      (@id, @project_id, @name, @source_id, @canonical_short_id, @display_order, @created_at, @updated_at)
+      (@id, @project_id, @name, @source_id, @canonical_short_id, @display_order, @wrapped_at, @created_at, @updated_at)
   `,
     ).run({
       ...m,
       display_order: m.display_order ?? 0,
+      wrapped_at: m.wrapped_at ?? null,
       created_at: m.created_at ?? now,
       updated_at: m.updated_at ?? now,
     });
@@ -2756,6 +2757,7 @@ export interface MilestonePatch {
   source_id?: string | null;
   canonical_short_id?: string | null;
   display_order?: number;
+  wrapped_at?: number | null;
 }
 
 export function updateMilestone(
@@ -2776,6 +2778,7 @@ export function updateMilestone(
       source_id: string | null;
       canonical_short_id: string | null;
       display_order: number;
+      wrapped_at: number | null;
       updated_at: number;
     }>(
       `
@@ -2784,6 +2787,7 @@ export function updateMilestone(
         source_id = @source_id,
         canonical_short_id = @canonical_short_id,
         display_order = @display_order,
+        wrapped_at = @wrapped_at,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -2794,6 +2798,8 @@ export function updateMilestone(
         patch.source_id !== undefined ? patch.source_id : existing.source_id,
       canonical_short_id: nextCanonicalShortId,
       display_order: patch.display_order ?? existing.display_order,
+      wrapped_at:
+        patch.wrapped_at !== undefined ? patch.wrapped_at : existing.wrapped_at,
       updated_at: now,
     });
   } catch (err) {
