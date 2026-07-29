@@ -217,4 +217,43 @@ describe('session.requestCapability decision-surface kind', () => {
 
     expect(sessionManager.enqueueFeedback).not.toHaveBeenCalled();
   });
+
+  it('rejects a non-conforming capability shape at stage time, before any row is written', () => {
+    expect(() =>
+      stageIntent(
+        'session.requestCapability',
+        {
+          capability: 'banana',
+          plan: 'do something',
+          evidence: 'because',
+        },
+        'proj-1',
+        null,
+        'sess-6',
+      ),
+    ).toThrow(/not a supported capability shape/);
+
+    const rows = db
+      .prepare(
+        "SELECT * FROM staged_intent WHERE kind = 'session.requestCapability'",
+      )
+      .all();
+    expect(rows).toHaveLength(0);
+  });
+
+  it('stages a well-formed but isGrantable-denylisted capability normally — denylist enforcement stays at grant time, not stage time', () => {
+    const intent = stageIntent(
+      'session.requestCapability',
+      {
+        capability: 'mcp__github__resolve_review_thread',
+        plan: 'resolve the review thread directly',
+        evidence: 'reviewer asked for it',
+      },
+      'proj-1',
+      null,
+      'sess-7',
+    );
+
+    expect(intent.state).toBe('staged');
+  });
 });

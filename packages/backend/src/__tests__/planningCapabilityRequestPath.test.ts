@@ -266,3 +266,46 @@ describe('session.requestCapability is not counted toward the Ready-path require
     expect(reasons.some((r) => r.includes('seed_contribution'))).toBe(true);
   });
 });
+
+describe('session.requestCapability is rejected at stage time when the capability is not a supported shape', () => {
+  beforeEach(() => {
+    db.prepare('DELETE FROM staged_intent').run();
+  });
+
+  it('throws before staging a non-tool-shaped, non-session-record capability', () => {
+    expect(() =>
+      stageIntent(
+        'session.requestCapability',
+        {
+          capability: 'banana',
+          plan: 'do something',
+          evidence: 'because',
+        },
+        'proj-1',
+        null,
+        'session-groom-2',
+        null,
+      ),
+    ).toThrow(/not a supported capability shape/);
+  });
+
+  it.each([
+    'Bash(psql:*)',
+    'mcp__github__merge_pull_request',
+    'read:session-record:target-session-9',
+  ])('still stages a well-formed capability "%s" normally', (capability) => {
+    const intent = stageIntent(
+      'session.requestCapability',
+      {
+        capability,
+        plan: 'do something',
+        evidence: 'because',
+      },
+      'proj-1',
+      null,
+      'session-groom-3',
+      null,
+    );
+    expect(intent.state).toBe('staged');
+  });
+});
