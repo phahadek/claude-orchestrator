@@ -560,9 +560,17 @@ function JournalSetStateHeadline({ intent }: { intent: StagedIntent }) {
   );
 }
 
+type NamedCompletenessDisposition =
+  | 'resolved'
+  | 'out-of-scope'
+  | 'not-a-decision'
+  | 'fold'
+  | 'file-sibling'
+  | 'sibling-owned';
+
 interface CompletenessDispositionQuestionPayload {
   question: string;
-  disposition: 'accepted' | 'dismissed';
+  disposition: NamedCompletenessDisposition;
   reason: string;
   approvalStatus?: 'proposed' | 'approved' | 'rejected';
 }
@@ -572,6 +580,7 @@ interface CompletenessDispositionPayload {
   rowId: number;
   project: string | null;
   milestone: string | null;
+  probed: string[];
   questions: CompletenessDispositionQuestionPayload[];
   runAt: string;
 }
@@ -588,16 +597,14 @@ function CompletenessDispositionHeadline({ intent }: { intent: StagedIntent }) {
         Completeness critic run for <strong>{payload.taskId}</strong>
         {payload.milestone ? ` (${payload.milestone})` : ''} — {payload.runAt}
       </p>
+      <p>Probed: {(payload.probed ?? []).join(', ') || 'none recorded'}</p>
       {payload.questions.length === 0 ? (
         <p>No gaps raised — pass run, clean.</p>
       ) : (
         <ul>
           {payload.questions.map((q, idx) => (
             <li key={idx}>
-              <strong>
-                {q.disposition === 'accepted' ? 'Accepted' : 'Dismissed'}:
-              </strong>{' '}
-              {q.question} — {q.reason}
+              <strong>{q.disposition}:</strong> {q.question} — {q.reason}
             </li>
           ))}
         </ul>

@@ -3,8 +3,13 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   buildCompletenessDispositionRow,
   insertCompletenessDisposition,
+  getTaskCache,
 } from '../../db/queries';
-import type { CompletenessDispositionQuestion } from '../../db/types';
+import {
+  COMPLETENESS_PROBED_GAP_CLASSES,
+  type CompletenessDispositionQuestion,
+  type CompletenessDispositionRecord,
+} from '../../db/types';
 import {
   computeTraceCoverage,
   type TraceCoverageInput,
@@ -15,6 +20,23 @@ import {
   stageIntent,
   type CompletenessDispositionIntentPayload,
 } from '../../routes/stagedIntents';
+
+/** Rejects anything Date cannot parse — defect 6: `runAt` previously accepted any string. */
+function isValidTimestamp(value: string): boolean {
+  return !Number.isNaN(Date.parse(value));
+}
+
+/** Thrown at stage time when a disposition names a task id the store has never seen — defect 4. */
+class UnresolvedTaskIdError extends Error {
+  constructor(taskId: string) {
+    super(
+      `[completeness.disposition] task "${taskId}" does not resolve — no cached task with this id exists, ` +
+        'so the disposition would be permanently attached to a task the store cannot find. ' +
+        'Double-check the task id.',
+    );
+    this.name = 'UnresolvedTaskIdError';
+  }
+}
 
 /** Per-connection context the completeness tool surface is scoped to. */
 export interface CompletenessToolContext {
@@ -30,7 +52,14 @@ function ok(body: unknown): { content: { type: 'text'; text: string }[] } {
 
 const dispositionQuestionSchema = z.object({
   question: z.string(),
-  disposition: z.enum(['accepted', 'dismissed']),
+  disposition: z.enum([
+    'resolved',
+    'out-of-scope',
+    'not-a-decision',
+    'fold',
+    'file-sibling',
+    'sibling-owned',
+  ]),
   reason: z.string(),
   approvalStatus: z.enum(['proposed', 'approved', 'rejected']).optional(),
 });
@@ -86,23 +115,28 @@ export function registerCompletenessTools(
         taskId: z.string(),
         project: z.string().optional(),
         milestone: z.string().optional(),
+        probed: z.array(z.enum(COMPLETENESS_PROBED_GAP_CLASSES)).min(1),
         questions: z.array(dispositionQuestionSchema),
-        runAt: z.string(),
+        runAt: z.string().refine(isValidTimestamp, {
+          message: 'runAt must be a valid, parseable timestamp',
+        }),
       },
     },
     async (args) => {
       const taskId = normalizeTaskId(args.taskId);
+      if (!getTaskCache(taskId)) {
+        throw new UnresolvedTaskIdError(taskId);
+      }
       const newRow = buildCompletenessDispositionRow({
         taskId,
         project: args.project ?? null,
         milestone: args.milestone ?? null,
+        probed: args.probed,
         questions: args.questions as CompletenessDispositionQuestion[],
         runAt: args.runAt,
       });
       const row = insertCompletenessDisposition(newRow);
-      const questions = JSON.parse(
-        row.questions,
-      ) as CompletenessDispositionQuestion[];
+      const record = JSON.parse(row.questions) as CompletenessDispositionRecord;
 
       let intent = null;
       if (ctx.projectId) {
@@ -111,7 +145,8 @@ export function registerCompletenessTools(
           rowId: row.id,
           project: row.project,
           milestone: row.milestone,
-          questions,
+          probed: record.probed,
+          questions: record.questions,
           runAt: row.run_at,
         };
         intent = stageIntent(
@@ -123,7 +158,12 @@ export function registerCompletenessTools(
         );
       }
 
-      return ok({ ...row, questions, intent });
+      return ok({
+        ...row,
+        probed: record.probed,
+        questions: record.questions,
+        intent,
+      });
     },
   );
 

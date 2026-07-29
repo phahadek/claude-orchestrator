@@ -53,10 +53,11 @@ describe('StagedIntentPanel', () => {
             rowId: 1,
             project: 'demo',
             milestone: 'M13',
+            probed: ['unstated-premises'],
             questions: [
               {
                 question: 'Should X be configurable?',
-                disposition: 'dismissed',
+                disposition: 'out-of-scope',
                 reason: 'Out of scope.',
                 approvalStatus: 'proposed',
               },

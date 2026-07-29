@@ -649,36 +649,84 @@ export type NewSeedItemEventRow = Omit<SeedItemEventRow, 'id'>;
 
 // ─── completeness_disposition ───────────────────────────────────────────────
 
+/**
+ * The Design skill's six-value disposition vocabulary (design skill,
+ * presentation.md) for a completeness-critic candidate question. Five of
+ * the six collapse to "the question is closed, no follow-on"; `fold` and the
+ * two sibling variants each mean something materially different (folded back
+ * into an open question vs. owned by a sibling task), which a binary
+ * accepted/dismissed column could not distinguish — see task
+ * …3012260f. Stored verbatim, never collapsed.
+ */
+type NamedCompletenessDisposition =
+  | 'resolved'
+  | 'out-of-scope'
+  | 'not-a-decision'
+  | 'fold'
+  | 'file-sibling'
+  | 'sibling-owned';
+
 /** A single candidate question the /design completeness critic considered and dispositioned. */
 export interface CompletenessDispositionQuestion {
   question: string;
-  disposition: 'accepted' | 'dismissed';
+  disposition: NamedCompletenessDisposition;
   reason: string;
   /**
    * Recorded (`proposed`, the default at critic-run time) is not approved —
    * the same disposition is carried into a `completeness.disposition` staged
    * intent for operator sign-off, and only flips to `approved` once that
-   * intent is approved (or `rejected` once it is rejected) — see
-   * routes/stagedIntents.ts's completeness-disposition approve/reject
-   * handling, which is what actually advances this field on the stored row.
-   * A rejected run leaves the session free to re-run the critic and stage a
-   * revised `completeness.disposition` intent, which writes a fresh row
-   * rather than editing this one in place.
+   * intent is approved — see routes/stagedIntents.ts's completeness-
+   * disposition approve handling, which is what actually advances this field
+   * on the stored row. A rejected run deletes the row entirely (see
+   * deleteCompletenessDisposition) and leaves the session free to re-run the
+   * critic and stage a revised `completeness.disposition` intent.
    */
   approvalStatus?: 'proposed' | 'approved' | 'rejected';
 }
 
 /**
+ * The named gap classes the design skill's completeness critic is required
+ * to probe (task …3012260f, defect 2). Recording which of these were
+ * actually probed on a run turns a clean pass into an affirmative statement
+ * ("these classes were checked, none produced a gap") instead of an
+ * indistinguishable-from-skipped empty `questions` array.
+ */
+export const COMPLETENESS_PROBED_GAP_CLASSES = [
+  'durability-failure-modes',
+  'dual-read-consumer-set',
+  'interaction-bugs',
+  'missing-scaffolding',
+  'state-mutation-granularity',
+  'unstated-premises',
+] as const;
+
+export type CompletenessProbedGapClass =
+  (typeof COMPLETENESS_PROBED_GAP_CLASSES)[number];
+
+/**
+ * The shape stored (as JSON) in `completeness_disposition.questions` — a
+ * pre-existing JSON TEXT column, so widening it from a bare array to this
+ * object is a TypeScript/zod type change only, no SQL migration. `probed`
+ * is never empty: a clean pass still names every gap class the critic
+ * checked, so the record can never be confused with a skipped run.
+ */
+export interface CompletenessDispositionRecord {
+  probed: CompletenessProbedGapClass[];
+  questions: CompletenessDispositionQuestion[];
+}
+
+/**
  * Durable analog of gate_accretion for the /design completeness safeguard —
- * one row per critic run, recording the source design task, the candidate
- * questions it considered, and why each was accepted or dismissed. Advisory
- * audit trail only; never read by a promotion gate.
+ * one row per critic run, recording the source design task, the gap classes
+ * probed, and the candidate questions considered with their named
+ * disposition. Advisory audit trail only; never read by a promotion gate.
  */
 export interface CompletenessDispositionRow {
   id: number;
   source_task_id: string;
   project: string | null;
   milestone: string | null;
+  /** JSON-serialized CompletenessDispositionRecord. */
   questions: string;
   run_at: string;
 }

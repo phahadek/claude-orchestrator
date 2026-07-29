@@ -60,6 +60,8 @@ import type {
   CompletenessDispositionRow,
   NewCompletenessDispositionRow,
   CompletenessDispositionQuestion,
+  CompletenessDispositionRecord,
+  CompletenessProbedGapClass,
   StagedIntentRow,
   StagedIntentState,
   StagedIntentGroupRow,
@@ -4913,6 +4915,7 @@ export function listCompletenessDispositions(
 let _stmtGetCompletenessDisposition: Database.Statement | null = null;
 let _stmtUpdateCompletenessDispositionApproval: Database.Statement | null =
   null;
+let _stmtDeleteCompletenessDisposition: Database.Statement | null = null;
 
 /** Point read of one completeness-disposition run by id — the row a staged `completeness.disposition` intent's payload names. */
 function getCompletenessDisposition(
@@ -4927,23 +4930,27 @@ function getCompletenessDisposition(
 }
 
 /**
- * Advances every question in one completeness-disposition run off `proposed`
- * — `approved` once the operator approves the run's staged intent, `rejected`
- * once they reject it. The durable write-through at critic time (`proposed`)
- * happens immediately, before this ever runs, so a session dying mid-pass
- * never loses the findings; this only resolves the lifecycle once the
- * operator has actually disposed of them.
+ * Advances every question in one completeness-disposition run's record off
+ * `proposed` to `approved`, once the operator approves the run's staged
+ * intent. The durable write-through at critic time (`proposed`) happens
+ * immediately, before this ever runs, so a session dying mid-pass never
+ * loses the findings; this only resolves the lifecycle once the operator has
+ * actually approved them. A rejection instead deletes the row outright — see
+ * deleteCompletenessDisposition — so there is no `rejected` terminal state
+ * to advance to here.
  */
 export function updateCompletenessDispositionApproval(
   id: number,
-  approvalStatus: 'approved' | 'rejected',
+  approvalStatus: 'approved',
 ): CompletenessDispositionRow | undefined {
   const row = getCompletenessDisposition(id);
   if (!row) return undefined;
-  const questions = (
-    JSON.parse(row.questions) as CompletenessDispositionQuestion[]
-  ).map((q) => ({ ...q, approvalStatus }));
-  const updatedQuestions = JSON.stringify(questions);
+  const record = JSON.parse(row.questions) as CompletenessDispositionRecord;
+  const updatedRecord: CompletenessDispositionRecord = {
+    probed: record.probed,
+    questions: record.questions.map((q) => ({ ...q, approvalStatus })),
+  };
+  const updatedQuestions = JSON.stringify(updatedRecord);
   _stmtUpdateCompletenessDispositionApproval ??= db.prepare<{
     id: number;
     questions: string;
@@ -4958,20 +4965,37 @@ export function updateCompletenessDispositionApproval(
 }
 
 /**
+ * Removes a completeness-disposition run outright — the reject-time
+ * counterpart to insertCompletenessDisposition's stage-time durable write.
+ * Rejecting the run's staged `completeness.disposition` intent calls this
+ * (routes/stagedIntents.ts) so the store never carries an orphaned row for
+ * a run the operator explicitly declined; a session is still free to re-run
+ * the critic and stage a fresh disposition afterward.
+ */
+export function deleteCompletenessDisposition(id: number): void {
+  _stmtDeleteCompletenessDisposition ??= db.prepare<{ id: number }>(`
+    DELETE FROM completeness_disposition WHERE id = @id
+  `);
+  _stmtDeleteCompletenessDisposition.run({ id });
+}
+
+/**
  * Shared row-shape builder for the completeness-disposition durable write —
  * used identically by the completeness.disposition MCP tool
  * (mcp/tools/completenessTools.ts) and the device-authed HTTP route
  * (routes/design.ts), so the two writers can never diverge on defaulting.
- * Every question defaults to `approvalStatus: 'proposed'` (recorded is not
- * approved), and `runAt` is normalized to a full ISO timestamp — a bare
- * date-only string (or any other Date-parseable value) round-trips to one via
- * `toISOString()`; a value Date cannot parse is passed through unchanged
- * rather than silently coerced to "Invalid Date".
+ * `probed` is stored verbatim (the caller has already validated it is
+ * non-empty). Every question defaults to `approvalStatus: 'proposed'`
+ * (recorded is not approved), and `runAt` is normalized to a full ISO
+ * timestamp — a bare date-only string (or any other Date-parseable value)
+ * round-trips to one via `toISOString()`; the caller is expected to have
+ * already rejected a value Date cannot parse.
  */
 export function buildCompletenessDispositionRow(input: {
   taskId: string;
   project: string | null;
   milestone: string | null;
+  probed: CompletenessProbedGapClass[];
   questions: CompletenessDispositionQuestion[];
   runAt: string;
 }): NewCompletenessDispositionRow {
@@ -4979,16 +5003,18 @@ export function buildCompletenessDispositionRow(input: {
   const runAt = Number.isNaN(parsedRunAt.getTime())
     ? input.runAt
     : parsedRunAt.toISOString();
+  const record: CompletenessDispositionRecord = {
+    probed: input.probed,
+    questions: input.questions.map((q) => ({
+      approvalStatus: 'proposed' as const,
+      ...q,
+    })),
+  };
   return {
     source_task_id: input.taskId,
     project: input.project,
     milestone: input.milestone,
-    questions: JSON.stringify(
-      input.questions.map((q) => ({
-        approvalStatus: 'proposed' as const,
-        ...q,
-      })),
-    ),
+    questions: JSON.stringify(record),
     run_at: runAt,
   };
 }

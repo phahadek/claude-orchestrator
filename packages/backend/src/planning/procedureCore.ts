@@ -623,22 +623,26 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     title: "Disposition-don't-drop",
     appliesTo: ['design'],
     text:
-      'DO dispose every candidate the completeness critic raises with a recorded ' +
-      'reason — one of `resolved` / `out-of-scope` / `not-a-decision` / `fold` / ' +
-      "`file-sibling` / `sibling-owned` — folded into the API's accepted/dismissed " +
-      'disposition (`resolved` is `accepted`; the rest are `dismissed` carrying that ' +
-      'reason). DO call the ' +
-      `\`${orchestratorMcpToolName('completeness.disposition')}\` tool with ` +
-      '`{taskId, questions: [{question, disposition: "accepted"|"dismissed", reason, ' +
-      'approvalStatus: "proposed"}], runAt}` at critic time, for every critic run — ' +
-      'this durable store, never body prose, is the record, and it is written ' +
-      'immediately so nothing is silently lost even before the operator has seen ' +
-      'it. This same call also stages a `completeness.disposition` intent for ' +
+      'DO dispose every candidate the completeness critic raises with one of the ' +
+      'named dispositions — `resolved` / `out-of-scope` / `not-a-decision` / `fold` ' +
+      '/ `file-sibling` / `sibling-owned` — and a recorded reason; the named value ' +
+      'is stored verbatim, never collapsed to a binary accepted/dismissed. DO call ' +
+      `the \`${orchestratorMcpToolName('completeness.disposition')}\` tool with ` +
+      '`{taskId, probed: [<every gap class actually checked>], questions: ' +
+      '[{question, disposition: <named value>, reason, approvalStatus: "proposed"}], ' +
+      'runAt}` at critic time, for every critic run — this durable store, never ' +
+      'body prose, is the record, and it is written immediately so nothing is ' +
+      'silently lost even before the operator has seen it. `probed` is never empty: ' +
+      'a clean pass (no gaps) still names every gap class the critic checked, so ' +
+      'the record reads as an affirmative "ran clean," never as indistinguishable ' +
+      'from a skipped run. This same call also stages a `completeness.disposition` ' +
+      'intent for ' +
       'operator approval — DO wait for that intent to be approved before staging ' +
-      'any `arch.createUnit` / `arch.updateUnit` / `arch.supersedeUnit` write or the ' +
-      'closing-synthesis `task.updateBody` (see DESIGN_TERMINAL_ARTIFACTS_ORDERING ' +
-      'above) — staging one earlier is rejected at stage time, naming the missing ' +
-      'approval. DO NOT drop a candidate silently. DO NOT record a disposition only ' +
+      'any `arch.createUnit` / `arch.updateUnit` / `arch.supersedeUnit` write, the ' +
+      'closing-synthesis `task.updateBody`, or the follow-on `task.create` set (see ' +
+      'DESIGN_TERMINAL_ARTIFACTS_ORDERING above) — staging one earlier is rejected ' +
+      'at stage time, naming the missing approval. DO NOT drop a candidate silently. ' +
+      'DO NOT record a disposition only ' +
       'as Implementation-notes prose; prose may summarize it, but the store call is ' +
       'the disposition. DO NOT confuse "recorded" with "approved": a `proposed` ' +
       'disposition is provisional until the operator approves the staged ' +
