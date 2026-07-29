@@ -1,4 +1,6 @@
 import { typedGetSetting } from './settings';
+import { getSetting } from '../db/queries';
+import { logger } from '../logger';
 
 interface CorporateModeGates {
   dockerMandatory: boolean;
@@ -14,6 +16,7 @@ export interface CorporateModeConfig {
 }
 
 let cachedConfig: CorporateModeConfig | null = null;
+let deprecationWarned = false;
 
 // Per-gate env var names. Precedence: env-var override > mode default.
 // Set to "true" or "false" to override the corporate-mode default for that gate.
@@ -53,6 +56,20 @@ export function getCorporateMode(): CorporateModeConfig {
     return cachedConfig;
   }
 
+  // Deprecated alias: honored only when no ORCHESTRATOR_MODE and no explicit
+  // settings row exist, so an explicit settings value always wins.
+  const rawDbVal = getSetting('corporate_mode');
+  if (rawDbVal == null && process.env.CORPORATE_MODE === 'true') {
+    if (!deprecationWarned) {
+      deprecationWarned = true;
+      logger.warn(
+        '[corporateMode] CORPORATE_MODE env var is deprecated — set ORCHESTRATOR_MODE=corporate or the corporate_mode setting instead.',
+      );
+    }
+    cachedConfig = { enabled: true, envLocked: false, gates: buildGates(true) };
+    return cachedConfig;
+  }
+
   const dbVal = typedGetSetting('corporate_mode'); // 'corporate' | 'personal', default 'personal'
   const enabled = dbVal === 'corporate';
   cachedConfig = { enabled, envLocked: false, gates: buildGates(enabled) };
@@ -61,4 +78,5 @@ export function getCorporateMode(): CorporateModeConfig {
 
 export function _resetCorporateModeCache(): void {
   cachedConfig = null;
+  deprecationWarned = false;
 }

@@ -52,27 +52,34 @@ vi.mock('../db/queries', () => ({
   setPauseReason: vi.fn(),
   getProjectRowById: vi.fn(() => null),
   insertLocalBranch: vi.fn(),
+  resetTaskCrashCount: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog', () => ({
   recordEvent: vi.fn(),
 }));
 
-vi.mock('../config', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../config')>();
-  return {
-    ...actual,
-    runtimeSettings: {
-      ...actual.runtimeSettings,
-      corporate_mode_enabled: false,
-    },
-  };
-});
+const { mockCorporateMode } = vi.hoisted(() => ({
+  mockCorporateMode: { enabled: false, gates: { validatePRBody: false } },
+}));
+
+vi.mock('../config/corporateMode', () => ({
+  getCorporateMode: () => mockCorporateMode,
+}));
+
+vi.mock('../config', () => ({
+  ALLOWED_TOOLS: [],
+  BASH_MAX_OUTPUT_LENGTH: 30000,
+  BASH_DEFAULT_TIMEOUT_MS: 300000,
+  GITHUB_REPO: 'org/repo',
+  runtimeSettings: {},
+  getProjectById: vi.fn(() => undefined),
+  config: { claudePath: 'claude' },
+}));
 
 import { AgentSession } from '../session/AgentSession';
 import { setPauseReason } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
-import { runtimeSettings } from '../config';
 import type { GitHubClient } from '../github/GitHubClient';
 
 function fakeGitHubClient(): GitHubClient {
@@ -176,9 +183,8 @@ describe('AgentSession — ai-authored label', () => {
   beforeEach(() => {
     mockProc = createMockProc();
     vi.clearAllMocks();
-    (
-      runtimeSettings as { corporate_mode_enabled: boolean }
-    ).corporate_mode_enabled = false;
+    mockCorporateMode.enabled = false;
+    mockCorporateMode.gates.validatePRBody = false;
   });
 
   it('applies the ai-authored label to PRs opened by a session', async () => {
@@ -214,9 +220,8 @@ describe('AgentSession — PR body validation', () => {
   beforeEach(() => {
     mockProc = createMockProc();
     vi.clearAllMocks();
-    (
-      runtimeSettings as { corporate_mode_enabled: boolean }
-    ).corporate_mode_enabled = false;
+    mockCorporateMode.enabled = false;
+    mockCorporateMode.gates.validatePRBody = false;
   });
 
   it('does NOT pause or post comment when body is valid (non-corporate)', async () => {
@@ -241,9 +246,8 @@ describe('AgentSession — PR body validation', () => {
   });
 
   it('pauses and posts PR comment in corporate mode when body is invalid', async () => {
-    (
-      runtimeSettings as { corporate_mode_enabled: boolean }
-    ).corporate_mode_enabled = true;
+    mockCorporateMode.enabled = true;
+    mockCorporateMode.gates.validatePRBody = true;
     const ghClient = fakeGitHubClient();
     await runPRCreationFlow(PR_JSON_INVALID_BODY, ghClient);
     await new Promise((r) => setTimeout(r, 50));
@@ -261,5 +265,19 @@ describe('AgentSession — PR body validation', () => {
       43,
       expect.stringContaining('PR body validation failed'),
     );
+  });
+
+  it('warns (does not pause) when corporate mode is enabled but the validatePRBody gate is off', async () => {
+    mockCorporateMode.enabled = true;
+    mockCorporateMode.gates.validatePRBody = false;
+    const ghClient = fakeGitHubClient();
+    await runPRCreationFlow(PR_JSON_INVALID_BODY, ghClient);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'pr_body_invalid_warning' }),
+    );
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(ghClient.createIssueComment)).not.toHaveBeenCalled();
   });
 });

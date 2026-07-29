@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../db/queries.js', () => ({
   getSetting: vi.fn().mockReturnValue(undefined),
@@ -113,5 +113,44 @@ describe('getCorporateMode', () => {
     const { gates } = getCorporateMode();
     const allOff = Object.values(gates).every((v) => !v);
     expect(allOff).toBe(true);
+  });
+});
+
+describe('getCorporateMode — CORPORATE_MODE deprecated alias', () => {
+  const originalCorporateMode = process.env.CORPORATE_MODE;
+
+  beforeEach(() => {
+    delete process.env.CORPORATE_MODE;
+  });
+
+  afterEach(() => {
+    if (originalCorporateMode === undefined) {
+      delete process.env.CORPORATE_MODE;
+    } else {
+      process.env.CORPORATE_MODE = originalCorporateMode;
+    }
+  });
+
+  it('enables corporate mode when only CORPORATE_MODE=true is set', () => {
+    process.env.CORPORATE_MODE = 'true';
+    const result = getCorporateMode();
+    expect(result.enabled).toBe(true);
+  });
+
+  it('logs a deprecation warning once when resolved via the CORPORATE_MODE alias', () => {
+    process.env.CORPORATE_MODE = 'true';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    getCorporateMode();
+    getCorporateMode();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toMatch(/deprecated/i);
+    warnSpy.mockRestore();
+  });
+
+  it('an explicit settings row wins over the CORPORATE_MODE alias', () => {
+    process.env.CORPORATE_MODE = 'true';
+    vi.mocked(getSetting).mockReturnValue('personal');
+    const result = getCorporateMode();
+    expect(result.enabled).toBe(false);
   });
 });

@@ -1,14 +1,9 @@
 import crypto from 'crypto';
 import { execSync } from 'child_process';
-import { runtimeSettings } from '../config';
+import { getCorporateMode } from '../config/corporateMode';
 import { ProjectService } from '../projects/ProjectService';
 
 export type BranchMode = 'two_tier' | 'flat';
-
-/** Returns the corporate-mode setting from runtimeSettings. */
-function getCorporateMode(): { enabled: boolean } {
-  return { enabled: runtimeSettings.corporate_mode_enabled };
-}
 
 /**
  * Converts a milestone name to a URL-friendly git branch slug.
