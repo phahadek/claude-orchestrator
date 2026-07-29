@@ -517,6 +517,16 @@ export interface RuntimeSettings {
   gate_verification_interval_ms: number;
   /** Model used by the Tier-3 semantic readiness advisory (paraphrased-deferral) classifier. */
   tier3_classifier_model: string;
+  /**
+   * Kill switch for the session.requestCapability auto-approve policy (see
+   * orchestrator-config.ts#isSanctionedAutoApproveCapability): when true
+   * (default), a request for a sanctioned read-only capability is granted
+   * and the session re-dispatched without an operator park. When false,
+   * every request parks for grant-on-re-dispatch as before, regardless of
+   * the allowlist. Writes and raw command-prefix grants are never affected
+   * either way — this only gates the auto-approve fast path.
+   */
+  capability_auto_approve_enabled: boolean;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -588,4 +598,6 @@ export const runtimeSettings: RuntimeSettings = {
     process.env.GATE_VERIFICATION_INTERVAL_MS ?? 60_000,
   ),
   tier3_classifier_model: 'claude-haiku-4-5-20251001',
+  capability_auto_approve_enabled:
+    process.env.CAPABILITY_AUTO_APPROVE_ENABLED !== 'false',
 };

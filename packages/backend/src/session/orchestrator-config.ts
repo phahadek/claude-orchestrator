@@ -256,6 +256,42 @@ export function parseSessionRecordReadCapability(
 }
 
 /**
+ * Curated, operator-configurable allowlist of sanctioned read-only
+ * capabilities that `session.requestCapability` auto-approves without an
+ * operator park (see stagedIntents.ts's auto-approve branch). Every entry
+ * must be an exact capability string a grant can widen access with — never a
+ * Bash/mcp prefix pattern, since a prefix cannot be certified read-only
+ * (sqlite3/node/python can all write). Empty today: the only sanctioned
+ * capability currently shipped is the own-record reader below, which is
+ * checked separately since it is parameterized by the requesting session's
+ * own id rather than a fixed string. Widening this list live is the sibling
+ * task "Expose the capability auto-approve allowlist as an operator-editable
+ * setting" — until that ships, editing this constant is the only way to add
+ * a sanctioned entry.
+ */
+const SANCTIONED_AUTO_APPROVE_CAPABILITIES: readonly string[] = [];
+
+/**
+ * True iff `capability` is exactly the sanctioned read-only capability set
+ * for `requestingSessionId` — either a literal member of
+ * `SANCTIONED_AUTO_APPROVE_CAPABILITIES`, or the own-record-read capability
+ * for the requesting session itself (never another session's; a capability
+ * naming a different target session id is not a match, even though it is
+ * grantable via the existing operator-approval path). Exact-string
+ * comparison only — never a prefix/heuristic match, so a Bash(*:*) prefix or
+ * any other tool-shaped capability can never auto-approve.
+ */
+export function isSanctionedAutoApproveCapability(
+  capability: string,
+  requestingSessionId: string,
+): boolean {
+  return (
+    capability === sessionRecordReadCapability(requestingSessionId) ||
+    SANCTIONED_AUTO_APPROVE_CAPABILITIES.includes(capability)
+  );
+}
+
+/**
  * A granted capability shaped like an actual CLI tool permission — a Bash
  * command prefix or a named MCP verb. Only these widen `--allowed-tools` at
  * spawn (see `getSessionAllowedTools` below); the own-record-read capability

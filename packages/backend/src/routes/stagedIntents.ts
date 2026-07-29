@@ -95,7 +95,9 @@ import { logger } from '../logger';
 import {
   isToolShapedCapability,
   parseSessionRecordReadCapability,
+  isSanctionedAutoApproveCapability,
 } from '../session/orchestrator-config';
+import { runtimeSettings } from '../config';
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
 // Mirrors tasks.ts's task_updated wiring: REST stays the fetch/apply source of
@@ -1822,14 +1824,47 @@ async function rejectStagedIntentRow(
   return rejectedIntent;
 }
 
+/**
+ * Every capability request's terminal disposition, one of the four buckets
+ * the audit trail distinguishes (see recordEvent call below): an auto-
+ * approved grant never reaches an operator; the other three are the
+ * existing operator-approve/pushback/decline outcomes, unchanged.
+ */
+function capabilityRequestDisposition(
+  outcome: 'approved' | StagedIntentRejectOutcome,
+  provenance: 'auto' | 'operator',
+): 'auto_approved' | 'operator_approved' | 'operator_denied' | 'declined' {
+  if (outcome === 'approved') {
+    return provenance === 'auto' ? 'auto_approved' : 'operator_approved';
+  }
+  return outcome === 'pushback' ? 'operator_denied' : 'declined';
+}
+
 async function resumeCapabilityRequester(
   sessionManager: SessionManager | undefined,
   intent: StagedIntent,
   outcome: 'approved' | StagedIntentRejectOutcome,
   reason?: string | null,
+  provenance: 'auto' | 'operator' = 'operator',
 ): Promise<void> {
-  if (!sessionManager || !intent.sessionId) return;
+  if (!intent.sessionId) return;
   const payload = intent.payload as CapabilityRequestPayload;
+
+  recordEvent({
+    event_type: 'capability_request_disposition',
+    actor_type: provenance === 'auto' ? 'system' : 'human',
+    actor_id: intent.sessionId,
+    project_id: intent.projectId,
+    task_id: null,
+    payload: {
+      intentId: intent.id,
+      capability: payload.capability,
+      disposition: capabilityRequestDisposition(outcome, provenance),
+      provenance,
+    },
+  });
+
+  if (!sessionManager) return;
 
   if (outcome === 'approved') {
     await sessionManager.grantCapability(intent.sessionId, payload.capability);
@@ -1853,6 +1888,57 @@ async function resumeCapabilityRequester(
       `[stagedIntents] resume failed for session ${intent.sessionId.slice(0, 8)} after capability-request ${outcome}: ${err}`,
     );
   }
+}
+
+/**
+ * Stage-time auto-approve for `session.requestCapability`: when the
+ * requested capability exactly matches the curated sanctioned read-only
+ * allowlist (`isSanctionedAutoApproveCapability` — today, only the
+ * requesting session's own-record reader), the request is granted and the
+ * session re-dispatched immediately through the same
+ * grant -> resume path an operator approval takes (`resumeCapabilityRequester`
+ * with provenance `'auto'`), never parking for the operator. Every other
+ * request — a write, a raw Bash/mcp-verb grant, another session's
+ * own-record capability — is left in `staged` for the existing
+ * grant-on-re-dispatch operator surface, unchanged. Gated entirely off by
+ * `runtimeSettings.capability_auto_approve_enabled`: when disabled, every
+ * request parks as before, regardless of the allowlist. Called once, at
+ * stage time, by `routeStageTimeBlock` — the sole path a dispatched
+ * session's `session.requestCapability` MCP call reaches (see
+ * mcp/tools/stageProposalTools.ts's `stage`).
+ */
+async function maybeAutoApproveCapabilityRequest(
+  intent: StagedIntent,
+  sessionManager: SessionManager | undefined,
+): Promise<StagedIntent> {
+  if (
+    intent.kind !== 'session.requestCapability' ||
+    !intent.sessionId ||
+    !runtimeSettings.capability_auto_approve_enabled
+  ) {
+    return intent;
+  }
+
+  const payload = intent.payload as CapabilityRequestPayload;
+  if (
+    !isSanctionedAutoApproveCapability(payload.capability, intent.sessionId)
+  ) {
+    return intent;
+  }
+
+  const committed = transitionStagedIntent(intent.id, 'committed', {
+    annotation: null,
+  });
+  const committedIntent = rowToApi(committed);
+  broadcastIntentChange(committedIntent);
+  await resumeCapabilityRequester(
+    sessionManager,
+    committedIntent,
+    'approved',
+    null,
+    'auto',
+  );
+  return committedIntent;
 }
 
 /**
@@ -2181,6 +2267,10 @@ export async function routeStageTimeBlock(
   intent: StagedIntent,
   sessionManager: SessionManager | undefined,
 ): Promise<StagedIntent> {
+  if (intent.kind === 'session.requestCapability') {
+    return maybeAutoApproveCapabilityRequest(intent, sessionManager);
+  }
+
   const checked = await runStageTimeReadyChecks(intent);
   const detail = describeBlockedAnnotation(checked.annotation);
   // No originating session — nothing to auto-correct and re-verify this via
