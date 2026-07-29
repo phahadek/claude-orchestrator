@@ -118,6 +118,12 @@ function verdictLabel(verdict: string): string {
   return verdict;
 }
 
+function planningSessionTypeLabel(sessionType: string): string {
+  if (sessionType === 'groom') return 'Grooming';
+  if (sessionType === 'design') return 'Design';
+  return 'Ops';
+}
+
 export function TaskCard({
   task,
   selected,
@@ -126,7 +132,7 @@ export function TaskCard({
   boardId = null,
   onMoveStaged,
 }: Props) {
-  const { codeSession, pr, review } = task;
+  const { codeSession, planningSession, pr, review } = task;
   const isMultiRepo = getProjectRepos(project).length > 1;
   const needsRepo = isMultiRepo && task.assignedRepo === null;
   const [recoveryInFlight, setRecoveryInFlight] = useState(false);
@@ -196,6 +202,18 @@ export function TaskCard({
       </div>
 
       {task.priority && <div className={styles.priority}>{task.priority}</div>}
+
+      {planningSession && (
+        <div className={styles.sessionRow}>
+          <span
+            className={`${styles.sessionStatus} ${styles.planningSessionBadge} ${styles[`session-${planningSession.status}`] ?? ''}`}
+            title={`Held by ${planningSessionTypeLabel(planningSession.sessionType)} session (${planningSession.status})`}
+          >
+            🧭 {planningSessionTypeLabel(planningSession.sessionType)}:{' '}
+            {planningSession.status}
+          </span>
+        </div>
+      )}
 
       {!isNonCode && (
         <>

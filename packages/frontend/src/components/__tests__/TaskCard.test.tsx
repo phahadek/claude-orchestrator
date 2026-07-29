@@ -47,6 +47,21 @@ function makeCodeSession(
   };
 }
 
+function makePlanningSession(
+  overrides?: Partial<NonNullable<TaskView['planningSession']>>,
+): NonNullable<TaskView['planningSession']> {
+  return {
+    sessionId: 'plan-1',
+    status: 'idle',
+    sessionType: 'groom',
+    startedAt: Date.now() - 60_000,
+    endedAt: null,
+    inputTokens: 0,
+    outputTokens: 0,
+    ...overrides,
+  };
+}
+
 function makePr(
   overrides?: Partial<NonNullable<TaskView['pr']>>,
 ): NonNullable<TaskView['pr']> {
@@ -854,5 +869,74 @@ describe('TaskCard', () => {
       />,
     );
     expect(screen.queryByText('⚠ Needs repo')).toBeNull();
+  });
+
+  it('renders a planning-session indicator when planningSession is present (idle groom)', () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          planningSession: makePlanningSession({
+            sessionType: 'groom',
+            status: 'idle',
+          }),
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText(/Grooming:\s*idle/)).toBeDefined();
+  });
+
+  it('renders a planning-session indicator labeled by sessionType (design, running)', () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          planningSession: makePlanningSession({
+            sessionType: 'design',
+            status: 'running',
+          }),
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText(/Design:\s*running/)).toBeDefined();
+  });
+
+  it('does not render a planning-session indicator when planningSession is null', () => {
+    render(
+      <TaskCard
+        task={makeTask({ planningSession: null })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByText(/Grooming:|Design:|Ops:/)).toBeNull();
+  });
+
+  it('renders both codeSession and planningSession indicators without conflict', () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          codeSession: makeCodeSession({ status: 'running' }),
+          planningSession: makePlanningSession({
+            sessionType: 'ops',
+            status: 'idle',
+          }),
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('running')).toBeDefined();
+    expect(screen.getByText(/Ops:\s*idle/)).toBeDefined();
   });
 });
