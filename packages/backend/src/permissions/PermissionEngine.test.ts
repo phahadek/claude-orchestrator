@@ -106,9 +106,45 @@ describe('PermissionEngine', () => {
     );
   });
 
+  it('hard-allows go build', () => {
+    expect(engine.evaluate('Bash', '{"command":"go build ./..."}')).toBe(
+      'allow',
+    );
+  });
+
+  it('hard-allows go test', () => {
+    expect(engine.evaluate('Bash', '{"command":"go test ./..."}')).toBe(
+      'allow',
+    );
+  });
+
+  it('hard-allows go vet', () => {
+    expect(engine.evaluate('Bash', '{"command":"go vet ./..."}')).toBe('allow');
+  });
+
+  it('does not hard-allow go run — follows normal evaluation path', () => {
+    expect(engine.evaluate('Bash', '{"command":"go run ./main.go"}')).toBe(
+      'escalate',
+    );
+  });
+
+  it('does not hard-allow go get — follows normal evaluation path', () => {
+    expect(
+      engine.evaluate('Bash', '{"command":"go get example.com/pkg"}'),
+    ).toBe('escalate');
+  });
+
   it('does NOT write to permission_events for hard-allow', () => {
     engine.evaluate('Read', '{"file_path":"/foo.ts"}');
     expect(mockInsertPermissionEvent).not.toHaveBeenCalled();
+  });
+
+  // ─── Tool-name extraction ──────────────────────────────────────────────────
+
+  it('derives Bash from the go build/test/vet HARD_ALLOW patterns', () => {
+    const tools = engine.getAllowedToolNames();
+    expect(tools).toContain('Bash');
+    expect(tools).toContain('Read');
   });
 
   // ─── User rules ────────────────────────────────────────────────────────────
