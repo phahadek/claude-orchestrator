@@ -81,9 +81,7 @@ export function MilestoneDecisionInbox({ projectId, milestone }: Props) {
 
   return (
     <div className={styles.inbox} data-testid="milestone-decision-inbox">
-      <div className={styles.heading}>
-        Decisions ({intents.length})
-      </div>
+      <div className={styles.heading}>Decisions ({intents.length})</div>
 
       <TriageBatchPanel
         cleanGroupIds={cleanGroupIds}

@@ -72,7 +72,11 @@ describe('useDecisionQueue', () => {
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
 
     const { result } = renderHook(() =>
-      useDecisionQueue({ type: 'milestone', projectId: 'proj-1', milestone: 'M1' }),
+      useDecisionQueue({
+        type: 'milestone',
+        projectId: 'proj-1',
+        milestone: 'M1',
+      }),
     );
 
     await waitFor(() => expect(result.current.loaded).toBe(true));
@@ -93,7 +97,11 @@ describe('useDecisionQueue', () => {
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([]);
 
     const { result } = renderHook(() =>
-      useDecisionQueue({ type: 'milestone', projectId: 'proj-1', milestone: 'M1' }),
+      useDecisionQueue({
+        type: 'milestone',
+        projectId: 'proj-1',
+        milestone: 'M1',
+      }),
     );
     await waitFor(() => expect(result.current.loaded).toBe(true));
 

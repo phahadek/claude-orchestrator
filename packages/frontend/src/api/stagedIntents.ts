@@ -140,7 +140,10 @@ export const stagedIntentsApi = {
    * backend's unblock-impact convergence-ranking (see decisionRanking.ts) —
    * the frontend renders this order as-is rather than re-sorting.
    */
-  listByMilestone(projectId: string, milestone: string): Promise<StagedIntent[]> {
+  listByMilestone(
+    projectId: string,
+    milestone: string,
+  ): Promise<StagedIntent[]> {
     return apiRequest<{ intents: StagedIntent[] }>(
       `/api/staged-intents?projectId=${encodeURIComponent(projectId)}&milestone=${encodeURIComponent(milestone)}`,
     ).then((res) => res.intents);

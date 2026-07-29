@@ -112,7 +112,11 @@ describe('MilestoneDecisionInbox', () => {
   });
 
   it('pools clean-verdict groups across different sessions into one TriageBatchPanel/commitBatch', async () => {
-    function cleanGroup(groupId: string, taskId: string, sessionId: string): StagedIntent[] {
+    function cleanGroup(
+      groupId: string,
+      taskId: string,
+      sessionId: string,
+    ): StagedIntent[] {
       return [
         {
           id: `${groupId}-dep`,
@@ -133,7 +137,10 @@ describe('MilestoneDecisionInbox', () => {
             status: 'Ready',
             groomingGate: {
               type: '📐 Design',
-              triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: false },
+              triage: {
+                proposedVerdict: 'clean',
+                hasOpenQuestionsHeading: false,
+              },
             },
           },
           projectId: 'proj-1',
@@ -152,7 +159,11 @@ describe('MilestoneDecisionInbox', () => {
     ]);
     const commitBatch = vi
       .spyOn(stagedIntentsApi, 'commitBatch')
-      .mockResolvedValue({ ok: true, committed: ['group-a', 'group-b'], exceptions: [] });
+      .mockResolvedValue({
+        ok: true,
+        committed: ['group-a', 'group-b'],
+        exceptions: [],
+      });
 
     render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
     await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
@@ -163,7 +174,10 @@ describe('MilestoneDecisionInbox', () => {
     fireEvent.click(screen.getByTestId('approve-all-clean'));
 
     await waitFor(() =>
-      expect(commitBatch).toHaveBeenCalledWith(['group-a', 'group-b'], undefined),
+      expect(commitBatch).toHaveBeenCalledWith(
+        ['group-a', 'group-b'],
+        undefined,
+      ),
     );
   });
 
