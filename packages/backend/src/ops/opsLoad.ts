@@ -191,7 +191,7 @@ interface TaskRef {
   url: string;
 }
 
-export interface OpsArchUnitRef {
+interface OpsArchUnitRef {
   id: string;
   title: string;
 }
