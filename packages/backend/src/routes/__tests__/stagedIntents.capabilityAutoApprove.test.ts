@@ -100,7 +100,7 @@ describe('session.requestCapability auto-approve policy', () => {
     expect(sessionManager.grantCapability).not.toHaveBeenCalled();
   });
 
-  it('parks a request for another session\'s own-record read — only self-targeted reads are sanctioned', async () => {
+  it("parks a request for another session's own-record read — only self-targeted reads are sanctioned", async () => {
     const sessionManager = makeSessionManager();
     const capability = sessionRecordReadCapability('some-other-session');
     const intent = stageCapabilityRequest('sess-park-3', capability);
@@ -169,7 +169,10 @@ describe('session.requestCapability auto-approve policy', () => {
 
   it('audits the operator-approved disposition with operator provenance', async () => {
     const sessionManager = makeSessionManager();
-    const intent = stageCapabilityRequest('sess-audit-op-approve', 'Bash(psql:*)');
+    const intent = stageCapabilityRequest(
+      'sess-audit-op-approve',
+      'Bash(psql:*)',
+    );
     // Parked (not sanctioned) — simulate the existing operator-approve path
     // directly via the exported apply surface used by the REST route.
     const { createStagedIntentsRouter } = await import('../stagedIntents');

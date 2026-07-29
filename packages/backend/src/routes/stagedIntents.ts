@@ -1881,7 +1881,9 @@ async function maybeAutoApproveCapabilityRequest(
   }
 
   const payload = intent.payload as CapabilityRequestPayload;
-  if (!isSanctionedAutoApproveCapability(payload.capability, intent.sessionId)) {
+  if (
+    !isSanctionedAutoApproveCapability(payload.capability, intent.sessionId)
+  ) {
     return intent;
   }
 
