@@ -7,10 +7,7 @@ import type { GateItemClassification } from '../db/types';
  * the three cannot drift (the same drift hazard PLANNING_INTENT_KINDS
  * parity guards against). Do not inline tier prose anywhere else.
  */
-export const GATE_ITEM_TIER_DESCRIPTIONS: Record<
-  GateItemClassification,
-  string
-> = {
+const GATE_ITEM_TIER_DESCRIPTIONS: Record<GateItemClassification, string> = {
   'Read-Only':
     'A check that reads state without changing it — a query, a ' +
     'log/record inspection, a computed-value check. Includes checks that ' +
