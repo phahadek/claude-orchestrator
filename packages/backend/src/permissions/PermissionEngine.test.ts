@@ -119,9 +119,7 @@ describe('PermissionEngine', () => {
   });
 
   it('hard-allows go vet', () => {
-    expect(engine.evaluate('Bash', '{"command":"go vet ./..."}')).toBe(
-      'allow',
-    );
+    expect(engine.evaluate('Bash', '{"command":"go vet ./..."}')).toBe('allow');
   });
 
   it('does not hard-allow go run — follows normal evaluation path', () => {
