@@ -445,7 +445,15 @@ export function isRemovableWorktree(
  * AutoLauncher owns backoff + escalation for these via session_launch_failed
  * messages.
  */
-const UNCOUNTED_REASONS = new Set(['user_kill', 'pr_closed', 'launch_failed']);
+const UNCOUNTED_REASONS = new Set([
+  'user_kill',
+  'pr_closed',
+  'launch_failed',
+  // Kept as a literal (not a reference to BACKEND_SPAWN_DEGRADED_REASON,
+  // defined further below) to avoid a temporal-dead-zone load-order issue —
+  // this Set is constructed at module init, before that const exists.
+  'backend_spawn_degraded',
+]);
 
 /**
  * Delete the local session/<sessionId> branch if it exists and conditions are met:
@@ -595,13 +603,93 @@ export function buildResumeMessage(row: Session): string {
 }
 
 /**
+ * Per-repo mutex for `git worktree add`. Every worktree add for a given repo
+ * touches the same `.git/config` (git worktree registers/unregisters entries
+ * there), so concurrent launches against the *same* repo must run one at a
+ * time. Launches against different repos share no state and must not be
+ * serialized against each other — the queue is keyed by resolved repo path,
+ * not global, so it cannot become an effective concurrency cap when many
+ * sessions across different projects start together.
+ *
+ * Chains a promise per key rather than using a counting semaphore: each new
+ * caller attaches its work to the tail of the current chain for that repo,
+ * so callers naturally run in arrival order and the map entry self-cleans
+ * once the chain is idle.
+ */
+const repoWorktreeLocks = new Map<string, Promise<void>>();
+
+async function withRepoWorktreeLock<T>(
+  repoDir: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const key = path.resolve(repoDir);
+  const tail = repoWorktreeLocks.get(key) ?? Promise.resolve();
+  let release: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const chained = tail.then(() => gate);
+  repoWorktreeLocks.set(key, chained);
+  await tail;
+  try {
+    return await fn();
+  } finally {
+    release!();
+    if (repoWorktreeLocks.get(key) === chained) {
+      repoWorktreeLocks.delete(key);
+    }
+  }
+}
+
+/**
+ * A `child_process.exec()` failure with empty stderr and a killed/signal
+ * outcome is not a real git/command failure — the child never ran far enough
+ * to write diagnostic output. This is the signature of a degraded spawn
+ * subsystem on a long-lived backend process (confirmed root cause: an OS
+ * suspend/resume on a laptop-hosted backend leaves child_process spawns
+ * broken until the backend is restarted). Distinguishing it lets callers
+ * surface "the backend may need a restart" instead of investigating a
+ * command that never actually ran.
+ */
+export function isDegradedSpawnFailure(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as {
+    stderr?: string | Buffer;
+    killed?: boolean;
+    signal?: string | null;
+  };
+  const stderr = e.stderr ? e.stderr.toString() : '';
+  return stderr.trim() === '' && (e.killed === true || !!e.signal);
+}
+
+/** Reason code used for markSessionErrored/pause-reason when a worktree-add
+ * failure is classified as a degraded backend spawn rather than a real
+ * per-command failure. Deliberately excluded from crash-budget accounting
+ * (see UNCOUNTED_REASONS) — this is a backend-health statement, not a
+ * session-level or task-level failure. */
+export const BACKEND_SPAWN_DEGRADED_REASON = 'backend_spawn_degraded';
+
+/** Operator-readable explanation surfaced alongside BACKEND_SPAWN_DEGRADED_REASON. */
+const BACKEND_SPAWN_DEGRADED_MESSAGE =
+  'Backend spawn health check failed: a child process command returned no ' +
+  'stderr output and a killed/signal outcome. This is the signature of a ' +
+  'degraded spawn subsystem (commonly following an OS suspend/resume on a ' +
+  'long-running backend) rather than a real command failure. Restarting the ' +
+  'backend process typically resolves this.';
+
+/**
  * Wraps `git worktree add` with a retry loop that fires **only** on transient
  * .git/config lock contention (the "could not lock config file" error). All
  * other errors propagate immediately so the caller's existing branch-already-exists
  * / directory-exists handling is unaffected.
  *
  * The lock is typically held for milliseconds; a short jittered backoff is more
- * than enough to clear it across concurrent session launches.
+ * than enough to clear it across concurrent session launches. In addition to
+ * the retry, every call is serialized per-repo (see withRepoWorktreeLock) so
+ * concurrent launches against the same repo queue instead of racing — the
+ * lock-contention retry above is a backstop for contention from *outside*
+ * this process (e.g. a manual `git worktree add`), not the primary
+ * concurrency control.
  */
 export async function gitWorktreeAddWithRetry(
   cmd: string,
@@ -610,30 +698,54 @@ export async function gitWorktreeAddWithRetry(
   /** Overrideable for unit tests; defaults to 100–300 ms jitter. */
   getDelayMs: () => number = () => 100 + Math.random() * 200,
 ): Promise<void> {
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      await exec(cmd, opts);
-      return;
-    } catch (err) {
-      const stderr =
-        (err as { stderr?: string | Buffer })?.stderr?.toString() ?? '';
-      if (!GIT_CONFIG_LOCK_RE.test(stderr)) {
-        throw err; // non-lock error: fail immediately, no retry
-      }
-      lastErr = err;
-      if (attempt < maxAttempts) {
-        const backoffMs = getDelayMs();
-        logger.warn(
-          `[SessionManager] git worktree add .git/config lock contention (attempt ${attempt}/${maxAttempts}), retry in ${Math.round(backoffMs)}ms: ${stderr.trim()}`,
-        );
-        if (backoffMs > 0) {
-          await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
+  return withRepoWorktreeLock(opts.cwd, async () => {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await exec(cmd, opts);
+        return;
+      } catch (err) {
+        const stderr =
+          (err as { stderr?: string | Buffer })?.stderr?.toString() ?? '';
+        if (!GIT_CONFIG_LOCK_RE.test(stderr)) {
+          throw err; // non-lock error: fail immediately, no retry
+        }
+        lastErr = err;
+        if (attempt < maxAttempts) {
+          const backoffMs = getDelayMs();
+          logger.warn(
+            `[SessionManager] git worktree add .git/config lock contention (attempt ${attempt}/${maxAttempts}), retry in ${Math.round(backoffMs)}ms: ${stderr.trim()}`,
+          );
+          if (backoffMs > 0) {
+            await new Promise<void>((resolve) =>
+              setTimeout(resolve, backoffMs),
+            );
+          }
         }
       }
     }
-  }
-  throw lastErr;
+    throw lastErr;
+  });
+}
+
+/**
+ * Builds a WorktreeSetupError from a `git worktree add` failure, classifying
+ * it as a degraded backend spawn when applicable (see isDegradedSpawnFailure)
+ * so callers surface a restart recommendation instead of a plain command
+ * failure. `fullMsg` should already include the captured stderr — that
+ * capture is preserved verbatim; the degraded-spawn explanation is prefixed
+ * onto it, never replacing it.
+ */
+function buildWorktreeSetupError(
+  err: unknown,
+  fullMsg: string,
+  isBranchAlreadyExists: boolean,
+): WorktreeSetupError {
+  const isDegradedSpawn = isDegradedSpawnFailure(err);
+  return new WorktreeSetupError(
+    isDegradedSpawn ? `${BACKEND_SPAWN_DEGRADED_MESSAGE}\n${fullMsg}` : fullMsg,
+    { isBranchAlreadyExists, isDegradedSpawn },
+  );
 }
 
 export class SessionManager extends EventEmitter {
@@ -1166,16 +1278,21 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] completeStart failed for ${sessionId}:`,
         errorDetail,
       );
+      const isDegradedSpawn =
+        err instanceof WorktreeSetupError && err.isDegradedSpawn;
+      const pauseReason = isDegradedSpawn
+        ? BACKEND_SPAWN_DEGRADED_REASON
+        : 'launch_failed';
       // Persist the error context so review-verdict construction can surface the
       // real cause instead of the generic "no output to parse" fallback.
       try {
-        setSessionPauseReason(sessionId, 'launch_failed');
+        setSessionPauseReason(sessionId, pauseReason);
         setSessionLastErrorDetail(sessionId, errorDetail);
       } catch {
         // Best-effort — DB may be unavailable or mocked without these functions.
       }
       await this.cleanupPartialWorktree(sessionId);
-      this.markSessionErrored(sessionId, 'error', 'launch_failed');
+      this.markSessionErrored(sessionId, 'error', pauseReason);
       this.emit('message', {
         type: 'error',
         message: `Session launch failed: ${errorDetail}`,
@@ -1385,9 +1502,7 @@ export class SessionManager extends EventEmitter {
                 logger.error(
                   `[SessionManager] completeStart: retry after stale-branch abandonment also failed for ${sessionId}: ${retryMsg}`,
                 );
-                throw new WorktreeSetupError(retryMsg, {
-                  isBranchAlreadyExists: false,
-                });
+                throw buildWorktreeSetupError(retryErr, retryMsg, false);
               }
             } else {
               // Branch exists but not attributable to a terminal predecessor of this task.
@@ -1395,13 +1510,17 @@ export class SessionManager extends EventEmitter {
               logger.error(
                 `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
               );
-              throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists });
+              throw buildWorktreeSetupError(
+                err,
+                fullMsg,
+                isBranchAlreadyExists,
+              );
             }
           } else {
             logger.error(
               `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
             );
-            throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists });
+            throw buildWorktreeSetupError(err, fullMsg, isBranchAlreadyExists);
           }
         }
       } else {
@@ -1418,9 +1537,7 @@ export class SessionManager extends EventEmitter {
           logger.error(
             `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
           );
-          throw new WorktreeSetupError(fullMsg, {
-            isBranchAlreadyExists: false,
-          });
+          throw buildWorktreeSetupError(err, fullMsg, false);
         }
       }
 
@@ -3549,18 +3666,21 @@ export class SessionManager extends EventEmitter {
       const msg = `sendOrResume: worktree recreation failed for session ${sessionId.slice(0, 8)}: ${(err as Error).message}\nstderr: ${stderr}`;
       logger.error(`[SessionManager] ${msg}`);
 
-      this.markSessionErrored(
-        sessionId,
-        'error',
-        'worktree_recreate_failed',
-        `worktree recreation failed: ${(err as Error).message}`,
-      );
+      const isDegradedSpawn = isDegradedSpawnFailure(err);
+      const reason = isDegradedSpawn
+        ? BACKEND_SPAWN_DEGRADED_REASON
+        : 'worktree_recreate_failed';
+      const detail = isDegradedSpawn
+        ? `${BACKEND_SPAWN_DEGRADED_MESSAGE}\nworktree recreation failed: ${(err as Error).message}`
+        : `worktree recreation failed: ${(err as Error).message}`;
+
+      this.markSessionErrored(sessionId, 'error', reason, detail);
 
       this.emit('message', {
         type: 'session_action_failed',
         sessionId,
         action: 'sendOrResume',
-        reason: 'worktree_recreate_failed',
+        reason,
         detail: stderr || (err as Error).message,
       } satisfies ServerMessage);
 
