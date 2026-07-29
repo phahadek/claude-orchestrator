@@ -14,7 +14,7 @@ import {
   getPRBySessionId,
   getLocalBranchBySession,
   setSessionPauseReason,
-  getLatestSessionEventTimestamp,
+  getSessionLastActivityMs,
   upsertPullRequest,
 } from '../db/queries';
 import {
@@ -300,7 +300,7 @@ export class OrphanedTaskSweeper {
 
     // Working-recency gate: skip if the session emitted events recently.
     // Covers escalation/resume windows where the session is legitimately mid-task.
-    const latestEventTs = getLatestSessionEventTimestamp(session_id);
+    const latestEventTs = getSessionLastActivityMs(session_id);
     const recencyGateMs = this.options.recencyGateMs ?? RECENCY_GATE_MS;
     if (latestEventTs !== null && Date.now() - latestEventTs < recencyGateMs) {
       return;
