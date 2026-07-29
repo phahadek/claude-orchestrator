@@ -24,7 +24,10 @@ function sumCounts(counts: Record<string, number>): number {
 
 type SnapshotFields = Omit<ConvergenceSnapshotRow, 'id' | 'ts'>;
 
-function sameSnapshot(latest: ConvergenceSnapshotRow, next: SnapshotFields): boolean {
+function sameSnapshot(
+  latest: ConvergenceSnapshotRow,
+  next: SnapshotFields,
+): boolean {
   return (
     latest.tasks_open === next.tasks_open &&
     latest.tasks_closed === next.tasks_closed &&
@@ -96,7 +99,10 @@ export class ConvergenceSnapshotJob {
     return { items_processed: itemsProcessed };
   }
 
-  private sampleMilestone(projectId: string, milestone: ProjectMilestone): void {
+  private sampleMilestone(
+    projectId: string,
+    milestone: ProjectMilestone,
+  ): void {
     const key = canonicalMilestoneKey(milestone);
     const convergence = getMilestoneConvergence(projectId, key);
 

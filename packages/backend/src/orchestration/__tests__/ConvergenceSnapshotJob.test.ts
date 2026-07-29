@@ -24,7 +24,10 @@ const projectServiceMock = vi.hoisted(() => ({
 }));
 
 vi.mock('../../db/queries.js', () => queriesMock);
-vi.mock('../../convergence/convergenceService.js', () => convergenceServiceMock);
+vi.mock(
+  '../../convergence/convergenceService.js',
+  () => convergenceServiceMock,
+);
 vi.mock('../../gate/gateService.js', () => gateServiceMock);
 vi.mock('../../seed/seedService.js', () => seedServiceMock);
 vi.mock('../../convergence/opsReadiness.js', () => opsReadinessMock);
@@ -146,7 +149,11 @@ describe('ConvergenceSnapshotJob dedup', () => {
 describe('ConvergenceSnapshotJob per-milestone failure isolation', () => {
   it('catches a failure on one milestone and still processes the rest', async () => {
     projectServiceMock.ProjectService.listMilestones.mockReturnValue([
-      milestone({ id: 'ms-broken', name: 'Broken', canonicalShortId: 'Broken' }),
+      milestone({
+        id: 'ms-broken',
+        name: 'Broken',
+        canonicalShortId: 'Broken',
+      }),
       milestone({ id: 'ms-ok', name: 'OK', canonicalShortId: 'OK' }),
     ]);
 
