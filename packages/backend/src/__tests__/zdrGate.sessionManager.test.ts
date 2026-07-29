@@ -4,6 +4,7 @@
  * code path — not source-text scanning.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Prevent real git/fs operations ──────────────────────────────────────────
 
@@ -54,19 +55,21 @@ vi.mock('../config', () => ({
   normalizePath: (p: string) => p,
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  insertSession: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  getSession: vi.fn().mockReturnValue(null),
-  insertEvent: vi.fn(),
-  getSessionsByStatus: vi.fn().mockReturnValue([]),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  getPRByNumber: vi.fn().mockReturnValue(null),
-  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    insertSession: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    getSession: vi.fn().mockReturnValue(null),
+    insertEvent: vi.fn(),
+    getSessionsByStatus: vi.fn().mockReturnValue([]),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    getPRByNumber: vi.fn().mockReturnValue(null),
+    getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+  }),
+);
 
 vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn().mockReturnValue({

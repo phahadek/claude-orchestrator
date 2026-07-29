@@ -10,25 +10,28 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
-vi.mock('../db/queries.js', () => ({
-  getPRBySessionId: vi.fn(),
-  getPRByNumber: vi.fn(),
-  setHeadSha: vi.fn(),
-  setLastReviewedSha: vi.fn(),
-  setPRReviewResult: vi.fn(),
-  setPauseReason: vi.fn(),
-  setPendingPush: vi.fn(),
-  getSetting: vi.fn().mockReturnValue(null),
-  getAllOpenPRs: vi.fn().mockReturnValue([]),
-  updatePRState: vi.fn(),
-  updateMergeState: vi.fn(),
-  getSession: vi.fn().mockReturnValue(null),
-  addAutofixSha: vi.fn(),
-  consumeAutofixSha: vi.fn().mockReturnValue(false),
-  deleteAllAutofixShasForPR: vi.fn(),
-  setCiRemediationAttemptedSha: vi.fn(),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getPRBySessionId: vi.fn(),
+    getPRByNumber: vi.fn(),
+    setHeadSha: vi.fn(),
+    setLastReviewedSha: vi.fn(),
+    setPRReviewResult: vi.fn(),
+    setPauseReason: vi.fn(),
+    setPendingPush: vi.fn(),
+    getSetting: vi.fn().mockReturnValue(null),
+    getAllOpenPRs: vi.fn().mockReturnValue([]),
+    updatePRState: vi.fn(),
+    updateMergeState: vi.fn(),
+    getSession: vi.fn().mockReturnValue(null),
+    addAutofixSha: vi.fn(),
+    consumeAutofixSha: vi.fn().mockReturnValue(false),
+    deleteAllAutofixShasForPR: vi.fn(),
+    setCiRemediationAttemptedSha: vi.fn(),
+  }),
+);
 
 vi.mock('../config.js', () => ({
   AUTO_REVIEW_ENABLED: true,

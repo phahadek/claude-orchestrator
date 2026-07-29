@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from '../__tests__/helpers/mockDbQueries';
 
 // ── Mocks (must precede imports of the modules under test) ───────────────────
 
@@ -22,27 +23,29 @@ const { projectFixture, runtimeSettingsFixture } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('../db/queries.js', () => ({
-  getPRByNumber: vi.fn(),
-  setPauseReason: vi.fn(),
-  updateMergeState: vi.fn(),
-  updatePRDraftStatus: vi.fn(),
-  getApprovedOpenPRs: vi.fn().mockReturnValue([]),
-  getApprovedLocalBranches: vi.fn().mockReturnValue([]),
-  markLocalBranchMerged: vi.fn(),
-  setLocalBranchPauseReason: vi.fn(),
-  getSession: vi.fn(),
-  getOrphanMergeablePRs: vi.fn().mockReturnValue([]),
-  getStaleAutoMergeFailedPRs: vi.fn().mockReturnValue([]),
-  getConflictNudgeCandidates: vi.fn().mockReturnValue([]),
-  upsertActiveMerge: vi.fn(),
-  deleteActiveMerge: vi.fn(),
-  getAllActiveMerges: vi.fn().mockReturnValue([]),
-  setConflictNudgeSha: vi.fn(),
-  getTaskCache: vi.fn().mockReturnValue(undefined),
-  getPendingRoutedCommentCount: vi.fn().mockReturnValue(0),
-  markReviewerRequested: vi.fn(),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getPRByNumber: vi.fn(),
+    setPauseReason: vi.fn(),
+    updateMergeState: vi.fn(),
+    updatePRDraftStatus: vi.fn(),
+    getApprovedOpenPRs: vi.fn().mockReturnValue([]),
+    getApprovedLocalBranches: vi.fn().mockReturnValue([]),
+    markLocalBranchMerged: vi.fn(),
+    setLocalBranchPauseReason: vi.fn(),
+    getSession: vi.fn(),
+    getOrphanMergeablePRs: vi.fn().mockReturnValue([]),
+    getStaleAutoMergeFailedPRs: vi.fn().mockReturnValue([]),
+    getConflictNudgeCandidates: vi.fn().mockReturnValue([]),
+    upsertActiveMerge: vi.fn(),
+    deleteActiveMerge: vi.fn(),
+    getAllActiveMerges: vi.fn().mockReturnValue([]),
+    setConflictNudgeSha: vi.fn(),
+    getTaskCache: vi.fn().mockReturnValue(undefined),
+    getPendingRoutedCommentCount: vi.fn().mockReturnValue(0),
+    markReviewerRequested: vi.fn(),
+  }),
+);
 
 vi.mock('../config.js', () => ({
   getProjectByGithubRepo: vi.fn((repo: string) =>

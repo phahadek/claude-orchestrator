@@ -13,6 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Hoisted mutable config mock ───────────────────────────────────────────────
 // vi.mock factories are hoisted above imports, so top-level variables in the test
@@ -86,25 +87,27 @@ vi.mock('../config', () => ({
   normalizePath: (p: string) => p,
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  insertSession: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  getSession: vi.fn().mockReturnValue(null),
-  insertEvent: vi.fn(),
-  getSessionsByStatus: vi.fn().mockReturnValue([]),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  getPRByNumber: vi.fn().mockReturnValue(null),
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  getSetting: vi.fn().mockReturnValue(null),
-  getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
-  markSessionSuperseded: vi.fn(),
-  markSessionDone: vi.fn(),
-  updateSessionWorktreePath: vi.fn(),
-  incrementTaskCrashCount: vi.fn().mockReturnValue(1),
-  setTaskPauseReason: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    insertSession: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    getSession: vi.fn().mockReturnValue(null),
+    insertEvent: vi.fn(),
+    getSessionsByStatus: vi.fn().mockReturnValue([]),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    getPRByNumber: vi.fn().mockReturnValue(null),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    getSetting: vi.fn().mockReturnValue(null),
+    getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
+    markSessionSuperseded: vi.fn(),
+    markSessionDone: vi.fn(),
+    updateSessionWorktreePath: vi.fn(),
+    incrementTaskCrashCount: vi.fn().mockReturnValue(1),
+    setTaskPauseReason: vi.fn(),
+  }),
+);
 
 vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn().mockReturnValue({

@@ -7,13 +7,16 @@ import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { PullRequest } from '../github/types';
 import type { WorktreeEscapeViolation } from '../db/types';
+import { mockDbQueries } from '../__tests__/helpers/mockDbQueries';
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  getPRByNotionTaskId: vi.fn(() => null),
-  getEventsBySession: vi.fn(() => []),
-  getDenialsBySession: vi.fn(() => []),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    getPRByNotionTaskId: vi.fn(() => null),
+    getEventsBySession: vi.fn(() => []),
+    getDenialsBySession: vi.fn(() => []),
+  }),
+);
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

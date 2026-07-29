@@ -8,29 +8,32 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 const { mockGetSession, mockArchiveSession } = vi.hoisted(() => ({
   mockGetSession: vi.fn(),
   mockArchiveSession: vi.fn(),
 }));
 
-vi.mock('../db/queries', () => ({
-  getSession: mockGetSession,
-  getActiveSessions: vi.fn(),
-  getArchivedSessions: vi.fn(),
-  getSessionsByStatus: vi.fn(),
-  getSessionsByProject: vi.fn(),
-  deleteSession: vi.fn(),
-  archiveSession: mockArchiveSession,
-  unarchiveSession: vi.fn(),
-  archiveFinishedSessions: vi.fn(),
-  setSessionNote: vi.fn(),
-  setSessionTags: vi.fn(),
-  favoriteSession: vi.fn(),
-  unfavoriteSession: vi.fn(),
-  deleteDenialsBySession: vi.fn(),
-  getEventsBySession: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getSession: mockGetSession,
+    getActiveSessions: vi.fn(),
+    getArchivedSessions: vi.fn(),
+    getSessionsByStatus: vi.fn(),
+    getSessionsByProject: vi.fn(),
+    deleteSession: vi.fn(),
+    archiveSession: mockArchiveSession,
+    unarchiveSession: vi.fn(),
+    archiveFinishedSessions: vi.fn(),
+    setSessionNote: vi.fn(),
+    setSessionTags: vi.fn(),
+    favoriteSession: vi.fn(),
+    unfavoriteSession: vi.fn(),
+    deleteDenialsBySession: vi.fn(),
+    getEventsBySession: vi.fn(),
+  }),
+);
 
 vi.mock('../config', () => ({
   getProjectById: vi.fn(),

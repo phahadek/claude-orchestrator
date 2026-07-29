@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Mock } from 'vitest';
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 vi.mock('https', () => ({
   default: { get: vi.fn() },
@@ -9,10 +10,12 @@ const { mockGetSetting, mockSetSetting } = vi.hoisted(() => ({
   mockGetSetting: vi.fn<[], string | undefined>(() => undefined),
   mockSetSetting: vi.fn<[string, string], void>(),
 }));
-vi.mock('../../db/queries', () => ({
-  getSetting: mockGetSetting,
-  setSetting: mockSetSetting,
-}));
+vi.mock('../../db/queries', () =>
+  mockDbQueries({
+    getSetting: mockGetSetting,
+    setSetting: mockSetSetting,
+  }),
+);
 
 import https from 'https';
 import {

@@ -14,6 +14,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import { EventEmitter } from 'events';
 import { makeEventRow } from '../../test/helpers/eventFixtures';
 
@@ -26,25 +27,27 @@ vi.mock('../db/db.js', async () => {
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
-vi.mock('../db/queries.js', () => ({
-  getPRByNumber: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  setReviewSessionId: vi.fn(),
-  setLastReviewedSha: vi.fn(),
-  setPRReviewResult: vi.fn(),
-  updatePRDraftStatus: vi.fn(),
-  incrementReviewIteration: vi.fn(),
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  getPausedPrReasonForTask: vi.fn().mockReturnValue(null),
-  getMergedPRForTask: vi.fn().mockReturnValue(null),
-  getLocalBranchById: vi.fn(),
-  setLocalBranchReviewResult: vi.fn(),
-  getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
-  insertPendingReviewSync: vi.fn(),
-  deletePendingReviewSync: vi.fn(),
-  getSetting: vi.fn().mockReturnValue(null),
-  getSession: vi.fn(),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getPRByNumber: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    setReviewSessionId: vi.fn(),
+    setLastReviewedSha: vi.fn(),
+    setPRReviewResult: vi.fn(),
+    updatePRDraftStatus: vi.fn(),
+    incrementReviewIteration: vi.fn(),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    getPausedPrReasonForTask: vi.fn().mockReturnValue(null),
+    getMergedPRForTask: vi.fn().mockReturnValue(null),
+    getLocalBranchById: vi.fn(),
+    setLocalBranchReviewResult: vi.fn(),
+    getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
+    insertPendingReviewSync: vi.fn(),
+    deletePendingReviewSync: vi.fn(),
+    getSetting: vi.fn().mockReturnValue(null),
+    getSession: vi.fn(),
+  }),
+);
 
 vi.mock('../projects/ProjectService.js', () => ({
   ProjectService: {

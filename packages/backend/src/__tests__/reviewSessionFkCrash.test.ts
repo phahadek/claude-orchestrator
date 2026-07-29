@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
 
@@ -137,28 +138,30 @@ vi.mock('../tasks/TaskStatusEngine', () => ({
   deriveDisplayStatusFromDb: vi.fn(() => 'Running'),
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  getSessionsByStatus: vi.fn(() => []),
-  getSession: vi.fn(() => undefined),
-  getEventsBySession: vi.fn(() => []),
-  getPRByNotionTaskId: vi.fn(() => null),
-  getPRByNumber: vi.fn(() => null),
-  updateSessionStatus: vi.fn(),
-  insertSession: vi.fn(),
-  insertEvent: vi.fn(),
-  upsertSessionEvent: vi.fn(() => 1),
-  upsertPullRequest: vi.fn(),
-  insertPermissionDenial: vi.fn(),
-  incrementTokens: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  insertSessionAudit: vi.fn(),
-  setSessionModel: vi.fn(),
-  getPRBySessionId: vi.fn(() => null),
-  setHeadSha: vi.fn(),
-  hasActiveSessionForTask: vi.fn(() => false),
-  getSetting: vi.fn().mockReturnValue(null),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    getSessionsByStatus: vi.fn(() => []),
+    getSession: vi.fn(() => undefined),
+    getEventsBySession: vi.fn(() => []),
+    getPRByNotionTaskId: vi.fn(() => null),
+    getPRByNumber: vi.fn(() => null),
+    updateSessionStatus: vi.fn(),
+    insertSession: vi.fn(),
+    insertEvent: vi.fn(),
+    upsertSessionEvent: vi.fn(() => 1),
+    upsertPullRequest: vi.fn(),
+    insertPermissionDenial: vi.fn(),
+    incrementTokens: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    insertSessionAudit: vi.fn(),
+    setSessionModel: vi.fn(),
+    getPRBySessionId: vi.fn(() => null),
+    setHeadSha: vi.fn(),
+    hasActiveSessionForTask: vi.fn(() => false),
+    getSetting: vi.fn().mockReturnValue(null),
+  }),
+);
 
 vi.mock('../audit/AuditLog', () => ({
   recordEvent: vi.fn(),

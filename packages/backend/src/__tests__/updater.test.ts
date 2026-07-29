@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Mock } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -13,11 +14,13 @@ vi.mock('https', () => {
 });
 
 // Stable channel by default for existing tests
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  getSetting: vi.fn(() => 'stable'),
-  setSetting: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    getSetting: vi.fn(() => 'stable'),
+    setSetting: vi.fn(),
+  }),
+);
 
 import https from 'https';
 import { UpdateChecker } from '../updater/UpdateChecker.js';

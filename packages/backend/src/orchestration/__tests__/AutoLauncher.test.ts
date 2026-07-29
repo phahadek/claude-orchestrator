@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ResolvedTask } from '../../notion/types';
 import type { ProjectConfig } from '../../config';
 import { WorktreeSetupError } from '../../session/WorktreeSetupError.js';
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -23,18 +24,20 @@ vi.mock('../../tasks/TaskBackend.js', () => ({
   getTaskBackend: vi.fn(),
 }));
 
-vi.mock('../../db/queries.js', () => ({
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  getPausedPrReasonForTask: vi.fn().mockReturnValue(null),
-  getMergedPRForTask: vi.fn().mockReturnValue(null),
-  setPauseReason: vi.fn(),
-  setTaskPauseReason: vi.fn(),
-  getTaskPauseReason: vi.fn().mockReturnValue(null),
-  clearTaskPauseReason: vi.fn(),
-  clearPausedPrReasonForTask: vi.fn(),
-  resetTaskCrashCount: vi.fn(),
-  getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
-}));
+vi.mock('../../db/queries.js', () =>
+  mockDbQueries({
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    getPausedPrReasonForTask: vi.fn().mockReturnValue(null),
+    getMergedPRForTask: vi.fn().mockReturnValue(null),
+    setPauseReason: vi.fn(),
+    setTaskPauseReason: vi.fn(),
+    getTaskPauseReason: vi.fn().mockReturnValue(null),
+    clearTaskPauseReason: vi.fn(),
+    clearPausedPrReasonForTask: vi.fn(),
+    resetTaskCrashCount: vi.fn(),
+    getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
+  }),
+);
 
 vi.mock('../../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),

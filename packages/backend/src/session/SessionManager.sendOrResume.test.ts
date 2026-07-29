@@ -8,32 +8,35 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from '../__tests__/helpers/mockDbQueries';
 
 // ── Heavy deps mocked before SessionManager is imported ───────────────────────
 
-vi.mock('../db/queries.js', () => ({
-  getSession: vi.fn().mockReturnValue(null),
-  insertSession: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  updateSessionWorktreePath: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionSuperseded: vi.fn(),
-  insertEvent: vi.fn(),
-  getSessionsByStatus: vi.fn().mockReturnValue([]),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  getPRByNumber: vi.fn().mockReturnValue(null),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
-  getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
-  setSessionPauseReason: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
-  incrementTaskCrashCount: vi.fn(),
-  setTaskPauseReason: vi.fn(),
-  getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getSession: vi.fn().mockReturnValue(null),
+    insertSession: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    updateSessionWorktreePath: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionSuperseded: vi.fn(),
+    insertEvent: vi.fn(),
+    getSessionsByStatus: vi.fn().mockReturnValue([]),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    getPRByNumber: vi.fn().mockReturnValue(null),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+    getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
+    setSessionPauseReason: vi.fn(),
+    setSessionLastErrorDetail: vi.fn(),
+    incrementTaskCrashCount: vi.fn(),
+    setTaskPauseReason: vi.fn(),
+    getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
+  }),
+);
 
 vi.mock('../audit/AuditLog.js', () => ({ recordEvent: vi.fn() }));
 
