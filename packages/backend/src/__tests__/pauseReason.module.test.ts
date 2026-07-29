@@ -13,8 +13,8 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 27 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(27);
+  it('contains exactly 31 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(31);
   });
 
   it('covers all 20 legacy PauseReason values', () => {
@@ -218,6 +218,7 @@ describe('deriveRecoveryDescriptor', () => {
 
   it.each([
     ['autofix_git_infra_failure', 'rerun', 'Rerun'],
+    ['autofix_tool_infra_failure', 'rerun', 'Rerun'],
     ['ci_billing_blocked', 'rerun', 'Rerun'],
     ['stalled_reconcile_cap', 'rerun', 'Rerun'],
     ['auto_merge_failed', 'rerun', 'Rerun'],

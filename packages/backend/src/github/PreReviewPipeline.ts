@@ -35,6 +35,8 @@ interface GateFailureDetail {
   summary: string;
   output?: string;
   isGitInfraFailure?: boolean;
+  isToolInfraFailure?: boolean;
+  toolFailureReason?: string;
 }
 
 interface GateStageDescriptor {
@@ -139,6 +141,14 @@ export class PreReviewPipeline {
                 );
               }
               return { summary: result.summary, isGitInfraFailure: true };
+            }
+
+            if (result.isToolInfraFailure) {
+              return {
+                summary: result.summary,
+                isToolInfraFailure: true,
+                toolFailureReason: result.toolFailureReason,
+              };
             }
 
             success = result.success;
@@ -445,7 +455,9 @@ export class PreReviewPipeline {
 
     const verdict = detail.isGitInfraFailure
       ? 'autofix_git_infra_failure'
-      : stage.verdict;
+      : detail.isToolInfraFailure
+        ? 'autofix_tool_infra_failure'
+        : stage.verdict;
 
     setPRReviewResult(
       job.prNumber,
@@ -463,10 +475,16 @@ export class PreReviewPipeline {
 
     const pauseReasonToSet: PauseReason | undefined = detail.isGitInfraFailure
       ? 'autofix_git_infra_failure'
-      : stage.pauseReason;
+      : detail.isToolInfraFailure
+        ? 'autofix_tool_infra_failure'
+        : stage.pauseReason;
     if (pauseReasonToSet) {
       setPauseReason(job.prNumber, job.repo, pauseReasonToSet);
     }
+
+    // A tool-infra failure is a host/environment issue the session cannot
+    // fix by pushing code — route it to the operator instead of nudging.
+    if (detail.isToolInfraFailure) return;
 
     const sessionId = prRow?.session_id;
     if (!sessionId) return;
@@ -600,11 +618,15 @@ export class PreReviewPipeline {
 
   /**
    * Pauses this pipeline itself sets on gate failure: every stage descriptor's
-   * pauseReason, plus 'autofix_git_infra_failure' which handleGateFailure sets
-   * imperatively (outside the stage array) on git-infra failures.
+   * pauseReason, plus 'autofix_git_infra_failure' and 'autofix_tool_infra_failure'
+   * which handleGateFailure sets imperatively (outside the stage array) on
+   * infra failures.
    */
   private gateOwnedPauseReasons(): Set<PauseReason> {
-    const owned = new Set<PauseReason>(['autofix_git_infra_failure']);
+    const owned = new Set<PauseReason>([
+      'autofix_git_infra_failure',
+      'autofix_tool_infra_failure',
+    ]);
     for (const stage of this.stages) {
       if (stage.mode === 'gate' && stage.pauseReason) {
         owned.add(stage.pauseReason);

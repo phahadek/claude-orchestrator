@@ -505,6 +505,109 @@ describe('PreReviewPipeline — autofix git infra failure (exit 128)', () => {
   });
 });
 
+describe('PreReviewPipeline — autofix tool infra failure (tool could not execute)', () => {
+  it('sets verdict=autofix_tool_infra_failure, not autofix_failed', async () => {
+    mockLoadAutofixCommands.mockReturnValue(['golangci-lint run']);
+    mockRunAutofix.mockResolvedValue({
+      success: false,
+      isToolInfraFailure: true,
+      toolFailureReason:
+        'golangci-lint run: go.mod requires go >= 1.24 (running go 1.21.5)',
+      summary:
+        'golangci-lint run: go.mod requires go >= 1.24 (running go 1.21.5)',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockSetPRReviewResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      expect.stringContaining('autofix_tool_infra_failure'),
+    );
+    expect(mockSetPRReviewResult).not.toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      expect.stringContaining('autofix_failed'),
+    );
+  });
+
+  it('sets pause reason to autofix_tool_infra_failure', async () => {
+    mockLoadAutofixCommands.mockReturnValue(['golangci-lint run']);
+    mockRunAutofix.mockResolvedValue({
+      success: false,
+      isToolInfraFailure: true,
+      toolFailureReason: 'golangci-lint run: command not found',
+      summary: 'golangci-lint run: command not found',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'autofix_tool_infra_failure',
+    );
+  });
+
+  it('does not send a session nudge for a tool infra failure', async () => {
+    mockLoadAutofixCommands.mockReturnValue(['golangci-lint run']);
+    mockRunAutofix.mockResolvedValue({
+      success: false,
+      isToolInfraFailure: true,
+      toolFailureReason: 'golangci-lint run: command not found',
+      summary: 'golangci-lint run: command not found',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(sm.sendOrResume).not.toHaveBeenCalled();
+  });
+
+  it('does not invoke validateAndRepairGitConfig for a tool infra failure', async () => {
+    mockLoadAutofixCommands.mockReturnValue(['golangci-lint run']);
+    mockRunAutofix.mockResolvedValue({
+      success: false,
+      isToolInfraFailure: true,
+      toolFailureReason: 'golangci-lint run: command not found',
+      summary: 'golangci-lint run: command not found',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockValidateAndRepairGitConfig).not.toHaveBeenCalled();
+  });
+
+  it('still produces autofix_failed and nudges the session for a genuine (non-infra) autofix failure', async () => {
+    mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
+    mockRunAutofix.mockResolvedValue({
+      success: false,
+      summary: 'autofix commands ran but produced no diff (failures: exit 2)',
+    });
+    const sm = makeSessionManager();
+    const pipeline = new PreReviewPipeline(sm);
+
+    await pipeline.run(makeJob(), makeProject());
+
+    expect(mockSetPRReviewResult).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      expect.stringContaining('autofix_failed'),
+    );
+    expect(sm.sendOrResume).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.stringContaining('Autofix Gate Failure'),
+    );
+  });
+});
+
 describe('PreReviewPipeline — verify gate', () => {
   it('skips verify when no worktreePath', async () => {
     mockGetSession.mockReturnValue({
