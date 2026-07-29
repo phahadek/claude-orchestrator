@@ -149,9 +149,9 @@ function buildQuery(params: object): string {
 }
 
 export const gateApi = {
-  getGateReadiness(milestone: string): Promise<GateReadiness> {
+  getGateReadiness(project: string, milestone: string): Promise<GateReadiness> {
     return apiRequest<GateReadiness>(
-      `/api/gate/readiness${buildQuery({ milestone })}`,
+      `/api/gate/readiness${buildQuery({ project, milestone })}`,
     );
   },
 

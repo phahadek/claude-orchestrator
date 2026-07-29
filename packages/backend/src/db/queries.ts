@@ -4365,21 +4365,8 @@ export function insertGateItemEvent(row: NewGateItemEventRow): void {
   _stmtInsertGateItemEvent.run(row);
 }
 
-let _stmtListGateItemsByMilestoneAllProjects: Database.Statement | null = null;
 let _stmtListAllGateItems: Database.Statement | null = null;
 let _stmtUpdateGateItemMinDeployedCommit: Database.Statement | null = null;
-
-/** All gate items for a milestone, regardless of project (mirrors ops_journal's milestone-only lookup). */
-export function listGateItemsByMilestoneAllProjects(
-  milestone: string,
-): GateItemRow[] {
-  _stmtListGateItemsByMilestoneAllProjects ??= db.prepare<{
-    milestone: string;
-  }>(`SELECT * FROM gate_item WHERE milestone = @milestone`);
-  return _stmtListGateItemsByMilestoneAllProjects.all({
-    milestone,
-  }) as GateItemRow[];
-}
 
 /** Every gate item across all projects/milestones — the reconciler's working set. */
 export function listAllGateItems(): GateItemRow[] {
@@ -4611,7 +4598,6 @@ export function deleteGateContribution(
 
 let _stmtGetSeedItem: Database.Statement | null = null;
 let _stmtListSeedItemsByMilestone: Database.Statement | null = null;
-let _stmtListSeedItemsByMilestoneAllProjects: Database.Statement | null = null;
 let _stmtListAllSeedItems: Database.Statement | null = null;
 let _stmtListSeedItemsByProject: Database.Statement | null = null;
 let _stmtInsertSeedItem: Database.Statement | null = null;
@@ -4642,18 +4628,6 @@ export function listSeedItemsByMilestone(
   );
   return _stmtListSeedItemsByMilestone.all({
     project,
-    milestone,
-  }) as SeedItemRow[];
-}
-
-/** All seed items for a milestone, regardless of project — the readiness/applyability API's lookup. */
-export function listSeedItemsByMilestoneAllProjects(
-  milestone: string,
-): SeedItemRow[] {
-  _stmtListSeedItemsByMilestoneAllProjects ??= db.prepare<{
-    milestone: string;
-  }>(`SELECT * FROM seed_item WHERE milestone = @milestone`);
-  return _stmtListSeedItemsByMilestoneAllProjects.all({
     milestone,
   }) as SeedItemRow[];
 }

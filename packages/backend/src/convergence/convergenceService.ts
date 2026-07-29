@@ -160,7 +160,7 @@ export function getMilestoneConvergence(
 
   const tasks = getTaskAxis(milestoneRow);
 
-  const gateReadiness = getGateReadiness(key);
+  const gateReadiness = getGateReadiness(projectId, key);
   const gate: GateAxis = {
     status: gateReadiness.status,
     blockingCount: gateReadiness.blocking.length,
@@ -171,7 +171,7 @@ export function getMilestoneConvergence(
     })),
   };
 
-  const seedReadiness = getSeedReadiness(key);
+  const seedReadiness = getSeedReadiness(projectId, key);
   const seed: SeedAxis = {
     status: seedReadiness.status,
     blockingCount: seedReadiness.blocking.length,

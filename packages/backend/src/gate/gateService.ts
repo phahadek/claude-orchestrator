@@ -126,9 +126,18 @@ export interface GateReadiness {
   counts: Record<string, number>;
 }
 
-/** Headline output: green once every item in the milestone is pass/deferred/discarded. */
-export function getGateReadiness(milestone: string): GateReadiness {
-  const items = gateStore.listByMilestoneAllProjects(milestone);
+/**
+ * Headline output: green once every item in the milestone is
+ * pass/deferred/discarded. Scoped to one project — milestone display names
+ * are not unique across projects (e.g. two projects can each have an "M13"),
+ * so an unscoped lookup would merge unrelated projects' items into one
+ * rollup.
+ */
+export function getGateReadiness(
+  project: string,
+  milestone: string,
+): GateReadiness {
+  const items = gateStore.listByMilestone(project, milestone);
   const blocking = items
     .filter((item) => !RESOLVED_STATES.has(item.state))
     .map((item) => ({
@@ -290,14 +299,21 @@ function isAwaitingSetup(item: GateItem): boolean {
   return item.events.at(-1)?.disposition === 'needs-setup';
 }
 
-/** Pulls one tier's worth of runnable items at a time — never the full runnable set. */
+/**
+ * Pulls one tier's worth of runnable items at a time — never the full
+ * runnable set. Scoped to one project (see getGateReadiness) — an unscoped
+ * pull could hand one project's /gate session another project's items to
+ * disposition, writing pass/fail/deferred events against the wrong
+ * project's verification record.
+ */
 export function nextRunnableGateItems(
+  project: string,
   milestone: string,
   options: NextRunnableGateItemsOptions = {},
 ): GateItem[] {
   const limit = options.limit ?? DEFAULT_BATCH_LIMIT;
   const runnable = gateStore
-    .listByMilestoneAllProjects(milestone)
+    .listByMilestone(project, milestone)
     .filter((item) => item.state === 'runnable')
     .filter((item) => !isAwaitingSetup(item));
 

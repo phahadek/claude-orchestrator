@@ -26,7 +26,7 @@ vi.mock('../../tasks/TaskBackend.js', () => ({
 
 import { db } from '../../db/db.js';
 import { upsertTaskCache } from '../../db/queries.js';
-import { listByMilestoneAllProjects } from '../seedStore.js';
+import { listByMilestone } from '../seedStore.js';
 import { backfillSeedTask } from '../seedService.js';
 
 const SEED_BODY = `#### Add config knob [notion:xyz]\n- feature_flag: new_pricing_tier = true\n`;
@@ -59,7 +59,7 @@ describe('backfillSeedTask', () => {
 
     expect(result.createdIds).toHaveLength(1);
     expect(mockGetTaskBackend).toHaveBeenCalledWith('polimarket-analyser');
-    expect(listByMilestoneAllProjects('M11')).toHaveLength(1);
+    expect(listByMilestone('polimarket-analyser', 'M11')).toHaveLength(1);
   });
 
   it('is idempotent: re-running mints no duplicate rows', async () => {
@@ -79,7 +79,7 @@ describe('backfillSeedTask', () => {
 
     expect(second.createdIds).toHaveLength(0);
     expect(second.skippedIds).toHaveLength(1);
-    expect(listByMilestoneAllProjects('M11')).toHaveLength(1);
+    expect(listByMilestone('polimarket-analyser', 'M11')).toHaveLength(1);
   });
 
   it('throws a not-found error when fetchTaskPage fails', async () => {

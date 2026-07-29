@@ -423,7 +423,7 @@ export function GateReadinessPanel({
 
   // Load readiness (green/blocked + per-state counts) for the selected milestone.
   useEffect(() => {
-    if (!selectedMilestone) {
+    if (!selectedMilestone || !activeProjectId) {
       setReadiness(null);
       return;
     }
@@ -431,7 +431,7 @@ export function GateReadinessPanel({
     setReadinessLoading(true);
     setReadinessError(null);
     gateApi
-      .getGateReadiness(selectedMilestone)
+      .getGateReadiness(activeProjectId, selectedMilestone)
       .then((result) => {
         if (cancelled) return;
         setReadiness(result);
@@ -447,11 +447,11 @@ export function GateReadinessPanel({
     return () => {
       cancelled = true;
     };
-  }, [selectedMilestone]);
+  }, [activeProjectId, selectedMilestone]);
 
   // Load config-seed readiness (green/blocked + per-state counts) for the selected milestone.
   useEffect(() => {
-    if (!selectedMilestone) {
+    if (!selectedMilestone || !activeProjectId) {
       setSeedReadiness(null);
       return;
     }
@@ -459,7 +459,7 @@ export function GateReadinessPanel({
     setSeedReadinessLoading(true);
     setSeedReadinessError(null);
     seedApi
-      .getSeedReadiness(selectedMilestone)
+      .getSeedReadiness(activeProjectId, selectedMilestone)
       .then((result) => {
         if (cancelled) return;
         setSeedReadiness(result);
@@ -475,7 +475,7 @@ export function GateReadinessPanel({
     return () => {
       cancelled = true;
     };
-  }, [selectedMilestone]);
+  }, [activeProjectId, selectedMilestone]);
 
   // Reset to page 1 whenever the milestone or filters change.
   useEffect(() => {
@@ -786,14 +786,14 @@ export function GateReadinessPanel({
           .then((result) => setDetail(result))
           .catch(() => {});
       }
-      if (selectedMilestone) {
+      if (selectedMilestone && activeProjectId) {
         gateApi
-          .getGateReadiness(selectedMilestone)
+          .getGateReadiness(activeProjectId, selectedMilestone)
           .then((result) => setReadiness(result))
           .catch(() => {});
       }
     },
-    [expandedId, selectedMilestone],
+    [expandedId, selectedMilestone, activeProjectId],
   );
 
   const withDispositionMutation = useCallback(

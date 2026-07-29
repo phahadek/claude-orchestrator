@@ -106,11 +106,11 @@ export class ConvergenceSnapshotJob {
     const key = canonicalMilestoneKey(milestone);
     const convergence = getMilestoneConvergence(projectId, key);
 
-    const gateReadiness = getGateReadiness(key);
+    const gateReadiness = getGateReadiness(projectId, key);
     const gateOpen = gateReadiness.blocking.length;
     const gateClosed = sumCounts(gateReadiness.counts) - gateOpen;
 
-    const seedReadiness = getSeedReadiness(key);
+    const seedReadiness = getSeedReadiness(projectId, key);
     const seedOpen = seedReadiness.blocking.length;
     const seedClosed = sumCounts(seedReadiness.counts) - seedOpen;
 

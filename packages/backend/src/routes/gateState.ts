@@ -40,16 +40,27 @@ import {
 export function createGateStateRouter(): Router {
   const router = Router();
 
-  // GET /api/gate/readiness?milestone=M12
+  // GET /api/gate/readiness?project=P&milestone=M12
   router.get('/gate/readiness', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : null;
     const milestone =
       typeof req.query.milestone === 'string' ? req.query.milestone : null;
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
     if (!milestone) {
       res.status(400).json({ error: 'milestone is required' });
       return;
     }
     try {
-      res.json(getGateReadiness(resolveMilestoneAnyProject(milestone)));
+      res.json(
+        getGateReadiness(
+          project,
+          resolveMilestoneForProject(project, milestone),
+        ),
+      );
     } catch (err) {
       if (err instanceof UnknownMilestoneError) {
         res.status(400).json({ error: err.message });
@@ -71,10 +82,16 @@ export function createGateStateRouter(): Router {
     res.json(reconcileGateRunnability(deploySha));
   });
 
-  // GET /api/gate/next?milestone=M12&classification=Read-Only&limit=5
+  // GET /api/gate/next?project=P&milestone=M12&classification=Read-Only&limit=5
   router.get('/gate/next', (req: Request, res: Response) => {
+    const project =
+      typeof req.query.project === 'string' ? req.query.project : null;
     const milestone =
       typeof req.query.milestone === 'string' ? req.query.milestone : null;
+    if (!project) {
+      res.status(400).json({ error: 'project is required' });
+      return;
+    }
     if (!milestone) {
       res.status(400).json({ error: 'milestone is required' });
       return;
@@ -87,10 +104,14 @@ export function createGateStateRouter(): Router {
       typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
     try {
       res.json(
-        nextRunnableGateItems(resolveMilestoneAnyProject(milestone), {
-          classification,
-          limit: Number.isFinite(limit) ? limit : undefined,
-        }),
+        nextRunnableGateItems(
+          project,
+          resolveMilestoneForProject(project, milestone),
+          {
+            classification,
+            limit: Number.isFinite(limit) ? limit : undefined,
+          },
+        ),
       );
     } catch (err) {
       if (err instanceof UnknownMilestoneError) {

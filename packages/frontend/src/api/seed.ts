@@ -77,9 +77,9 @@ function buildQuery(params: object): string {
 }
 
 export const seedApi = {
-  getSeedReadiness(milestone: string): Promise<SeedReadiness> {
+  getSeedReadiness(project: string, milestone: string): Promise<SeedReadiness> {
     return apiRequest<SeedReadiness>(
-      `/api/seed/readiness${buildQuery({ milestone })}`,
+      `/api/seed/readiness${buildQuery({ project, milestone })}`,
     );
   },
 

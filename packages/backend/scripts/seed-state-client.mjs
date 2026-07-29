@@ -13,8 +13,8 @@
 // all routes are loopback-only and device-authed.
 //
 // Usage:
-//   node seed-state-client.mjs readiness --milestone <M>
-//   node seed-state-client.mjs next --milestone <M> --deploySha <sha> [--limit <N>]
+//   node seed-state-client.mjs readiness --project <P> --milestone <M>
+//   node seed-state-client.mjs next --project <P> --milestone <M> --deploySha <sha> [--limit <N>]
 //   node seed-state-client.mjs item <seedItemId>
 //   node seed-state-client.mjs detail <seedItemId>
 //   node seed-state-client.mjs event <seedItemId> <json-payload>
@@ -78,8 +78,8 @@ export function requestSeedState({ host, port, token, method, path, payload }) {
   });
 }
 
-export function fetchSeedReadiness({ host, port, token, milestone }) {
-  const query = new URLSearchParams({ milestone });
+export function fetchSeedReadiness({ host, port, token, project, milestone }) {
+  const query = new URLSearchParams({ project, milestone });
   return requestSeedState({
     host,
     port,
@@ -93,11 +93,12 @@ export function fetchNextApplyableSeedItems({
   host,
   port,
   token,
+  project,
   milestone,
   deploySha,
   limit,
 }) {
-  const query = new URLSearchParams({ milestone, deploySha });
+  const query = new URLSearchParams({ project, milestone, deploySha });
   if (limit !== undefined) query.set('limit', String(limit));
   return requestSeedState({
     host,
@@ -157,6 +158,7 @@ function parseFlags(argv) {
     return argv[i + 1];
   }
   return {
+    project: option('--project'),
     milestone: option('--milestone'),
     deploySha: option('--deploySha'),
     limit: option('--limit'),
@@ -165,8 +167,8 @@ function parseFlags(argv) {
 
 const USAGE =
   'usage:\n' +
-  '  node seed-state-client.mjs readiness --milestone <M>\n' +
-  '  node seed-state-client.mjs next --milestone <M> --deploySha <sha> [--limit <N>]\n' +
+  '  node seed-state-client.mjs readiness --project <P> --milestone <M>\n' +
+  '  node seed-state-client.mjs next --project <P> --milestone <M> --deploySha <sha> [--limit <N>]\n' +
   '  node seed-state-client.mjs item <seedItemId>\n' +
   '  node seed-state-client.mjs detail <seedItemId>\n' +
   '  node seed-state-client.mjs event <seedItemId> <json-payload>\n' +
@@ -198,16 +200,23 @@ async function main() {
   try {
     let result;
     if (command === 'readiness') {
-      const { milestone } = parseFlags(rest);
-      if (!milestone) return fail(USAGE);
-      result = await fetchSeedReadiness({ host, port, token, milestone });
+      const { project, milestone } = parseFlags(rest);
+      if (!project || !milestone) return fail(USAGE);
+      result = await fetchSeedReadiness({
+        host,
+        port,
+        token,
+        project,
+        milestone,
+      });
     } else if (command === 'next') {
-      const { milestone, deploySha, limit } = parseFlags(rest);
-      if (!milestone || !deploySha) return fail(USAGE);
+      const { project, milestone, deploySha, limit } = parseFlags(rest);
+      if (!project || !milestone || !deploySha) return fail(USAGE);
       result = await fetchNextApplyableSeedItems({
         host,
         port,
         token,
+        project,
         milestone,
         deploySha,
         limit,

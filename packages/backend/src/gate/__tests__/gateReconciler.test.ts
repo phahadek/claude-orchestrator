@@ -277,7 +277,7 @@ describe('runGateReconcilerTick', () => {
       { itemId: item.id, classification: 'Read-Only', disposition: 'pass' },
     ]);
     expect(getItem(item.id)?.state).toBe('pass');
-    expect(result.readiness['M12'].status).toBe('green');
+    expect(result.readiness['polimarket-analyser::M12'].status).toBe('green');
     expect(getItem(item.id)?.events.at(-1)).toMatchObject({
       disposition: 'pass',
       operator: 'gate-verifier',
@@ -676,7 +676,7 @@ describe('runGateReconcilerTick', () => {
     const result = await runGateReconcilerTick({
       deployAdvanceTrigger: fixedTrigger(null),
     });
-    expect(result.readiness['M20'].status).toBe('blocked');
+    expect(result.readiness['polimarket-analyser::M20'].status).toBe('blocked');
   });
 });
 
