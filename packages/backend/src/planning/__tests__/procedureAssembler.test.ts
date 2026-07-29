@@ -1265,7 +1265,7 @@ describe('assemblePlanningProcedure', () => {
     });
 
     const hintSentence =
-      "This selection is titles/ids only — too large to inline wholesale.";
+      'This selection is titles/ids only — too large to inline wholesale.';
     expect(designOutput).toContain(hintSentence);
     expect(opsOutput).toContain(hintSentence);
   });
