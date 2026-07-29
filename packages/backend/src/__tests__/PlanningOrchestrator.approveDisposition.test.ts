@@ -71,6 +71,7 @@ function stageIntent(
     project_id: 'proj-1',
     session_id: SESSION_ID,
     group_id: null,
+    milestone: null,
     state: 'staged',
     supersedes: null,
     annotation: null,

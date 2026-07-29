@@ -1264,6 +1264,23 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // staged_intent.milestone: the milestone (canonical_short_id) the intent's
+  // target task belongs to — populated at every stage path (dispatched
+  // planning sessions, which know their milestone at dispatch, and the human
+  // POST /staged-intents route). Legacy rows and intents whose task can't be
+  // resolved to a milestone stay NULL, surfaced on the decision-inbox
+  // ?milestone lens as the "unattributed" bucket — never dropped.
+  // Forward-only: existing rows get NULL until best-effort backfilled (see
+  // backfillStagedIntentMilestones in queries.ts, run once at boot).
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN milestone TEXT`);
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    CREATE INDEX IF NOT EXISTS idx_staged_intent_project_milestone ON staged_intent(project_id, milestone);
+  `);
+
   // ── arch_unit: architecture-information store ───────────────────────────
   // A single titled architecture statement (kind/topic/regions/status envelope
   // + markdown body). Mirrors the gate_item/seed_item shape: envelope as typed

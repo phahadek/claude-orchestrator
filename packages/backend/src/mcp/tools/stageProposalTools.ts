@@ -43,6 +43,14 @@ export interface StageProposalToolContext {
   kinds?: readonly string[];
   /** Used to route a stage-time validation block back to this session in-turn, via enqueueFeedback. */
   sessionManager?: SessionManager;
+  /**
+   * The milestone this connecting session's task belongs to, known at
+   * dispatch (see orchestratorMcpServer.ts's buildMcpServer) — carried onto
+   * every intent this session stages, for the milestone decision-inbox
+   * attribution. Null for a session whose task couldn't be resolved to a
+   * milestone (falls to the "unattributed" bucket).
+   */
+  milestone?: string | null;
 }
 
 /** Shape of the { payload, groupId?, decisionProposal?, groomProposal? } envelope every tool accepts. */
@@ -79,6 +87,7 @@ async function stage(
     envelopeArgs.decisionProposal ?? null,
     envelopeArgs.groomProposal ?? null,
     envelopeArgs.supersedes ?? null,
+    ctx.milestone ?? null,
   );
   const checked = await routeStageTimeBlock(intent, ctx.sessionManager);
   return { content: [{ type: 'text', text: JSON.stringify(checked) }] };

@@ -60,6 +60,9 @@ function stageJournalDecision(
     null,
     sessionId,
     summarizeDecision(entry),
+    null,
+    null,
+    entry.milestone,
   );
 }
 

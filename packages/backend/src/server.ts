@@ -77,7 +77,12 @@ import {
 } from './gate/gateReconciler';
 import { registerGateMergeConsumer } from './gate/gateMergeConsumer';
 import { SessionGateItemVerifier } from './gate/gateItemVerifier';
-import { deleteGhostSessions, getPRBySessionId } from './db/queries';
+import {
+  deleteGhostSessions,
+  getPRBySessionId,
+  backfillStagedIntentMilestones,
+} from './db/queries';
+import { resolveMilestoneForTaskId } from './projects/milestoneResolver';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
@@ -123,6 +128,17 @@ runMigrations(db);
 loadRuntimeSettingsFromDb();
 setupSessionCgroup();
 importProjectsFromEnv(process.env.PROJECTS);
+
+// Best-effort backfill of pre-milestone-column staged_intent rows — never
+// blocks boot, and rows that don't resolve just stay in the "unattributed"
+// bucket (see backfillStagedIntentMilestones in db/queries.ts).
+try {
+  backfillStagedIntentMilestones(resolveMilestoneForTaskId);
+} catch (err) {
+  logger.error(
+    `[server] staged_intent milestone backfill failed: ${err instanceof Error ? err.message : String(err)}`,
+  );
+}
 
 // Resume-at-boot: a project's deploy_run left `running` by a self-deploy
 // restart (the restart step reboots this very backend) never finalizes on

@@ -13,6 +13,7 @@ import { registerTaskReadTools } from './tools/taskReadTools';
 import type { SessionManager } from '../session/SessionManager';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import type { PlanningWorkflow } from '../planning/planningIntentKinds';
+import { resolveMilestoneForTaskId } from '../projects/milestoneResolver';
 
 /**
  * Maps a session's `session_type` to its planning workflow, or null for a
@@ -101,12 +102,19 @@ export function buildMcpServer(
   const workflow = toPlanningWorkflow(session?.session_type);
 
   if (session?.project_id) {
+    // Best-effort — a task not found in any cached milestone board (e.g. a
+    // non-milestone task) resolves to null, and the intent lands in the
+    // "unattributed" bucket rather than blocking staging.
+    const milestone = session.task_id
+      ? resolveMilestoneForTaskId(session.project_id, session.task_id)
+      : null;
     registerStageProposalTools(server, {
       sessionId,
       projectId: session.project_id,
       // undefined = register every kind (code/review sessions).
       kinds: workflow ? PLANNING_INTENT_KINDS[workflow] : undefined,
       sessionManager,
+      milestone,
     });
     registerGroomPrecheckTool(server, {
       projectId: session.project_id,
