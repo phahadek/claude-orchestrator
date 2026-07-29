@@ -45,7 +45,8 @@ export type CanonicalPauseReason =
   | 'review_rules_escalation'
   | 'planning_crashed'
   | 'planning_first_turn_empty'
-  | 'planning_terminal_no_decision';
+  | 'planning_terminal_no_decision'
+  | 'planning_terminal_blocked_members';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -220,6 +221,11 @@ export const PAUSE_REASON_REGISTRY: Record<
     retry_strategy: 'manual_action',
   },
   planning_terminal_no_decision: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  planning_terminal_blocked_members: {
     source: 'session',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',

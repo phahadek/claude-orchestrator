@@ -109,6 +109,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Planning session finished its first turn without staging anything — review the transcript and redispatch or close.',
   planning_terminal_no_decision:
     'Planning session reached a terminal state without ever staging a decision — review and redispatch planning when ready.',
+  planning_terminal_blocked_members:
+    'Planning session reached a terminal state with staged intents still blocked in verification — the group can no longer be superseded by that session; review and disposition the blocked members manually.',
 };
 
 function verdictLabel(verdict: string): string {
