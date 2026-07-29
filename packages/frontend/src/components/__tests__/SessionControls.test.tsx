@@ -746,7 +746,10 @@ describe('SessionControls — granted capability provenance', () => {
           new Response(
             JSON.stringify({
               capabilities: [
-                { capability: 'session.readOwnRecord(sess-1)', provenance: 'auto' },
+                {
+                  capability: 'session.readOwnRecord(sess-1)',
+                  provenance: 'auto',
+                },
                 { capability: 'Bash(psql:*)', provenance: 'operator' },
               ],
             }),
