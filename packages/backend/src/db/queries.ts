@@ -5030,6 +5030,7 @@ let _stmtListStagedIntentsByGroup: Database.Statement | null = null;
 let _stmtFindActiveStagedIntentForTask: Database.Statement | null = null;
 let _stmtUpdateStagedIntentState: Database.Statement | null = null;
 let _stmtHasStagedIntentForSession: Database.Statement | null = null;
+let _stmtHasStagedIntentForTask: Database.Statement | null = null;
 let _stmtHasActiveCapabilityRequestForSession: Database.Statement | null = null;
 
 export function insertStagedIntent(row: StagedIntentRow): void {
@@ -5067,6 +5068,20 @@ export function hasStagedIntentForSession(sessionId: string): boolean {
   return (
     _stmtHasStagedIntentForSession.get({ session_id: sessionId }) !== undefined
   );
+}
+
+/**
+ * True if ANY planning-session attempt for this task has ever staged at
+ * least one intent (any lifecycle state), across the task's full crash/retry
+ * history — not just the current session. Used to distinguish a genuinely
+ * decision-less planning task (backstop: planning_terminal_no_decision) from
+ * one where a decision was staged on an earlier attempt before it crashed.
+ */
+export function hasStagedIntentForTask(taskId: string): boolean {
+  _stmtHasStagedIntentForTask ??= db.prepare<{ task_id: string }>(
+    `SELECT 1 FROM staged_intent WHERE task_id = @task_id LIMIT 1`,
+  );
+  return _stmtHasStagedIntentForTask.get({ task_id: taskId }) !== undefined;
 }
 
 /**

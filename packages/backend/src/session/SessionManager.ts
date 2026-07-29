@@ -85,6 +85,7 @@ import {
   enqueueFeedbackItem,
   addGrantedCapability,
   expireStagedIntentsForSession,
+  hasStagedIntentForTask,
   sweepStagedIntentsForTerminalSessions,
   TERMINAL_SESSION_STATUSES,
   listStagedIntentsBySession,
@@ -954,7 +955,11 @@ export class SessionManager extends EventEmitter {
     const crashCount = incrementTaskCrashCount(taskId);
     if (crashCount < 2) return;
 
-    setTaskPauseReason(taskId, 'planning_crashed', detail ?? reason);
+    const pauseReason = hasStagedIntentForTask(taskId)
+      ? 'planning_crashed'
+      : 'planning_terminal_no_decision';
+
+    setTaskPauseReason(taskId, pauseReason, detail ?? reason);
     recordEvent({
       event_type: 'auto_launch_paused',
       actor_type: 'system',
@@ -962,7 +967,7 @@ export class SessionManager extends EventEmitter {
       project_id: projectId || null,
       task_id: taskId,
       payload: {
-        reason: 'planning_crashed',
+        reason: pauseReason,
         sessionId: row.session_id,
         crashCount,
       },
@@ -970,7 +975,7 @@ export class SessionManager extends EventEmitter {
     this.emit('message', {
       type: 'auto_launch_paused',
       taskId,
-      reason: 'planning_crashed',
+      reason: pauseReason,
       detail: detail ?? reason,
     } satisfies ServerMessage);
   }

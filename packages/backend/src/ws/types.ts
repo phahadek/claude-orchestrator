@@ -301,7 +301,8 @@ export type ServerMessage =
       reason:
         | 'launch_failed'
         | 'planning_crashed'
-        | 'planning_first_turn_empty';
+        | 'planning_first_turn_empty'
+        | 'planning_terminal_no_decision';
       detail: string;
     }
   | { type: 'session_launch_failed'; taskId: string; sessionId: string }

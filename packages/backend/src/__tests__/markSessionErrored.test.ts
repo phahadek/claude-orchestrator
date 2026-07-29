@@ -81,6 +81,7 @@ vi.mock('../db/queries', () => ({
   resetTaskCrashCount: vi.fn(),
   setTaskPauseReason: vi.fn(),
   setSessionLastErrorDetail: vi.fn(),
+  hasStagedIntentForTask: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../audit/AuditLog', () => ({
@@ -555,6 +556,30 @@ describe('SessionManager.markSessionErrored() — planning session (design) cras
       | undefined;
     expect(paused).toBeDefined();
     expect(paused!.reason).toBe('planning_crashed');
+    expect(paused!.taskId).toBe('notion-task-id');
+  });
+
+  it('surfaces planning_terminal_no_decision when no attempt ever staged an intent', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
+    vi.mocked(queries.hasStagedIntentForTask).mockReturnValueOnce(false);
+    setupFakeBackend();
+    const sm = new SessionManager();
+    const messages: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => messages.push(m));
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(queries.setTaskPauseReason).toHaveBeenCalledWith(
+      'notion-task-id',
+      'planning_terminal_no_decision',
+      'runner_non_zero',
+    );
+    const paused = messages.find((m) => m.type === 'auto_launch_paused') as
+      | { reason: string; taskId: string }
+      | undefined;
+    expect(paused).toBeDefined();
+    expect(paused!.reason).toBe('planning_terminal_no_decision');
     expect(paused!.taskId).toBe('notion-task-id');
   });
 
