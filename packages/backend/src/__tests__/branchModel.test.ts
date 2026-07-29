@@ -7,13 +7,13 @@ vi.mock('child_process', () => ({
   execSync: vi.fn(),
 }));
 
-const { mockRuntimeSettings, mockGetMilestone } = vi.hoisted(() => ({
-  mockRuntimeSettings: { corporate_mode_enabled: false },
+const { mockCorporateMode, mockGetMilestone } = vi.hoisted(() => ({
+  mockCorporateMode: { enabled: false },
   mockGetMilestone: vi.fn(),
 }));
 
-vi.mock('../config.js', () => ({
-  runtimeSettings: mockRuntimeSettings,
+vi.mock('../config/corporateMode.js', () => ({
+  getCorporateMode: () => mockCorporateMode,
 }));
 
 vi.mock('../projects/ProjectService.js', () => ({
@@ -51,7 +51,7 @@ describe('slugify', () => {
 
 describe('resolveBranchMode', () => {
   beforeEach(() => {
-    mockRuntimeSettings.corporate_mode_enabled = false;
+    mockCorporateMode.enabled = false;
   });
 
   it('returns two_tier when project explicitly sets two_tier', () => {
@@ -71,12 +71,12 @@ describe('resolveBranchMode', () => {
   });
 
   it('returns two_tier when no setting and corporate mode is on', () => {
-    mockRuntimeSettings.corporate_mode_enabled = true;
+    mockCorporateMode.enabled = true;
     expect(resolveBranchMode(null)).toBe('two_tier');
   });
 
   it('explicit project setting wins over corporate mode', () => {
-    mockRuntimeSettings.corporate_mode_enabled = true;
+    mockCorporateMode.enabled = true;
     expect(resolveBranchMode('flat')).toBe('flat');
   });
 });
@@ -85,7 +85,7 @@ describe('resolveBranchMode', () => {
 
 describe('resolveStartingPoint', () => {
   beforeEach(() => {
-    mockRuntimeSettings.corporate_mode_enabled = false;
+    mockCorporateMode.enabled = false;
     mockGetMilestone.mockReset();
   });
 
@@ -125,7 +125,7 @@ describe('resolveStartingPoint', () => {
   });
 
   it('explicit project setting wins over corporate-mode default', () => {
-    mockRuntimeSettings.corporate_mode_enabled = true;
+    mockCorporateMode.enabled = true;
     mockGetMilestone.mockReturnValue({ id: 'ms-1', name: 'M6' });
     // Project explicitly sets flat → should stay flat even with corporate mode on
     const result = resolveStartingPoint({ milestoneBranching: 'flat' }, 'ms-1');

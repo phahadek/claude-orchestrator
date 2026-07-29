@@ -3,6 +3,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { GITHUB_REPO, runtimeSettings, getProjectById } from '../config';
+import { getCorporateMode } from '../config/corporateMode';
 import type { GateItemClassification } from '../db/types';
 import { getOrchestratorConfig } from '../config/appConfig';
 import { mintStageCredential } from '../auth/SessionStageAuth';
@@ -1986,7 +1987,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             if (needsBodyValidation) {
               const bodyValidation = validatePRBody(freshPR.body);
               if (!bodyValidation.valid) {
-                const isCorporate = runtimeSettings.corporate_mode_enabled;
+                const isCorporate = getCorporateMode().gates.validatePRBody;
                 recordEvent({
                   event_type: isCorporate
                     ? 'pr_body_invalid'
@@ -2034,7 +2035,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       if (prShape.body) {
         const bodyValidation = validatePRBody(prShape.body);
         if (!bodyValidation.valid) {
-          const isCorporate = runtimeSettings.corporate_mode_enabled;
+          const isCorporate = getCorporateMode().gates.validatePRBody;
           recordEvent({
             event_type: isCorporate
               ? 'pr_body_invalid'
@@ -2261,7 +2262,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           this.sessionId,
           this.projectId || null,
           this.taskId || null,
-          runtimeSettings.corporate_mode_enabled,
+          getCorporateMode().enabled,
         ).catch((e) =>
           logger.warn(`[AgentSession] checkCommitAttribution failed: ${e}`),
         );
