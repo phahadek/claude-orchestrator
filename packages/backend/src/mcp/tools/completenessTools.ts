@@ -136,9 +136,7 @@ export function registerCompletenessTools(
         runAt: args.runAt,
       });
       const row = insertCompletenessDisposition(newRow);
-      const record = JSON.parse(
-        row.questions,
-      ) as CompletenessDispositionRecord;
+      const record = JSON.parse(row.questions) as CompletenessDispositionRecord;
 
       let intent = null;
       if (ctx.projectId) {

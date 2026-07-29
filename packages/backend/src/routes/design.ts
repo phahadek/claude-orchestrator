@@ -125,9 +125,7 @@ export function createDesignRouter(): Router {
           runAt: body.runAt,
         }),
       );
-      const record = JSON.parse(
-        row.questions,
-      ) as CompletenessDispositionRecord;
+      const record = JSON.parse(row.questions) as CompletenessDispositionRecord;
       res.status(201).json({
         ...row,
         probed: record.probed,
