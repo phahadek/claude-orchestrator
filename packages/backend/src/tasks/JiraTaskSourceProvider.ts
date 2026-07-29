@@ -1,4 +1,4 @@
-import type { TaskBackend } from './TaskBackend';
+import type { TaskBackend, TaskSummary } from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
 import { formatTaskId, toExternalId } from './taskId';
@@ -293,6 +293,22 @@ export class JiraTaskSourceProvider implements TaskBackend {
     }
 
     await this.client.transitionIssue(externalId, transition.id);
+  }
+
+  async fetchTaskSummary(taskId: string): Promise<TaskSummary | null> {
+    const externalId = toExternalId(taskId);
+    const typeMap = this.projectConfig.type_mapping ?? DEFAULT_TYPE_MAP;
+    try {
+      const issue = await this.client.getIssue(externalId);
+      return {
+        title: issue.fields.summary,
+        type: this.mapIssueType(issue.fields.issuetype.name, typeMap),
+        status: this.getOrchestratorStatus(issue.fields.status.name),
+      };
+    } catch (err) {
+      if (err instanceof JiraApiError && err.statusCode === 404) return null;
+      throw err;
+    }
   }
 
   async fetchTaskPage(taskId: string): Promise<string> {

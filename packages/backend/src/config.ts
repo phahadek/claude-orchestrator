@@ -227,11 +227,18 @@ const ARCHITECTURE_READ_MCP_TOOLS = [
   orchestratorMcpToolName('architecture.queryUnits'),
 ];
 
+// task.getById — the read-only task-summary ({title, type, status}) lookup
+// (mcp/tools/taskReadTools.ts), always-on for groom/design/ops by the same
+// precedent as ARCHITECTURE_READ_MCP_TOOLS above. Not a staged-intent kind,
+// so it isn't in PLANNING_INTENT_KINDS — added here explicitly.
+const TASK_READ_MCP_TOOLS = [orchestratorMcpToolName('task.getById')];
+
 const GROOM_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
   ...PLANNING_INTENT_KINDS.groom.map(orchestratorMcpToolName),
   orchestratorMcpToolName('groom.precheck'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
+  ...TASK_READ_MCP_TOOLS,
 ];
 
 // Plus completeness.disposition / completeness.traceCoverage — the /design
@@ -252,6 +259,7 @@ const DESIGN_MCP_TOOLS = [
   orchestratorMcpToolName('completeness.disposition'),
   orchestratorMcpToolName('completeness.traceCoverage'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
+  ...TASK_READ_MCP_TOOLS,
 ];
 
 // Plus gate.verify — a gate-item-verification session is sessionType 'ops'
@@ -266,6 +274,7 @@ const OPS_MCP_TOOLS = [
   ...PLANNING_INTENT_KINDS.ops.map(orchestratorMcpToolName),
   orchestratorMcpToolName('gate.verify'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
+  ...TASK_READ_MCP_TOOLS,
 ];
 
 /**

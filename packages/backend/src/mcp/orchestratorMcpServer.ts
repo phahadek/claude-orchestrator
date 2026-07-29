@@ -9,6 +9,7 @@ import { registerVerdictTools } from './tools/verdictTools';
 import { registerCompletenessTools } from './tools/completenessTools';
 import { registerGroomPrecheckTool } from './tools/groomPrecheckTool';
 import { registerArchitectureReadTools } from './tools/architectureReadTools';
+import { registerTaskReadTools } from './tools/taskReadTools';
 import type { SessionManager } from '../session/SessionManager';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import type { PlanningWorkflow } from '../planning/planningIntentKinds';
@@ -70,7 +71,10 @@ export function buildOrchestratorMcpServerEntry(
  * 'groom' / 'design' / 'ops' workflow session — the read-only arch_unit
  * store surface (architecture.getUnit / architecture.queryUnits, see
  * mcp/tools/architectureReadTools.ts), always-on rather than grant-gated
- * since architecture content is these workflows' non-negotiable input.
+ * since architecture content is these workflows' non-negotiable input —
+ * and the read-only task-summary lookup (task.getById, see
+ * mcp/tools/taskReadTools.ts), same always-on precedent, for a task id
+ * outside the session's injected digest.
  */
 export function buildMcpServer(
   sessionId: string,
@@ -105,6 +109,10 @@ export function buildMcpServer(
       sessionManager,
     });
     registerGroomPrecheckTool(server, {
+      projectId: session.project_id,
+      workflow,
+    });
+    registerTaskReadTools(server, {
       projectId: session.project_id,
       workflow,
     });

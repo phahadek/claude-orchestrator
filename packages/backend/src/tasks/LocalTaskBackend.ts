@@ -1,7 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
-import type { TaskBackend, NonMilestoneSourceConfig } from './TaskBackend';
+import type {
+  TaskBackend,
+  NonMilestoneSourceConfig,
+  TaskSummary,
+} from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
 import { toExternalId, formatTaskId } from './taskId';
@@ -273,6 +277,18 @@ export class LocalTaskBackend implements TaskBackend {
     if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
     found.task.status = fromDisplayStatus(status);
     this.writeFile(file);
+  }
+
+  async fetchTaskSummary(taskId: string): Promise<TaskSummary | null> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) return null;
+    return {
+      title: found.task.name,
+      type: toDisplayType(found.task.type ?? 'Code'),
+      status: toDisplayStatus(found.task.status),
+    };
   }
 
   async fetchTaskPage(taskId: string): Promise<string> {
