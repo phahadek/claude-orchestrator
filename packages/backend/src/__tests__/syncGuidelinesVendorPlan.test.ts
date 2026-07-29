@@ -10,7 +10,7 @@ const repoRoot = resolve(
 );
 
 describe('sync-guidelines-load.mjs vendor plan', () => {
-  it('covers the six route clients, all seven skills, and drops the retired loaders', () => {
+  it('covers the six route clients, all seven skills, the shared skill dependency, and drops the retired loaders', () => {
     const output = execFileSync(
       process.execPath,
       [
@@ -41,6 +41,7 @@ describe('sync-guidelines-load.mjs vendor plan', () => {
       'skill:wrap',
       'skill:sync-guidelines',
       'skill:gate',
+      'shared:_shared',
     ]) {
       expect(ids).toContain(id);
     }
