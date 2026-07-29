@@ -97,8 +97,11 @@ function fixtureOpsLoadResult(): OpsLoadResult {
     dependsOn: ['dep-2'],
     blockingDepIds: [],
     depStatus: 'ready' as const,
+    archSource: 'notion' as const,
+    archUnits: [],
   };
   return {
+    archSource: 'notion',
     contextPages: [
       { id: 'ctx-2', title: 'Ops Master Context', markdown: '...' },
     ],
@@ -1154,6 +1157,117 @@ describe('assemblePlanningProcedure', () => {
     });
     expect(output).toContain('No prior entry');
     expect(output).not.toContain('Ops Master Context');
+  });
+
+  it('points a store-sourced ops digest at the architecture read tools, rendering only titles/ids never a unit body', () => {
+    const result = fixtureOpsLoadResult();
+    result.worklist.executable[0].archSource = 'store';
+    result.worklist.executable[0].archUnits = [
+      {
+        id: 'unit-1',
+        title: 'Selective injection contract',
+      },
+    ];
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(result, 'task-3', null),
+      },
+    });
+
+    expect(output).toContain('Selective injection contract');
+    expect(output).toContain(orchestratorMcpToolName('architecture.getUnit'));
+    expect(output).toContain(
+      orchestratorMcpToolName('architecture.queryUnits'),
+    );
+  });
+
+  it('carries no hint and no arch-unit section in the ops digest when archSource is notion', () => {
+    const result = fixtureOpsLoadResult();
+    result.worklist.executable[0].archSource = 'notion';
+    result.worklist.executable[0].archUnits = [
+      { id: 'ctx-2', title: 'Ops Master Context' },
+    ];
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(result, 'task-3', null),
+      },
+    });
+
+    expect(output).not.toContain(
+      orchestratorMcpToolName('architecture.getUnit'),
+    );
+    expect(output).not.toContain('Arch-store-selected units');
+  });
+
+  it('carries no hint and no arch-unit section in the ops digest when the store selection is empty', () => {
+    const result = fixtureOpsLoadResult();
+    result.worklist.executable[0].archSource = 'store';
+    result.worklist.executable[0].archUnits = [];
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(result, 'task-3', null),
+      },
+    });
+
+    expect(output).not.toContain(
+      orchestratorMcpToolName('architecture.getUnit'),
+    );
+    expect(output).not.toContain('Arch-store-selected units');
+  });
+
+  it('sources the arch-unit dereference hint from the same shared text for the design and ops digests', () => {
+    const design = fixtureDesignLoadResult();
+    design.archSource = 'store';
+    design.archUnits = [{ id: 'unit-1', title: 'Shared unit' }];
+    const designOutput = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'design',
+        data: deriveDesignDigestSlice(design),
+      },
+    });
+
+    const ops = fixtureOpsLoadResult();
+    ops.worklist.executable[0].archSource = 'store';
+    ops.worklist.executable[0].archUnits = [
+      { id: 'unit-1', title: 'Shared unit' },
+    ];
+    const opsOutput = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'ops',
+        data: deriveOpsDigestSlice(ops, 'task-3', null),
+      },
+    });
+
+    const hintSentence =
+      'This selection is titles/ids only — too large to inline wholesale.';
+    expect(designOutput).toContain(hintSentence);
+    expect(opsOutput).toContain(hintSentence);
   });
 
   it('composes sections in skeleton → procedure core → digest order', () => {
