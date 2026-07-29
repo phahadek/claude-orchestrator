@@ -417,6 +417,30 @@ export interface OpsJournalRow {
   updated_at: string;
 }
 
+// ─── convergence_snapshot ───────────────────────────────────────────────────
+
+/** A point-in-time sample of a milestone's live convergence, written by ConvergenceSnapshotJob only when it changes. */
+export interface ConvergenceSnapshotRow {
+  id: string;
+  project: string;
+  milestone: string;
+  /** ISO-8601 UTC, consistent with scheduler_audit. */
+  ts: string;
+  tasks_open: number;
+  tasks_closed: number;
+  gate_open: number;
+  gate_closed: number;
+  seed_open: number;
+  seed_closed: number;
+  ops_open: number;
+  ops_closed: number;
+  total_scope: number;
+  distance_to_green: number;
+  status: string;
+}
+
+export type NewConvergenceSnapshotRow = Omit<ConvergenceSnapshotRow, 'id'>;
+
 // ─── gate_item ────────────────────────────────────────────────────────────
 
 export type GateItemClassification =
