@@ -69,6 +69,7 @@ function seedStagedIntent(
     project_id: 'proj-1',
     session_id: sessionId,
     group_id: null,
+    milestone: null,
     state,
     supersedes: null,
     annotation: null,

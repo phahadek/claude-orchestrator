@@ -454,11 +454,9 @@ Edit/Write tool) — canonical source
   `design-state.json` / `code-map.json` are loader-seeded JSON on disk — Edit them (or
   Read + Write the whole file). Never `node _q6lock.cjs && rm …` or any `cd … && …`
   route; that is what causes the constant permission prompts.
-- **Inspect the repo with `git -C <repo> …`, never `cd <repo> && git …`.** Design runs
-  from the projects-root cwd; the `cd … && git` form prompts every time (Claude Code flags
-  any directory-change-before-git as a hook-execution risk, regardless of allowlist).
-  `git -C <repo> show/log/diff …` is allowlisted and silent. Use path flags for other repo
-  tools too (`npm --prefix`, `uv --project`), not `cd`.
+- **Inspect the repo with `git -C <repo> …`, never `cd <repo> && git …`.** See
+  `../_shared/reference/hard-rules.md` for why the `cd … && git` form prompts
+  every time under Design Execution.
 - **No question-bundling.** One open question per `decision.pickOne` intent, one
   sign-off per question — but independent questions can each be staged as their own
   intent in the same turn; only a question that depends on another still-unresolved

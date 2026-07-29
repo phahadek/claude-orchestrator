@@ -309,12 +309,16 @@ describe('SessionManager.start() fire-and-forget structural checks', () => {
   });
 
   it('calls markSessionErrored with launch_failed inside completeStart catch', () => {
-    const catchIdx = source.indexOf('completeStart(');
+    const catchIdx = source.indexOf('void this.completeStart(');
     const endIdx = source.indexOf('\n  }', catchIdx + 100);
     const block = source.slice(catchIdx, endIdx);
+    // pauseReason defaults to 'launch_failed' (or BACKEND_SPAWN_DEGRADED_REASON
+    // for a detected degraded-spawn failure) and is passed to markSessionErrored.
     expect(block).toMatch(
-      /markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*'launch_failed'\s*\)/,
+      /markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*pauseReason\s*\)/,
     );
+    expect(block).toMatch(/pauseReason\s*=\s*isDegradedSpawn/);
+    expect(block).toMatch(/:\s*'launch_failed'/);
   });
 
   it('broadcasts session_starting (not session_started) from start()', () => {
@@ -543,9 +547,17 @@ describe('SessionManager.resumeOrphanSessions()', () => {
   });
 
   it('marks sessions as error when resume fails (catch block)', () => {
-    expect(source).toMatch(
-      /markSessionErrored\s*\(\s*row\.session_id\s*,\s*'error'\s*,\s*'resume_failed'\s*\)/,
+    // A resume failure is routed through flagResumeFailure (needs_attention
+    // policy) rather than markSessionErrored, so an operator decides whether
+    // to redispatch instead of the session being silently auto-disposed.
+    expect(source).toMatch(/this\.flagResumeFailure\s*\(\s*row\s*,/);
+    const flagIdx = source.indexOf('private flagResumeFailure(');
+    const nextMethod = source.indexOf('\n  private ', flagIdx + 1);
+    const flagBlock = source.slice(flagIdx, nextMethod);
+    expect(flagBlock).toMatch(
+      /updateSessionStatus\s*\(\s*row\.session_id\s*,\s*'error'/,
     );
+    expect(flagBlock).toMatch(/reason:\s*'resume_failed'/);
   });
 
   it('respects max_concurrent_code_sessions — slices code orphans into toResume and toError', () => {
@@ -654,9 +666,10 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
   });
 
   it('calls this.send() with the nudge message during resume', () => {
-    // nudgeMessage is built by buildResumeMessage(row) and then passed to send()
+    // nudgeMessage is built by the module-level buildResumeMessage(row) helper
+    // (exported so tests can verify the exact message) and then passed to send()
     expect(source).toMatch(
-      /const\s+nudgeMessage\s*=\s*this\.buildResumeMessage\s*\(\s*row\s*\)/,
+      /const\s+nudgeMessage\s*=\s*buildResumeMessage\s*\(\s*row\s*\)/,
     );
     expect(source).toMatch(
       /this\.send\s*\(\s*row\.session_id\s*,\s*nudgeMessage\s*\)/,
@@ -676,8 +689,10 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
   it('sets a 30-second timeout and marks session as error if no events are received', () => {
     expect(source).toMatch(/RESUME_TIMEOUT_MS\s*=\s*30[_]?000/);
     expect(source).toMatch(/setTimeout\s*\(/);
+    // Timeout expiry flags the session via flagResumeFailure (needs_attention
+    // policy), not markSessionErrored directly.
     expect(source).toMatch(
-      /markSessionErrored\s*\(\s*row\.session_id\s*,\s*'error'\s*,\s*'resume_timeout'\s*\)/,
+      /this\.flagResumeFailure\s*\(\s*row\s*,\s*'no events within 30s of resume'\s*\)/,
     );
     // Timer is cleared on first message — the variable is errorTimer
     expect(source).toMatch(/clearTimeout\s*\(\s*errorTimer\s*\)/);
@@ -734,17 +749,24 @@ describe('SessionManager.sendOrResume() — pr_url carry-forward', () => {
   });
 });
 
-// ── AC: server.ts calls resumeOrphanSessions() after jsonlReader.importAll() ──
+// ── AC: bootSequence.ts calls resumeOrphanSessions() after jsonlReader.importAll() ──
+// The startup sequence now lives in bootSequence.ts (a step-tracked async
+// pipeline), not inline in server.ts.
 describe('server.ts startup sequence', () => {
-  it('calls sessionManager.resumeOrphanSessions() in the importAll().then() block', () => {
-    const serverSource = fs.readFileSync(
-      path.join(__dirname, '..', 'server.ts'),
+  it('calls sessionManager.resumeOrphanSessions() after the jsonl_import step', () => {
+    const bootSource = fs.readFileSync(
+      path.join(__dirname, '..', 'bootSequence.ts'),
       'utf-8',
     );
-    expect(serverSource).toMatch(/resumeOrphanSessions\s*\(\s*\)/);
-    // Must appear inside the importAll().then(...) callback (after importAll)
-    const importAllIdx = serverSource.indexOf('importAll()');
-    const resumeIdx = serverSource.indexOf('resumeOrphanSessions()');
+    expect(bootSource).toMatch(/resumeOrphanSessions\s*\(\s*\)/);
+    // Must appear after the jsonl_import step (importAll) runs — use the
+    // actual call site (deps.sessionManager.resumeOrphanSessions()), not the
+    // earlier interface/type declaration.
+    const importAllIdx = bootSource.indexOf('jsonlReader.importAll()');
+    const resumeIdx = bootSource.indexOf(
+      'deps.sessionManager.resumeOrphanSessions()',
+    );
+    expect(importAllIdx).toBeGreaterThan(-1);
     expect(resumeIdx).toBeGreaterThan(importAllIdx);
   });
 });
@@ -775,7 +797,9 @@ describe('SessionManager.resumeSession() — resumability pre-check', () => {
   });
 
   it('marks the session as error when the worktree is missing', () => {
-    // The pre-check failure path must call markSessionErrored(...) and return early (skip spawn).
+    // The pre-check failure path routes through flagResumeFailure(...) (the
+    // needs_attention policy) rather than markSessionErrored, and returns
+    // early (skip spawn).
     const resumeSessionIdx = source.indexOf('private async resumeSession(');
     const preCheckIdx = source.indexOf(
       'resumability pre-check failed',
@@ -788,7 +812,7 @@ describe('SessionManager.resumeSession() — resumability pre-check', () => {
     );
     const preCheckBlock = source.slice(preCheckIdx, newAgentSessionIdx);
     expect(preCheckBlock).toMatch(
-      /markSessionErrored\s*\(\s*row\.session_id\s*,\s*'error'\s*,\s*'worktree_missing'\s*\)/,
+      /this\.flagResumeFailure\s*\(\s*row\s*,\s*detail\s*\)/,
     );
     expect(preCheckBlock).toMatch(/return\s*;/);
   });
@@ -949,7 +973,7 @@ describe('SessionManager.getLiveCodeSessionCount() — pendingStarts', () => {
   });
 
   it('pendingStarts.delete is called in the completeStart .catch() handler', () => {
-    const catchIdx = source.indexOf('completeStart(');
+    const catchIdx = source.indexOf('void this.completeStart(');
     const catchBlock = source.slice(catchIdx, catchIdx + 500);
     expect(catchBlock).toMatch(
       /this\.pendingStarts\.delete\s*\(\s*sessionId\s*\)/,
@@ -972,7 +996,10 @@ describe('SessionManager.getLiveCodeSessionCount() — pendingStarts', () => {
     const countFnIdx = source.indexOf('getLiveCodeSessionCount()');
     const countFnBody = source.slice(countFnIdx, countFnIdx + 400);
     expect(countFnBody).toMatch(/this\.pendingStarts/);
-    expect(countFnBody).toMatch(/sessionType\s*!==\s*'review'/);
+    // Both sessions and pendingStarts are filtered through the shared
+    // countsAgainstCodeSessionConcurrency predicate (excludes review AND
+    // planning session types), not a raw sessionType !== 'review' check.
+    expect(countFnBody).toMatch(/countsAgainstCodeSessionConcurrency/);
   });
 
   it('getLiveCodeSessionCount() skips pendingStarts entries already in sessions to avoid double-count', () => {
@@ -984,11 +1011,12 @@ describe('SessionManager.getLiveCodeSessionCount() — pendingStarts', () => {
   it('a review sessionType in pendingStarts does not count toward getLiveCodeSessionCount', () => {
     const countFnIdx = source.indexOf('getLiveCodeSessionCount()');
     const countFnBody = source.slice(countFnIdx, countFnIdx + 400);
-    // Both sessions and pendingStarts guard on sessionType !== 'review'
-    const reviewGuards = [
-      ...countFnBody.matchAll(/sessionType\s*!==\s*'review'/g),
+    // Both sessions and pendingStarts guard via countsAgainstCodeSessionConcurrency,
+    // which excludes review (and planning) session types.
+    const guards = [
+      ...countFnBody.matchAll(/countsAgainstCodeSessionConcurrency\(/g),
     ];
-    expect(reviewGuards.length).toBeGreaterThanOrEqual(2);
+    expect(guards.length).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -1014,14 +1042,19 @@ describe('SessionManager — error broadcast and rollback', () => {
   it('completeStart().catch() delegates status rollback to markSessionErrored with launch_failed cause', () => {
     const completeStartCatchIdx = source.indexOf('void this.completeStart(');
     expect(completeStartCatchIdx).toBeGreaterThan(-1);
-    // markSessionErrored maps 'launch_failed' → '🗂️ Ready' internally
+    // markSessionErrored maps 'launch_failed' → '🗂️ Ready' internally.
+    // The cause passed is the pauseReason variable, which defaults to
+    // 'launch_failed' (or BACKEND_SPAWN_DEGRADED_REASON for a detected
+    // degraded-spawn failure).
     const catchBlock = source.slice(
       completeStartCatchIdx,
-      completeStartCatchIdx + 1000,
+      completeStartCatchIdx + 1200,
     );
     expect(catchBlock).toMatch(
-      /markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*'launch_failed'\s*\)/,
+      /markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*pauseReason\s*\)/,
     );
+    expect(catchBlock).toMatch(/pauseReason\s*=\s*isDegradedSpawn/);
+    expect(catchBlock).toMatch(/:\s*'launch_failed'/);
   });
 
   it('completeStart().catch() broadcasts an error type ServerMessage', () => {
@@ -1036,14 +1069,15 @@ describe('SessionManager — error broadcast and rollback', () => {
 
   it('completeStart rollback: markSessionErrored is responsible for task_status_changed and Ready status', () => {
     // markSessionErrored emits task_status_changed with '🗂️ Ready' for 'launch_failed' cause.
-    // Verified structurally: the helper is called from the catch block.
+    // Verified structurally: the helper is called from the catch block with
+    // the pauseReason variable (defaults to 'launch_failed').
     const completeStartCatchIdx = source.indexOf('void this.completeStart(');
     const catchBlock = source.slice(
       completeStartCatchIdx,
-      completeStartCatchIdx + 1000,
+      completeStartCatchIdx + 1200,
     );
     expect(catchBlock).toMatch(
-      /markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*'launch_failed'\s*\)/,
+      /markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*pauseReason\s*\)/,
     );
     // markSessionErrored.test.ts verifies the task_status_changed + '🗂️ Ready' emission.
   });
@@ -1127,7 +1161,11 @@ describe('SessionManager.start() — in-flight dedup guard', () => {
 
   it('dedup guard only applies to non-review sessions', () => {
     const dedupIdx = source.indexOf('this.hasLiveSessionForTask(');
-    const dedupBlock = source.slice(Math.max(0, dedupIdx - 250), dedupIdx + 50);
+    // The planning-aware duplicate check (hasNonIdlePlanningSessionForTask /
+    // hasActivePlanningSessionForTask) now sits between the
+    // countsAgainstConcurrency(sessionType) guard and this dedup call, so
+    // the guard is further back than a tight lookbehind window covers.
+    const dedupBlock = source.slice(Math.max(0, dedupIdx - 800), dedupIdx + 50);
     expect(dedupBlock).toMatch(/countsAgainstConcurrency\(sessionType\)/);
   });
 });
@@ -1184,53 +1222,58 @@ describe('SessionManager.buildResumeMessage() — verdict-enriched resume nudge'
     'utf-8',
   );
 
-  it('private buildResumeMessage method exists', () => {
-    expect(source).toMatch(/private\s+buildResumeMessage\s*\(/);
+  // buildResumeMessage is a module-level exported function (not a private
+  // method on the class) — exported so tests can verify the exact message
+  // without hardcoding it. It's also branched on isPlanningSession first, to
+  // avoid sending code-session-only verdict nudges to a groom/design/ops
+  // session.
+  it('buildResumeMessage function exists and is exported', () => {
+    expect(source).toMatch(/export\s+function\s+buildResumeMessage\s*\(/);
   });
 
   it('calls getPRBySessionId to look up the PR for the session', () => {
-    const methodIdx = source.indexOf('private buildResumeMessage(');
-    const nextMethod = source.indexOf('\n  private ', methodIdx + 1);
-    const methodBlock = source.slice(methodIdx, nextMethod);
+    const methodIdx = source.indexOf('export function buildResumeMessage(');
+    const methodEnd = source.indexOf('\n}', methodIdx);
+    const methodBlock = source.slice(methodIdx, methodEnd);
     expect(methodBlock).toMatch(/getPRBySessionId\s*\(\s*row\.session_id\s*\)/);
   });
 
   it('returns RESUME_NUDGE_MESSAGE when no PR row exists (session never opened a PR)', () => {
-    const methodIdx = source.indexOf('private buildResumeMessage(');
-    const nextMethod = source.indexOf('\n  private ', methodIdx + 1);
-    const methodBlock = source.slice(methodIdx, nextMethod);
+    const methodIdx = source.indexOf('export function buildResumeMessage(');
+    const methodEnd = source.indexOf('\n}', methodIdx);
+    const methodBlock = source.slice(methodIdx, methodEnd);
     // Falls back to RESUME_NUDGE_MESSAGE when pr is null/undefined
     expect(methodBlock).toMatch(/if\s*\(\s*!pr\?\.review_result\s*\)/);
     expect(methodBlock).toMatch(/return\s+RESUME_NUDGE_MESSAGE/);
   });
 
   it('returns formatReviewFeedback for needs_changes verdict', () => {
-    const methodIdx = source.indexOf('private buildResumeMessage(');
-    const nextMethod = source.indexOf('\n  private ', methodIdx + 1);
-    const methodBlock = source.slice(methodIdx, nextMethod);
+    const methodIdx = source.indexOf('export function buildResumeMessage(');
+    const methodEnd = source.indexOf('\n}', methodIdx);
+    const methodBlock = source.slice(methodIdx, methodEnd);
     expect(methodBlock).toMatch(/result\.verdict\s*===\s*'needs_changes'/);
     expect(methodBlock).toMatch(/formatReviewFeedback\s*\(/);
   });
 
   it('returns formatReviewFeedback for incomplete verdict', () => {
-    const methodIdx = source.indexOf('private buildResumeMessage(');
-    const nextMethod = source.indexOf('\n  private ', methodIdx + 1);
-    const methodBlock = source.slice(methodIdx, nextMethod);
+    const methodIdx = source.indexOf('export function buildResumeMessage(');
+    const methodEnd = source.indexOf('\n}', methodIdx);
+    const methodBlock = source.slice(methodIdx, methodEnd);
     expect(methodBlock).toMatch(/result\.verdict\s*===\s*'incomplete'/);
   });
 
   it('returns formatApprovedVerdictMessage for approved verdict', () => {
-    const methodIdx = source.indexOf('private buildResumeMessage(');
-    const nextMethod = source.indexOf('\n  private ', methodIdx + 1);
-    const methodBlock = source.slice(methodIdx, nextMethod);
+    const methodIdx = source.indexOf('export function buildResumeMessage(');
+    const methodEnd = source.indexOf('\n}', methodIdx);
+    const methodBlock = source.slice(methodIdx, methodEnd);
     expect(methodBlock).toMatch(/result\.verdict\s*===\s*'approved'/);
     expect(methodBlock).toMatch(/formatApprovedVerdictMessage\s*\(/);
   });
 
   it('falls back to RESUME_NUDGE_MESSAGE when review_result is malformed JSON', () => {
-    const methodIdx = source.indexOf('private buildResumeMessage(');
-    const nextMethod = source.indexOf('\n  private ', methodIdx + 1);
-    const methodBlock = source.slice(methodIdx, nextMethod);
+    const methodIdx = source.indexOf('export function buildResumeMessage(');
+    const methodEnd = source.indexOf('\n}', methodIdx);
+    const methodBlock = source.slice(methodIdx, methodEnd);
     // Must have a try/catch that returns RESUME_NUDGE_MESSAGE on parse failure
     expect(methodBlock).toMatch(/try\s*\{[\s\S]*?\}\s*catch/);
     // The final return after the catch block returns the plain nudge
@@ -1240,7 +1283,7 @@ describe('SessionManager.buildResumeMessage() — verdict-enriched resume nudge'
   });
 
   it('resumeSession calls buildResumeMessage(row) instead of using RESUME_NUDGE_MESSAGE directly', () => {
-    expect(source).toMatch(/this\.buildResumeMessage\s*\(\s*row\s*\)/);
+    expect(source).toMatch(/buildResumeMessage\s*\(\s*row\s*\)/);
     // The direct RESUME_NUDGE_MESSAGE reference in the nudge setTimeout must be gone
     const nudgeDelayIdx = source.indexOf('const nudgeDelay = setTimeout');
     const nudgeDelayBlock = source.slice(nudgeDelayIdx, nudgeDelayIdx + 300);
@@ -1267,7 +1310,7 @@ describe('SessionManager._doSendOrResume() — terminal status guard', () => {
   );
 
   it('checks row.status against done, error, and killed before respawning', () => {
-    const doResumeIdx = source.indexOf('_doSendOrResume');
+    const doResumeIdx = source.indexOf('private async _doSendOrResume(');
     const shutdownIdx = source.indexOf('async shutdownAll');
     const block = source.slice(doResumeIdx, shutdownIdx);
     expect(block).toMatch(/row\.status\s*===\s*'done'/);
@@ -1276,12 +1319,12 @@ describe('SessionManager._doSendOrResume() — terminal status guard', () => {
   });
 
   it('logs a warning and returns early for terminal sessions', () => {
-    const doResumeIdx = source.indexOf('_doSendOrResume');
+    const doResumeIdx = source.indexOf('private async _doSendOrResume(');
     const shutdownIdx = source.indexOf('async shutdownAll');
     const block = source.slice(doResumeIdx, shutdownIdx);
     // Must log a warning with the session status before bailing
     expect(block).toMatch(
-      /console\.warn[\s\S]*?terminal|terminal[\s\S]*?console\.warn/,
+      /logger\.warn[\s\S]*?terminal|terminal[\s\S]*?logger\.warn/,
     );
     // Guard must appear before any git worktree or process-spawn code
     const guardIdx = block.indexOf("row.status === 'done'");
@@ -1291,7 +1334,7 @@ describe('SessionManager._doSendOrResume() — terminal status guard', () => {
   });
 
   it('allows idle sessions to proceed through respawn', () => {
-    const doResumeIdx = source.indexOf('_doSendOrResume');
+    const doResumeIdx = source.indexOf('private async _doSendOrResume(');
     const shutdownIdx = source.indexOf('async shutdownAll');
     const block = source.slice(doResumeIdx, shutdownIdx);
     // Guard must NOT include 'idle' — idle→running re-entry must be permitted
@@ -1338,8 +1381,15 @@ describe('SessionManager.completeStart() — planning sessions skip worktree', (
   });
 
   it('cleanupPartialWorktree never removes the project checkout itself', () => {
+    // Guarded via the isRemovableWorktree(worktreePath, projectDir) helper
+    // rather than a direct worktreePath === projectDir comparison — it also
+    // confirms the worktree is nested under .claude/worktrees/, not just
+    // "not literally the project dir" (see 2026-07-20 incident note on the
+    // helper's docstring).
     const fnIdx = source.indexOf('private async cleanupPartialWorktree(');
     const fnBlock = source.slice(fnIdx, fnIdx + 800);
-    expect(fnBlock).toMatch(/worktreePath === projectDir/);
+    expect(fnBlock).toMatch(
+      /isRemovableWorktree\s*\(\s*worktreePath\s*,\s*projectDir\s*\)/,
+    );
   });
 });

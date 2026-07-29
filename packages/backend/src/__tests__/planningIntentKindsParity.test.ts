@@ -45,6 +45,10 @@ const ARCHITECTURE_READ_TOOLS = [
   orchestratorMcpToolName('architecture.getUnit'),
   orchestratorMcpToolName('architecture.queryUnits'),
 ];
+// task.getById is a read-only task-summary lookup, not a staged-intent kind —
+// it isn't in PLANNING_INTENT_KINDS, so every workflow's guard below excludes
+// it too (see config.ts's TASK_READ_MCP_TOOLS comment).
+const TASK_READ_TOOLS = [orchestratorMcpToolName('task.getById')];
 
 const WORKFLOWS: {
   name: 'groom' | 'design' | 'ops';
@@ -54,17 +58,29 @@ const WORKFLOWS: {
   {
     name: 'groom',
     allowedTools: GROOM_ALLOWED_TOOLS,
-    extraNonStagedTools: [GROOM_PRECHECK_TOOL, ...ARCHITECTURE_READ_TOOLS],
+    extraNonStagedTools: [
+      GROOM_PRECHECK_TOOL,
+      ...ARCHITECTURE_READ_TOOLS,
+      ...TASK_READ_TOOLS,
+    ],
   },
   {
     name: 'design',
     allowedTools: DESIGN_ALLOWED_TOOLS,
-    extraNonStagedTools: [...COMPLETENESS_TOOLS, ...ARCHITECTURE_READ_TOOLS],
+    extraNonStagedTools: [
+      ...COMPLETENESS_TOOLS,
+      ...ARCHITECTURE_READ_TOOLS,
+      ...TASK_READ_TOOLS,
+    ],
   },
   {
     name: 'ops',
     allowedTools: OPS_ALLOWED_TOOLS,
-    extraNonStagedTools: [GATE_VERIFY_TOOL, ...ARCHITECTURE_READ_TOOLS],
+    extraNonStagedTools: [
+      GATE_VERIFY_TOOL,
+      ...ARCHITECTURE_READ_TOOLS,
+      ...TASK_READ_TOOLS,
+    ],
   },
 ];
 

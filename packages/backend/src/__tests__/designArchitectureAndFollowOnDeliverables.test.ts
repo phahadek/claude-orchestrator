@@ -117,10 +117,10 @@ describe('assembled design procedure — architecture and follow-on task deliver
     );
 
     const questionBundling = CORE_PRINCIPLES.find(
-      (p) => p.id === 'design-no-question-bundling',
+      (p) => p.id === 'design-one-question-per-turn',
     )!;
     expect(renderPrinciple(questionBundling, 'design')).toMatch(
-      /staged exactly once, the last of the decision-recording steps, only after every question is settled and the completeness critic below has run/i,
+      /staged exactly once, the last of the decision-recording steps\..*is staged only once every listed Open Question is answered and the completeness critic's findings have been accepted/is,
     );
   });
 

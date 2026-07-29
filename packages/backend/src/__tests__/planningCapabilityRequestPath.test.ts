@@ -229,20 +229,23 @@ describe('session.requestCapability is not counted toward the Ready-path require
     db.prepare('DELETE FROM staged_intent_group').run();
   });
 
-  it('a staged session.requestCapability intent does not satisfy the gate/seed accretion requirement for a Ready flip in the same group', async () => {
+  it('a session.requestCapability intent cannot be staged into a group at all, so it can never masquerade as the gate/seed accretion required for a Ready flip', async () => {
     const groupId = 'group-capability-request-1';
-    stageIntent(
-      'session.requestCapability',
-      {
-        capability: 'Bash(pip install:*)',
-        plan: 'install the missing dependency',
-        evidence: 'the sandbox denied Bash(pip install:*)',
-      },
-      'proj-1',
-      groupId,
-      'session-groom-1',
-      null,
-    );
+    expect(() =>
+      stageIntent(
+        'session.requestCapability',
+        {
+          capability: 'Bash(pip install:*)',
+          plan: 'install the missing dependency',
+          evidence: 'the sandbox denied Bash(pip install:*)',
+        },
+        'proj-1',
+        groupId,
+        'session-groom-1',
+        null,
+      ),
+    ).toThrow(/cannot belong to a group/);
+
     const readyIntent = stageIntent(
       'task.setStatus',
       {
@@ -256,14 +259,23 @@ describe('session.requestCapability is not counted toward the Ready-path require
       null,
     );
 
+    // A grouped Ready-flip defers gate_contribution/seed_contribution
+    // enforcement to the commit-time precheck (precheckGroupCommit) rather
+    // than checking it at stage time (runStageTimeReadyChecks explicitly
+    // passes skipGateContributionCheck/skipSeedContributionCheck for any
+    // grouped intent — see its comment). So the only way a
+    // session.requestCapability intent could ever masquerade as a genuine
+    // gate.accrete/seed.stage contribution is by joining the same group —
+    // which is refused outright above. What stage time still enforces here
+    // is the baseline promotion gate (size/type checks, files/paths), which
+    // this incomplete groomingGate payload fails regardless.
     const checked = await runStageTimeReadyChecks(readyIntent);
     expect(checked.annotation?.blocked).toBe(true);
     const reasons =
       checked.annotation && 'reasons' in checked.annotation
         ? checked.annotation.reasons
         : [];
-    expect(reasons.some((r) => r.includes('gate_contribution'))).toBe(true);
-    expect(reasons.some((r) => r.includes('seed_contribution'))).toBe(true);
+    expect(reasons.length).toBeGreaterThan(0);
   });
 });
 

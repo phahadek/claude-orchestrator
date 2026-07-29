@@ -10,20 +10,30 @@ describe('eventKind — live full-event payload shape', () => {
     expect(eventKind(makeEventRow('text').live)).toBe<EventKind>('text');
   });
 
-  it('tool_use → tool_use', () => {
-    expect(eventKind(makeEventRow('tool_use').live)).toBe<EventKind>(
-      'tool_use',
-    );
+  // db/types.ts's EventType was narrowed to the values the event_type column
+  // actually holds ('text' | 'system' | 'user_message' | 'rate_limit' — see
+  // "narrow EventType to stored values, remove dead kind comparisons").
+  // event_type is never literally 'tool_use' or 'tool_result' in storage —
+  // tool_use blocks arrive folded into an assistant 'text' event's merged
+  // content array instead — so eventKind() has no case for them and falls
+  // through to the default 'other', which is the correct, safe behavior for
+  // a row shape that shouldn't occur in practice.
+  it('tool_use (impossible event_type) → other', () => {
+    expect(eventKind(makeEventRow('tool_use').live)).toBe<EventKind>('other');
   });
 
-  it('tool_result → tool_result', () => {
+  it('tool_result (impossible event_type) → other', () => {
     expect(eventKind(makeEventRow('tool_result').live)).toBe<EventKind>(
-      'tool_result',
+      'other',
     );
   });
 
-  it('error → error', () => {
-    expect(eventKind(makeEventRow('error').live)).toBe<EventKind>('error');
+  // Likewise, event_type is never literally 'error' in storage — error
+  // events are stored as event_type='system' with payload.type='error' (see
+  // 'eventKind — system event payload discrimination' below) — so this
+  // shape also falls through to the default 'other'.
+  it('error (impossible event_type) → other', () => {
+    expect(eventKind(makeEventRow('error').live)).toBe<EventKind>('other');
   });
 
   it('result → result (system event, payload.type=result)', () => {
@@ -46,20 +56,21 @@ describe('eventKind — JSONL ev.content shape', () => {
     expect(eventKind(makeEventRow('text').jsonl)).toBe<EventKind>('text');
   });
 
-  it('tool_use → tool_use (no type field in payload)', () => {
-    expect(eventKind(makeEventRow('tool_use').jsonl)).toBe<EventKind>(
-      'tool_use',
-    );
+  // Same "impossible event_type" reasoning as the live-shape block above —
+  // event_type is never 'tool_use'/'tool_result'/'error' in storage, so
+  // these fall through to the default 'other'.
+  it('tool_use (impossible event_type) → other (no type field in payload)', () => {
+    expect(eventKind(makeEventRow('tool_use').jsonl)).toBe<EventKind>('other');
   });
 
-  it('tool_result → tool_result (no type field in payload)', () => {
+  it('tool_result (impossible event_type) → other (no type field in payload)', () => {
     expect(eventKind(makeEventRow('tool_result').jsonl)).toBe<EventKind>(
-      'tool_result',
+      'other',
     );
   });
 
-  it('error → error (no type field in payload)', () => {
-    expect(eventKind(makeEventRow('error').jsonl)).toBe<EventKind>('error');
+  it('error (impossible event_type) → other (no type field in payload)', () => {
+    expect(eventKind(makeEventRow('error').jsonl)).toBe<EventKind>('other');
   });
 
   it('result → result (system event, payload.type=result — same as live)', () => {
@@ -117,12 +128,19 @@ describe('eventKind — system event payload discrimination', () => {
 // ── Regression: isTransientApiError (AgentSession:415) ───────────────────────
 
 describe('regression — transient API error detection (isTransientApiError path)', () => {
-  it('eventKind=error for overloaded_error (529 retry) — live shape', () => {
-    expect(eventKind(makeEventRow('error').live)).toBe<EventKind>('error');
-  });
-
-  it('eventKind=error for overloaded_error (529 retry) — JSONL shape', () => {
-    expect(eventKind(makeEventRow('error').jsonl)).toBe<EventKind>('error');
+  it('eventKind=error for overloaded_error (529 retry) — stored as a system event', () => {
+    // overloaded_error (like all error events) is stored as event_type='system'
+    // with payload.type='error' — see eventFixtures.ts's 'error' shape and
+    // the "system event payload discrimination" block above for the
+    // event_type='error' (impossible-shape) case, which now yields 'other'.
+    const overloadedErrorRow = {
+      event_type: 'system',
+      payload: JSON.stringify({
+        type: 'error',
+        error: { type: 'overloaded_error', message: 'Overloaded' },
+      }),
+    };
+    expect(eventKind(overloadedErrorRow)).toBe<EventKind>('error');
   });
 
   it('eventKind=error for SDK error stored as system event', () => {
@@ -141,28 +159,30 @@ describe('regression — transient API error detection (isTransientApiError path
 // ── Regression: mid-turn detection (SessionManager:1089) ─────────────────────
 
 describe('regression — mid-turn detection', () => {
-  it('eventKind=tool_result — live shape', () => {
+  // SessionManager's mid-turn check (`eventKind(lastEvent) === 'tool_result'
+  // || eventKind(lastEvent) === 'tool_use'`) is now unreachable dead code —
+  // event_type is never 'tool_result'/'tool_use' in storage (see the "narrow
+  // EventType to stored values, remove dead kind comparisons" PR), so these
+  // shapes always resolve to 'other'. Documented here rather than deleted so
+  // a future EventType widening that resurrects these values is caught.
+  it('eventKind≠tool_result — live shape (impossible event_type, dead comparison)', () => {
     expect(eventKind(makeEventRow('tool_result').live)).toBe<EventKind>(
-      'tool_result',
+      'other',
     );
   });
 
-  it('eventKind=tool_result — JSONL shape', () => {
+  it('eventKind≠tool_result — JSONL shape (impossible event_type, dead comparison)', () => {
     expect(eventKind(makeEventRow('tool_result').jsonl)).toBe<EventKind>(
-      'tool_result',
+      'other',
     );
   });
 
-  it('eventKind=tool_use — live shape', () => {
-    expect(eventKind(makeEventRow('tool_use').live)).toBe<EventKind>(
-      'tool_use',
-    );
+  it('eventKind≠tool_use — live shape (impossible event_type, dead comparison)', () => {
+    expect(eventKind(makeEventRow('tool_use').live)).toBe<EventKind>('other');
   });
 
-  it('eventKind=tool_use — JSONL shape', () => {
-    expect(eventKind(makeEventRow('tool_use').jsonl)).toBe<EventKind>(
-      'tool_use',
-    );
+  it('eventKind≠tool_use — JSONL shape (impossible event_type, dead comparison)', () => {
+    expect(eventKind(makeEventRow('tool_use').jsonl)).toBe<EventKind>('other');
   });
 
   it('eventKind≠tool_result for a text event (no false positive)', () => {

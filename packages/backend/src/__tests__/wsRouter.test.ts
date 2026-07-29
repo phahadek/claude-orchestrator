@@ -13,12 +13,14 @@ describe('ws/router.ts — fetch_tasks milestone-based routing', () => {
     expect(routerSource).toMatch(/fetch_tasks payload changed/);
   });
 
-  it('resolves the per-project task backend via getTaskBackend(projectId)', () => {
-    expect(routerSource).toMatch(/getTaskBackend\(msg\.projectId\)/);
+  it('resolves the milestone via ProjectService.getMilestone(milestoneId)', () => {
+    expect(routerSource).toMatch(
+      /ProjectService\.getMilestone\(msg\.milestoneId\)/,
+    );
   });
 
-  it('forwards milestoneId (not boardId) to backend.fetchReadyTasks()', () => {
-    expect(routerSource).toMatch(/\.fetchReadyTasks\(msg\.milestoneId/);
+  it('reads the board cache keyed on the milestone UUID (not boardId), never blocking on a live backend round-trip', () => {
+    expect(routerSource).toMatch(/getTaskCache\(`board:\$\{milestone\.id\}`\)/);
   });
 
   it('does not pre-translate milestoneId to source_id (no getMilestoneById call)', () => {

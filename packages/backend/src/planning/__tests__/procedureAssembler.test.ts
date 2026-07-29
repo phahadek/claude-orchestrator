@@ -461,7 +461,11 @@ describe('assemblePlanningProcedure', () => {
     }
 
     // design/ops share the generic decisionProposal contract — the
-    // structured groomProposal requirement is groom-specific.
+    // structured groomProposal requirement (its JSON field shape) is
+    // groom-specific. A shared hard-rules principle incidentally mentions
+    // "groomProposal.openQuestions" prose (the Investigation/Testing
+    // exemption rationale) even under the design variant, so assert
+    // against the structured field marker rather than the bare substring.
     const designOutput = assemblePlanningProcedure({
       taskName: 'A task',
       taskUrl: 'https://notion.so/x',
@@ -472,7 +476,8 @@ describe('assemblePlanningProcedure', () => {
         data: deriveDesignDigestSlice(fixtureDesignLoadResult()),
       },
     });
-    expect(designOutput).not.toContain('groomProposal');
+    expect(designOutput).not.toContain('"groomProposal"');
+    expect(designOutput).not.toContain('presentation.md');
   });
 
   it("carries the completeness critic (gap-class probing + disposition-don't-drop) and split-don't-trim / one-question-at-a-time guidance for design, and never for groom/ops", () => {

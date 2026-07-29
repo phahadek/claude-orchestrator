@@ -165,7 +165,7 @@ describe('backfillConfigSeedTask', () => {
     const sources = listSeedItemSources(storeRow.id);
     expect(sources).toHaveLength(1);
     expect(sources[0]).toMatchObject({
-      source_task_id: 'task-store-1',
+      source_task_id: 'notion:task-store-1',
       source_task_title: 'Add the seed-state store',
       merge_commit: 'abc123',
     });
@@ -232,6 +232,6 @@ describe('backfillConfigSeedTask', () => {
       .get('some seed spec') as any;
     expect(row.min_deployed_commit).toBe('commit-xyz');
     const sources = listSeedItemSources(row.id);
-    expect(sources[0].source_task_id).toBe('resolved-id');
+    expect(sources[0].source_task_id).toBe('notion:resolved-id');
   });
 });

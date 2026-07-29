@@ -21,6 +21,7 @@ import {
   insertStagedIntent,
   transitionStagedIntent,
   getSession,
+  applyPendingDone,
 } from '../db/queries';
 import type { StagedIntentRow } from '../db/types';
 import { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
@@ -105,6 +106,14 @@ describe('PlanningOrchestrator.checkTerminal', () => {
 
     transitionStagedIntent(intent.id, 'committed');
     expect(orchestrator.checkTerminal(SESSION_ID)).toBe(true);
+    // The session's DB status is still 'running' at this point — markTerminal
+    // defers the running→done write (markSessionDone's in-flight guard)
+    // since it can't tell this call apart from a turn genuinely still in
+    // flight. The done-transition is only actually applied once the turn
+    // settles (applyPendingDone), which the caller does after the subprocess
+    // exits.
+    expect(getSession(SESSION_ID)?.status).toBe('running');
+    expect(applyPendingDone(SESSION_ID)).toBe(true);
     expect(getSession(SESSION_ID)?.status).toBe('done');
   });
 
@@ -159,6 +168,10 @@ describe('PlanningOrchestrator.checkTerminal', () => {
       transitionStagedIntent(intent.id, 'committed');
     }
     expect(orchestrator.checkTerminal(SESSION_ID)).toBe(true);
+    // Deferred, same as the Deferred-path case above — status flips to
+    // 'done' only once the turn settles.
+    expect(getSession(SESSION_ID)?.status).toBe('running');
+    expect(applyPendingDone(SESSION_ID)).toBe(true);
     expect(getSession(SESSION_ID)?.status).toBe('done');
   });
 

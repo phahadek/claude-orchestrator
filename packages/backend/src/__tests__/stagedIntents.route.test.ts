@@ -49,11 +49,31 @@ function makeApp() {
   return app;
 }
 
+/**
+ * gate.accrete / seed.stage resolve their sourceTask's milestone against a
+ * real project (resolveMilestoneForProject -> ProjectService.getById) —
+ * seed a project + milestone row so that lookup succeeds.
+ */
+function insertProjectWithMilestone(
+  projectId: string,
+  milestone: string,
+): void {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO projects (id, name, project_dir, task_source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(projectId, projectId, `/tmp/${projectId}`, 'notion', now, now);
+  db.prepare(
+    `INSERT INTO milestones (id, project_id, name, source_id, display_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(`${projectId}-ms`, projectId, milestone, null, 0, now, now);
+}
+
 beforeEach(() => {
   mockGetTaskBackend.mockReset();
   mockRecordEvent.mockReset();
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
+  db.prepare('DELETE FROM milestones').run();
+  db.prepare('DELETE FROM projects').run();
 });
 
 /**
@@ -347,6 +367,13 @@ describe('POST /api/staged-intents/group/:groupId/commit — grooming promotion 
 
 describe('POST /api/staged-intents — kind validation', () => {
   it('accepts task.updateBody, task.setProperties, and task.archive', async () => {
+    // task.updateBody / task.setProperties resolve their subject taskId at
+    // stage time (assertTaskIdResolves) — the task cache is mocked to miss
+    // in this file, so it falls back to a live backend fetch.
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome doc.\n'),
+    });
     const app = makeApp();
     const agent = supertest(app);
 
@@ -390,6 +417,10 @@ describe('POST /api/staged-intents/:id/apply — new kinds', () => {
       updateBody,
       setProperties,
       archive,
+      // task.updateBody / task.setProperties resolve their subject taskId at
+      // stage time via a live backend fetch (assertTaskIdResolves) since the
+      // task cache is mocked to miss in this file.
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome doc.\n'),
     });
     const app = makeApp();
     const agent = supertest(app);
@@ -448,6 +479,10 @@ describe('POST /api/staged-intents/:id/apply — new kinds', () => {
       archive,
       updateBody,
       setProperties,
+      // task.updateBody / task.setProperties / task.move resolve their
+      // subject taskId at stage time via a live backend fetch
+      // (assertTaskIdResolves) since the task cache is mocked to miss.
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome doc.\n'),
     });
     const app = makeApp();
     const agent = supertest(app);
@@ -564,7 +599,15 @@ describe('POST /api/staged-intents/:id/apply — task.setType', () => {
 
 describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / journal.setState', () => {
   it('applies gate.accrete by dispatching through accreteGateContribution', async () => {
-    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    // accreteGateContribution validates the source task exists on the board
+    // (assertTaskExists -> fetchTaskPage) before minting gate items, and
+    // resolves sourceTask.milestone against a real project/milestone row
+    // (resolveMilestoneForProject).
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome doc.\n'),
+    });
+    insertProjectWithMilestone('proj-gate', 'M1');
     const app = makeApp();
     const agent = supertest(app);
 
@@ -598,7 +641,14 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
   });
 
   it('applies seed.stage by dispatching through stageSeedContribution', async () => {
-    mockGetTaskBackend.mockReturnValue({ type: 'notion' });
+    // stageSeedContribution likewise validates the source task exists
+    // (assertTaskExists -> fetchTaskPage) before staging seeds, and resolves
+    // sourceTask.milestone against a real project/milestone row.
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome doc.\n'),
+    });
+    insertProjectWithMilestone('proj-seed', 'M1');
     const app = makeApp();
     const agent = supertest(app);
 
@@ -745,6 +795,13 @@ describe('POST /api/staged-intents — decision-proposal annotation', () => {
   });
 
   it('stages a task.setStatus -> Deferred discard/defer proposal with its rationale, and it round-trips to the decision surface', async () => {
+    // task.setStatus resolves its subject taskId at stage time
+    // (assertTaskIdResolves) — the task cache is mocked to miss in this
+    // file, so it falls back to a live backend fetch.
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nSome doc.\n'),
+    });
     const app = makeApp();
     const agent = supertest(app);
 
