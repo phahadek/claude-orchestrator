@@ -1623,9 +1623,14 @@ export default function App() {
               activeProjectId={activeProjectId}
               activeBoardId={activeBoardId}
               activeBoardMilestone={activeBoardMilestone}
+              tasks={taskViews}
               lastTaskUpdate={lastTaskUpdate}
               lastStagedIntentChange={lastStagedIntentChange}
-              tasks={taskViews}
+              sessions={sessions}
+              send={send}
+              setSessionArchived={setSessionArchived}
+              setSessionFavorited={setSessionFavorited}
+              project={activeProject}
             />
           </ErrorBoundary>
         )}

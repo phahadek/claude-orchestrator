@@ -1,9 +1,17 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TaskView as BackendTaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 import type { TaskView } from '../types/taskView';
+import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import type { StagedIntent } from '../api/stagedIntents';
+import type { SessionState } from '../hooks/useSessionStore';
 import { useMilestoneConvergence } from '../hooks/useMilestoneConvergence';
 import { MilestoneBurndown } from './MilestoneBurndown';
+import {
+  MilestoneDecisionStack,
+  type MilestoneStackSelection,
+} from './MilestoneDecisionStack';
+import { MilestoneDrilldown } from './MilestoneDrilldown';
 import styles from './MilestoneView.module.css';
 
 const MIN_MIDDLE_WIDTH_PCT = 30;
@@ -16,23 +24,36 @@ interface Props {
   activeBoardId: string | null;
   /** Display name of the active milestone, or null when no real milestone is selected. */
   activeBoardMilestone: string | null;
-  lastTaskUpdate: BackendTaskView | null;
-  lastStagedIntentChange: StagedIntent | null;
   /** Tasks for the active project + board — already scoped upstream. */
   tasks: TaskView[];
+  lastTaskUpdate: BackendTaskView | null;
+  lastStagedIntentChange: StagedIntent | null;
+  sessions: SessionState[];
+  send: (msg: ClientMessage) => void;
+  setSessionArchived: (sessionId: string, archived: boolean) => void;
+  setSessionFavorited: (sessionId: string, favorited: boolean) => void;
+  project?: ProjectConfig | null;
 }
 
 export function MilestoneView({
   activeProjectId,
   activeBoardId,
   activeBoardMilestone,
+  tasks,
   lastTaskUpdate,
   lastStagedIntentChange,
-  tasks,
+  sessions,
+  send,
+  setSessionArchived,
+  setSessionFavorited,
+  project = null,
 }: Props) {
   // Shared filter state: the burndown (left) emits a phase, the decision
   // stack (middle) consumes it.
   const [phaseFilter, setPhaseFilter] = useState<string | null>(null);
+  const [selection, setSelection] = useState<MilestoneStackSelection | null>(
+    null,
+  );
 
   const invalidationKey = useMemo(
     () => `${lastTaskUpdate?.taskId ?? ''}:${lastStagedIntentChange?.id ?? ''}`,
@@ -44,6 +65,11 @@ export function MilestoneView({
     milestoneId: activeBoardMilestone ? activeBoardId : null,
     invalidationKey,
   });
+
+  // The decision-inbox lens keys on the milestone's canonical short id
+  // (convergence.milestone), distinct from activeBoardId (the DB board id
+  // used to scope /api/tasks/active).
+  const milestoneKey = convergence?.milestone ?? null;
 
   const [middleWidthPct, setMiddleWidthPct] = useState(
     DEFAULT_MIDDLE_WIDTH_PCT,
@@ -80,6 +106,12 @@ export function MilestoneView({
     window.addEventListener('mouseup', onUp);
   }, []);
 
+  // Selection lives against a specific milestone's stack — drop it when the
+  // milestone scope changes so the drill-down never shows a stale item.
+  useEffect(() => {
+    setSelection(null);
+  }, [activeProjectId, activeBoardId]);
+
   if (!activeBoardMilestone) {
     return (
       <div className={styles.container}>
@@ -110,9 +142,20 @@ export function MilestoneView({
         style={{ width: `${middleWidthPct}%` }}
         data-testid="milestone-decision-stack-mount"
       >
-        <div className={styles.mountPlaceholder}>
-          Decision stack{phaseFilter ? ` (filtered: ${phaseFilter})` : ''}
-        </div>
+        {activeProjectId && milestoneKey ? (
+          <MilestoneDecisionStack
+            projectId={activeProjectId}
+            milestone={milestoneKey}
+            tasks={tasks}
+            phaseFilter={phaseFilter}
+            selection={selection}
+            onSelect={setSelection}
+          />
+        ) : (
+          <div className={styles.mountPlaceholder}>
+            Decision stack{phaseFilter ? ` (filtered: ${phaseFilter})` : ''}
+          </div>
+        )}
       </div>
 
       <div
@@ -124,11 +167,16 @@ export function MilestoneView({
         className={styles.rightPanel}
         data-testid="milestone-drilldown-mount"
       >
-        <div className={styles.mountPlaceholder}>
-          {convergence
-            ? `Drill-down — status: ${convergence.status}`
-            : 'Drill-down'}
-        </div>
+        <MilestoneDrilldown
+          selection={selection}
+          tasks={tasks}
+          projectId={activeProjectId}
+          sessions={sessions}
+          send={send}
+          setSessionArchived={setSessionArchived}
+          setSessionFavorited={setSessionFavorited}
+          project={project}
+        />
       </div>
     </div>
   );
