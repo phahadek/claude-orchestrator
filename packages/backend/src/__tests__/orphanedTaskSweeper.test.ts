@@ -32,7 +32,7 @@ vi.mock('../db/queries.js', () => ({
   getPRBySessionId: vi.fn(() => null),
   getLocalBranchBySession: vi.fn(() => undefined),
   setSessionPauseReason: vi.fn(),
-  getLatestSessionEventTimestamp: vi.fn(() => null),
+  getSessionLastActivityMs: vi.fn(() => null),
   upsertPullRequest: vi.fn(() => null),
 }));
 
@@ -59,7 +59,7 @@ import {
   getPRBySessionId,
   getLocalBranchBySession,
   setSessionPauseReason,
-  getLatestSessionEventTimestamp,
+  getSessionLastActivityMs,
   upsertPullRequest,
 } from '../db/queries.js';
 import {
@@ -144,7 +144,7 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(setSessionPauseReason).mockClear();
     vi.mocked(recordEvent).mockClear();
     vi.mocked(countNudgeEvents).mockReturnValue(0);
-    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(null);
+    vi.mocked(getSessionLastActivityMs).mockReturnValue(null);
     vi.mocked(getLatestNudgeTimestamp).mockReturnValue(null);
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(upsertPullRequest).mockClear();
@@ -663,7 +663,7 @@ describe('OrphanedTaskSweeper', () => {
       >,
     );
     // Last event was 5 minutes ago — under 10-minute recency gate
-    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
+    vi.mocked(getSessionLastActivityMs).mockReturnValue(
       Date.now() - 5 * 60 * 1000,
     );
     const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
@@ -691,7 +691,7 @@ describe('OrphanedTaskSweeper', () => {
       >,
     );
     // Last event was 15 minutes ago — beyond 10-minute recency gate
-    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
+    vi.mocked(getSessionLastActivityMs).mockReturnValue(
       Date.now() - 15 * 60 * 1000,
     );
     const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
@@ -723,7 +723,7 @@ describe('OrphanedTaskSweeper', () => {
         typeof getLatestCodeSessionByNotionTaskId
       >,
     );
-    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
+    vi.mocked(getSessionLastActivityMs).mockReturnValue(
       Date.now() - 20 * 60 * 1000,
     );
     // Last nudge was only 5 minutes ago — under 15-minute spacing
@@ -753,7 +753,7 @@ describe('OrphanedTaskSweeper', () => {
         typeof getLatestCodeSessionByNotionTaskId
       >,
     );
-    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
+    vi.mocked(getSessionLastActivityMs).mockReturnValue(
       Date.now() - 30 * 60 * 1000,
     );
     vi.mocked(getLatestNudgeTimestamp).mockReturnValue(null);
@@ -790,7 +790,7 @@ describe('OrphanedTaskSweeper', () => {
       >,
     );
     // Session has responded to nudges (latestEventTs advances), but still no PR
-    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
+    vi.mocked(getSessionLastActivityMs).mockReturnValue(
       Date.now() - 20 * 60 * 1000,
     );
     // Total nudge count = NUDGE_LIMIT — should surface regardless of session activity
@@ -828,7 +828,7 @@ describe('OrphanedTaskSweeper', () => {
         typeof getLatestCodeSessionByNotionTaskId
       >,
     );
-    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
+    vi.mocked(getSessionLastActivityMs).mockReturnValue(
       Date.now() - 60 * 60 * 1000,
     );
     // 2 total nudges — limit reached
@@ -864,7 +864,7 @@ describe('OrphanedTaskSweeper', () => {
       ...makeSession('idle', 90 * 60 * 1000, endedAt),
       pause_reason: 'stalled_idle',
     } as ReturnType<typeof getLatestCodeSessionByNotionTaskId>);
-    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
+    vi.mocked(getSessionLastActivityMs).mockReturnValue(
       Date.now() - 60 * 60 * 1000,
     );
     vi.mocked(countNudgeEvents).mockReturnValue(2);

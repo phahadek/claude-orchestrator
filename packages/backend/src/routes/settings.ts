@@ -37,6 +37,7 @@ const SETTING_KEYS = [
   'session_cgroup_deny_swap',
   'session_notify_threshold_seconds',
   'session_pause_threshold_seconds',
+  'session_inert_threshold_seconds',
   'session_hard_stop_window_seconds',
   'ci_poll_interval_seconds',
   'ci_poll_max_minutes',
@@ -124,6 +125,9 @@ function applyToRuntime(
       break;
     case 'session_pause_threshold_seconds':
       runtimeSettings.session_pause_threshold_seconds = value as number;
+      break;
+    case 'session_inert_threshold_seconds':
+      runtimeSettings.session_inert_threshold_seconds = value as number;
       break;
     case 'session_hard_stop_window_seconds':
       runtimeSettings.session_hard_stop_window_seconds = value as number;
@@ -227,6 +231,9 @@ function runtimeSettingsAsRecord(): {
     ),
     session_pause_threshold_seconds: String(
       runtimeSettings.session_pause_threshold_seconds,
+    ),
+    session_inert_threshold_seconds: String(
+      runtimeSettings.session_inert_threshold_seconds,
     ),
     session_hard_stop_window_seconds: String(
       runtimeSettings.session_hard_stop_window_seconds,

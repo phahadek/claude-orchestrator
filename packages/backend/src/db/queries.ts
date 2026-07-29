@@ -1005,10 +1005,12 @@ const stmtGetEventsBySession = db.prepare<{ session_id: string }>(`
   SELECT * FROM session_events WHERE session_id = @session_id ORDER BY id ASC
 `);
 
-/** Returns the timestamp of the most recent session_events row for the session, or null. */
-export function getLatestSessionEventTimestamp(
-  sessionId: string,
-): number | null {
+/**
+ * Epoch ms of the most recent session_events row for the session, or null
+ * when it has none (pruned or never emitted — callers must treat null as
+ * "unknown", never as "inert").
+ */
+export function getSessionLastActivityMs(sessionId: string): number | null {
   const row = db
     .prepare<
       [string],

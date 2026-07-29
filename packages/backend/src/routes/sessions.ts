@@ -18,6 +18,7 @@ import {
   getEventsBySession,
   removeGrantedCapability,
   getGrantedCapabilities,
+  getSessionLastActivityMs,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { getProjectById } from '../config';
@@ -27,6 +28,19 @@ import type { ServerMessage } from '../ws/types';
 import { eventKind } from '../session/eventKind';
 import type { SessionManager } from '../session/SessionManager';
 import { deriveCapabilityProvenance } from '../audit/capabilityProvenance';
+import type { Session } from '../db/types';
+
+/** Attaches lastActivityAgeMs — ms since the session's last session_events row, null when unknown (none recorded, or pruned). */
+function withActivityAge<T extends Session>(
+  session: T,
+): T & { lastActivityAgeMs: number | null } {
+  const lastActivityTs = getSessionLastActivityMs(session.session_id);
+  return {
+    ...session,
+    lastActivityAgeMs:
+      lastActivityTs !== null ? Date.now() - lastActivityTs : null,
+  };
+}
 
 let _broadcast: (msg: ServerMessage) => void = () => {};
 export function setBroadcast(fn: (msg: ServerMessage) => void): void {
@@ -42,7 +56,7 @@ export const sessionsRouter = Router();
 
 // GET /api/sessions/archived
 sessionsRouter.get('/archived', (_req: Request, res: Response) => {
-  res.json(getArchivedSessions());
+  res.json(getArchivedSessions().map(withActivityAge));
 });
 
 // GET /api/sessions?status=running,done&projectId=claude-orchestrator
@@ -53,7 +67,7 @@ sessionsRouter.get('/', (req: Request, res: Response) => {
     typeof req.query.status === 'string' ? req.query.status : '';
 
   if (projectId) {
-    res.json(getSessionsByProject(projectId));
+    res.json(getSessionsByProject(projectId).map(withActivityAge));
     return;
   }
   if (statusParam) {
@@ -61,20 +75,21 @@ sessionsRouter.get('/', (req: Request, res: Response) => {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    res.json(getSessionsByStatus(statuses));
+    res.json(getSessionsByStatus(statuses).map(withActivityAge));
   } else {
-    res.json(getActiveSessions());
+    res.json(getActiveSessions().map(withActivityAge));
   }
 });
 
 // GET /api/sessions/:id/events
 sessionsRouter.get('/:id/events', (req: Request, res: Response) => {
   const sessionId = String(req.params.id);
-  const session = getSession(sessionId);
-  if (!session) {
+  const rawSession = getSession(sessionId);
+  if (!rawSession) {
     res.status(404).json({ error: 'Session not found' });
     return;
   }
+  const session = withActivityAge(rawSession);
   const events = getEventsBySession(sessionId)
     .filter((ev) => !isSystemOnlyUserEvent(ev.payload))
     .map((ev) => ({

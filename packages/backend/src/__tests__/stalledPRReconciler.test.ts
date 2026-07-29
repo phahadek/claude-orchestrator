@@ -29,6 +29,7 @@ vi.mock('../db/queries.js', () => ({
   lookupSessionByBranch: vi.fn(() => null),
   linkPRTaskAndSession: vi.fn(),
   setPendingPush: vi.fn(),
+  getSessionLastActivityMs: vi.fn(() => null),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
