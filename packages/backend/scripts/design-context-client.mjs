@@ -30,7 +30,14 @@ import { pathToFileURL } from 'node:url';
  * inlined in the CLI body) so it can be exercised directly, in-process, by
  * tests without spawning a child process for the network round trip.
  */
-export function fetchDesignContext({ host, port, token, milestone, task, project }) {
+export function fetchDesignContext({
+  host,
+  port,
+  token,
+  milestone,
+  task,
+  project,
+}) {
   const query = new URLSearchParams({ milestone, task });
   if (project) query.set('project', project);
 

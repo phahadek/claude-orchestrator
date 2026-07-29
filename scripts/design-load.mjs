@@ -897,7 +897,9 @@ const blockedExec = tasks.executable.filter(
 ).length;
 const readyExec = tasks.executable.length - blockedExec;
 console.log(`design-load: milestone ${milestone} loaded into ${cacheDir}`);
-console.log(`  context pages: ${contextPages.length} (fetched via design-context)`);
+console.log(
+  `  context pages: ${contextPages.length} (fetched via design-context)`,
+);
 console.log(`  📐 Design + 📋 Planning tasks on target board:`);
 console.log(
   `    executable (Ready + In Progress): ${tasks.executable.length} (${readyExec} dep-ready, ${blockedExec} dep-blocked)`,

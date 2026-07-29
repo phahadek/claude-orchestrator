@@ -23,7 +23,13 @@ function startFixtureServer(
 
 function bundleWith(archSource: 'store' | 'notion') {
   return {
-    task: { id: 't1', title: 'Task', status: 'Ready', type: '📐 Design', url: 'https://notion.so/t1' },
+    task: {
+      id: 't1',
+      title: 'Task',
+      status: 'Ready',
+      type: '📐 Design',
+      url: 'https://notion.so/t1',
+    },
     markdown: '# Task',
     openQuestions: { items: [], source: 'none' },
     archSource,
@@ -113,7 +119,12 @@ describe('design-context-client.mjs — fetchDesignContext', () => {
       res.end('{}');
     });
 
-    await fetchDesignContext({ port, token: 't', milestone: 'M12', task: 't1' });
+    await fetchDesignContext({
+      port,
+      token: 't',
+      milestone: 'M12',
+      task: 't1',
+    });
 
     expect(receivedPath).toBe('/api/design-context?milestone=M12&task=t1');
   });

@@ -31,7 +31,9 @@ describe('design-context-client.mjs — CLI', () => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(bundle));
     });
-    await new Promise((resolvePort) => server.listen(0, '127.0.0.1', resolvePort));
+    await new Promise((resolvePort) =>
+      server.listen(0, '127.0.0.1', resolvePort),
+    );
     const { port } = server.address();
 
     const { stdout } = await runScript(['--milestone', 'M12', '--task', 't1'], {
@@ -48,9 +50,13 @@ describe('design-context-client.mjs — CLI', () => {
     delete env.ORCHESTRATOR_DEVICE_TOKEN;
 
     await expect(
-      execFileAsync('node', [scriptPath, '--milestone', 'M12', '--task', 't1'], {
-        env,
-      }),
+      execFileAsync(
+        'node',
+        [scriptPath, '--milestone', 'M12', '--task', 't1'],
+        {
+          env,
+        },
+      ),
     ).rejects.toMatchObject({
       code: 1,
       stdout: '',
@@ -75,7 +81,9 @@ describe('design-context-client.mjs — CLI', () => {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'design-context load failed' }));
     });
-    await new Promise((resolvePort) => server.listen(0, '127.0.0.1', resolvePort));
+    await new Promise((resolvePort) =>
+      server.listen(0, '127.0.0.1', resolvePort),
+    );
     const { port } = server.address();
 
     await expect(

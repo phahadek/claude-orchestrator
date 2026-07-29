@@ -126,7 +126,11 @@ const FIXTURES = {
       archUnits: [{ id: 'unit-1', title: 'Delivery invariant' }],
       unresolvedPageRefs: [],
       contextPages: [
-        { id: 'ctx-1', title: '🗺️ Project Context', markdown: 'project context body' },
+        {
+          id: 'ctx-1',
+          title: '🗺️ Project Context',
+          markdown: 'project context body',
+        },
       ],
     },
     'task-b': {
@@ -134,7 +138,11 @@ const FIXTURES = {
       archUnits: [],
       unresolvedPageRefs: [],
       contextPages: [
-        { id: 'ctx-1', title: '🗺️ Project Context', markdown: 'project context body' },
+        {
+          id: 'ctx-1',
+          title: '🗺️ Project Context',
+          markdown: 'project context body',
+        },
       ],
     },
   },
@@ -303,7 +311,7 @@ describe('design-load.mjs', () => {
     expect(taskB.inbound_carries).toEqual([]);
   });
 
-  it('loads each task\'s architecture via the design-context route (archStoreAdopted dual read), and carries the non-architecture context pages on both branches', () => {
+  it("loads each task's architecture via the design-context route (archStoreAdopted dual read), and carries the non-architecture context pages on both branches", () => {
     harness = setupHarness();
     runLoader(harness);
     const worklist = readWorklist(harness);
