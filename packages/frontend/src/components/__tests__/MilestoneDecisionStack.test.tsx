@@ -40,11 +40,10 @@ describe('MilestoneDecisionStack', () => {
   it('sorts tasks into not-yet-launched vs done, honouring the phase filter', async () => {
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([]);
     const tasks: TaskView[] = [
-      makeTask({ taskId: 'wave1-open', taskName: 'Wave 1 open', wave: 1 }),
+      makeTask({ taskId: 'code-open', taskName: 'Code open' }),
       makeTask({
-        taskId: 'wave1-launched',
-        taskName: 'Wave 1 launched',
-        wave: 1,
+        taskId: 'code-launched',
+        taskName: 'Code launched',
         codeSession: {
           sessionId: 'sess-1',
           status: 'running',
@@ -56,13 +55,16 @@ describe('MilestoneDecisionStack', () => {
         },
       }),
       makeTask({
-        taskId: 'wave1-done',
-        taskName: 'Wave 1 done',
-        wave: 1,
+        taskId: 'code-done',
+        taskName: 'Code done',
         displayStatus: 'done',
         notionStatus: '✅ Done',
       }),
-      makeTask({ taskId: 'wave2-open', taskName: 'Wave 2 open', wave: 2 }),
+      makeTask({
+        taskId: 'design-open',
+        taskName: 'Design open',
+        taskType: '📐 Design',
+      }),
     ];
 
     const onSelect = vi.fn();
@@ -71,7 +73,7 @@ describe('MilestoneDecisionStack', () => {
         projectId="proj-1"
         milestone="M1"
         tasks={tasks}
-        phaseFilter="1"
+        phaseFilter="code"
         selection={null}
         onSelect={onSelect}
       />,
@@ -81,14 +83,14 @@ describe('MilestoneDecisionStack', () => {
       expect(screen.getByTestId('milestone-decision-stack')).toBeTruthy(),
     );
 
-    expect(screen.getByTestId('milestone-task-row-wave1-open')).toBeTruthy();
-    expect(screen.getByTestId('milestone-task-row-wave1-done')).toBeTruthy();
+    expect(screen.getByTestId('milestone-task-row-code-open')).toBeTruthy();
+    expect(screen.getByTestId('milestone-task-row-code-done')).toBeTruthy();
     expect(
-      screen.queryByTestId('milestone-task-row-wave1-launched'),
+      screen.queryByTestId('milestone-task-row-code-launched'),
     ).toBeNull();
-    expect(screen.queryByTestId('milestone-task-row-wave2-open')).toBeNull();
+    expect(screen.queryByTestId('milestone-task-row-design-open')).toBeNull();
 
-    fireEvent.click(screen.getByTestId('milestone-task-row-wave1-open'));
+    fireEvent.click(screen.getByTestId('milestone-task-row-code-open'));
     expect(onSelect).toHaveBeenCalledWith({
       type: 'task',
       task: tasks[0],
