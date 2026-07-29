@@ -123,7 +123,7 @@ export async function isOpsCandidate(
 }
 
 /** True for a Type value the design flow dispatches: 📐 Design or 📋 Planning. */
-export function isDesignEligibleType(type: string): boolean {
+function isDesignEligibleType(type: string): boolean {
   return type.includes(DESIGN_TOKEN) || type.includes(PLANNING_TOKEN);
 }
 
