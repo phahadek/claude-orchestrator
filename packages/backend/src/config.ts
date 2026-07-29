@@ -70,9 +70,6 @@ export const config = {
   port: _oc.server.port,
   projectDir: normalizePath(process.env.PROJECT_DIR ?? process.cwd()),
   claudePath: resolveClaudePath(),
-  maxConcurrentCodeSessions: Number(
-    process.env.MAX_CONCURRENT_CODE_SESSIONS ?? 20,
-  ),
   anthropicApiKey: getSecret('ANTHROPIC_API_KEY') ?? '',
 };
 

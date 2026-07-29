@@ -86,7 +86,6 @@ vi.mock('../config', () => ({
   BASH_DEFAULT_TIMEOUT_MS: 120000,
   config: {
     claudePath: '/fake/claude',
-    maxConcurrentCodeSessions: 20,
     projectDir: '/fake/project',
   },
   getProjectById: vi.fn((id: string) =>

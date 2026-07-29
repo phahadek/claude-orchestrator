@@ -42,8 +42,8 @@ vi.mock('fs', async () => {
 });
 
 vi.mock('../config', () => ({
-  config: { maxConcurrentCodeSessions: 10 },
-  runtimeSettings: { session_mode: 'cli' },
+  config: {},
+  runtimeSettings: { session_mode: 'cli', max_concurrent_code_sessions: 10 },
   getProjectById: vi.fn().mockReturnValue({
     id: 'test-proj',
     name: 'Test Project',

@@ -25,6 +25,7 @@ const mockRuntimeSettings = vi.hoisted(() => ({
   large_task_model: null as string | null,
   code_session_model: null as string | null,
   auto_launch_poll_interval_ms: 60_000,
+  max_concurrent_code_sessions: 10,
 }));
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
@@ -70,7 +71,7 @@ vi.mock('fs', async () => {
 });
 
 vi.mock('../config', () => ({
-  config: { maxConcurrentCodeSessions: 10 },
+  config: {},
   runtimeSettings: mockRuntimeSettings,
   ALLOWED_TOOLS: [],
   GITHUB_REPO: '',

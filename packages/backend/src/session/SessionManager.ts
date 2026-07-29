@@ -95,6 +95,7 @@ import {
 import { recoverSession } from './sessionRecovery';
 import {
   countsAgainstConcurrency,
+  countsAgainstCodeSessionConcurrency,
   isGateVerifySession,
   isPlanningSession,
   movesTargetInProgress,
@@ -1131,14 +1132,21 @@ export class SessionManager extends EventEmitter {
         );
       }
     } else if (countsAgainstConcurrency(sessionType)) {
-      const codeSessionCount = [...this.sessions.values()].filter(
-        (s) =>
-          countsAgainstConcurrency(s.sessionType) &&
-          !isPlanningSession(s.sessionType),
-      ).length;
-      if (codeSessionCount >= config.maxConcurrentCodeSessions) {
+      // Reservation is taken in the same synchronous block as the check
+      // (no await between) so concurrent start() calls can't all read the
+      // same pre-insert count — this.sessions only gains the entry once
+      // completeStart() finishes its (long, multi-await) worktree setup, so
+      // pendingStarts is what makes a launch "count" immediately.
+      const codeSessionCount =
+        [...this.sessions.values()].filter((s) =>
+          countsAgainstCodeSessionConcurrency(s.sessionType),
+        ).length +
+        [...this.pendingStarts.values()].filter((p) =>
+          countsAgainstCodeSessionConcurrency(p.sessionType),
+        ).length;
+      if (codeSessionCount >= runtimeSettings.max_concurrent_code_sessions) {
         throw new Error(
-          `Max concurrent code sessions (${config.maxConcurrentCodeSessions}) reached`,
+          `Max concurrent code sessions (${runtimeSettings.max_concurrent_code_sessions}) reached`,
         );
       }
     }
@@ -2508,10 +2516,11 @@ export class SessionManager extends EventEmitter {
       `[SessionManager] found ${orphans.length} orphan session(s) — resuming`,
     );
 
-    const codeSessionCount = [...this.sessions.values()].filter(
-      (s) => s.sessionType !== 'review',
+    const codeSessionCount = [...this.sessions.values()].filter((s) =>
+      countsAgainstCodeSessionConcurrency(s.sessionType),
     ).length;
-    const available = config.maxConcurrentCodeSessions - codeSessionCount;
+    const available =
+      runtimeSettings.max_concurrent_code_sessions - codeSessionCount;
     const reviewOrphans = orphans.filter(
       (row) => row.session_type === 'review',
     );
@@ -2803,16 +2812,11 @@ export class SessionManager extends EventEmitter {
   getLiveCodeSessionCount(): number {
     let n = 0;
     for (const s of this.sessions.values()) {
-      if (
-        countsAgainstConcurrency(s.sessionType) &&
-        !isPlanningSession(s.sessionType)
-      )
-        n++;
+      if (countsAgainstCodeSessionConcurrency(s.sessionType)) n++;
     }
     for (const [id, p] of this.pendingStarts) {
       if (
-        countsAgainstConcurrency(p.sessionType) &&
-        !isPlanningSession(p.sessionType) &&
+        countsAgainstCodeSessionConcurrency(p.sessionType) &&
         !this.sessions.has(id)
       )
         n++;

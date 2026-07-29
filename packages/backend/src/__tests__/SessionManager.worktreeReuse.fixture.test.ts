@@ -35,8 +35,8 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 vi.mock('../config', () => ({
-  config: { maxConcurrentCodeSessions: 10 },
-  runtimeSettings: { session_mode: 'cli' },
+  config: {},
+  runtimeSettings: { session_mode: 'cli', max_concurrent_code_sessions: 10 },
   ALLOWED_TOOLS: [],
   GITHUB_REPO: 'phahadek/test-repo',
   getProjectById: vi.fn().mockReturnValue({

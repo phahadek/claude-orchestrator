@@ -51,9 +51,23 @@ export function opensPr(sessionType: string): boolean {
   return sessionType === 'standard';
 }
 
-/** True for session types that count against the max-concurrent-code-sessions limit. */
+/** True for session types that count against the shared code+planning concurrency accounting (excludes review). */
 export function countsAgainstConcurrency(sessionType: string): boolean {
   return sessionType !== 'review';
+}
+
+/**
+ * True for session types that count against the max-concurrent-code-sessions
+ * cap specifically — excludes both review sessions and planning session
+ * types (groom/design/ops/split), which draw from their own separate
+ * concurrency pool (see max_concurrent_planning_sessions). This is the one
+ * predicate the code-session admission check and the orphan-resume budget
+ * must both use so they cannot drift onto different counts.
+ */
+export function countsAgainstCodeSessionConcurrency(
+  sessionType: string,
+): boolean {
+  return countsAgainstConcurrency(sessionType) && !isPlanningSession(sessionType);
 }
 
 /** True for session types that author task status changes (e.g. Blocked/Ready on error). */

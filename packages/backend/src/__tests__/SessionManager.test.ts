@@ -229,9 +229,9 @@ describe('SessionManager.start() — code-only session limit', () => {
   );
 
   it('code session is rejected when code session count reaches the limit', () => {
-    // Must check config.maxConcurrentCodeSessions for non-review sessions
-    expect(source).toMatch(/config\.maxConcurrentCodeSessions/);
-    // Error message references maxConcurrentCodeSessions
+    // Must check runtimeSettings.max_concurrent_code_sessions for non-review sessions
+    expect(source).toMatch(/runtimeSettings\.max_concurrent_code_sessions/);
+    // Error message references max_concurrent_code_sessions
     expect(source).toMatch(/Max concurrent code sessions/);
   });
 
@@ -240,16 +240,16 @@ describe('SessionManager.start() — code-only session limit', () => {
     expect(source).toMatch(/countsAgainstConcurrency\(sessionType\)/);
     // The cap check block is inside the countsAgainstConcurrency guard
     const guardIdx = source.indexOf('countsAgainstConcurrency(sessionType)');
-    const capCheckIdx = source.indexOf('maxConcurrentCodeSessions');
+    const capCheckIdx = source.indexOf('max_concurrent_code_sessions');
     expect(capCheckIdx).toBeGreaterThan(guardIdx);
   });
 
-  it('counts only non-review sessions against the cap', () => {
-    // getLiveCodeSessionCount() must exclude review sessions from the count
+  it('counts only non-review, non-planning sessions against the cap', () => {
+    // getLiveCodeSessionCount() must exclude review and planning sessions from the count
     expect(source).toMatch(/getLiveCodeSessionCount/);
     const countFnIdx = source.indexOf('getLiveCodeSessionCount()');
     const countFnBody = source.slice(countFnIdx, countFnIdx + 400);
-    expect(countFnBody).toMatch(/sessionType\s*!==\s*'review'/);
+    expect(countFnBody).toMatch(/countsAgainstCodeSessionConcurrency/);
   });
 });
 
@@ -548,9 +548,9 @@ describe('SessionManager.resumeOrphanSessions()', () => {
     );
   });
 
-  it('respects maxConcurrentCodeSessions — slices code orphans into toResume and toError', () => {
+  it('respects max_concurrent_code_sessions — slices code orphans into toResume and toError', () => {
     expect(source).toMatch(
-      /config\.maxConcurrentCodeSessions\s*-\s*codeSessionCount/,
+      /runtimeSettings\.max_concurrent_code_sessions\s*-\s*codeSessionCount/,
     );
     expect(source).toMatch(/codeOrphans\.slice\s*\(\s*0\s*,\s*available\s*\)/);
     expect(source).toMatch(/codeOrphans\.slice\s*\(\s*available\s*\)/);
