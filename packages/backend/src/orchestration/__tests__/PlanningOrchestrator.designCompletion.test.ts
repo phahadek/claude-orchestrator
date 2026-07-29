@@ -193,7 +193,11 @@ describe('PlanningOrchestrator — design task completion', () => {
 
     // The turn's boundary arrives (session_ended) and drains the deferred
     // approve-terminal transition.
-    sm.emit('message', { type: 'session_ended', sessionId: 'design-session-1', status: 'idle' });
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: 'design-session-1',
+      status: 'idle',
+    });
     await flush();
 
     expect(markSessionDone).toHaveBeenCalledWith(
