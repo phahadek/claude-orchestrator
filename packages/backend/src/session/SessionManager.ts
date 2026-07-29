@@ -670,7 +670,7 @@ export function isDegradedSpawnFailure(err: unknown): boolean {
 export const BACKEND_SPAWN_DEGRADED_REASON = 'backend_spawn_degraded';
 
 /** Operator-readable explanation surfaced alongside BACKEND_SPAWN_DEGRADED_REASON. */
-export const BACKEND_SPAWN_DEGRADED_MESSAGE =
+const BACKEND_SPAWN_DEGRADED_MESSAGE =
   'Backend spawn health check failed: a child process command returned no ' +
   'stderr output and a killed/signal outcome. This is the signature of a ' +
   'degraded spawn subsystem (commonly following an OS suspend/resume on a ' +

@@ -1916,6 +1916,9 @@ describe('sendOrResume — degraded spawn on worktree recreation is a backend-he
       },
     );
 
+    const emittedMessages: any[] = [];
+    sm.on('message', (msg) => emittedMessages.push(msg));
+
     const result = await sm.sendOrResume(SESSION_ID, 'hello');
 
     expect(result).toBe(SESSION_ID);
@@ -1934,6 +1937,14 @@ describe('sendOrResume — degraded spawn on worktree recreation is a backend-he
       'error',
       expect.any(Number),
     );
+
+    // The distinct reason code surfaced to the dashboard, not a generic
+    // worktree_recreate_failed — lets the UI/operator recognize this as a
+    // backend-health statement rather than a per-session error.
+    const actionFailedMsg = emittedMessages.find(
+      (m) => m.type === 'session_action_failed',
+    );
+    expect(actionFailedMsg?.reason).toBe(BACKEND_SPAWN_DEGRADED_REASON);
   });
 });
 
