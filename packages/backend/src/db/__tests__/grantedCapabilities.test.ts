@@ -17,6 +17,7 @@ import {
   insertSession,
   getGrantedCapabilities,
   addGrantedCapability,
+  removeGrantedCapability,
 } from '../queries.js';
 
 beforeEach(() => {
@@ -82,5 +83,22 @@ describe('granted capabilities', () => {
     seedSession('sess-6');
     addGrantedCapability('sess-5', 'Bash(psql:*)');
     expect(getGrantedCapabilities('sess-6')).toEqual([]);
+  });
+
+  it('removes exactly the named capability, leaving others intact', () => {
+    seedSession('sess-7');
+    addGrantedCapability('sess-7', 'Bash(psql:*)');
+    addGrantedCapability('sess-7', 'mcp__orchestrator__health');
+    removeGrantedCapability('sess-7', 'Bash(psql:*)');
+    expect(getGrantedCapabilities('sess-7')).toEqual([
+      'mcp__orchestrator__health',
+    ]);
+  });
+
+  it('is a no-op if the capability is not present', () => {
+    seedSession('sess-8');
+    addGrantedCapability('sess-8', 'Bash(psql:*)');
+    removeGrantedCapability('sess-8', 'Bash(not-granted:*)');
+    expect(getGrantedCapabilities('sess-8')).toEqual(['Bash(psql:*)']);
   });
 });

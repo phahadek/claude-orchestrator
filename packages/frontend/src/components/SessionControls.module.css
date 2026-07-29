@@ -274,6 +274,39 @@
   border-bottom-color: #89b4fa;
 }
 
+.capabilityRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.capabilityPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--ctp-text, #cdd6f4);
+  background: rgba(250, 179, 135, 0.5);
+  border-radius: var(--radius-sm, 4px);
+  padding: 1px 6px;
+}
+
+.capabilityRemove {
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+  opacity: 0.7;
+}
+
+.capabilityRemove:hover {
+  opacity: 1;
+}
+
 /* ── Compact disclosure toggle shared styles ─────────────────────── */
 .disclosureToggle--visible {
   display: inline-flex;

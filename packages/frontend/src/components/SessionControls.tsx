@@ -163,6 +163,17 @@ export function SessionControls({
     });
   }
 
+  async function handleRevokeCapability(capability: string) {
+    await authedFetch(
+      `/api/sessions/${session.sessionId}/capabilities/revoke`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capability }),
+      },
+    );
+  }
+
   const adminChromeClass = `${styles.adminChrome} ${compactOpen ? styles['adminChrome--open'] : ''}`;
   const headerControlsClass = `${styles.headerControls}${embedded ? ` ${styles['headerControls--embedded']}` : ''}`;
 
@@ -366,6 +377,23 @@ export function SessionControls({
             placeholder="Add tag..."
           />
         </div>
+
+        {(session.grantedCapabilities ?? []).length > 0 && (
+          <div className={styles.capabilityRow}>
+            {(session.grantedCapabilities ?? []).map((capability) => (
+              <span key={capability} className={styles.capabilityPill}>
+                {capability}
+                <button
+                  className={styles.capabilityRemove}
+                  onClick={() => void handleRevokeCapability(capability)}
+                  aria-label={`Revoke capability ${capability}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </>
   );
