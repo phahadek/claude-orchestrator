@@ -14,13 +14,10 @@ export function createMilestonesRouter(): Router {
   const router = Router();
 
   // GET /api/milestones/:milestoneId/arm -> effective per-flow state
-  router.get(
-    '/milestones/:milestoneId/arm',
-    (req: Request, res: Response) => {
-      const milestoneId = String(req.params.milestoneId);
-      res.json(listArm(milestoneId));
-    },
-  );
+  router.get('/milestones/:milestoneId/arm', (req: Request, res: Response) => {
+    const milestoneId = String(req.params.milestoneId);
+    res.json(listArm(milestoneId));
+  });
 
   // PUT /api/milestones/:milestoneId/arm/:flow { armed }
   router.put(

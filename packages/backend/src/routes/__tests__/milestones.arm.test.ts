@@ -48,7 +48,11 @@ describe('PUT /api/milestones/:milestoneId/arm/:flow', () => {
       .send({ armed: true });
 
     expect(putRes.status).toBe(200);
-    expect(putRes.body).toEqual({ milestoneId: 'm1', flow: 'design', armed: true });
+    expect(putRes.body).toEqual({
+      milestoneId: 'm1',
+      flow: 'design',
+      armed: true,
+    });
 
     const getRes = await request(makeApp()).get('/api/milestones/m1/arm');
     expect(getRes.body.design).toEqual({ armed: true, source: 'row' });
