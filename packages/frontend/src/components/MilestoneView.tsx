@@ -116,7 +116,10 @@ export function MilestoneView({
         onMouseDown={handleResizeMouseDown}
       />
 
-      <div className={styles.rightPanel} data-testid="milestone-drilldown-mount">
+      <div
+        className={styles.rightPanel}
+        data-testid="milestone-drilldown-mount"
+      >
         <div className={styles.mountPlaceholder}>
           {convergence
             ? `Drill-down — status: ${convergence.status}`
