@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
-import { MilestoneBurndown, computePhaseBurndown } from '../MilestoneBurndown';
+import { MilestoneBurndown } from '../MilestoneBurndown';
+import { computePhaseBurndown } from '../../utils/phaseBurndown';
 import type { TaskView } from '../../types/taskView';
 import type { MilestoneConvergence } from '@claude-orchestrator/backend/src/convergence/convergenceService';
 
