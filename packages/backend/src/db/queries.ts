@@ -5871,7 +5871,7 @@ let _stmtGetFlowArm: Database.Statement | undefined;
 let _stmtUpsertFlowArm: Database.Statement | undefined;
 
 /** flow_arm row for (milestoneId, flow), or null if absent (caller applies DEFAULT_ARM). */
-export function getFlowArmRow(
+function getFlowArmRow(
   milestoneId: string,
   flow: FlowId,
 ): FlowArmRow | null {
