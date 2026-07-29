@@ -104,12 +104,18 @@ describe('passesDesignDepGate', () => {
   it('requires every dep to be ✅ Done, regardless of Type', () => {
     const t = task({ dependsOn: ['code-dep'] });
     const notDone = new Map([
-      ['code-dep', task({ id: 'code-dep', type: '💻 Code', status: '🗂️ Ready' })],
+      [
+        'code-dep',
+        task({ id: 'code-dep', type: '💻 Code', status: '🗂️ Ready' }),
+      ],
     ]);
     expect(passesDesignDepGate(t, notDone)).toBe(false);
 
     const done = new Map([
-      ['code-dep', task({ id: 'code-dep', type: '💻 Code', status: '✅ Done' })],
+      [
+        'code-dep',
+        task({ id: 'code-dep', type: '💻 Code', status: '✅ Done' }),
+      ],
     ]);
     expect(passesDesignDepGate(t, done)).toBe(true);
   });
@@ -178,7 +184,10 @@ describe('isDesignCandidate', () => {
       dependsOn: ['code-dep'],
     });
     const notDone = new Map([
-      ['code-dep', task({ id: 'code-dep', type: '💻 Code', status: '🗂️ Ready' })],
+      [
+        'code-dep',
+        task({ id: 'code-dep', type: '💻 Code', status: '🗂️ Ready' }),
+      ],
     ]);
     expect(isDesignCandidate(t, { ...baseDeps, tasksById: notDone })).toBe(
       false,

@@ -150,23 +150,23 @@ describe('isOpsCandidate', () => {
 
   it('rejects a task that is not 🗂️ Ready', async () => {
     const t = task({ status: '🔲 Backlog' });
-    expect(
-      await isOpsCandidate(t, { ...baseDeps, tasksById: new Map() }),
-    ).toBe(false);
+    expect(await isOpsCandidate(t, { ...baseDeps, tasksById: new Map() })).toBe(
+      false,
+    );
   });
 
   it('rejects a Ready task of a non-ops-eligible Type', async () => {
     const t = task({ status: '🗂️ Ready', type: '💻 Code' });
-    expect(
-      await isOpsCandidate(t, { ...baseDeps, tasksById: new Map() }),
-    ).toBe(false);
+    expect(await isOpsCandidate(t, { ...baseDeps, tasksById: new Map() })).toBe(
+      false,
+    );
   });
 
   it('accepts a 🗂️ Ready 🔎 Investigation task with no deps', async () => {
     const t = task({ status: '🗂️ Ready', type: '🔎 Investigation' });
-    expect(
-      await isOpsCandidate(t, { ...baseDeps, tasksById: new Map() }),
-    ).toBe(true);
+    expect(await isOpsCandidate(t, { ...baseDeps, tasksById: new Map() })).toBe(
+      true,
+    );
   });
 
   it('skips a task with an active session (dedup)', async () => {
