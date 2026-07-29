@@ -213,7 +213,11 @@ describe('loadDesignContext', () => {
 
     // contextPages is fetched from Notion regardless of archStoreAdopted.
     expect(result.contextPages).toEqual([
-      { id: ARCH_PAGE_ID, title: 'Technical Architecture', markdown: result.markdown },
+      {
+        id: ARCH_PAGE_ID,
+        title: 'Technical Architecture',
+        markdown: result.markdown,
+      },
     ]);
 
     // No code-map.json cache under this repoRoot — grounding is empty.
@@ -255,7 +259,11 @@ describe('loadDesignContext', () => {
     expect(result.unresolvedPageRefs).toEqual([]);
     // contextPages is unconditional of archStoreAdopted — still fetched here.
     expect(result.contextPages).toEqual([
-      { id: ARCH_PAGE_ID, title: 'Technical Architecture', markdown: result.markdown },
+      {
+        id: ARCH_PAGE_ID,
+        title: 'Technical Architecture',
+        markdown: result.markdown,
+      },
     ]);
     // Store-sourced units carry no `raw` reference text — unlike the notion
     // branch's literal "Notion pages affected" excerpt, there is nothing to
