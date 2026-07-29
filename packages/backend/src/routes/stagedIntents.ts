@@ -52,6 +52,7 @@ import {
   supersedeStagedIntent,
   setStagedIntentAnnotation,
   setStagedIntentGroup,
+  clearStagedIntentGroup,
   getTaskCache,
   getSession,
   updateCompletenessDispositionApproval,
@@ -716,6 +717,36 @@ function validateDecisionPickOnePayload(
 }
 
 /**
+ * A session.requestCapability twin of DecisionPickOneValidationError: a
+ * capability request applies via SessionManager.grantCapability + a
+ * session respawn (see resumeCapabilityRequester), never via applyIntent —
+ * it cannot share atomicity with a set of task-store writes, so it must not
+ * belong to a group. Refusing this at stage time is what keeps
+ * commitGroupIntents/applyIntent from ever seeing the kind at all (the
+ * `default:` unknown-kind throw there stays reserved for a genuinely
+ * unrecognised kind). A sibling of CapabilityRequestValidationError (the
+ * capability-shape guard above) rather than a reuse of it, since this
+ * guards a structural property (groupId) rather than the payload shape.
+ */
+class CapabilityRequestGroupValidationError extends Error {
+  constructor(reason: string) {
+    super(`[stagedIntents] session.requestCapability rejected: ${reason}`);
+    this.name = 'CapabilityRequestGroupValidationError';
+  }
+}
+
+function validateCapabilityRequestDoesNotCarryGroup(
+  groupId: string | null | undefined,
+): void {
+  if (groupId) {
+    throw new CapabilityRequestGroupValidationError(
+      'a session.requestCapability cannot belong to a group — it applies via ' +
+        'SessionManager.grantCapability + a session respawn, not via a group commit',
+    );
+  }
+}
+
+/**
  * Thrown by validateAndNormalizeTaskReferences when a staged intent's task
  * reference (taskId or a dependsOn entry) is malformed or does not resolve
  * to an existing task — surfaced at stage time so a corrupted or unprefixed
@@ -1251,6 +1282,7 @@ export function stageIntent(
   }
   if (kind === 'session.requestCapability') {
     validateCapabilityRequestPayload(payload);
+    validateCapabilityRequestDoesNotCarryGroup(groupId);
   }
 
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
@@ -2370,6 +2402,27 @@ async function commitGroupIntents(
       body: { error: `no live staged intents found for group "${groupId}"` },
     };
   }
+  // Defense-in-depth alongside the stage-time refusal in stageIntent: a
+  // session.requestCapability applies via SessionManager.grantCapability + a
+  // session respawn, never via applyIntent, so it must never reach the
+  // apply loop below — where it would otherwise fall through applyIntent's
+  // `default:` unknown-kind throw and wedge the whole group (every other
+  // live member left uncommitted behind it in `ordered`).
+  const strayCapabilityRequest = live.find(
+    (r) => r.kind === 'session.requestCapability',
+  );
+  if (strayCapabilityRequest) {
+    return {
+      status: 409,
+      body: {
+        error:
+          `[stagedIntents] group "${groupId}" contains a session.requestCapability ` +
+          `intent ("${strayCapabilityRequest.id}") — it cannot be committed as part of a group; ` +
+          'approve or reject it individually via POST /staged-intents/:id/approve or /:id/reject',
+        precheck: true,
+      },
+    };
+  }
   if (!opts.autoApprove) {
     const notApproved = live.filter((r) => r.state !== 'approved');
     if (notApproved.length > 0) {
@@ -2864,6 +2917,78 @@ export function createStagedIntentsRouter(
       const updatedIntent = rowToApi(updated);
       broadcastIntentChange(updatedIntent);
       res.json(updatedIntent);
+    },
+  );
+
+  // ── GET /api/staged-intents/group/:groupId ────────────────────────────────
+  // Diagnostic surface: every intent ever staged for this group, regardless
+  // of state — including needs_revision, which /staged-intents (ACTIVE_STATES
+  // only) never surfaces. `wedged` flags the exact failure mode this route
+  // exists for: a non-empty group whose every member sits in needs_revision,
+  // reachable by no commit (commitGroupIntents' ACTIVE_STATES filter finds
+  // nothing live) and no per-item apply/reject (getActiveStagedIntent finds
+  // nothing live either).
+  router.get(
+    '/staged-intents/group/:groupId',
+    (req: Request, res: Response) => {
+      const groupId = String(req.params.groupId);
+      const members = listStagedIntentsByGroup(groupId);
+      const wedged =
+        members.length > 0 &&
+        members.every((r) => r.state === 'needs_revision');
+      res.json({ groupId, intents: members.map(rowToApi), wedged });
+    },
+  );
+
+  // ── POST /api/staged-intents/group/:groupId/recover ───────────────────────
+  // Wedged-group recovery: re-surfaces every needs_revision member of the
+  // group onto the normal staged/approved surface (ACTIVE_STATES), so the
+  // usual commit or per-item disposition (approve/reject) routes can act on
+  // it again — the state machine (STAGED_INTENT_TRANSITIONS in
+  // db/queries.ts) permits needs_revision -> staged only via this
+  // operator-initiated route, never implicitly. Also strips group_id: a
+  // session.requestCapability must never carry one (see
+  // validateCapabilityRequestDoesNotCarryGroup), so a recovered instance of
+  // the exact bug this guards against is freed to its individual
+  // approve/reject surface instead of being re-wedged by the next group
+  // commit. A non-capability-request member keeps its group_id — recovery
+  // only clears what stage-time validation would have refused.
+  router.post(
+    '/staged-intents/group/:groupId/recover',
+    (req: Request, res: Response) => {
+      const groupId = String(req.params.groupId);
+      const blocked = listStagedIntentsByGroup(groupId).filter(
+        (r) => r.state === 'needs_revision',
+      );
+      if (blocked.length === 0) {
+        res.status(404).json({
+          error: `no needs_revision intents found for group "${groupId}"`,
+        });
+        return;
+      }
+
+      const recovered = blocked.map((row) => {
+        const staged = transitionStagedIntent(row.id, 'staged', {
+          annotation: null,
+        });
+        const cleared =
+          staged.kind === 'session.requestCapability' && staged.group_id
+            ? clearStagedIntentGroup(staged.id)
+            : staged;
+        const recoveredIntent = rowToApi(cleared);
+        broadcastIntentChange(recoveredIntent);
+        recordEvent({
+          event_type: 'staged_intent_disposition',
+          actor_type: 'human',
+          actor_id: null,
+          project_id: recoveredIntent.projectId,
+          task_id: row.task_id,
+          payload: { intentId: row.id, disposition: 'recover' },
+        });
+        return recoveredIntent;
+      });
+
+      res.json({ ok: true, recovered });
     },
   );
 

@@ -37,7 +37,12 @@ vi.mock('../../db/queries', async (importOriginal) => {
 });
 
 import { db } from '../../db/db';
-import { getTaskCache, setStagedIntentAdvisory } from '../../db/queries';
+import {
+  getTaskCache,
+  setStagedIntentAdvisory,
+  insertStagedIntent,
+  getStagedIntent,
+} from '../../db/queries';
 import { createStagedIntentsRouter } from '../stagedIntents';
 import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
@@ -1374,5 +1379,194 @@ describe('task.setDependsOn symbolic reference to a sibling task.create — comm
       (i: { id: string }) => i.id === dependsOn.body.id,
     );
     expect(dependsOnRow.state).toBe('approved');
+  });
+});
+
+/**
+ * A session.requestCapability must never carry a groupId (enforced at stage
+ * time — see stagedIntents.capabilityRequest.test.ts), but a group already
+ * carrying one from before that guard existed must still be handled without
+ * crashing, and must be recoverable. These tests insert rows directly
+ * (bypassing stageIntent) to simulate that pre-existing/legacy data.
+ */
+function insertCapabilityRequestRow(opts: {
+  id: string;
+  groupId: string | null;
+  state: 'staged' | 'approved' | 'needs_revision';
+}) {
+  insertStagedIntent({
+    id: opts.id,
+    kind: 'session.requestCapability',
+    payload: JSON.stringify({
+      capability: 'mcp__notion__API-update-page-markdown',
+      plan: 'retire the arch pages',
+      evidence: 'legacy-wedge simulation',
+    }),
+    payload_hash: `hash-${opts.id}`,
+    task_id: null,
+    project_id: 'proj-wedge',
+    session_id: 'sess-wedge',
+    group_id: opts.groupId,
+    state: opts.state,
+    supersedes: null,
+    annotation: null,
+    decision_proposal: null,
+    groom_proposal: null,
+    advisory: null,
+    disposition_reason:
+      opts.state === 'needs_revision'
+        ? '[stagedIntents] unknown intent kind "session.requestCapability"'
+        : null,
+    answer: null,
+    created_at: 1000,
+    updated_at: 1000,
+  });
+}
+
+describe('a session.requestCapability caught in a group (legacy data)', () => {
+  it('committing the group never throws "unknown intent kind" — it is refused before reaching applyIntent', async () => {
+    const app = makeApp();
+    const agent = supertest(app);
+    insertCapabilityRequestRow({
+      id: 'cap-1',
+      groupId: 'g-legacy-live',
+      state: 'approved',
+    });
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-legacy-live/commit')
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.error).not.toMatch(/unknown intent kind/);
+    expect(commit.body.error).toMatch(/session\.requestCapability/);
+    expect(getStagedIntent('cap-1')!.state).toBe('approved');
+  });
+
+  it('approving a capability request still grants + respawns with no apply step, unchanged by the group guard', async () => {
+    const sessionManager = {
+      grantCapability: vi.fn().mockReturnValue([]),
+      enqueueFeedback: vi.fn().mockResolvedValue(undefined),
+    };
+    const app = express();
+    app.use(express.json());
+    app.use(
+      '/api',
+      createStagedIntentsRouter(
+        undefined,
+        sessionManager as unknown as Parameters<
+          typeof createStagedIntentsRouter
+        >[1],
+      ),
+    );
+    const agent = supertest(app);
+    insertCapabilityRequestRow({
+      id: 'cap-2',
+      groupId: null,
+      state: 'staged',
+    });
+
+    const res = await agent.post('/api/staged-intents/cap-2/approve');
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('committed');
+    expect(sessionManager.grantCapability).toHaveBeenCalledWith(
+      'sess-wedge',
+      'mcp__notion__API-update-page-markdown',
+    );
+  });
+
+  it('is diagnosable and recoverable once wedged in needs_revision', async () => {
+    const app = makeApp();
+    const agent = supertest(app);
+    insertCapabilityRequestRow({
+      id: 'cap-3',
+      groupId: 'retire-arch-pages-proposal-2026-07-28',
+      state: 'needs_revision',
+    });
+
+    const diagnosis = await agent.get(
+      '/api/staged-intents/group/retire-arch-pages-proposal-2026-07-28',
+    );
+    expect(diagnosis.status).toBe(200);
+    expect(diagnosis.body.wedged).toBe(true);
+    expect(diagnosis.body.intents).toHaveLength(1);
+    expect(diagnosis.body.intents[0].state).toBe('needs_revision');
+
+    // Unreachable by commit before recovery.
+    const commitBefore = await agent
+      .post(
+        '/api/staged-intents/group/retire-arch-pages-proposal-2026-07-28/commit',
+      )
+      .send({});
+    expect(commitBefore.status).toBe(404);
+
+    const recover = await agent.post(
+      '/api/staged-intents/group/retire-arch-pages-proposal-2026-07-28/recover',
+    );
+    expect(recover.status).toBe(200);
+    expect(recover.body.recovered).toHaveLength(1);
+    expect(recover.body.recovered[0].state).toBe('staged');
+    expect(recover.body.recovered[0].groupId).toBeNull();
+
+    const row = getStagedIntent('cap-3')!;
+    expect(row.state).toBe('staged');
+    expect(row.group_id).toBeNull();
+
+    // Now actionable via the ordinary per-item disposition surface.
+    const reject = await agent
+      .post('/api/staged-intents/cap-3/reject')
+      .send({ outcome: 'decline', reason: 'no longer needed' });
+    expect(reject.status).toBe(200);
+    expect(getStagedIntent('cap-3')!.state).toBe('rejected');
+  });
+
+  it('recovering a non-wedged (empty or live) group 404s', async () => {
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const recover = await agent.post(
+      '/api/staged-intents/group/no-such-group/recover',
+    );
+    expect(recover.status).toBe(404);
+  });
+
+  it('the default unknown-kind throw still fires for a genuinely unrecognised kind', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    insertStagedIntent({
+      id: 'unknown-1',
+      kind: 'totally.unrecognised',
+      payload: JSON.stringify({}),
+      payload_hash: 'hash-unknown-1',
+      task_id: null,
+      project_id: 'proj-wedge',
+      session_id: null,
+      group_id: 'g-unknown',
+      state: 'approved',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: 1000,
+      updated_at: 1000,
+    });
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-unknown/commit')
+      .send({});
+
+    expect(commit.status).toBe(500);
+    expect(commit.body.error).toMatch(/unknown intent kind/);
   });
 });
