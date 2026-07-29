@@ -118,6 +118,7 @@ function makeWatcher() {
     endSession: vi.fn(),
     markForBranchDeletion: vi.fn(),
     sendOrResume: vi.fn().mockResolvedValue(undefined),
+    on: vi.fn(),
   } as unknown as SessionManager;
   const broadcast = vi.fn();
   const watcher = new PRMergeWatcher(github, sessions, undefined, broadcast);

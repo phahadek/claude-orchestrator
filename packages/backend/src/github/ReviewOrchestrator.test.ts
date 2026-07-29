@@ -161,6 +161,7 @@ function makeMockSessionManager() {
     send: vi.fn(),
     sendOrResume: vi.fn().mockResolvedValue('coding-session-id'),
     addToRevertLock: vi.fn(),
+    enqueueFeedback: vi.fn().mockResolvedValue(undefined),
   });
 }
 

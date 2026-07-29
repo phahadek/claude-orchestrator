@@ -123,6 +123,7 @@ function makeSessionManager() {
     sendOrResume: vi.fn(),
     endSession: vi.fn(),
     markForBranchDeletion: vi.fn(),
+    on: vi.fn(),
   };
 }
 

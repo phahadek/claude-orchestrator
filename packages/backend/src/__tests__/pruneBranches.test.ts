@@ -109,6 +109,7 @@ function makeWatcher(
   const sessions = {
     endSession: vi.fn(),
     markForBranchDeletion: vi.fn(),
+    on: vi.fn(),
   } as unknown as SessionManager;
   Object.assign(sessions, sessionsOverrides);
 
