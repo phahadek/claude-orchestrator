@@ -183,7 +183,9 @@ function describeFailure(
   }
   if (playbook.failure_diagnoses.length === 0) return base;
   const all = playbook.failure_diagnoses
-    .map((d) => `symptom="${d.symptom}"; cause="${d.cause}"; action="${d.action}"`)
+    .map(
+      (d) => `symptom="${d.symptom}"; cause="${d.cause}"; action="${d.action}"`,
+    )
     .join(' | ');
   return `${base} — no diagnosis matched step "${step.id}"; declared diagnoses: ${all}`;
 }
