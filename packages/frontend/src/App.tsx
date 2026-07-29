@@ -1597,6 +1597,7 @@ export default function App() {
               activeBoardMilestone={activeBoardMilestone}
               lastTaskUpdate={lastTaskUpdate}
               lastStagedIntentChange={lastStagedIntentChange}
+              tasks={taskViews}
             />
           </ErrorBoundary>
         )}
