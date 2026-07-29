@@ -1,6 +1,6 @@
 import { getAuditLogByActorId } from './AuditLog';
 
-export type CapabilityProvenance = 'auto' | 'operator';
+type CapabilityProvenance = 'auto' | 'operator';
 
 export interface CapabilityGrant {
   capability: string;
