@@ -59,6 +59,8 @@ export interface StagedIntent {
   supersedes?: string | null;
   /** Correlates intents that form one structural-change unit (e.g. a split). */
   groupId?: string | null;
+  /** The milestone (canonical_short_id) this intent's target task belongs to. Null = unattributed (legacy row or unresolvable task) — the milestone decision-inbox lens's UNATTRIBUTED_MILESTONE_BUCKET. */
+  milestone?: string | null;
   /** The human-facing rationale/summary the decision surface renders beside the payload. */
   decisionProposal?: string | null;
   /** The /groom skill's structured proposal fields — see `GroomProposalFields`. */
@@ -112,6 +114,9 @@ export interface ApplyOptions {
   reason?: string;
 }
 
+/** Mirrors the backend's UNATTRIBUTED_MILESTONE_BUCKET (db/queries.ts) — the ?milestone lens value for legacy/unresolvable rows. */
+export const UNATTRIBUTED_MILESTONE_BUCKET = 'unattributed';
+
 export const stagedIntentsApi = {
   list(projectId?: string): Promise<StagedIntent[]> {
     const query = projectId
@@ -126,6 +131,21 @@ export const stagedIntentsApi = {
   listBySession(sessionId: string): Promise<StagedIntent[]> {
     return apiRequest<{ intents: StagedIntent[] }>(
       `/api/staged-intents?sessionId=${encodeURIComponent(sessionId)}`,
+    ).then((res) => res.intents);
+  },
+
+  /**
+   * The milestone decision-inbox lens: every staged decision attributed to
+   * the milestone (or the UNATTRIBUTED_MILESTONE_BUCKET), ordered by the
+   * backend's unblock-impact convergence-ranking (see decisionRanking.ts) —
+   * the frontend renders this order as-is rather than re-sorting.
+   */
+  listByMilestone(
+    projectId: string,
+    milestone: string,
+  ): Promise<StagedIntent[]> {
+    return apiRequest<{ intents: StagedIntent[] }>(
+      `/api/staged-intents?projectId=${encodeURIComponent(projectId)}&milestone=${encodeURIComponent(milestone)}`,
     ).then((res) => res.intents);
   },
 
