@@ -11,6 +11,7 @@
  *   - dev/main guard (defense-in-depth)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import { execSync } from 'child_process';
 
 // ── Module mocks ──────────────────────────────────────────────────────────
@@ -23,11 +24,13 @@ vi.mock('child_process', async (importOriginal) => {
   };
 });
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  getSession: vi.fn(),
-  getPRBySessionId: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    getSession: vi.fn(),
+    getPRBySessionId: vi.fn(),
+  }),
+);
 
 import { pruneSessionBranch } from '../session/SessionManager';
 import { getSession, getPRBySessionId } from '../db/queries';

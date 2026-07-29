@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 /**
  * Coverage for the design-completion gap: a design session's natural
@@ -13,15 +14,17 @@ vi.mock('../../logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock('../../db/queries', () => ({
-  getSession: vi.fn(),
-  listStagedIntentsBySession: vi.fn().mockReturnValue([]),
-  listStagedIntentsByGroup: vi.fn().mockReturnValue([]),
-  markSessionDone: vi.fn(),
-  setPendingApproveTerminal: vi.fn(),
-  clearPendingApproveTerminal: vi.fn(),
-  getSessionsWithPendingApproveTerminal: vi.fn().mockReturnValue([]),
-}));
+vi.mock('../../db/queries', () =>
+  mockDbQueries({
+    getSession: vi.fn(),
+    listStagedIntentsBySession: vi.fn().mockReturnValue([]),
+    listStagedIntentsByGroup: vi.fn().mockReturnValue([]),
+    markSessionDone: vi.fn(),
+    setPendingApproveTerminal: vi.fn(),
+    clearPendingApproveTerminal: vi.fn(),
+    getSessionsWithPendingApproveTerminal: vi.fn().mockReturnValue([]),
+  }),
+);
 
 vi.mock('../../routes/stagedIntents', () => ({
   verifyDispatchedGroupsForSession: vi.fn().mockResolvedValue([]),

@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
 import * as fs from 'fs';
 import * as path from 'path';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Mock child_process ─────────────────────────────────────────────────────
 
@@ -33,32 +34,34 @@ vi.mock('child_process', () => ({
 
 // ── Mock DB queries ────────────────────────────────────────────────────────
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  upsertSessionEvent: vi.fn(() => 1),
-  insertPermissionEvent: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getEventsBySession: vi.fn(() => []),
-  getRules: vi.fn(() => []),
-  insertPermissionDenial: vi.fn(),
-  upsertPullRequest: vi.fn(),
-  insertSessionAudit: vi.fn(),
-  incrementTokens: vi.fn(),
-  incrementCompactionCount: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  setSessionModel: vi.fn(),
-  setSessionMetadata: vi.fn(),
-  getPRBySessionId: vi.fn(() => null),
-  getPRByNotionTaskId: vi.fn(() => null),
-  getPRByNumber: vi.fn(() => null),
-  setHeadSha: vi.fn(),
-  setPauseReason: vi.fn(),
-  getSession: vi.fn(() => null),
-  getProjectRowById: vi.fn(() => null),
-  insertLocalBranch: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    upsertSessionEvent: vi.fn(() => 1),
+    insertPermissionEvent: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getEventsBySession: vi.fn(() => []),
+    getRules: vi.fn(() => []),
+    insertPermissionDenial: vi.fn(),
+    upsertPullRequest: vi.fn(),
+    insertSessionAudit: vi.fn(),
+    incrementTokens: vi.fn(),
+    incrementCompactionCount: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    setSessionModel: vi.fn(),
+    setSessionMetadata: vi.fn(),
+    getPRBySessionId: vi.fn(() => null),
+    getPRByNotionTaskId: vi.fn(() => null),
+    getPRByNumber: vi.fn(() => null),
+    setHeadSha: vi.fn(),
+    setPauseReason: vi.fn(),
+    getSession: vi.fn(() => null),
+    getProjectRowById: vi.fn(() => null),
+    insertLocalBranch: vi.fn(),
+  }),
+);
 
 vi.mock('../orchestration/localBranchHelpers', () => ({
   getCurrentBranch: vi.fn(async () => 'feature/test'),

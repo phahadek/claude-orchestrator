@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import express from 'express';
 import request from 'supertest';
 
@@ -13,10 +14,12 @@ vi.mock('../ops/opsLoad.js', () => ({
   loadOpsContext: mockLoadOpsContext,
 }));
 
-vi.mock('../db/queries.js', () => ({
-  getMilestoneById: mockGetMilestoneById,
-  getProjectRowById: mockGetProjectRowById,
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getMilestoneById: mockGetMilestoneById,
+    getProjectRowById: mockGetProjectRowById,
+  }),
+);
 
 import {
   createPlanningLaunchRouter,

@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import express from 'express';
 import supertest from 'supertest';
 import fs from 'fs';
@@ -30,40 +31,42 @@ const mockProject = {
   autoMergeEnabled: false,
 };
 
-vi.mock('../db/queries.js', () => ({
-  getSession: vi.fn(),
-  getActiveSessions: vi.fn().mockReturnValue([]),
-  getArchivedSessions: vi.fn().mockReturnValue([]),
-  getSessionsByStatus: vi.fn().mockReturnValue([]),
-  getSessionsByProject: vi.fn().mockReturnValue([]),
-  deleteSession: vi.fn(),
-  archiveSession: vi.fn(),
-  unarchiveSession: vi.fn(),
-  archiveFinishedSessions: vi.fn().mockReturnValue(0),
-  setSessionNote: vi.fn(),
-  setSessionTags: vi.fn(),
-  favoriteSession: vi.fn(),
-  unfavoriteSession: vi.fn(),
-  deleteDenialsBySession: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  insertProject: vi.fn((p: Record<string, unknown>) => ({
-    ...p,
-    created_at: 1000,
-    updated_at: 1000,
-    git_mode: p.git_mode ?? 'github',
-  })),
-  getProjectRowById: vi.fn(),
-  listProjectRows: vi.fn().mockReturnValue([]),
-  updateProject: vi.fn(),
-  deleteProject: vi.fn().mockReturnValue(true),
-  countProjects: vi.fn().mockReturnValue(0),
-  insertMilestone: vi.fn(),
-  getMilestoneById: vi.fn(),
-  listMilestonesByProject: vi.fn().mockReturnValue([]),
-  updateMilestone: vi.fn(),
-  deleteMilestone: vi.fn(),
-  getMergeReadyPRs: vi.fn().mockReturnValue([]),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getSession: vi.fn(),
+    getActiveSessions: vi.fn().mockReturnValue([]),
+    getArchivedSessions: vi.fn().mockReturnValue([]),
+    getSessionsByStatus: vi.fn().mockReturnValue([]),
+    getSessionsByProject: vi.fn().mockReturnValue([]),
+    deleteSession: vi.fn(),
+    archiveSession: vi.fn(),
+    unarchiveSession: vi.fn(),
+    archiveFinishedSessions: vi.fn().mockReturnValue(0),
+    setSessionNote: vi.fn(),
+    setSessionTags: vi.fn(),
+    favoriteSession: vi.fn(),
+    unfavoriteSession: vi.fn(),
+    deleteDenialsBySession: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    insertProject: vi.fn((p: Record<string, unknown>) => ({
+      ...p,
+      created_at: 1000,
+      updated_at: 1000,
+      git_mode: p.git_mode ?? 'github',
+    })),
+    getProjectRowById: vi.fn(),
+    listProjectRows: vi.fn().mockReturnValue([]),
+    updateProject: vi.fn(),
+    deleteProject: vi.fn().mockReturnValue(true),
+    countProjects: vi.fn().mockReturnValue(0),
+    insertMilestone: vi.fn(),
+    getMilestoneById: vi.fn(),
+    listMilestonesByProject: vi.fn().mockReturnValue([]),
+    updateMilestone: vi.fn(),
+    deleteMilestone: vi.fn(),
+    getMergeReadyPRs: vi.fn().mockReturnValue([]),
+  }),
+);
 
 vi.mock('../config.js', () => ({
   getProjectById: vi.fn((id: string) =>

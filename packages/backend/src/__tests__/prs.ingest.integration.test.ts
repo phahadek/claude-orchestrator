@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import { EventEmitter } from 'events';
 import express from 'express';
 import supertest from 'supertest';
@@ -77,43 +78,45 @@ vi.mock('../config.js', () => ({
   normalizePath: (p: string) => p,
 }));
 
-vi.mock('../db/queries.js', () => ({
-  // ingest route
-  getPRs: vi.fn().mockReturnValue([]),
-  getPRByNumber: vi.fn().mockReturnValue(null),
-  updatePRState: vi.fn(),
-  updateMergeState: vi.fn(),
-  getTaskTitleFromCache: vi.fn().mockReturnValue(null),
-  upsertPullRequest: vi.fn().mockReturnValue(null),
-  deletePR: vi.fn(),
-  resetReviewIteration: vi.fn(),
-  setPRReviewResult: vi.fn(),
-  updatePRDraftStatus: vi.fn(),
-  getSessionsByProject: vi.fn().mockReturnValue([]),
-  lookupSessionByBranch: vi.fn().mockReturnValue(null),
-  // ReviewOrchestrator
-  getSetting: vi.fn().mockReturnValue(null),
-  setPendingPush: vi.fn(),
-  setPauseReason: vi.fn(),
-  getLocalBranchBySession: vi.fn().mockReturnValue(null),
-  setLocalBranchPauseReason: vi.fn(),
-  getSession: vi.fn().mockReturnValue(undefined),
-  addAutofixSha: vi.fn(),
-  consumeAutofixSha: vi.fn().mockReturnValue(null),
-  insertPendingReviewSync: vi.fn(),
-  deletePendingReviewSync: vi.fn(),
-  getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
-  hasTestResultForSha: vi.fn().mockReturnValue(false),
-  upsertTestResult: vi.fn(),
-  setPreReviewStage: vi.fn(),
-  setReviewSessionId: vi.fn(),
-  incrementReviewIteration: vi.fn(),
-  setLastReviewedSha: vi.fn(),
-  setHeadSha: vi.fn(),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    // ingest route
+    getPRs: vi.fn().mockReturnValue([]),
+    getPRByNumber: vi.fn().mockReturnValue(null),
+    updatePRState: vi.fn(),
+    updateMergeState: vi.fn(),
+    getTaskTitleFromCache: vi.fn().mockReturnValue(null),
+    upsertPullRequest: vi.fn().mockReturnValue(null),
+    deletePR: vi.fn(),
+    resetReviewIteration: vi.fn(),
+    setPRReviewResult: vi.fn(),
+    updatePRDraftStatus: vi.fn(),
+    getSessionsByProject: vi.fn().mockReturnValue([]),
+    lookupSessionByBranch: vi.fn().mockReturnValue(null),
+    // ReviewOrchestrator
+    getSetting: vi.fn().mockReturnValue(null),
+    setPendingPush: vi.fn(),
+    setPauseReason: vi.fn(),
+    getLocalBranchBySession: vi.fn().mockReturnValue(null),
+    setLocalBranchPauseReason: vi.fn(),
+    getSession: vi.fn().mockReturnValue(undefined),
+    addAutofixSha: vi.fn(),
+    consumeAutofixSha: vi.fn().mockReturnValue(null),
+    insertPendingReviewSync: vi.fn(),
+    deletePendingReviewSync: vi.fn(),
+    getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
+    hasTestResultForSha: vi.fn().mockReturnValue(false),
+    upsertTestResult: vi.fn(),
+    setPreReviewStage: vi.fn(),
+    setReviewSessionId: vi.fn(),
+    incrementReviewIteration: vi.fn(),
+    setLastReviewedSha: vi.fn(),
+    setHeadSha: vi.fn(),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+  }),
+);
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 const mockDeleteTaskCacheRow = vi.fn();
 const mockRecordEvent = vi.fn();
@@ -6,10 +7,12 @@ const mockRehomeGateItems = vi.fn();
 const mockRehomeSeedItems = vi.fn();
 const mockResolveMilestoneForProject = vi.fn();
 
-vi.mock('../../db/queries', () => ({
-  getTaskCache: vi.fn().mockReturnValue(undefined),
-  deleteTaskCacheRow: (...args: unknown[]) => mockDeleteTaskCacheRow(...args),
-}));
+vi.mock('../../db/queries', () =>
+  mockDbQueries({
+    getTaskCache: vi.fn().mockReturnValue(undefined),
+    deleteTaskCacheRow: (...args: unknown[]) => mockDeleteTaskCacheRow(...args),
+  }),
+);
 
 vi.mock('../../audit/AuditLog', () => ({
   recordEvent: (...args: unknown[]) => mockRecordEvent(...args),

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { SessionRunnerOptions } from '../SessionRunner';
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 const mockRuntimeSettings = vi.hoisted(() => ({
   large_task_model: '',
@@ -22,32 +23,34 @@ const runCalls = vi.hoisted(
     }>,
 );
 
-vi.mock('../../db/queries', () => ({
-  upsertSessionEvent: vi.fn().mockReturnValue(1),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  insertPermissionDenial: vi.fn(),
-  upsertPullRequest: vi.fn(),
-  incrementTokens: vi.fn(),
-  incrementCompactionCount: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  setSessionModel: vi.fn(),
-  setSessionMetadata: vi.fn(),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  setHeadSha: vi.fn(),
-  setPauseReason: vi.fn(),
-  setSessionPauseReason: vi.fn(),
-  insertPauseInterval: vi.fn(),
-  getSessionTags: vi.fn().mockReturnValue([]),
-  setSessionTags: vi.fn(),
-  resetTaskCrashCount: vi.fn(),
-  getGrantedCapabilities: vi.fn().mockReturnValue([]),
-  setTaskPauseReason: vi.fn(),
-  hasStagedIntentForSession: vi.fn().mockReturnValue(true),
-  getSession: vi.fn().mockReturnValue(null),
-}));
+vi.mock('../../db/queries', () =>
+  mockDbQueries({
+    upsertSessionEvent: vi.fn().mockReturnValue(1),
+    updateSessionStatus: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    insertPermissionDenial: vi.fn(),
+    upsertPullRequest: vi.fn(),
+    incrementTokens: vi.fn(),
+    incrementCompactionCount: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    setSessionModel: vi.fn(),
+    setSessionMetadata: vi.fn(),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    setHeadSha: vi.fn(),
+    setPauseReason: vi.fn(),
+    setSessionPauseReason: vi.fn(),
+    insertPauseInterval: vi.fn(),
+    getSessionTags: vi.fn().mockReturnValue([]),
+    setSessionTags: vi.fn(),
+    resetTaskCrashCount: vi.fn(),
+    getGrantedCapabilities: vi.fn().mockReturnValue([]),
+    setTaskPauseReason: vi.fn(),
+    hasStagedIntentForSession: vi.fn().mockReturnValue(true),
+    getSession: vi.fn().mockReturnValue(null),
+  }),
+);
 
 vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn().mockReturnValue({

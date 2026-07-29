@@ -10,29 +10,32 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import { EventEmitter } from 'events';
 
 // ── Module mocks (must appear before any imports that transitively use them) ──
 
-vi.mock('../db/queries.js', () => ({
-  getPRByNumber: vi.fn(),
-  getPRBySessionId: vi.fn(),
-  getPRByNotionTaskId: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  setPRReviewResult: vi.fn(),
-  setReviewSessionId: vi.fn(),
-  incrementReviewIteration: vi.fn(),
-  setLastReviewedSha: vi.fn(),
-  setHeadSha: vi.fn(),
-  setPendingPush: vi.fn(),
-  setPauseReason: vi.fn(),
-  updatePRDraftStatus: vi.fn(),
-  getSetting: vi.fn().mockReturnValue(null),
-  getSession: vi.fn().mockReturnValue(undefined),
-  getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
-  insertPendingReviewSync: vi.fn(),
-  deletePendingReviewSync: vi.fn(),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getPRByNumber: vi.fn(),
+    getPRBySessionId: vi.fn(),
+    getPRByNotionTaskId: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    setPRReviewResult: vi.fn(),
+    setReviewSessionId: vi.fn(),
+    incrementReviewIteration: vi.fn(),
+    setLastReviewedSha: vi.fn(),
+    setHeadSha: vi.fn(),
+    setPendingPush: vi.fn(),
+    setPauseReason: vi.fn(),
+    updatePRDraftStatus: vi.fn(),
+    getSetting: vi.fn().mockReturnValue(null),
+    getSession: vi.fn().mockReturnValue(undefined),
+    getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
+    insertPendingReviewSync: vi.fn(),
+    deletePendingReviewSync: vi.fn(),
+  }),
+);
 
 const projectFixture = {
   id: 'proj-1',

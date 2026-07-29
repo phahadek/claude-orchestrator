@@ -10,41 +10,44 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import { EventEmitter } from 'events';
 
 // ── Mocks ──────────────────────────────────────────────────────────────────────
 
-vi.mock('../db/queries.js', () => ({
-  getPRByNumber: vi.fn(),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  setPRReviewResult: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  setReviewSessionId: vi.fn(),
-  updatePRDraftStatus: vi.fn(),
-  incrementReviewIteration: vi.fn(),
-  setLastReviewedSha: vi.fn(),
-  setLocalBranchReviewResult: vi.fn(),
-  getLocalBranchById: vi.fn(),
-  getSetting: vi.fn().mockReturnValue(null),
-  getSession: vi.fn().mockReturnValue(undefined),
-  setPendingPush: vi.fn(),
-  setPauseReason: vi.fn(),
-  insertPauseInterval: vi.fn(),
-  closePauseInterval: vi.fn(),
-  upsertStuckSessionTimer: vi.fn(),
-  deleteStuckSessionTimer: vi.fn(),
-  getAllStuckSessionTimers: vi.fn().mockReturnValue([]),
-  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getLocalBranchBySession: vi.fn(),
-  setLocalBranchPauseReason: vi.fn(),
-  addAutofixSha: vi.fn(),
-  consumeAutofixSha: vi.fn().mockReturnValue(false),
-  getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
-  insertPendingReviewSync: vi.fn(),
-  deletePendingReviewSync: vi.fn(),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getPRByNumber: vi.fn(),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    setPRReviewResult: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    setReviewSessionId: vi.fn(),
+    updatePRDraftStatus: vi.fn(),
+    incrementReviewIteration: vi.fn(),
+    setLastReviewedSha: vi.fn(),
+    setLocalBranchReviewResult: vi.fn(),
+    getLocalBranchById: vi.fn(),
+    getSetting: vi.fn().mockReturnValue(null),
+    getSession: vi.fn().mockReturnValue(undefined),
+    setPendingPush: vi.fn(),
+    setPauseReason: vi.fn(),
+    insertPauseInterval: vi.fn(),
+    closePauseInterval: vi.fn(),
+    upsertStuckSessionTimer: vi.fn(),
+    deleteStuckSessionTimer: vi.fn(),
+    getAllStuckSessionTimers: vi.fn().mockReturnValue([]),
+    getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getLocalBranchBySession: vi.fn(),
+    setLocalBranchPauseReason: vi.fn(),
+    addAutofixSha: vi.fn(),
+    consumeAutofixSha: vi.fn().mockReturnValue(false),
+    getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
+    insertPendingReviewSync: vi.fn(),
+    deletePendingReviewSync: vi.fn(),
+  }),
+);
 
 vi.mock('../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),

@@ -1,33 +1,36 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mockDbQueries } from '../__tests__/helpers/mockDbQueries';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-vi.mock('../db/queries.js', () => ({
-  getAllOpenPRs: vi.fn().mockReturnValue([]),
-  updatePRState: vi.fn(),
-  updateMergeState: vi.fn(),
-  setPauseReason: vi.fn(),
-  setCiRemediationAttemptedSha: vi.fn(),
-  getPRByNumber: vi.fn().mockReturnValue(null),
-  getSession: vi.fn().mockReturnValue(null),
-  addAutofixSha: vi.fn(),
-  consumeAutofixSha: vi.fn().mockReturnValue(false),
-  deleteAllAutofixShasForPR: vi.fn(),
-  setHeadSha: vi.fn(),
-  setLastReviewedSha: vi.fn(),
-  setPRReviewResult: vi.fn(),
-  setPendingPush: vi.fn(),
-  getSetting: vi.fn().mockReturnValue(null),
-  getTestResult: vi.fn().mockReturnValue(undefined),
-  markSessionDone: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  clearTerminalPRFlags: vi.fn(),
-  setPreReviewStage: vi.fn(),
-  setConflictNudgeSha: vi.fn(),
-  setHeadBranch: vi.fn(),
-  clearSessionInitiatedPRClose: vi.fn(),
-  recordMergeCommitForSession: vi.fn(),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getAllOpenPRs: vi.fn().mockReturnValue([]),
+    updatePRState: vi.fn(),
+    updateMergeState: vi.fn(),
+    setPauseReason: vi.fn(),
+    setCiRemediationAttemptedSha: vi.fn(),
+    getPRByNumber: vi.fn().mockReturnValue(null),
+    getSession: vi.fn().mockReturnValue(null),
+    addAutofixSha: vi.fn(),
+    consumeAutofixSha: vi.fn().mockReturnValue(false),
+    deleteAllAutofixShasForPR: vi.fn(),
+    setHeadSha: vi.fn(),
+    setLastReviewedSha: vi.fn(),
+    setPRReviewResult: vi.fn(),
+    setPendingPush: vi.fn(),
+    getSetting: vi.fn().mockReturnValue(null),
+    getTestResult: vi.fn().mockReturnValue(undefined),
+    markSessionDone: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    clearTerminalPRFlags: vi.fn(),
+    setPreReviewStage: vi.fn(),
+    setConflictNudgeSha: vi.fn(),
+    setHeadBranch: vi.fn(),
+    clearSessionInitiatedPRClose: vi.fn(),
+    recordMergeCommitForSession: vi.fn(),
+  }),
+);
 
 vi.mock('../config.js', () => ({
   getProjectByGithubRepo: vi.fn().mockReturnValue(null),

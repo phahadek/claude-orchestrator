@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
 import { makeEventRow } from '../../test/helpers/eventFixtures';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Mock child_process.spawn ───────────────────────────────────────────────
 // We need to mock before importing AgentSession because it imports spawn
@@ -35,33 +36,35 @@ vi.mock('child_process', () => ({
 }));
 
 // Mock DB queries — these would hit a real SQLite db otherwise
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  upsertSessionEvent: vi.fn(() => 1),
-  insertPermissionEvent: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getEventsBySession: vi.fn(() => []),
-  getRules: vi.fn(() => []),
-  insertPermissionDenial: vi.fn(),
-  upsertPullRequest: vi.fn(),
-  insertSessionAudit: vi.fn(),
-  incrementTokens: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  setSessionModel: vi.fn(),
-  getPRBySessionId: vi.fn(() => null),
-  getPRByNotionTaskId: vi.fn(() => null),
-  getPRByNumber: vi.fn(() => null),
-  setHeadSha: vi.fn(),
-  setPauseReason: vi.fn(),
-  getSession: vi.fn(() => null),
-  getProjectRowById: vi.fn(() => null),
-  insertLocalBranch: vi.fn(),
-  setSessionMetadata: vi.fn(),
-  listUndeliveredInboxItems: vi.fn(() => []),
-  markInboxItemsDelivered: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    upsertSessionEvent: vi.fn(() => 1),
+    insertPermissionEvent: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getEventsBySession: vi.fn(() => []),
+    getRules: vi.fn(() => []),
+    insertPermissionDenial: vi.fn(),
+    upsertPullRequest: vi.fn(),
+    insertSessionAudit: vi.fn(),
+    incrementTokens: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    setSessionModel: vi.fn(),
+    getPRBySessionId: vi.fn(() => null),
+    getPRByNotionTaskId: vi.fn(() => null),
+    getPRByNumber: vi.fn(() => null),
+    setHeadSha: vi.fn(),
+    setPauseReason: vi.fn(),
+    getSession: vi.fn(() => null),
+    getProjectRowById: vi.fn(() => null),
+    insertLocalBranch: vi.fn(),
+    setSessionMetadata: vi.fn(),
+    listUndeliveredInboxItems: vi.fn(() => []),
+    markInboxItemsDelivered: vi.fn(),
+  }),
+);
 
 // Mock local branch helpers to avoid real git calls in tests
 vi.mock('../orchestration/localBranchHelpers', () => ({

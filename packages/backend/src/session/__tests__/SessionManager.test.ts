@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
@@ -102,34 +103,36 @@ vi.mock('../../config/corporateMode', () => ({
     .mockReturnValue({ gates: { dockerMandatory: false } }),
 }));
 
-vi.mock('../../db/queries', () => ({
-  insertSession: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  updateSessionWorktreePath: vi.fn(),
-  markSessionDone: vi.fn(),
-  applyPendingDone: vi.fn().mockReturnValue(false),
-  getSessionsWithUnappliedPendingDone: vi.fn().mockReturnValue([]),
-  markSessionIdle: vi.fn(),
-  markSessionSuperseded: vi.fn(),
-  insertEvent: vi.fn(),
-  getSession: vi.fn(),
-  getSessionsByStatus: vi.fn().mockReturnValue([]),
-  getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
-  getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  getPRByNumber: vi.fn().mockReturnValue(null),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  incrementTaskCrashCount: vi.fn().mockReturnValue(1),
-  getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
-  setSessionPauseReason: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
-  setTaskPauseReason: vi.fn(),
-  listStagedIntentsBySession: vi.fn().mockReturnValue([]),
-  TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
-}));
+vi.mock('../../db/queries', () =>
+  mockDbQueries({
+    insertSession: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    updateSessionWorktreePath: vi.fn(),
+    markSessionDone: vi.fn(),
+    applyPendingDone: vi.fn().mockReturnValue(false),
+    getSessionsWithUnappliedPendingDone: vi.fn().mockReturnValue([]),
+    markSessionIdle: vi.fn(),
+    markSessionSuperseded: vi.fn(),
+    insertEvent: vi.fn(),
+    getSession: vi.fn(),
+    getSessionsByStatus: vi.fn().mockReturnValue([]),
+    getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
+    getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    getPRByNumber: vi.fn().mockReturnValue(null),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    incrementTaskCrashCount: vi.fn().mockReturnValue(1),
+    getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
+    setSessionPauseReason: vi.fn(),
+    setSessionLastErrorDetail: vi.fn(),
+    setTaskPauseReason: vi.fn(),
+    listStagedIntentsBySession: vi.fn().mockReturnValue([]),
+    TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
+  }),
+);
 
 vi.mock('../../config', () => ({
   config: { maxConcurrentCodeSessions: 5 },

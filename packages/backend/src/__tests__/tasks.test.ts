@@ -3,21 +3,24 @@ import express from 'express';
 import supertest from 'supertest';
 import yaml from 'js-yaml';
 import type { TaskAggregateRow } from '../db/queries.js';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-vi.mock('../db/queries.js', () => ({
-  getTaskCache: vi.fn(),
-  getActiveTaskAggregates: vi.fn(),
-  getSetting: vi.fn().mockReturnValue(null),
-  getMilestoneById: vi.fn().mockReturnValue(null),
-  clearTaskPauseReason: vi.fn(),
-  resetTaskCrashCount: vi.fn(),
-  deleteTaskCacheRow: vi.fn(),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  clearTerminalPRFlags: vi.fn(),
-  getTaskRepoAssignment: vi.fn().mockReturnValue(null),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getTaskCache: vi.fn(),
+    getActiveTaskAggregates: vi.fn(),
+    getSetting: vi.fn().mockReturnValue(null),
+    getMilestoneById: vi.fn().mockReturnValue(null),
+    clearTaskPauseReason: vi.fn(),
+    resetTaskCrashCount: vi.fn(),
+    deleteTaskCacheRow: vi.fn(),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    clearTerminalPRFlags: vi.fn(),
+    getTaskRepoAssignment: vi.fn().mockReturnValue(null),
+  }),
+);
 
 vi.mock('../config.js', () => ({
   getProjectById: vi.fn((id: string) => {

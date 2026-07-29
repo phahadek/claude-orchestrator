@@ -4,6 +4,7 @@
  * retry rather than silently losing the feedback.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
@@ -53,49 +54,51 @@ function seedInbox(
   inboxItemsBySession.set(sessionId, items);
 }
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  insertSession: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  updateSessionWorktreePath: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionSuperseded: vi.fn(),
-  insertEvent: vi.fn(),
-  getSession: vi.fn(),
-  getSessionsByStatus: vi.fn().mockReturnValue([]),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  getPRByNumber: vi.fn().mockReturnValue(null),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
-  getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
-  setSessionPauseReason: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
-  incrementTaskCrashCount: vi.fn().mockReturnValue(1),
-  setTaskPauseReason: vi.fn(),
-  getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
-  listSessionsWithUndeliveredInboxItems: vi.fn(() => [
-    ...inboxItemsBySession.keys(),
-  ]),
-  listUndeliveredInboxItems: vi.fn((sessionId: string) =>
-    (inboxItemsBySession.get(sessionId) ?? []).map((i) => ({
-      ...i,
-      session_id: sessionId,
-      enqueued_at: 0,
-      delivered_at: null,
-    })),
-  ),
-  markInboxItemsDelivered: vi.fn((ids: number[]) => {
-    for (const [sessionId, items] of inboxItemsBySession.entries()) {
-      inboxItemsBySession.set(
-        sessionId,
-        items.filter((i) => !ids.includes(i.id)),
-      );
-    }
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    insertSession: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    updateSessionWorktreePath: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionSuperseded: vi.fn(),
+    insertEvent: vi.fn(),
+    getSession: vi.fn(),
+    getSessionsByStatus: vi.fn().mockReturnValue([]),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    getPRByNumber: vi.fn().mockReturnValue(null),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+    getRunningSessionsWithMergedOrClosedPR: vi.fn().mockReturnValue([]),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    getOtherRunningSessionsForTask: vi.fn().mockReturnValue([]),
+    setSessionPauseReason: vi.fn(),
+    setSessionLastErrorDetail: vi.fn(),
+    incrementTaskCrashCount: vi.fn().mockReturnValue(1),
+    setTaskPauseReason: vi.fn(),
+    getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
+    listSessionsWithUndeliveredInboxItems: vi.fn(() => [
+      ...inboxItemsBySession.keys(),
+    ]),
+    listUndeliveredInboxItems: vi.fn((sessionId: string) =>
+      (inboxItemsBySession.get(sessionId) ?? []).map((i) => ({
+        ...i,
+        session_id: sessionId,
+        enqueued_at: 0,
+        delivered_at: null,
+      })),
+    ),
+    markInboxItemsDelivered: vi.fn((ids: number[]) => {
+      for (const [sessionId, items] of inboxItemsBySession.entries()) {
+        inboxItemsBySession.set(
+          sessionId,
+          items.filter((i) => !ids.includes(i.id)),
+        );
+      }
+    }),
   }),
-}));
+);
 
 vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn().mockReturnValue({

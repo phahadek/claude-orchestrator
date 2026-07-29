@@ -12,6 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 import type { ServerMessage } from '../ws/types';
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
@@ -63,26 +64,28 @@ vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn(),
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  insertSession: vi.fn(),
-  updateSessionStatus: vi.fn(),
-  getSession: vi.fn(),
-  getSessionsByStatus: vi.fn().mockReturnValue([]),
-  getPRByNotionTaskId: vi.fn().mockReturnValue(null),
-  getPRByNumber: vi.fn().mockReturnValue(null),
-  getPRBySessionId: vi.fn().mockReturnValue(null),
-  insertEvent: vi.fn(),
-  getEventsBySession: vi.fn().mockReturnValue([]),
-  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  getSetting: vi.fn().mockReturnValue(null),
-  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
-  incrementTaskCrashCount: vi.fn().mockReturnValue(1),
-  resetTaskCrashCount: vi.fn(),
-  setTaskPauseReason: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
-  hasStagedIntentForTask: vi.fn().mockReturnValue(true),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    insertSession: vi.fn(),
+    updateSessionStatus: vi.fn(),
+    getSession: vi.fn(),
+    getSessionsByStatus: vi.fn().mockReturnValue([]),
+    getPRByNotionTaskId: vi.fn().mockReturnValue(null),
+    getPRByNumber: vi.fn().mockReturnValue(null),
+    getPRBySessionId: vi.fn().mockReturnValue(null),
+    insertEvent: vi.fn(),
+    getEventsBySession: vi.fn().mockReturnValue([]),
+    hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+    getSetting: vi.fn().mockReturnValue(null),
+    getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+    incrementTaskCrashCount: vi.fn().mockReturnValue(1),
+    resetTaskCrashCount: vi.fn(),
+    setTaskPauseReason: vi.fn(),
+    setSessionLastErrorDetail: vi.fn(),
+    hasStagedIntentForTask: vi.fn().mockReturnValue(true),
+  }),
+);
 
 vi.mock('../audit/AuditLog', () => ({
   recordEvent: vi.fn(),

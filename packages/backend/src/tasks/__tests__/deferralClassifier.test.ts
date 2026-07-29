@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
+import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
 
 const { mockGetTaskBackend, mockRecordEvent, mockSpawn } = vi.hoisted(() => ({
   mockGetTaskBackend: vi.fn(),
@@ -37,13 +38,15 @@ const {
   mockSetStagedIntentAdvisory: vi.fn(),
 }));
 
-vi.mock('../../db/queries', () => ({
-  listStagedIntentsByGroup: mockListStagedIntentsByGroup,
-  getTaskCache: mockGetTaskCache,
-  setStagedIntentAdvisory: mockSetStagedIntentAdvisory,
-  getMergeCommitForTask: vi.fn(),
-  deleteTaskCacheRow: vi.fn(),
-}));
+vi.mock('../../db/queries', () =>
+  mockDbQueries({
+    listStagedIntentsByGroup: mockListStagedIntentsByGroup,
+    getTaskCache: mockGetTaskCache,
+    setStagedIntentAdvisory: mockSetStagedIntentAdvisory,
+    getMergeCommitForTask: vi.fn(),
+    deleteTaskCacheRow: vi.fn(),
+  }),
+);
 
 vi.mock('../../gate/gateStore', () => ({
   insertItem: vi.fn(),
