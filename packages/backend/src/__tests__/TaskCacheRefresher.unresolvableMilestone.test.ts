@@ -46,7 +46,11 @@ function writeTasksYaml(
       lines.push(`    tasks: []`);
     } else {
       lines.push(`    tasks:`);
-      for (const t of m.tasks as { id: string; name: string; status: string }[]) {
+      for (const t of m.tasks as {
+        id: string;
+        name: string;
+        status: string;
+      }[]) {
         lines.push(`      - id: ${t.id}`);
         lines.push(`        name: ${t.name}`);
         lines.push(`        status: ${t.status}`);

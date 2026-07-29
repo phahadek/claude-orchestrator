@@ -146,8 +146,7 @@ export class TaskCacheRefresher {
       if (condemned) {
         const currentMtimeMs = this.statMtimeMs(condemned.filePath);
         const fileChanged =
-          currentMtimeMs !== null &&
-          currentMtimeMs !== condemned.fileMtimeMs;
+          currentMtimeMs !== null && currentMtimeMs !== condemned.fileMtimeMs;
         if (!fileChanged) {
           // Still unresolvable and the source file hasn't changed since we
           // gave up on it — skip silently rather than re-warning every cycle.
