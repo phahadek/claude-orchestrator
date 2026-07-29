@@ -369,6 +369,7 @@ export class OpsSessionLauncher {
       if (err instanceof GroomWorklistTaskNotFoundError) throw err;
       throw new Error(
         `failed to assemble planning procedure for task ${task.id} (${sessionType}): ${err instanceof Error ? err.message : err}`,
+        { cause: err },
       );
     }
   }
