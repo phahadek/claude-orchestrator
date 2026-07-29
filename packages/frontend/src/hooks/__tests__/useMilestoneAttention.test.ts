@@ -35,9 +35,7 @@ describe('useMilestoneAttention', () => {
     await waitFor(() =>
       expect(result.current.lastTier2Batch?.events).toHaveLength(1),
     );
-    expect(result.current.lastTier2Batch?.events[0].key).toBe(
-      'aging:intent-1',
-    );
+    expect(result.current.lastTier2Batch?.events[0].key).toBe('aging:intent-1');
   });
 
   it('does not re-fire the same signal key on a repeated poll', async () => {

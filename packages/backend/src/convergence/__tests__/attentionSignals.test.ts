@@ -44,7 +44,9 @@ describe('detectAgingSignals', () => {
 });
 
 describe('detectBlockedSignals', () => {
-  function pause(overrides: Partial<PauseReasonStruct> = {}): PauseReasonStruct {
+  function pause(
+    overrides: Partial<PauseReasonStruct> = {},
+  ): PauseReasonStruct {
     return {
       reason: 'planning_terminal_no_decision',
       source: 'session',
@@ -59,9 +61,7 @@ describe('detectBlockedSignals', () => {
       { task_id: 'task-1', parsed: pause() },
     ]);
     expect(signals).toHaveLength(1);
-    expect(signals[0].key).toBe(
-      'blocked:task-1:planning_terminal_no_decision',
-    );
+    expect(signals[0].key).toBe('blocked:task-1:planning_terminal_no_decision');
   });
 
   it('fires for a terminal pause reason', () => {
@@ -134,7 +134,11 @@ describe('detectFlatSignal', () => {
   it('does not fire once the milestone is green', () => {
     const now = 100 * HOUR;
     const history = [
-      snapshot({ ts: new Date(0).toISOString(), distance_to_green: 0, status: 'green' }),
+      snapshot({
+        ts: new Date(0).toISOString(),
+        distance_to_green: 0,
+        status: 'green',
+      }),
     ];
     expect(
       detectFlatSignal(history, now, 24 * HOUR, 'proj-1:M12'),
@@ -144,7 +148,10 @@ describe('detectFlatSignal', () => {
   it('does not fire when there is not yet enough retained history', () => {
     const now = 100 * HOUR;
     const history = [
-      snapshot({ ts: new Date(now - 1 * HOUR).toISOString(), distance_to_green: 3 }),
+      snapshot({
+        ts: new Date(now - 1 * HOUR).toISOString(),
+        distance_to_green: 3,
+      }),
     ];
     expect(
       detectFlatSignal(history, now, 24 * HOUR, 'proj-1:M12'),
@@ -162,7 +169,10 @@ describe('detectFlatSignal', () => {
     ];
     const first = detectFlatSignal(history, now, 24 * HOUR, 'proj-1:M12');
     const second = detectFlatSignal(
-      [...history, snapshot({ ts: new Date(now).toISOString(), distance_to_green: 3 })],
+      [
+        ...history,
+        snapshot({ ts: new Date(now).toISOString(), distance_to_green: 3 }),
+      ],
       now + HOUR,
       24 * HOUR,
       'proj-1:M12',

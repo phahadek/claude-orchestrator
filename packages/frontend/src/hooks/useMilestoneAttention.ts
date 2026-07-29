@@ -51,9 +51,8 @@ export function useMilestoneAttention({
   invalidationKey,
 }: UseMilestoneAttentionParams): UseMilestoneAttentionResult {
   const [pendingCount, setPendingCount] = useState(0);
-  const [lastTier2Batch, setLastTier2Batch] = useState<
-    UseMilestoneAttentionResult['lastTier2Batch']
-  >(null);
+  const [lastTier2Batch, setLastTier2Batch] =
+    useState<UseMilestoneAttentionResult['lastTier2Batch']>(null);
   const firedKeysRef = useRef<Set<string>>(new Set());
   const requestIdRef = useRef(0);
 
@@ -77,7 +76,9 @@ export function useMilestoneAttention({
           if (!currentKeys.has(key)) firedKeysRef.current.delete(key);
         }
 
-        const fresh = data.tier2.filter((s) => !firedKeysRef.current.has(s.key));
+        const fresh = data.tier2.filter(
+          (s) => !firedKeysRef.current.has(s.key),
+        );
         if (fresh.length === 0) return;
         for (const signal of fresh) firedKeysRef.current.add(signal.key);
 

@@ -35,10 +35,7 @@ const SettingsSchema = z.object({
   flake_recovery_max_retries: z.coerce.number().int().min(0),
   session_cgroup_prod_reserve_mb: z.coerce.number().int().min(0),
   session_cgroup_memory_high_fraction: z.coerce.number().min(0).max(1),
-  milestone_attention_aging_threshold_seconds: z.coerce
-    .number()
-    .int()
-    .min(0),
+  milestone_attention_aging_threshold_seconds: z.coerce.number().int().min(0),
   milestone_attention_flat_convergence_window_seconds: z.coerce
     .number()
     .int()
