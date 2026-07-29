@@ -2175,10 +2175,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
               if (pr) {
                 setPauseReason(pr.pr_number, pr.repo, 'diverged_branch');
               }
-              const baseBranch = pr?.base_branch ?? 'dev';
               const nudgeMsg =
                 `Your branch has diverged from origin/${branch} (${behind} commit(s) behind). ` +
-                `Run: git fetch origin && git rebase origin/${baseBranch}, resolve any conflicts, then ` +
+                `Run: git fetch origin && git rebase origin/${branch}, resolve any conflicts, then ` +
                 `git push --force-with-lease origin ${branch} (a bare push will be rejected after a rebase).`;
               void this.sessionManager?.sendOrResume?.(
                 this.sessionId,
