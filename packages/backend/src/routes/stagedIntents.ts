@@ -2703,9 +2703,29 @@ async function commitGroupIntents(
   opts: GroupCommitOptions,
   planningOrchestrator?: PlanningOrchestrator,
 ): Promise<GroupCommitResult> {
-  const live = listStagedIntentsByGroup(groupId).filter((r) =>
-    ACTIVE_STATES.includes(r.state),
+  const allMembers = listStagedIntentsByGroup(groupId);
+  // A member stuck in pending_verification/needs_revision is not in
+  // ACTIVE_STATES, so `live` below silently excludes it — without this
+  // check the group would commit over the remaining members and strand the
+  // blocked one behind, exactly the partial-commit bug this guards against.
+  // Hold the whole group rather than dropping the blocked member from it.
+  const blockedMember = allMembers.find(
+    (r) => r.state === 'needs_revision' || r.state === 'pending_verification',
   );
+  if (blockedMember) {
+    return {
+      status: 409,
+      body: {
+        error:
+          `group "${groupId}" has a blocked member ("${blockedMember.id}", ` +
+          `state "${blockedMember.state}") — it must be recovered or ` +
+          'resolved before this group can commit',
+        blockingId: blockedMember.id,
+      },
+    };
+  }
+
+  const live = allMembers.filter((r) => ACTIVE_STATES.includes(r.state));
   if (live.length === 0) {
     return {
       status: 404,
@@ -3269,9 +3289,9 @@ export function createStagedIntentsRouter(
   // of state — including needs_revision, which /staged-intents (ACTIVE_STATES
   // only) never surfaces. `wedged` flags the exact failure mode this route
   // exists for: a non-empty group whose every member sits in needs_revision,
-  // reachable by no commit (commitGroupIntents' ACTIVE_STATES filter finds
-  // nothing live) and no per-item apply/reject (getActiveStagedIntent finds
-  // nothing live either).
+  // reachable by no commit (commitGroupIntents refuses outright while any
+  // member is needs_revision/pending_verification) and no per-item
+  // apply/reject (getActiveStagedIntent finds nothing live either).
   router.get(
     '/staged-intents/group/:groupId',
     (req: Request, res: Response) => {

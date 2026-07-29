@@ -338,6 +338,31 @@ export class PlanningOrchestrator {
   ): void {
     const row = getSession(sessionId);
     if (!row) return;
+
+    // needs_revision/pending_verification are transient states meant to be
+    // resolved by this same session — a group's own group-commit guard now
+    // refuses to drop a blocked member, but that only helps while the
+    // session is still alive to supersede it. Once the session goes
+    // terminal with blocked members still outstanding, they become
+    // unreachable (excluded from both the operator-facing decision surface
+    // and any live session), so raise a needs-attention pause reason
+    // against the target task rather than leaving them silently stranded.
+    if (row.task_id) {
+      const blockedMembers = listStagedIntentsBySession(sessionId).filter(
+        (i) =>
+          i.state === 'needs_revision' || i.state === 'pending_verification',
+      );
+      if (blockedMembers.length > 0) {
+        setTaskPauseReason(
+          row.task_id,
+          'planning_terminal_blocked_members',
+          `Planning session ${sessionId} reached terminal (${reason}) with ` +
+            `${blockedMembers.length} blocked staged intent(s) still outstanding: ` +
+            `${blockedMembers.map((i) => i.id).join(', ')}.`,
+        );
+      }
+    }
+
     if (row.status === 'done') {
       // Status was already written by another terminal-status writer (e.g.
       // the gate-item verifier), which may not have reaped the subprocess.

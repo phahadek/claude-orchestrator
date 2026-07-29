@@ -1889,13 +1889,15 @@ describe('a session.requestCapability caught in a group (legacy data)', () => {
     expect(diagnosis.body.intents).toHaveLength(1);
     expect(diagnosis.body.intents[0].state).toBe('needs_revision');
 
-    // Unreachable by commit before recovery.
+    // Unreachable by commit before recovery — the blocked member holds the
+    // group rather than being silently dropped from it.
     const commitBefore = await agent
       .post(
         '/api/staged-intents/group/retire-arch-pages-proposal-2026-07-28/commit',
       )
       .send({});
-    expect(commitBefore.status).toBe(404);
+    expect(commitBefore.status).toBe(409);
+    expect(commitBefore.body.blockingId).toBe('cap-3');
 
     const recover = await agent.post(
       '/api/staged-intents/group/retire-arch-pages-proposal-2026-07-28/recover',
@@ -1964,5 +1966,146 @@ describe('a session.requestCapability caught in a group (legacy data)', () => {
 
     expect(commit.status).toBe(500);
     expect(commit.body.error).toMatch(/unknown intent kind/);
+  });
+});
+
+/**
+ * A blocked member (needs_revision/pending_verification) must hold its whole
+ * group at commit time rather than being silently excluded — the confirmed
+ * bug where a group committed over its remaining members and stranded the
+ * blocked one behind.
+ */
+function insertUpdateBodyRow(opts: {
+  id: string;
+  groupId: string;
+  taskId: string;
+  state: 'staged' | 'approved' | 'needs_revision' | 'pending_verification';
+}) {
+  insertStagedIntent({
+    id: opts.id,
+    kind: 'task.updateBody',
+    payload: JSON.stringify({ taskId: opts.taskId, sections: sections() }),
+    payload_hash: `hash-${opts.id}`,
+    task_id: opts.taskId,
+    project_id: 'proj-blocked',
+    session_id: 'sess-blocked',
+    group_id: opts.groupId,
+    state: opts.state,
+    supersedes: null,
+    annotation: null,
+    decision_proposal: null,
+    groom_proposal: null,
+    advisory: null,
+    disposition_reason: null,
+    answer: null,
+    created_at: 1000,
+    updated_at: 1000,
+  });
+}
+
+describe('group commit — a blocked member holds the whole group', () => {
+  it('refuses to commit while a member is needs_revision, naming the blocking member — no member transitions to committed', async () => {
+    const setDependsOn = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-blocked-nr';
+    const taskId = 't-blocked-nr';
+
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-blocked',
+      groupId,
+      payload: { taskId, dependsOn: [] },
+    });
+    await agent
+      .post(`/api/staged-intents/${dependsOn.body.id}/approve`)
+      .send({});
+    insertUpdateBodyRow({
+      id: 'ub-nr',
+      groupId,
+      taskId,
+      state: 'needs_revision',
+    });
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.blockingId).toBe('ub-nr');
+    expect(setDependsOn).not.toHaveBeenCalled();
+    expect(getStagedIntent(dependsOn.body.id)!.state).toBe('approved');
+    expect(getStagedIntent('ub-nr')!.state).toBe('needs_revision');
+  });
+
+  it('applies the same refusal to a pending_verification member', async () => {
+    const setDependsOn = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-blocked-pv';
+    const taskId = 't-blocked-pv';
+
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-blocked',
+      groupId,
+      payload: { taskId, dependsOn: [] },
+    });
+    await agent
+      .post(`/api/staged-intents/${dependsOn.body.id}/approve`)
+      .send({});
+    insertUpdateBodyRow({
+      id: 'ub-pv',
+      groupId,
+      taskId,
+      state: 'pending_verification',
+    });
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.blockingId).toBe('ub-pv');
+    expect(setDependsOn).not.toHaveBeenCalled();
+    expect(getStagedIntent(dependsOn.body.id)!.state).toBe('approved');
+  });
+
+  it('a group whose members are all active still commits atomically, unchanged', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-blocked-clean',
+      't-blocked-clean',
+      'g-blocked-clean',
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-blocked-clean/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.committed).toEqual([dependsOn.id, setStatus.id]);
   });
 });
