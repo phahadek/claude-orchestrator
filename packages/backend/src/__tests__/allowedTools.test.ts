@@ -24,6 +24,8 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'task.setDependsOn',
   'task.updateBody',
   'task.setProperties',
+  'task.patchBodySection',
+  'intent.withdraw',
   'gate.accrete',
   'seed.stage',
   'arch.createUnit',
@@ -38,6 +40,8 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'completeness.disposition',
   'completeness.traceCoverage',
   'groom.precheck',
+  'architecture.getUnit',
+  'architecture.queryUnits',
 ];
 
 const REGISTERED_TOOL_NAMES = new Set(
@@ -132,6 +136,17 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
 
   it('groom allow-list contains the underscore form of groom_precheck', () => {
     expect(GROOM_ALLOWED_TOOLS).toContain('mcp__orchestrator__groom_precheck');
+  });
+
+  it('groom/design/ops allow-lists all contain the underscore forms of architecture_getUnit and architecture_queryUnits', () => {
+    for (const list of [
+      GROOM_ALLOWED_TOOLS,
+      DESIGN_ALLOWED_TOOLS,
+      OPS_ALLOWED_TOOLS,
+    ]) {
+      expect(list).toContain('mcp__orchestrator__architecture_getUnit');
+      expect(list).toContain('mcp__orchestrator__architecture_queryUnits');
+    }
   });
 
   it('ops/gate allow-list contains the underscore forms of gate_verify, task_create, journal_setState, session_requestCapability', () => {

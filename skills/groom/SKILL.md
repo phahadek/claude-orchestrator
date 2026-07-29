@@ -89,8 +89,9 @@ url}`), and `neighbourBoards` — the same shape for neighbour milestones
   `filesSection` / `rawMarkdown`, plus **already-computed** judgment seeds:
   `readinessViolations` (the shared readiness gate run ahead of time),
   `sizeCheckSeed` (`{files, loc_method}` — a deterministic size-check seed),
-  `typeCheck` (the type/content-mismatch scan), and `regions` (resolved
-  package/file scope).
+  `typeCheck` (the type/content-mismatch scan), `regions` (resolved
+  package/file scope), and its dual-read architecture (`archSource` +
+  `archUnits` — see below).
 - `codeWorklist` — per-package deduped file paths declared across target task
   bodies (object form: package path → file list).
 - `gitFreshness` — per-package freshness (`fresh` / `stale` / `missing`) vs. the
@@ -117,11 +118,26 @@ longer a live non-Done target) with the **Edit** tool. This is what makes
 **resume** mode work and is unchanged from before the cutover — only the
 _source_ of the bundle moved from a shell-out to the route.
 
-Read the context-page bodies from `contextPages[].markdown`. Also read the
-universal task-authoring standard at `config/task-writing.md` (it is not a
-Notion context page — the skill reads it from local disk). **This is
-non-negotiable**: resolving a task without the architectural constraints loaded is how
-grooming produces confidently-wrong decisions.
+Read the non-architecture context-page bodies from `contextPages[].markdown`
+(project context, product design doc, dev setup, future scope — always
+populated, regardless of `archSource`). Also read the universal
+task-authoring standard at `config/task-writing.md` (it is not a Notion
+context page — the skill reads it from local disk).
+
+Read each target task's architecture from `targetTasks[].archUnits`, dual-read
+per `archSource`:
+- `archSource: 'notion'` — the milestone's fixed Notion architecture pages
+  (Technical Architecture, Coding Guidelines), each `{id, title}` here and its
+  body available via `contextPages[].markdown`.
+- `archSource: 'store'` — `archUnits[]` carries region-intersected arch_unit
+  store units (plus every active invariant), each already `{id, title, body}`
+  — the body is inlined directly in the bundle, no extra fetch needed. If a
+  unit's `body` is ever absent, dereference it with the
+  `mcp__orchestrator__architecture_getUnit` tool (`{id}`), or broaden the
+  selection with `mcp__orchestrator__architecture_queryUnits`.
+
+**This is non-negotiable**: resolving a task without the architectural
+constraints loaded is how grooming produces confidently-wrong decisions.
 
 **Disposition the constraints — don't just "read the pages."** The loader surfaces each
 task's **binding constraints** (`targetTasks[].bindingConstraints` — the

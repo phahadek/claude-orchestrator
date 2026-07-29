@@ -23,6 +23,7 @@ import {
 import { SessionManager } from '../session/SessionManager';
 import { insertSession } from '../db/queries';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
+import { createUnit } from '../architecture/ArchUnitStore';
 
 function buildApp() {
   const app = express();
@@ -138,7 +139,15 @@ describe('buildMcpServer — tool surface per session type', () => {
       session_type: 'groom',
     });
     const names = await toolNamesFor('mcp-groom-1');
-    expect(names).toEqual(['health', ...PLANNING_INTENT_KINDS.groom].sort());
+    expect(names).toEqual(
+      [
+        'health',
+        ...PLANNING_INTENT_KINDS.groom,
+        'groom.precheck',
+        'architecture.getUnit',
+        'architecture.queryUnits',
+      ].sort(),
+    );
   });
 
   it('a design session exposes decision.pickOne and task.updateBody, not journal.setState', async () => {
@@ -159,6 +168,8 @@ describe('buildMcpServer — tool surface per session type', () => {
         ...PLANNING_INTENT_KINDS.design,
         'completeness.disposition',
         'completeness.traceCoverage',
+        'architecture.getUnit',
+        'architecture.queryUnits',
       ].sort(),
     );
     expect(names).toContain('decision.pickOne');
@@ -180,11 +191,13 @@ describe('buildMcpServer — tool surface per session type', () => {
     const names = await toolNamesFor('mcp-ops-1');
     expect(names).toContain('session.requestCapability');
     expect(names).toContain('gate.verify');
+    expect(names).toContain('architecture.getUnit');
+    expect(names).toContain('architecture.queryUnits');
     expect(names).not.toContain('review.disposition');
     expect(names).not.toContain('flaky.confirm');
   });
 
-  it('a standard session still exposes review.disposition and flaky.confirm', async () => {
+  it('a standard session still exposes review.disposition and flaky.confirm, not the architecture read tools', async () => {
     insertSession({
       session_id: 'mcp-standard-1',
       task_id: null,
@@ -198,7 +211,66 @@ describe('buildMcpServer — tool surface per session type', () => {
     const names = await toolNamesFor('mcp-standard-1');
     expect(names).toContain('review.disposition');
     expect(names).toContain('flaky.confirm');
+    expect(names).not.toContain('architecture.getUnit');
+    expect(names).not.toContain('architecture.queryUnits');
     expect(names).not.toContain('gate.verify');
+  });
+});
+
+describe('architecture.getUnit / architecture.queryUnits', () => {
+  it('a groom session can fetch a unit body and query by topic', async () => {
+    insertSession({
+      session_id: 'mcp-groom-arch-1',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'groom',
+    });
+    const unit = createUnit({
+      title: 'Test Invariant',
+      kind: 'invariant',
+      topic: 'system-architecture',
+      regions: ['packages/backend'],
+      body: 'The full body content of this architecture unit.',
+      at: new Date(0).toISOString(),
+    });
+
+    const server = buildMcpServer('mcp-groom-arch-1', new SessionManager());
+    const [serverTransport, clientTransport] =
+      InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    await Promise.all([
+      server.connect(serverTransport),
+      client.connect(clientTransport),
+    ]);
+
+    const getResult = await client.callTool({
+      name: 'architecture.getUnit',
+      arguments: { id: unit.id },
+    });
+    const getContent = (
+      getResult.content as { type: string; text: string }[]
+    )[0];
+    expect(JSON.parse(getContent.text)).toMatchObject({
+      id: unit.id,
+      body: 'The full body content of this architecture unit.',
+    });
+
+    const queryResult = await client.callTool({
+      name: 'architecture.queryUnits',
+      arguments: { topic: 'system-architecture' },
+    });
+    const queryContent = (
+      queryResult.content as { type: string; text: string }[]
+    )[0];
+    const queried = JSON.parse(queryContent.text) as { id: string }[];
+    expect(queried.some((u) => u.id === unit.id)).toBe(true);
+
+    await client.close();
+    await server.close();
   });
 });
 

@@ -49,10 +49,17 @@ interface PageDoc {
   markdown: string;
 }
 
-/** A minimal architecture-unit reference, dual-read-source-agnostic. */
+/**
+ * A minimal architecture-unit reference, dual-read-source-agnostic. `body`
+ * is populated only on the store branch — grooming's selection is already
+ * region-intersected (+ active invariants), small enough to inline directly
+ * into a task's constraints, unlike the Notion branch's fixed milestone-wide
+ * context-page set.
+ */
 interface GroomArchUnitRef {
   id: string;
   title: string;
+  body?: string;
 }
 
 interface TaskRow {
@@ -137,9 +144,12 @@ export interface GroomLoadResult {
   /**
    * Which dual-read branch this milestone resolved architecture from — driven
    * by the project's `archStoreAdopted` flag (`ProjectService`/`opts.projectId`).
-   * `contextPages` below is populated only on the `'notion'` branch; once a
-   * project has adopted the store, grooming stops reading the fixed Notion
-   * context pages and each target task's `archUnits` carries the
+   * `contextPages` below is unrelated to that flag — it carries the
+   * manifest's non-architecture context pages (project context, product
+   * design doc, dev setup, future scope), which are fetched from Notion
+   * regardless of `archSource`. Only the two pages that were architecture
+   * (Technical Architecture, Coding Guidelines) moved into the store; once
+   * a project adopts it, each target task's `archUnits` carries the
    * region-intersected store units instead (see `TaskDoc.archUnits`).
    */
   archSource: 'store' | 'notion';
@@ -437,16 +447,22 @@ export async function loadGroomContext(
     : false;
   const archSource: 'store' | 'notion' = archStoreAdopted ? 'store' : 'notion';
 
+  // contextPages is independent of archStoreAdopted: the manifest's context
+  // pages are mostly non-architecture (project context, product design doc,
+  // dev setup, future scope) and were never migrated into the store, so they
+  // are fetched from Notion regardless of dual-read branch. Only the two
+  // pages that were architecture (Technical Architecture, Coding Guidelines)
+  // moved into the store; once the sibling operational retirement lands they
+  // become read-only stub pages here, with their live content carried
+  // instead by the target tasks' `archUnits`.
   const contextPages: PageDoc[] = [];
-  if (!archStoreAdopted) {
-    for (const pg of manifest.context_pages ?? []) {
-      const page = await notion.fetchTaskPage(formatTaskId('notion', pg.id));
-      contextPages.push({
-        id: pg.id,
-        title: pg.title ?? page.name,
-        markdown: page.rawMarkdown,
-      });
-    }
+  for (const pg of manifest.context_pages ?? []) {
+    const page = await notion.fetchTaskPage(formatTaskId('notion', pg.id));
+    contextPages.push({
+      id: pg.id,
+      title: pg.title ?? page.name,
+      markdown: page.rawMarkdown,
+    });
   }
   const notionArchUnits: GroomArchUnitRef[] = contextPages.map((p) => ({
     id: p.id,
@@ -489,7 +505,7 @@ export async function loadGroomContext(
       archSource,
       archUnits: archStoreAdopted
         ? selectUnitsFromStore({ regions: regionsForBinding(regions) }).map(
-            (u) => ({ id: u.id, title: u.title }),
+            (u) => ({ id: u.id, title: u.title, body: u.body }),
           )
         : notionArchUnits,
       filesPathsEntries: parseFilesPathsEntries(

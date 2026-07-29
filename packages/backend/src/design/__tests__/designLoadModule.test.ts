@@ -248,6 +248,12 @@ describe('loadDesignContext', () => {
     // The store path's page references only drive topic resolution, never
     // the manifest — there is nothing left to flag as unresolved.
     expect(result.unresolvedPageRefs).toEqual([]);
+    // Store-sourced units carry no `raw` reference text — unlike the notion
+    // branch's literal "Notion pages affected" excerpt, there is nothing to
+    // quote — but they must never fall back to the old raw: '' placeholder.
+    for (const unit of result.archUnits) {
+      expect(unit.raw).not.toBe('');
+    }
   });
 
   it("resolves the task's topic from its 'Notion pages affected' references and includes that topic's active units alongside the active invariants", async () => {

@@ -232,7 +232,8 @@ interface DesignTaskRef {
 interface ArchUnit {
   id: string;
   title: string;
-  raw: string;
+  /** The literal "Notion pages affected" reference text — notion branch only; a store unit has no such raw reference. */
+  raw?: string;
 }
 
 export interface DesignLoadResult {
@@ -322,7 +323,7 @@ export async function loadDesignContext(
     archSource = 'store';
     const topic = resolveDesignTopic(pagesAffected);
     for (const unit of selectUnitsFromStore({ topic })) {
-      archUnits.push({ id: unit.id, title: unit.title, raw: '' });
+      archUnits.push({ id: unit.id, title: unit.title });
     }
   } else {
     archSource = 'notion';

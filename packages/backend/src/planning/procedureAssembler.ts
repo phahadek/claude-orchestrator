@@ -122,8 +122,13 @@ export interface GroomDigestSlice {
   bindingConstraints: string[];
   /** Which dual-read branch `archUnits` was resolved from — see `groomLoad.ts`'s `TaskDoc.archSource`. */
   archSource: GroomLoadResult['archSource'];
-  /** Region-intersected arch_unit store units (+ active invariants) once adopted, else the fixed Notion context pages. */
-  archUnits: { id: string; title: string }[];
+  /**
+   * Region-intersected arch_unit store units (+ active invariants) once
+   * adopted, else the fixed Notion context pages. `body` is populated only
+   * on the store branch — the selection is small enough to inline directly
+   * (see `renderGroomDigest`).
+   */
+  archUnits: { id: string; title: string; body?: string }[];
   dependencyCandidates: TaskDependencyCandidates | null;
   /** This task's declared scope, resolved into package/file regions — the code it touches. */
   regions: TaskRegions;
@@ -1028,7 +1033,9 @@ function renderGroomDigest(
     `- Binding constraints: ${data.bindingConstraints.length ? data.bindingConstraints.join(', ') : '(none)'}`,
   ];
   // Store-sourced architecture is task-scoped (region-intersected + active
-  // invariants) — small enough to inline. The Notion branch's archUnits
+  // invariants) — small enough to inline the full unit bodies, the only
+  // channel an auto-dispatched code session has to this content (it never
+  // reads the store or Notion directly). The Notion branch's archUnits
   // mirror the milestone's whole fixed context-page set, which is exactly
   // the milestone-wide dump this digest is constrained to exclude (see
   // `deriveGroomDigestSlice`'s doc comment) — pre-migration behaviour never
@@ -1037,6 +1044,12 @@ function renderGroomDigest(
     lines.push(
       `- Arch-store-selected units (${data.archUnits.length}): ${data.archUnits.length ? data.archUnits.map((u) => u.title).join(', ') : '(none)'}`,
     );
+    if (data.archUnits.length) {
+      lines.push('', '### Architecture unit bodies', '');
+      for (const u of data.archUnits) {
+        lines.push(`#### ${u.title} (${u.id})`, '', u.body || '(empty)', '');
+      }
+    }
   }
   const hasResolvedRegions =
     data.regions.packages.length > 0 || data.regions.files.length > 0;
@@ -1094,6 +1107,14 @@ function renderDesignDigest(data: DesignDigestSlice): string {
     '',
     ...data.archUnits.map((u) => `- ${u.title} (${u.id})`),
   );
+  if (data.archSource === 'store' && data.archUnits.length) {
+    lines.push(
+      '',
+      `_This selection is titles/ids only — too large to inline wholesale. Fetch a unit's full body with ` +
+        `${orchestratorMcpToolName('architecture.getUnit')} ({ id }), or run a broader query with ` +
+        `${orchestratorMcpToolName('architecture.queryUnits')} ({ topic / kind / region })._`,
+    );
+  }
   if (data.unresolvedPageRefs.length) {
     lines.push(
       '',
