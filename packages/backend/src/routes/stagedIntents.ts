@@ -87,6 +87,10 @@ import type { ArchUnitUpdateFields } from '../architecture/ArchUnitStore';
 import type { ArchUnitKind, ArchUnitStatus } from '../db/types';
 import type { ServerMessage } from '../ws/types';
 import { logger } from '../logger';
+import {
+  isToolShapedCapability,
+  parseSessionRecordReadCapability,
+} from '../session/orchestrator-config';
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
 // Mirrors tasks.ts's task_updated wiring: REST stays the fetch/apply source of
@@ -610,6 +614,47 @@ function toArchUnitUpdateFields(
     status: payload.metadata?.status,
     body: payload.body,
   };
+}
+
+/**
+ * Locks the capability vocabulary at stage time (see the design task "Lock
+ * the capability vocabulary for dispatched planning sessions"): a
+ * session.requestCapability's `capability` must be tool-shaped
+ * (`isToolShapedCapability` — `Bash(...)`/`mcp__...`) or the registered
+ * own-record-read prefix (`parseSessionRecordReadCapability` —
+ * `read:session-record:<id>`), since those are the only shapes that ever
+ * actually widen a session's access. A non-conforming string (e.g.
+ * "banana") is rejected here, before the row ever reaches `staged`, rather
+ * than being durably granted and silently never taking effect. This is
+ * distinct from and does not replace `isGrantable`'s denylist check, which
+ * stays at grant/approval time for well-formed-but-denylisted requests
+ * (e.g. `Write`).
+ */
+class CapabilityRequestValidationError extends Error {
+  constructor(capability: string) {
+    super(
+      `[stagedIntents] session.requestCapability rejected: "${capability}" is not a ` +
+        'supported capability shape — expected a tool-shaped capability ' +
+        '("Bash(...)" or "mcp__...") or "read:session-record:<id>"',
+    );
+    this.name = 'CapabilityRequestValidationError';
+  }
+}
+
+function validateCapabilityRequestPayload(
+  payload: unknown,
+): asserts payload is CapabilityRequestPayload {
+  const p = payload as Partial<CapabilityRequestPayload> | null;
+  const capability = p?.capability;
+  if (typeof capability !== 'string') {
+    throw new CapabilityRequestValidationError(String(capability));
+  }
+  if (
+    !isToolShapedCapability(capability) &&
+    parseSessionRecordReadCapability(capability) === null
+  ) {
+    throw new CapabilityRequestValidationError(capability);
+  }
 }
 
 /**
@@ -1203,6 +1248,9 @@ export function stageIntent(
 ): StagedIntent {
   if (kind === 'decision.pickOne') {
     validateDecisionPickOnePayload(payload, groupId, decisionProposal);
+  }
+  if (kind === 'session.requestCapability') {
+    validateCapabilityRequestPayload(payload);
   }
 
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
