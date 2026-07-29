@@ -232,6 +232,42 @@
   gap: 4px;
 }
 
+.capabilityRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.capabilityBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--ctp-text, #cdd6f4);
+  border-radius: var(--radius-sm, 4px);
+  padding: 1px 6px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capabilityBadge--auto {
+  background: rgba(166, 227, 161, 0.35);
+}
+
+.capabilityBadge--operator {
+  background: rgba(137, 180, 250, 0.35);
+}
+
+.capabilityProvenance {
+  font-size: 9px;
+  text-transform: uppercase;
+  opacity: 0.75;
+  flex-shrink: 0;
+}
+
 .tagPill {
   display: inline-flex;
   align-items: center;

@@ -3,6 +3,7 @@ import { authedFetch } from '../api/projects';
 import type { SessionState } from '../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
+import type { CapabilityGrant } from '@claude-orchestrator/backend/src/audit/capabilityProvenance';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import { calcElapsedMs, formatDuration } from '../utils/sessionTimer';
 import { StatusBadge } from './StatusBadge';
@@ -46,6 +47,7 @@ export function SessionControls({
   const [noteValue, setNoteValue] = useState('');
   const [tagInput, setTagInput] = useState('');
   const [compactOpen, setCompactOpen] = useState(false);
+  const [capabilities, setCapabilities] = useState<CapabilityGrant[]>([]);
 
   useEffect(() => {
     setEditingNote(false);
@@ -55,6 +57,21 @@ export function SessionControls({
     // Reset local state only on session switch — intentionally excludes session?.note
     // to avoid resetting the input while the user is editing
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.sessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    authedFetch(`/api/sessions/${session.sessionId}/capabilities`)
+      .then((res) => (res.ok ? res.json() : { capabilities: [] }))
+      .then((data: { capabilities?: CapabilityGrant[] }) => {
+        if (!cancelled) setCapabilities(data.capabilities ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setCapabilities([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [session.sessionId]);
 
   const isActive =
@@ -350,6 +367,23 @@ export function SessionControls({
             </button>
           )}
         </div>
+
+        {capabilities.length > 0 && (
+          <div className={styles.capabilityRow}>
+            {capabilities.map(({ capability, provenance }) => (
+              <span
+                key={capability}
+                className={`${styles.capabilityBadge} ${provenance === 'auto' ? styles['capabilityBadge--auto'] : styles['capabilityBadge--operator']}`}
+                title={capability}
+              >
+                {capability}
+                <span className={styles.capabilityProvenance}>
+                  {provenance === 'auto' ? 'auto' : 'operator'}
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
 
         <div className={styles.tagRow}>
           {(session.tags ?? []).map((tag) => (

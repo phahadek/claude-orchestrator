@@ -17,6 +17,7 @@ import {
   deleteDenialsBySession,
   getEventsBySession,
   removeGrantedCapability,
+  getGrantedCapabilities,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { getProjectById } from '../config';
@@ -25,6 +26,7 @@ import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import type { ServerMessage } from '../ws/types';
 import { eventKind } from '../session/eventKind';
 import type { SessionManager } from '../session/SessionManager';
+import { deriveCapabilityProvenance } from '../audit/capabilityProvenance';
 
 let _broadcast: (msg: ServerMessage) => void = () => {};
 export function setBroadcast(fn: (msg: ServerMessage) => void): void {
@@ -82,6 +84,21 @@ sessionsRouter.get('/:id/events', (req: Request, res: Response) => {
       ...(ev.message_id != null && { messageId: ev.message_id }),
     }));
   res.json({ session, events });
+});
+
+// GET /api/sessions/:id/capabilities
+sessionsRouter.get('/:id/capabilities', (req: Request, res: Response) => {
+  const sessionId = String(req.params.id);
+  const session = getSession(sessionId);
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  const capabilities = deriveCapabilityProvenance(
+    sessionId,
+    getGrantedCapabilities(sessionId),
+  );
+  res.json({ capabilities });
 });
 
 // DELETE /api/sessions/:id/denials
