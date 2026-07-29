@@ -62,10 +62,11 @@ export interface OrchestratorConfig {
   /** Stop running subsequent analyze commands after the first failure. Default true. */
   analyze_fail_fast: boolean;
   /**
-   * When true (default), orchestrator autofix and file-revert commits include
-   * [skip ci] so GitHub skips pull_request workflows, saving CI minutes.
-   * Set to false on projects with required GitHub status checks — [skip ci]
-   * prevents those checks from reporting, permanently blocking the PR.
+   * When true, orchestrator autofix and file-revert commits include [skip ci]
+   * so GitHub skips pull_request workflows, saving CI minutes. Defaults to
+   * false: on projects with required GitHub status checks, [skip ci] prevents
+   * those checks from reporting, permanently blocking the PR. Opt in only on
+   * projects confirmed to have no required status checks on the base branch.
    */
   autofix_skip_ci: boolean;
 }
@@ -89,7 +90,7 @@ const DEFAULTS: OrchestratorConfig = {
   analyze_timeout_sec: 300,
   analyze_max_rss_mb: 0,
   analyze_fail_fast: true,
-  autofix_skip_ci: true,
+  autofix_skip_ci: false,
 };
 
 /**
