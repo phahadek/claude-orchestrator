@@ -98,9 +98,7 @@ describe('MilestoneDrilldown', () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(screen.getByText('Spec body')).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getByText('Spec body')).toBeTruthy());
     expect(screen.getByText('No events yet.')).toBeTruthy();
   });
 

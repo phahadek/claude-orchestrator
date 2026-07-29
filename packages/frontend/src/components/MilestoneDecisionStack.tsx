@@ -47,7 +47,8 @@ export function MilestoneDecisionStack({
 
   const selectedIntentCardId =
     selection?.type === 'intent' ? selection.intent.id : null;
-  const selectedTaskId = selection?.type === 'task' ? selection.task.taskId : null;
+  const selectedTaskId =
+    selection?.type === 'task' ? selection.task.taskId : null;
 
   return (
     <div className={styles.stack} data-testid="milestone-decision-stack">

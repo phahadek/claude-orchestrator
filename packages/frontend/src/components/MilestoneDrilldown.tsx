@@ -60,7 +60,8 @@ function useResolvedSession(
           id: sessionId,
           session: {
             sessionId: session.session_id,
-            taskName: session.task_name ?? session.task_url ?? session.session_id,
+            taskName:
+              session.task_name ?? session.task_url ?? session.session_id,
             notionTaskUrl: session.task_url ?? '',
             sessionType: session.session_type,
             status: session.status,
@@ -84,10 +85,11 @@ function useResolvedSession(
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [sessionId, liveSession]);
 
-  if (liveSession) return { session: liveSession, loading: false, notFound: false };
+  if (liveSession)
+    return { session: liveSession, loading: false, notFound: false };
   if (fetched && fetched.id === sessionId) {
     return { session: fetched.session, loading: false, notFound: false };
   }
@@ -119,7 +121,9 @@ export function MilestoneDrilldown({
   const sessionId =
     selection?.type === 'task'
       ? (selection.task.codeSession?.sessionId ?? null)
-      : (selection?.intent.sessionId ?? resolvedTask?.codeSession?.sessionId ?? null);
+      : (selection?.intent.sessionId ??
+        resolvedTask?.codeSession?.sessionId ??
+        null);
 
   const {
     markdown: taskMarkdown,
@@ -135,7 +139,10 @@ export function MilestoneDrilldown({
 
   if (!selection) {
     return (
-      <div className={styles.emptyState} data-testid="milestone-drilldown-empty">
+      <div
+        className={styles.emptyState}
+        data-testid="milestone-drilldown-empty"
+      >
         Select an item from the stack to see details.
       </div>
     );
@@ -144,11 +151,12 @@ export function MilestoneDrilldown({
   return (
     <div className={styles.drilldown} data-testid="milestone-drilldown">
       <div className={styles.taskReader} data-testid="milestone-task-reader">
-        <div className={styles.heading}>
-          {resolvedTask?.taskName ?? 'Task'}
-        </div>
+        <div className={styles.heading}>{resolvedTask?.taskName ?? 'Task'}</div>
         {!taskId && (
-          <p className={styles.muted} data-testid="milestone-drilldown-unresolved">
+          <p
+            className={styles.muted}
+            data-testid="milestone-drilldown-unresolved"
+          >
             {selection.type === 'intent'
               ? `This ${selection.intent.kind} decision doesn't reference an existing task yet.`
               : 'No task selected.'}
@@ -168,7 +176,10 @@ export function MilestoneDrilldown({
         )}
       </div>
 
-      <div className={styles.sessionEmbed} data-testid="milestone-session-embed">
+      <div
+        className={styles.sessionEmbed}
+        data-testid="milestone-session-embed"
+      >
         {!sessionId && (
           <p className={styles.muted}>
             {resolvedTask

@@ -85,9 +85,7 @@ describe('MilestoneDecisionStack', () => {
 
     expect(screen.getByTestId('milestone-task-row-code-open')).toBeTruthy();
     expect(screen.getByTestId('milestone-task-row-code-done')).toBeTruthy();
-    expect(
-      screen.queryByTestId('milestone-task-row-code-launched'),
-    ).toBeNull();
+    expect(screen.queryByTestId('milestone-task-row-code-launched')).toBeNull();
     expect(screen.queryByTestId('milestone-task-row-design-open')).toBeNull();
 
     fireEvent.click(screen.getByTestId('milestone-task-row-code-open'));
