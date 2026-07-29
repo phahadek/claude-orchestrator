@@ -17,11 +17,12 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { insertProject } from '../../db/queries.js';
+import { insertProject, insertMilestone } from '../../db/queries.js';
 import { requireDeviceAuth } from '../../auth/DeviceAuth.js';
 import { projectsRouter } from '../projects.js';
 
 const PROJECT = 'proj-arch-flip';
+const MILESTONE = 'milestone-wrap-test';
 const DEVICE_TOKEN = 'valid-device-token';
 
 function makeApp() {
@@ -46,6 +47,7 @@ function insertDevice() {
 
 beforeEach(() => {
   db.prepare('DELETE FROM devices').run();
+  db.prepare('DELETE FROM milestones').run();
   db.prepare('DELETE FROM projects').run();
   db.prepare('DELETE FROM audit_log').run();
 
@@ -57,6 +59,13 @@ beforeEach(() => {
     context_url: null,
     github_repo: null,
     task_source: 'notion',
+  });
+  insertMilestone({
+    id: MILESTONE,
+    project_id: PROJECT,
+    name: 'M1 Wrap Test',
+    source_id: null,
+    canonical_short_id: 'M1',
   });
 });
 
@@ -111,5 +120,71 @@ describe('PATCH /api/projects/:id — archStoreAdopted', () => {
     expect(res.status).toBe(200);
     expect(res.body.archStoreAdopted).toBe(true);
     expect(res.body.name).toBe('Renamed Project');
+  });
+});
+
+describe('POST /api/milestones/:id/wrapped', () => {
+  it('sets wrapped_at through updateMilestone (no raw SQL) and records a milestone_wrapped audit event', async () => {
+    const before = Date.now();
+    const res = await request(makeApp())
+      .post(`/api/milestones/${MILESTONE}/wrapped`)
+      .set('Authorization', `Bearer ${DEVICE_TOKEN}`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.wrappedAt).toBeGreaterThanOrEqual(before);
+
+    const row = db
+      .prepare('SELECT wrapped_at FROM milestones WHERE id = ?')
+      .get(MILESTONE) as { wrapped_at: number | null };
+    expect(row.wrapped_at).not.toBeNull();
+    expect(row.wrapped_at).toBeGreaterThanOrEqual(before);
+
+    const events = db
+      .prepare(`SELECT * FROM audit_log WHERE event_type = 'milestone_wrapped'`)
+      .all() as { project_id: string; payload: string }[];
+    expect(events).toHaveLength(1);
+    expect(events[0].project_id).toBe(PROJECT);
+    expect(JSON.parse(events[0].payload)).toEqual({
+      milestoneId: MILESTONE,
+      wrappedAt: row.wrapped_at,
+    });
+  });
+
+  it('404s for an unknown milestone id', async () => {
+    const res = await request(makeApp())
+      .post('/api/milestones/does-not-exist/wrapped')
+      .set('Authorization', `Bearer ${DEVICE_TOKEN}`)
+      .send({});
+
+    expect(res.status).toBe(404);
+  });
+
+  it('409s without moving the timestamp on a second call against an already-wrapped milestone', async () => {
+    const first = await request(makeApp())
+      .post(`/api/milestones/${MILESTONE}/wrapped`)
+      .set('Authorization', `Bearer ${DEVICE_TOKEN}`)
+      .send({});
+    expect(first.status).toBe(200);
+
+    const rowAfterFirst = db
+      .prepare('SELECT wrapped_at FROM milestones WHERE id = ?')
+      .get(MILESTONE) as { wrapped_at: number | null };
+
+    const second = await request(makeApp())
+      .post(`/api/milestones/${MILESTONE}/wrapped`)
+      .set('Authorization', `Bearer ${DEVICE_TOKEN}`)
+      .send({});
+    expect(second.status).toBe(409);
+
+    const rowAfterSecond = db
+      .prepare('SELECT wrapped_at FROM milestones WHERE id = ?')
+      .get(MILESTONE) as { wrapped_at: number | null };
+    expect(rowAfterSecond.wrapped_at).toBe(rowAfterFirst.wrapped_at);
+
+    const events = db
+      .prepare(`SELECT * FROM audit_log WHERE event_type = 'milestone_wrapped'`)
+      .all();
+    expect(events).toHaveLength(1);
   });
 });
