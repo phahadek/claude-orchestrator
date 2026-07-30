@@ -20,10 +20,10 @@ beforeEach(() => {
 });
 
 describe('DEFAULT_ARM', () => {
-  it('arms groom and gate-verify, and leaves design and ops off', () => {
+  it('leaves every flow disarmed', () => {
     expect(DEFAULT_ARM).toEqual({
-      groom: true,
-      'gate-verify': true,
+      groom: false,
+      'gate-verify': false,
       design: false,
       ops: false,
     });
@@ -32,7 +32,7 @@ describe('DEFAULT_ARM', () => {
 
 describe('getArm', () => {
   it('returns DEFAULT_ARM[flow] when no row exists', () => {
-    expect(getArm('m1', 'groom')).toBe(true);
+    expect(getArm('m1', 'groom')).toBe(false);
     expect(getArm('m1', 'design')).toBe(false);
   });
 
@@ -51,17 +51,17 @@ describe('listArm', () => {
 
     const state = listArm('m1');
     expect(state.ops).toEqual({ armed: true, source: 'row' });
-    expect(state.groom).toEqual({ armed: true, source: 'default' });
+    expect(state.groom).toEqual({ armed: false, source: 'default' });
     expect(state.design).toEqual({ armed: false, source: 'default' });
-    expect(state['gate-verify']).toEqual({ armed: true, source: 'default' });
+    expect(state['gate-verify']).toEqual({ armed: false, source: 'default' });
   });
 });
 
 describe('upsertArm', () => {
   it('inserts a new row and returns the prior default as previous', () => {
-    const { previous } = upsertArm('m1', 'groom', false, 100);
-    expect(previous).toBe(true);
-    expect(getArm('m1', 'groom')).toBe(false);
+    const { previous } = upsertArm('m1', 'groom', true, 100);
+    expect(previous).toBe(false);
+    expect(getArm('m1', 'groom')).toBe(true);
   });
 
   it('updates an existing row and returns its prior value as previous', () => {

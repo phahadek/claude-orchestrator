@@ -16,8 +16,8 @@ afterEach(() => {
 
 function makeState(overrides: Partial<FlowArmState> = {}): FlowArmState {
   return {
-    groom: { armed: true, source: 'default' },
-    'gate-verify': { armed: true, source: 'default' },
+    groom: { armed: false, source: 'default' },
+    'gate-verify': { armed: false, source: 'default' },
     design: { armed: false, source: 'default' },
     ops: { armed: false, source: 'default' },
     ...overrides,
@@ -50,19 +50,15 @@ describe('FlowArmToggle', () => {
         screen
           .getByTestId('flow-arm-switch-groom')
           .getAttribute('aria-checked'),
-      ).toBe('true');
+      ).toBe('false');
     });
-    expect(
-      screen
-        .getByTestId('flow-arm-switch-gate-verify')
-        .getAttribute('aria-checked'),
-    ).toBe('true');
-    expect(
-      screen.getByTestId('flow-arm-switch-design').getAttribute('aria-checked'),
-    ).toBe('false');
-    expect(
-      screen.getByTestId('flow-arm-switch-ops').getAttribute('aria-checked'),
-    ).toBe('false');
+    for (const flow of FLOW_IDS) {
+      expect(
+        screen
+          .getByTestId(`flow-arm-switch-${flow}`)
+          .getAttribute('aria-checked'),
+      ).toBe('false');
+    }
   });
 
   it('displays the project autoLaunchEnabled state alongside arm state', async () => {
@@ -79,7 +75,7 @@ describe('FlowArmToggle', () => {
         screen
           .getByTestId('flow-arm-switch-groom')
           .getAttribute('aria-checked'),
-      ).toBe('true'),
+      ).toBe('false'),
     );
   });
 

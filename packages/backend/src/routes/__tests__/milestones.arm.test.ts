@@ -34,10 +34,10 @@ describe('GET /api/milestones/:milestoneId/arm', () => {
     const res = await request(makeApp()).get('/api/milestones/m1/arm');
 
     expect(res.status).toBe(200);
-    expect(res.body.groom).toEqual({ armed: true, source: 'default' });
+    expect(res.body.groom).toEqual({ armed: false, source: 'default' });
     expect(res.body.design).toEqual({ armed: false, source: 'default' });
     expect(res.body.ops).toEqual({ armed: false, source: 'default' });
-    expect(res.body['gate-verify']).toEqual({ armed: true, source: 'default' });
+    expect(res.body['gate-verify']).toEqual({ armed: false, source: 'default' });
   });
 });
 
