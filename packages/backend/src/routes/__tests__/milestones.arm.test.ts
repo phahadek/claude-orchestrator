@@ -37,7 +37,10 @@ describe('GET /api/milestones/:milestoneId/arm', () => {
     expect(res.body.groom).toEqual({ armed: false, source: 'default' });
     expect(res.body.design).toEqual({ armed: false, source: 'default' });
     expect(res.body.ops).toEqual({ armed: false, source: 'default' });
-    expect(res.body['gate-verify']).toEqual({ armed: false, source: 'default' });
+    expect(res.body['gate-verify']).toEqual({
+      armed: false,
+      source: 'default',
+    });
   });
 });
 
