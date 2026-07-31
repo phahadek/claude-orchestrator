@@ -28,7 +28,11 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
-import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
+import {
+  createStagedIntentsRouter,
+  stageIntent,
+  sessionOwesGatedDesignArtifacts,
+} from '../stagedIntents';
 import { insertSession, listCompletenessDispositions } from '../../db/queries';
 
 function makeApp() {
@@ -360,5 +364,115 @@ describe('completeness-approval gate on design terminal artifacts', () => {
         'groom-session-1',
       ),
     ).not.toThrow();
+  });
+});
+
+// ── sessionOwesGatedDesignArtifacts — the "work owed" signal PlanningOrchestrator
+// consults so an approval that unblocks arch.*/task.updateBody writes does not
+// also terminate the session those writes are owed by ──────────────────────
+describe('sessionOwesGatedDesignArtifacts', () => {
+  it('is false before any completeness.disposition has been staged', () => {
+    expect(sessionOwesGatedDesignArtifacts(SESSION_ID)).toBe(false);
+  });
+
+  it('is false while the disposition is only staged, not yet approved', () => {
+    stageDisposition();
+    expect(sessionOwesGatedDesignArtifacts(SESSION_ID)).toBe(false);
+  });
+
+  it('is true once the disposition is approved and no gated artifact has been staged yet — the deadlock this signal exists to prevent', async () => {
+    const intent = stageDisposition();
+    const app = makeApp();
+    const agent = supertest(app);
+
+    await agent.post(`/api/staged-intents/${intent.id}/approve`).send({});
+
+    expect(sessionOwesGatedDesignArtifacts(SESSION_ID)).toBe(true);
+  });
+
+  it('flips false once an arch.createUnit has been staged (even before it is disposed), and the full flow — locked disposition, architecture unit, closing synthesis — settles as one sequence', async () => {
+    const intent = stageDisposition();
+    const app = makeApp();
+    const agent = supertest(app);
+
+    await agent.post(`/api/staged-intents/${intent.id}/approve`).send({});
+    expect(sessionOwesGatedDesignArtifacts(SESSION_ID)).toBe(true);
+
+    stageIntent(
+      'arch.createUnit',
+      {
+        title: 'A new unit',
+        metadata: { kind: 'invariant', topic: 't', regions: ['r'] },
+        body: 'body',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    expect(sessionOwesGatedDesignArtifacts(SESSION_ID)).toBe(false);
+
+    stageIntent(
+      'task.updateBody',
+      { taskId: TASK_ID, sections: { summary: 'x' } },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    expect(sessionOwesGatedDesignArtifacts(SESSION_ID)).toBe(false);
+  });
+
+  it('is false for a non-design (e.g. groom) session even with an approved disposition', async () => {
+    db.prepare('DELETE FROM sessions').run();
+    insertSession({
+      session_id: 'groom-session-owed-1',
+      task_id: TASK_ID,
+      task_url: null,
+      project_context_url: null,
+      project_id: PROJECT_ID,
+      status: 'running',
+      started_at: 1,
+      session_type: 'groom',
+    });
+
+    const intent = stageIntent(
+      'completeness.disposition',
+      {
+        taskId: TASK_ID,
+        rowId: insertRow('2026-07-28T00:00:00.000Z'),
+        project: 'demo',
+        milestone: 'M13',
+        probed: PROBED,
+        questions: QUESTIONS,
+        runAt: '2026-07-28T00:00:00.000Z',
+      },
+      PROJECT_ID,
+      null,
+      'groom-session-owed-1',
+    );
+    const app = makeApp();
+    const agent = supertest(app);
+    await agent.post(`/api/staged-intents/${intent.id}/approve`).send({});
+
+    expect(sessionOwesGatedDesignArtifacts('groom-session-owed-1')).toBe(
+      false,
+    );
+  });
+
+  it('is false when the session has no bound task', () => {
+    db.prepare('DELETE FROM sessions').run();
+    insertSession({
+      session_id: 'design-session-no-task',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: PROJECT_ID,
+      status: 'running',
+      started_at: 1,
+      session_type: 'design',
+    });
+
+    expect(sessionOwesGatedDesignArtifacts('design-session-no-task')).toBe(
+      false,
+    );
   });
 });
