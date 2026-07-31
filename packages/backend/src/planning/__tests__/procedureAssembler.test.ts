@@ -11,7 +11,10 @@ import { join } from 'path';
 // value derived from one place rather than re-typed as a literal string.
 const { PROJECT_FIXTURES } = vi.hoisted(() => ({
   PROJECT_FIXTURES: {
-    p1: { id: 'p1', projectDir: '/srv/orchestrator/projects/claude-orchestrator' },
+    p1: {
+      id: 'p1',
+      projectDir: '/srv/orchestrator/projects/claude-orchestrator',
+    },
     'other-project': {
       id: 'other-project',
       projectDir: '/srv/orchestrator/projects/totally-different-dirname',
@@ -345,7 +348,9 @@ describe('assemblePlanningProcedure', () => {
       // is that checkout, and that the registry id must not be used as a
       // path search term — for every workflow (groom/design/ops).
       expect(output).toContain(PROJECT_FIXTURES.p1.projectDir);
-      expect(output).toMatch(/working directory is already the project checkout/);
+      expect(output).toMatch(
+        /working directory is already the project checkout/,
+      );
       expect(output).toMatch(/NOT named after this project's registry id/);
       expect(output).toMatch(/do not `find` \/ `ls` \/ grep the filesystem/);
 
@@ -419,7 +424,9 @@ describe('assemblePlanningProcedure', () => {
       projectId: 'no-such-project',
       digest: cases[0].digest,
     });
-    expect(output).not.toMatch(/working directory is already the project checkout/);
+    expect(output).not.toMatch(
+      /working directory is already the project checkout/,
+    );
     // The rest of the skeleton still assembles normally.
     expect(output).toContain('## Session Lifecycle');
     expect(output).toContain('## Transport');

@@ -817,7 +817,7 @@ export function renderCheckoutPathStatement(checkoutDir: string): string {
   return (
     "This session's working directory is already the project checkout: " +
     `\`${checkoutDir}\`. The \`PROJECT_DIR\` environment variable names the ` +
-    'same path. The checkout directory is NOT named after this project\'s ' +
+    "same path. The checkout directory is NOT named after this project's " +
     'registry id (the project name this session knows itself by) — do not ' +
     '`find` / `ls` / grep the filesystem searching for the registry id as a ' +
     'path fragment, it will not match anything. The path above is already ' +
