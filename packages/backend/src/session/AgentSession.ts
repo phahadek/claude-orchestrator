@@ -615,7 +615,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     const modelSetting =
       this.launchModel ||
       (this.sessionType === 'ops'
-        ? runtimeSettings.ops_session_model
+        ? isGateVerifySession(this.taskId)
+          ? runtimeSettings.gate_verify_session_model ||
+            runtimeSettings.ops_session_model
+          : runtimeSettings.ops_session_model
         : isPlanningSession(this.sessionType)
           ? runtimeSettings.planning_session_model
           : isCodeSession(this.sessionType)
@@ -624,7 +627,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     const effortSetting =
       this.launchEffort ||
       (this.sessionType === 'ops'
-        ? runtimeSettings.ops_session_effort
+        ? isGateVerifySession(this.taskId)
+          ? runtimeSettings.gate_verify_session_effort ||
+            runtimeSettings.ops_session_effort
+          : runtimeSettings.ops_session_effort
         : isPlanningSession(this.sessionType)
           ? runtimeSettings.planning_session_effort
           : isCodeSession(this.sessionType)
