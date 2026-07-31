@@ -1321,9 +1321,7 @@ describe('TaskList', () => {
       const typeCard = within(nonCodeSection).getByTestId(
         'type-card-investigation',
       );
-      expect(
-        typeCard.querySelector('input[type="checkbox"]'),
-      ).toBeNull();
+      expect(typeCard.querySelector('input[type="checkbox"]')).toBeNull();
       expect(
         within(typeCard).getByTestId('ops-dep-blocked-reason').textContent,
       ).toContain('waiting on Design Task');
@@ -1363,7 +1361,9 @@ describe('TaskList', () => {
           .textContent,
       ).toContain('waiting on Investigation Task');
 
-      fireEvent.click(within(backlogSection).getByTestId('groom-select-all-btn'));
+      fireEvent.click(
+        within(backlogSection).getByTestId('groom-select-all-btn'),
+      );
       const groomBtn = within(backlogSection).getByTestId(
         'groom-btn',
       ) as HTMLButtonElement;
