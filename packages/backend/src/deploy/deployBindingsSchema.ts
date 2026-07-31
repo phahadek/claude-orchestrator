@@ -62,8 +62,8 @@ const BARE_REF_RE = /\$([A-Za-z_][A-Za-z0-9_]*)/g;
 export function extractBindingRefs(text: string | undefined): string[] {
   if (!text) return [];
   const names = new Set<string>();
-  for (const source of [BRACED_REF_RE.source, BARE_REF_RE.source]) {
-    const re = new RegExp(source, 'g');
+  for (const re of [BRACED_REF_RE, BARE_REF_RE]) {
+    re.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = re.exec(text))) {
       names.add(m[1]);
