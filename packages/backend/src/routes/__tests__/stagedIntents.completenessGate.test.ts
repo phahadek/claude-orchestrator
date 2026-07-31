@@ -201,6 +201,17 @@ describe('completeness-approval gate on design terminal artifacts', () => {
       ),
     ).not.toThrow();
 
+    // The closing synthesis also requires the other expected terminal kind
+    // (follow-on Code tasks) be accounted for — see the expected-terminal-kind
+    // XOR gate below.
+    stageIntent(
+      'task.create',
+      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+
     expect(() =>
       stageIntent(
         'task.updateBody',
@@ -367,6 +378,276 @@ describe('completeness-approval gate on design terminal artifacts', () => {
   });
 });
 
+// ── Per-expected-kind XOR on the design closing synthesis: task.create and
+// the architecture writes are each accounted for either by a staged artifact
+// of that kind, or by a planning.noOp naming it ────────────────────────────
+describe('expected-terminal-kind XOR gate on the design closing synthesis', () => {
+  async function approveDisposition(): Promise<void> {
+    const intent = stageDisposition();
+    const app = makeApp();
+    const agent = supertest(app);
+    await agent.post(`/api/staged-intents/${intent.id}/approve`).send({});
+  }
+
+  it('refuses the closing synthesis when no follow-on task.create is staged, naming the unaccounted-for kind', async () => {
+    await approveDisposition();
+
+    stageIntent(
+      'arch.createUnit',
+      {
+        title: 'A new unit',
+        metadata: { kind: 'invariant', topic: 't', regions: ['r'] },
+        body: 'body',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: TASK_ID, sections: { summary: 'x' } },
+        PROJECT_ID,
+        null,
+        SESSION_ID,
+      ),
+    ).toThrow(/follow-on Code tasks \(task\.create\)/);
+  });
+
+  it('refuses the closing synthesis when no architecture write is staged, naming the unaccounted-for kind', async () => {
+    await approveDisposition();
+
+    stageIntent(
+      'task.create',
+      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: TASK_ID, sections: { summary: 'x' } },
+        PROJECT_ID,
+        null,
+        SESSION_ID,
+      ),
+    ).toThrow(/architecture-unit writes/);
+  });
+
+  it('allows the closing synthesis once both expected kinds are staged as artifacts', async () => {
+    await approveDisposition();
+
+    stageIntent(
+      'arch.createUnit',
+      {
+        title: 'A new unit',
+        metadata: { kind: 'invariant', topic: 't', regions: ['r'] },
+        body: 'body',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    stageIntent(
+      'task.create',
+      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: TASK_ID, sections: { summary: 'x' } },
+        PROJECT_ID,
+        null,
+        SESSION_ID,
+      ),
+    ).not.toThrow();
+  });
+
+  it('a planning.noOp naming task.create satisfies that expected kind while architecture is satisfied by an artifact', async () => {
+    await approveDisposition();
+
+    stageIntent(
+      'arch.createUnit',
+      {
+        title: 'A new unit',
+        metadata: { kind: 'invariant', topic: 't', regions: ['r'] },
+        body: 'body',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    stageIntent(
+      'planning.noOp',
+      {
+        taskId: TASK_ID,
+        reason: 'no implementation work beyond the locked decisions',
+        skippedKind: 'task.create',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: TASK_ID, sections: { summary: 'x' } },
+        PROJECT_ID,
+        null,
+        SESSION_ID,
+      ),
+    ).not.toThrow();
+  });
+
+  it('a planning.noOp naming architecture satisfies that expected kind while task.create is satisfied by an artifact', async () => {
+    await approveDisposition();
+
+    stageIntent(
+      'task.create',
+      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    stageIntent(
+      'planning.noOp',
+      {
+        taskId: TASK_ID,
+        reason: 'these decisions change no architecture page',
+        skippedKind: 'architecture',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: TASK_ID, sections: { summary: 'x' } },
+        PROJECT_ID,
+        null,
+        SESSION_ID,
+      ),
+    ).not.toThrow();
+  });
+
+  it('two noOps, one per skipped kind, satisfy the gate when a pass produces neither deliverable', async () => {
+    await approveDisposition();
+
+    stageIntent(
+      'planning.noOp',
+      {
+        taskId: TASK_ID,
+        reason: 'no implementation work beyond the locked decisions',
+        skippedKind: 'task.create',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    stageIntent(
+      'planning.noOp',
+      {
+        taskId: TASK_ID,
+        reason: 'these decisions change no architecture page',
+        skippedKind: 'architecture',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: TASK_ID, sections: { summary: 'x' } },
+        PROJECT_ID,
+        null,
+        SESSION_ID,
+      ),
+    ).not.toThrow();
+  });
+
+  it('does not gate a non-design (e.g. groom) session', async () => {
+    db.prepare('DELETE FROM sessions').run();
+    insertSession({
+      session_id: 'groom-session-xor-1',
+      task_id: TASK_ID,
+      task_url: null,
+      project_context_url: null,
+      project_id: PROJECT_ID,
+      status: 'running',
+      started_at: 1,
+      session_type: 'groom',
+    });
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: TASK_ID, sections: { summary: 'x' } },
+        PROJECT_ID,
+        null,
+        'groom-session-xor-1',
+      ),
+    ).not.toThrow();
+  });
+
+  it('generates parts 4 and 5 of the closing synthesis from the staged terminal set, appended to decisionProposal and to the body write Implementation notes', async () => {
+    await approveDisposition();
+
+    stageIntent(
+      'arch.createUnit',
+      {
+        title: 'Widget architecture',
+        metadata: { kind: 'invariant', topic: 't', regions: ['r'] },
+        body: 'body',
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+    stageIntent(
+      'task.create',
+      { databaseId: 'db-1', title: 'Build the widget', type: '💻 Code' },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
+
+    const synthesis = stageIntent(
+      'task.updateBody',
+      { taskId: TASK_ID, sections: { summary: 'x' } },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+      'Decision summary: locked the widget approach.',
+    );
+
+    expect(synthesis.decisionProposal).toContain(
+      'Decision summary: locked the widget approach.',
+    );
+    expect(synthesis.decisionProposal).toContain('Widget architecture');
+    expect(synthesis.decisionProposal).toContain('Build the widget');
+    expect(
+      (synthesis.payload as { sections: { implementationNotes?: string } })
+        .sections.implementationNotes,
+    ).toContain('Widget architecture');
+    expect(
+      (synthesis.payload as { sections: { implementationNotes?: string } })
+        .sections.implementationNotes,
+    ).toContain('Build the widget');
+  });
+});
+
 // ── sessionOwesGatedDesignArtifacts — the "work owed" signal PlanningOrchestrator
 // consults so an approval that unblocks arch.*/task.updateBody writes does not
 // also terminate the session those writes are owed by ──────────────────────
@@ -410,6 +691,14 @@ describe('sessionOwesGatedDesignArtifacts', () => {
       SESSION_ID,
     );
     expect(sessionOwesGatedDesignArtifacts(SESSION_ID)).toBe(false);
+
+    stageIntent(
+      'task.create',
+      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+    );
 
     stageIntent(
       'task.updateBody',

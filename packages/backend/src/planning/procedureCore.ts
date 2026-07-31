@@ -689,30 +689,32 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     title: 'Closing synthesis — the terminal decisionProposal, not a body diff',
     appliesTo: ['design'],
     text:
-      'DO carry the exact five-part closing synthesis below as the ' +
+      'DO carry the three-part authored synthesis below as the ' +
       '`decisionProposal` of the ' +
       '`task.updateBody` intent: (1) Decision summary — one paragraph on what was ' +
       'decided and why; (2) Open questions resolved — a table, one row per listed ' +
       'Open Question, included only when there are ≥2 questions; (3) Completeness-' +
       'critic dispositions — every gap the pass raised, its disposition, and the ' +
-      'run date, or "none — pass run, no gaps" when clean; (4) Architecture pages ' +
-      'updated — each architecture unit and the section changed in this same pass, ' +
-      'or "none — these decisions change no architecture page" when genuinely ' +
-      'nothing applies; (5) Follow-on Code tasks filed — each staged as a ' +
-      '`task.create` intent in this same pass, with Type and a one-line scope, or ' +
-      '"none — no implementation work beyond the locked decisions" when nothing ' +
-      'further is implied. DO frame the operator’s decision as approving ' +
+      'run date, or "none — pass run, no gaps" when clean. DO NOT author parts 4 ' +
+      '("Architecture pages updated") and 5 ("Follow-on Code tasks filed") — ' +
+      'stagedIntents.ts generates both, at the moment the closing synthesis ' +
+      'stages, from the architecture-unit / `task.create` intents (and any ' +
+      '`planning.noOp` markers) already staged this pass, and appends them to ' +
+      'both `decisionProposal` and the body write’s Implementation-notes content. ' +
+      'The generated text is not this session’s to write — writing it anyway ' +
+      'only duplicates what the stage-time generator already produces from the ' +
+      'same staged set. DO frame the operator’s decision as approving ' +
       'this synthesis — the body write is its consequence, not a separate thing to ' +
       'diff. DO NOT ask the operator to validate the `task.updateBody` payload’s ' +
       'prose as if reviewing a diff; the synthesis is the reviewable artifact, ' +
       'carried in `decisionProposal`, not the body text itself. DO NOT fold the ' +
-      'decision summary straight into the write without the other four parts — all ' +
-      'five sections are required every time, per the skill’s hard checkpoint. DO ' +
-      'NOT report parts 4 or 5 as "pending" or "see next messages" — by the time ' +
-      'the closing synthesis stages, the architecture-unit intents and follow-on ' +
-      '`task.create` intents it reports are already staged (or the "none" ' +
-      'disposition is genuine); the synthesis reports what was done in this pass, ' +
-      'never a promise of what comes next.',
+      'decision summary straight into the write without the other two authored ' +
+      'parts — all three sections are required every time, per the skill’s hard ' +
+      'checkpoint. Staging this `task.updateBody` before every expected terminal ' +
+      'kind is accounted for (an architecture write and a follow-on `task.create`, ' +
+      'each either staged or covered by a `planning.noOp` naming it — see ' +
+      '"design-architecture-and-followon-required" below) is refused at stage ' +
+      'time, naming the unaccounted-for kind.',
   },
   {
     id: 'design-architecture-and-followon-required',
@@ -733,15 +735,21 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'work a locked design implies as `task.create` intents (landing at 🔲 ' +
       'Backlog, typed 💻 Code) in this same pass — this is not limited to the ' +
       "'Split-don't-trim' overflow case below; any locked design that implies code " +
-      'work files that work now. DO state explicitly, for either deliverable, when ' +
-      'the locked decisions genuinely touch no architecture page or spawn no ' +
-      'follow-on task — silence is never an acceptable substitute for that ' +
-      'statement, mirroring the disposition-don’t-drop rule the completeness ' +
-      'critic follows above. DO NOT treat either statement as a numeric gate: there ' +
-      'is no minimum count of architecture units or follow-on tasks, and neither is ' +
-      'wired into a promotion block — this is an advisory-but-required reporting ' +
-      'obligation, the same posture the trace-coverage signal already takes, not a ' +
-      'size or count threshold.',
+      'work files that work now. DO stage a `planning.noOp` naming the skipped ' +
+      'kind (`{taskId, reason, skippedKind: "task.create"}` or ' +
+      '`skippedKind: "architecture"`) when the locked decisions genuinely touch no ' +
+      'architecture page, or spawn no follow-on task — silence is never an ' +
+      'acceptable substitute for that statement, mirroring the disposition-don’t-' +
+      'drop rule the completeness critic follows above. This is enforced, not just ' +
+      'advisory: the closing-synthesis `task.updateBody` is refused at stage time, ' +
+      'naming the unaccounted-for kind, until each of `task.create` and the ' +
+      'architecture-unit writes is satisfied — by ≥1 staged intent of that kind, or ' +
+      'by a `planning.noOp` naming it (one `planning.noOp` per skipped kind, never ' +
+      'one covering both). DO NOT treat this as a numeric gate: there is no minimum ' +
+      'count of architecture units or follow-on tasks, and neither is wired into a ' +
+      'promotion block — gating on the presence of a statement is a different thing ' +
+      'from gating on its content or count, the same posture the trace-coverage ' +
+      'signal already takes.',
   },
   {
     id: 'design-split-dont-trim',
@@ -1065,19 +1073,22 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'on an as-yet-unresolved one, stating the dependency, rather than staging ' +
         'it.\n' +
         '- DO stage `task.updateBody` (the Implementation notes) exactly once, ' +
-        'the last of the decision-recording steps — carrying the five-part ' +
-        'closing synthesis (decision summary, open questions resolved, ' +
-        'completeness-critic dispositions, architecture pages updated, follow-on ' +
-        'Code tasks filed) as its `decisionProposal`, presented for the operator ' +
-        'to approve, never a bare body-write diff to validate. ' +
+        'the last of the decision-recording steps — carrying the three-part ' +
+        'authored synthesis (decision summary, open questions resolved, ' +
+        'completeness-critic dispositions) as its `decisionProposal`, presented ' +
+        'for the operator to approve, never a bare body-write diff to validate. ' +
+        'Parts 4 and 5 (architecture pages updated, follow-on Code tasks filed) ' +
+        'are generated at stage time from the staged terminal set — do not author ' +
+        'them. ' +
         DESIGN_TERMINAL_ARTIFACTS_ORDERING +
         '\n' +
         '- DO stage the architecture-unit change(s) each locked decision implies, ' +
-        'or an explicit "none" statement when genuinely no page applies, and the ' +
-        'follow-on `task.create` intents a locked design implies, or an explicit ' +
-        '"none" statement when nothing further is implied — both in this same ' +
-        'pass, reported in the closing synthesis, never left for the operator to ' +
-        'request afterward.\n' +
+        'or a `planning.noOp` naming `skippedKind: "architecture"` when genuinely ' +
+        'no page applies, and the follow-on `task.create` intents a locked design ' +
+        'implies, or a `planning.noOp` naming `skippedKind: "task.create"` when ' +
+        'nothing further is implied — both in this same pass, generated into the ' +
+        'closing synthesis, never left for the operator to request afterward. The ' +
+        'closing synthesis is refused at stage time until each is accounted for.\n' +
         '- DO NOT end the turn on a chat write-up, findings recap, or "here is ' +
         'what I think" summary — none of those is a valid stopping point. Staging ' +
         'the Implementation-notes write is not the end of the session either: it ' +
@@ -1215,9 +1226,11 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         '`task.create` intents (landing at 🔲 Backlog, typed 💻 Code) in the same ' +
         "pass, not only in the '🔲 Backlog' split-overflow case. Do this for every " +
         'Design task, not just one that overflows into a sibling: when the locked ' +
-        'decisions imply no implementation work beyond themselves, state that ' +
-        'explicitly ("none — no implementation work beyond the locked decisions") ' +
-        'rather than leaving the deliverable unaddressed. The operator disposes ' +
+        'decisions imply no implementation work beyond themselves, stage a ' +
+        '`planning.noOp` naming `skippedKind: "task.create"` rather than leaving ' +
+        'the deliverable unaddressed — the closing synthesis is refused at stage ' +
+        'time until this is staged or the follow-on task itself is. The operator ' +
+        'disposes ' +
         'each staged task like any other intent; never treat handing a task spec ' +
         'back in chat as an acceptable substitute for staging it. ' +
         DESIGN_TERMINAL_ARTIFACTS_ORDERING,
@@ -1278,13 +1291,15 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'A dispatched design session never applies a write itself — it only ' +
         'stages. DO stage `task.updateBody` (the Implementation notes) exactly ' +
         'once, the last of the decision-recording steps — carrying the ' +
-        'five-part closing synthesis as its `decisionProposal` (see "Closing ' +
-        'synthesis" below). The operator is approving that synthesis, not ' +
+        'three-part authored synthesis as its `decisionProposal` (see "Closing ' +
+        'synthesis" below); parts 4 and 5 are generated at stage time, not ' +
+        'authored. The operator is approving that synthesis, not ' +
         'diffing the body write — presenting IS staging, so the synthesis rides ' +
         'on the same intent the body write does, rather than a separate ' +
         "validation step. This write is not the pass's terminal action: the " +
         'architecture-unit updates and follow-on `task.create` intents the ' +
-        'locked decisions imply (or an explicit "none" for either) are staged in ' +
+        'locked decisions imply (or a `planning.noOp` naming the skipped kind, ' +
+        'for either) are staged in ' +
         'this same pass and reported in that synthesis. ' +
         DESIGN_TERMINAL_ARTIFACTS_ORDERING +
         ' DO NOT drive any of ' +

@@ -623,6 +623,13 @@ function CompletenessDispositionHeadline({ intent }: { intent: StagedIntent }) {
 interface NoOpPayload {
   taskId: string;
   reason: string;
+  /**
+   * The staged-intent kind this pass produced nothing of — present only for
+   * the "skipped deliverable" variant (see the backend's NoOpPayload doc
+   * comment). Absent = the whole-turn no-op this component originally
+   * rendered, unchanged.
+   */
+  skippedKind?: string;
 }
 
 /**
@@ -631,9 +638,27 @@ interface NoOpPayload {
  * informational/auditable — no operator disposition is required or offered
  * for this kind (see the panel's isNoOp guard below), so the operator's only
  * action is reading the reason.
+ *
+ * Branches on `skippedKind`: a whole-turn no-op renders the original
+ * headline; a skipped-deliverable marker (this pass produced other
+ * artifacts, just none of this one kind) renders as a single, visually
+ * distinct line naming the skipped kind and its reason — it would read as
+ * flatly wrong sitting beside real artifacts if rendered with the
+ * whole-turn-emptiness copy above.
  */
 function NoOpHeadline({ intent }: { intent: StagedIntent }) {
   const payload = intent.payload as NoOpPayload;
+  if (payload.skippedKind) {
+    return (
+      <p
+        className={styles.skippedKindLine}
+        data-testid="staged-intent-no-op-skipped-kind"
+      >
+        <span className={styles.skippedKindLabel}>Skipped</span>
+        <strong>{payload.skippedKind}</strong> — {payload.reason}
+      </p>
+    );
+  }
   return (
     <div className={styles.text} data-testid="staged-intent-no-op">
       <p>
