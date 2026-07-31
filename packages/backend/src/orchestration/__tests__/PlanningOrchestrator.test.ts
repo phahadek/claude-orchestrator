@@ -20,6 +20,7 @@ vi.mock('../../db/queries', () =>
 
 vi.mock('../../routes/stagedIntents', () => ({
   verifyDispatchedGroupsForSession: vi.fn().mockResolvedValue([]),
+  sessionOwesGatedDesignArtifacts: vi.fn().mockReturnValue(false),
 }));
 
 import {
@@ -31,7 +32,10 @@ import {
   clearPendingApproveTerminal,
   getSessionsWithPendingApproveTerminal,
 } from '../../db/queries';
-import { verifyDispatchedGroupsForSession } from '../../routes/stagedIntents';
+import {
+  verifyDispatchedGroupsForSession,
+  sessionOwesGatedDesignArtifacts,
+} from '../../routes/stagedIntents';
 import { PlanningOrchestrator } from '../PlanningOrchestrator';
 import type { StagedIntentRow } from '../../db/types';
 
@@ -98,6 +102,7 @@ beforeEach(() => {
   vi.mocked(listStagedIntentsByGroup).mockReturnValue([]);
   vi.mocked(verifyDispatchedGroupsForSession).mockResolvedValue([]);
   vi.mocked(getSessionsWithPendingApproveTerminal).mockReturnValue([]);
+  vi.mocked(sessionOwesGatedDesignArtifacts).mockReturnValue(false);
 });
 
 // ── handleDisposition — resumes the correct originating session ────────────
@@ -444,6 +449,49 @@ describe('PlanningOrchestrator.handleDisposition', () => {
 
     expect(sm.enqueueFeedback).not.toHaveBeenCalled();
   });
+
+  it('an approve that completes the mandate but still owes gated design artifacts (completeness.disposition approved, no arch.*/task.updateBody staged yet) resumes the session instead of terminating it', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    vi.mocked(sessionOwesGatedDesignArtifacts).mockReturnValue(true);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      kind: 'completeness.disposition',
+      session_id: 'planning-session-1',
+      state: 'committed',
+    });
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'operator-disposition',
+      expect.stringContaining('arch.createUnit'),
+    );
+    expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sm.endSession).not.toHaveBeenCalled();
+  });
+
+  it('an approve that completes the mandate and owes nothing further (sessionOwesGatedDesignArtifacts false, the default for non-design/groom sessions) still terminates exactly as before', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({ session_id: 'planning-session-1' });
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+
+    expect(sm.enqueueFeedback).not.toHaveBeenCalled();
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'planning-session-1',
+      expect.any(Number),
+      null,
+      expect.any(String),
+      { skipInFlightGuard: true },
+    );
+    expect(sm.endSession).toHaveBeenCalledWith('planning-session-1');
+  });
 });
 
 // ── handleGroupDisposition — coalesces a group reject into one message ──────
@@ -611,6 +659,22 @@ describe('PlanningOrchestrator terminal detection', () => {
 
     vi.mocked(listStagedIntentsBySession).mockReturnValue([
       makeIntent({ state: 'staged' }),
+    ]);
+
+    const terminal = orch.checkTerminal('planning-session-1');
+
+    expect(terminal).toBe(false);
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('is not terminal when no un-dispositioned intents remain and the turn staged nothing new, but the session still owes gated design artifacts', () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(sessionOwesGatedDesignArtifacts).mockReturnValue(true);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ kind: 'completeness.disposition', state: 'committed' }),
     ]);
 
     const terminal = orch.checkTerminal('planning-session-1');

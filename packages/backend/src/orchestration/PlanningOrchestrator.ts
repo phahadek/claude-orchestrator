@@ -18,7 +18,10 @@ import type {
 import { isPlanningSession } from '../session/sessionPredicates';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage } from '../ws/types';
-import { verifyDispatchedGroupsForSession } from '../routes/stagedIntents';
+import {
+  verifyDispatchedGroupsForSession,
+  sessionOwesGatedDesignArtifacts,
+} from '../routes/stagedIntents';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { emitTaskUpdated } from '../routes/tasks';
 import { NO_OP_INTENT_KIND, hasStagedDecision } from './planningDecisionKinds';
@@ -235,7 +238,14 @@ export class PlanningOrchestrator {
     const stillPending = countable.some((i) => i.state === 'staged');
     const priorCount = this.stagedCountAtResume.get(sessionId) ?? 0;
     const stagedNothingNew = countable.length <= priorCount;
-    const reachedTerminal = !stillPending && stagedNothingNew;
+    // A session whose completeness.disposition was just approved still owes
+    // its gated architecture-unit / closing-synthesis write even though
+    // nothing is left `staged` — that approval is a precondition for further
+    // staging, not the end of the session's mandate. See
+    // sessionOwesGatedDesignArtifacts.
+    const owesGatedArtifacts = sessionOwesGatedDesignArtifacts(sessionId);
+    const reachedTerminal =
+      !stillPending && stagedNothingNew && !owesGatedArtifacts;
 
     if (!reachedTerminal) {
       this.stagedCountAtResume.set(sessionId, countable.length);
@@ -483,6 +493,15 @@ export class PlanningOrchestrator {
    * nothing new, which is a different question from "does this approval
    * itself warrant a resume" (it never does).
    *
+   * The one exception: an approved completeness.disposition for a design
+   * session that still owes its gated architecture-unit / closing-synthesis
+   * write (sessionOwesGatedDesignArtifacts) DOES carry information the
+   * session must act on — the approval is the precondition that unblocks
+   * those writes (see assertCompletenessApproval in routes/stagedIntents.ts).
+   * Going terminal here would foreclose the very turn that was waiting on
+   * this approval, so this case resumes the session instead of marking it
+   * terminal, exactly like a pushback/decline/answer disposition.
+   *
    * A concurrent path (e.g. a capability-grant resume) can have the
    * session's turn genuinely in flight (AgentSession.hasActiveTurn()) by the
    * time this settles — the mandate having completed does not mean the
@@ -493,6 +512,9 @@ export class PlanningOrchestrator {
    * — that is the normal resting state for a dispatched planning session
    * parked alive between turns, not a turn-in-flight signal, so it would
    * defer almost every approval rather than only the rare mid-turn one.
+   * (The gated-artifacts resume path above needs no equivalent defer: it
+   * goes through enqueueFeedback, which already queues behind an in-flight
+   * turn and delivers at the next boundary — see SessionManager.enqueueFeedback.)
    */
   private async handleApproveDisposition(
     sessionId: string,
@@ -504,6 +526,25 @@ export class PlanningOrchestrator {
       (i) => i.state === 'staged',
     );
     if (stillPending) return;
+
+    if (sessionOwesGatedDesignArtifacts(sessionId)) {
+      this.stagedCountAtResume.set(
+        sessionId,
+        listStagedIntentsBySession(sessionId).length,
+      );
+      try {
+        await this.sessionManager.enqueueFeedback(
+          sessionId,
+          'operator-disposition',
+          formatGatedArtifactsUnblockedMessage(intent),
+        );
+      } catch (err) {
+        logger.error(
+          `[PlanningOrchestrator] resume failed for session ${sessionId.slice(0, 8)} after gating approval: ${err}`,
+        );
+      }
+      return;
+    }
 
     const liveSession = this.sessionManager.getLiveSession(sessionId);
     if (liveSession?.hasActiveTurn()) {
@@ -619,6 +660,15 @@ function formatGroupDispositionMessage(
   return (
     `Staged intent group ${groupId} (${intents.length} intent${intents.length === 1 ? '' : 's'}: ${list}) ` +
     `was ${verb}. ${label}: ${reason ?? ''}`
+  );
+}
+
+function formatGatedArtifactsUnblockedMessage(intent: StagedIntentRow): string {
+  return (
+    `Staged intent ${intent.id} (${intent.kind}) was approved. This unblocks ` +
+    "this task's gated architecture-unit write (arch.createUnit / " +
+    'arch.updateUnit / arch.supersedeUnit) and the closing-synthesis ' +
+    'task.updateBody — stage them now.'
   );
 }
 

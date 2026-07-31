@@ -1481,6 +1481,54 @@ function assertCompletenessApproval(
   }
 }
 
+/**
+ * The two terminal-artifact kinds a design session's completeness approval
+ * unblocks — deliberately excludes `task.create` from COMPLETENESS_GATED_KINDS:
+ * a follow-on task set can already exist before the disposition that gates it
+ * (see COMPLETENESS_GATED_KINDS's own doc comment on the …3012260f ordering
+ * hole), so its presence or absence is not a reliable "still owed" signal the
+ * way an architecture write or the closing-synthesis body update is.
+ */
+const DESIGN_OWED_ARTIFACT_KINDS: ReadonlySet<string> = new Set([
+  'arch.createUnit',
+  'arch.updateUnit',
+  'arch.supersedeUnit',
+  'task.updateBody',
+]);
+
+/**
+ * True when a design session has an operator-approved completeness.disposition
+ * for its own bound task but has not yet staged either of the artifact kinds
+ * that approval exists to unblock (an architecture-unit write, or the
+ * closing-synthesis `task.updateBody`) — i.e. the session still owes work an
+ * approval-driven terminal transition must not foreclose. See
+ * PlanningOrchestrator.handleApproveDisposition and .checkTerminal, which
+ * both consult this before marking a session terminal on an approval: a
+ * session refused a gated write (assertCompletenessApproval, above) leaves no
+ * other trace that it still owes one, so this is that signal, derived fresh
+ * from the session's own staged-intent history rather than tracked
+ * separately.
+ */
+export function sessionOwesGatedDesignArtifacts(sessionId: string): boolean {
+  const session = getSession(sessionId);
+  if (!session?.task_id || session.session_type !== 'design') return false;
+  const taskId = normalizeTaskId(session.task_id);
+  const intents = listStagedIntentsBySession(sessionId);
+
+  const approved = intents.some((row) => {
+    if (row.kind !== 'completeness.disposition' || row.state !== 'committed') {
+      return false;
+    }
+    const payload = JSON.parse(
+      row.payload,
+    ) as CompletenessDispositionIntentPayload;
+    return normalizeTaskId(payload.taskId) === taskId;
+  });
+  if (!approved) return false;
+
+  return !intents.some((row) => DESIGN_OWED_ARTIFACT_KINDS.has(row.kind));
+}
+
 export function stageIntent(
   kind: string,
   payload: unknown,
