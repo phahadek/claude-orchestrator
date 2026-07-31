@@ -44,17 +44,13 @@ function useResolvedSession(
     id: string;
     session: SessionState;
   } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [notFound, setNotFound] = useState(false);
+  const [notFound, setNotFound] = useState<{ id: string } | null>(null);
 
   useEffect(() => {
-    setNotFound(false);
     if (!sessionId || liveSession) {
-      setLoading(false);
       return;
     }
     let cancelled = false;
-    setLoading(true);
     sessionsApi
       .getById(sessionId)
       .then(({ session, events }) => {
@@ -79,11 +75,7 @@ function useResolvedSession(
       })
       .catch(() => {
         if (cancelled) return;
-        setNotFound(true);
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setLoading(false);
+        setNotFound({ id: sessionId });
       });
     return () => {
       cancelled = true;
@@ -95,7 +87,13 @@ function useResolvedSession(
   if (fetched && fetched.id === sessionId) {
     return { session: fetched.session, loading: false, notFound: false };
   }
-  return { session: null, loading, notFound };
+  if (sessionId && notFound && notFound.id === sessionId) {
+    return { session: null, loading: false, notFound: true };
+  }
+  // No live/fetched/not-found match yet for this sessionId — the by-id
+  // fallback fetch above is in flight (or about to start on next effect
+  // pass). Treat as loading so this render never falls through empty.
+  return { session: null, loading: !!sessionId, notFound: false };
 }
 
 /**

@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { MilestoneDrilldown } from '../MilestoneDrilldown';
 import { stagedIntentsApi } from '../../api/stagedIntents';
+import { sessionsApi } from '../../api/projects';
 import type { StagedIntent } from '../../api/stagedIntents';
 import type { TaskView } from '../../types/taskView';
 
@@ -310,5 +311,81 @@ describe('MilestoneDrilldown', () => {
       screen.getByTestId('milestone-drilldown-unresolved').textContent,
     ).toContain("doesn't reference an existing task yet");
     expect(screen.getByText('No associated session.')).toBeTruthy();
+  });
+
+  it('shows a loading indication, never a blank pane, for a session absent from the live store', async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+    // Fallback fetch never resolves within this test — proves the very
+    // first render (before the resolution effect runs) is non-blank.
+    vi.spyOn(sessionsApi, 'getById').mockReturnValue(new Promise(() => {}));
+    const task = makeTask({
+      taskId: 'task-1',
+      codeSession: {
+        sessionId: 'sess-missing',
+        status: 'running',
+        startedAt: 1,
+        endedAt: null,
+        lastMessage: '',
+        inputTokens: 0,
+        outputTokens: 0,
+      },
+    });
+
+    render(
+      <MilestoneDrilldown
+        selection={{ type: 'task', task }}
+        tasks={[task]}
+        projectId="proj-1"
+        sessions={[]}
+        send={noop}
+        setSessionArchived={noop}
+        setSessionFavorited={noop}
+      />,
+    );
+
+    const embed = screen.getByTestId('milestone-session-embed');
+    expect(embed.textContent).toContain('Loading session…');
+    expect(embed.textContent?.trim().length).toBeGreaterThan(0);
+  });
+
+  it("renders an archived session's panel when it is still present in the live store", async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+    const task = makeTask({
+      taskId: 'task-1',
+      codeSession: {
+        sessionId: 'sess-archived',
+        status: 'done',
+        startedAt: 1,
+        endedAt: 2,
+        lastMessage: '',
+        inputTokens: 0,
+        outputTokens: 0,
+      },
+    });
+
+    render(
+      <MilestoneDrilldown
+        selection={{ type: 'task', task }}
+        tasks={[task]}
+        projectId="proj-1"
+        sessions={[
+          {
+            sessionId: 'sess-archived',
+            taskName: 'Do the thing',
+            notionTaskUrl: '',
+            status: 'done',
+            events: [],
+            archived: true,
+          },
+        ]}
+        send={noop}
+        setSessionArchived={noop}
+        setSessionFavorited={noop}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText('No events yet.')).toBeTruthy());
+    const embed = screen.getByTestId('milestone-session-embed');
+    expect(embed.textContent).not.toContain('Transcript not available');
   });
 });
