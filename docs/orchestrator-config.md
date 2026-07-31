@@ -25,7 +25,10 @@ verify:
 ci_check_name:
   - build
 
-# Extra Bash tool permission patterns merged with the base allowed-tools set.
+# Extra claude CLI tool-permission patterns merged with the base allowed-tools
+# set and passed straight through to `claude --allowed-tools`. Any pattern the
+# CLI itself understands is valid here, not just `Bash(...)` — e.g.
+# `WebFetch(domain:example.com)` to scope network fetches to one host.
 allowed_tools: []
 
 # Bash rules (Rule 5+). Each item is the full rule text.
@@ -55,13 +58,38 @@ bootstrap_script: ''
 | `autofix`          | `string[]` | `[]`    | Commands run by the orchestrator before the PR is opened. Failures are logged but do not block.                          |
 | `verify`           | `string[]` | `[]`    | Commands injected into the CLAUDE.md Pre-PR Gate section. The session is instructed to run these before opening a PR.    |
 | `ci_check_name`    | `string[]` | `[]`    | GitHub check-run names the orchestrator treats as authoritative. Empty = all checks count.                               |
-| `allowed_tools`    | `string[]` | `[]`    | Extra Bash tool permission patterns (e.g. `Bash(dotnet:*)`) added on top of the base set.                                |
+| `allowed_tools`    | `string[]` | `[]`    | Extra `claude` CLI tool-permission patterns (e.g. `Bash(dotnet:*)`, `WebFetch(domain:example.com)`) added on top of the base set. Accepts any pattern shape the CLI understands, not just `Bash(...)`. |
 | `bash_rules`       | `string[]` | `[]`    | Replacement Bash rules (Rule 5+) injected into CLAUDE.md. Each string's first line is the heading.                       |
 | `session_rules`    | `string[]` | `[]`    | Per-project coding-session guidance, rendered as a "## Project Rules" section (distinct from `bash_rules`).              |
 | `review_rules`     | `string[]` | `[]`    | Per-project review-session enforcement criteria, rendered into the review-session prompt. Can drive `escalate` verdicts. |
 | `bootstrap_script` | `string`   | `""`    | Relative path to a script executed after worktree creation. Receives the worktree path as `$1`.                          |
 
 All fields are optional. Missing fields fall back to their defaults — a partial config is valid.
+
+## How `allowed_tools` is enforced
+
+Every orchestrator-spawned session runs the `claude` CLI with `--print`, passing
+the merged base + `allowed_tools` set via `--allowed-tools`. Print mode has no
+mid-session permission-approval protocol: there is no interactive prompt to
+approve or deny a tool call as it happens. Instead, the CLI enforces the
+`--allowed-tools` patterns internally for the entire run — a call that doesn't
+match an allowed pattern (e.g. a `WebFetch` to a domain not covered by a
+`WebFetch(domain:...)` entry) is blocked outright by the CLI, not merely
+discouraged. This makes `allowed_tools` a real boundary, not an advisory one.
+
+Because there's no round-trip, denials aren't visible as they happen — they
+surface only after the fact via `permission_denials` telemetry on the session
+record. If a session's task requires fetching from a host, that host must be
+allowlisted up front via `allowed_tools`; there's no opportunity to approve it
+mid-session.
+
+This is a CLI-level, per-tool-call control and is distinct from the network-level
+egress allowlist enforced by the Docker-mode Squid proxy (see
+[`docs/docker-mode/operator-setup.md`](./docker-mode/operator-setup.md)). The
+Squid proxy allowlists destination hosts for *all* outbound traffic from the
+session container regardless of which tool made the request, and only runs
+under `ORCHESTRATOR_MODE=corporate` / `dockerMandatory` — it is off by default
+in personal mode, where `allowed_tools` is the only enforced boundary.
 
 ## Loader behaviour
 
