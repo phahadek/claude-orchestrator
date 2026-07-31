@@ -109,7 +109,9 @@ export function createConvergenceRouter(
       try {
         const row = resolveMilestoneRowForProject(project, milestone);
         const key = canonicalMilestoneKey(row);
-        res.json(computeMilestoneAttentionSignals(project, key, sessionManager));
+        res.json(
+          computeMilestoneAttentionSignals(project, key, sessionManager),
+        );
       } catch (err) {
         if (err instanceof UnknownMilestoneError) {
           res.status(400).json({ error: err.message });
