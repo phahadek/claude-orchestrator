@@ -3310,18 +3310,30 @@ async function commitGroupIntents(
   // check the group would commit over the remaining members and strand the
   // blocked one behind, exactly the partial-commit bug this guards against.
   // Hold the whole group rather than dropping the blocked member from it.
-  const blockedMember = allMembers.find(
+  const blockedMembers = allMembers.filter(
     (r) => r.state === 'needs_revision' || r.state === 'pending_verification',
   );
-  if (blockedMember) {
+  if (blockedMembers.length > 0) {
+    const [blockedMember] = blockedMembers;
+    const otherIds = blockedMembers
+      .slice(1)
+      .map((r) => r.id)
+      .join(', ');
     return {
       status: 409,
       body: {
         error:
           `group "${groupId}" has a blocked member ("${blockedMember.id}", ` +
           `state "${blockedMember.state}") — it must be recovered or ` +
-          'resolved before this group can commit',
+          'resolved before this group can commit' +
+          (otherIds ? ` (also blocked: ${otherIds})` : ''),
         blockingId: blockedMember.id,
+        blockedMembers: blockedMembers.map((r) => ({
+          id: r.id,
+          kind: r.kind,
+          state: r.state,
+          reason: r.disposition_reason,
+        })),
       },
     };
   }
