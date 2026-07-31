@@ -1555,9 +1555,7 @@ export function GateReadinessPanel({
                               key={outcome}
                               type="button"
                               onClick={() => blockSeedItemHandler(item)}
-                              disabled={seedDispositionMutatingIds.has(
-                                item.id,
-                              )}
+                              disabled={seedDispositionMutatingIds.has(item.id)}
                               data-testid={`seed-item-blocked-${item.id}`}
                             >
                               Blocked
@@ -1569,9 +1567,7 @@ export function GateReadinessPanel({
                               onClick={() =>
                                 recordSeedDisposition(item.id, outcome)
                               }
-                              disabled={seedDispositionMutatingIds.has(
-                                item.id,
-                              )}
+                              disabled={seedDispositionMutatingIds.has(item.id)}
                               data-testid={`seed-item-${outcome}-${item.id}`}
                             >
                               {outcome === 'applied' ? 'Applied' : 'Confirmed'}
