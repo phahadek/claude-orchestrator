@@ -20,6 +20,7 @@ import { db } from '../../db/db.js';
 import {
   DeployOrchestrator,
   buildDeployStepEnv,
+  buildShellInvocation,
   spawnShell,
   RESTART_STEP_ID,
   type DeployOrchestratorDeps,
@@ -836,6 +837,200 @@ describe('DeployOrchestrator: companion-diff flags', () => {
     expect(info.companions.map((c: { name: string }) => c.name)).toEqual([
       'worker',
     ]);
+  });
+});
+
+describe('DeployOrchestrator + real spawnShell: host-binding substitution', () => {
+  it('fails a shell step that references an undefined binding rather than expanding to empty (bash -uc nounset)', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'use-binding',
+        kind: 'shell',
+        command_or_prompt: 'echo "${UNDEFINED_BINDING}"',
+      }),
+    ]);
+    const loadResult: LoadPlaybookResult = { ok: true, playbook };
+    const orchestrator = new DeployOrchestrator('proj', process.cwd(), {
+      loadPlaybook: () => loadResult,
+      loadDeployBindings: () => ({ ok: true, bindings: {} }),
+      spawnAgenticStep: vi.fn(),
+      waitForConfirmGate: vi.fn(async () => true),
+      getDiffPaths: vi.fn(async () => []),
+      now,
+      pollDelayMs: 0,
+    });
+
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+  });
+
+  it('makes a declared binding available to a shell step via env expansion', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'use-binding',
+        kind: 'shell',
+        command_or_prompt: 'test "$MY_BINDING" = "hello"',
+      }),
+    ]);
+    const loadResult: LoadPlaybookResult = { ok: true, playbook };
+    const orchestrator = new DeployOrchestrator('proj', process.cwd(), {
+      loadPlaybook: () => loadResult,
+      loadDeployBindings: () => ({ ok: true, bindings: { MY_BINDING: 'hello' } }),
+      spawnAgenticStep: vi.fn(),
+      waitForConfirmGate: vi.fn(async () => true),
+      getDiffPaths: vi.fn(async () => []),
+      now,
+      pollDelayMs: 0,
+    });
+
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+  });
+});
+
+describe('buildShellInvocation: run_as binding threading', () => {
+  it('threads bindings through as NAME=value argv tokens ahead of bash -uc, since sudo resets the environment', () => {
+    const { cmd, args } = buildShellInvocation('echo "$MY_BINDING"', {
+      runAs: 'deploy',
+      bindings: { MY_BINDING: 'hello', OTHER: 'x' },
+    });
+    expect(cmd).toBe('sudo');
+    expect(args).toEqual([
+      '-u',
+      'deploy',
+      'NODE_ENV=development',
+      'MY_BINDING=hello',
+      'OTHER=x',
+      'bash',
+      '-uc',
+      'echo "$MY_BINDING"',
+    ]);
+  });
+
+  it('omits sudo entirely (and any binding tokens) when no run_as is given', () => {
+    const { cmd, args } = buildShellInvocation('echo hi', {
+      bindings: { MY_BINDING: 'hello' },
+    });
+    expect(cmd).toBe('bash');
+    expect(args).toEqual(['-uc', 'echo hi']);
+  });
+});
+
+describe('DeployOrchestrator: binding substitution for confirm-gate/agentic step text', () => {
+  it('resolves a binding reference in a confirm-gate step before handing it to waitForConfirmGate', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'confirm',
+        kind: 'confirm-gate',
+        command_or_prompt: 'restart ${SERVICE_NAME}?',
+      }),
+    ]);
+    let seenText: string | undefined;
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: { SERVICE_NAME: 'orchestrator' },
+      }),
+      waitForConfirmGate: vi.fn(async ({ step: s }) => {
+        seenText = s.command_or_prompt;
+        return true;
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(seenText).toBe('restart orchestrator?');
+  });
+
+  it('fails closed without waiting for a disposition when a confirm-gate step references an undefined binding', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'confirm',
+        kind: 'confirm-gate',
+        command_or_prompt: 'restart ${UNDEFINED}?',
+      }),
+    ]);
+    const waitForConfirmGate = vi.fn(async () => true);
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: () => ({ ok: true, bindings: {} }),
+      waitForConfirmGate,
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(waitForConfirmGate).not.toHaveBeenCalled();
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+  });
+
+  it('resolves a binding reference in an agentic step prompt before spawning it', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'check',
+        kind: 'agentic',
+        command_or_prompt: 'inspect ${TARGET}',
+      }),
+    ]);
+    let seenPrompt: string | undefined;
+    let orchestrator: DeployOrchestrator;
+    const spawnAgenticStep = vi.fn(({ runId, step: s }) => {
+      seenPrompt = s.command_or_prompt;
+      orchestrator.reportAgenticVerdict(runId, s.id, 'approved');
+    });
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: () => ({ ok: true, bindings: { TARGET: 'db' } }),
+      spawnAgenticStep,
+    });
+    orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(seenPrompt).toBe('inspect db');
+  });
+
+  it('fails closed and never spawns the agentic step when its prompt references an undefined binding', async () => {
+    const playbook = playbookWith([
+      step({
+        id: 'check',
+        kind: 'agentic',
+        command_or_prompt: 'inspect ${UNDEFINED}',
+      }),
+    ]);
+    const spawnAgenticStep = vi.fn();
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: () => ({ ok: true, bindings: {} }),
+      spawnAgenticStep,
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(spawnAgenticStep).not.toHaveBeenCalled();
+    expect(getDeployRun(run.run_id)?.status).toBe('failed');
+  });
+});
+
+describe('DeployOrchestrator: bindings loaded once per run', () => {
+  it('loads bindings once per drive() call, not re-read between steps', async () => {
+    const playbook = playbookWith([
+      step({ id: 'one', kind: 'shell' }),
+      step({ id: 'two', kind: 'shell' }),
+      step({ id: 'three', kind: 'shell' }),
+    ]);
+    const loadDeployBindingsMock = vi.fn(() => ({ ok: true, bindings: {} }));
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: loadDeployBindingsMock,
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(loadDeployBindingsMock).toHaveBeenCalledTimes(1);
   });
 });
 

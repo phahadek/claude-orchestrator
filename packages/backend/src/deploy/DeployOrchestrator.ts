@@ -1,6 +1,11 @@
 import { spawn } from 'child_process';
 import { logger } from '../logger';
 import { loadDeployPlaybook, LoadPlaybookResult } from './loadPlaybook';
+import {
+  loadDeployBindings,
+  LoadDeployBindingsResult,
+} from './loadDeployBindings';
+import { DeployBindings, substituteBindings } from './deployBindingsSchema';
 import { matchesPathDiff } from './pathDiffPredicate';
 import type {
   DeployPlaybook,
@@ -53,7 +58,7 @@ export interface ShellResult {
 /** Runs a step's shell command (kind `shell`/`validation`), optionally as another user. */
 export type ShellRunner = (
   command: string,
-  opts: { runAs?: string; cwd: string },
+  opts: { runAs?: string; cwd: string; bindings?: DeployBindings },
 ) => Promise<ShellResult>;
 
 /** Spawns the validation/investigation session for an `agentic` step. Fire-and-forget — the
@@ -104,6 +109,7 @@ interface DeployOrchestratorSink {
 
 export interface DeployOrchestratorDeps {
   loadPlaybook?: (projectDir: string) => LoadPlaybookResult;
+  loadDeployBindings?: (projectDir: string) => LoadDeployBindingsResult;
   runShell?: ShellRunner;
   spawnAgenticStep: AgenticStepSpawner;
   waitForConfirmGate: ConfirmGateWaiter;
@@ -123,26 +129,61 @@ interface StepOutcome {
 }
 
 /** Deploy steps build artifacts; they must not inherit the host service's
- *  NODE_ENV=production, which makes npm omit devDependencies (vite etc.). */
+ *  NODE_ENV=production, which makes npm omit devDependencies (vite etc.).
+ *  Host bindings are merged in last so a project can't clobber NODE_ENV. */
 export function buildDeployStepEnv(
   base: NodeJS.ProcessEnv = process.env,
+  bindings: DeployBindings = {},
 ): NodeJS.ProcessEnv {
-  return { ...base, NODE_ENV: 'development' };
+  return { ...base, NODE_ENV: 'development', ...bindings };
+}
+
+/**
+ * Builds the argv for a step's shell invocation. Always `bash -uc`
+ * (nounset), so a step referencing an undefined binding aborts rather than
+ * silently expanding to empty. `sudo` resets the environment by default, so
+ * a `run_as` step threads each binding through as an explicit `NAME=value`
+ * argv token (mirroring the existing `NODE_ENV=development` handling)
+ * rather than relying on env inheritance into the sudo-invoked shell.
+ */
+export function buildShellInvocation(
+  command: string,
+  opts: { runAs?: string; bindings?: DeployBindings },
+): { cmd: string; args: string[] } {
+  const bindingTokens = Object.entries(opts.bindings ?? {}).map(
+    ([name, value]) => `${name}=${value}`,
+  );
+  if (!opts.runAs) {
+    return { cmd: 'bash', args: ['-uc', command] };
+  }
+  return {
+    cmd: 'sudo',
+    args: [
+      '-u',
+      opts.runAs,
+      'NODE_ENV=development',
+      ...bindingTokens,
+      'bash',
+      '-uc',
+      command,
+    ],
+  };
 }
 
 /** The default `ShellRunner` used when no `runShell` dep is injected. */
 export function spawnShell(
   command: string,
-  opts: { cwd: string; runAs?: string },
+  opts: { cwd: string; runAs?: string; bindings?: DeployBindings },
 ): Promise<ShellResult> {
   return new Promise((resolve) => {
-    const [cmd, args] = opts.runAs
-      ? [
-          'sudo',
-          ['-u', opts.runAs, 'NODE_ENV=development', 'bash', '-lc', command],
-        ]
-      : ['bash', ['-lc', command]];
-    const proc = spawn(cmd, args, { cwd: opts.cwd, env: buildDeployStepEnv() });
+    const { cmd, args } = buildShellInvocation(command, {
+      runAs: opts.runAs,
+      bindings: opts.bindings,
+    });
+    const proc = spawn(cmd, args, {
+      cwd: opts.cwd,
+      env: buildDeployStepEnv(process.env, opts.bindings),
+    });
     let out = '';
     proc.stdout?.on('data', (d: Buffer) => {
       out += d.toString();
@@ -188,6 +229,22 @@ function describeFailure(
     )
     .join(' | ');
   return `${base} — no diagnosis matched step "${step.id}"; declared diagnoses: ${all}`;
+}
+
+/**
+ * Substitutes `${NAME}`/`$NAME` binding references into a `confirm-gate`/
+ * `agentic` step's `command_or_prompt` before it's surfaced — these two
+ * kinds are never shell-executed, so they don't get bash's own expansion
+ * for free the way `shell`/`validation` do at the spawn boundary.
+ */
+function substituteStepText(
+  step: StepDescriptor,
+  bindings: DeployBindings,
+): { ok: true; step: StepDescriptor } | { ok: false; reason: string } {
+  if (step.command_or_prompt === undefined) return { ok: true, step };
+  const result = substituteBindings(step.command_or_prompt, bindings);
+  if (!result.ok) return { ok: false, reason: result.reason };
+  return { ok: true, step: { ...step, command_or_prompt: result.value } };
 }
 
 function gitDiffNameOnly(input: {
@@ -265,6 +322,9 @@ async function resolveDeployTarget(projectDir: string): Promise<string> {
  */
 export class DeployOrchestrator {
   private readonly loadPlaybook: (projectDir: string) => LoadPlaybookResult;
+  private readonly loadBindings: (
+    projectDir: string,
+  ) => LoadDeployBindingsResult;
   private readonly runShell: ShellRunner;
   private readonly getDiffPaths: DiffProvider;
   private readonly resolveDeployTarget: DeployTargetResolver;
@@ -282,10 +342,15 @@ export class DeployOrchestrator {
     private readonly deps: DeployOrchestratorDeps,
   ) {
     this.loadPlaybook = deps.loadPlaybook ?? loadDeployPlaybook;
+    this.loadBindings = deps.loadDeployBindings ?? loadDeployBindings;
     this.runShell =
       deps.runShell ??
       ((command, opts) =>
-        spawnShell(command, { cwd: opts.cwd, runAs: opts.runAs }));
+        spawnShell(command, {
+          cwd: opts.cwd,
+          runAs: opts.runAs,
+          bindings: opts.bindings,
+        }));
     this.getDiffPaths =
       deps.getDiffPaths ??
       ((input) =>
@@ -313,6 +378,10 @@ export class DeployOrchestrator {
     if (!loaded.ok) {
       throw new Error(`cannot start deploy: ${loaded.reason}`);
     }
+    const loadedBindings = this.loadBindings(this.projectDir);
+    if (!loadedBindings.ok) {
+      throw new Error(`cannot start deploy: ${loadedBindings.reason}`);
+    }
     const resolvedSha =
       targetSha ?? (await this.resolveDeployTarget(this.projectDir));
     const run = startDeployRun({
@@ -326,6 +395,7 @@ export class DeployOrchestrator {
       loaded.playbook,
       resolvedSha,
       deployedShaAtStart,
+      loadedBindings.bindings,
     );
     return run;
   }
@@ -352,12 +422,27 @@ export class DeployOrchestrator {
       });
       return;
     }
+    const loadedBindings = this.loadBindings(this.projectDir);
+    if (!loadedBindings.ok) {
+      logger.error(
+        `[DeployOrchestrator] resume: cannot load deploy bindings for ${this.project} (run ${active.run_id}): ${loadedBindings.reason}`,
+      );
+      completeDeployRun(active.run_id, 'failed', this.now());
+      this.deps.sink?.onNeedsAttention?.({
+        runId: active.run_id,
+        project: this.project,
+        stepId: active.current_step ?? '',
+        reason: `cannot resume: ${loadedBindings.reason}`,
+      });
+      return;
+    }
     const deployedShaAtStart = getProjectDeployedSha(this.project);
     await this.drive(
       active.run_id,
       loaded.playbook,
       active.target_sha,
       deployedShaAtStart,
+      loadedBindings.bindings,
       active.current_step,
     );
   }
@@ -393,6 +478,7 @@ export class DeployOrchestrator {
     playbook: DeployPlaybook,
     targetSha: string,
     deployedShaAtStart: string | null,
+    bindings: DeployBindings,
     resumeAtStep?: string | null,
   ): Promise<void> {
     const diffPaths = await this.getDiffPaths({
@@ -455,6 +541,7 @@ export class DeployOrchestrator {
           const identityResult = await this.runShell(step.identity_capture, {
             runAs: step.run_as,
             cwd: this.projectDir,
+            bindings,
           });
           appendDeployRunEvent({
             runId,
@@ -482,6 +569,7 @@ export class DeployOrchestrator {
             step,
             targetSha,
             playbook,
+            bindings,
           );
           if (!outcome.ok) {
             logger.error(
@@ -498,7 +586,13 @@ export class DeployOrchestrator {
 
       let outcome: StepOutcome;
       try {
-        outcome = await this.executeStep(runId, step, targetSha, playbook);
+        outcome = await this.executeStep(
+          runId,
+          step,
+          targetSha,
+          playbook,
+          bindings,
+        );
       } catch (err) {
         outcome = { ok: false, detail: String(err) };
       }
@@ -512,7 +606,13 @@ export class DeployOrchestrator {
           at: this.now(),
         });
         if (step.rollback_ref) {
-          await this.runCompensatingStep(runId, playbook, step, targetSha);
+          await this.runCompensatingStep(
+            runId,
+            playbook,
+            step,
+            targetSha,
+            bindings,
+          );
         }
         completeDeployRun(runId, 'failed', this.now());
         const reason = describeFailure(playbook, step, outcome.detail);
@@ -563,6 +663,7 @@ export class DeployOrchestrator {
     playbook: DeployPlaybook,
     failedStep: StepDescriptor,
     targetSha: string,
+    bindings: DeployBindings,
   ): Promise<void> {
     if (!failedStep.rollback_ref) return;
     const compensatingStep = playbook.steps.find(
@@ -593,6 +694,7 @@ export class DeployOrchestrator {
         compensatingStep,
         targetSha,
         playbook,
+        bindings,
       );
       appendDeployRunEvent({
         runId,
@@ -617,12 +719,14 @@ export class DeployOrchestrator {
     step: StepDescriptor,
     targetSha: string,
     playbook: DeployPlaybook,
+    bindings: DeployBindings,
   ): Promise<StepOutcome> {
     switch (step.kind) {
       case 'shell': {
         const result = await this.runShell(step.command_or_prompt as string, {
           runAs: step.run_as,
           cwd: this.projectDir,
+          bindings,
         });
         return {
           ok: result.ok,
@@ -633,7 +737,13 @@ export class DeployOrchestrator {
       case 'validation': {
         const command = step.poll_until ?? (step.command_or_prompt as string);
         const identityCheck = this.resolveIdentityCheck(runId, step, playbook);
-        return this.pollUntil(step.id, command, step.run_as, identityCheck);
+        return this.pollUntil(
+          step.id,
+          command,
+          step.run_as,
+          bindings,
+          identityCheck,
+        );
       }
 
       case 'report-in': {
@@ -642,11 +752,17 @@ export class DeployOrchestrator {
       }
 
       case 'agentic': {
+        const substituted = substituteStepText(step, bindings);
+        if (!substituted.ok) return { ok: false, detail: substituted.reason };
         const key = `${runId}:${step.id}`;
         const verdictPromise = new Promise<AgenticVerdict>((resolve) => {
           this.pendingAgenticVerdicts.set(key, resolve);
         });
-        this.deps.spawnAgenticStep({ runId, project: this.project, step });
+        this.deps.spawnAgenticStep({
+          runId,
+          project: this.project,
+          step: substituted.step,
+        });
         const verdict = await verdictPromise;
         return {
           ok: verdict === 'approved',
@@ -658,10 +774,12 @@ export class DeployOrchestrator {
       }
 
       case 'confirm-gate': {
+        const substituted = substituteStepText(step, bindings);
+        if (!substituted.ok) return { ok: false, detail: substituted.reason };
         const approved = await this.deps.waitForConfirmGate({
           runId,
           project: this.project,
-          step,
+          step: substituted.step,
         });
         appendDeployRunEvent({
           runId,
@@ -708,6 +826,7 @@ export class DeployOrchestrator {
     stepId: string,
     command: string,
     runAs: string | undefined,
+    bindings: DeployBindings,
     identityCheck?: { command: string; baseline: string },
   ): Promise<StepOutcome> {
     let lastResult: ShellResult = { ok: false, output: '', exitCode: null };
@@ -716,6 +835,7 @@ export class DeployOrchestrator {
         const identityResult = await this.runShell(identityCheck.command, {
           runAs,
           cwd: this.projectDir,
+          bindings,
         });
         const currentIdentity = identityResult.output.trim();
         if (!identityResult.ok || currentIdentity === identityCheck.baseline) {
@@ -735,6 +855,7 @@ export class DeployOrchestrator {
       const result = await this.runShell(command, {
         runAs,
         cwd: this.projectDir,
+        bindings,
       });
       if (result.ok) return { ok: true };
       lastResult = result;
