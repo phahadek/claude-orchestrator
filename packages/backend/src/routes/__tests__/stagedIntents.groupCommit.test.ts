@@ -1793,7 +1793,7 @@ describe('task.setDependsOn symbolic reference to a sibling task.create — comm
 function insertCapabilityRequestRow(opts: {
   id: string;
   groupId: string | null;
-  state: 'staged' | 'approved' | 'needs_revision';
+  state: 'staged' | 'approved' | 'needs_revision' | 'pending_verification';
 }) {
   insertStagedIntent({
     id: opts.id,
@@ -1923,6 +1923,36 @@ describe('a session.requestCapability caught in a group (legacy data)', () => {
       .send({ outcome: 'decline', reason: 'no longer needed' });
     expect(reject.status).toBe(200);
     expect(getStagedIntent('cap-3')!.state).toBe('rejected');
+  });
+
+  it('is diagnosable and recoverable once wedged in pending_verification', async () => {
+    const app = makeApp();
+    const agent = supertest(app);
+    insertCapabilityRequestRow({
+      id: 'cap-4',
+      groupId: 'retire-arch-pages-proposal-2026-07-29',
+      state: 'pending_verification',
+    });
+
+    const diagnosis = await agent.get(
+      '/api/staged-intents/group/retire-arch-pages-proposal-2026-07-29',
+    );
+    expect(diagnosis.status).toBe(200);
+    expect(diagnosis.body.wedged).toBe(true);
+    expect(diagnosis.body.intents).toHaveLength(1);
+    expect(diagnosis.body.intents[0].state).toBe('pending_verification');
+
+    const recover = await agent.post(
+      '/api/staged-intents/group/retire-arch-pages-proposal-2026-07-29/recover',
+    );
+    expect(recover.status).toBe(200);
+    expect(recover.body.recovered).toHaveLength(1);
+    expect(recover.body.recovered[0].state).toBe('staged');
+    expect(recover.body.recovered[0].groupId).toBeNull();
+
+    const row = getStagedIntent('cap-4')!;
+    expect(row.state).toBe('staged');
+    expect(row.group_id).toBeNull();
   });
 
   it('recovering a non-wedged (empty or live) group 404s', async () => {
