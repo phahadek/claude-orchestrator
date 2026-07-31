@@ -120,3 +120,26 @@ export function getLatestEventByType(eventType: string): AuditRow | undefined {
     >(`SELECT * FROM audit_log WHERE event_type = ? ORDER BY ts DESC LIMIT 1`)
     .get(eventType);
 }
+
+/**
+ * True when a task_body_updated or task_deps_updated event has been recorded
+ * for `taskId` after `sinceTs` — the orchestrator-authored-write signal a
+ * committed planning.noOp's grooming suppression retires on (see
+ * isGroomNoOpSuppressed in db/queries.ts). Both event types are written by
+ * AuditingTaskBackend for every orchestrator-authored body/deps edit; a raw
+ * break-glass Notion edit doesn't itself retire the suppression, only the
+ * next orchestrator-authored write does.
+ */
+export function hasTaskEditSinceTimestamp(
+  taskId: string,
+  sinceTs: number,
+): boolean {
+  const row = db
+    .prepare<[string, number], { one: number }>(
+      `SELECT 1 AS one FROM audit_log
+       WHERE task_id = ? AND event_type IN ('task_body_updated', 'task_deps_updated') AND ts > ?
+       LIMIT 1`,
+    )
+    .get(taskId, sinceTs);
+  return row !== undefined;
+}

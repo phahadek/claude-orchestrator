@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import { createHash, randomUUID } from 'crypto';
 import { db } from './db';
 import { logger } from '../logger';
-import { recordEvent } from '../audit/AuditLog';
+import { recordEvent, hasTaskEditSinceTimestamp } from '../audit/AuditLog';
 import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
 import { isCodeSession } from '../session/sessionPredicates';
 import {
@@ -5466,6 +5466,44 @@ export function hasStagedIntentForTask(taskId: string): boolean {
     `SELECT 1 FROM staged_intent WHERE task_id = @task_id LIMIT 1`,
   );
   return _stmtHasStagedIntentForTask.get({ task_id: taskId }) !== undefined;
+}
+
+let _stmtGetLatestNoOpForTask: Database.Statement | null = null;
+
+/**
+ * The task's most recent planning.noOp staged intent (by creation order),
+ * in whatever state it currently holds. isGroomNoOpSuppressed reads its
+ * state/updated_at to decide whether the deliberate "leave it at Backlog"
+ * decision it recorded still stands.
+ */
+function getLatestNoOpForTask(taskId: string): StagedIntentRow | undefined {
+  _stmtGetLatestNoOpForTask ??= db.prepare<{ task_id: string }>(
+    `SELECT * FROM staged_intent
+     WHERE task_id = @task_id AND kind = 'planning.noOp'
+     ORDER BY created_at DESC
+     LIMIT 1`,
+  );
+  return _stmtGetLatestNoOpForTask.get({ task_id: taskId }) as
+    | StagedIntentRow
+    | undefined;
+}
+
+/**
+ * True while a task's most recent planning.noOp still suppresses
+ * auto-grooming candidacy. Only a no-op that reached `committed` represents
+ * an accepted operator decision — staged, rejected and superseded carry no
+ * acceptance and never suppress. Suppression is derived from the committed
+ * intent itself, not from the staging session's status, so it holds after
+ * that session reaches a terminal state (see isGroomCandidate). It retires
+ * the moment a task_body_updated or task_deps_updated audit event lands for
+ * the task after the no-op's commit timestamp (its `updated_at`) — the
+ * conditions the no-op was reasoned against changing reopens candidacy with
+ * no operator action required.
+ */
+export function isGroomNoOpSuppressed(taskId: string): boolean {
+  const noOp = getLatestNoOpForTask(taskId);
+  if (!noOp || noOp.state !== 'committed') return false;
+  return !hasTaskEditSinceTimestamp(taskId, noOp.updated_at);
 }
 
 /**
