@@ -70,7 +70,8 @@ function applyEnvFallback(
 
   for (const field of ENV_FALLBACK_FIELDS) {
     const envValue = field.get(envConfig);
-    const explicitlySet = explicitFields.has(field.key) && field.get(config) !== '';
+    const explicitlySet =
+      explicitFields.has(field.key) && field.get(config) !== '';
     if (!explicitlySet) {
       if (envValue) {
         field.set(config, envValue);

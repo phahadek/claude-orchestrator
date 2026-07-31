@@ -328,7 +328,10 @@ function validateConfigForCompletion(): string[] {
     problems.push('notion.apiKey is too short to be a real key');
   }
 
-  const resolvedDbPath = resolveDbPath(cfg.db.path || './dashboard.db', getDataDir());
+  const resolvedDbPath = resolveDbPath(
+    cfg.db.path || './dashboard.db',
+    getDataDir(),
+  );
   if (!isDbDirWritable(resolvedDbPath)) {
     problems.push(
       `db.path resolves to "${resolvedDbPath}", whose directory is not writable`,
