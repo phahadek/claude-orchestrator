@@ -135,12 +135,11 @@ export function hasTaskEditSinceTimestamp(
   sinceTs: number,
 ): boolean {
   const row = db
-    .prepare<
-      [string, number],
-      { one: number }
-    >(`SELECT 1 AS one FROM audit_log
+    .prepare<[string, number], { one: number }>(
+      `SELECT 1 AS one FROM audit_log
        WHERE task_id = ? AND event_type IN ('task_body_updated', 'task_deps_updated') AND ts > ?
-       LIMIT 1`)
+       LIMIT 1`,
+    )
     .get(taskId, sinceTs);
   return row !== undefined;
 }
