@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import { DecisionPickOnePanel } from './DecisionPickOnePanel';
 import { TriageBatchPanel } from './TriageBatchPanel';
+import { GroupCard } from './GroupCard';
 import { taskIdFor } from './triageVerdict';
 import { useDecisionQueue } from '../hooks/useDecisionQueue';
 import styles from './DecisionPanel.module.css';
@@ -166,112 +167,30 @@ export function DecisionPanel({ sessionId }: Props) {
         const inFlight = groupInFlight === groupId;
         const isClean = cleanGroupIds.includes(groupId);
         return (
-          <div key={groupId} className={styles.group}>
-            <div className={styles.groupHeader}>
-              <span>Group {groupId}</span>
-              {isClean && (
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={!batchExcluded[groupId]}
-                    onChange={() => toggleBatchExcluded(groupId)}
-                    aria-label={`Include ${taskIdFor(groupIntents) ?? groupId} in approve all clean`}
-                    data-testid={`clean-batch-include-${groupId}`}
-                  />
-                  <span
-                    className={styles.cleanBadge}
-                    data-testid={`clean-badge-${groupId}`}
-                  >
-                    Clean
-                  </span>
-                </label>
-              )}
-            </div>
-            {batchExceptions[groupId] && (
-              <div className={styles.groupError}>
-                {batchExceptions[groupId]}
-              </div>
-            )}
-            {groupError && groupInFlight === null && (
-              <div className={styles.groupError}>{groupError}</div>
-            )}
-            {groupIntents.map((intent) => (
-              <StagedIntentPanel
-                key={intent.id}
-                intent={intent}
-                onApplied={remove}
-                onRejected={remove}
-                onDismiss={remove}
-                onApproved={upsert}
-                hideActions
-                disabled={sessionIncomplete}
-              />
-            ))}
-            <div className={styles.groupActions}>
-              <button
-                type="button"
-                className={styles.commitButton}
-                disabled={inFlight || sessionIncomplete}
-                onClick={() => void handleApproveGroup(groupId)}
-              >
-                {inFlight ? 'Approving…' : '✓ Approve groom'}
-              </button>
-              <div
-                className={styles.outcomeToggle}
-                role="radiogroup"
-                aria-label="Reject outcome"
-              >
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={draft.outcome === 'pushback'}
-                  className={
-                    draft.outcome === 'pushback'
-                      ? styles.outcomeOptionActive
-                      : styles.outcomeOption
-                  }
-                  onClick={() => setDraft(groupId, { outcome: 'pushback' })}
-                >
-                  Pushback
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={draft.outcome === 'decline'}
-                  className={
-                    draft.outcome === 'decline'
-                      ? styles.outcomeOptionActive
-                      : styles.outcomeOption
-                  }
-                  onClick={() => setDraft(groupId, { outcome: 'decline' })}
-                >
-                  Decline
-                </button>
-              </div>
-              <textarea
-                className={styles.reasonInput}
-                placeholder={
-                  draft.outcome === 'pushback'
-                    ? 'What should the session revise?'
-                    : 'Why is this being declined?'
-                }
-                value={draft.reason}
-                onChange={(e) => setDraft(groupId, { reason: e.target.value })}
-              />
-              <button
-                type="button"
-                className={styles.denyButton}
-                disabled={inFlight || sessionIncomplete || !draft.reason.trim()}
-                onClick={() => void handleRejectGroup(groupId)}
-              >
-                {inFlight
-                  ? 'Submitting…'
-                  : draft.outcome === 'pushback'
-                    ? '↩ Pushback groom'
-                    : '✕ Decline groom'}
-              </button>
-            </div>
-          </div>
+          <GroupCard
+            key={groupId}
+            groupId={groupId}
+            members={groupIntents.map((intent) => ({
+              intent,
+              hideActions: true,
+            }))}
+            onApplied={remove}
+            onRejected={remove}
+            onDismiss={remove}
+            onApproved={upsert}
+            isClean={isClean}
+            batchExcluded={!!batchExcluded[groupId]}
+            onToggleBatchExcluded={() => toggleBatchExcluded(groupId)}
+            cleanBatchLabel={taskIdFor(groupIntents) ?? groupId}
+            batchException={batchExceptions[groupId]}
+            groupError={groupInFlight === null ? groupError : null}
+            inFlight={inFlight}
+            draft={draft}
+            onSetDraft={(patch) => setDraft(groupId, patch)}
+            onApproveGroup={() => void handleApproveGroup(groupId)}
+            onRejectGroup={() => void handleRejectGroup(groupId)}
+            disabled={sessionIncomplete}
+          />
         );
       })}
 
