@@ -38,6 +38,7 @@ import { bindingConstraintIdsForRegions } from './constraintCatalog';
 import type { FilesPathsEntry, DependsOnTaskRef } from './groomGate';
 import { ProjectService } from '../projects/ProjectService';
 import { selectUnitsFromStore } from '../architecture/selectiveInjection';
+import { SIZE_TYPE_CHECK } from '../planning/procedureCore';
 
 const execFileAsync = promisify(execFile);
 
@@ -130,6 +131,31 @@ interface TaskDoc extends TaskRow {
    * liveness signal to it).
    */
   dependsOnTasks: DependsOnTaskRef[];
+}
+
+/** The subset of a sizeCheckSeed the file-count/LoC nomination check needs. */
+export interface SizeCheckThresholdSeed {
+  files: number;
+  locEstimate?: number;
+}
+
+/**
+ * Deterministic split-nomination flag: trips when either axis of
+ * `SIZE_TYPE_CHECK` (file count or estimated LoC) is exceeded — a task
+ * touching many files gets nominated even when its per-file diff is small,
+ * and vice versa. This is a nomination signal only: it never forces
+ * `split_now` — `unsplittable` with a recorded reason remains a legitimate
+ * `size_check` outcome above either threshold, and the decision vocabulary
+ * itself (checked by groomGate.ts) is unaffected.
+ */
+export function isSizeCheckSeedOverThreshold(
+  seed: SizeCheckThresholdSeed,
+): boolean {
+  if (seed.files > SIZE_TYPE_CHECK.fileSplitThreshold) return true;
+  return (
+    typeof seed.locEstimate === 'number' &&
+    seed.locEstimate > SIZE_TYPE_CHECK.locSplitThreshold
+  );
 }
 
 type FreshnessStatus = 'fresh' | 'stale' | 'missing';

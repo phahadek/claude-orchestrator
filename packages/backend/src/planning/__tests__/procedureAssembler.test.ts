@@ -10,6 +10,7 @@ import {
   WORKFLOW_LOADERS,
   type PlanningDigest,
 } from '../procedureAssembler';
+import { SIZE_TYPE_CHECK } from '../procedureCore';
 import type { GroomLoadResult } from '../../groom/groomLoad';
 import type { DesignLoadResult } from '../../design/designLoad';
 import type { OpsLoadResult } from '../../ops/opsLoad';
@@ -877,6 +878,23 @@ describe('assemblePlanningProcedure', () => {
     expect(example).toContain('"constraintsDispositioned"');
     expect(example).toContain('"filesPathsEntries"');
     expect(example).toContain('"dependsOnTasks"');
+  });
+
+  it('states both the LoC and file-count size_check thresholds, and that exceeding either nominates a split', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+
+    expect(output).toContain(`${SIZE_TYPE_CHECK.locSplitThreshold}-LoC`);
+    expect(output).toContain(`${SIZE_TYPE_CHECK.fileSplitThreshold}-file`);
+    expect(output).toMatch(/exceeding either nominates a split/);
   });
 
   it('offers the groom procedure a discard/defer proposal as an alternative to promoting to Ready', () => {
