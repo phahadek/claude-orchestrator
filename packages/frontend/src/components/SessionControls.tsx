@@ -181,7 +181,7 @@ export function SessionControls({
   }
 
   async function handleRevokeCapability(capability: string) {
-    await authedFetch(
+    const res = await authedFetch(
       `/api/sessions/${session.sessionId}/capabilities/revoke`,
       {
         method: 'PATCH',
@@ -189,7 +189,21 @@ export function SessionControls({
         body: JSON.stringify({ capability }),
       },
     );
+    if (!res.ok) return;
+    const data: { grantedCapabilities?: string[] } = await res.json();
+    if (data.grantedCapabilities) {
+      const stillGranted = data.grantedCapabilities;
+      setCapabilities((prev) =>
+        prev.filter((c) => stillGranted.includes(c.capability)),
+      );
+    }
   }
+
+  const grantedFromSession = session.grantedCapabilities;
+  const visibleCapabilities =
+    grantedFromSession === undefined
+      ? capabilities
+      : capabilities.filter((c) => grantedFromSession.includes(c.capability));
 
   const adminChromeClass = `${styles.adminChrome} ${compactOpen ? styles['adminChrome--open'] : ''}`;
   const headerControlsClass = `${styles.headerControls}${embedded ? ` ${styles['headerControls--embedded']}` : ''}`;
@@ -368,18 +382,25 @@ export function SessionControls({
           )}
         </div>
 
-        {capabilities.length > 0 && (
+        {visibleCapabilities.length > 0 && (
           <div className={styles.capabilityRow}>
-            {capabilities.map(({ capability, provenance }) => (
+            {visibleCapabilities.map(({ capability, provenance }) => (
               <span
                 key={capability}
-                className={`${styles.capabilityBadge} ${provenance === 'auto' ? styles['capabilityBadge--auto'] : styles['capabilityBadge--operator']}`}
+                className={`${styles.capabilityChip} ${provenance === 'auto' ? styles['capabilityChip--auto'] : styles['capabilityChip--operator']}`}
                 title={capability}
               >
                 {capability}
                 <span className={styles.capabilityProvenance}>
                   {provenance === 'auto' ? 'auto' : 'operator'}
                 </span>
+                <button
+                  className={styles.capabilityRemove}
+                  onClick={() => void handleRevokeCapability(capability)}
+                  aria-label={`Revoke capability ${capability}`}
+                >
+                  ×
+                </button>
               </span>
             ))}
           </div>
@@ -411,23 +432,6 @@ export function SessionControls({
             placeholder="Add tag..."
           />
         </div>
-
-        {(session.grantedCapabilities ?? []).length > 0 && (
-          <div className={styles.capabilityRow}>
-            {(session.grantedCapabilities ?? []).map((capability) => (
-              <span key={capability} className={styles.capabilityPill}>
-                {capability}
-                <button
-                  className={styles.capabilityRemove}
-                  onClick={() => void handleRevokeCapability(capability)}
-                  aria-label={`Revoke capability ${capability}`}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
       </div>
     </>
   );

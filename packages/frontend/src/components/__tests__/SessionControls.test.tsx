@@ -775,6 +775,111 @@ describe('SessionControls — granted capability provenance', () => {
     expect(screen.queryByText('auto')).toBeNull();
     expect(screen.queryByText('operator')).toBeNull();
   });
+
+  it('renders each granted capability exactly once, with provenance and a revoke control on the same chip', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/capabilities')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              capabilities: [
+                { capability: 'Bash(psql:*)', provenance: 'operator' },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 200 }));
+    });
+
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Bash(psql:*)')).toHaveLength(1);
+    });
+    expect(screen.getByText('operator')).toBeTruthy();
+    expect(
+      screen.getByLabelText('Revoke capability Bash(psql:*)'),
+    ).toBeTruthy();
+  });
+
+  it('revokes a capability via the existing endpoint and removes the chip, reflecting the persisted result', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/capabilities/revoke')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true, grantedCapabilities: [] }), {
+            status: 200,
+          }),
+        );
+      }
+      if (url.includes('/capabilities')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              capabilities: [
+                { capability: 'Bash(psql:*)', provenance: 'operator' },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 200 }));
+    });
+
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Bash(psql:*)')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByLabelText('Revoke capability Bash(psql:*)'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/sessions/sess-1/capabilities/revoke',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({ capability: 'Bash(psql:*)' }),
+        }),
+      );
+      expect(screen.queryByText('Bash(psql:*)')).toBeNull();
+    });
+  });
+
+  it('does not re-render a capability from the WS-hydrated session once it is no longer granted', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/capabilities')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              capabilities: [
+                { capability: 'Bash(psql:*)', provenance: 'operator' },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 200 }));
+    });
+
+    render(
+      <SessionControls
+        session={makeSession({ grantedCapabilities: [] })}
+        {...defaultProps}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalled();
+    });
+    expect(screen.queryByText('Bash(psql:*)')).toBeNull();
+  });
 });
 
 describe('SessionControls — Close button', () => {
