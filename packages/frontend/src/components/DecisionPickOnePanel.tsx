@@ -4,6 +4,7 @@ import type {
   DecisionPickOnePayload,
 } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
+import { CollapsibleField } from './CollapsibleField';
 import styles from './StagedIntentPanel.module.css';
 import pickOneStyles from './DecisionPickOnePanel.module.css';
 
@@ -74,6 +75,11 @@ export function DecisionPickOnePanel({
       <p className={styles.text}>{payload.prompt}</p>
       {intent.decisionProposal && (
         <p className={styles.rationale}>{intent.decisionProposal}</p>
+      )}
+      {intent.investigation && (
+        <div className={styles.rationale} data-testid="decision-investigation">
+          <CollapsibleField text={intent.investigation} />
+        </div>
       )}
 
       <div

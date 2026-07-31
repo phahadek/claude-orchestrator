@@ -152,6 +152,49 @@ describe('decision.pickOne staging validation', () => {
   });
 });
 
+describe('decision.pickOne investigation field', () => {
+  it('persists investigation separately from decisionProposal and surfaces it via the API', () => {
+    const intent = stageIntent(
+      'decision.pickOne',
+      { prompt: 'Which approach?', options: OPTIONS, allowFreeForm: true },
+      'proj-1',
+      null,
+      'sess-1',
+      'Recommend option A — it keeps memory flat under load.',
+      null,
+      null,
+      null,
+      'Evidence: reader.ts:12-40 streams in fixed chunks; queries.ts:88 caps batch size.',
+    );
+
+    expect(intent.decisionProposal).toBe(
+      'Recommend option A — it keeps memory flat under load.',
+    );
+    expect(intent.investigation).toBe(
+      'Evidence: reader.ts:12-40 streams in fixed chunks; queries.ts:88 caps batch size.',
+    );
+
+    const row = getStagedIntent(intent.id)!;
+    expect(row.investigation).toBe(
+      'Evidence: reader.ts:12-40 streams in fixed chunks; queries.ts:88 caps batch size.',
+    );
+  });
+
+  it('an intent staged without investigation persists and renders with investigation null', () => {
+    const intent = stageIntent(
+      'decision.pickOne',
+      { prompt: 'Which approach?', options: OPTIONS, allowFreeForm: true },
+      'proj-1',
+      null,
+      'sess-1',
+      'A genuine fork the session cannot resolve confidently.',
+    );
+
+    expect(intent.investigation).toBeNull();
+    expect(getStagedIntent(intent.id)!.investigation).toBeNull();
+  });
+});
+
 describe('decision.pickOne dedup', () => {
   it('re-emitting an identical decision.pickOne from the same session dedups (no duplicate)', () => {
     const payload = {

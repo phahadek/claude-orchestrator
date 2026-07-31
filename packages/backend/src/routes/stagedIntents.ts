@@ -547,6 +547,14 @@ export interface StagedIntent {
    */
   decisionProposal?: string | null;
   /**
+   * The file:line / arch-page-section / API-result evidence
+   * `decisionProposal`'s recommendation rests on — carried separately so
+   * `decisionProposal` stays at design altitude. Rendered collapsed by
+   * default. Null for kinds that don't carry one, and for rows created
+   * before this field existed.
+   */
+  investigation?: string | null;
+  /**
    * The /groom skill's structured proposal fields (presentation.md's
    * 4/5-point summary), carried by a dispatched groom session's Ready-flip
    * decision in place of a free-prose `decisionProposal`.
@@ -605,6 +613,7 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
     groupId: row.group_id,
     milestone: row.milestone,
     decisionProposal: row.decision_proposal,
+    investigation: row.investigation,
     groomProposal: row.groom_proposal
       ? (JSON.parse(row.groom_proposal) as GroomProposalFields)
       : null,
@@ -1893,6 +1902,7 @@ export function stageIntent(
   groomProposal?: GroomProposalFields | null,
   explicitSupersedes?: string | null,
   milestone?: string | null,
+  investigation?: string | null,
 ): StagedIntent {
   if (kind === 'decision.pickOne') {
     validateDecisionPickOnePayload(payload, groupId, decisionProposal);
@@ -1996,6 +2006,7 @@ export function stageIntent(
       supersedes: null,
       annotation: null,
       decision_proposal: decisionProposal ?? null,
+      investigation: investigation ?? null,
       groom_proposal: groomProposalJson,
       advisory: null,
       disposition_reason: null,
@@ -2022,6 +2033,7 @@ export function stageIntent(
     supersedes: null,
     annotation: null,
     decision_proposal: decisionProposal ?? null,
+    investigation: investigation ?? null,
     groom_proposal: groomProposalJson,
     advisory: null,
     disposition_reason: null,
@@ -3650,6 +3662,7 @@ export function createStagedIntentsRouter(
       projectId?: unknown;
       groupId?: unknown;
       decisionProposal?: unknown;
+      investigation?: unknown;
       groomProposal?: unknown;
       supersedes?: unknown;
       milestone?: unknown;
@@ -3660,6 +3673,8 @@ export function createStagedIntentsRouter(
     const groupId = typeof body.groupId === 'string' ? body.groupId : null;
     const decisionProposal =
       typeof body.decisionProposal === 'string' ? body.decisionProposal : null;
+    const investigation =
+      typeof body.investigation === 'string' ? body.investigation : null;
     const groomProposal = parseGroomProposal(body.groomProposal);
     const supersedes =
       typeof body.supersedes === 'string' ? body.supersedes : null;
@@ -3709,6 +3724,7 @@ export function createStagedIntentsRouter(
       groomProposal,
       supersedes,
       milestone,
+      investigation,
     );
 
     const checked = await runStageTimeReadyChecks(intent);

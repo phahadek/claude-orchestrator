@@ -622,6 +622,14 @@ export interface StagedIntentRow {
   /** Human-facing rationale/summary the decision surface renders beside the payload. */
   decision_proposal: string | null;
   /**
+   * The file:line / arch-page-section / API-result evidence a decision.pickOne
+   * intent's `decision_proposal` recommendation rests on — kept separate so
+   * `decision_proposal` stays at design altitude. Rendered collapsed by
+   * default. Null for kinds that don't carry one, and for rows created
+   * before this column existed.
+   */
+  investigation: string | null;
+  /**
    * The /groom skill's structured proposal fields (JSON-encoded
    * `GroomProposalFields`), carried by a dispatched groom session's
    * Ready-flip decision in place of a free-prose `decision_proposal`.
