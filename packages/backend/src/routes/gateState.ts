@@ -134,6 +134,7 @@ export function createGateStateRouter(): Router {
       return Number.isFinite(n) ? n : undefined;
     };
     const runnableRaw = stringParam('runnable');
+    const awaitingSetupRaw = stringParam('awaitingSetup');
     const project = stringParam('project');
     const milestoneParam = stringParam('milestone');
     let milestone: string | undefined;
@@ -165,6 +166,10 @@ export function createGateStateRouter(): Router {
           | undefined,
         runnable:
           runnableRaw === undefined ? undefined : runnableRaw === 'true',
+        awaitingSetup:
+          awaitingSetupRaw === undefined
+            ? undefined
+            : awaitingSetupRaw === 'true',
         page: numberParam('page'),
         limit: numberParam('limit'),
         order: orderRaw,

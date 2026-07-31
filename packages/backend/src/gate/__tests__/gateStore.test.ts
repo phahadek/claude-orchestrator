@@ -147,8 +147,57 @@ describe('gateStore', () => {
     expect(item?.updatedAt).toBe(new Date(5).toISOString());
     expect(item?.state).toBe('open');
     expect(item?.currentDisposition).toBeUndefined();
+    expect(item?.latestDisposition).toBe('needs-setup');
     expect(item?.events).toHaveLength(1);
     expect(item?.events[0]).toMatchObject({ disposition: 'needs-setup' });
+  });
+
+  it('stamps latest_disposition on a non-resolving noted event, same as needs-setup', () => {
+    const created = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Verify the read-only report renders',
+      classification: 'Read-Only',
+      sources: [{ sourceTaskId: 'notion:n1', sourceTaskTitle: 'Add report' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    appendEvent(created.id, {
+      disposition: 'noted',
+      evidence: { note: 'flaky in CI, retry needed' },
+      at: new Date(5).toISOString(),
+    });
+
+    const item = getItem(created.id);
+    expect(item?.state).toBe('open');
+    expect(item?.currentDisposition).toBeUndefined();
+    expect(item?.latestDisposition).toBe('noted');
+  });
+
+  it('overwrites latest_disposition and advances state on a subsequent resolving pass', () => {
+    const created = insertItem({
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      text: 'Verify the read-only report renders',
+      classification: 'Read-Only',
+      sources: [{ sourceTaskId: 'notion:n1', sourceTaskTitle: 'Add report' }],
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    appendEvent(created.id, {
+      disposition: 'needs-setup',
+      at: new Date(1).toISOString(),
+    });
+    appendEvent(created.id, {
+      disposition: 'pass',
+      at: new Date(2).toISOString(),
+    });
+    advanceState(created.id, 'pass', 'pass', new Date(2).toISOString());
+
+    const item = getItem(created.id);
+    expect(item?.state).toBe('pass');
+    expect(item?.currentDisposition).toBe('pass');
+    expect(item?.latestDisposition).toBe('pass');
   });
 
   it('advances the denormalized state and current_disposition', () => {

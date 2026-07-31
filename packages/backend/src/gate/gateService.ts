@@ -115,6 +115,8 @@ interface GateBlockingItem {
   state: string;
   /** Flagged loudly rather than auto-rewritten — steer it to `discarded` (or its intended disposition) by hand. */
   bespoke?: boolean;
+  /** True when the item's latest event carries a non-resolving disposition (needs-setup/noted) — attempted but inconclusive, distinct from an item that was never dispatched at all. */
+  nonResolving?: boolean;
 }
 
 export interface GateReadiness {
@@ -122,6 +124,8 @@ export interface GateReadiness {
   blocking: GateBlockingItem[];
   /** Subset of `blocking` sitting in a state outside the closed vocabulary — needs human re-disposition, not indefinite blocking. */
   bespokeStates: GateBlockingItem[];
+  /** Subset of `blocking` whose latest disposition is non-resolving (needs-setup/noted) — attempted but inconclusive, not simply untouched. */
+  nonResolvingItems: GateBlockingItem[];
   /** The milestone's full per-state item totals, independent of any table filter; sums to the milestone's item total. */
   counts: Record<string, number>;
 }
@@ -148,6 +152,11 @@ export function getGateReadiness(
       classification: item.classification,
       state: item.state,
       bespoke: isBespokeGateState(item.state),
+      nonResolving:
+        item.latestDisposition !== undefined &&
+        NON_TERMINAL_DISPOSITIONS.has(
+          item.latestDisposition as GateDisposition,
+        ),
     }));
   const counts: Record<string, number> = {};
   for (const item of items) {
@@ -157,6 +166,7 @@ export function getGateReadiness(
     status: blocking.length === 0 ? 'green' : 'blocked',
     blocking,
     bespokeStates: blocking.filter((item) => item.bespoke),
+    nonResolvingItems: blocking.filter((item) => item.nonResolving),
     counts,
   };
 }
@@ -295,10 +305,12 @@ export interface NextRunnableGateItemsOptions {
  * True once an item's latest event carries the `needs-setup` abstain — the
  * dispatcher skips it until a later event (reclassify/reopen/a new fail)
  * supersedes it as the item's latest, per GateVerificationResult's
- * needs-setup contract.
+ * needs-setup contract. Reads the denormalized latest_disposition column
+ * rather than replaying the event log — appendGateItemEvent keeps it in
+ * sync with every event's disposition, terminal or not.
  */
 function isAwaitingSetup(item: GateItem): boolean {
-  return item.events.at(-1)?.disposition === 'needs-setup';
+  return item.latestDisposition === 'needs-setup';
 }
 
 /**
@@ -356,6 +368,8 @@ export interface ListGateItemsOptions {
   state?: string;
   classification?: GateItemClassification;
   runnable?: boolean;
+  /** True: only items whose latest event is the needs-setup abstain — "attempted, inconclusive" rather than never dispatched. */
+  awaitingSetup?: boolean;
   page?: number;
   limit?: number;
   /** 'not-done-first' surfaces unresolved (non pass/deferred) items ahead of resolved ones — the run-worklist default. */
@@ -390,6 +404,7 @@ export function listGateItems(
       state: options.state,
       classification: options.classification,
       runnable: options.runnable,
+      awaitingSetup: options.awaitingSetup,
     },
     limit,
     offset,
@@ -505,9 +520,13 @@ function isVerifierBlockedFromPassing(
 /**
  * Appends an event and, when disposition is present and terminal, advances
  * the item's denormalized (state, current_disposition). A dispositionless
- * event, or one carrying the non-terminal `noted` disposition, is a pure log
- * entry — evidence is recorded but state is left unchanged. `discarded`
- * requires an evidence/reason, since it permanently voids the item.
+ * event, or one carrying a non-terminal disposition (`noted`/`needs-setup`),
+ * is a pure log entry as far as state goes — state is left unchanged — but
+ * every disposition-bearing event, terminal or not, is still mirrored onto
+ * the item's latest_disposition column (see gateStore.appendEvent), so a
+ * non-resolving abstain is queryable rather than indistinguishable from an
+ * item that was never attempted. `discarded` requires an evidence/reason,
+ * since it permanently voids the item.
  */
 export function appendGateItemEvent(
   gateItemId: string,

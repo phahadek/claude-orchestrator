@@ -4513,10 +4513,10 @@ export function insertGateItem(row: GateItemRow): void {
   _stmtInsertGateItem ??= db.prepare<GateItemRow>(`
     INSERT INTO gate_item
       (id, project, milestone, text, classification, min_deployed_commit,
-       state, current_disposition, updated_at)
+       state, current_disposition, latest_disposition, updated_at)
     VALUES
       (@id, @project, @milestone, @text, @classification, @min_deployed_commit,
-       @state, @current_disposition, @updated_at)
+       @state, @current_disposition, @latest_disposition, @updated_at)
   `);
   _stmtInsertGateItem.run(row);
 }
@@ -4531,6 +4531,7 @@ export function updateGateItem(row: GateItemRow): void {
       min_deployed_commit = @min_deployed_commit,
       state = @state,
       current_disposition = @current_disposition,
+      latest_disposition = @latest_disposition,
       updated_at = @updated_at
     WHERE id = @id
   `);
@@ -4665,9 +4666,37 @@ export function updateGateItemMinDeployedCommit(
 }
 
 let _stmtTouchGateItemUpdatedAt: Database.Statement | null = null;
+let _stmtTouchGateItemUpdatedAtWithDisposition: Database.Statement | null =
+  null;
 
-/** Stamps updated_at only — never touches state/current_disposition. For non-resolving events (e.g. needs-setup). */
-export function touchGateItemUpdatedAt(id: string, updatedAt: string): void {
+/**
+ * Stamps updated_at, and — when `latestDisposition` is supplied — also
+ * writes it to the latest_disposition column, without ever touching
+ * state/current_disposition. Used both for a dispositionless log entry
+ * (updated_at only) and a non-resolving event like needs-setup/noted, which
+ * must surface on the item's latest-disposition column despite not
+ * advancing state.
+ */
+export function touchGateItemUpdatedAt(
+  id: string,
+  updatedAt: string,
+  latestDisposition?: string,
+): void {
+  if (latestDisposition !== undefined) {
+    _stmtTouchGateItemUpdatedAtWithDisposition ??= db.prepare<{
+      id: string;
+      updated_at: string;
+      latest_disposition: string;
+    }>(
+      `UPDATE gate_item SET updated_at = @updated_at, latest_disposition = @latest_disposition WHERE id = @id`,
+    );
+    _stmtTouchGateItemUpdatedAtWithDisposition.run({
+      id,
+      updated_at: updatedAt,
+      latest_disposition: latestDisposition,
+    });
+    return;
+  }
   _stmtTouchGateItemUpdatedAt ??= db.prepare<{
     id: string;
     updated_at: string;
@@ -4739,6 +4768,8 @@ export interface GateItemFilter {
   state?: string;
   classification?: GateItemClassification;
   runnable?: boolean;
+  /** True: only items whose latest event is a needs-setup abstain — "attempted, inconclusive". */
+  awaitingSetup?: boolean;
 }
 
 function buildGateItemWhereClause(filter: GateItemFilter): {
@@ -4766,6 +4797,13 @@ function buildGateItemWhereClause(filter: GateItemFilter): {
   if (filter.runnable !== undefined) {
     conditions.push(
       filter.runnable ? "state = 'runnable'" : "state != 'runnable'",
+    );
+  }
+  if (filter.awaitingSetup !== undefined) {
+    conditions.push(
+      filter.awaitingSetup
+        ? "latest_disposition = 'needs-setup'"
+        : "(latest_disposition IS NULL OR latest_disposition != 'needs-setup')",
     );
   }
   return {

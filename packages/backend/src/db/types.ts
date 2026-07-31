@@ -459,6 +459,8 @@ export interface GateItemRow {
   min_deployed_commit: string | null;
   state: string;
   current_disposition: string | null;
+  /** The disposition carried by the item's most recent event, regardless of whether it advanced state — distinct from current_disposition, which only moves on a terminal (state-advancing) disposition. */
+  latest_disposition: string | null;
   updated_at: string;
 }
 

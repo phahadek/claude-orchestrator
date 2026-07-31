@@ -711,7 +711,7 @@ export function GateReadinessPanel({
       setVerifyBaseline((prev) => {
         const next = { ...prev };
         for (const id of ids) {
-          next[id] = items.find((i) => i.id === id)?.currentDisposition;
+          next[id] = items.find((i) => i.id === id)?.latestDisposition;
         }
         return next;
       });
@@ -739,9 +739,12 @@ export function GateReadinessPanel({
     [items],
   );
 
-  // Polls each in-flight verification's item detail until its disposition
-  // moves away from the dispatch-time baseline, reflecting the resulting
-  // disposition back into the table without a full-page refresh.
+  // Polls each in-flight verification's item detail until its latest
+  // disposition moves away from the dispatch-time baseline, reflecting the
+  // resulting disposition back into the table without a full-page refresh.
+  // latestDisposition (not currentDisposition) is the baseline/compare field
+  // so a non-resolving needs-setup verdict — which never advances
+  // currentDisposition — still settles the poll.
   useEffect(() => {
     if (verifyingIds.size === 0) return;
     const ids = Array.from(verifyingIds);
@@ -754,31 +757,39 @@ export function GateReadinessPanel({
             .catch(() => null),
         ),
       ).then((results) => {
-        const settled: string[] = [];
+        // Computed up front from `results` (not mutated from inside the
+        // setItems updater below and read back synchronously afterward) —
+        // a functional setState updater runs on React's own schedule, not
+        // necessarily before the next line of this callback, so relying on
+        // a side effect inside it to communicate back was a race that could
+        // leave verifyingIds never cleared despite the table already
+        // reflecting the settled disposition.
+        const settled = results
+          .filter(
+            (r): r is { id: string; detail: GateItemDetail } =>
+              r !== null &&
+              r.detail.item.latestDisposition !== verifyBaseline[r.id],
+          )
+          .map((r) => r.id);
+        if (settled.length === 0) return;
         setItems((prevItems) =>
           prevItems.map((item) => {
             const found = results.find((r) => r && r.id === item.id);
-            if (!found) return item;
-            const newDisposition = found.detail.item.currentDisposition;
-            if (newDisposition !== verifyBaseline[item.id]) {
-              settled.push(item.id);
-              return {
-                ...item,
-                currentDisposition: newDisposition,
-                state: found.detail.item.state,
-                updatedAt: found.detail.item.updatedAt,
-              };
-            }
-            return item;
+            if (!found || !settled.includes(item.id)) return item;
+            return {
+              ...item,
+              currentDisposition: found.detail.item.currentDisposition,
+              latestDisposition: found.detail.item.latestDisposition,
+              state: found.detail.item.state,
+              updatedAt: found.detail.item.updatedAt,
+            };
           }),
         );
-        if (settled.length > 0) {
-          setVerifyingIds((prev) => {
-            const next = new Set(prev);
-            settled.forEach((id) => next.delete(id));
-            return next;
-          });
-        }
+        setVerifyingIds((prev) => {
+          const next = new Set(prev);
+          settled.forEach((id) => next.delete(id));
+          return next;
+        });
       });
     }, 5000);
     return () => clearInterval(interval);
@@ -1261,7 +1272,7 @@ export function GateReadinessPanel({
                           {item.state}
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
-                          {item.currentDisposition ?? '—'}
+                          {item.latestDisposition ?? '—'}
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
                           {new Date(item.updatedAt).toLocaleString()}

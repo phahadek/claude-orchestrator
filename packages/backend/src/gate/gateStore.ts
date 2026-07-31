@@ -58,6 +58,8 @@ export interface GateItem {
   minDeployedCommit?: string;
   state: string;
   currentDisposition?: string;
+  /** The disposition on the item's most recent event, whether or not it advanced state — the queryable "attempted, inconclusive" signal (needs-setup/noted) that current_disposition can't carry. */
+  latestDisposition?: string;
   updatedAt: string;
   sources: GateItemSource[];
   events: GateItemEvent[];
@@ -89,6 +91,7 @@ export function getItem(id: string): GateItem | undefined {
     minDeployedCommit: row.min_deployed_commit ?? undefined,
     state: row.state,
     currentDisposition: row.current_disposition ?? undefined,
+    latestDisposition: row.latest_disposition ?? undefined,
     updatedAt: row.updated_at,
     sources: listGateItemSources(row.id).map((s) => ({
       sourceTaskId: s.source_task_id,
@@ -192,6 +195,7 @@ export function insertItem(input: NewGateItemInput): GateItem {
     min_deployed_commit: alreadyMergedCommit,
     state: 'open',
     current_disposition: null,
+    latest_disposition: null,
     updated_at: input.updatedAt,
   });
   for (const source of input.sources) {
@@ -233,7 +237,11 @@ export function appendEvent(gateItemId: string, event: GateItemEvent): void {
       event.unattended === undefined ? null : event.unattended ? 1 : 0,
     at: event.at,
   });
-  touchGateItemUpdatedAt(gateItemId, event.at);
+  if (event.disposition !== undefined) {
+    touchGateItemUpdatedAt(gateItemId, event.at, event.disposition);
+  } else {
+    touchGateItemUpdatedAt(gateItemId, event.at);
+  }
   recordEvent({
     event_type: 'gate_item_event_appended',
     actor_type: 'system',
@@ -309,6 +317,7 @@ export function setClassification(
   updateGateItem({
     ...row,
     classification,
+    latest_disposition: 'reclassified',
     updated_at: updatedAt,
   });
   insertGateItemEvent({

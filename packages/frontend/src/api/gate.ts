@@ -57,6 +57,8 @@ export interface GateItem {
   minDeployedCommit?: string;
   state: string;
   currentDisposition?: string;
+  /** The disposition on the item's most recent event, whether or not it advanced state — set even for a non-resolving abstain like needs-setup/noted. */
+  latestDisposition?: string;
   updatedAt: string;
   sources: GateItemSource[];
   events: GateItemEvent[];
@@ -75,11 +77,15 @@ interface GateBlockingItem {
   text: string;
   classification: GateItemClassification;
   state: string;
+  /** True when the item's latest event carries a non-resolving disposition (needs-setup/noted) — attempted but inconclusive. */
+  nonResolving?: boolean;
 }
 
 export interface GateReadiness {
   status: 'green' | 'blocked';
   blocking: GateBlockingItem[];
+  /** Subset of `blocking` whose latest disposition is non-resolving (needs-setup/noted). */
+  nonResolvingItems: GateBlockingItem[];
   /** The milestone's full per-state item totals, independent of any table filter. */
   counts: Record<string, number>;
 }
@@ -97,6 +103,8 @@ export interface ListGateItemsParams {
   state?: string;
   classification?: GateItemClassification;
   runnable?: boolean;
+  /** True: only items whose latest event is the needs-setup abstain. */
+  awaitingSetup?: boolean;
   page?: number;
   limit?: number;
   order?: 'not-done-first';
