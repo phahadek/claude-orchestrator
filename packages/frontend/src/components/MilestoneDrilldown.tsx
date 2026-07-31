@@ -8,7 +8,7 @@ import type { SessionState } from '../hooks/useSessionStore';
 import { sessionsApi } from '../api/projects';
 import { useTaskPage } from '../hooks/useTaskPage';
 import { SessionPanel } from './SessionPanel';
-import { taskIdFromIntent } from '../utils/milestoneStack';
+import { taskIdFromIntent, taskIdForIntentDisplay } from '../utils/milestoneStack';
 import type { MilestoneStackSelection } from './MilestoneDecisionStack';
 import styles from './MilestoneDrilldown.module.css';
 
@@ -95,6 +95,39 @@ function useResolvedSession(
   return { session: null, loading, notFound };
 }
 
+/**
+ * Resolves the task_id of a session by id, for the sole purpose of giving a
+ * decision.pickOne (or other taskId-less intent) a display-only task
+ * context — the originating session's task. Not derived from the live
+ * session store since SessionState doesn't carry task_id.
+ */
+function useSessionTaskId(sessionId: string | null): string | null {
+  const [result, setResult] = useState<{ id: string; taskId: string | null } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    sessionsApi
+      .getById(sessionId)
+      .then(({ session }) => {
+        if (cancelled) return;
+        setResult({ id: sessionId, taskId: session.task_id });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setResult({ id: sessionId, taskId: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  if (!sessionId) return null;
+  return result && result.id === sessionId ? result.taskId : null;
+}
+
 export function MilestoneDrilldown({
   selection,
   tasks,
@@ -105,11 +138,20 @@ export function MilestoneDrilldown({
   setSessionFavorited,
   project = null,
 }: Props) {
+  const intentPayloadTaskId =
+    selection?.type === 'intent' ? taskIdFromIntent(selection.intent) : null;
+  const intentSessionId =
+    selection?.type === 'intent' ? (selection.intent.sessionId ?? null) : null;
+  // Only resolved when needed — a payload taskId or a task selection never triggers this fetch.
+  const fallbackSessionTaskId = useSessionTaskId(
+    selection?.type === 'intent' && !intentPayloadTaskId ? intentSessionId : null,
+  );
+
   const taskId =
     selection?.type === 'task'
       ? selection.task.taskId
       : selection
-        ? taskIdFromIntent(selection.intent)
+        ? taskIdForIntentDisplay(selection.intent, fallbackSessionTaskId)
         : null;
 
   const resolvedTask: TaskView | null =
