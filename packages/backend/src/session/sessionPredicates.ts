@@ -29,6 +29,13 @@
  *   groom — the target task stays put (it isn't archived/moved, only
  *   narrowed via a staged task.updateBody) while its siblings are staged as
  *   new task.create intents for human apply.
+ * - docs: documentation-authoring planning session — shares the planning
+ *   concurrency pool, target task is mechanically moved to In Progress on
+ *   start like design/ops, but unlike them it can open its own PR; every PR
+ *   it opens is forced human_merge_only (see AgentSession.handlePRDetected)
+ *   since its injected procedure — not buildOrchestratorClaudeMd's
+ *   code-session lifecycle — governs its PR timing, so isCodeSession stays
+ *   false for it.
  */
 
 /** True for session types that plan (groom/design/ops/split): stage-only base profile, no worktree, no PR. */
@@ -37,7 +44,8 @@ export function isPlanningSession(sessionType: string): boolean {
     sessionType === 'groom' ||
     sessionType === 'design' ||
     sessionType === 'ops' ||
-    sessionType === 'split'
+    sessionType === 'split' ||
+    sessionType === 'docs'
   );
 }
 
@@ -48,7 +56,7 @@ export function isCodeSession(sessionType: string): boolean {
 
 /** True for session types that can open a pull request against the base branch. */
 export function opensPr(sessionType: string): boolean {
-  return sessionType === 'standard';
+  return sessionType === 'standard' || sessionType === 'docs';
 }
 
 /** True for session types that count against the shared code+planning concurrency accounting (excludes review). */
@@ -82,7 +90,8 @@ export function movesTargetInProgress(sessionType: string): boolean {
   return (
     sessionType === 'standard' ||
     sessionType === 'design' ||
-    sessionType === 'ops'
+    sessionType === 'ops' ||
+    sessionType === 'docs'
   );
 }
 

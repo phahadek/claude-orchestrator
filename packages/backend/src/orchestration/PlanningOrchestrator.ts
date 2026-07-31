@@ -8,6 +8,7 @@ import {
   clearPendingApproveTerminal,
   getSessionsWithPendingApproveTerminal,
   setTaskPauseReason,
+  getPRBySessionId,
 } from '../db/queries';
 import type {
   Session,
@@ -390,6 +391,15 @@ export class PlanningOrchestrator {
     ) {
       this.completeDesignTask(sessionId, row);
     }
+
+    // A docs session's natural terminal closes its target task only when the
+    // session never opened a PR (a Notion-page-edit-only outcome) — once a
+    // docs session opens a PR, opensPr('docs') routes the target task's
+    // closure through the existing merge-driven path instead, same as a
+    // standard code session.
+    if (row.session_type === 'docs' && DESIGN_COMPLETING_REASONS.has(reason)) {
+      this.completeDocsTask(sessionId, row);
+    }
   }
 
   /**
@@ -424,6 +434,42 @@ export class PlanningOrchestrator {
       .catch((err) => {
         logger.error(
           `[PlanningOrchestrator] failed to close design task ${taskId} for session ${sessionId.slice(0, 8)}: ${err}`,
+        );
+      });
+  }
+
+  /**
+   * Close a docs session's target task when it reached terminal having never
+   * opened a PR — the Notion-page-edit-only outcome. If a PR was opened, its
+   * closure runs through the existing merge-driven path instead (see
+   * opensPr('docs')), so this mirrors completeDesignTask but is additionally
+   * gated on the absence of a PR row for this session.
+   */
+  private completeDocsTask(sessionId: string, row: Session): void {
+    const taskId = row.task_id;
+    const projectId = row.project_id;
+    if (!taskId || !projectId) return;
+    if (getPRBySessionId(sessionId)) return;
+
+    const intents = listStagedIntentsBySession(sessionId);
+    if (intents.some((i) => i.state === 'rejected')) return;
+
+    getTaskBackend(projectId)
+      .updateStatus(taskId, DESIGN_DONE_STATUS, {
+        source: 'orchestrator',
+        sessionId,
+      })
+      .then(() => {
+        this.sessionManager.emit('message', {
+          type: 'task_status_changed',
+          notionTaskId: taskId,
+          newStatus: DESIGN_DONE_STATUS,
+        } satisfies ServerMessage);
+        emitTaskUpdated(taskId);
+      })
+      .catch((err) => {
+        logger.error(
+          `[PlanningOrchestrator] failed to close docs task ${taskId} for session ${sessionId.slice(0, 8)}: ${err}`,
         );
       });
   }

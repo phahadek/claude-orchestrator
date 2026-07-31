@@ -17,8 +17,9 @@ describe('sessionPredicates', () => {
     expect(isCodeSession('ops')).toBe(false);
   });
 
-  it('opensPr is true only for standard', () => {
+  it('opensPr is true for standard and docs', () => {
     expect(opensPr('standard')).toBe(true);
+    expect(opensPr('docs')).toBe(true);
     expect(opensPr('review')).toBe(false);
     expect(opensPr('groom')).toBe(false);
     expect(opensPr('design')).toBe(false);
@@ -41,19 +42,25 @@ describe('sessionPredicates', () => {
     expect(writesTaskStatus('ops')).toBe(false);
   });
 
-  it('movesTargetInProgress is true for standard, design and ops, false for review and groom', () => {
+  it('movesTargetInProgress is true for standard, design, ops and docs, false for review and groom', () => {
     expect(movesTargetInProgress('standard')).toBe(true);
     expect(movesTargetInProgress('review')).toBe(false);
     expect(movesTargetInProgress('groom')).toBe(false);
     expect(movesTargetInProgress('design')).toBe(true);
     expect(movesTargetInProgress('ops')).toBe(true);
+    expect(movesTargetInProgress('docs')).toBe(true);
   });
 
-  it('isPlanningSession is true for groom, design and ops', () => {
+  it('isPlanningSession is true for groom, design, ops and docs', () => {
     expect(isPlanningSession('standard')).toBe(false);
     expect(isPlanningSession('review')).toBe(false);
     expect(isPlanningSession('groom')).toBe(true);
     expect(isPlanningSession('design')).toBe(true);
     expect(isPlanningSession('ops')).toBe(true);
+    expect(isPlanningSession('docs')).toBe(true);
+  });
+
+  it('isCodeSession is false for docs', () => {
+    expect(isCodeSession('docs')).toBe(false);
   });
 });
