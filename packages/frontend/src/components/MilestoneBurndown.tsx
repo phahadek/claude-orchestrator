@@ -25,9 +25,16 @@ const SEGMENT_FILL_CLASS: Record<SegmentState, string> = {
   pending: styles.fillPending,
   staged: styles.fillStaged,
   done: styles.fillDone,
-  blocked: styles.fillPending,
-  inGrooming: styles.fillStaged,
+  blocked: styles.fillBlocked,
+  inGrooming: styles.fillInGrooming,
   untouched: styles.fillUntouched,
+  open: styles.fillGateOpen,
+  runnable: styles.fillGateRunnable,
+  pendingApproval: styles.fillGatePendingApproval,
+  pass: styles.fillGatePass,
+  fail: styles.fillGateFail,
+  deferred: styles.fillGateDeferred,
+  discarded: styles.fillGateDiscarded,
 };
 
 interface Props {

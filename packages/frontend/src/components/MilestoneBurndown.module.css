@@ -175,19 +175,55 @@
 }
 
 .fillPending {
-  background: var(--color-red, #f38ba8);
+  background: #fab387;
 }
 
 .fillStaged {
-  background: var(--color-yellow, #f9e2af);
+  background: #f9e2af;
 }
 
 .fillDone {
-  background: var(--color-green, #a6e3a1);
+  background: #a6e3a1;
+}
+
+.fillBlocked {
+  background: #f38ba8;
+}
+
+.fillInGrooming {
+  background: #89b4fa;
 }
 
 .fillUntouched {
-  background: var(--text-faint, #6c7086);
+  background: #6c7086;
+}
+
+.fillGateOpen {
+  background: #cba6f7;
+}
+
+.fillGateRunnable {
+  background: #74c7ec;
+}
+
+.fillGatePendingApproval {
+  background: #b4befe;
+}
+
+.fillGatePass {
+  background: #94e2d5;
+}
+
+.fillGateFail {
+  background: #eba0ac;
+}
+
+.fillGateDeferred {
+  background: #f5c2e7;
+}
+
+.fillGateDiscarded {
+  background: #7f849c;
 }
 
 .blockerBadge {
