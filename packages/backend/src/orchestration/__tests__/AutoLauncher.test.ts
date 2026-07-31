@@ -1422,9 +1422,7 @@ describe('AutoLauncher — launch failure tracking', () => {
     // prior failure — only a confirmed session_started does. Clearing here
     // is exactly the bug: it wipes the failure history before the outcome
     // of this launch is known.
-    expect(clearTaskPauseReason).not.toHaveBeenCalledWith(
-      'task-dispatch-only',
-    );
+    expect(clearTaskPauseReason).not.toHaveBeenCalledWith('task-dispatch-only');
   });
 
   it('successful launch (confirmed via session_started) resets the count to zero and clears the persisted pause reason', async () => {
@@ -1436,19 +1434,17 @@ describe('AutoLauncher — launch failure tracking', () => {
 
     // Simulate a prior failure.
     fireLaunchFailed(launcher, 'task-confirmed-success');
-    expect(
-      getCrashBudget(launcher).inCooldown('task-confirmed-success'),
-    ).toBe(true);
+    expect(getCrashBudget(launcher).inCooldown('task-confirmed-success')).toBe(
+      true,
+    );
 
     // The launch is later confirmed successful via session_started.
     fireSessionStarted(launcher, 'task-confirmed-success');
 
-    expect(clearTaskPauseReason).toHaveBeenCalledWith(
-      'task-confirmed-success',
+    expect(clearTaskPauseReason).toHaveBeenCalledWith('task-confirmed-success');
+    expect(getCrashBudget(launcher).inCooldown('task-confirmed-success')).toBe(
+      false,
     );
-    expect(
-      getCrashBudget(launcher).inCooldown('task-confirmed-success'),
-    ).toBe(false);
 
     // The count is truly reset to zero, not just out of cooldown: a
     // subsequent failure is treated as attempt 1 again with the first-tier
