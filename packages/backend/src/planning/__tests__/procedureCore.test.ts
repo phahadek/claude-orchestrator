@@ -249,6 +249,15 @@ describe('procedureCore', () => {
     );
   });
 
+  it('names task.create among the intents that share the decision groupId when splitting-by-narrowing produces one', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+    const text = stepSummaryFor(step, 'groom');
+    expect(text).toMatch(
+      /one `task\.create` per\s+excised piece[\s\S]*?under the\s+same shared `groupId` as the narrowing decision/,
+    );
+    expect(text).toMatch(/never staged ungrouped/);
+  });
+
   it('instructs surfacing a digest-contradicting spot-check as a blocker, not resolving around it', () => {
     const step = ORDERED_STEPS.find((s) => s.id === 'investigate')!;
     const text = stepSummaryFor(step, 'groom');
