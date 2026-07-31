@@ -324,7 +324,9 @@ interface SetStatusPayload {
 function GroomingGateSummary({ gate }: { gate: GroomingGate }) {
   const regionCount =
     (gate.regions?.packages?.length ?? 0) + (gate.regions?.files?.length ?? 0);
-  const constraintCount = Object.keys(gate.constraintsDispositioned ?? {}).length;
+  const constraintCount = Object.keys(
+    gate.constraintsDispositioned ?? {},
+  ).length;
   const filesPathsEntries = gate.filesPathsEntries ?? [];
   const constraintsDispositioned = gate.constraintsDispositioned ?? {};
 
@@ -336,13 +338,14 @@ function GroomingGateSummary({ gate }: { gate: GroomingGate }) {
       <p>
         Size: {gate.size_check?.decision ?? '—'} · Type check:{' '}
         {gate.type_check?.decision ?? '—'} · Task type: {gate.type ?? '—'} ·{' '}
-        {regionCount} region{regionCount === 1 ? '' : 's'} ·{' '}
-        {constraintCount} constraint{constraintCount === 1 ? '' : 's'}{' '}
-        dispositioned
+        {regionCount} region{regionCount === 1 ? '' : 's'} · {constraintCount}{' '}
+        constraint{constraintCount === 1 ? '' : 's'} dispositioned
       </p>
       {(constraintCount > 0 || filesPathsEntries.length > 0) && (
         <details className={styles.expandDetail}>
-          <summary className={styles.expandSummary}>Show grooming detail</summary>
+          <summary className={styles.expandSummary}>
+            Show grooming detail
+          </summary>
           {constraintCount > 0 && (
             <div>
               <strong>Constraints</strong>
@@ -351,7 +354,9 @@ function GroomingGateSummary({ gate }: { gate: GroomingGate }) {
                   <li key={id}>
                     {id}: {d.disposition}
                     {d.why ? ` — ${d.why}` : ''}
-                    {d.citedDesignTaskId ? ` (cites ${d.citedDesignTaskId})` : ''}
+                    {d.citedDesignTaskId
+                      ? ` (cites ${d.citedDesignTaskId})`
+                      : ''}
                     {d.routedTaskId ? ` (routed to ${d.routedTaskId})` : ''}
                   </li>
                 ))}

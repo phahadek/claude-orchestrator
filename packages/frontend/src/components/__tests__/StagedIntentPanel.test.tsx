@@ -112,14 +112,28 @@ describe('StagedIntentPanel', () => {
               size_check: { decision: 'no_split' },
               type_check: { decision: 'none' },
               type: '💻 Code',
-              regions: { packages: ['packages/frontend'], files: ['a.ts', 'b.ts'] },
+              regions: {
+                packages: ['packages/frontend'],
+                files: ['a.ts', 'b.ts'],
+              },
               constraintsDispositioned: {
-                'constraint-1': { disposition: 'n/a', why: 'Not applicable here.' },
+                'constraint-1': {
+                  disposition: 'n/a',
+                  why: 'Not applicable here.',
+                },
                 'constraint-2': { disposition: 'complies' },
               },
               filesPathsEntries: [
-                { raw: 'packages/frontend/src/a.ts', isNew: false, existsInRepo: true },
-                { raw: 'packages/frontend/src/b.ts', isNew: true, existsInRepo: false },
+                {
+                  raw: 'packages/frontend/src/a.ts',
+                  isNew: false,
+                  existsInRepo: true,
+                },
+                {
+                  raw: 'packages/frontend/src/b.ts',
+                  isNew: true,
+                  existsInRepo: false,
+                },
               ],
             },
           },
