@@ -624,7 +624,7 @@ describe('POST /api/staged-intents/group/:groupId/commit', () => {
 
     expect(commit.status).toBe(200);
     expect(updateStatus).toHaveBeenCalledWith(
-      't-7',
+      'notion:t-7',
       '🗂️ Ready',
       expect.objectContaining({ source: 'human' }),
     );
@@ -707,7 +707,7 @@ describe('POST /api/staged-intents/group/:groupId/commit', () => {
       [dependsOn.body.id, patch.body.id, setStatus.body.id].sort(),
     );
     expect(patchBodySection).toHaveBeenCalledWith(
-      taskId,
+      `notion:${taskId}`,
       '👁️ Manual verification',
       expect.objectContaining({ operation: 'remove' }),
       expect.objectContaining({ source: 'human' }),
@@ -1699,12 +1699,12 @@ describe('task.setDependsOn symbolic reference to a sibling task.create — comm
     ]);
     expect(createTask).toHaveBeenCalledTimes(1);
     expect(setDependsOn).toHaveBeenCalledWith(
-      taskId,
+      `notion:${taskId}`,
       ['notion:new-prereq-id'],
       expect.objectContaining({ source: 'human' }),
     );
     expect(updateStatus).toHaveBeenCalledWith(
-      taskId,
+      `notion:${taskId}`,
       '🗂️ Ready',
       expect.objectContaining({ source: 'human' }),
     );

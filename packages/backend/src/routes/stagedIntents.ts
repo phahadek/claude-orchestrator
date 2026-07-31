@@ -1335,13 +1335,22 @@ class OpsJournalTransitionRejectedError extends Error {
 }
 
 /**
- * Parses/normalizes one raw task-reference id. A bare id (no `source:`
- * prefix) is unambiguous — every unprefixed id surfacing in this system
- * originates from Notion (board rows, groom-context bundles) — so it is
- * normalized to `notion:<id>` rather than rejected. A prefixed id must parse
- * cleanly via taskId.ts's parseTaskId or is rejected outright: guessing at a
- * malformed prefixed id risks resolving a near-miss uuid to a real but wrong
- * task, the exact failure class the full-id matching rule exists to prevent.
+ * Parses/normalizes one raw task-reference id to the single canonical form
+ * every staged-intent write path persists (staged_intent.task_id,
+ * audit_log.task_id, dependsOn entries) — this is the write-boundary
+ * chokepoint the id-format fan-out (hyphenated uuid / hyphenless 32-hex /
+ * notion:-prefixed variant, all observed live) converges through, so a
+ * downstream reader is never handed two formats of the same id. A bare id
+ * (no `source:` prefix) is unambiguous — every unprefixed id surfacing in
+ * this system originates from Notion (board rows, groom-context bundles) —
+ * so it is normalized to `notion:<id>` rather than rejected. A prefixed id
+ * must parse cleanly via taskId.ts's parseTaskId or is rejected outright:
+ * guessing at a malformed prefixed id risks resolving a near-miss uuid to a
+ * real but wrong task, the exact failure class the full-id matching rule
+ * exists to prevent. Either way, the result is run through
+ * taskId.ts's normalizeTaskId, which canonicalizes the external id's
+ * hyphenation while preserving whatever source prefix (or its absence)
+ * denotes — the source discriminator, not decoration, is never erased.
  */
 function normalizeOrRejectTaskId(raw: unknown, fieldLabel: string): string {
   if (typeof raw !== 'string' || !raw.trim()) {
@@ -1358,7 +1367,6 @@ function normalizeOrRejectTaskId(raw: unknown, fieldLabel: string): string {
           `"source:externalId" (source one of notion/yaml/jira/github): ${(err as Error).message}`,
       );
     }
-    return raw;
   }
   return normalizeTaskId(raw);
 }
@@ -1413,10 +1421,13 @@ const SUBJECT_TASK_ID_KINDS: ReadonlySet<string> = new Set([
  * shape apply time requires, since
  * NotionClient.setDependsOn parses each entry with no bare-id fallback
  * (taskId.ts's toExternalId, unlike normalizeTaskId, throws on a bare id).
- * The taskId subject is validated (existence + shape) but left as the
- * caller supplied it: every backend already normalizes its own taskId
- * argument internally (see NotionTaskBackend), so rewriting it here would
- * only risk diverging from what downstream code expects verbatim. Throws
+ * The taskId subject is likewise rewritten to its canonical
+ * (normalizeOrRejectTaskId) form — this is the write-path chokepoint that
+ * keeps staged_intent.task_id (and, via recordEvent, audit_log.task_id) from
+ * ever persisting whichever of the hyphenated/hyphenless/notion:-prefixed
+ * formats a caller happened to pass; every backend already tolerates the
+ * canonical form internally (see NotionTaskBackend), so rewriting it here
+ * costs nothing downstream. Throws
  * TaskReferenceValidationError on anything unparseable or unresolvable. A
  * no-op for kinds that carry no task reference in scope (seed.stage keys off
  * sourceTask, arch.* off unitId — neither is a board task reference), except
@@ -1431,6 +1442,28 @@ export async function validateAndNormalizeTaskReferences(
   projectId: string,
   groupId?: string | null,
 ): Promise<unknown> {
+  // gate.accrete/seed.stage key off `sourceTask.id` rather than a top-level
+  // `taskId` — normalized here on the same rule as SUBJECT_TASK_ID_KINDS
+  // below so it converges with a sibling task.setStatus's now-normalized
+  // taskId in the same group (the strip<->accrete content-match precheck
+  // correlates the two by exact string equality — see
+  // getGroupGateAccretePayload/getGroupSeedStagePayload).
+  if (
+    (kind === 'gate.accrete' || kind === 'seed.stage') &&
+    payload &&
+    typeof payload === 'object' &&
+    'sourceTask' in payload
+  ) {
+    const p = payload as { sourceTask?: { id?: unknown } };
+    if (typeof p.sourceTask?.id === 'string') {
+      const normalized = normalizeOrRejectTaskId(
+        p.sourceTask.id,
+        'sourceTask.id',
+      );
+      p.sourceTask = { ...p.sourceTask, id: normalized };
+    }
+  }
+
   if (kind === 'gate.accrete') {
     const sourceTaskId = (payload as { sourceTask?: { id?: unknown } } | null)
       ?.sourceTask?.id;
@@ -1481,6 +1514,7 @@ export async function validateAndNormalizeTaskReferences(
   if (SUBJECT_TASK_ID_KINDS.has(kind)) {
     const normalized = normalizeOrRejectTaskId(p.taskId, 'taskId');
     await assertTaskIdResolves(normalized, projectId);
+    p.taskId = normalized;
   }
 
   if (kind === 'task.setDependsOn' || kind === 'task.create') {

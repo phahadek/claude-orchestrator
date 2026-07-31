@@ -126,7 +126,7 @@ describe('POST /api/staged-intents/batch/commit', () => {
 
     expect(updateStatus).toHaveBeenCalledTimes(2);
     expect(mockRecordEvent).toHaveBeenCalledTimes(2);
-    for (const [taskId] of [['t-1'], ['t-2']]) {
+    for (const [taskId] of [['notion:t-1'], ['notion:t-2']]) {
       expect(mockRecordEvent).toHaveBeenCalledWith(
         expect.objectContaining({
           event_type: 'readiness_override',
