@@ -77,7 +77,7 @@ beforeEach(() => {
 });
 
 describe('stage-proposal MCP tools — registration', () => {
-  it('registers exactly the 16 stage-proposal tool names', async () => {
+  it('registers exactly the 17 stage-proposal tool names', async () => {
     const { client, close } = await connectedClient();
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
@@ -90,6 +90,7 @@ describe('stage-proposal MCP tools — registration', () => {
         'gate.accrete',
         'intent.withdraw',
         'journal.setState',
+        'notion.pageEdit',
         'planning.noOp',
         'seed.stage',
         'session.requestCapability',
@@ -101,6 +102,27 @@ describe('stage-proposal MCP tools — registration', () => {
         'task.updateBody',
       ].sort(),
     );
+    await close();
+  });
+
+  it('notion.pageEdit stages a notion.pageEdit intent carrying page_id/content_updates', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'notion.pageEdit',
+      arguments: {
+        payload: {
+          page_id: 'page-1',
+          content_updates: [{ old_str: 'old', new_str: 'new' }],
+        },
+      },
+    });
+    const intent = parseIntentResult(
+      result as { content: Array<{ type: string; text?: string }> },
+    );
+    expect(intent.kind).toBe('notion.pageEdit');
+    expect(intent.projectId).toBe(PROJECT_ID);
+    expect(intent.sessionId).toBe(SESSION_ID);
+    expect(getStagedIntent(intent.id as string)).toBeTruthy();
     await close();
   });
 

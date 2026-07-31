@@ -7,6 +7,8 @@ import {
   GROOM_ALLOWED_TOOLS,
   DESIGN_ALLOWED_TOOLS,
   OPS_ALLOWED_TOOLS,
+  DOCS_ALLOWED_TOOLS,
+  docsWebFetchTools,
   NOTION_READ_MCP_TOOLS,
   runtimeSettings,
 } from '../config';
@@ -361,12 +363,19 @@ export function isToolShapedCapability(capability: string): boolean {
  * Jira/GitHub/YAML project gets no Notion entries — granting them here
  * without the server being registered would be permissions for tools that
  * are structurally absent, the exact bug this gating fixes.
+ *
+ * `docsSourceDomains` is a docs session's per-dispatch WebFetch allowlist,
+ * derived from the Docs task's declared Source domains (see the Docs
+ * task-body convention). Only merged in for sessionType 'docs' — every other
+ * session type ignores it. Never widens to an open WebFetch/WebSearch: an
+ * empty/omitted list grants no WebFetch at all.
  */
 export function getSessionAllowedTools(
   sessionType: string,
   orchConfig: Pick<OrchestratorConfig, 'allowed_tools'>,
   granted: string[] = [],
   taskSource?: 'notion' | 'yaml' | 'jira' | 'github',
+  docsSourceDomains: string[] = [],
 ): string[] {
   const grantable = granted.filter(isGrantable).filter(isToolShapedCapability);
   const notionExtras = taskSource === 'notion' ? NOTION_READ_MCP_TOOLS : [];
@@ -377,6 +386,12 @@ export function getSessionAllowedTools(
         ? [...DESIGN_ALLOWED_TOOLS, ...notionExtras]
         : sessionType === 'ops'
           ? [...OPS_ALLOWED_TOOLS, ...notionExtras, ...orchConfig.allowed_tools]
-          : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
+          : sessionType === 'docs'
+            ? [
+                ...DOCS_ALLOWED_TOOLS,
+                ...notionExtras,
+                ...docsWebFetchTools(docsSourceDomains),
+              ]
+            : [...ALLOWED_TOOLS, ...orchConfig.allowed_tools];
   return [...new Set([...base, ...grantable])];
 }

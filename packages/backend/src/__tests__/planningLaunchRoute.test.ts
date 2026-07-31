@@ -81,6 +81,10 @@ describe('resolveSessionType', () => {
     expect(resolveSessionType('investigation')).toBe('ops');
   });
 
+  it('resolves docs to its own sessionType', () => {
+    expect(resolveSessionType('docs')).toBe('docs');
+  });
+
   it('returns null for an unrecognized workflow', () => {
     expect(resolveSessionType('nonsense')).toBeNull();
   });

@@ -133,7 +133,13 @@ export const ALLOWED_TOOLS = [
   'Bash(sort:*)',
   'Bash(pwd:*)',
   // GitHub MCP — explicit allowlist; create_pull_request and merge_pull_request are
-  // backend-owned and must not be available to session agents.
+  // backend-owned and must not be available to session agents. The one
+  // reviewed exception is DOCS_ALLOWED_TOOLS below, which grants
+  // create_pull_request (plus the `gh pr create` Bash verb) to docs sessions
+  // only — a repo-file Docs task has no backend-driven PR-open path the way
+  // a Code session does, so the docs session must open its own never-auto-merge
+  // PR. This is a narrow, scoped precedent for docs sessions specifically,
+  // not a relaxation of this exclusion for any other session type.
   'mcp__github__add_issue_comment',
   'mcp__github__create_branch',
   'mcp__github__create_issue',
@@ -367,6 +373,56 @@ export const OPS_ALLOWED_TOOLS = [
   'Bash(git rev-parse:*)',
   'Bash(git branch --list:*)',
 ];
+
+// The orchestrator MCP stage-proposal tool a docs session uses for a
+// Notion-page Target surface — the notion.pageEdit staged-edit path (see
+// mcp/tools/stageProposalTools.ts). docs isn't a PLANNING_INTENT_KINDS
+// workflow (it isn't an assembled groom/design/ops/split procedure), so this
+// is named explicitly rather than derived, same precedent as
+// groom.precheck/completeness.disposition/gate.verify above.
+const DOCS_MCP_TOOLS = [
+  ORCHESTRATOR_MCP_HEALTH_TOOL,
+  orchestratorMcpToolName('notion.pageEdit'),
+  ...ARCHITECTURE_READ_MCP_TOOLS,
+  ...TASK_READ_MCP_TOOLS,
+  ...TIER_B_READ_MCP_TOOLS,
+];
+
+/**
+ * docs session base tool set: the planning read set + Write/Edit (repo-file
+ * authoring) + the Code-session git-write and PR-open path (git-write Bash,
+ * the `gh pr create` verb, and the narrowly-scoped mcp__github__create_pull_request
+ * exception — see the comment on ALLOWED_TOOLS above) + the Notion
+ * staged-edit path (notion.pageEdit, above). WebFetch is deliberately NOT
+ * included here — it's merged in per-dispatch, scoped to the docs task's
+ * declared Source domain(s) (see getSessionAllowedTools's docsSourceDomains
+ * param), since a static, module-load-time constant cannot know a task's
+ * declared domains. No open WebSearch and no un-allowlisted WebFetch ever
+ * appear in this base — broader egress is a grantable capability via the
+ * existing granted[] / isGrantable path, never the autonomous base.
+ */
+export const DOCS_ALLOWED_TOOLS = [
+  ...PLANNING_READONLY_BASH_TOOLS,
+  ...DOCS_MCP_TOOLS,
+  'Write',
+  'Edit',
+  'Bash(git:*)',
+  'Bash(gh pr create:*)',
+  'mcp__github__create_pull_request',
+];
+
+/**
+ * Builds the docs session's per-dispatch WebFetch allowlist from a Docs
+ * task's declared Source domains (see the Docs task-body convention —
+ * Target surface + Source domains). Each domain becomes its own
+ * `WebFetch(domain:<domain>)` entry rather than a single wildcard, so the
+ * CLI's own domain match (not just this array's presence) enforces the
+ * boundary. Empty input grants no WebFetch at all — never a wildcard
+ * fallback.
+ */
+export function docsWebFetchTools(sourceDomains: string[]): string[] {
+  return sourceDomains.map((domain) => `WebFetch(domain:${domain})`);
+}
 
 function hydrateProject(p: {
   id: string;

@@ -354,6 +354,22 @@ export function registerStageProposalTools(
     async (args) => stage('planning.noOp', args.payload, ctx, args),
   );
 
+  registerTool(
+    'notion.pageEdit',
+    {
+      title: 'Stage a Notion source-page edit',
+      description:
+        'Stages a notion.pageEdit intent — the Notion source-of-truth-page twin of task.updateBody/task.patchBodySection, for a Docs task whose Target surface is a Notion page rather than a repo file. Each content_updates entry is a find/replace pair (old_str/new_str) applied against the page\'s current full body at apply time; old_str must match the live page body exactly at apply time or the intent is rejected as stale.',
+      inputSchema: envelope({
+        page_id: z.string(),
+        content_updates: z.array(
+          z.object({ old_str: z.string(), new_str: z.string() }),
+        ),
+      }),
+    },
+    async (args) => stage('notion.pageEdit', args.payload, ctx, args),
+  );
+
   // Not routed through `stage()`: unlike every other tool here, this acts
   // immediately on an existing staged intent rather than creating a new one
   // — see withdrawIntent's doc comment in stagedIntents.ts for why this is

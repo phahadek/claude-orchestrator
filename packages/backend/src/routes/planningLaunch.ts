@@ -44,6 +44,8 @@ export function resolveSessionType(
     case 'ops':
     case 'investigation':
       return 'ops';
+    case 'docs':
+      return 'docs';
     default:
       return null;
   }
@@ -104,9 +106,9 @@ export async function dispatchPlanningFlow(
     });
   }
 
-  // groom / design: dispatch directly per task id. No dependency gating
-  // here — the evaluator's candidate scan (or a human's selection) is where
-  // gating belongs, not the dispatch step itself.
+  // groom / design / docs: dispatch directly per task id. No dependency
+  // gating here — the evaluator's candidate scan (or a human's selection) is
+  // where gating belongs, not the dispatch step itself.
   const tasks: PlanningTaskEntry[] = taskIds.map((id) => {
     const normalizedId = normalizeTaskId(id);
     return {
