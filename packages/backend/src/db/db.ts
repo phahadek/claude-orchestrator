@@ -1,10 +1,17 @@
 import Database from 'better-sqlite3';
-import path from 'path';
+import fs from 'fs';
 import { getOrchestratorConfig } from '../config/appConfig';
+import { getDataDir } from '../config/dataDir';
+import { resolveDbPath } from '../config/resolveDbPath';
 import { logger } from '../logger';
+import { assertDatabaseSchema } from './assertDatabaseSchema';
 
-const _configDbPath = getOrchestratorConfig().db.path;
-const dbPath = _configDbPath || path.join(process.cwd(), 'dashboard.db');
+const _configDbPath = getOrchestratorConfig().db.path || './dashboard.db';
+// Resolved against the data directory, never process.cwd() — a CWD-relative
+// path is set by whatever launched the process (e.g. a systemd drop-in), not
+// by the operator, and silently pointed a production install at an empty
+// database at the wrong location.
+const dbPath = resolveDbPath(_configDbPath, getDataDir());
 
 // A test process (vitest, or anything with NODE_ENV=test) must never bind a
 // real on-disk database file: an inherited/misconfigured DB_PATH pointing at
@@ -23,9 +30,15 @@ if (isTestMode && dbPath !== ':memory:') {
   );
 }
 
+// Captured before opening — better-sqlite3 creates the file on open, which
+// would otherwise make a pre-existing file indistinguishable from a fresh one.
+const dbFileExistedBeforeOpen = dbPath !== ':memory:' && fs.existsSync(dbPath);
+
 export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+
+assertDatabaseSchema(db, dbPath, dbFileExistedBeforeOpen);
 
 // Run migrations immediately so prepared statements in queries.ts compile at import time.
 db.exec(`

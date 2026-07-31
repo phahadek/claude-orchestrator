@@ -64,7 +64,13 @@ function obj(v: unknown, field: string): Record<string, unknown> {
   return v as Record<string, unknown>;
 }
 
-function validateConfig(raw: unknown): OrchestratorConfig {
+export interface ConfigReadResult {
+  config: OrchestratorConfig;
+  /** Dotted-path fields explicitly present in the raw config.json (regardless of value). */
+  explicitFields: Set<string>;
+}
+
+function validateConfig(raw: unknown): ConfigReadResult {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     throw new ConfigValidationError(
       '[config] config.json must be a JSON object. Fix the file and restart.',
@@ -80,43 +86,67 @@ function validateConfig(raw: unknown): OrchestratorConfig {
   }
 
   const result = structuredClone(CONFIG_DEFAULTS);
+  const explicitFields = new Set<string>();
 
   if ('notion' in top) {
     const n = obj(top.notion, 'notion');
-    if ('apiKey' in n) result.notion.apiKey = str(n.apiKey, 'notion.apiKey');
+    if ('apiKey' in n) {
+      result.notion.apiKey = str(n.apiKey, 'notion.apiKey');
+      explicitFields.add('notion.apiKey');
+    }
   }
   if ('github' in top) {
     const g = obj(top.github, 'github');
-    if ('token' in g) result.github.token = str(g.token, 'github.token');
-    if ('repo' in g) result.github.repo = str(g.repo, 'github.repo');
+    if ('token' in g) {
+      result.github.token = str(g.token, 'github.token');
+      explicitFields.add('github.token');
+    }
+    if ('repo' in g) {
+      result.github.repo = str(g.repo, 'github.repo');
+      explicitFields.add('github.repo');
+    }
   }
   if ('server' in top) {
     const s = obj(top.server, 'server');
-    if ('port' in s) result.server.port = num(s.port, 'server.port');
+    if ('port' in s) {
+      result.server.port = num(s.port, 'server.port');
+      explicitFields.add('server.port');
+    }
   }
   if ('db' in top) {
     const d = obj(top.db, 'db');
-    if ('path' in d) result.db.path = str(d.path, 'db.path');
+    if ('path' in d) {
+      result.db.path = str(d.path, 'db.path');
+      explicitFields.add('db.path');
+    }
   }
   if ('sessions' in top) {
     const se = obj(top.sessions, 'sessions');
-    if ('dir' in se) result.sessions.dir = str(se.dir, 'sessions.dir');
+    if ('dir' in se) {
+      result.sessions.dir = str(se.dir, 'sessions.dir');
+      explicitFields.add('sessions.dir');
+    }
   }
   if ('autoReview' in top) {
     const ar = obj(top.autoReview, 'autoReview');
-    if ('enabled' in ar)
+    if ('enabled' in ar) {
       result.autoReview.enabled = bool(ar.enabled, 'autoReview.enabled');
-    if ('concurrency' in ar)
+      explicitFields.add('autoReview.enabled');
+    }
+    if ('concurrency' in ar) {
       result.autoReview.concurrency = num(
         ar.concurrency,
         'autoReview.concurrency',
       );
+      explicitFields.add('autoReview.concurrency');
+    }
   }
   if ('setupComplete' in top) {
     result.setupComplete = bool(top.setupComplete, 'setupComplete');
+    explicitFields.add('setupComplete');
   }
 
-  return result;
+  return { config: result, explicitFields };
 }
 
 function deepMerge(
@@ -154,8 +184,20 @@ export class DataDirConfigSource implements ConfigSource {
   }
 
   read(): OrchestratorConfig {
+    return this.readWithExplicitFields().config;
+  }
+
+  /**
+   * Like read(), but also reports which dotted-path fields were explicitly
+   * present in config.json — used by appConfig's .env fallback merge to tell
+   * "explicitly set" apart from "filled in from CONFIG_DEFAULTS".
+   */
+  readWithExplicitFields(): ConfigReadResult {
     if (!this.exists()) {
-      return structuredClone(CONFIG_DEFAULTS);
+      return {
+        config: structuredClone(CONFIG_DEFAULTS),
+        explicitFields: new Set(),
+      };
     }
     const raw: unknown = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
     return validateConfig(raw);

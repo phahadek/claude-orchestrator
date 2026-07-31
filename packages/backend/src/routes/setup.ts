@@ -8,6 +8,8 @@ import {
   writeOrchestratorConfig,
 } from '../config/appConfig';
 import { claudeCredentialsPath } from '../config/credentialsPath';
+import { getDataDir } from '../config/dataDir';
+import { resolveDbPath } from '../config/resolveDbPath';
 import { countProjects } from '../db/queries';
 import type { DeepPartial, OrchestratorConfig } from '../config/types';
 import { GitHubClient } from '../github/GitHubClient';
@@ -284,7 +286,64 @@ router.post('/setup/save-credentials', (req, res) => {
 
 // ── Complete / Skip ───────────────────────────────────────────────────────────
 
+// Below this length a token/key is obviously a placeholder, not a real
+// credential (the incident's github.token was "ghp-x", 5 characters).
+const MIN_CREDENTIAL_LENGTH = 10;
+
+function isPlaceholderRepo(repo: string): boolean {
+  return repo.trim().toLowerCase() === 'owner/repo';
+}
+
+function isPlaceholderCredential(value: string): boolean {
+  return value.trim().length > 0 && value.trim().length < MIN_CREDENTIAL_LENGTH;
+}
+
+function isDbDirWritable(resolvedDbPath: string): boolean {
+  if (resolvedDbPath === ':memory:') return true;
+  try {
+    fs.accessSync(path.dirname(resolvedDbPath), fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validates that the current config could actually start the service before
+ * setupComplete is stamped. Skips fields that are simply unset (empty) —
+ * only rejects values that are present but placeholder-shaped or unusable,
+ * so a genuine first-run with partial config isn't blocked.
+ */
+function validateConfigForCompletion(): string[] {
+  const cfg = getOrchestratorConfig();
+  const problems: string[] = [];
+
+  if (cfg.github.repo && isPlaceholderRepo(cfg.github.repo)) {
+    problems.push('github.repo is still the placeholder value "owner/repo"');
+  }
+  if (cfg.github.token && isPlaceholderCredential(cfg.github.token)) {
+    problems.push('github.token is too short to be a real token');
+  }
+  if (cfg.notion.apiKey && isPlaceholderCredential(cfg.notion.apiKey)) {
+    problems.push('notion.apiKey is too short to be a real key');
+  }
+
+  const resolvedDbPath = resolveDbPath(cfg.db.path || './dashboard.db', getDataDir());
+  if (!isDbDirWritable(resolvedDbPath)) {
+    problems.push(
+      `db.path resolves to "${resolvedDbPath}", whose directory is not writable`,
+    );
+  }
+
+  return problems;
+}
+
 router.post('/setup/complete', (_req, res) => {
+  const problems = validateConfigForCompletion();
+  if (problems.length > 0) {
+    res.status(400).json({ error: 'invalid_config', problems });
+    return;
+  }
   writeOrchestratorConfig({ setupComplete: true });
   res.json({ ok: true });
 });

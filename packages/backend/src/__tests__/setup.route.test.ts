@@ -192,6 +192,98 @@ describe('setup writes bust the config cache', () => {
   });
 });
 
+// ── POST /setup/complete validation ────────────────────────────────────────────
+// Regression for the 2026-07-30 outage: setupComplete was previously stamped
+// on any payload, including a config holding "owner/repo" and a 5-character
+// token. /setup/complete must now refuse to bless a config that can't work.
+
+describe('POST /setup/complete validation', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-setup-complete-'));
+    mockedGetDataDir.mockReturnValue(tmpDir);
+    _setConfigSourceForTesting(new DataDirConfigSource(tmpDir));
+  });
+
+  afterEach(() => {
+    _resetAppConfigCache();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  it('rejects a placeholder-shaped github.repo', async () => {
+    const src = new DataDirConfigSource(tmpDir);
+    src.write({
+      github: { token: 'ghp-real-1234567890', repo: 'owner/repo' },
+    });
+
+    const res = await supertest(buildApp()).post('/api/setup/complete');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_config');
+    expect(res.body.problems.join(' ')).toMatch(/owner\/repo/);
+
+    expect(getOrchestratorConfig().setupComplete).toBe(false);
+  });
+
+  it('rejects an obviously-too-short github.token', async () => {
+    const src = new DataDirConfigSource(tmpDir);
+    src.write({ github: { token: 'ghp-x', repo: 'real-owner/real-repo' } });
+
+    const res = await supertest(buildApp()).post('/api/setup/complete');
+    expect(res.status).toBe(400);
+    expect(res.body.problems.join(' ')).toMatch(/github\.token/);
+  });
+
+  it('rejects an obviously-too-short notion.apiKey', async () => {
+    const src = new DataDirConfigSource(tmpDir);
+    src.write({
+      github: { token: 'ghp-real-1234567890', repo: 'real-owner/real-repo' },
+      notion: { apiKey: 'ntn-1' },
+    });
+
+    const res = await supertest(buildApp()).post('/api/setup/complete');
+    expect(res.status).toBe(400);
+    expect(res.body.problems.join(' ')).toMatch(/notion\.apiKey/);
+  });
+
+  it('rejects a db.path whose directory is not writable', async () => {
+    const src = new DataDirConfigSource(tmpDir);
+    src.write({
+      github: { token: 'ghp-real-1234567890', repo: 'real-owner/real-repo' },
+      db: { path: '/nonexistent-dir-xyz/dashboard.db' },
+    });
+
+    const res = await supertest(buildApp()).post('/api/setup/complete');
+    expect(res.status).toBe(400);
+    expect(res.body.problems.join(' ')).toMatch(/db\.path/);
+  });
+
+  it('genuine first-run (real-looking credentials, writable db path) completes successfully', async () => {
+    const src = new DataDirConfigSource(tmpDir);
+    src.write({
+      github: { token: 'ghp-real-1234567890', repo: 'real-owner/real-repo' },
+    });
+
+    const res = await supertest(buildApp()).post('/api/setup/complete');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(getOrchestratorConfig().setupComplete).toBe(true);
+  });
+
+  it('does not block first-run when notion.apiKey and db.path are left unset', async () => {
+    const src = new DataDirConfigSource(tmpDir);
+    src.write({
+      github: { token: 'ghp-real-1234567890', repo: 'real-owner/real-repo' },
+    });
+    // db.path/notion.apiKey untouched — defaults apply, must not be treated as placeholders.
+    expect(src.read().notion.apiKey).toBe('');
+
+    const res = await supertest(buildApp()).post('/api/setup/complete');
+    expect(res.status).toBe(200);
+  });
+});
+
 // ── isSetupRequired — legacy .env fallback regression ─────────────────────────
 
 describe('isSetupRequired (legacy .env / resolved-config regression)', () => {
