@@ -8,7 +8,10 @@ import {
   _resetStageCredentialsForTesting,
   _simulateProcessRestartForTesting,
 } from '../auth/SessionStageAuth';
-import { getLatestEventByType, queryAuditLogByProject } from '../audit/AuditLog';
+import {
+  getLatestEventByType,
+  queryAuditLogByProject,
+} from '../audit/AuditLog';
 
 /** Mirrors the orchestrator MCP endpoint's own wiring (requireSessionStageAuth ahead of the handler). */
 function buildMcpApp() {
