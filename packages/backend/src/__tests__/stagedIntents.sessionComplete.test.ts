@@ -48,7 +48,9 @@ function makeApp(sessionManager?: SessionManager) {
 }
 
 let counter = 0;
-function stageIntent(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow {
+function stageIntent(
+  overrides: Partial<StagedIntentRow> = {},
+): StagedIntentRow {
   counter += 1;
   const now = Date.now();
   const row: StagedIntentRow = {

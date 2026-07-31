@@ -211,7 +211,7 @@ describe('useDecisionQueue', () => {
     expect(result.current.intents).toEqual([]);
   });
 
-  it('milestone scope reveals a session_turn_completed session\'s intents in place, without reordering', async () => {
+  it("milestone scope reveals a session_turn_completed session's intents in place, without reordering", async () => {
     const intents: StagedIntent[] = [
       {
         id: 'already-visible',

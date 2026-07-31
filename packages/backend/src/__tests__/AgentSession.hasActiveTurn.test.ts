@@ -204,9 +204,9 @@ describe('AgentSession.hasActiveTurn()', () => {
     );
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(
-      messages.some((m) => m.type === 'session_turn_completed'),
-    ).toBe(false);
+    expect(messages.some((m) => m.type === 'session_turn_completed')).toBe(
+      false,
+    );
 
     (
       session as unknown as { isPausingForShutdown: boolean }
