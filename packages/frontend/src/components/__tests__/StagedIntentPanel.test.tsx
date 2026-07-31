@@ -100,6 +100,64 @@ describe('StagedIntentPanel', () => {
     ).toBeTruthy();
   });
 
+  it('renders a task.setStatus -> Ready card with a condensed groomingGate summary that expands to constraints and files/paths', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'task.setStatus',
+          payload: {
+            taskId: 'notion:abc',
+            status: 'Ready',
+            groomingGate: {
+              size_check: { decision: 'no_split' },
+              type_check: { decision: 'none' },
+              type: '💻 Code',
+              regions: { packages: ['packages/frontend'], files: ['a.ts', 'b.ts'] },
+              constraintsDispositioned: {
+                'constraint-1': { disposition: 'n/a', why: 'Not applicable here.' },
+                'constraint-2': { disposition: 'complies' },
+              },
+              filesPathsEntries: [
+                { raw: 'packages/frontend/src/a.ts', isNew: false, existsInRepo: true },
+                { raw: 'packages/frontend/src/b.ts', isNew: true, existsInRepo: false },
+              ],
+            },
+          },
+        })}
+      />,
+    );
+
+    const headline = screen.getByTestId('staged-intent-promote-ready');
+    expect(headline.textContent).toContain('notion:abc');
+    const summary = screen.getByTestId('staged-intent-grooming-gate-summary');
+    expect(summary.textContent).toContain('no_split');
+    expect(summary.textContent).toContain('💻 Code');
+    expect(summary.textContent).toContain('3 regions');
+    expect(summary.textContent).toContain('2 constraints');
+
+    fireEvent.click(screen.getByText('Show grooming detail'));
+    expect(summary.textContent).toContain('Not applicable here.');
+    expect(summary.textContent).toContain('packages/frontend/src/a.ts');
+    expect(summary.textContent).toContain('packages/frontend/src/b.ts');
+  });
+
+  it('renders a task.setStatus -> Ready card with only the task id when the intent has no groomProposal, no decisionProposal, and no groomingGate', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'task.setStatus',
+          payload: { taskId: 'notion:abc', status: 'Ready' },
+        })}
+      />,
+    );
+
+    const headline = screen.getByTestId('staged-intent-promote-ready');
+    expect(headline.textContent).toContain('notion:abc');
+    expect(
+      screen.queryByTestId('staged-intent-grooming-gate-summary'),
+    ).toBeNull();
+  });
+
   it('renders ops_journal (journal.setState) as a decision-surface kind with a task/state headline', () => {
     render(
       <StagedIntentPanel

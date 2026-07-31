@@ -286,9 +286,98 @@ function PatchBodySectionDiff({ intent }: { intent: StagedIntent }) {
   );
 }
 
+interface GroomingGateConstraintDisposition {
+  disposition: 'complies' | 'n/a' | 'conflict_route';
+  why?: string;
+  citedDesignTaskId?: string;
+  routedTaskId?: string;
+}
+
+interface GroomingGateFilesPathsEntry {
+  raw: string;
+  isNew: boolean;
+  existsInRepo: boolean;
+}
+
+interface GroomingGateRegions {
+  packages?: string[];
+  files?: string[];
+}
+
+/** Mirrors groomGate.ts's GroomingGateEntry — the client only renders these fields, never re-judges them. */
+interface GroomingGate {
+  size_check?: { decision?: string } | null;
+  type_check?: { decision?: string; disposition?: string } | null;
+  type?: string;
+  regions?: GroomingGateRegions;
+  constraintsDispositioned?: Record<string, GroomingGateConstraintDisposition>;
+  filesPathsEntries?: GroomingGateFilesPathsEntry[];
+  dependsOnTasks?: { id: string; type?: string; status?: string }[];
+}
+
 interface SetStatusPayload {
   taskId: string;
   status: string;
+  groomingGate?: GroomingGate;
+}
+
+function GroomingGateSummary({ gate }: { gate: GroomingGate }) {
+  const regionCount =
+    (gate.regions?.packages?.length ?? 0) + (gate.regions?.files?.length ?? 0);
+  const constraintCount = Object.keys(gate.constraintsDispositioned ?? {}).length;
+  const filesPathsEntries = gate.filesPathsEntries ?? [];
+  const constraintsDispositioned = gate.constraintsDispositioned ?? {};
+
+  return (
+    <div
+      className={styles.text}
+      data-testid="staged-intent-grooming-gate-summary"
+    >
+      <p>
+        Size: {gate.size_check?.decision ?? '—'} · Type check:{' '}
+        {gate.type_check?.decision ?? '—'} · Task type: {gate.type ?? '—'} ·{' '}
+        {regionCount} region{regionCount === 1 ? '' : 's'} ·{' '}
+        {constraintCount} constraint{constraintCount === 1 ? '' : 's'}{' '}
+        dispositioned
+      </p>
+      {(constraintCount > 0 || filesPathsEntries.length > 0) && (
+        <details className={styles.expandDetail}>
+          <summary className={styles.expandSummary}>Show grooming detail</summary>
+          {constraintCount > 0 && (
+            <div>
+              <strong>Constraints</strong>
+              <ul>
+                {Object.entries(constraintsDispositioned).map(([id, d]) => (
+                  <li key={id}>
+                    {id}: {d.disposition}
+                    {d.why ? ` — ${d.why}` : ''}
+                    {d.citedDesignTaskId ? ` (cites ${d.citedDesignTaskId})` : ''}
+                    {d.routedTaskId ? ` (routed to ${d.routedTaskId})` : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {filesPathsEntries.length > 0 && (
+            <div>
+              <strong>Files / paths</strong>
+              <ul>
+                {filesPathsEntries.map((entry, idx) => (
+                  <li key={idx}>
+                    {entry.raw}
+                    {entry.isNew ? ' (new)' : ''}
+                    {!entry.isNew && !entry.existsInRepo
+                      ? ' (not found in repo)'
+                      : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </details>
+      )}
+    </div>
+  );
 }
 
 function ViolationsRegister({
@@ -388,10 +477,13 @@ function SetStatusHeadline({ intent }: { intent: StagedIntent }) {
   const payload = intent.payload as SetStatusPayload;
   if (payload.status === 'Ready') {
     return (
-      <div className={styles.text}>
+      <div className={styles.text} data-testid="staged-intent-promote-ready">
         <p>
           <strong>Promote to Ready</strong> — {payload.taskId}
         </p>
+        {payload.groomingGate && (
+          <GroomingGateSummary gate={payload.groomingGate} />
+        )}
       </div>
     );
   }
