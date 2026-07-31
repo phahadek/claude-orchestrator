@@ -51,6 +51,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM audit_log').run();
   db.prepare('DELETE FROM task_cache').run();
   db.prepare('DELETE FROM flow_arm').run();
+  db.prepare('DELETE FROM sessions').run();
   deployServiceMock.getProjectDeployedSha.mockReset().mockReturnValue(null);
 });
 
@@ -89,6 +90,22 @@ function makeRunnableItem(
 const fixedTrigger = (sha: string | null): DeployAdvanceTrigger => ({
   latestDeploySha: () => sha,
 });
+
+/** Seeds a `sessions` row for a gate item, bypassing the real SessionManager — for exercising the DB-backed live-session guard directly, including the process-restart case where inFlightVerifications would be empty. */
+function insertVerifySession(
+  itemId: string,
+  opts: { sessionId: string; status: string; startedAt?: number },
+) {
+  db.prepare(
+    `INSERT INTO sessions (session_id, task_id, status, started_at)
+     VALUES (@sessionId, @taskId, @status, @startedAt)`,
+  ).run({
+    sessionId: opts.sessionId,
+    taskId: `gate-item:${itemId}`,
+    status: opts.status,
+    startedAt: opts.startedAt ?? 0,
+  });
+}
 
 describe('register', () => {
   it('registers a job with the Scheduler that runs on tick', async () => {
@@ -187,6 +204,23 @@ describe('dispatchGateItemVerification', () => {
       });
     });
     expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('dispatches an explicit operator re-verify even though the item already has a live verify session', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    insertVerifySession(item.id, { sessionId: 'sess-live', status: 'running' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    configureGateVerification({
+      verifier: { verify },
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+    });
+
+    const result = dispatchGateItemVerification([item.id]);
+
+    expect(result.dispatched).toEqual([item.id]);
+    await vi.waitFor(() => {
+      expect(verify).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('skips an item already mid-verify rather than double-dispatching', async () => {
@@ -658,6 +692,115 @@ describe('runGateReconcilerTick', () => {
     ]);
 
     expect(maxConcurrent).toBe(1);
+  });
+
+  it('does not dispatch a gate item that already has a live verify session from an earlier process', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    // Simulates a session dispatched before a process restart: no in-memory
+    // inFlightVerifications entry survives, only the DB-backed session row.
+    insertVerifySession(item.id, { sessionId: 'sess-live', status: 'running' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('does not re-dispatch a completed verification while its runnability inputs are unchanged', async () => {
+    makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+    expect(verify).toHaveBeenCalledTimes(1);
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-dispatches a failed item once its min_deployed_commit is newly satisfied, even with a terminal session row from the earlier verify', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    let callCount = 0;
+    const verifier: GateItemVerifier = {
+      verify: async () => {
+        callCount += 1;
+        // Mirrors the real SessionGateItemVerifier: a terminal session row
+        // is left behind once the verify concludes.
+        insertVerifySession(item.id, {
+          sessionId: `sess-${callCount}`,
+          status: 'done',
+        });
+        return { disposition: 'fail', evidence: { log: 'boom' } };
+      },
+    };
+    const followupFiler: FollowupFixTaskFiler = {
+      fileFollowupFixTask: vi.fn(async () => ({
+        taskId: 'notion:followup-1',
+        taskTitle: 'fix it',
+      })),
+    };
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+      followupFiler,
+    });
+    expect(callCount).toBe(1);
+    expect(getItem(item.id)?.state).toBe('open');
+
+    // A fresh deploy covers a min_deployed_commit past the one recorded at
+    // the fail — reconcileGateRunnability reopens then re-marks runnable.
+    // Merge coverage for both the original source and the follow-up fix
+    // task the fail path attached, or the item stays open (fail-dedup test
+    // above does the same double-merge for the same reason).
+    mergeSource(item.id, 'sha2', new Date(2).toISOString());
+    setSourceMergeCommit(item.id, 'notion:followup-1', 'sha2');
+    reconcileGateRunnability('sha2');
+    expect(getItem(item.id)?.state).toBe('runnable');
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha2'),
+      verifier,
+      followupFiler,
+    });
+
+    expect(callCount).toBe(2);
+  });
+
+  it('two consecutive reconciler ticks over the same runnable item produce exactly one session', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => {
+      insertVerifySession(item.id, { sessionId: 'sess-only', status: 'done' });
+      return { disposition: 'pass' as const };
+    });
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    const sessionCount = db
+      .prepare(
+        `SELECT COUNT(*) as c FROM sessions WHERE task_id = ?`,
+      )
+      .get(`gate-item:${item.id}`) as { c: number };
+    expect(sessionCount.c).toBe(1);
   });
 
   it('does not advance runnability when the deploy-advance trigger reports no advance', async () => {

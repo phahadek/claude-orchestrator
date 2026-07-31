@@ -3,7 +3,7 @@ import type { Scheduler } from '../orchestration/Scheduler';
 import { getAllProjects, getProjectById, runtimeSettings } from '../config';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { getProjectDeployedSha } from '../deploy/deployService';
-import { getArm } from '../db/queries';
+import { getArm, hasLiveVerifySessionForGateItem } from '../db/queries';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
 import { catchUpMergeCommits } from './gateMergeConsumer';
@@ -249,6 +249,14 @@ async function processItem(
   deploySha: string | null,
   concurrency: GateVerificationConcurrencyConfig = {},
 ): Promise<ProcessedGateItem | null> {
+  // DB-backed guard, ahead of the in-memory reservation below: catches a
+  // live verify session dispatched by an earlier process (e.g. before a
+  // restart), which inFlightVerifications alone cannot see. Auto-run only —
+  // dispatchGateItemVerification (operator-triggered) intentionally skips
+  // this so an explicit re-verify is never blocked by a prior session.
+  if (hasLiveVerifySessionForGateItem(item.id)) {
+    return null;
+  }
   if (!tryReserveInFlight(item.id)) {
     return null;
   }
