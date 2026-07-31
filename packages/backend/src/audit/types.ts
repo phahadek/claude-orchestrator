@@ -91,7 +91,8 @@ type EventType =
   | 'project_record_access_guide_missing'
   | 'project_record_access_guide_blocks_escalation'
   | 'flow_arm_changed'
-  | 'milestone_wrapped';
+  | 'milestone_wrapped'
+  | 'base_fetch_failed';
 
 type ActorType = 'ai' | 'human' | 'system';
 

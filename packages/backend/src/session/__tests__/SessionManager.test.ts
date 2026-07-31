@@ -202,6 +202,7 @@ import {
   buildPlanningResumeMessage,
   RESUME_NUDGE_MESSAGE,
   PLANNING_RESUME_FALLBACK_MESSAGE,
+  fetchBaseBranchCoalesced,
 } from '../SessionManager';
 import {
   updateSessionStatus,
@@ -1714,6 +1715,45 @@ describe('sendOrResume — missing worktree falls through to recreation', () => 
       'standard',
     );
   });
+
+  it('a pre-resume fetch failure records a diagnosable signal but the session still resumes', async () => {
+    vi.mocked(getProjectById).mockReturnValue({
+      ...makeProject(),
+      projectDir: '/project-resume-fetch-fail',
+    });
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr:
+              "error: cannot lock ref 'refs/remotes/origin/dev': is at ae9f9803 but expected 066b562e",
+          });
+          return callback(err);
+        }
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+
+    const p = sm.sendOrResume(SESSION_ID, 'hello');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event' as const,
+      sessionId: SESSION_ID,
+      eventType: 'system' as const,
+      content: 'boot',
+    });
+    await p;
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'base_fetch_failed' }),
+    );
+    expect(vi.mocked(setSessionLastErrorDetail)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('stale'),
+    );
+    // The resume still proceeded despite the fetch failure.
+    expect(capturedSessions.length).toBeGreaterThan(0);
+  });
 });
 
 // ── gitWorktreeAddWithRetry — unit tests ──────────────────────────────────────
@@ -1936,6 +1976,106 @@ describe('gitWorktreeAddWithRetry — per-repo serialization', () => {
         ),
       ]),
     ).resolves.toBeDefined();
+  });
+});
+
+// ── fetchBaseBranchCoalesced — per-project pre-launch fetch serialization ─────
+//
+// Each test uses its own unique project directory so the module-level
+// coalescing cache (deliberately shared across calls within a short window)
+// can never leak an outcome from one test into another.
+
+describe('fetchBaseBranchCoalesced — direct unit tests', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('serializes concurrent fetches for the same project (never > 1 in flight, one exec call)', async () => {
+    let active = 0;
+    let maxActive = 0;
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        setTimeout(() => {
+          active--;
+          callback(null, { stdout: '', stderr: '' });
+        }, 15);
+      },
+    );
+
+    const dir = '/fetch-test-serialize';
+    const results = await Promise.all([
+      fetchBaseBranchCoalesced(dir, 'dev'),
+      fetchBaseBranchCoalesced(dir, 'dev'),
+      fetchBaseBranchCoalesced(dir, 'dev'),
+    ]);
+
+    expect(maxActive).toBe(1);
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(1);
+    expect(results.every((r) => r.ok)).toBe(true);
+  });
+
+  it('coalesces a burst that arrives after completion — reuses the outcome without a new exec call', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+
+    const dir = '/fetch-test-coalesce';
+    const first = await fetchBaseBranchCoalesced(dir, 'dev');
+    const second = await fetchBaseBranchCoalesced(dir, 'dev');
+    const third = await fetchBaseBranchCoalesced(dir, 'dev');
+
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(1);
+    expect(first.ok).toBe(true);
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+  });
+
+  it('does not serialize or coalesce fetches for different projects', async () => {
+    let active = 0;
+    let maxActive = 0;
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        setTimeout(() => {
+          active--;
+          callback(null, { stdout: '', stderr: '' });
+        }, 15);
+      },
+    );
+
+    await Promise.all([
+      fetchBaseBranchCoalesced('/fetch-test-projA', 'dev'),
+      fetchBaseBranchCoalesced('/fetch-test-projB', 'dev'),
+    ]);
+
+    expect(maxActive).toBe(2);
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns ok:false on failure without throwing, retrying, or forcing past the lock', async () => {
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        const err = Object.assign(new Error('cmd failed'), {
+          stderr:
+            "error: cannot lock ref 'refs/remotes/origin/dev': is at ae9f9803 but expected 066b562e",
+        });
+        callback(err);
+      },
+    );
+
+    const outcome = await fetchBaseBranchCoalesced('/fetch-test-failure', 'dev');
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toBeDefined();
+    // Exactly one attempt — no retry loop chasing the lock mismatch.
+    expect(vi.mocked(execCb)).toHaveBeenCalledTimes(1);
+    const [cmd] = vi.mocked(execCb).mock.calls[0];
+    expect(String(cmd)).not.toContain('--force');
   });
 });
 
@@ -2309,6 +2449,155 @@ describe('start() — bootstrap gate', () => {
 
     expect(vi.mocked(buildSessionContext)).toHaveBeenCalledWith(
       expect.objectContaining({ taskBackend: 'jira' }),
+    );
+  });
+});
+
+// ── start() — pre-launch fetch serialization/coalescing (integration) ──────
+
+describe('start() — pre-launch fetch serialization/coalescing (integration)', () => {
+  let sm: SessionManager;
+
+  const ORCH_CONFIG = {
+    mcp_servers: undefined,
+    allowed_tools: [],
+    verify: [],
+    bash_rules: [],
+    session_rules: [],
+    bootstrap_script: '',
+    required_env: [] as string[],
+    required_files: [] as string[],
+    autofix: [],
+    ci_check_name: [],
+    test: [],
+    test_timeout_sec: 300,
+    test_max_rss_mb: 0,
+    test_fail_fast: true,
+    analyze: [],
+    analyze_timeout_sec: 300,
+    analyze_max_rss_mb: 0,
+    analyze_fail_fast: true,
+  };
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    vi.mocked(fsModule.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+    vi.mocked((fsModule as any).default.existsSync).mockImplementation(
+      (p: string) => !String(p).endsWith('.git'),
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({ ...ORCH_CONFIG });
+  });
+
+  it('two launches for the same project issue one coalesced fetch and both sessions still launch', async () => {
+    const projectDir = '/project-integ-same';
+    vi.mocked(getProjectById).mockReturnValue({
+      ...makeProject(),
+      projectDir,
+    });
+    vi.mocked(execCb).mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        setTimeout(() => callback(null, { stdout: '', stderr: '' }), 5);
+      },
+    );
+
+    sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'non_milestone',
+      taskName: 'task-a',
+    });
+    sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'non_milestone',
+      taskName: 'task-b',
+    });
+
+    await vi.waitFor(() => expect(capturedSessions).toHaveLength(2));
+
+    const fetchCalls = vi
+      .mocked(execCb)
+      .mock.calls.filter(([cmd]) => String(cmd).startsWith('git fetch'));
+    expect(fetchCalls).toHaveLength(1);
+  });
+
+  it('launches for different projects still fetch concurrently', async () => {
+    let fetchActive = 0;
+    let fetchMaxActive = 0;
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          fetchActive++;
+          fetchMaxActive = Math.max(fetchMaxActive, fetchActive);
+          setTimeout(() => {
+            fetchActive--;
+            callback(null, { stdout: '', stderr: '' });
+          }, 15);
+          return;
+        }
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+    vi.mocked(getProjectById).mockImplementation(
+      (id: string) =>
+        ({
+          ...makeProject(),
+          projectDir: `/project-integ-${id}`,
+        }) as any,
+    );
+
+    sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: 'proj-a',
+      taskKind: 'non_milestone',
+      taskName: 'task-a',
+    });
+    sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: 'proj-b',
+      taskKind: 'non_milestone',
+      taskName: 'task-b',
+    });
+
+    await vi.waitFor(() => expect(capturedSessions).toHaveLength(2));
+
+    expect(fetchMaxActive).toBe(2);
+  });
+
+  it('a fetch failure records a diagnosable signal but the session still launches', async () => {
+    const projectDir = '/project-integ-fail';
+    vi.mocked(getProjectById).mockReturnValue({
+      ...makeProject(),
+      projectDir,
+    });
+    vi.mocked(execCb).mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).startsWith('git fetch')) {
+          const err = Object.assign(new Error('cmd failed'), {
+            stderr:
+              "error: cannot lock ref 'refs/remotes/origin/dev': is at ae9f9803 but expected 066b562e",
+          });
+          return callback(err);
+        }
+        callback(null, { stdout: '', stderr: '' });
+      },
+    );
+
+    sm.start('https://notion.so/task', 'https://notion.so/project', {
+      projectId: PROJECT_ID,
+      taskKind: 'non_milestone',
+      taskName: 'task-fail',
+    });
+
+    await vi.waitFor(() => expect(capturedSessions).toHaveLength(1));
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'base_fetch_failed' }),
+    );
+    expect(vi.mocked(setSessionLastErrorDetail)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('stale'),
     );
   });
 });
