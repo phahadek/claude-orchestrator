@@ -3956,6 +3956,37 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Periodic defense-in-depth sweep: drop any in-memory `this.sessions` entry
+   * whose backing DB row is terminal (done/error/killed) or missing entirely,
+   * releasing its concurrency slot and revoking its stage credential. Mirrors
+   * WorktreeReconciler's periodic-Scheduler-job pattern, but operates on the
+   * in-memory map instead of the filesystem, so it must live on SessionManager
+   * where `this.sessions` is accessible. Never touches a non-terminal (live)
+   * session's entry.
+   */
+  reconcileSessionsMap(): { dropped: number } {
+    let dropped = 0;
+    for (const sessionId of Array.from(this.sessions.keys())) {
+      const row = getSession(sessionId);
+      if (row && !TERMINAL_SESSION_STATUSES.has(row.status)) {
+        continue;
+      }
+      this.evictDeadSessionEntry(sessionId);
+      revokeStageCredential(sessionId);
+      dropped++;
+      logger.info(
+        `[SessionManager] reconcileSessionsMap: dropped stale in-memory entry for session ${sessionId.slice(0, 8)} (${row ? `status=${row.status}` : 'missing DB row'})`,
+      );
+    }
+    if (dropped > 0) {
+      logger.info(
+        `[SessionManager] reconcileSessionsMap: sweep complete — dropped ${dropped} stale entr${dropped === 1 ? 'y' : 'ies'}`,
+      );
+    }
+    return { dropped };
+  }
+
+  /**
    * Relaunch a coding fixer on a PR's existing branch when the implementing
    * session has died (or is idle) and the normal gate-failure /
    * conflict-nudge delivery path (sendOrResume to job.sessionId) can't reach

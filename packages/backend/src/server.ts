@@ -529,6 +529,19 @@ stuckSessionMonitor.register(scheduler);
 planUsagePoller.register(scheduler);
 convergenceSnapshotJob.register(scheduler);
 registerWorktreeReconciler(scheduler);
+// Session-map reconciler: defense-in-depth sweep dropping stale in-memory
+// this.sessions entries whose DB row is terminal or missing, so a slot leak
+// from any (known or future) code path self-heals without operator
+// intervention. Same cadence pattern as registerWorktreeReconciler above.
+scheduler.register({
+  name: 'session_map_reconciler',
+  intervalMs: 30 * 60_000,
+  runOnBoot: true,
+  concurrency: 'skip-if-running',
+  run: async () => {
+    sessionManager.reconcileSessionsMap();
+  },
+});
 // Gate-verification reconciler: runnability/readiness reconcile on every
 // tick; auto-run verification drives the same wired verifier, gated by the
 // global gate_verification_enabled master switch and, per item, by that
