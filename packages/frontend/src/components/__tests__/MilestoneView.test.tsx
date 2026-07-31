@@ -97,9 +97,9 @@ describe('MilestoneView', () => {
 
     fireEvent.click(screen.getByTestId('phase-segment-gate'));
 
-    expect(
-      screen.getByTestId('gate-readiness-panel').textContent,
-    ).toContain('scoped to M1');
+    expect(screen.getByTestId('gate-readiness-panel').textContent).toContain(
+      'scoped to M1',
+    );
     expect(screen.queryByTestId('milestone-decision-stack')).toBeNull();
     expect(screen.getByTestId('active-phase').textContent).toBe('gate');
   });
