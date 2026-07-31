@@ -3044,16 +3044,14 @@ async function commitGroupIntents(
   const incompleteMember = live.find((r) => {
     if (!r.session_id) return false;
     const turnInFlight =
-      sessionManager?.getLiveSession?.(r.session_id)?.hasActiveTurn() ??
-      false;
+      sessionManager?.getLiveSession?.(r.session_id)?.hasActiveTurn() ?? false;
     return !isSessionComplete(r.session_id, turnInFlight);
   });
   if (incompleteMember) {
     return {
       status: 409,
       body: {
-        error: new SessionIncompleteError(incompleteMember.session_id!)
-          .message,
+        error: new SessionIncompleteError(incompleteMember.session_id!).message,
       },
     };
   }
