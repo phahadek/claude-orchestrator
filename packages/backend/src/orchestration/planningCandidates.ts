@@ -92,25 +92,22 @@ export interface GroomCandidateDeps {
   hasActiveSession: (taskId: string) => boolean;
   /** True while this task id is within its crash-budget cooldown window. */
   inCrashCooldown: (taskId: string) => boolean;
-  /** True while a groom session for this task is still running (not yet parked idle) — blocks unconditionally. */
-  hasRunningGroomSession: (taskId: string) => boolean;
-  /** True while this task has an undispositioned (staged/approved) intent — the parked-idle hold a groom session leaves behind. */
-  hasUndispositionedGroomIntent: (taskId: string) => boolean;
+  /**
+   * True when a non-terminal (running OR parked idle) groom session already
+   * handles this task id. idle is an active-but-waiting status — a parked
+   * session can be resumed at any moment (pushback/decline) or driven
+   * terminal directly (approve), so it blocks re-dispatch unconditionally,
+   * the same as a running one; there is no idle-specific carve-out.
+   */
+  hasActiveGroomSession: (taskId: string) => boolean;
 }
 
 /**
  * A task is a groom candidate when it's still 🔲 Backlog (any Type), no
- * non-terminal standard session is already handling it, no groom session is
- * either still running or parked idle holding an undispositioned intent for
- * it, it isn't within its crash-budget cooldown, and every Depends-On clears
- * the groom dep-gate.
- *
- * The groom-specific hold is two-part rather than a single "session exists"
- * check: a running session blocks unconditionally (it hasn't staged
- * anything an operator could act on yet), while a parked-idle session blocks
- * only for as long as it holds an undispositioned intent — once the
- * operator dispositions it, the task re-qualifies immediately rather than
- * waiting for the session's own resume/park cycle to reach a terminal state.
+ * non-terminal standard session is already handling it, no non-terminal
+ * (running or parked idle) groom session already handles it, it isn't
+ * within its crash-budget cooldown, and every Depends-On clears the groom
+ * dep-gate.
  */
 export function isGroomCandidate(
   task: NotionTask,
@@ -118,8 +115,7 @@ export function isGroomCandidate(
 ): boolean {
   if (!task.status.includes(BACKLOG_TOKEN)) return false;
   if (deps.hasActiveSession(task.id)) return false;
-  if (deps.hasRunningGroomSession(task.id)) return false;
-  if (deps.hasUndispositionedGroomIntent(task.id)) return false;
+  if (deps.hasActiveGroomSession(task.id)) return false;
   if (deps.inCrashCooldown(task.id)) return false;
   return passesGroomDepGate(task, deps.tasksById);
 }

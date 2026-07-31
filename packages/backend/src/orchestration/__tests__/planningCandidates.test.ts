@@ -122,8 +122,7 @@ describe('isGroomCandidate', () => {
   const baseDeps = {
     tasksById: new Map<string, NotionTask>(),
     hasActiveSession: () => false,
-    hasRunningGroomSession: () => false,
-    hasUndispositionedGroomIntent: () => false,
+    hasActiveGroomSession: () => false,
     inCrashCooldown: () => false,
   };
 
@@ -154,29 +153,15 @@ describe('isGroomCandidate', () => {
   it('skips a task with a groom session still running', () => {
     const t = task();
     expect(
-      isGroomCandidate(t, { ...baseDeps, hasRunningGroomSession: () => true }),
+      isGroomCandidate(t, { ...baseDeps, hasActiveGroomSession: () => true }),
     ).toBe(false);
   });
 
-  it('skips a task with an idle groom session holding at least one undispositioned intent', () => {
+  it('skips a task with a groom session parked idle — idle blocks unconditionally, whether or not it holds an undispositioned intent', () => {
     const t = task();
     expect(
-      isGroomCandidate(t, {
-        ...baseDeps,
-        hasUndispositionedGroomIntent: () => true,
-      }),
+      isGroomCandidate(t, { ...baseDeps, hasActiveGroomSession: () => true }),
     ).toBe(false);
-  });
-
-  it("re-qualifies once the idle groom session's intents are dispositioned", () => {
-    const t = task();
-    expect(
-      isGroomCandidate(t, {
-        ...baseDeps,
-        hasRunningGroomSession: () => false,
-        hasUndispositionedGroomIntent: () => false,
-      }),
-    ).toBe(true);
   });
 });
 

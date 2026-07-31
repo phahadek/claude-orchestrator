@@ -13,8 +13,6 @@ import {
   getTaskCache,
   hasActivePlanningSessionForTask,
   hasActiveSessionForTask,
-  hasNonIdlePlanningSessionForTask,
-  hasUndispositionedStagedIntentForTask,
   listMilestonesByProject,
   setTaskPauseReason,
 } from '../db/queries';
@@ -187,10 +185,8 @@ export class DispatchTriggerEvaluator {
           isGroomCandidate(task, {
             tasksById,
             hasActiveSession: hasActiveSessionForTask,
-            hasRunningGroomSession: (taskId) =>
-              hasNonIdlePlanningSessionForTask(taskId, 'groom'),
-            hasUndispositionedGroomIntent:
-              hasUndispositionedStagedIntentForTask,
+            hasActiveGroomSession: (taskId) =>
+              hasActivePlanningSessionForTask(taskId, 'groom'),
             inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
           })
         ) {

@@ -1161,8 +1161,8 @@ describe('SessionManager.start() — in-flight dedup guard', () => {
 
   it('dedup guard only applies to non-review sessions', () => {
     const dedupIdx = source.indexOf('this.hasLiveSessionForTask(');
-    // The planning-aware duplicate check (hasNonIdlePlanningSessionForTask /
-    // hasActivePlanningSessionForTask) now sits between the
+    // The planning-aware duplicate check (hasActivePlanningSessionForTask)
+    // now sits between the
     // countsAgainstConcurrency(sessionType) guard and this dedup call, so
     // the guard is further back than a tight lookbehind window covers.
     const dedupBlock = source.slice(Math.max(0, dedupIdx - 800), dedupIdx + 50);

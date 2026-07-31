@@ -126,8 +126,6 @@ vi.mock('../../db/queries', () =>
     getStuckResultSessionRows: vi.fn().mockReturnValue([]),
     hasActiveSessionForTask: vi.fn().mockReturnValue(false),
     hasActivePlanningSessionForTask: vi.fn().mockReturnValue(false),
-    hasNonIdlePlanningSessionForTask: vi.fn().mockReturnValue(false),
-    hasUndispositionedStagedIntentForTask: vi.fn().mockReturnValue(false),
     incrementTaskCrashCount: vi.fn().mockReturnValue(1),
     getTerminalSessionsForTask: vi.fn().mockReturnValue([]),
     setSessionPauseReason: vi.fn(),
@@ -221,8 +219,6 @@ import {
   applyPendingDone,
   getSessionsWithUnappliedPendingDone,
   hasActivePlanningSessionForTask,
-  hasNonIdlePlanningSessionForTask,
-  hasUndispositionedStagedIntentForTask,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
@@ -2459,8 +2455,6 @@ describe('start() — planning-flow dedup', () => {
     // clearAllMocks() clears call history but not implementations set by an
     // earlier test in this file — reset every planning-dedup predicate to
     // its "nothing holds this task" default before each test opts in.
-    vi.mocked(hasNonIdlePlanningSessionForTask).mockReturnValue(false);
-    vi.mocked(hasUndispositionedStagedIntentForTask).mockReturnValue(false);
     vi.mocked(hasActivePlanningSessionForTask).mockReturnValue(false);
   });
 
@@ -2472,7 +2466,7 @@ describe('start() — planning-flow dedup', () => {
     await vi.waitFor(() => expect(vi.mocked(insertSession)).toHaveBeenCalled());
 
     // Second dispatch tick: a groom session for this task is now running.
-    vi.mocked(hasNonIdlePlanningSessionForTask).mockImplementation(
+    vi.mocked(hasActivePlanningSessionForTask).mockImplementation(
       (_taskId, flow) => flow === 'groom',
     );
 
@@ -2484,8 +2478,10 @@ describe('start() — planning-flow dedup', () => {
     ).rejects.toMatchObject({ alreadyRunning: true });
   });
 
-  it('rejects a groom dispatch while an idle groom session still holds an undispositioned intent', async () => {
-    vi.mocked(hasUndispositionedStagedIntentForTask).mockReturnValue(true);
+  it('rejects a groom dispatch while a groom session is parked idle — idle blocks unconditionally, regardless of any undispositioned intent', async () => {
+    vi.mocked(hasActivePlanningSessionForTask).mockImplementation(
+      (_taskId, flow) => flow === 'groom',
+    );
 
     await expect(
       sm.start('https://notion.so/task', 'https://notion.so/project', {
@@ -2495,9 +2491,8 @@ describe('start() — planning-flow dedup', () => {
     ).rejects.toMatchObject({ alreadyRunning: true });
   });
 
-  it("admits a groom dispatch once the idle session's intents are all dispositioned", async () => {
-    vi.mocked(hasNonIdlePlanningSessionForTask).mockReturnValue(false);
-    vi.mocked(hasUndispositionedStagedIntentForTask).mockReturnValue(false);
+  it('admits a groom dispatch once the prior groom session has reached a terminal state', async () => {
+    vi.mocked(hasActivePlanningSessionForTask).mockReturnValue(false);
 
     await sm.start('https://notion.so/task', 'https://notion.so/project', {
       ...PLANNING_START_OPTS,

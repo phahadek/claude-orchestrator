@@ -434,6 +434,28 @@ export function getSessionsWithUnappliedPendingDone(): Session[] {
  */
 export const TERMINAL_SESSION_STATUSES = new Set(['done', 'error', 'killed']);
 
+/**
+ * TERMINAL_SESSION_STATUSES plus 'superseded' — the wider terminal vocabulary
+ * used by consumers below (hasActiveSessionForTask, hasActivePlanningSessionForTask,
+ * hasNonTerminalPlanningSessionForTask, archiveFinishedSessions) that also treat a
+ * superseded session as concluded. Derived, never re-enumerated, so 'idle' can
+ * never silently reappear in one of these collections.
+ */
+const TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED = new Set([
+  ...TERMINAL_SESSION_STATUSES,
+  'superseded',
+]);
+
+/** SQL `IN (...)`-ready literal list derived from TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED. */
+const TERMINAL_STATUS_SQL_LIST = [...TERMINAL_SESSION_STATUSES_WITH_SUPERSEDED]
+  .map((s) => `'${s}'`)
+  .join(', ');
+
+/** SQL `IN (...)`-ready literal list derived from TERMINAL_SESSION_STATUSES (no 'superseded'). */
+const BASE_TERMINAL_STATUS_SQL_LIST = [...TERMINAL_SESSION_STATUSES]
+  .map((s) => `'${s}'`)
+  .join(', ');
+
 const stmtBackfillPrUrlIfNull = db.prepare<{
   session_id: string;
   pr_url: string | null;
@@ -734,7 +756,7 @@ export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
     .prepare<[], { task_id: string | null }>(
       `
     SELECT task_id FROM sessions
-    WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
+    WHERE status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND session_type IN ('groom', 'design', 'ops')
   `,
     )
@@ -762,31 +784,7 @@ export function hasActivePlanningSessionForTask(
     .prepare<{ flow: string }, { task_id: string | null }>(
       `
     SELECT task_id FROM sessions
-    WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
-      AND session_type = @flow
-  `,
-    )
-    .all({ flow });
-  return rows.some((row) => normalizeBoardId(row.task_id ?? '') === norm);
-}
-
-/**
- * True if this task has a session of the given planning flow that is
- * genuinely still running (not yet parked idle) — used to block re-dispatch
- * unconditionally while a session is active, before it has staged anything
- * an operator could disposition (see hasUndispositionedStagedIntentForTask
- * for the idle-parked half of the same dedup).
- */
-export function hasNonIdlePlanningSessionForTask(
-  taskId: string,
-  flow: DedupedPlanningFlow,
-): boolean {
-  const norm = normalizeBoardId(taskId);
-  const rows = db
-    .prepare<{ flow: string }, { task_id: string | null }>(
-      `
-    SELECT task_id FROM sessions
-    WHERE status NOT IN ('idle', 'done', 'error', 'killed', 'superseded')
+    WHERE status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND session_type = @flow
   `,
     )
@@ -801,7 +799,7 @@ export function hasActiveSessionForTask(taskId: string): boolean {
       `
     SELECT 1 FROM sessions
     WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
-      AND status NOT IN ('idle', 'done', 'error', 'killed', 'superseded')
+      AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND (session_type = 'standard' OR session_type IS NULL)
     LIMIT 1
   `,
@@ -869,17 +867,22 @@ export function unfavoriteSession(sessionId: string): boolean {
   return result.changes > 0;
 }
 
+/**
+ * Archives concluded sessions only (status derived from TERMINAL_SESSION_STATUSES).
+ * A session parked idle is still alive and resumable — never terminal — and
+ * must never be swept up by this basis alone.
+ */
 export function archiveFinishedSessions(): number {
   const result = db
     .prepare(
-      `UPDATE sessions SET archived = 1 WHERE status IN ('done', 'error', 'killed', 'idle')`,
+      `UPDATE sessions SET archived = 1 WHERE status IN (${BASE_TERMINAL_STATUS_SQL_LIST})`,
     )
     .run();
   return result.changes;
 }
 
 /**
- * Archive concluded sessions (status IN ('done','error','killed'), archived=0)
+ * Archive concluded sessions (status derived from TERMINAL_SESSION_STATUSES, archived=0)
  * whose ended_at is older than the given cutoff timestamp (ms).
  * Idle sessions are excluded — the CLI subprocess is still alive and resumable.
  * Returns the session_ids of archived sessions.
@@ -888,7 +891,7 @@ export function archiveConcludedSessionsOlderThan(cutoffMs: number): string[] {
   const rows = db
     .prepare(
       `SELECT session_id FROM sessions
-       WHERE status IN ('done', 'error', 'killed')
+       WHERE status IN (${BASE_TERMINAL_STATUS_SQL_LIST})
          AND archived = 0
          AND ended_at IS NOT NULL
          AND ended_at < @cutoff`,
@@ -5300,33 +5303,6 @@ export function hasStagedIntentForTask(taskId: string): boolean {
     `SELECT 1 FROM staged_intent WHERE task_id = @task_id LIMIT 1`,
   );
   return _stmtHasStagedIntentForTask.get({ task_id: taskId }) !== undefined;
-}
-
-let _stmtHasUndispositionedStagedIntentForTask: Database.Statement | null =
-  null;
-
-/**
- * True if this task has an intent still awaiting operator disposition
- * (state 'staged' or 'approved' — the same PENDING set PlanningOrchestrator's
- * isGroupFullyDisposed uses). Unlike hasStagedIntentForTask (any state,
- * ever), this reflects the *current* hold: it flips false the instant an
- * operator dispositions the last pending intent, without waiting for the
- * parked session's next resume/park cycle to reach checkTerminal — that lag
- * would otherwise leave a task un-groomable for longer than the disposition
- * itself.
- */
-export function hasUndispositionedStagedIntentForTask(taskId: string): boolean {
-  _stmtHasUndispositionedStagedIntentForTask ??= db.prepare<{
-    task_id: string;
-  }>(
-    `SELECT 1 FROM staged_intent
-     WHERE task_id = @task_id AND state IN ('staged', 'approved')
-     LIMIT 1`,
-  );
-  return (
-    _stmtHasUndispositionedStagedIntentForTask.get({ task_id: taskId }) !==
-    undefined
-  );
 }
 
 /**
