@@ -23,7 +23,11 @@ const ALL_FIELDS: Array<{
   /** process.env var consulted for this field in legacy (no config.json) mode. */
   envVar?: string;
 }> = [
-  { key: 'notion.apiKey', get: (c) => c.notion.apiKey, envVar: 'NOTION_API_KEY' },
+  {
+    key: 'notion.apiKey',
+    get: (c) => c.notion.apiKey,
+    envVar: 'NOTION_API_KEY',
+  },
   { key: 'github.token', get: (c) => c.github.token, envVar: 'GITHUB_TOKEN' },
   { key: 'github.repo', get: (c) => c.github.repo, envVar: 'GITHUB_REPO' },
   { key: 'db.path', get: (c) => c.db.path, envVar: 'DB_PATH' },
@@ -167,7 +171,10 @@ function logProvenanceSummary(provenance: ConfigProvenance): void {
   logger.info(`[config] effective configuration: ${parts.join(', ')}`);
 }
 
-function resolve(): { config: OrchestratorConfig; provenance: ConfigProvenance } {
+function resolve(): {
+  config: OrchestratorConfig;
+  provenance: ConfigProvenance;
+} {
   if (sourceOverride) {
     // Test-only override: no provenance tracking, everything reports as config.json.
     const config = sourceOverride.read();
@@ -198,7 +205,10 @@ function resolve(): { config: OrchestratorConfig; provenance: ConfigProvenance }
       `  To migrate, create: ${recommendedPath}\n` +
       `  The first-run wizard will handle this automatically when available.`,
   );
-  return { config: new EnvFileConfigSource().read(), provenance: legacyProvenance() };
+  return {
+    config: new EnvFileConfigSource().read(),
+    provenance: legacyProvenance(),
+  };
 }
 
 function ensureResolved(): void {

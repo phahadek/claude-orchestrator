@@ -13,7 +13,10 @@ interface FieldStatus {
   length?: number;
 }
 
-const FIELD_GETTERS: Record<string, (c: ReturnType<typeof getOrchestratorConfig>) => unknown> = {
+const FIELD_GETTERS: Record<
+  string,
+  (c: ReturnType<typeof getOrchestratorConfig>) => unknown
+> = {
   'notion.apiKey': (c) => c.notion.apiKey,
   'github.token': (c) => c.github.token,
   'github.repo': (c) => c.github.repo,
