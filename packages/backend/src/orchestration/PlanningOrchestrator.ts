@@ -21,6 +21,7 @@ import type { ServerMessage } from '../ws/types';
 import { verifyDispatchedGroupsForSession } from '../routes/stagedIntents';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { emitTaskUpdated } from '../routes/tasks';
+import { NO_OP_INTENT_KIND, hasStagedDecision } from './planningDecisionKinds';
 
 const DESIGN_DONE_STATUS = '✅ Done';
 
@@ -35,56 +36,6 @@ const DESIGN_COMPLETING_REASONS = new Set([
   'planning_approved',
   'planning_no_pending_dispositions',
 ]);
-
-/** The deliberate-no-op marker kind — see stagedIntents.ts's KNOWN_INTENT_KINDS. */
-const NO_OP_INTENT_KIND = 'planning.noOp';
-
-/** The ops_journal disposition kind — a staged transition counts as a decision. */
-const OPS_JOURNAL_INTENT_KIND = 'journal.setState';
-
-/**
- * Kinds that constitute "staged a decision" for the terminal-no-decision
- * backstop (checkTerminal below) — every real task-write / arch-write /
- * gate / seed intent kind a groom or design session can stage. Deliberately
- * excludes decision.pickOne, session.requestCapability, and
- * completeness.disposition: those are questions/asks the session raises for
- * the operator, not decisions it has committed to, so staging one alone must
- * not mask a session that otherwise never decided anything.
- * OPS_JOURNAL_INTENT_KIND and NO_OP_INTENT_KIND count as decisions too (see
- * hasStagedDecision) but are tracked separately since they aren't task-writes.
- */
-const DECISION_INTENT_KINDS: ReadonlySet<string> = new Set([
-  'task.create',
-  'task.setStatus',
-  'task.setDependsOn',
-  'task.updateBody',
-  'task.patchBodySection',
-  'task.setProperties',
-  'task.setType',
-  'task.archive',
-  'task.move',
-  'gate.accrete',
-  'seed.stage',
-  'arch.createUnit',
-  'arch.updateUnit',
-  'arch.supersedeUnit',
-]);
-
-/**
- * True once the session has ever staged (any lifecycle state — even a
- * since-rejected intent still proves the session produced a real decision)
- * at least one intent of a kind that counts as "staged a decision": a
- * task-write/arch-write/gate/seed intent, an ops_journal transition, or an
- * explicit no-op marker.
- */
-function hasStagedDecision(intents: StagedIntentRow[]): boolean {
-  return intents.some(
-    (i) =>
-      DECISION_INTENT_KINDS.has(i.kind) ||
-      i.kind === OPS_JOURNAL_INTENT_KIND ||
-      i.kind === NO_OP_INTENT_KIND,
-  );
-}
 
 /**
  * The bounded self-correct re-turn nudge sent exactly once (per session) when
