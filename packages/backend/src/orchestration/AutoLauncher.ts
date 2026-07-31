@@ -34,6 +34,7 @@ const MIN_POLL_INTERVAL_MS = 5_000;
 const FETCH_TIMEOUT_MS = 30_000;
 const PROJECT_CONCURRENCY = 5;
 const UPDATE_CONCURRENCY = 3;
+const LAUNCH_CONCURRENCY = 3;
 
 export class AutoLauncherFetchTimeoutError extends Error {
   constructor(message: string) {
@@ -392,24 +393,33 @@ export class AutoLauncher {
     if (candidates.length === 0)
       return { eligible: 0, launched: 0, skipped: 0, readyTaskIds };
 
-    let launched = 0;
-    for (const candidate of candidates) {
-      if (!this.hasCapacity()) {
-        break;
-      }
-      // Non-milestone tasks have no milestoneId — they branch off dev directly.
-      const isNonMilestone = nonMilestoneTasks.includes(candidate);
-      if (
-        await this.launchTask(
+    // Bounded concurrency so a launch burst (worktree add, git fetch, MCP-config
+    // and system-prompt writes, claude process spawn) doesn't serialise the
+    // whole tick behind its own I/O — mirrors the catch-up pass's
+    // UPDATE_CONCURRENCY pattern above. hasCapacity() is re-checked per
+    // candidate so the cap is still respected once in-flight launches land;
+    // capacityExhausted short-circuits remaining workers once it flips.
+    let capacityExhausted = false;
+    const launchResults = await runWithConcurrency(
+      candidates,
+      LAUNCH_CONCURRENCY,
+      async (candidate) => {
+        if (capacityExhausted) return false;
+        if (!this.hasCapacity()) {
+          capacityExhausted = true;
+          return false;
+        }
+        // Non-milestone tasks have no milestoneId — they branch off dev directly.
+        const isNonMilestone = nonMilestoneTasks.includes(candidate);
+        return this.launchTask(
           project,
           candidate,
           isNonMilestone ? null : milestoneId,
           isNonMilestone ? 'non_milestone' : 'milestone',
-        )
-      ) {
-        launched++;
-      }
-    }
+        );
+      },
+    );
+    const launched = launchResults.filter(Boolean).length;
 
     return {
       eligible: candidates.length,

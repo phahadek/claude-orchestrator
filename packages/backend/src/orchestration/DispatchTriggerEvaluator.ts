@@ -29,6 +29,11 @@ import {
 
 const MIN_POLL_INTERVAL_MS = 5_000;
 
+/** Yields to the event loop so a pending HTTP request gets serviced mid-scan. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 /** available = max(0, cap - humanReserve - active), never negative. */
 export function computeAvailableCapacity(params: {
   maxConcurrentPlanningSessions: number;
@@ -76,6 +81,19 @@ interface FlowCandidate {
 export class DispatchTriggerEvaluator {
   private roundRobinIndex = 0;
   private readonly crashBudget = new CrashBudget();
+  /**
+   * Parsed-board memo, keyed on the cache row's task_id (`board:<milestoneId>`).
+   * Keyed on the row's raw_json content itself (string equality), never on
+   * fetched_at: status write-through paths (updateTaskStatusInBoardCaches,
+   * updateTaskCacheStatus) intentionally rewrite raw_json while reusing the
+   * row's existing fetched_at, and fetched_at is separately relied on
+   * elsewhere for real fetch-staleness semantics. A memo keyed on fetched_at
+   * would both miss the write-through case and corrupt those signals.
+   */
+  private readonly boardMemo = new Map<
+    string,
+    { rawJson: string; parsed: NotionTask[] }
+  >();
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -127,8 +145,11 @@ export class DispatchTriggerEvaluator {
     let dispatched = 0;
     for (const project of orderedProjects) {
       if (dispatched >= available) break;
+      await yieldToEventLoop();
 
-      const groomCandidates = this.scanProjectGroomCandidates(project.id);
+      const groomCandidates = await this.scanProjectGroomCandidates(
+        project.id,
+      );
       dispatched += await this.dispatchUpTo(
         groomCandidates,
         available - dispatched,
@@ -144,7 +165,9 @@ export class DispatchTriggerEvaluator {
       );
       if (dispatched >= available) continue;
 
-      const designCandidates = this.scanProjectDesignCandidates(project.id);
+      const designCandidates = await this.scanProjectDesignCandidates(
+        project.id,
+      );
       dispatched += await this.dispatchUpTo(
         designCandidates,
         available - dispatched,
@@ -170,12 +193,15 @@ export class DispatchTriggerEvaluator {
   }
 
   /** All groom-armed, dependency-cleared, un-dispatched Backlog tasks across a project's non-Done milestones, in board order (FIFO-by-age proxy). */
-  private scanProjectGroomCandidates(projectId: string): FlowCandidate[] {
+  private async scanProjectGroomCandidates(
+    projectId: string,
+  ): Promise<FlowCandidate[]> {
     const candidates: FlowCandidate[] = [];
     const milestones = listMilestonesByProject(projectId).filter(
       (m) => m.wrapped_at == null,
     );
     for (const milestone of milestones) {
+      await yieldToEventLoop();
       if (!getArm(milestone.id, 'groom')) continue;
       const tasks = this.loadBoardTasks(milestone.id);
       if (tasks.length === 0) continue;
@@ -206,6 +232,7 @@ export class DispatchTriggerEvaluator {
       (m) => m.wrapped_at == null,
     );
     for (const milestone of milestones) {
+      await yieldToEventLoop();
       if (!getArm(milestone.id, 'ops')) continue;
       const tasks = this.loadBoardTasks(milestone.id);
       if (tasks.length === 0) continue;
@@ -226,12 +253,15 @@ export class DispatchTriggerEvaluator {
   }
 
   /** All design-armed, dependency-cleared, un-dispatched Ready design/planning tasks across a project's non-Done milestones, in board order. */
-  private scanProjectDesignCandidates(projectId: string): FlowCandidate[] {
+  private async scanProjectDesignCandidates(
+    projectId: string,
+  ): Promise<FlowCandidate[]> {
     const candidates: FlowCandidate[] = [];
     const milestones = listMilestonesByProject(projectId).filter(
       (m) => m.wrapped_at == null,
     );
     for (const milestone of milestones) {
+      await yieldToEventLoop();
       const armed = getArm(milestone.id, 'design');
       if (!armed) continue;
       const tasks = this.loadBoardTasks(milestone.id);
@@ -256,13 +286,19 @@ export class DispatchTriggerEvaluator {
   }
 
   private loadBoardTasks(milestoneId: string): NotionTask[] {
-    const row = getTaskCache(`board:${milestoneId}`);
+    const key = `board:${milestoneId}`;
+    const row = getTaskCache(key);
     if (!row) return [];
+    const memo = this.boardMemo.get(key);
+    if (memo && memo.rawJson === row.raw_json) return memo.parsed;
+    let parsed: NotionTask[];
     try {
-      return JSON.parse(row.raw_json) as NotionTask[];
+      parsed = JSON.parse(row.raw_json) as NotionTask[];
     } catch {
-      return [];
+      parsed = [];
     }
+    this.boardMemo.set(key, { rawJson: row.raw_json, parsed });
+    return parsed;
   }
 
   /** Shared groom/design dispatch via dispatchPlanningFlow's manual-PlanningTaskEntry path. */
