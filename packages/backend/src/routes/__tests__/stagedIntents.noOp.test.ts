@@ -82,4 +82,62 @@ describe('planning.noOp decision-surface kind', () => {
       ),
     ).toThrow(/taskId is required/i);
   });
+
+  it('accepts an optional skippedKind naming the intent kind this pass produced nothing of', () => {
+    const intent = stageIntent(
+      'planning.noOp',
+      {
+        taskId: 'task-1',
+        reason: 'no implementation work beyond the locked decisions',
+        skippedKind: 'task.create',
+      },
+      'proj-1',
+      null,
+      'sess-5',
+    );
+    expect(intent.state).toBe('staged');
+    expect(intent.payload).toEqual({
+      taskId: 'task-1',
+      reason: 'no implementation work beyond the locked decisions',
+      skippedKind: 'task.create',
+    });
+  });
+
+  it('omitting skippedKind retains the existing whole-turn no-op semantics unchanged', () => {
+    const intent = stageIntent(
+      'planning.noOp',
+      { taskId: 'task-1', reason: 'task is already Ready, nothing to add' },
+      'proj-1',
+      null,
+      'sess-6',
+    );
+    expect(intent.payload).toEqual({
+      taskId: 'task-1',
+      reason: 'task is already Ready, nothing to add',
+    });
+  });
+
+  it('still requires a non-empty reason when skippedKind is carried', () => {
+    expect(() =>
+      stageIntent(
+        'planning.noOp',
+        { taskId: 'task-1', skippedKind: 'task.create' },
+        'proj-1',
+        null,
+        'sess-7',
+      ),
+    ).toThrow(/reason.*required/i);
+  });
+
+  it('rejects a blank skippedKind', () => {
+    expect(() =>
+      stageIntent(
+        'planning.noOp',
+        { taskId: 'task-1', reason: 'nothing to change', skippedKind: '   ' },
+        'proj-1',
+        null,
+        'sess-8',
+      ),
+    ).toThrow(/skippedKind/i);
+  });
 });

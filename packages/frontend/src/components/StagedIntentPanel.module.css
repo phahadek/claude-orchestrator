@@ -56,6 +56,23 @@
   color: var(--ctp-red);
 }
 
+.skippedKindLine {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  border-left: 3px solid var(--ctp-yellow);
+  padding-left: 8px;
+}
+
+.skippedKindLabel {
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  margin-right: 6px;
+}
+
 .permissionButtons {
   display: flex;
   gap: 8px;

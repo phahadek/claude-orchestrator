@@ -392,4 +392,72 @@ describe('StagedIntentPanel', () => {
       screen.queryByText('this should not render when groomProposal is set'),
     ).toBeNull();
   });
+
+  it('renders a whole-turn planning.noOp with the original no-op headline', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'planning.noOp',
+          payload: {
+            taskId: 'notion:abc',
+            reason: 'task is already Ready, nothing to add',
+          },
+        })}
+        hideActions
+      />,
+    );
+
+    expect(screen.getByTestId('staged-intent-no-op')).toBeTruthy();
+    expect(screen.getByText(/No-op: nothing staged for/)).toBeTruthy();
+    expect(
+      screen.getByText(/task is already Ready, nothing to add/),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId('staged-intent-no-op-skipped-kind'),
+    ).toBeNull();
+  });
+
+  it('renders a skippedKind planning.noOp as a discrete line naming the skipped kind and reason, distinct from the whole-turn headline', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'planning.noOp',
+          payload: {
+            taskId: 'notion:abc',
+            reason: 'no implementation work beyond the locked decisions',
+            skippedKind: 'task.create',
+          },
+        })}
+        hideActions
+      />,
+    );
+
+    const skippedLine = screen.getByTestId('staged-intent-no-op-skipped-kind');
+    expect(skippedLine).toBeTruthy();
+    expect(skippedLine.textContent).toContain('task.create');
+    expect(skippedLine.textContent).toContain(
+      'no implementation work beyond the locked decisions',
+    );
+    expect(screen.queryByTestId('staged-intent-no-op')).toBeNull();
+    expect(screen.queryByText(/No-op: nothing staged for/)).toBeNull();
+  });
+
+  it('a skippedKind planning.noOp still offers no operator disposition controls', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          kind: 'planning.noOp',
+          payload: {
+            taskId: 'notion:abc',
+            reason: 'these decisions change no architecture page',
+            skippedKind: 'architecture',
+          },
+        })}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: /commit/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /approve/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /pushback/i })).toBeNull();
+  });
 });

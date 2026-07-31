@@ -568,6 +568,17 @@ function extractTaskId(kind: string, payload: unknown): string | null {
     // via the existing tombstone mechanism above.
     return `${p.taskId}::${p.section.trim()}`;
   }
+  if (kind === 'planning.noOp') {
+    const p = payload as Partial<NoOpPayload> | null;
+    if (typeof p?.taskId !== 'string') return null;
+    // One kind, N instances (decision 2): a `skippedKind`-carrying noOp
+    // dedups on (taskId, skippedKind) rather than bare taskId — mirroring
+    // task.patchBodySection's compound key above — so a pass staging a noOp
+    // for `task.create` and another for `architecture` are two independent
+    // standing markers, neither superseding the other. A whole-turn noOp
+    // (no skippedKind) keeps the plain taskId dedup slot, unchanged.
+    return p.skippedKind ? `${p.taskId}::noop:${p.skippedKind}` : p.taskId;
+  }
   const taskId = (payload as { taskId?: unknown } | null)?.taskId;
   return typeof taskId === 'string' ? taskId : null;
 }
@@ -814,6 +825,19 @@ function validateCapabilityRequestPayload(
 interface NoOpPayload {
   taskId: string;
   reason: string;
+  /**
+   * The staged-intent kind this pass produced nothing of. Absent = the
+   * existing whole-turn no-op semantics, unchanged. When present, this is
+   * not merely informational — see EXPECTED_TERMINAL_KINDS_BY_WORKFLOW and
+   * assertExpectedTerminalKinds below: a workflow's closing-synthesis write
+   * cannot stage without either an intent of the expected kind, or a noOp
+   * naming it. That is a deliberate widening of "requires no operator
+   * disposition" (still true — this marker is never itself dispositioned),
+   * NOT a numeric gate on count/content — it gates only on the presence of
+   * a statement, the same class of check assertCompletenessApproval already
+   * performs on this same closing-synthesis write.
+   */
+  skippedKind?: string;
 }
 
 /**
@@ -837,6 +861,11 @@ function validateNoOpPayload(payload: unknown): asserts payload is NoOpPayload {
   if (typeof p?.reason !== 'string' || !p.reason.trim()) {
     throw new NoOpValidationError(
       'payload.reason is required — a one-line why-nothing-to-change explanation',
+    );
+  }
+  if (p?.skippedKind !== undefined && !p.skippedKind.trim()) {
+    throw new NoOpValidationError(
+      'payload.skippedKind, when present, must be a non-empty staged-intent kind',
     );
   }
 }
@@ -1529,6 +1558,243 @@ export function sessionOwesGatedDesignArtifacts(sessionId: string): boolean {
   return !intents.some((row) => DESIGN_OWED_ARTIFACT_KINDS.has(row.kind));
 }
 
+/**
+ * One expected terminal deliverable a workflow's closing-synthesis write
+ * requires — satisfied either by ≥1 staged intent of a `matches` kind, or by
+ * a `planning.noOp` naming `key` as its `skippedKind` (see
+ * assertExpectedTerminalKinds below). `label` is the phrase used in the
+ * stage-time refusal message so the operator/session sees which deliverable
+ * is unaccounted for, not just a bare kind string.
+ */
+interface ExpectedTerminalKindGroup {
+  key: string;
+  label: string;
+  matches: ReadonlySet<string>;
+}
+
+/**
+ * design-architecture-and-followon-required (procedureCore.ts) names two
+ * required deliverables beyond the locked decisions themselves — this is
+ * that list made machine-readable. Keyed per workflow (session_type) rather
+ * than hard-coded so a future workflow can adopt the same mechanism (see the
+ * task's locked decision "build this so other kinds can adopt it later") —
+ * gate.accrete/seed.stage's own none-forms are NOT migrated onto this table.
+ */
+const DESIGN_EXPECTED_TERMINAL_KINDS: readonly ExpectedTerminalKindGroup[] = [
+  {
+    key: 'task.create',
+    label: 'follow-on Code tasks (task.create)',
+    matches: new Set(['task.create']),
+  },
+  {
+    key: 'architecture',
+    label:
+      'architecture-unit writes (arch.createUnit / arch.updateUnit / arch.supersedeUnit)',
+    matches: new Set([
+      'arch.createUnit',
+      'arch.updateUnit',
+      'arch.supersedeUnit',
+    ]),
+  },
+];
+
+const EXPECTED_TERMINAL_KINDS_BY_WORKFLOW: Readonly<
+  Record<string, readonly ExpectedTerminalKindGroup[]>
+> = {
+  design: DESIGN_EXPECTED_TERMINAL_KINDS,
+};
+
+/**
+ * Thrown at stage time when a workflow's closing-synthesis `task.updateBody`
+ * arrives before every expected terminal kind (EXPECTED_TERMINAL_KINDS_BY_
+ * WORKFLOW) is accounted for — by a staged artifact of that kind, or a
+ * `planning.noOp` naming it. Names the specific unaccounted-for deliverable
+ * so the session (or operator) knows exactly what is missing.
+ */
+class ExpectedTerminalKindMissingError extends Error {
+  constructor(label: string) {
+    super(
+      `[stagedIntents] closing-synthesis "task.updateBody" is blocked: no ${label} ` +
+        'staged for this pass, and no planning.noOp naming this kind — stage the ' +
+        'deliverable, or a planning.noOp ({taskId, reason, skippedKind}) explaining ' +
+        'why there is none, before staging the closing synthesis.',
+    );
+    this.name = 'ExpectedTerminalKindMissingError';
+  }
+}
+
+/**
+ * Per-expected-kind XOR (see the task's locked decision 3): for a workflow
+ * with an EXPECTED_TERMINAL_KINDS_BY_WORKFLOW entry, its closing-synthesis
+ * `task.updateBody` — scoped the same way assertCompletenessApproval scopes
+ * COMPLETENESS_GATED_KINDS, to a session bound to the task the write targets
+ * — cannot stage until every expected kind is satisfied. This gates on the
+ * *presence* of a statement (an artifact or a noOp naming the kind), never on
+ * its count or content — design-architecture-and-followon-required's "no
+ * minimum count of architecture units or follow-on tasks" still holds; this
+ * does not reintroduce a numeric gate, only a mandatory disposition.
+ */
+function assertExpectedTerminalKinds(
+  kind: string,
+  payload: unknown,
+  sessionId: string | null | undefined,
+): void {
+  if (kind !== 'task.updateBody' || !sessionId) return;
+  const session = getSession(sessionId);
+  if (!session?.task_id) return;
+  const groups = EXPECTED_TERMINAL_KINDS_BY_WORKFLOW[session.session_type];
+  if (!groups) return;
+
+  const boundTaskId = normalizeTaskId(session.task_id);
+  const payloadTaskId = extractTaskId(kind, payload);
+  if (
+    !payloadTaskId ||
+    normalizeTaskId(payloadTaskId) !== boundTaskId
+  ) {
+    return;
+  }
+
+  const intents = listStagedIntentsBySession(sessionId).filter((row) =>
+    ACTIVE_STATES.includes(row.state),
+  );
+  const noOpSkippedKinds = new Set(
+    intents
+      .filter((row) => row.kind === 'planning.noOp')
+      .map((row) => (JSON.parse(row.payload) as NoOpPayload).skippedKind)
+      .filter((skippedKind): skippedKind is string => Boolean(skippedKind)),
+  );
+
+  for (const group of groups) {
+    const satisfiedByArtifact = intents.some((row) =>
+      group.matches.has(row.kind),
+    );
+    if (satisfiedByArtifact) continue;
+    if (noOpSkippedKinds.has(group.key)) continue;
+    throw new ExpectedTerminalKindMissingError(group.label);
+  }
+}
+
+/**
+ * Describes one staged terminal artifact for the generated closing-synthesis
+ * account below — the title a human reads, independent of the intent kind's
+ * payload shape.
+ */
+function describeStagedArtifactTitle(row: StagedIntentRow): string {
+  const payload = JSON.parse(row.payload) as {
+    title?: unknown;
+    replacement?: { title?: unknown };
+  };
+  const title =
+    row.kind === 'arch.supersedeUnit'
+      ? payload.replacement?.title
+      : payload.title;
+  return typeof title === 'string' && title.trim() ? title.trim() : row.kind;
+}
+
+/**
+ * Generates parts 4 and 5 of the design closing synthesis — "Architecture
+ * pages updated" and "Follow-on Code tasks filed" — from the already-staged
+ * terminal-artifact set (plus any noOp markers), at the moment the closing
+ * synthesis itself stages. Per the task's design intent: the operator then
+ * approves exactly the content they were shown (no payload mutating after
+ * approval), and there is a single source of truth rather than a
+ * hand-authored duplicate of what staging already recorded.
+ */
+function generateDesignClosingSynthesisAccount(sessionId: string): {
+  architectureLine: string;
+  followOnLine: string;
+} {
+  const intents = listStagedIntentsBySession(sessionId).filter((row) =>
+    ACTIVE_STATES.includes(row.state),
+  );
+
+  const findNoOpReason = (skippedKind: string): string | undefined =>
+    intents
+      .filter((row) => row.kind === 'planning.noOp')
+      .map((row) => JSON.parse(row.payload) as NoOpPayload)
+      .find((p) => p.skippedKind === skippedKind)?.reason;
+
+  const architectureGroup = DESIGN_EXPECTED_TERMINAL_KINDS.find(
+    (group) => group.key === 'architecture',
+  )!;
+  const archRows = intents.filter((row) =>
+    architectureGroup.matches.has(row.kind),
+  );
+  const architectureLine = archRows.length
+    ? `(4) Architecture pages updated — ${archRows
+        .map((row) => describeStagedArtifactTitle(row))
+        .join('; ')}`
+    : `(4) Architecture pages updated — none — these decisions change no ` +
+      `architecture page${
+        findNoOpReason('architecture')
+          ? ` (${findNoOpReason('architecture')})`
+          : ''
+      }`;
+
+  const taskRows = intents.filter((row) => row.kind === 'task.create');
+  const followOnLine = taskRows.length
+    ? `(5) Follow-on Code tasks filed — ${taskRows
+        .map((row) => describeStagedArtifactTitle(row))
+        .join('; ')}`
+    : `(5) Follow-on Code tasks filed — none — no implementation work beyond ` +
+      `the locked decisions${
+        findNoOpReason('task.create') ? ` (${findNoOpReason('task.create')})` : ''
+      }`;
+
+  return { architectureLine, followOnLine };
+}
+
+/**
+ * Injects the generated parts 4/5 account into a design closing-synthesis
+ * `task.updateBody` at stage time — appended to `decisionProposal` (so the
+ * operator approves exactly the content they were shown — no payload
+ * mutating after approval) and into `sections.implementationNotes` (so the
+ * generated account survives on the durable task page even though the
+ * authored synthesis no longer carries it twice — the task's "the durable
+ * record must survive" constraint). A no-op for any other kind, or for a
+ * task.updateBody not scoped to a design session's own bound task (e.g. a
+ * groom/ops session's unrelated task.updateBody use).
+ */
+function applyDesignClosingSynthesisGeneration(
+  kind: string,
+  payload: unknown,
+  sessionId: string | null | undefined,
+  decisionProposal: string | null | undefined,
+): { payload: unknown; decisionProposal: string | null | undefined } {
+  if (kind !== 'task.updateBody' || !sessionId) {
+    return { payload, decisionProposal };
+  }
+  const session = getSession(sessionId);
+  if (!session?.task_id || session.session_type !== 'design') {
+    return { payload, decisionProposal };
+  }
+  const boundTaskId = normalizeTaskId(session.task_id);
+  const payloadTaskId = extractTaskId(kind, payload);
+  if (!payloadTaskId || normalizeTaskId(payloadTaskId) !== boundTaskId) {
+    return { payload, decisionProposal };
+  }
+
+  const { architectureLine, followOnLine } =
+    generateDesignClosingSynthesisAccount(sessionId);
+  const generatedAccount = `${architectureLine}\n${followOnLine}`;
+
+  const p = payload as UpdateBodyPayload;
+  const nextPayload: UpdateBodyPayload = {
+    ...p,
+    sections: {
+      ...p.sections,
+      implementationNotes: p.sections.implementationNotes
+        ? `${p.sections.implementationNotes}\n\n${generatedAccount}`
+        : generatedAccount,
+    },
+  };
+  const nextDecisionProposal = decisionProposal?.trim()
+    ? `${decisionProposal.trim()}\n\n${generatedAccount}`
+    : generatedAccount;
+
+  return { payload: nextPayload, decisionProposal: nextDecisionProposal };
+}
+
 export function stageIntent(
   kind: string,
   payload: unknown,
@@ -1553,7 +1819,15 @@ export function stageIntent(
 
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
   assertCompletenessApproval(kind, sessionId);
+  assertExpectedTerminalKinds(kind, payload, sessionId);
   assertTaskCreateGrouped(kind, sessionId, groupId);
+
+  ({ payload, decisionProposal } = applyDesignClosingSynthesisGeneration(
+    kind,
+    payload,
+    sessionId,
+    decisionProposal,
+  ));
 
   const taskId = extractTaskId(kind, payload);
   const titleKey = extractTitleKey(kind, payload);
