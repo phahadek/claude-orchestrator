@@ -5,13 +5,45 @@ import { getDataDir } from './dataDir';
 import { logger } from '../logger';
 import {
   ConfigValidationError,
+  type ConfigFieldSource,
+  type ConfigProvenance,
   type ConfigSource,
   type DeepPartial,
   type OrchestratorConfig,
 } from './types';
 
 let cached: OrchestratorConfig | null = null;
+let cachedProvenance: ConfigProvenance | null = null;
 let sourceOverride: ConfigSource | null = null;
+
+/** Every effective-config field, in the shape reported by the provenance surface. */
+const ALL_FIELDS: Array<{
+  key: string;
+  get: (c: OrchestratorConfig) => unknown;
+  /** process.env var consulted for this field in legacy (no config.json) mode. */
+  envVar?: string;
+}> = [
+  {
+    key: 'notion.apiKey',
+    get: (c) => c.notion.apiKey,
+    envVar: 'NOTION_API_KEY',
+  },
+  { key: 'github.token', get: (c) => c.github.token, envVar: 'GITHUB_TOKEN' },
+  { key: 'github.repo', get: (c) => c.github.repo, envVar: 'GITHUB_REPO' },
+  { key: 'db.path', get: (c) => c.db.path, envVar: 'DB_PATH' },
+  { key: 'sessions.dir', get: (c) => c.sessions.dir, envVar: 'SESSIONS_DIR' },
+  { key: 'server.port', get: (c) => c.server.port, envVar: 'PORT' },
+  {
+    key: 'autoReview.enabled',
+    get: (c) => c.autoReview.enabled,
+    envVar: 'AUTO_REVIEW',
+  },
+  { key: 'autoReview.concurrency', get: (c) => c.autoReview.concurrency },
+  { key: 'setupComplete', get: (c) => c.setupComplete },
+];
+
+/** Fields whose values must never be logged or returned in full — presence/length only. */
+export const SECRET_FIELDS = new Set(['notion.apiKey', 'github.token']);
 
 // Fields for which an absent-or-empty config.json value falls back to the
 // legacy .env value, rather than config.json's mere existence silently
@@ -63,10 +95,11 @@ const ENV_FALLBACK_FIELDS: Array<{
 function applyEnvFallback(
   config: OrchestratorConfig,
   explicitFields: Set<string>,
-): OrchestratorConfig {
+): { config: OrchestratorConfig; provenance: ConfigProvenance } {
   const envConfig = new EnvFileConfigSource().read();
   const filledFromEnv: string[] = [];
   const overriddenFromEnv: string[] = [];
+  const provenance: ConfigProvenance = {};
 
   for (const field of ENV_FALLBACK_FIELDS) {
     const envValue = field.get(envConfig);
@@ -76,10 +109,24 @@ function applyEnvFallback(
       if (envValue) {
         field.set(config, envValue);
         filledFromEnv.push(field.key);
+        provenance[field.key] = 'env';
+      } else {
+        provenance[field.key] = 'default';
       }
-    } else if (envValue && envValue !== field.get(config)) {
-      overriddenFromEnv.push(field.key);
+    } else {
+      provenance[field.key] = 'config.json';
+      if (envValue && envValue !== field.get(config)) {
+        overriddenFromEnv.push(field.key);
+      }
     }
+  }
+
+  // Fields not eligible for .env fallback: config.json if explicitly set, else default.
+  for (const field of ALL_FIELDS) {
+    if (field.key in provenance) continue;
+    provenance[field.key] = explicitFields.has(field.key)
+      ? 'config.json'
+      : 'default';
   }
 
   if (filledFromEnv.length > 0) {
@@ -95,11 +142,46 @@ function applyEnvFallback(
     );
   }
 
-  return config;
+  return { config, provenance };
 }
 
-function resolve(): OrchestratorConfig {
-  if (sourceOverride) return sourceOverride.read();
+/** Provenance for legacy (no config.json) mode: env if the var is set, else default. */
+function legacyProvenance(): ConfigProvenance {
+  const provenance: ConfigProvenance = {};
+  for (const field of ALL_FIELDS) {
+    const source: ConfigFieldSource =
+      field.envVar && process.env[field.envVar] !== undefined
+        ? 'env'
+        : 'default';
+    provenance[field.key] = source;
+  }
+  return provenance;
+}
+
+function logProvenanceSummary(provenance: ConfigProvenance): void {
+  const config = getOrchestratorConfig();
+  const parts = ALL_FIELDS.map((field) => {
+    const source = provenance[field.key] ?? 'default';
+    if (SECRET_FIELDS.has(field.key)) {
+      const value = String(field.get(config) ?? '');
+      return `${field.key}=${source}${value ? ` (${value.length} chars)` : ''}`;
+    }
+    return `${field.key}=${source}`;
+  });
+  logger.info(`[config] effective configuration: ${parts.join(', ')}`);
+}
+
+function resolve(): {
+  config: OrchestratorConfig;
+  provenance: ConfigProvenance;
+} {
+  if (sourceOverride) {
+    // Test-only override: no provenance tracking, everything reports as config.json.
+    const config = sourceOverride.read();
+    const provenance: ConfigProvenance = {};
+    for (const field of ALL_FIELDS) provenance[field.key] = 'config.json';
+    return { config, provenance };
+  }
 
   const dataDirSource = new DataDirConfigSource();
 
@@ -123,13 +205,38 @@ function resolve(): OrchestratorConfig {
       `  To migrate, create: ${recommendedPath}\n` +
       `  The first-run wizard will handle this automatically when available.`,
   );
-  return new EnvFileConfigSource().read();
+  return {
+    config: new EnvFileConfigSource().read(),
+    provenance: legacyProvenance(),
+  };
+}
+
+function ensureResolved(): void {
+  if (cached) return;
+  const result = resolve();
+  cached = result.config;
+  cachedProvenance = result.provenance;
 }
 
 /** Returns the resolved OrchestratorConfig (cached per process lifetime). */
 export function getOrchestratorConfig(): OrchestratorConfig {
-  if (!cached) cached = resolve();
-  return cached;
+  ensureResolved();
+  return cached!;
+}
+
+/**
+ * Returns where each effective-config field's value came from: config.json,
+ * .env fallback, or the shipped default. Computed alongside the same resolve()
+ * pass that produces getOrchestratorConfig(), and cached with it.
+ */
+export function getConfigProvenance(): ConfigProvenance {
+  ensureResolved();
+  return cachedProvenance!;
+}
+
+/** Logs a one-line, secret-safe summary of the effective config and its provenance. */
+export function logConfigProvenanceSummary(): void {
+  logProvenanceSummary(getConfigProvenance());
 }
 
 /**
@@ -142,16 +249,19 @@ export function writeOrchestratorConfig(
   const source = new DataDirConfigSource();
   source.write(partial);
   cached = null;
+  cachedProvenance = null;
 }
 
 /** Override the config source — for unit tests only. */
 export function _setConfigSourceForTesting(src: ConfigSource): void {
   sourceOverride = src;
   cached = null;
+  cachedProvenance = null;
 }
 
 /** Reset cached state — for unit tests only. */
 export function _resetAppConfigCache(): void {
   cached = null;
+  cachedProvenance = null;
   sourceOverride = null;
 }
