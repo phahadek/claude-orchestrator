@@ -1,14 +1,43 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { TaskView } from '../../types/taskView';
 import type { MilestoneConvergence } from '@claude-orchestrator/backend/src/convergence/convergenceService';
+import type { FlowRejectionRateResult } from '../../api/gate';
 
 const useConvergenceHistoryMock = vi.hoisted(() => vi.fn());
 vi.mock('../../hooks/useConvergenceHistory', () => ({
   useConvergenceHistory: useConvergenceHistoryMock,
 }));
 
+const getFlowRejectionRateMock = vi.hoisted(() => vi.fn());
+vi.mock('../../api/gate', async () => {
+  const actual =
+    await vi.importActual<typeof import('../../api/gate')>('../../api/gate');
+  return {
+    ...actual,
+    gateApi: {
+      ...actual.gateApi,
+      getFlowRejectionRate: getFlowRejectionRateMock,
+    },
+  };
+});
+
 import { MilestoneBurndown } from '../MilestoneBurndown';
+import { TRUST_PRECISION_FLOWS } from '../../api/gate';
+
+function makeTrustRate(
+  overrides: Partial<FlowRejectionRateResult> = {},
+): FlowRejectionRateResult {
+  return {
+    flow: 'gate-verify',
+    project: 'proj',
+    milestone: 'M1',
+    total: 0,
+    rejected: 0,
+    rate: null,
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
   useConvergenceHistoryMock.mockReturnValue({
@@ -16,6 +45,11 @@ beforeEach(() => {
     loading: false,
     error: null,
   });
+  getFlowRejectionRateMock.mockReset();
+  getFlowRejectionRateMock.mockImplementation(
+    (_project: string, _milestone: string, flow: string) =>
+      Promise.resolve(makeTrustRate({ flow: flow as never })),
+  );
 });
 
 function makeTask(overrides: Partial<TaskView> = {}): TaskView {
@@ -459,5 +493,184 @@ describe('MilestoneBurndown convergence header', () => {
     expect(screen.getByTestId('convergence-header')).toBeDefined();
     expect(screen.getByTestId('phase-segment-code')).toBeDefined();
     expect(screen.getByTestId('phase-segment-gate')).toBeDefined();
+  });
+});
+
+describe('MilestoneBurndown trust-rate panel', () => {
+  it('does not render without a project/milestone selected', () => {
+    render(
+      <MilestoneBurndown
+        tasks={[]}
+        convergence={makeConvergence()}
+        activePhase={null}
+        onPhaseSelect={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByTestId('trust-rate-panel')).toBeNull();
+    expect(getFlowRejectionRateMock).not.toHaveBeenCalled();
+  });
+
+  it('fetches /api/gate/trust-rate for each flow in TRUST_PRECISION_FLOWS, including gate-verify with its denominator', async () => {
+    getFlowRejectionRateMock.mockImplementation(
+      (_project: string, _milestone: string, flow: string) =>
+        Promise.resolve(
+          flow === 'gate-verify'
+            ? makeTrustRate({
+                flow: 'gate-verify',
+                total: 28,
+                rejected: 16,
+                rate: 16 / 28,
+              })
+            : makeTrustRate({
+                flow: flow as never,
+                total: 3,
+                rejected: 1,
+                rate: 1 / 3,
+              }),
+        ),
+    );
+
+    render(
+      <MilestoneBurndown
+        tasks={[]}
+        convergence={makeConvergence()}
+        activePhase={null}
+        onPhaseSelect={vi.fn()}
+        projectId="proj"
+        milestoneId="M1"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getFlowRejectionRateMock).toHaveBeenCalledTimes(
+        TRUST_PRECISION_FLOWS.length,
+      );
+    });
+    for (const flow of TRUST_PRECISION_FLOWS) {
+      expect(getFlowRejectionRateMock).toHaveBeenCalledWith('proj', 'M1', flow);
+      expect(screen.getByTestId(`trust-rate-${flow}`)).toBeDefined();
+    }
+
+    const gateVerifyItem = screen.getByTestId('trust-rate-gate-verify');
+    expect(gateVerifyItem.textContent).toContain('16/28');
+  });
+
+  it('renders distinct text for a 2-of-3 abstain rate and a 16-of-28 abstain rate', async () => {
+    getFlowRejectionRateMock.mockImplementation(
+      (_project: string, _milestone: string, flow: string) =>
+        Promise.resolve(
+          flow === 'gate-verify'
+            ? makeTrustRate({
+                flow: 'gate-verify',
+                total: 28,
+                rejected: 2,
+                rate: 2 / 28,
+              })
+            : makeTrustRate({
+                flow: flow as never,
+                total: 3,
+                rejected: 2,
+                rate: 2 / 3,
+              }),
+        ),
+    );
+
+    render(
+      <MilestoneBurndown
+        tasks={[]}
+        convergence={makeConvergence()}
+        activePhase={null}
+        onPhaseSelect={vi.fn()}
+        projectId="proj"
+        milestoneId="M1"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('trust-rate-gate-verify').textContent,
+      ).toContain('2/28');
+    });
+    expect(screen.getByTestId('trust-rate-groom').textContent).toContain('2/3');
+    expect(
+      screen.getByTestId('trust-rate-gate-verify').textContent,
+    ).not.toEqual(screen.getByTestId('trust-rate-groom').textContent);
+  });
+
+  it('renders an explicit no-data state for a flow with zero dispositioned items, not a misleading 0%', async () => {
+    getFlowRejectionRateMock.mockResolvedValue(
+      makeTrustRate({ total: 0, rejected: 0, rate: null }),
+    );
+
+    render(
+      <MilestoneBurndown
+        tasks={[]}
+        convergence={makeConvergence()}
+        activePhase={null}
+        onPhaseSelect={vi.fn()}
+        projectId="proj"
+        milestoneId="M1"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getFlowRejectionRateMock).toHaveBeenCalledTimes(
+        TRUST_PRECISION_FLOWS.length,
+      );
+    });
+    for (const flow of TRUST_PRECISION_FLOWS) {
+      const item = screen.getByTestId(`trust-rate-${flow}`);
+      expect(item.textContent).toContain('no data');
+      expect(item.textContent).not.toContain('0%');
+    }
+  });
+
+  it('refetches trust rates when the selected milestone changes', async () => {
+    const { rerender } = render(
+      <MilestoneBurndown
+        tasks={[]}
+        convergence={makeConvergence()}
+        activePhase={null}
+        onPhaseSelect={vi.fn()}
+        projectId="proj"
+        milestoneId="M1"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getFlowRejectionRateMock).toHaveBeenCalledTimes(
+        TRUST_PRECISION_FLOWS.length,
+      );
+    });
+    expect(getFlowRejectionRateMock).toHaveBeenCalledWith(
+      'proj',
+      'M1',
+      'groom',
+    );
+
+    getFlowRejectionRateMock.mockClear();
+
+    rerender(
+      <MilestoneBurndown
+        tasks={[]}
+        convergence={makeConvergence()}
+        activePhase={null}
+        onPhaseSelect={vi.fn()}
+        projectId="proj"
+        milestoneId="M2"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getFlowRejectionRateMock).toHaveBeenCalledTimes(
+        TRUST_PRECISION_FLOWS.length,
+      );
+    });
+    expect(getFlowRejectionRateMock).toHaveBeenCalledWith(
+      'proj',
+      'M2',
+      'groom',
+    );
   });
 });

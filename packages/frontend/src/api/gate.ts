@@ -1,4 +1,18 @@
 import { apiRequest } from './projects';
+import type {
+  FlowRejectionRateResult,
+  TrustPrecisionFlow,
+} from '@claude-orchestrator/backend/src/db/queries';
+
+export type { FlowRejectionRateResult, TrustPrecisionFlow };
+
+/** Mirrors the backend's TRUST_PRECISION_FLOWS (routes/gateState.ts) — the flows the /api/gate/trust-rate route accepts. */
+export const TRUST_PRECISION_FLOWS: TrustPrecisionFlow[] = [
+  'groom',
+  'design',
+  'ops',
+  'gate-verify',
+];
 
 export type GateItemClassification =
   | 'Read-Only'
@@ -237,6 +251,17 @@ export const gateApi = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(input),
       },
+    );
+  },
+
+  /** The Milestone panel's trust-precision read: per-flow rejection/abstain rate. Informative only — no auto-disarm. */
+  getFlowRejectionRate(
+    project: string,
+    milestone: string,
+    flow: TrustPrecisionFlow,
+  ): Promise<FlowRejectionRateResult> {
+    return apiRequest<FlowRejectionRateResult>(
+      `/api/gate/trust-rate${buildQuery({ project, milestone, flow })}`,
     );
   },
 

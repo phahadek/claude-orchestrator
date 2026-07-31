@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { TaskView } from '../types/taskView';
 import type { MilestoneConvergence } from '@claude-orchestrator/backend/src/convergence/convergenceService';
 import {
@@ -13,7 +13,24 @@ import {
 } from '../utils/phaseBurndown';
 import { useConvergenceHistory } from '../hooks/useConvergenceHistory';
 import { ConvergenceSparkline } from './ConvergenceSparkline';
+import {
+  gateApi,
+  TRUST_PRECISION_FLOWS,
+  type FlowRejectionRateResult,
+} from '../api/gate';
 import styles from './MilestoneBurndown.module.css';
+
+const TRUST_PRECISION_FLOW_LABELS: Record<string, string> = {
+  groom: 'Groom',
+  design: 'Design',
+  ops: 'Ops',
+  'gate-verify': 'Gate-verify',
+};
+
+function formatTrustRate(result: FlowRejectionRateResult | null): string {
+  if (!result || result.rate === null) return 'no data';
+  return `${Math.round(result.rate * 100)}% (${result.rejected}/${result.total})`;
+}
 
 const TASK_AXIS_LABELS: Record<'green' | 'blocked' | 'unavailable', string> = {
   green: 'Green',
@@ -66,6 +83,36 @@ export function MilestoneBurndown({
     [tasks, convergence],
   );
   const { history } = useConvergenceHistory(projectId, milestoneId);
+
+  const [trustRates, setTrustRates] = useState<
+    Record<string, FlowRejectionRateResult>
+  >({});
+
+  useEffect(() => {
+    if (!projectId || !milestoneId) {
+      setTrustRates({});
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      TRUST_PRECISION_FLOWS.map((flow) =>
+        gateApi
+          .getFlowRejectionRate(projectId, milestoneId, flow)
+          .then((result) => [flow, result] as const)
+          .catch(() => null),
+      ),
+    ).then((results) => {
+      if (cancelled) return;
+      const next: Record<string, FlowRejectionRateResult> = {};
+      for (const entry of results) {
+        if (entry) next[entry[0]] = entry[1];
+      }
+      setTrustRates(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, milestoneId]);
 
   return (
     <div className={styles.container} data-testid="milestone-burndown">
@@ -138,6 +185,22 @@ export function MilestoneBurndown({
               <ConvergenceSparkline points={history} />
             </div>
           )}
+        </div>
+      )}
+      {projectId && milestoneId && (
+        <div className={styles.trustRates} data-testid="trust-rate-panel">
+          <span className={styles.trustRatesLabel}>Trust precision</span>
+          {TRUST_PRECISION_FLOWS.map((flow) => (
+            <span
+              key={flow}
+              className={styles.trustRateItem}
+              data-testid={`trust-rate-${flow}`}
+              title={`${TRUST_PRECISION_FLOW_LABELS[flow]}: ${formatTrustRate(trustRates[flow] ?? null)}`}
+            >
+              {TRUST_PRECISION_FLOW_LABELS[flow]}:{' '}
+              {formatTrustRate(trustRates[flow] ?? null)}
+            </span>
+          ))}
         </div>
       )}
       {PHASE_ORDER.map((phase) => {
