@@ -154,7 +154,9 @@ export function getGateReadiness(
       bespoke: isBespokeGateState(item.state),
       nonResolving:
         item.latestDisposition !== undefined &&
-        NON_TERMINAL_DISPOSITIONS.has(item.latestDisposition as GateDisposition),
+        NON_TERMINAL_DISPOSITIONS.has(
+          item.latestDisposition as GateDisposition,
+        ),
     }));
   const counts: Record<string, number> = {};
   for (const item of items) {

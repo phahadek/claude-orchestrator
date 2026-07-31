@@ -18,11 +18,7 @@ function freshDb(): Database.Database {
   return db;
 }
 
-function seedGateItem(
-  db: Database.Database,
-  id: string,
-  state = 'open',
-): void {
+function seedGateItem(db: Database.Database, id: string, state = 'open'): void {
   db.prepare(
     `INSERT INTO gate_item
       (id, project, milestone, text, classification, state, updated_at)
