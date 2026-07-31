@@ -577,9 +577,13 @@ describe('TaskDetail', () => {
     fireEvent.click(header);
     expect(header.getAttribute('aria-expanded')).toBe('true');
 
-    rerender(<TaskDetail task={{ ...task }} send={vi.fn()} onClose={vi.fn()} />);
+    rerender(
+      <TaskDetail task={{ ...task }} send={vi.fn()} onClose={vi.fn()} />,
+    );
     expect(
-      screen.getByTestId('planning-session-header').getAttribute('aria-expanded'),
+      screen
+        .getByTestId('planning-session-header')
+        .getAttribute('aria-expanded'),
     ).toBe('true');
   });
 
