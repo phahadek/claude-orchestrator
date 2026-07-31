@@ -1865,7 +1865,11 @@ describe('AutoLauncher — usage admission gate', () => {
     registerUsagePoller({
       getCache: () => ({
         available: true,
-        fiveHour: { percent: 10, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
+        fiveHour: {
+          percent: 10,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
       }),
     });
 

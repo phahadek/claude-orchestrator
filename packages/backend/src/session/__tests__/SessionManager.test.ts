@@ -780,9 +780,8 @@ describe('resumeOrphanSessions — usage admission gate', () => {
   });
 
   it('does not spawn a resume while plan usage is exhausted, and tags the task as deferred', async () => {
-    const { registerUsagePoller } = await import(
-      '../../orchestration/usageAdmission.js'
-    );
+    const { registerUsagePoller } =
+      await import('../../orchestration/usageAdmission.js');
     const resetsAt = new Date(Date.now() + 60_000).toISOString();
     registerUsagePoller({
       getCache: () => ({
@@ -808,9 +807,8 @@ describe('resumeOrphanSessions — usage admission gate', () => {
   });
 
   it('resumes normally once usage is available (existing resume behavior unaffected)', async () => {
-    const { registerUsagePoller } = await import(
-      '../../orchestration/usageAdmission.js'
-    );
+    const { registerUsagePoller } =
+      await import('../../orchestration/usageAdmission.js');
     registerUsagePoller({ getCache: () => ({ available: false }) });
 
     const orphanRow = { ...makeDeadRow(), status: 'running' };

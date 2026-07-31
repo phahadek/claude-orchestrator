@@ -31,8 +31,16 @@ describe('checkUsageAdmission', () => {
   it('allows admission when both windows are under 100% utilization', () => {
     const result = checkUsageAdmission(
       usage({
-        fiveHour: { percent: 40, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
-        weekly: { percent: 10, resetsAt: '2099-01-08T00:00:00Z', severity: 'normal' },
+        fiveHour: {
+          percent: 40,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
+        weekly: {
+          percent: 10,
+          resetsAt: '2099-01-08T00:00:00Z',
+          severity: 'normal',
+        },
       }),
     );
     expect(result.allowed).toBe(true);
@@ -122,7 +130,11 @@ describe('checkUsageAdmission', () => {
     setUsageDeferral('five_hour', Date.now() - 1000);
     const reopened = checkUsageAdmission(
       usage({
-        fiveHour: { percent: 5, resetsAt: '2099-01-01T00:00:00Z', severity: 'normal' },
+        fiveHour: {
+          percent: 5,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
       }),
     );
     expect(reopened.allowed).toBe(true);

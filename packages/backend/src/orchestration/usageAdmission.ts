@@ -40,9 +40,7 @@ function fallbackDeferralMs(): number {
  * early), then the poller's live snapshot; a newly observed exhausted
  * window is recorded as a deferral before returning not-allowed.
  */
-export function checkUsageAdmission(
-  usage: PlanUsage,
-): UsageAdmissionResult {
+export function checkUsageAdmission(usage: PlanUsage): UsageAdmissionResult {
   const now = Date.now();
 
   for (const window of WINDOW_ORDER) {
@@ -62,7 +60,9 @@ export function checkUsageAdmission(
   for (const [window, snapshot] of windows) {
     if (isExhausted(snapshot)) {
       const parsed = snapshot ? Date.parse(snapshot.resetsAt) : NaN;
-      const deferredUntil = Number.isNaN(parsed) ? fallbackDeferralMs() : parsed;
+      const deferredUntil = Number.isNaN(parsed)
+        ? fallbackDeferralMs()
+        : parsed;
       setUsageDeferral(window, deferredUntil);
       return { allowed: false, deferredUntil, window };
     }
