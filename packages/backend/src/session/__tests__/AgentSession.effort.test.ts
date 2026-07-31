@@ -8,10 +8,14 @@ const mockRuntimeSettings = vi.hoisted(() => ({
   code_session_model: '',
   review_session_model: '',
   planning_session_model: '',
+  ops_session_model: '',
+  gate_verify_session_model: '',
   large_task_effort: '',
   code_session_effort: '',
   review_session_effort: '',
   planning_session_effort: '',
+  ops_session_effort: '',
+  gate_verify_session_effort: '',
   corporate_mode_enabled: false,
 }));
 
@@ -99,6 +103,7 @@ vi.mock('../../config', () => ({
   ALLOWED_TOOLS: [],
   GROOM_ALLOWED_TOOLS: [],
   DESIGN_ALLOWED_TOOLS: [],
+  OPS_ALLOWED_TOOLS: [],
   GITHUB_REPO: 'owner/repo',
   BASH_MAX_OUTPUT_LENGTH: 30000,
   BASH_DEFAULT_TIMEOUT_MS: 300000,
@@ -132,7 +137,8 @@ vi.mock('../CliSessionRunner', () => ({
 import { AgentSession } from '../AgentSession';
 
 function makeSession(
-  sessionType: 'standard' | 'review' | 'groom' | 'design' = 'standard',
+  sessionType: 'standard' | 'review' | 'groom' | 'design' | 'ops' = 'standard',
+  taskId = 'task-123',
 ) {
   return new AgentSession(
     'test-session-effort',
@@ -143,7 +149,7 @@ function makeSession(
       getTask: vi.fn().mockResolvedValue(null),
     } as never,
     '/tmp/worktree',
-    'task-123',
+    taskId,
     undefined,
     undefined,
     sessionType,
@@ -157,10 +163,14 @@ beforeEach(() => {
   mockRuntimeSettings.code_session_model = '';
   mockRuntimeSettings.review_session_model = '';
   mockRuntimeSettings.planning_session_model = '';
+  mockRuntimeSettings.ops_session_model = '';
+  mockRuntimeSettings.gate_verify_session_model = '';
   mockRuntimeSettings.large_task_effort = '';
   mockRuntimeSettings.code_session_effort = '';
   mockRuntimeSettings.review_session_effort = '';
   mockRuntimeSettings.planning_session_effort = '';
+  mockRuntimeSettings.ops_session_effort = '';
+  mockRuntimeSettings.gate_verify_session_effort = '';
   vi.clearAllMocks();
 });
 
@@ -236,6 +246,83 @@ describe('AgentSession — per-class effort resolution', () => {
 
     expect(runCalls).toHaveLength(1);
     expect(runCalls[0].options.model).toBe('claude-opus-4-7[1m]');
+    expect(runCalls[0].options.effort).toBe('max');
+  });
+
+  it('a non-gate-verify ops session uses ops_session_model/effort regardless of gate-verify settings', async () => {
+    mockRuntimeSettings.ops_session_model = 'claude-sonnet-5';
+    mockRuntimeSettings.ops_session_effort = 'high';
+    mockRuntimeSettings.gate_verify_session_model = 'claude-haiku-4-5';
+    mockRuntimeSettings.gate_verify_session_effort = 'low';
+
+    const session = makeSession('ops', 'task-456');
+    await session.run();
+
+    expect(runCalls).toHaveLength(1);
+    expect(runCalls[0].options.model).toBe('claude-sonnet-5');
+    expect(runCalls[0].options.effort).toBe('high');
+  });
+
+  it('a gate-verify session uses gate_verify_session_model/effort when set', async () => {
+    mockRuntimeSettings.ops_session_model = 'claude-sonnet-5';
+    mockRuntimeSettings.ops_session_effort = 'high';
+    mockRuntimeSettings.gate_verify_session_model = 'claude-haiku-4-5';
+    mockRuntimeSettings.gate_verify_session_effort = 'low';
+
+    const session = makeSession('ops', 'gate-item:abc123');
+    await session.run();
+
+    expect(runCalls).toHaveLength(1);
+    expect(runCalls[0].options.model).toBe('claude-haiku-4-5');
+    expect(runCalls[0].options.effort).toBe('low');
+  });
+
+  it('a gate-verify session falls back to ops_session_model/effort when gate-verify settings are unset', async () => {
+    mockRuntimeSettings.ops_session_model = 'claude-sonnet-5';
+    mockRuntimeSettings.ops_session_effort = 'high';
+    mockRuntimeSettings.gate_verify_session_model = '';
+    mockRuntimeSettings.gate_verify_session_effort = '';
+
+    const session = makeSession('ops', 'gate-item:abc123');
+    await session.run();
+
+    expect(runCalls).toHaveLength(1);
+    expect(runCalls[0].options.model).toBe('claude-sonnet-5');
+    expect(runCalls[0].options.effort).toBe('high');
+  });
+
+  it('an explicit launch model/effort override still takes precedence for a gate-verify session', async () => {
+    mockRuntimeSettings.gate_verify_session_model = 'claude-haiku-4-5';
+    mockRuntimeSettings.gate_verify_session_effort = 'low';
+
+    const session = new AgentSession(
+      'test-session-effort',
+      'https://notion.so/task',
+      'https://notion.so/project',
+      {
+        attachPR: vi.fn().mockResolvedValue(undefined),
+        getTask: vi.fn().mockResolvedValue(null),
+      } as never,
+      '/tmp/worktree',
+      'gate-item:abc123',
+      undefined, // resumeSessionId
+      undefined, // customPrompt
+      'ops', // sessionType
+      undefined, // sessionManager
+      undefined, // githubClient
+      undefined, // extraAllowedTools
+      undefined, // systemPromptContent
+      undefined, // runner
+      undefined, // projectId
+      undefined, // mcpConfigPath
+      undefined, // systemPromptFilePath
+      'claude-opus-4-8', // launchModel
+      'max', // launchEffort
+    );
+    await session.run();
+
+    expect(runCalls).toHaveLength(1);
+    expect(runCalls[0].options.model).toBe('claude-opus-4-8');
     expect(runCalls[0].options.effort).toBe('max');
   });
 });

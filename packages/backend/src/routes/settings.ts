@@ -52,6 +52,8 @@ const SETTING_KEYS = [
   'planning_session_effort',
   'ops_session_model',
   'ops_session_effort',
+  'gate_verify_session_model',
+  'gate_verify_session_effort',
   'tier3_classifier_model',
   'capability_auto_approve_allowlist',
   'milestone_attention_aging_threshold_seconds',
@@ -171,6 +173,12 @@ function applyToRuntime(
     case 'ops_session_effort':
       runtimeSettings.ops_session_effort = value as string;
       break;
+    case 'gate_verify_session_model':
+      runtimeSettings.gate_verify_session_model = value as string;
+      break;
+    case 'gate_verify_session_effort':
+      runtimeSettings.gate_verify_session_effort = value as string;
+      break;
     case 'tier3_classifier_model':
       runtimeSettings.tier3_classifier_model = value as string;
       break;
@@ -257,6 +265,8 @@ function runtimeSettingsAsRecord(): {
     planning_session_effort: runtimeSettings.planning_session_effort,
     ops_session_model: runtimeSettings.ops_session_model,
     ops_session_effort: runtimeSettings.ops_session_effort,
+    gate_verify_session_model: runtimeSettings.gate_verify_session_model,
+    gate_verify_session_effort: runtimeSettings.gate_verify_session_effort,
     tier3_classifier_model: runtimeSettings.tier3_classifier_model,
     capability_auto_approve_allowlist:
       runtimeSettings.capability_auto_approve_allowlist,
