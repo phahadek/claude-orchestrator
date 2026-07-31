@@ -2193,9 +2193,7 @@ describe('task.create staged while the session has an open decision group for it
     );
     await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
     await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
-    await agent
-      .post(`/api/staged-intents/${create.id}/approve`)
-      .send({});
+    await agent.post(`/api/staged-intents/${create.id}/approve`).send({});
 
     const commit = await agent
       .post('/api/staged-intents/group/g-split-2/commit')
@@ -2279,9 +2277,8 @@ describe('task.create staged while the session has an open decision group for it
       .send({});
 
     expect(commit.status).toBe(200);
-    expect(setDependsOn).toHaveBeenCalledWith(
-      't-split-original-3',
-      ['notion:sibling-task-id-3'],
-    );
+    expect(setDependsOn).toHaveBeenCalledWith('t-split-original-3', [
+      'notion:sibling-task-id-3',
+    ]);
   });
 });

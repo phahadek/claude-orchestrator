@@ -1031,7 +1031,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'it was split off this task and which part it carries) under the ' +
         'same shared `groupId` as the narrowing decision — a split/spin-off ' +
         '`task.create` is never staged ungrouped; it is dispositioned atomically ' +
-        'with the narrowing it belongs to, exactly like the Ready path\'s other ' +
+        "with the narrowing it belongs to, exactly like the Ready path's other " +
         'grouped members above. Stage ' +
         '`task.setDependsOn` where the cut creates a genuine ordering ' +
         'constraint between the narrowed original and a sibling, then take the ' +
