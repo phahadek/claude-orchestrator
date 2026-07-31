@@ -9,9 +9,7 @@ import type { PullRequest } from '../github/types';
 import type { WorktreeEscapeViolation } from '../db/types';
 
 vi.mock('../db/queries', async () => {
-  const { mockDbQueries } = await import(
-    '../__tests__/helpers/mockDbQueries'
-  );
+  const { mockDbQueries } = await import('../__tests__/helpers/mockDbQueries');
   return mockDbQueries({
     getGrantedCapabilities: vi.fn(() => []),
     getPRByNotionTaskId: vi.fn(() => null),
@@ -401,47 +399,53 @@ describe('auditWorktreeEscape', () => {
     expect(violations).toHaveLength(0);
   });
 
-  itWin('Git-Bash path /c/... outside worktree resolves correctly', async () => {
-    // /c/Users/phadek/... is outside WORKTREE (which is deep under project)
-    vi.mocked(queries.getEventsBySession).mockReturnValue([
-      makeToolUseEvent('Write', {
-        file_path: '/c/Users/phadek/IdeaProjects/project/outside.db',
-        content: '',
-      }),
-    ]);
-    const auditor = new SessionAuditor(
-      makeNotionClient(),
-      undefined,
-      undefined,
-    );
-    const violations = await auditor.auditWorktreeEscape(
-      'test-session-id',
-      WORKTREE,
-    );
-    expect(violations).toHaveLength(1);
-    expect(violations[0].type).toBe('worktree_escape');
-    // escapedTo should be the Windows-normalized form
-    expect(violations[0].escapedTo).toMatch(/^C:\\Users\\phadek/i);
-  });
+  itWin(
+    'Git-Bash path /c/... outside worktree resolves correctly',
+    async () => {
+      // /c/Users/phadek/... is outside WORKTREE (which is deep under project)
+      vi.mocked(queries.getEventsBySession).mockReturnValue([
+        makeToolUseEvent('Write', {
+          file_path: '/c/Users/phadek/IdeaProjects/project/outside.db',
+          content: '',
+        }),
+      ]);
+      const auditor = new SessionAuditor(
+        makeNotionClient(),
+        undefined,
+        undefined,
+      );
+      const violations = await auditor.auditWorktreeEscape(
+        'test-session-id',
+        WORKTREE,
+      );
+      expect(violations).toHaveLength(1);
+      expect(violations[0].type).toBe('worktree_escape');
+      // escapedTo should be the Windows-normalized form
+      expect(violations[0].escapedTo).toMatch(/^C:\\Users\\phadek/i);
+    },
+  );
 
-  itWin('Windows-style path inside worktree produces no violation', async () => {
-    vi.mocked(queries.getEventsBySession).mockReturnValue([
-      makeToolUseEvent('Write', {
-        file_path: `${WORKTREE}\\src\\index.ts`,
-        content: '',
-      }),
-    ]);
-    const auditor = new SessionAuditor(
-      makeNotionClient(),
-      undefined,
-      undefined,
-    );
-    const violations = await auditor.auditWorktreeEscape(
-      'test-session-id',
-      WORKTREE,
-    );
-    expect(violations).toHaveLength(0);
-  });
+  itWin(
+    'Windows-style path inside worktree produces no violation',
+    async () => {
+      vi.mocked(queries.getEventsBySession).mockReturnValue([
+        makeToolUseEvent('Write', {
+          file_path: `${WORKTREE}\\src\\index.ts`,
+          content: '',
+        }),
+      ]);
+      const auditor = new SessionAuditor(
+        makeNotionClient(),
+        undefined,
+        undefined,
+      );
+      const violations = await auditor.auditWorktreeEscape(
+        'test-session-id',
+        WORKTREE,
+      );
+      expect(violations).toHaveLength(0);
+    },
+  );
 
   it('worktree_escape violations are included in audit violations array', async () => {
     const outsidePath = 'C:\\Users\\phadek\\IdeaProjects\\project\\data.db';
@@ -607,23 +611,26 @@ describe('auditWorktreeEscape', () => {
     expect(violations).toHaveLength(0);
   });
 
-  itWin('Bash redirect to inside-worktree path produces no violation', async () => {
-    vi.mocked(queries.getEventsBySession).mockReturnValue([
-      makeToolUseEvent('Bash', {
-        command: `echo hello > ${WORKTREE}\\output.txt`,
-      }),
-    ]);
-    const auditor = new SessionAuditor(
-      makeNotionClient(),
-      undefined,
-      undefined,
-    );
-    const violations = await auditor.auditWorktreeEscape(
-      'test-session-id',
-      WORKTREE,
-    );
-    expect(violations).toHaveLength(0);
-  });
+  itWin(
+    'Bash redirect to inside-worktree path produces no violation',
+    async () => {
+      vi.mocked(queries.getEventsBySession).mockReturnValue([
+        makeToolUseEvent('Bash', {
+          command: `echo hello > ${WORKTREE}\\output.txt`,
+        }),
+      ]);
+      const auditor = new SessionAuditor(
+        makeNotionClient(),
+        undefined,
+        undefined,
+      );
+      const violations = await auditor.auditWorktreeEscape(
+        'test-session-id',
+        WORKTREE,
+      );
+      expect(violations).toHaveLength(0);
+    },
+  );
 
   // ── AC: /dev/null redirects are not flagged ───────────────────────────────
   it.each([

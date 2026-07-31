@@ -54,7 +54,9 @@ vi.mock('../config.js', () => ({
 }));
 
 vi.mock('../session/orchestrator-config.js', () => ({
-  loadOrchestratorConfig: vi.fn().mockReturnValue({ ci_check_name: [], test: [] }),
+  loadOrchestratorConfig: vi
+    .fn()
+    .mockReturnValue({ ci_check_name: [], test: [] }),
 }));
 
 vi.mock('../session/autofix-runner.js', () => ({

@@ -2836,8 +2836,8 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
     // enqueueFeedbackItem (db/queries), not sm.sendOrResume — see
     // ReviewOrchestrator.ts's reviewLocalBranch needs_changes handling.
     expect(vi.mocked(enqueueFeedbackItem)).toHaveBeenCalledOnce();
-    const [sessionId, source, message] = vi.mocked(enqueueFeedbackItem).mock
-      .calls[0];
+    const [sessionId, source, message] =
+      vi.mocked(enqueueFeedbackItem).mock.calls[0];
     expect(sessionId).toBe('coding-session-local');
     expect(source).toBe('ai-reviewer');
     expect(message).toContain('Review Feedback');

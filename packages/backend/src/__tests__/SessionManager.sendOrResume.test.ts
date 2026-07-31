@@ -346,9 +346,7 @@ describe('sendOrResume() worktree-recreate failure: session_action_failed broadc
           result?: unknown,
         ) => void;
         if (cmd.includes('worktree add')) {
-          process.nextTick(() =>
-            callback(makeWorktreeError(stderrContent)),
-          );
+          process.nextTick(() => callback(makeWorktreeError(stderrContent)));
           return;
         }
         process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
