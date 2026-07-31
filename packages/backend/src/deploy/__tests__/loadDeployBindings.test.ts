@@ -40,17 +40,37 @@ describe('loadDeployBindings', () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  it('yields an empty binding map when deploy-bindings.yml is absent', () => {
+  it('yields an empty binding map when deploy-bindings.yml is absent, but reports the path checked', () => {
     const result = loadDeployBindings(projectDir);
-    expect(result).toEqual({ ok: true, bindings: {} });
+    const expectedPath = path.join(
+      configDir,
+      'projects',
+      'my-project',
+      'deploy-bindings.yml',
+    );
+    expect(result).toEqual({
+      ok: true,
+      bindings: {},
+      bindingsPath: expectedPath,
+    });
   });
 
-  it('yields an empty binding map when the config tree cannot be resolved', () => {
+  it('yields an empty binding map and a null path when the config tree cannot be resolved', () => {
     delete process.env.ORCHESTRATOR_CONFIG_DIR;
-    const unresolvable = path.join(tmpRoot, 'no-config-here', 'some-project');
+    // Isolated from `tmpRoot` (which has a sibling `config/` dir two levels
+    // up from a project dir there) so `resolveConfigDir`'s relative-path
+    // fallback checks genuinely find nothing.
+    const isolatedRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'deploy-bindings-isolated-'),
+    );
+    const unresolvable = path.join(isolatedRoot, 'checkout', 'some-project');
     fs.mkdirSync(unresolvable, { recursive: true });
-    const result = loadDeployBindings(unresolvable);
-    expect(result).toEqual({ ok: true, bindings: {} });
+    try {
+      const result = loadDeployBindings(unresolvable);
+      expect(result).toEqual({ ok: true, bindings: {}, bindingsPath: null });
+    } finally {
+      fs.rmSync(isolatedRoot, { recursive: true, force: true });
+    }
   });
 
   it('parses a valid deploy-bindings.yml keyed by basename(projectDir), not a registry id', () => {
@@ -63,6 +83,12 @@ describe('loadDeployBindings', () => {
     expect(result).toEqual({
       ok: true,
       bindings: { DB_HOST: 'db.internal', DB_PORT: '5432' },
+      bindingsPath: path.join(
+        configDir,
+        'projects',
+        'my-project',
+        'deploy-bindings.yml',
+      ),
     });
   });
 

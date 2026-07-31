@@ -5,7 +5,11 @@ import {
   loadDeployBindings,
   LoadDeployBindingsResult,
 } from './loadDeployBindings';
-import { DeployBindings, substituteBindings } from './deployBindingsSchema';
+import {
+  DeployBindings,
+  substituteBindings,
+  extractBindingRefs,
+} from './deployBindingsSchema';
 import { matchesPathDiff } from './pathDiffPredicate';
 import type {
   DeployPlaybook,
@@ -247,6 +251,53 @@ function substituteStepText(
   return { ok: true, step: { ...step, command_or_prompt: result.value } };
 }
 
+/**
+ * Every binding name referenced anywhere in a playbook's steps
+ * (`command_or_prompt`, `poll_until`, `identity_capture`) — the set
+ * `DeployOrchestrator`'s preflight check must confirm is fully covered by
+ * the loaded bindings before any step runs.
+ */
+function collectReferencedBindings(playbook: DeployPlaybook): string[] {
+  const names = new Set<string>();
+  for (const step of playbook.steps) {
+    for (const text of [
+      step.command_or_prompt,
+      step.poll_until,
+      step.identity_capture,
+    ]) {
+      for (const name of extractBindingRefs(text)) names.add(name);
+    }
+  }
+  return [...names].sort();
+}
+
+/**
+ * Preflight: confirms every binding a playbook references is present in the
+ * loaded bindings map, so a missing `deploy-bindings.yml` (or a binding
+ * simply never declared) is reported before any step executes — instead of
+ * a mid-run `bash -uc` (nounset) failure at whichever step happens to
+ * dereference it first. A playbook that references no bindings is
+ * unaffected even when no bindings file exists at all.
+ */
+export function validateBindingReferences(
+  playbook: DeployPlaybook,
+  loadedBindings: Extract<LoadDeployBindingsResult, { ok: true }>,
+): { ok: true } | { ok: false; reason: string } {
+  const referenced = collectReferencedBindings(playbook);
+  const missing = referenced.filter(
+    (name) => !(name in loadedBindings.bindings),
+  );
+  if (missing.length === 0) return { ok: true };
+
+  const checkedPath = loadedBindings.bindingsPath
+    ? `deploy-bindings.yml at ${loadedBindings.bindingsPath}`
+    : 'no resolvable central config tree (set $ORCHESTRATOR_CONFIG_DIR)';
+  return {
+    ok: false,
+    reason: `deploy playbook references undefined binding(s): ${missing.join(', ')} — checked ${checkedPath}`,
+  };
+}
+
 function gitDiffNameOnly(input: {
   projectDir: string;
   fromSha: string | null;
@@ -382,6 +433,13 @@ export class DeployOrchestrator {
     if (!loadedBindings.ok) {
       throw new Error(`cannot start deploy: ${loadedBindings.reason}`);
     }
+    const bindingCheck = validateBindingReferences(
+      loaded.playbook,
+      loadedBindings,
+    );
+    if (!bindingCheck.ok) {
+      throw new Error(`cannot start deploy: ${bindingCheck.reason}`);
+    }
     const resolvedSha =
       targetSha ?? (await this.resolveDeployTarget(this.projectDir));
     const run = startDeployRun({
@@ -433,6 +491,23 @@ export class DeployOrchestrator {
         project: this.project,
         stepId: active.current_step ?? '',
         reason: `cannot resume: ${loadedBindings.reason}`,
+      });
+      return;
+    }
+    const bindingCheck = validateBindingReferences(
+      loaded.playbook,
+      loadedBindings,
+    );
+    if (!bindingCheck.ok) {
+      logger.error(
+        `[DeployOrchestrator] resume: ${bindingCheck.reason} for ${this.project} (run ${active.run_id})`,
+      );
+      completeDeployRun(active.run_id, 'failed', this.now());
+      this.deps.sink?.onNeedsAttention?.({
+        runId: active.run_id,
+        project: this.project,
+        stepId: active.current_step ?? '',
+        reason: `cannot resume: ${bindingCheck.reason}`,
       });
       return;
     }

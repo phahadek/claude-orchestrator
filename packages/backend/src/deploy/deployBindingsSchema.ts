@@ -52,6 +52,27 @@ const BRACED_REF_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const BARE_REF_RE = /\$([A-Za-z_][A-Za-z0-9_]*)/g;
 
 /**
+ * Statically scans `text` (a step's `command_or_prompt`/`poll_until`/
+ * `identity_capture`) for `${NAME}`/`$NAME` binding references, without
+ * requiring a bindings map — used by `DeployOrchestrator`'s preflight check
+ * to determine which bindings a playbook needs *before* any step runs,
+ * since `substituteBindings`/bash's own `-uc` (nounset) expansion only
+ * surface a missing reference once that step is actually executing.
+ */
+export function extractBindingRefs(text: string | undefined): string[] {
+  if (!text) return [];
+  const names = new Set<string>();
+  for (const re of [BRACED_REF_RE, BARE_REF_RE]) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      names.add(m[1]);
+    }
+  }
+  return [...names];
+}
+
+/**
  * Substitutes `${NAME}`/`$NAME` references in `text` against `bindings`,
  * fail-closed: a reference to an undefined binding is reported as an error
  * rather than silently expanding to empty (mirrors the `bash -uc` (nounset)
