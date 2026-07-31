@@ -1038,7 +1038,24 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'capability this session lacks, stage a `session.requestCapability` ' +
         'naming the exact write. Never ask in chat whether to stage or request ' +
         'first — staging/requesting is what puts the decision in front of the ' +
-        'operator; asking first leaves them with nothing to act on.',
+        'operator; asking first leaves them with nothing to act on. ' +
+        "**Closing the session's decision is one shared group, not loose " +
+        'intents:** once an investigation reaches its conclusion, the closing ' +
+        'set — the `journal.setState` transition to `resolved`, any task-body ' +
+        'write recording the finding (`task.updateBody` / ' +
+        '`task.patchBodySection`), and any follow-on `task.create` the ' +
+        'investigation produces — is staged all under the same shared ' +
+        '`groupId` as one closing decision, never as loose ungrouped intents ' +
+        'the operator has to disposition one at a time. This is enforced at ' +
+        'stage time, the same way the grooming Ready path enforces its own ' +
+        'member set (see the Ready-path directive under `groom` below): each ' +
+        'is rejected the moment it is staged with no `groupId`. This grouping ' +
+        'mandate governs correlation, not legality — the ops_journal state ' +
+        'machine above still decides which transitions are legal; a mid-run ' +
+        '`journal.setState` that records an incidental gap without closing the ' +
+        'investigation (see "An incidental tooling gap is not a blocker" ' +
+        'above) never targets `resolved`, so it remains a standalone write, ' +
+        'exactly as before.',
       groom:
         '**Directive — staging is the terminal action:**\n' +
         '- DO stage the grooming decision (Ready or Deferred) as the last action ' +

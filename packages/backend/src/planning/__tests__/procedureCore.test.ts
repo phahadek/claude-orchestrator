@@ -824,6 +824,38 @@ describe('procedureCore', () => {
     });
   });
 
+  describe('the ops-terminal closing set is mandated under one shared groupId', () => {
+    it('names every member kind of the ops-terminal closing set and the grouping mandate itself', () => {
+      const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+      const text = stepSummaryFor(step, 'ops');
+      expect(text).toMatch(/one shared/);
+      expect(text).toMatch(/groupId/);
+      expect(text).toContain('journal.setState');
+      expect(text).toContain('resolved');
+      expect(text).toContain('task.updateBody');
+      expect(text).toContain('task.patchBodySection');
+      expect(text).toContain('task.create');
+      expect(text).toMatch(/enforced at stage time/);
+    });
+
+    it('states the incidental-mid-run carve-out — a journal.setState that never targets resolved remains standalone', () => {
+      const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+      const text = stepSummaryFor(step, 'ops');
+      expect(text).toMatch(/incidental gap/);
+      expect(text).toMatch(/remains a standalone write/);
+    });
+
+    it('does not appear for groom or design (an ops-only mandate)', () => {
+      const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+      expect(stepSummaryFor(step, 'groom')).not.toMatch(
+        /journal\.setState transition to `resolved`/,
+      );
+      expect(stepSummaryFor(step, 'design')).not.toMatch(
+        /journal\.setState transition to `resolved`/,
+      );
+    });
+  });
+
   describe('a dispatched ops run is write-capable and must drive to applied-pending-confirm', () => {
     it('states the write-capable doctrine, scoped to ops only', () => {
       const principle = CORE_PRINCIPLES.find(
