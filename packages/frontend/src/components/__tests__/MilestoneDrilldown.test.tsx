@@ -421,15 +421,16 @@ describe('MilestoneDrilldown', () => {
       );
 
       await waitFor(() =>
-        expect(screen.getByTestId('milestone-task-reader').textContent).toContain(
-          sha,
-        ),
+        expect(
+          screen.getByTestId('milestone-task-reader').textContent,
+        ).toContain(sha),
       );
       // The SHA appears in the paragraph, the list item, and the table cell —
       // all three text-element kinds react-markdown emits for prose bodies.
-      const occurrences = (
-        screen.getByTestId('milestone-task-reader').textContent ?? ''
-      ).split(sha).length - 1;
+      const occurrences =
+        (screen.getByTestId('milestone-task-reader').textContent ?? '').split(
+          sha,
+        ).length - 1;
       expect(occurrences).toBe(3);
     });
   });

@@ -28,7 +28,18 @@ describe('global.css overflow-wrap default', () => {
     expect(ruleMatch).not.toBeNull();
     const selectors = ruleMatch![1];
 
-    for (const tag of ['p', 'li', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']) {
+    for (const tag of [
+      'p',
+      'li',
+      'td',
+      'th',
+      'h1',
+      'h2',
+      'h3',
+      'h4',
+      'h5',
+      'h6',
+    ]) {
       expect(selectors).toMatch(new RegExp(`(^|,)\\s*${tag}\\s*(,|$)`));
     }
     // pre must keep horizontal-scroll behaviour, never wrap mid-token.
