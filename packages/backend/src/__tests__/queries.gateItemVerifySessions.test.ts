@@ -6,7 +6,10 @@ vi.mock('../db/db.js', async () => {
 });
 
 import { db } from '../db/db.js';
-import { getVerifySessionsForGateItems } from '../db/queries.js';
+import {
+  getVerifySessionsForGateItems,
+  hasLiveVerifySessionForGateItem,
+} from '../db/queries.js';
 
 function insertSession(opts: {
   session_id: string;
@@ -110,5 +113,64 @@ describe('getVerifySessionsForGateItems() — gate item ↔ verify session linka
     const rows = getVerifySessionsForGateItems(['item-a', 'item-b']);
 
     expect(rows.map((r) => r.itemId).sort()).toEqual(['item-a', 'item-b']);
+  });
+});
+
+describe('hasLiveVerifySessionForGateItem() — per-item dispatch guard', () => {
+  it('is false when the item has no verify session at all', () => {
+    expect(hasLiveVerifySessionForGateItem('item-none')).toBe(false);
+  });
+
+  it('is true when the item has a running verify session', () => {
+    insertSession({
+      session_id: 'sess-live',
+      task_id: 'gate-item:item-abc',
+      status: 'running',
+      started_at: 100,
+    });
+
+    expect(hasLiveVerifySessionForGateItem('item-abc')).toBe(true);
+  });
+
+  it.each(['done', 'error', 'killed', 'superseded'])(
+    "is false when the item's only prior session is terminal (%s)",
+    (status) => {
+      insertSession({
+        session_id: `sess-${status}`,
+        task_id: 'gate-item:item-abc',
+        status,
+        started_at: 100,
+      });
+
+      expect(hasLiveVerifySessionForGateItem('item-abc')).toBe(false);
+    },
+  );
+
+  it('is true when a prior session is terminal but a newer one is still live', () => {
+    insertSession({
+      session_id: 'sess-old',
+      task_id: 'gate-item:item-abc',
+      status: 'done',
+      started_at: 100,
+    });
+    insertSession({
+      session_id: 'sess-new',
+      task_id: 'gate-item:item-abc',
+      status: 'running',
+      started_at: 200,
+    });
+
+    expect(hasLiveVerifySessionForGateItem('item-abc')).toBe(true);
+  });
+
+  it('ignores sessions for other gate items', () => {
+    insertSession({
+      session_id: 'sess-other',
+      task_id: 'gate-item:item-xyz',
+      status: 'running',
+      started_at: 100,
+    });
+
+    expect(hasLiveVerifySessionForGateItem('item-abc')).toBe(false);
   });
 });

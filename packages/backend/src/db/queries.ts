@@ -703,6 +703,26 @@ export function getVerifySessionsForGateItems(
 }
 
 /**
+ * True if this gate item has a live (non-terminal) verify session — the
+ * gate reconciler's per-item dispatch guard, keyed on the same
+ * `gate-item:<id>` task_id convention as getVerifySessionsForGateItems.
+ * Unlike the reconciler's in-memory inFlightVerifications set, this is
+ * DB-backed and so survives a process restart — the gap that let a gate
+ * item with a still-running verify session get re-dispatched a second time.
+ */
+export function hasLiveVerifySessionForGateItem(itemId: string): boolean {
+  const taskId = `${GATE_ITEM_TASK_PREFIX}${itemId}`;
+  const row = db
+    .prepare<{ taskId: string }, { c: number }>(
+      `SELECT COUNT(*) as c FROM sessions
+       WHERE task_id = @taskId
+         AND status NOT IN ('done', 'error', 'killed', 'superseded')`,
+    )
+    .get({ taskId });
+  return (row?.c ?? 0) > 0;
+}
+
+/**
  * True if this task has a non-terminal planning (groom/design/ops) session —
  * including one parked idle awaiting operator disposition. Per the no-timeout
  * decision for planning sessions, an idle groom/design/ops session is never
