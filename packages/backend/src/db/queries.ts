@@ -1781,7 +1781,7 @@ export function getMergedPRForTask(taskId: string): PullRequestRow | null {
  * in routes/prs.ts is the only repair path for escalated state='open' rows,
  * so every open row must always be visible to it.
  */
-export const PR_LIST_TERMINAL_LIMIT = 50;
+const PR_LIST_TERMINAL_LIMIT = 50;
 
 /**
  * Returns all open PRs for a repo plus the most recently updated terminal
