@@ -244,7 +244,7 @@
 /* ── Code session — takes bulk of panel, scrolls independently ────── */
 .codeSection {
   flex: 1;
-  min-height: 200px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -303,7 +303,7 @@
 
 .planningBody {
   flex: 1;
-  min-height: 200px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow-y: auto;

@@ -1172,6 +1172,95 @@ describe('TaskDetail', () => {
     expect(reviewBodyBlock).toContain('max-height');
   });
 
+  // ── Planning + code sections share height (no unshrinkable 200px floors) ──
+
+  it('TaskDetail.module.css codeSection does not declare a 200px min-height floor', () => {
+    const cssPath = path.join(__dirname, '../TaskDetail.module.css');
+    const css = fs.readFileSync(cssPath, 'utf-8');
+    const match = css.match(/\.codeSection\s*\{([^}]+)\}/);
+    expect(match).toBeTruthy();
+    expect(match![1]).not.toContain('200px');
+  });
+
+  it('TaskDetail.module.css planningBody does not declare a 200px min-height floor', () => {
+    const cssPath = path.join(__dirname, '../TaskDetail.module.css');
+    const css = fs.readFileSync(cssPath, 'utf-8');
+    const match = css.match(/\.planningBody\s*\{([^}]+)\}/);
+    expect(match).toBeTruthy();
+    expect(match![1]).not.toContain('200px');
+  });
+
+  it('TaskDetail.module.css planningSection[data-expanded=true] min-height:0 is effective (child has no competing floor)', () => {
+    const cssPath = path.join(__dirname, '../TaskDetail.module.css');
+    const css = fs.readFileSync(cssPath, 'utf-8');
+    const expandedMatch = css.match(
+      /\.planningSection\[data-expanded='true'\]\s*\{([^}]+)\}/,
+    );
+    expect(expandedMatch).toBeTruthy();
+    expect(expandedMatch![1]).toContain('min-height: 0');
+    const planningBodyMatch = css.match(/\.planningBody\s*\{([^}]+)\}/);
+    expect(planningBodyMatch![1]).toContain('min-height: 0');
+  });
+
+  it('renders planning, code, and review sections together without one crowding out another', () => {
+    const codeSession = makeCodeSession();
+    const planningSession = makePlanningSession();
+    const review = makeReview();
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession, planningSession, review })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={[]}
+      />,
+    );
+    expect(screen.getByTestId('planning-session-section')).toBeTruthy();
+    expect(
+      screen.getByText(/Transcript not available — session not loaded\./),
+    ).toBeTruthy();
+    expect(screen.getByTestId('review-session-section')).toBeTruthy();
+  });
+
+  it('planning section collapsed still occupies only its header height (flex: 0 0 auto) even with a code session present', () => {
+    const codeSession = makeCodeSession();
+    const planningSession = makePlanningSession();
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession, planningSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={[]}
+      />,
+    );
+    const planningHeader = screen.getByTestId('planning-session-header');
+    fireEvent.click(planningHeader);
+    const section = screen.getByTestId('planning-session-section');
+    expect(section.getAttribute('data-expanded')).toBe('false');
+    expect(screen.queryByTestId('planning-session-body')).toBeNull();
+  });
+
+  it('expanding and collapsing the planning section leaves the code section and its transcript container intact', () => {
+    const codeSession = makeCodeSession({ sessionId: 'sess-1' });
+    const planningSession = makePlanningSession();
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', events: [] }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession, planningSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+      />,
+    );
+    expect(screen.getByText('No events yet.')).toBeTruthy();
+    const planningHeader = screen.getByTestId('planning-session-header');
+    fireEvent.click(planningHeader);
+    expect(screen.getByText('No events yet.')).toBeTruthy();
+    fireEvent.click(planningHeader);
+    expect(screen.getByText('No events yet.')).toBeTruthy();
+  });
+
   // ── Shared task-views source — detail pane AC tests ──
 
   it('renders task data when the task prop is provided', () => {
