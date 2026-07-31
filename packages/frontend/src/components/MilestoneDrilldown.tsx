@@ -256,6 +256,7 @@ export function MilestoneDrilldown({
             setSessionArchived={setSessionArchived}
             setSessionFavorited={setSessionFavorited}
             project={project}
+            showDecisionPanel={false}
           />
         )}
       </div>

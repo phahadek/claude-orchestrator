@@ -22,6 +22,8 @@ interface Props {
   project?: ProjectConfig | null;
   onClose?: () => void;
   showTaskName?: boolean;
+  /** Opt out of the embedded proposals/decision block — for surfaces (e.g. the milestone drill-down) that already render the session's staged intents elsewhere. Defaults to shown. */
+  showDecisionPanel?: boolean;
 }
 
 export function SessionPanel({
@@ -35,6 +37,7 @@ export function SessionPanel({
   project = null,
   onClose,
   showTaskName = true,
+  showDecisionPanel = true,
 }: Props) {
   const [showReviewTranscript, setShowReviewTranscript] = useState(false);
   const [activeTab, setActiveTab] = useState<'transcript' | 'diff'>(
@@ -144,7 +147,7 @@ export function SessionPanel({
           </>
         )}
       </div>
-      <DecisionPanel sessionId={session.sessionId} />
+      {showDecisionPanel && <DecisionPanel sessionId={session.sessionId} />}
     </div>
   );
 }

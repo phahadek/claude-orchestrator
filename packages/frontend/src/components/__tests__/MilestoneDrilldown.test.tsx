@@ -114,7 +114,18 @@ describe('MilestoneDrilldown', () => {
   });
 
   it('drives the task reader + SessionPanel embed from a selected launched task', async () => {
-    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([
+      {
+        id: 'intent-1',
+        kind: 'task.setStatus',
+        payload: { taskId: 'task-1', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 1,
+        sessionId: 'sess-1',
+        milestone: 'M1',
+        state: 'staged',
+      },
+    ]);
     const task = makeTask({
       taskId: 'task-1',
       codeSession: {
@@ -159,6 +170,9 @@ describe('MilestoneDrilldown', () => {
 
     await waitFor(() => expect(screen.getByText('Spec body')).toBeTruthy());
     expect(screen.getByText('No events yet.')).toBeTruthy();
+    // The embedded SessionPanel must not duplicate the centre column's
+    // decision inbox — the milestone drill-down opts out of DecisionPanel.
+    expect(screen.queryByTestId('decision-panel')).toBeNull();
   });
 
   it('handles an unresolvable create-intent gracefully', async () => {
