@@ -630,6 +630,113 @@ describe('checkGroomingPromotionGate — FM2 resolve-in-artifact (Files/paths)',
   });
 });
 
+describe('checkGroomingPromotionGate — Files/paths non-repo-path declaration', () => {
+  const BASE = {
+    size_check: { decision: 'n/a' },
+    type_check: { decision: 'none' },
+    type: '💻 Code',
+  };
+
+  beforeEach(() => {
+    recordAccretionMarker({
+      sourceTaskId: 'notion:nonrepo-task',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      reason: 'This task type is exempt from gate accretion.',
+      accretedAt: new Date(0).toISOString(),
+    });
+    recordSeedAccretionMarker({
+      sourceTaskId: 'notion:nonrepo-task',
+      project: 'polimarket-analyser',
+      milestone: 'M12',
+      decision: 'n/a',
+      accretedAt: new Date(0).toISOString(),
+    });
+  });
+
+  it('rejects the observed incident entry — a Notion-prefixed design-page line marked isNew:true', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/orchestration/flowArm.ts (update) — DEFAULT_ARM all false',
+            isNew: false,
+            existsInRepo: true,
+          },
+          {
+            raw: 'Notion: Design the per-flow arm model & graduated rollout (update — decision record amended with the reversal)',
+            isNew: true,
+            existsInRepo: false,
+          },
+        ],
+      },
+      'notion:nonrepo-task',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some(
+        (r) => r.includes('Notion:') && r.includes('does not parse as a'),
+      ),
+    ).toBe(true);
+  });
+
+  it('allows a genuinely new repo path even though existsInRepo is false', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        filesPathsEntries: [
+          {
+            raw: 'packages/backend/src/foo/bar.ts (new)',
+            isNew: true,
+            existsInRepo: false,
+          },
+        ],
+      },
+      'notion:nonrepo-task',
+    );
+    expect(result.allowed).toBe(true);
+  });
+
+  it('reports the non-repo-path failure as its own reason, distinct from type_check', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        ...BASE,
+        type_check: { decision: 'none' },
+        filesPathsEntries: [
+          {
+            raw: 'Notion: some other design page',
+            isNew: true,
+            existsInRepo: false,
+          },
+        ],
+      },
+      'notion:nonrepo-task',
+    );
+    expect(result.allowed).toBe(false);
+    expect(
+      result.reasons.some((r) => r.toLowerCase().includes('type_check')),
+    ).toBe(false);
+  });
+
+  it('does not apply the non-repo-path check to non-Code types', () => {
+    const result = checkGroomingPromotionGate(
+      {
+        size_check: { decision: 'n/a' },
+        type_check: { decision: 'n/a' },
+        type: '📐 Design',
+        triage: { proposedVerdict: 'clean', hasOpenQuestionsHeading: true },
+        filesPathsEntries: [
+          { raw: 'Notion: some design page', isNew: true, existsInRepo: false },
+        ],
+      },
+      'notion:nonrepo-non-code',
+    );
+    expect(result.allowed).toBe(true);
+  });
+});
+
 describe('checkGroomingPromotionGate — FM3 Design/Planning Depends On liveness', () => {
   const BASE = {
     size_check: { decision: 'n/a' },

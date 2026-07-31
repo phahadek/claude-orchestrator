@@ -385,6 +385,58 @@ function isFilesPathsResolved(
   return { ok: reasons.length === 0, reasons };
 }
 
+/** An external-source prefix such as `Notion:` or `Slack:` — a declared line naming work in another system, never a repo path. */
+const EXTERNAL_PREFIX_RE = /^[A-Za-z][A-Za-z0-9 ]*:\s/;
+
+/**
+ * Whether a Files/paths entry's leading token could plausibly be a
+ * repository path — the discriminator for the non-repo-path check below is
+ * *shape*, not existence: a well-formed but not-yet-created source file
+ * (`packages/backend/src/foo/bar.ts`, or a bare `a.ts` at repo root) must
+ * parse as true, while a line naming work in another system
+ * (`Notion: Design the per-flow arm model...`) must parse as false. Requires
+ * a file extension on the leading token and rejects an explicit
+ * external-source prefix.
+ */
+function looksLikeRepoPath(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (EXTERNAL_PREFIX_RE.test(trimmed)) return false;
+  const candidate = trimmed.split(/[\s(]/)[0] ?? '';
+  return /\.[A-Za-z0-9]+$/.test(candidate);
+}
+
+/**
+ * The incident driver for this check (task 3ae22f91): a 💻 Code task's
+ * Files/paths entry that is existsInRepo:false AND does not parse as a
+ * plausible repo path (looksLikeRepoPath) declares work a dispatched Code
+ * session's worktree+PR cannot perform — a Notion page, a decision record,
+ * etc. Distinguishable from the legitimate case of a genuinely new source
+ * file, which is existsInRepo:false but well-formed. Independent of FM2's
+ * hedge/isNew check above (a session's own isNew label is not trustworthy —
+ * the incident entry was mislabeled isNew:true) and of type_check's
+ * advisory smuggle heuristic (which stayed "none" on this exact input) —
+ * this check is deterministic and reported as its own gate reason, never
+ * folded into type_check's disposition. Non-Code types fail-open.
+ */
+function isFilesPathsDeclaringRepoWork(
+  type: string | undefined,
+  entries: FilesPathsEntry[] | undefined,
+): { ok: boolean; reasons: string[] } {
+  if (type !== '💻 Code') return { ok: true, reasons: [] };
+  const reasons: string[] = [];
+  for (const e of entries ?? []) {
+    if (!e.existsInRepo && !looksLikeRepoPath(e.raw)) {
+      reasons.push(
+        `Files/paths entry "${e.raw}" does not resolve to an existing repo file and does not parse as a ` +
+          'plausible repository path (no path separator / file extension, or an explicit external-source ' +
+          'prefix such as "Notion:") — a 💻 Code task cannot declare non-repo work; excise the entry or ' +
+          're-type the task.',
+      );
+    }
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
 /**
  * FM3 signal (a) — a non-Done 📐 Design / 📋 Planning / 🔎 Investigation
  * Depends On task can still reshape this task's scope, invalidating whatever
@@ -592,6 +644,10 @@ export function checkGroomingPromotionGate(
 
   reasons.push(
     ...isFilesPathsResolved(resolvedType, entry.filesPathsEntries).reasons,
+  );
+  reasons.push(
+    ...isFilesPathsDeclaringRepoWork(resolvedType, entry.filesPathsEntries)
+      .reasons,
   );
   reasons.push(...isDependsOnGateClear(entry.dependsOnTasks).reasons);
   reasons.push(...isConstraintsDispositioned(entry).reasons);
