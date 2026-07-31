@@ -390,4 +390,48 @@ describe('MilestoneDrilldown', () => {
     const embed = screen.getByTestId('milestone-session-embed');
     expect(embed.textContent).not.toContain('Transcript not available');
   });
+
+  describe('long unbreakable tokens in the task body', () => {
+    it('renders a 40-character commit SHA in full rather than truncating or erroring', async () => {
+      vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+      const sha = 'a07c76a390ece5c531b020688f5351a10d0baf4b'.slice(0, 40);
+      const task = makeTask({ taskId: 'task-long-token' });
+
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            markdown: `## Context\n\nAnchors read at checkout HEAD ${sha}.\n\n- path: packages/backend/src/${sha}/index.ts\n\n| SHA | Note |\n| --- | --- |\n| ${sha} | table cell |\n`,
+          }),
+        }),
+      );
+
+      render(
+        <MilestoneDrilldown
+          selection={{ type: 'task', task }}
+          tasks={[task]}
+          projectId="proj-1"
+          sessions={[]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(
+          screen.getByTestId('milestone-task-reader').textContent,
+        ).toContain(sha),
+      );
+      // The SHA appears in the paragraph, the list item, and the table cell —
+      // all three text-element kinds react-markdown emits for prose bodies.
+      const occurrences =
+        (screen.getByTestId('milestone-task-reader').textContent ?? '').split(
+          sha,
+        ).length - 1;
+      expect(occurrences).toBe(3);
+    });
+  });
 });
