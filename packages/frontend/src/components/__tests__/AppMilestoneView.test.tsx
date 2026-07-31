@@ -76,11 +76,25 @@ function stubLocalStorage() {
   });
 }
 
+function mockMatchMedia(isMobile: boolean) {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: isMobile,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }));
+}
+
 import App from '../../App';
 
 describe('App milestone view', () => {
   beforeEach(() => {
     stubLocalStorage();
+    mockMatchMedia(false);
   });
 
   it('switches to the milestone shell and renders its three regions when a milestone is active', async () => {
@@ -122,5 +136,39 @@ describe('App milestone view', () => {
 
     expect(screen.getByTestId('milestone-empty-state')).toBeDefined();
     expect(screen.queryByTestId('milestone-view-shell')).toBeNull();
+  });
+
+  it('shows a tab switch below the breakpoint, mounting only one region at a time', async () => {
+    mockMatchMedia(true);
+    stubProjects([
+      {
+        id: 'proj-1',
+        name: 'Project 1',
+        projectDir: '/p',
+        contextUrl: '',
+        boardId: 'board-1',
+        boards: [{ id: 'board-1', name: 'M1' }],
+      },
+    ]);
+    render(<App />);
+    await waitFor(() => screen.getByRole('button', { name: 'Milestone' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Milestone' }));
+
+    expect(screen.getByTestId('milestone-view-shell')).toBeDefined();
+
+    // Only the default (burndown) region is mounted initially.
+    expect(screen.getByTestId('milestone-burndown-mount')).toBeDefined();
+    expect(screen.queryByTestId('milestone-decision-stack-mount')).toBeNull();
+    expect(screen.queryByTestId('milestone-drilldown-mount')).toBeNull();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Decisions' }));
+    expect(screen.queryByTestId('milestone-burndown-mount')).toBeNull();
+    expect(screen.getByTestId('milestone-decision-stack-mount')).toBeDefined();
+    expect(screen.queryByTestId('milestone-drilldown-mount')).toBeNull();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Drill-down' }));
+    expect(screen.queryByTestId('milestone-burndown-mount')).toBeNull();
+    expect(screen.queryByTestId('milestone-decision-stack-mount')).toBeNull();
+    expect(screen.getByTestId('milestone-drilldown-mount')).toBeDefined();
   });
 });
