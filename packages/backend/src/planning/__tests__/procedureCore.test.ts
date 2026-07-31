@@ -538,6 +538,27 @@ describe('procedureCore', () => {
       );
     });
 
+    it('requires the post-approval terminal artifacts to share one groupId, in the same register as the groom grouping rules', () => {
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /staged together under the same shared `groupId`/,
+      );
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /never individually or ungrouped/,
+      );
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /disposes the design's closing set as a single group-level/,
+      );
+    });
+
+    it('keeps completeness.disposition and decision.pickOne out of the terminal-artifact group', () => {
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /`completeness\.disposition` intent itself stays outside that group/,
+      );
+      expect(DESIGN_TERMINAL_ARTIFACTS_ORDERING).toMatch(
+        /each `decision\.pickOne` stays\s+individually staged and ungrouped, one per turn/,
+      );
+    });
+
     it('leaves the groom and ops procedures unchanged by the ordering rule', () => {
       for (const skill of ['groom', 'ops'] as SkillId[]) {
         const principleText = principlesFor(skill)
