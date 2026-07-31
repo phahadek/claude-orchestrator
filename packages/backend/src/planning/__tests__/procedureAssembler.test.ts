@@ -1,6 +1,33 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+
+// Project-record fixtures used by the mocked `getProjectById` below —
+// `projectDir` intentionally does not match the registry id key for either
+// entry, mirroring the real registry (see procedureCore.ts's
+// `renderCheckoutPathStatement`). Declared via `vi.hoisted` so the same
+// object is usable both inside the mock factory (which vitest hoists above
+// this file's imports) and in assertions further down, keeping the expected
+// value derived from one place rather than re-typed as a literal string.
+const { PROJECT_FIXTURES } = vi.hoisted(() => ({
+  PROJECT_FIXTURES: {
+    p1: { id: 'p1', projectDir: '/srv/orchestrator/projects/claude-orchestrator' },
+    'other-project': {
+      id: 'other-project',
+      projectDir: '/srv/orchestrator/projects/totally-different-dirname',
+    },
+  } as Record<string, { id: string; projectDir: string }>,
+}));
+
+vi.mock('../../config', async () => {
+  const actual =
+    await vi.importActual<typeof import('../../config')>('../../config');
+  return {
+    ...actual,
+    getProjectById: (id: string) => PROJECT_FIXTURES[id],
+  };
+});
+
 import {
   assemblePlanningProcedure,
   deriveGroomDigestSlice,
@@ -313,6 +340,15 @@ describe('assemblePlanningProcedure', () => {
       expect(output).toContain('session.requestCapability');
       expect(output).toContain('it never narrows whether one may be requested');
 
+      // States the checkout path literally (resolved from the project
+      // record, not a placeholder), that the session's working directory
+      // is that checkout, and that the registry id must not be used as a
+      // path search term — for every workflow (groom/design/ops).
+      expect(output).toContain(PROJECT_FIXTURES.p1.projectDir);
+      expect(output).toMatch(/working directory is already the project checkout/);
+      expect(output).toMatch(/NOT named after this project's registry id/);
+      expect(output).toMatch(/do not `find` \/ `ls` \/ grep the filesystem/);
+
       // Per-type digest section.
       const digestTitles: Record<PlanningDigest['workflow'], string> = {
         groom: '## Grooming Validation Slice',
@@ -362,6 +398,32 @@ describe('assemblePlanningProcedure', () => {
       }
     });
   }
+
+  it("renders the real directory for a project whose checkout dir name differs from its registry id — not the p1 fixture's path", () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'other-project',
+      digest: cases[0].digest,
+    });
+    expect(output).toContain(PROJECT_FIXTURES['other-project'].projectDir);
+    expect(output).not.toContain(PROJECT_FIXTURES.p1.projectDir);
+  });
+
+  it('omits the checkout-path statement (rather than a placeholder) when the project record cannot be resolved', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'no-such-project',
+      digest: cases[0].digest,
+    });
+    expect(output).not.toMatch(/working directory is already the project checkout/);
+    // The rest of the skeleton still assembles normally.
+    expect(output).toContain('## Session Lifecycle');
+    expect(output).toContain('## Transport');
+  });
 
   it('never carries the interactive-only chat-confirmation directive in the injected rendering, for groom, design, or ops', () => {
     for (const { workflow, digest } of cases) {

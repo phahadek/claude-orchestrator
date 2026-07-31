@@ -44,6 +44,7 @@ import {
   SIZE_TYPE_CHECK,
   SKILL_LABELS,
   principlesFor,
+  renderCheckoutPathStatement,
   renderPrinciple,
   stepsFor,
   stepSummaryFor,
@@ -670,12 +671,32 @@ function reportMissingProjectRecordAccessGuide(
   }
 }
 
+/**
+ * Resolve the registry projectId to the project's checkout directory, for
+ * `renderCheckoutPathStatement`. Mirrors
+ * `resolveProjectRecordAccessGuidePath`'s never-throw, log-and-degrade
+ * fallback: an unresolvable project id (an unregistered project, or a test
+ * fixture with no backing project row) drops the statement rather than
+ * rendering a placeholder — the real dispatch path always resolves a
+ * project (`OpsSessionLauncher.buildInjectedProcedure` validates the
+ * project row before ever calling `assemblePlanningProcedure`), so this
+ * branch is a defensive fallback, not the expected path.
+ */
+function resolveProjectCheckoutDir(projectId: string): string | null {
+  try {
+    return getProjectById(projectId)?.projectDir ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function renderSkeleton(
   workflow: PlanningWorkflow,
   taskName: string,
   taskUrl: string,
   milestoneId: string,
   projectId: string,
+  checkoutDir: string | null,
 ): string {
   const label = SKILL_LABELS[workflow];
   const kinds = PLANNING_INTENT_KINDS[workflow];
@@ -706,6 +727,7 @@ function renderSkeleton(
     '',
     lifecycle,
     '',
+    ...(checkoutDir ? [renderCheckoutPathStatement(checkoutDir), ''] : []),
     ...renderProjectRecordAccess(workflow, projectId),
     ...(workflow === 'ops' ? renderOpsCapabilities() : []),
     '## Transport',
@@ -1255,8 +1277,23 @@ export function assemblePlanningProcedure(
   params: AssemblePlanningProcedureParams,
 ): string {
   const { taskName, taskUrl, digest, milestoneId, projectId } = params;
+  const checkoutDir = resolveProjectCheckoutDir(projectId);
+  if (!checkoutDir) {
+    logger.warn(
+      `[procedureAssembler] cannot resolve a checkout directory for ` +
+        `projectId=${projectId} — omitting the checkout-path statement ` +
+        'from the injected procedure',
+    );
+  }
   const sections = [
-    renderSkeleton(digest.workflow, taskName, taskUrl, milestoneId, projectId),
+    renderSkeleton(
+      digest.workflow,
+      taskName,
+      taskUrl,
+      milestoneId,
+      projectId,
+      checkoutDir,
+    ),
     renderProcedureCore(digest.workflow),
     renderDigest(digest),
   ];
