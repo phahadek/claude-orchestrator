@@ -113,7 +113,6 @@ describe('UpdateChecker', () => {
   });
 
   afterEach(() => {
-    checker.stop();
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -168,9 +167,6 @@ describe('UpdateChecker', () => {
 
   it('skips update check entirely in dev mode', async () => {
     process.env.CO_DEV = '1';
-    checker.start();
-    // No https.get should have been called
-    expect(https.get).not.toHaveBeenCalled();
     const info = await checker.checkNow();
     expect(info).toBeNull();
     expect(broadcast).not.toHaveBeenCalled();

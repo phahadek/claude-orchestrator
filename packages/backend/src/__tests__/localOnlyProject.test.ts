@@ -333,7 +333,9 @@ describe('POST /api/sessions/:id/mark-merged', () => {
     );
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(mockUpdateStatus).toHaveBeenCalledWith('task-abc', '✅ Done');
+    expect(mockUpdateStatus).toHaveBeenCalledWith('task-abc', '✅ Done', {
+      source: 'human',
+    });
   });
 
   it('rejects mark-merged for github project', async () => {

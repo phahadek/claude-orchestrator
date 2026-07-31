@@ -25,10 +25,6 @@ vi.mock('../db/queries.js', () => ({
   getActiveDeviceCount: vi.fn().mockReturnValue(0),
 }));
 
-vi.mock('../config/dataDir.js', () => ({
-  getDataDir: vi.fn(() => os.tmpdir()),
-}));
-
 vi.mock('../config/credentialsPath.js', () => ({
   claudeCredentialsPath: vi.fn(),
 }));
@@ -76,10 +72,18 @@ function buildApp() {
 
 describe('GET /api/setup/status', () => {
   let tmpDir: string;
+  let prevXdgDataHome: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-setup-'));
-    mockedGetDataDir.mockReturnValue(tmpDir);
+    // writeOrchestratorConfig() always targets the real data dir (see its
+    // doc comment in appConfig.ts) — a getDataDir mock never reaches it, and
+    // by the time this file's vi.mock hoisting runs, testSetupDb.ts (an
+    // earlier-running Vitest setupFile) has already resolved appConfig.ts's
+    // own unmocked getDataDir import (see logger.test.ts for the same
+    // pitfall). Point the REAL data dir at this tmp dir instead.
+    prevXdgDataHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = tmpDir;
     // The status route now reads the resolved config (config.json → .env fallback),
     // so drive it through the app-config override pointed at this test's data dir.
     _setConfigSourceForTesting(new DataDirConfigSource(tmpDir));
@@ -88,6 +92,8 @@ describe('GET /api/setup/status', () => {
 
   afterEach(() => {
     _resetAppConfigCache();
+    if (prevXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = prevXdgDataHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
     vi.clearAllMocks();
   });
@@ -130,15 +136,38 @@ describe('GET /api/setup/status', () => {
 
 describe('setup writes bust the config cache', () => {
   let tmpDir: string;
+  let prevXdgDataHome: string | undefined;
+  // Before config.json exists, resolve() falls back to EnvFileConfigSource,
+  // which reads these directly off process.env — an inherited GITHUB_TOKEN /
+  // NOTION_API_KEY (e.g. exported in a dev's shell, or set for this session's
+  // own `gh` CLI use) would make the "missing" assertions below false
+  // negatives. Clear them for the duration of this block.
+  const ENV_KEYS = ['GITHUB_TOKEN', 'NOTION_API_KEY', 'GITHUB_REPO'] as const;
+  const prevEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-setup-cache-'));
-    mockedGetDataDir.mockReturnValue(tmpDir);
-    _setConfigSourceForTesting(new DataDirConfigSource(tmpDir));
+    // No _setConfigSourceForTesting override here: these tests exercise
+    // writeOrchestratorConfig() (via the setup routes), which always targets
+    // the real data dir and ignores any source override — so reads must go
+    // through the same real (XDG_DATA_HOME-derived) path via the default
+    // resolve(), not a tmpDir-literal override that the writes never reach.
+    prevXdgDataHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = tmpDir;
+    for (const key of ENV_KEYS) {
+      prevEnv[key] = process.env[key];
+      delete process.env[key];
+    }
   });
 
   afterEach(() => {
     _resetAppConfigCache();
+    if (prevXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = prevXdgDataHome;
+    for (const key of ENV_KEYS) {
+      if (prevEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = prevEnv[key];
+    }
     fs.rmSync(tmpDir, { recursive: true, force: true });
     vi.clearAllMocks();
   });
@@ -529,6 +558,7 @@ describe('POST /api/setup/validate', () => {
 
 describe('POST /api/setup/import', () => {
   let tmpDir: string;
+  let prevXdgDataHome: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-import-'));
@@ -536,10 +566,21 @@ describe('POST /api/setup/import', () => {
     // Treat tmpDir as the sole permitted root so existing fixtures (which
     // live under os.tmpdir(), not the real home dir) stay under bounds.
     _setEnvImportRootsForTesting([tmpDir]);
+    // writeOrchestratorConfig() always targets the real data dir (see its
+    // doc comment in appConfig.ts) — the getDataDir mock above never reaches
+    // it, since testSetupDb.ts (an earlier-running Vitest setupFile) has
+    // already resolved appConfig.ts's own unmocked getDataDir import (see
+    // logger.test.ts for the same pitfall). Point the REAL data dir at this
+    // tmp dir instead.
+    prevXdgDataHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = tmpDir;
   });
 
   afterEach(() => {
     _setEnvImportRootsForTesting(null);
+    _resetAppConfigCache();
+    if (prevXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = prevXdgDataHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
     vi.clearAllMocks();
   });
@@ -582,8 +623,11 @@ describe('POST /api/setup/import', () => {
     expect(res.body.imported).toContain('server.port');
     expect(res.body.dbFound).toBe(false);
 
-    // Verify config.json was written correctly
-    const src = new DataDirConfigSource(tmpDir);
+    // Verify config.json was written correctly. writeOrchestratorConfig()
+    // always targets the real (XDG_DATA_HOME-derived) data dir, which
+    // appends a 'claude-orchestrator' subdir onto tmpDir — read from there,
+    // not from tmpDir directly.
+    const src = new DataDirConfigSource();
     const cfg = src.read();
     expect(cfg.notion.apiKey).toBe('ntn-imported');
     expect(cfg.github.token).toBe('ghp-imported');

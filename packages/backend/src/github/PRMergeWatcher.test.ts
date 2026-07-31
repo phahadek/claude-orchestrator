@@ -33,7 +33,13 @@ vi.mock('../db/queries.js', () =>
 );
 
 vi.mock('../config.js', () => ({
-  getProjectByGithubRepo: vi.fn().mockReturnValue(null),
+  // Default to a resolvable project so poll()'s "no project for repo" gate
+  // doesn't silently short-circuit tests that don't care about that gate;
+  // tests exercising the gate itself override this back to null.
+  getProjectByGithubRepo: vi.fn().mockReturnValue({
+    id: 'proj-1',
+    projectDir: '/fake/project',
+  }),
   AUTO_REVIEW_ENABLED: true,
 }));
 
@@ -206,6 +212,13 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // vi.clearAllMocks() resets calls, not implementations — re-arm the
+  // default here so a test that overrides getProjectByGithubRepo to null
+  // doesn't leak that into later tests that don't care about the gate.
+  vi.mocked(getProjectByGithubRepo).mockReturnValue({
+    id: 'proj-1',
+    projectDir: '/fake/project',
+  } as never);
 });
 
 // ── poll() ────────────────────────────────────────────────────────────────────
@@ -1213,7 +1226,10 @@ describe('PRMergeWatcher first-poll-after-boot suppression', () => {
     expect(messages.filter((m) => m.type === 'pr_merged')).toHaveLength(1);
   });
 
-  it('start() immediate poll acts as first-poll-after-boot — suppresses pr_merged for pre-merged PRs', async () => {
+  it('the first poll() call after construction acts as first-poll-after-boot — suppresses pr_merged for pre-merged PRs', async () => {
+    // firstPollPending is a PRMergeWatcher-internal flag defaulting to true;
+    // it's independent of the (now-removed) start()/register() scheduling
+    // wrapper — a fresh watcher's very first poll() call exercises it.
     const pr = makePRRow({
       task_id: null,
       head_branch: 'main',
@@ -1236,9 +1252,7 @@ describe('PRMergeWatcher first-poll-after-boot suppression', () => {
       (msg) => messages.push(msg),
     );
 
-    const pollSpy = vi.spyOn(watcher, 'poll');
-    watcher.start(Number.MAX_SAFE_INTEGER);
-    await pollSpy.mock.results[0].value;
+    await watcher.poll();
 
     expect(vi.mocked(updatePRState)).toHaveBeenCalledWith(
       42,
@@ -1246,8 +1260,6 @@ describe('PRMergeWatcher first-poll-after-boot suppression', () => {
       'merged',
     );
     expect(messages.filter((m) => m.type === 'pr_merged')).toHaveLength(0);
-
-    watcher.stop();
   });
 });
 
@@ -2025,8 +2037,14 @@ describe('PRMergeWatcher — CI-failure autofix dedup reads from DB', () => {
 
 describe('PRMergeWatcher — ci_remediation_attempted_sha per-SHA dedup', () => {
   beforeEach(() => {
-    // Reset mocks that may have been set to non-default values by prior describe blocks
-    vi.mocked(getProjectByGithubRepo).mockReturnValue(null);
+    // Reset mocks that may have been set to non-default values by prior describe blocks.
+    // getProjectByGithubRepo must resolve (not null) — poll()'s ci_remediation
+    // path (setCiRemediationAttemptedSha) sits behind the same "no project for
+    // repo" gate as everything else in poll().
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/fake/project',
+    } as never);
     vi.mocked(getSession).mockReturnValue(null);
     vi.mocked(loadAutofixCommands).mockReturnValue([]);
     vi.mocked(runAutofix).mockResolvedValue({
@@ -4105,11 +4123,17 @@ describe('PRMergeWatcher — sweepPendingPushDeadLetters', () => {
   });
 });
 
-// ── start() — immediate first poll ────────────────────────────────────────────
+// ── register() — scheduling delegated to Scheduler ────────────────────────────
+//
+// PRMergeWatcher used to self-schedule via start()/stop(); that's been
+// replaced by register(scheduler), which hands the poll cadence (immediate
+// first run, skip-if-running reentrancy) to the shared Scheduler. Scheduler's
+// own suite (src/__tests__/Scheduler.test.ts) covers runOnBoot and
+// skip-if-running generically — this just checks PRMergeWatcher wires poll()
+// into the scheduler correctly.
 
-describe('PRMergeWatcher.start()', () => {
-  it('fires one poll immediately on start before any interval tick', () => {
-    vi.useFakeTimers();
+describe('PRMergeWatcher.register()', () => {
+  it('registers a job that calls poll() when run', async () => {
     const watcher = new PRMergeWatcher(
       makeMockGitHub(),
       makeMockSessions(),
@@ -4118,52 +4142,19 @@ describe('PRMergeWatcher.start()', () => {
     );
     const pollSpy = vi.spyOn(watcher, 'poll').mockResolvedValue(undefined);
 
-    watcher.start(60_000);
+    const registered: Array<{ name: string; run: () => Promise<void> }> = [];
+    const fakeScheduler = {
+      register: vi.fn((opts: { name: string; run: () => Promise<void> }) => {
+        registered.push(opts);
+      }),
+    };
 
+    watcher.register(fakeScheduler as never);
+
+    const mainJob = registered.find((j) => j.name === 'pr_merge_watcher');
+    expect(mainJob).toBeDefined();
+    await mainJob!.run();
     expect(pollSpy).toHaveBeenCalledTimes(1);
-    watcher.stop();
-    vi.useRealTimers();
-  });
-
-  it('second start() is a no-op — no extra immediate poll or extra timer', () => {
-    vi.useFakeTimers();
-    const watcher = new PRMergeWatcher(
-      makeMockGitHub(),
-      makeMockSessions(),
-      undefined,
-      () => {},
-    );
-    const pollSpy = vi.spyOn(watcher, 'poll').mockResolvedValue(undefined);
-
-    watcher.start(60_000);
-    watcher.start(60_000);
-
-    expect(pollSpy).toHaveBeenCalledTimes(1);
-    watcher.stop();
-    vi.useRealTimers();
-  });
-
-  it('poll error in the immediate call is caught and logged, not thrown', async () => {
-    vi.useFakeTimers();
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const watcher = new PRMergeWatcher(
-      makeMockGitHub(),
-      makeMockSessions(),
-      undefined,
-      () => {},
-    );
-    vi.spyOn(watcher, 'poll').mockRejectedValue(new Error('boom'));
-
-    expect(() => watcher.start(60_000)).not.toThrow();
-    await vi.runAllTimersAsync();
-
-    expect(warnSpy).toHaveBeenCalledWith(
-      '[PRMergeWatcher] poll error:',
-      'boom',
-    );
-    warnSpy.mockRestore();
-    watcher.stop();
-    vi.useRealTimers();
   });
 });
 

@@ -182,7 +182,6 @@ describe('UpdateChecker — release channel behavior', () => {
   });
 
   afterEach(() => {
-    checker.stop();
     vi.useRealTimers();
     vi.clearAllMocks();
   });

@@ -14,23 +14,28 @@ import os from 'os';
 import path from 'path';
 import { mockDbQueries } from './helpers/mockDbQueries';
 
+const { mockExecCallback } = vi.hoisted(() => ({
+  mockExecCallback: vi.fn(
+    (
+      _cmd: string,
+      _opts: unknown,
+      cb?: (err: null, result: { stdout: string; stderr: string }) => void,
+    ) => {
+      const callback = (typeof _opts === 'function' ? _opts : cb) as (
+        err: null,
+        result: { stdout: string; stderr: string },
+      ) => void;
+      process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+    },
+  ),
+}));
+
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   return {
     ...actual,
     execSync: vi.fn().mockReturnValue(''),
-    exec: vi
-      .fn()
-      .mockImplementation(
-        (
-          _cmd: string,
-          _opts: unknown,
-          cb: (err: null, result: { stdout: string; stderr: string }) => void,
-        ) => {
-          const callback = typeof _opts === 'function' ? _opts : cb;
-          process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
-        },
-      ),
+    exec: mockExecCallback,
   };
 });
 
@@ -84,12 +89,18 @@ vi.mock('../tasks/TaskBackend', () => ({
 vi.mock('../session/orchestrator-config', () => ({
   loadOrchestratorConfig: vi.fn().mockReturnValue({
     mainBranch: 'main',
-    bootstrapScript: null,
+    bootstrap_script: null,
     prGate: null,
-    bashRules: null,
-    allowedTools: [],
+    bash_rules: [],
+    allowed_tools: [],
     mcp_servers: undefined,
+    verify: [],
+    required_env: [],
+    required_files: [],
+    review_rules: [],
+    session_rules: [],
   }),
+  getSessionAllowedTools: vi.fn(() => []),
 }));
 
 vi.mock('../session/ContextBuilder', () => ({
@@ -245,9 +256,10 @@ describe('sendOrResume() surviving-worktree reuse (real-fs fixture)', () => {
     await sm.sendOrResume(SESSION_ID, 'feedback');
 
     // Recreation path ran (worktree add attempted) — reuse correctly refused.
-    const addCalls = vi
-      .mocked(execSync)
-      .mock.calls.filter(([cmd]) => String(cmd).includes('worktree add'));
+    // gitWorktreeAddWithRetry uses the promisified async exec, not execSync.
+    const addCalls = mockExecCallback.mock.calls.filter(([cmd]) =>
+      String(cmd).includes('worktree add'),
+    );
     expect(addCalls.length).toBeGreaterThan(0);
   });
 });

@@ -68,6 +68,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * use the same code path as a manual UI launch.
  */
 export class AutoLauncher {
+  private polling = false;
   private pollLastStartedAt: number | null = null;
   private cycleCounter = 0;
   private notionUpdateAttempts = new Map<
@@ -181,9 +182,24 @@ export class AutoLauncher {
 
   /**
    * Run a single poll cycle. Called directly on boot (after resumeOrphanSessions)
-   * and periodically by the Scheduler thereafter.
+   * and periodically by the Scheduler thereafter — guarded here too (not just
+   * via the Scheduler's skip-if-running) since the boot-time call bypasses the
+   * Scheduler's own tracking entirely.
    */
   async pollOnce(): Promise<void> {
+    if (this.polling) {
+      logger.info('[AutoLauncher] poll already in progress — skipping');
+      return;
+    }
+    this.polling = true;
+    try {
+      await this.runPollCycle();
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  private async runPollCycle(): Promise<void> {
     const cycleId = ++this.cycleCounter;
     this.pollLastStartedAt = Date.now();
     logger.info(`[AutoLauncher] poll start cycle=${cycleId}`);

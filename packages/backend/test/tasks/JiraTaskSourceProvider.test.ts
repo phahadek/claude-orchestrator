@@ -90,7 +90,7 @@ describe('JiraTaskSourceProvider.fetchReadyTasks', () => {
     expect(source).toBe('jira');
     expect(task.id).toBe('jira:PROJ-42');
     expect(task.title).toBe('Task: PROJ-42');
-    expect(task.status).toBe('To Do');
+    expect(task.status).toBe('🗂️ Ready'); // Jira 'To Do' -> canonical status
     expect(task.type).toBe('💻 Code'); // Task -> Code
     expect(typeof blocked).toBe('boolean');
     expect(Array.isArray(blockers)).toBe(true);
@@ -137,13 +137,13 @@ describe('JiraTaskSourceProvider.fetchReadyTasks', () => {
     expect(tasks.every((t) => t.task.id.startsWith('jira:'))).toBe(true);
   });
 
-  it('maps Bug issuetype to Testing type', async () => {
+  it('maps Bug issuetype to Code type by default', async () => {
     client.searchIssues = vi
       .fn()
       .mockResolvedValue([makeIssue('PROJ-5', 'To Do', 'Bug')]);
 
     const [task] = await provider.fetchReadyTasks(null);
-    expect(task.task.type).toBe('🧪 Testing');
+    expect(task.task.type).toBe('💻 Code');
   });
 });
 
@@ -196,20 +196,25 @@ describe('JiraTaskSourceProvider.updateStatus', () => {
     expect(client.transitionIssue).toHaveBeenCalledWith('PROJ-20', '51');
   });
 
-  it('throws when no transition matches the target status', async () => {
+  it('skips the transition (no throw) when no transition matches the target status', async () => {
     client.getTransitions = vi
       .fn()
       .mockResolvedValue([makeTransition('11', 'In Progress')]);
+    client.getIssue = vi
+      .fn()
+      .mockResolvedValue(makeIssue('PROJ-9', 'In Progress'));
 
     await expect(
       provider.updateStatus('jira:PROJ-9', '✅ Done'),
-    ).rejects.toThrow(/no transition to "Done"/);
+    ).resolves.toBeUndefined();
+    expect(client.transitionIssue).not.toHaveBeenCalled();
   });
 
-  it('throws when status has no mapping', async () => {
+  it('skips the transition (no throw) when status has no mapping', async () => {
     await expect(
       provider.updateStatus('jira:PROJ-9', '❓ Unknown'),
-    ).rejects.toThrow(/no Jira status mapping/);
+    ).resolves.toBeUndefined();
+    expect(client.transitionIssue).not.toHaveBeenCalled();
   });
 });
 

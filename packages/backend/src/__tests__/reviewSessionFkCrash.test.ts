@@ -40,7 +40,12 @@ let mockProc: ReturnType<typeof createMockProc>;
 vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
   execSync: vi.fn(() => 'dev'),
-  execFile: vi.fn(),
+  execFile: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
   exec: vi
     .fn()
     .mockImplementation(
@@ -66,11 +71,13 @@ vi.mock('fs', async () => {
       readFileSync: vi.fn(() => ''),
       writeFileSync: vi.fn(),
       statSync: vi.fn(() => ({ isFile: () => true })),
+      mkdirSync: vi.fn(),
     },
     existsSync: vi.fn(() => true),
     readFileSync: vi.fn(() => ''),
     writeFileSync: vi.fn(),
     statSync: vi.fn(() => ({ isFile: () => true })),
+    mkdirSync: vi.fn(),
   };
 });
 
@@ -88,6 +95,8 @@ const projectFixture = {
 vi.mock('../config', () => ({
   AUTO_REVIEW_ENABLED: false,
   ALLOWED_TOOLS: [],
+  BASH_MAX_OUTPUT_LENGTH: 30000,
+  BASH_DEFAULT_TIMEOUT_MS: 300000,
   config: {
     claudePath: '/fake/claude',
     projectDir: '/fake/project',
@@ -96,6 +105,7 @@ vi.mock('../config', () => ({
     id === 'test-project' ? projectFixture : undefined,
   ),
   getAllProjects: vi.fn(() => [projectFixture]),
+  getSessionAllowedTools: vi.fn(() => []),
   normalizePath: (p: string) => p,
   runtimeSettings: {
     session_mode: 'cli',
@@ -108,11 +118,18 @@ vi.mock('../config', () => ({
 
 vi.mock('../session/orchestrator-config', () => ({
   loadOrchestratorConfig: vi.fn(() => ({
-    allowedTools: [],
+    allowed_tools: [],
     prGate: { typeCheck: '', build: '' },
-    bootstrapScript: '',
-    bashRules: [],
+    bootstrap_script: '',
+    bash_rules: [],
+    required_env: [],
+    required_files: [],
+    review_rules: [],
+    session_rules: [],
+    verify: [],
+    mcp_servers: [],
   })),
+  getSessionAllowedTools: vi.fn(() => []),
 }));
 
 vi.mock('../session/orchestrator-claudemd', () => ({
@@ -371,7 +388,7 @@ describe('upsertSessionEvent — defensive guard (source-level)', () => {
     );
     const upsertIdx = source.indexOf('export function upsertSessionEvent');
     const block = source.slice(upsertIdx, upsertIdx + 900);
-    expect(block).toMatch(/console\.error/);
+    expect(block).toMatch(/logger\.error/);
     expect(block).toMatch(/no sessions row/);
     expect(block).toMatch(/return -1/);
   });

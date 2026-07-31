@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
 import { isContextOverflow } from '../session/contextOverflow';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Pure classifier unit tests ────────────────────────────────────────────────
 
@@ -116,34 +117,37 @@ vi.mock('child_process', () => ({
   execFile: vi.fn(),
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  upsertSessionEvent: vi.fn(() => 1),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getEventsBySession: vi.fn(() => []),
-  insertPermissionDenial: vi.fn(),
-  upsertPullRequest: vi.fn(),
-  incrementTokens: vi.fn(),
-  incrementCompactionCount: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  setSessionModel: vi.fn(),
-  setSessionMetadata: vi.fn(),
-  getPRBySessionId: vi.fn(() => null),
-  getPRByNumber: vi.fn(() => null),
-  setHeadSha: vi.fn(),
-  setPauseReason: vi.fn(),
-  setSessionPauseReason: vi.fn(),
-  insertPauseInterval: vi.fn(),
-  getProjectRowById: vi.fn(() => null),
-  getSession: vi.fn(() => null),
-  insertLocalBranch: vi.fn(),
-  insertSessionAudit: vi.fn(),
-  getPRByNotionTaskId: vi.fn(() => null),
-  listMilestonesByProject: vi.fn(() => []),
-  resetTaskCrashCount: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    upsertSessionEvent: vi.fn(() => 1),
+    updateSessionStatus: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getEventsBySession: vi.fn(() => []),
+    insertPermissionDenial: vi.fn(),
+    upsertPullRequest: vi.fn(),
+    incrementTokens: vi.fn(),
+    incrementCompactionCount: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    setSessionModel: vi.fn(),
+    setSessionMetadata: vi.fn(),
+    getPRBySessionId: vi.fn(() => null),
+    getPRByNumber: vi.fn(() => null),
+    setHeadSha: vi.fn(),
+    setPauseReason: vi.fn(),
+    setSessionPauseReason: vi.fn(),
+    insertPauseInterval: vi.fn(),
+    getProjectRowById: vi.fn(() => null),
+    getSession: vi.fn(() => null),
+    insertLocalBranch: vi.fn(),
+    insertSessionAudit: vi.fn(),
+    getPRByNotionTaskId: vi.fn(() => null),
+    listMilestonesByProject: vi.fn(() => []),
+    resetTaskCrashCount: vi.fn(),
+    listUndeliveredInboxItems: vi.fn(() => []),
+  }),
+);
 
 vi.mock('../orchestration/localBranchHelpers', () => ({
   getCurrentBranch: vi.fn(async () => 'feature/test'),

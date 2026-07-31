@@ -34,7 +34,11 @@ vi.mock('../db/queries.js', () => ({
 vi.mock('../config.js', () => ({
   GITHUB_TOKEN: 'test-token',
   GITHUB_REPO: 'owner/repo',
-  getProjectByGithubRepo: vi.fn().mockReturnValue(null),
+  AUTO_REVIEW_ENABLED: true,
+  getProjectByGithubRepo: vi.fn().mockReturnValue({
+    id: 'proj-1',
+    projectDir: '/fake/project',
+  }),
   getProjectById: vi.fn().mockReturnValue(null),
   runtimeSettings: {
     ci_poll_interval_seconds: 5,

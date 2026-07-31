@@ -45,11 +45,13 @@ vi.mock('fs', async () => {
       existsSync: vi.fn().mockReturnValue(false),
       readFileSync: vi.fn().mockReturnValue(''),
       statSync: vi.fn().mockReturnValue({ isFile: () => false }),
+      mkdirSync: vi.fn(),
     },
     writeFileSync: vi.fn(),
     existsSync: vi.fn().mockReturnValue(false),
     readFileSync: vi.fn().mockReturnValue(''),
     statSync: vi.fn().mockReturnValue({ isFile: () => false }),
+    mkdirSync: vi.fn(),
   };
 });
 
@@ -109,7 +111,12 @@ vi.mock('../session/orchestrator-config', () => ({
     bash_rules: [],
     mcp_servers: undefined,
     allowed_tools: [],
+    required_env: [],
+    required_files: [],
+    review_rules: [],
+    session_rules: [],
   }),
+  getSessionAllowedTools: vi.fn(() => []),
 }));
 
 vi.mock('../session/ContextBuilder', () => ({

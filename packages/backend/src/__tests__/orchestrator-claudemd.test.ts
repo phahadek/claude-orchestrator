@@ -17,20 +17,24 @@ const standardParams = {
 };
 
 describe('buildOrchestratorClaudeMd — size ceilings', () => {
-  it('rendered standard fixture is ≤ 6,250 characters', () => {
+  // Ceilings were bumped to track legitimate growth (Context Efficiency,
+  // Responding to Review Comments, Manual Verification Gate sections, etc.)
+  // added since these were first set; they still guard against unbounded
+  // creep, just at the current, larger baseline.
+  it('rendered standard fixture is ≤ 9,500 characters', () => {
     const output = buildOrchestratorClaudeMd(standardParams);
-    expect(output.length).toBeLessThanOrEqual(6250);
+    expect(output.length).toBeLessThanOrEqual(9500);
   });
 
-  it('rendered standard fixture is ≤ 990 words', () => {
+  it('rendered standard fixture is ≤ 1,600 words', () => {
     const output = buildOrchestratorClaudeMd(standardParams);
     const wordCount = output.trim().split(/\s+/).length;
-    expect(wordCount).toBeLessThanOrEqual(990);
+    expect(wordCount).toBeLessThanOrEqual(1600);
   });
 
-  it('hard ceiling: rendered standard fixture is ≤ 6,500 characters', () => {
+  it('hard ceiling: rendered standard fixture is ≤ 9,750 characters', () => {
     const output = buildOrchestratorClaudeMd(standardParams);
-    expect(output.length).toBeLessThanOrEqual(6500);
+    expect(output.length).toBeLessThanOrEqual(9750);
   });
 });
 
@@ -49,11 +53,11 @@ describe('buildOrchestratorClaudeMd — behaviour preservation', () => {
     );
   });
 
-  it('pre-PR gate: stash, rebase, restore steps present', () => {
+  it('pre-PR gate: rebase and stage steps present (no CLAUDE.md stash step)', () => {
     const output = buildOrchestratorClaudeMd(baseParams);
-    expect(output).toContain('git stash push CLAUDE.md');
     expect(output).toContain('Rebase onto');
-    expect(output).toContain('git stash pop');
+    expect(output).not.toContain('git stash push CLAUDE.md');
+    expect(output).not.toContain('git stash pop');
     expect(output).toContain('Stage only your implementation files');
   });
 

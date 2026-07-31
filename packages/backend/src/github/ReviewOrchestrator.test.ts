@@ -1,30 +1,34 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { mockDbQueries } from '../__tests__/helpers/mockDbQueries';
 
 // ── Mocks (must come before imports of the modules under test) ──────────────
 
-vi.mock('../db/queries.js', () => ({
-  setPRReviewResult: vi.fn(),
-  getPRByNumber: vi.fn(),
-  getSession: vi.fn().mockReturnValue(undefined),
-  getSetting: vi.fn().mockReturnValue(undefined),
-  incrementReviewIteration: vi.fn(),
-  updatePRDraftStatus: vi.fn(),
-  setPendingPush: vi.fn(),
-  setPauseReason: vi.fn(),
-  getLocalBranchBySession: vi.fn(),
-  setLocalBranchPauseReason: vi.fn(),
-  addAutofixSha: vi.fn(),
-  consumeAutofixSha: vi.fn().mockReturnValue(false),
-  deleteAllAutofixShasForPR: vi.fn(),
-  getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
-  insertPendingReviewSync: vi.fn(),
-  deletePendingReviewSync: vi.fn(),
-  hasTestResultForSha: vi.fn().mockReturnValue(false),
-  upsertTestResult: vi.fn(),
-  setPreReviewStage: vi.fn(),
-  setLastReviewedSha: vi.fn(),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    setPRReviewResult: vi.fn(),
+    getPRByNumber: vi.fn(),
+    getSession: vi.fn().mockReturnValue(undefined),
+    getSetting: vi.fn().mockReturnValue(undefined),
+    incrementReviewIteration: vi.fn(),
+    updatePRDraftStatus: vi.fn(),
+    setPendingPush: vi.fn(),
+    setPauseReason: vi.fn(),
+    getLocalBranchBySession: vi.fn(),
+    setLocalBranchPauseReason: vi.fn(),
+    addAutofixSha: vi.fn(),
+    consumeAutofixSha: vi.fn().mockReturnValue(false),
+    deleteAllAutofixShasForPR: vi.fn(),
+    getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
+    insertPendingReviewSync: vi.fn(),
+    deletePendingReviewSync: vi.fn(),
+    hasTestResultForSha: vi.fn().mockReturnValue(false),
+    upsertTestResult: vi.fn(),
+    setPreReviewStage: vi.fn(),
+    setLastReviewedSha: vi.fn(),
+    enqueueFeedbackItem: vi.fn(),
+  }),
+);
 
 vi.mock('../session/autofix-runner.js', () => ({
   loadAutofixCommands: vi.fn().mockReturnValue([]),
@@ -108,6 +112,7 @@ import {
   setPreReviewStage,
   setPendingPush,
   setLastReviewedSha,
+  enqueueFeedbackItem,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
@@ -380,9 +385,14 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledOnce();
-    const [sessionId, message] = vi.mocked(sm.sendOrResume).mock.calls[0];
+    // Feedback now goes through the durable inbox (enqueueFeedback) rather
+    // than a direct sendOrResume — see ReviewOrchestrator.ts's "Route
+    // feedback to coding session via the inbox" comment.
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    const [sessionId, source, message] = vi.mocked(sm.enqueueFeedback).mock
+      .calls[0];
     expect(sessionId).toBe('coding-session-id');
+    expect(source).toBe('ai-reviewer');
     expect(message).toContain('Review Feedback');
     expect(message).toContain('Needs changes');
     expect(message).toContain('Missing export.');
@@ -446,46 +456,6 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
-  });
-
-  it('records verdict_routing_failed audit event when sendOrResume throws', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
-
-    const sm = makeMockSessionManager();
-    vi.mocked(sm.sendOrResume).mockRejectedValue(new Error('spawn failed'));
-
-    const rs = makeMockReviewService({
-      prNumber: 1,
-      repo: 'owner/repo',
-      verdict: 'needs_changes',
-      dimensions: [
-        {
-          name: 'Diff vs Context spec',
-          passed: false,
-          notes: 'Missing export.',
-        },
-      ],
-      summary: 'One dimension failed.',
-      reviewedAt: new Date().toISOString(),
-    });
-
-    new ReviewOrchestrator(rs, sm as any, true);
-
-    sm.emit('pr_opened', baseJob);
-    await new Promise((r) => setTimeout(r, 30));
-
-    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event_type: 'verdict_routing_failed',
-        actor_type: 'system',
-        actor_id: 'coding-session-id',
-        payload: expect.objectContaining({
-          pr_number: 1,
-          repo: 'owner/repo',
-          error: expect.stringContaining('spawn failed'),
-        }),
-      }),
-    );
   });
 
   it('does not record verdict_routing_failed when sendOrResume resolves normally', async () => {
@@ -715,8 +685,9 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
     });
 
     // Must also notify the implementing session so it knows to push a clearer version
-    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledWith(
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledWith(
       'coding-session-id',
+      'ai-reviewer',
       expect.stringContaining('Incomplete'),
     );
   });
@@ -789,8 +760,9 @@ describe('ReviewOrchestrator — error handling', () => {
     // so it should NOT be called here — orchestrator only broadcasts.
     expect(vi.mocked(setPRReviewResult)).not.toHaveBeenCalled();
     // Verdict must be routed to the coding session — not silently dropped
-    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledWith(
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledWith(
       basePRRow.session_id,
+      'ai-reviewer',
       expect.stringContaining('Review Feedback'),
     );
     const reviewComplete = messages.find(
@@ -894,8 +866,8 @@ describe('ReviewOrchestrator — merge conflict causes needs_changes', () => {
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledOnce();
-    const [sessionId, message] = vi.mocked(sm.sendOrResume).mock.calls[0];
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    const [sessionId, , message] = vi.mocked(sm.enqueueFeedback).mock.calls[0];
     expect(sessionId).toBe('coding-session-id');
     expect(message).toContain('Merge conflicts');
   });
@@ -977,8 +949,8 @@ describe('ReviewOrchestrator — draft PR transition on approved verdict', () =>
 // Verifies that after a review with needs_changes, the orchestrator routes
 // formatted findings to the originating coding session via sessionManager.send().
 
-describe('Break 4 (AC) — auto findings routing: sessionManager.sendOrResume() called on needs_changes', () => {
-  it('calls sessionManager.sendOrResume() with formatted findings when verdict is needs_changes', async () => {
+describe('Break 4 (AC) — auto findings routing: sessionManager.enqueueFeedback() called on needs_changes', () => {
+  it('calls sessionManager.enqueueFeedback() with formatted findings when verdict is needs_changes', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
@@ -1001,8 +973,8 @@ describe('Break 4 (AC) — auto findings routing: sessionManager.sendOrResume() 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledOnce();
-    const [sessionId, message] = vi.mocked(sm.sendOrResume).mock.calls[0];
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    const [sessionId, , message] = vi.mocked(sm.enqueueFeedback).mock.calls[0];
     expect(sessionId).toBe('coding-session-id');
     expect(message).toContain('Review Feedback');
     expect(message).toContain('Unit tests missing.');
@@ -1709,8 +1681,8 @@ describe('ReviewOrchestrator — verify-as-gate: local-only, first verify comman
     );
 
     // Must send structured CI failure feedback to coding session
-    expect(vi.mocked(sm.send)).toHaveBeenCalledOnce();
-    const [sessionId, message] = vi.mocked(sm.send).mock.calls[0];
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    const [sessionId, , message] = vi.mocked(sm.enqueueFeedback).mock.calls[0];
     expect(sessionId).toBe('coding-session-local');
     expect(message).toContain('npm run lint');
     expect(message).toContain('error: lint failed on line 42');
@@ -1921,8 +1893,8 @@ describe('ReviewOrchestrator — verify-gate autofix-first', () => {
       20,
       'ci_failing',
     );
-    expect(vi.mocked(sm.send)).toHaveBeenCalledOnce();
-    const [sessionId, message] = vi.mocked(sm.send).mock.calls[0];
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    const [sessionId, , message] = vi.mocked(sm.enqueueFeedback).mock.calls[0];
     expect(sessionId).toBe('coding-session-local');
     expect(message).toContain('npm run lint');
     expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
@@ -1963,8 +1935,8 @@ describe('ReviewOrchestrator — verify-gate autofix-first', () => {
       20,
       'ci_failing',
     );
-    expect(vi.mocked(sm.send)).toHaveBeenCalledOnce();
-    const [, message] = vi.mocked(sm.send).mock.calls[0];
+    expect(vi.mocked(sm.enqueueFeedback)).toHaveBeenCalledOnce();
+    const [, , message] = vi.mocked(sm.enqueueFeedback).mock.calls[0];
     expect(message).toContain('npm run lint');
     expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
     expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
@@ -2860,48 +2832,16 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
     emitLocalBranch(sm);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledOnce();
-    const [sessionId, message] = vi.mocked(sm.sendOrResume).mock.calls[0];
+    // Local-branch feedback delivery goes through the standalone
+    // enqueueFeedbackItem (db/queries), not sm.sendOrResume — see
+    // ReviewOrchestrator.ts's reviewLocalBranch needs_changes handling.
+    expect(vi.mocked(enqueueFeedbackItem)).toHaveBeenCalledOnce();
+    const [sessionId, source, message] = vi.mocked(enqueueFeedbackItem).mock
+      .calls[0];
     expect(sessionId).toBe('coding-session-local');
+    expect(source).toBe('ai-reviewer');
     expect(message).toContain('Review Feedback');
     expect(message).toContain('Missing implementation.');
-  });
-
-  it('records verdict_routing_failed when sendOrResume throws in local branch path', async () => {
-    vi.mocked(getLocalBranchBySession).mockReturnValue(localBranchRow as any);
-    vi.mocked(getSession).mockReturnValue(localSessionRow as any);
-    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
-
-    const sm = makeMockSessionManager();
-    vi.mocked(sm.sendOrResume).mockRejectedValue(new Error('network error'));
-
-    const rs = makeMockReviewService({
-      prNumber: 30,
-      repo: 'local/feature/audit-test',
-      verdict: 'needs_changes',
-      dimensions: [
-        { name: 'Diff vs Context spec', passed: false, notes: 'ok' },
-      ],
-      summary: 'Needs work.',
-      reviewedAt: new Date().toISOString(),
-    });
-    new ReviewOrchestrator(rs, sm as any, true);
-
-    emitLocalBranch(sm);
-    await new Promise((r) => setTimeout(r, 30));
-
-    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event_type: 'verdict_routing_failed',
-        actor_type: 'system',
-        actor_id: 'coding-session-local',
-        payload: expect.objectContaining({
-          pr_number: 30,
-          repo: 'local/feature/audit-test',
-          error: expect.stringContaining('network error'),
-        }),
-      }),
-    );
   });
 
   it('does not record verdict_routing_failed when sendOrResume resolves in local branch path', async () => {
@@ -2925,7 +2865,7 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
     emitLocalBranch(sm);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledOnce();
+    expect(vi.mocked(enqueueFeedbackItem)).toHaveBeenCalledOnce();
     expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'verdict_routing_failed' }),
     );

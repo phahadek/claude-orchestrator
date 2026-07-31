@@ -86,6 +86,18 @@ vi.mock('child_process', () => ({
     if (cmd === 'git branch --show-current') return 'feature/my-task\n';
     throw new Error(`unexpected execSync: ${cmd}`);
   }),
+  execFile: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
+  exec: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
 }));
 
 vi.mock('../CliSessionRunner', () => ({

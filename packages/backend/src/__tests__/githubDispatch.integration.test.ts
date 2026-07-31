@@ -53,10 +53,15 @@ vi.mock('../projects/ProjectService.js', () => ({
   ProjectService: {
     getMilestone: vi.fn(),
   },
+  getProjectRepos: vi.fn().mockReturnValue(['owner/repo']),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
+}));
+
+vi.mock('../orchestration/memoryAdmission.js', () => ({
+  hasMemoryHeadroom: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('../config.js', () => ({
@@ -178,6 +183,7 @@ function makeSessionManager() {
     sendOrResume: ReturnType<typeof vi.fn>;
     getLiveCodeSessionCount: ReturnType<typeof vi.fn>;
     hasLiveSessionForTask: ReturnType<typeof vi.fn>;
+    findLiveSessionIdForTask: ReturnType<typeof vi.fn>;
   };
   em.start = vi.fn();
   em.isAlive = vi.fn().mockReturnValue(false);
@@ -185,6 +191,7 @@ function makeSessionManager() {
   em.sendOrResume = vi.fn();
   em.getLiveCodeSessionCount = vi.fn().mockReturnValue(0);
   em.hasLiveSessionForTask = vi.fn().mockReturnValue(false);
+  em.findLiveSessionIdForTask = vi.fn().mockReturnValue(undefined);
   return em;
 }
 
@@ -302,9 +309,8 @@ describe('GithubTaskSourceProvider — milestone resolution', () => {
     await provider.fetchReadyTasks(null);
 
     expect(client.listIssues).toHaveBeenCalledWith(REPO, {
-      labels: ['status:ready'],
       milestone: undefined,
-      state: 'open',
+      state: 'all',
     });
     expect(ProjectService.getMilestone).not.toHaveBeenCalled();
   });
@@ -322,9 +328,8 @@ describe('GithubTaskSourceProvider — milestone resolution', () => {
 
     expect(ProjectService.getMilestone).toHaveBeenCalledWith(MILESTONE_UUID);
     expect(client.listIssues).toHaveBeenCalledWith(REPO, {
-      labels: ['status:ready'],
       milestone: 1,
-      state: 'open',
+      state: 'all',
     });
   });
 
@@ -446,9 +451,8 @@ describe('AutoLauncher — github milestone gating', () => {
     await launcher.pollOnce();
 
     expect(client.listIssues).toHaveBeenCalledWith(REPO, {
-      labels: ['status:ready'],
       milestone: 1,
-      state: 'open',
+      state: 'all',
     });
     expect(sessionManager.start).toHaveBeenCalledOnce();
   });

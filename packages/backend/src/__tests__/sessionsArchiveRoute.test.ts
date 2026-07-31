@@ -60,22 +60,23 @@ describe('PATCH /api/sessions/:id/archive', () => {
   });
 
   it('ends the session in addition to archiving it, reaping a still-live subprocess', async () => {
-    const endSession = vi.fn();
-    setSessionManager({ endSession } as unknown as SessionManager);
+    // Archiving now goes through a single combined SessionManager method
+    // rather than a separate archiveSession() + endSession() call pair.
+    const archiveAndEndSession = vi.fn();
+    setSessionManager({ archiveAndEndSession } as unknown as SessionManager);
 
     const res = await supertest(buildApp()).patch(
       '/api/sessions/sess-1/archive',
     );
 
     expect(res.status).toBe(200);
-    expect(mockArchiveSession).toHaveBeenCalledWith('sess-1');
-    expect(endSession).toHaveBeenCalledWith('sess-1');
+    expect(archiveAndEndSession).toHaveBeenCalledWith('sess-1');
   });
 
   it('404s without archiving or ending when the session does not exist', async () => {
     mockGetSession.mockReturnValue(undefined);
-    const endSession = vi.fn();
-    setSessionManager({ endSession } as unknown as SessionManager);
+    const archiveAndEndSession = vi.fn();
+    setSessionManager({ archiveAndEndSession } as unknown as SessionManager);
 
     const res = await supertest(buildApp()).patch(
       '/api/sessions/missing/archive',
@@ -83,6 +84,6 @@ describe('PATCH /api/sessions/:id/archive', () => {
 
     expect(res.status).toBe(404);
     expect(mockArchiveSession).not.toHaveBeenCalled();
-    expect(endSession).not.toHaveBeenCalled();
+    expect(archiveAndEndSession).not.toHaveBeenCalled();
   });
 });

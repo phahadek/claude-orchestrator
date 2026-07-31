@@ -20,6 +20,7 @@ import { mockDbQueries } from './helpers/mockDbQueries';
 vi.mock('child_process', () => ({
   execSync: vi.fn().mockReturnValue('dev\n'),
   execFile: vi.fn(),
+  exec: vi.fn(),
   spawn: vi.fn(),
 }));
 

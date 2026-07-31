@@ -12,17 +12,20 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
-vi.mock('../db/queries.js', () => ({
-  updatePRState: vi.fn(),
-  deleteAllAutofixShasForPR: vi.fn(),
-  getSession: vi.fn().mockReturnValue(null),
-  getPRByNumber: vi.fn(),
-  getAllOpenPRs: vi.fn().mockReturnValue([]),
-  getSetting: vi.fn().mockReturnValue(null),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    updatePRState: vi.fn(),
+    deleteAllAutofixShasForPR: vi.fn(),
+    getSession: vi.fn().mockReturnValue(null),
+    getPRByNumber: vi.fn(),
+    getAllOpenPRs: vi.fn().mockReturnValue([]),
+    getSetting: vi.fn().mockReturnValue(null),
+  }),
+);
 
 vi.mock('../tasks/TaskBackend.js', () => ({
   getTaskBackend: vi.fn(() => ({

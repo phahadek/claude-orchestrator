@@ -8,6 +8,16 @@ vi.mock('../db/queries', () =>
   }),
 );
 
+// fetchReadyTasks resolves milestoneId -> ProjectService milestone row to get
+// the Jira Epic key (sourceId). These tests use the milestoneId itself as the
+// Epic key, matching mocked JiraClient calls that don't assert on the exact
+// key value.
+vi.mock('../projects/ProjectService', () => ({
+  ProjectService: {
+    getMilestone: vi.fn((id: string) => ({ id, sourceId: id })),
+  },
+}));
+
 import { JiraTaskSourceProvider } from './JiraTaskSourceProvider';
 import { JiraApiError } from './JiraClient';
 import { upsertTaskCache } from '../db/queries';

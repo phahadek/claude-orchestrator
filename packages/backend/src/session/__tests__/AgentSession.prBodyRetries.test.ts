@@ -31,6 +31,7 @@ vi.mock('../../config', () => ({
   BASH_MAX_OUTPUT_LENGTH: 30000,
   BASH_DEFAULT_TIMEOUT_MS: 300000,
   runtimeSettings: { corporate_mode_enabled: false },
+  getProjectById: vi.fn(() => undefined),
 }));
 
 vi.mock('../../tasks/TaskBackend', () => ({
@@ -71,6 +72,18 @@ vi.mock('child_process', () => ({
       return 'refs/remotes/origin/dev\n';
     if (cmd === 'git push -u origin feature/my-task') return '';
     throw new Error(`unexpected: ${cmd}`);
+  }),
+  execFile: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
+  exec: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
   }),
 }));
 
