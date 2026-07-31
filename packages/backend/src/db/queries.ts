@@ -818,7 +818,7 @@ export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
 }
 
 /** A planning flow whose dispatch-eligibility predicate needs its own re-dispatch dedup — see planningCandidates.ts. */
-export type DedupedPlanningFlow = 'groom' | 'design' | 'ops';
+export type DedupedPlanningFlow = 'groom' | 'design' | 'ops' | 'docs';
 
 /**
  * True if this task has a non-terminal (running OR parked idle) session of

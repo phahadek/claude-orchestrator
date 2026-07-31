@@ -23,6 +23,10 @@ describe('FLOW_DISPATCH', () => {
       sessionType: 'design',
     });
     expect(FLOW_DISPATCH.ops).toEqual({ kind: 'session', sessionType: 'ops' });
+    expect(FLOW_DISPATCH.docs).toEqual({
+      kind: 'session',
+      sessionType: 'docs',
+    });
   });
 
   it('maps gate-verify to the GateItemVerifier dispatch, not a session type', () => {
@@ -38,7 +42,7 @@ describe('FLOW_DISPATCH', () => {
 });
 
 describe('isFlowId', () => {
-  it('accepts the four known flows and rejects split and unknowns', () => {
+  it('accepts the known flows and rejects split and unknowns', () => {
     for (const flow of FLOW_IDS) {
       expect(isFlowId(flow)).toBe(true);
     }

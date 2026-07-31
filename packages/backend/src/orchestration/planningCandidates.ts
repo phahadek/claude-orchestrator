@@ -20,6 +20,7 @@ const DESIGN_TOKEN = 'Design';
 const PLANNING_TOKEN = 'Planning';
 const INVESTIGATION_TOKEN = 'Investigation';
 const DEFERRED_TOKEN = 'Deferred';
+const DOCS_TOKEN = 'Docs';
 
 /**
  * Groom dep-gate: a Depends-On that is a decision-producing Type (📐 Design /
@@ -271,4 +272,44 @@ export function isDesignCandidate(
   if (deps.hasActiveDesignSession(task.id)) return false;
   if (deps.inCrashCooldown(task.id)) return false;
   return passesDesignDepGate(task, deps.tasksById);
+}
+
+/** True for a Type value the docs flow dispatches: 📝 Docs only, never 🎨 Assets. */
+export function isDocsEligibleType(type: string): boolean {
+  return type.includes(DOCS_TOKEN);
+}
+
+export interface DocsCandidateDeps {
+  /** Every task on the same board, keyed by id — feeds the dep-gate's status/title lookup. */
+  tasksById: Map<string, NotionTask>;
+  /** True when a non-terminal *standard* session already handles this task id. */
+  hasActiveSession: (taskId: string) => boolean;
+  /** True while this task id is within its crash-budget cooldown window. */
+  inCrashCooldown: (taskId: string) => boolean;
+  /** True when a non-terminal (running or parked idle) docs session already handles this task id. */
+  hasActiveDocsSession: (taskId: string) => boolean;
+  /** Project id the dep-gate's deploy check runs against (getProjectDeployedSha). */
+  projectId: string;
+  /** Effective getArm(milestone.id, 'docs') result — docs defaults off. */
+  armed: boolean;
+}
+
+/**
+ * A task is a docs candidate when the docs flow is armed, it's 🗂️ Ready and a
+ * 📝 Docs Type (never 🎨 Assets), no non-terminal standard or docs session
+ * already handles it, it isn't within its crash-budget cooldown, and every
+ * Depends-On clears the ops dep-gate (Done + deployed-or-no-merge-commit,
+ * reused verbatim from passesOpsDepGate/computeOpsBlockingDeps).
+ */
+export async function isDocsCandidate(
+  task: NotionTask,
+  deps: DocsCandidateDeps,
+): Promise<boolean> {
+  if (!deps.armed) return false;
+  if (!task.status.includes(READY_TOKEN)) return false;
+  if (!isDocsEligibleType(task.type)) return false;
+  if (deps.hasActiveSession(task.id)) return false;
+  if (deps.hasActiveDocsSession(task.id)) return false;
+  if (deps.inCrashCooldown(task.id)) return false;
+  return passesOpsDepGate(task, deps.tasksById, deps.projectId);
 }
