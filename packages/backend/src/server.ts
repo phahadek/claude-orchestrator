@@ -66,6 +66,7 @@ import { AutoLauncher } from './orchestration/AutoLauncher';
 import { DispatchTriggerEvaluator } from './orchestration/DispatchTriggerEvaluator';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { PlanUsagePoller } from './orchestration/PlanUsagePoller';
+import { registerUsagePoller } from './orchestration/usageAdmission';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
 import { StalledPRReconciler } from './orchestration/StalledPRReconciler';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
@@ -485,6 +486,7 @@ const stuckSessionMonitor = new StuckSessionMonitor(
 // device is on an API key or the OAuth token can't be read.
 const planUsagePoller = new PlanUsagePoller(broadcast);
 setPlanUsagePoller(planUsagePoller);
+registerUsagePoller(planUsagePoller);
 
 // Orphaned-task sweep: finds tasks stuck at In Progress with no live session.
 // enqueueFeedback is wired so idle sessions without a PR are nudged via the

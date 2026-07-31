@@ -22,6 +22,7 @@ import type { MilestoneRow } from '../db/types';
 import type { NotionTask } from '../notion/types';
 import { typedGetSetting } from '../config/settings';
 import { CrashBudget } from './crashBudget';
+import { isUsageAdmitted } from './usageAdmission';
 import {
   isGroomCandidate,
   isOpsCandidate,
@@ -103,6 +104,12 @@ export class DispatchTriggerEvaluator {
   }
 
   async tickOnce(): Promise<number> {
+    // Usage admission is an account-wide gate, independent of arm/capacity
+    // accounting below: when the plan usage is exhausted, don't dispatch at
+    // all this tick — the deferral (persisted by isUsageAdmitted) is
+    // re-evaluated automatically on the next tick.
+    if (!isUsageAdmitted().allowed) return 0;
+
     const listProjects = this.options.listProjects ?? getAllProjects;
     const projects = listProjects();
     if (projects.length === 0) return 0;

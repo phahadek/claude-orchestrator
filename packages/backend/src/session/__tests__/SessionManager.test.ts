@@ -763,6 +763,65 @@ describe('resumeOrphanSessions — boot recovery regression', () => {
   });
 });
 
+// ── resumeOrphanSessions — usage admission gate ───────────────────────────────
+
+describe('resumeOrphanSessions — usage admission gate', () => {
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getStuckResultSessionRows).mockReturnValue([]);
+    const { clearUsageDeferral } = await import('../../db/queries.js');
+    clearUsageDeferral('five_hour');
+    clearUsageDeferral('seven_day');
+  });
+
+  it('does not spawn a resume while plan usage is exhausted, and tags the task as deferred', async () => {
+    const { registerUsagePoller } = await import(
+      '../../orchestration/usageAdmission.js'
+    );
+    const resetsAt = new Date(Date.now() + 60_000).toISOString();
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: { percent: 100, resetsAt, severity: 'exceeded' },
+      }),
+    });
+
+    const orphanRow = { ...makeDeadRow(), status: 'running' };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
+      'task-1',
+      'usage_limit_deferred',
+      'five_hour',
+    );
+    // Not treated as a failure — the session row is left as-is, not driven
+    // to a terminal 'error' status the way flagResumeFailure would.
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalled();
+  });
+
+  it('resumes normally once usage is available (existing resume behavior unaffected)', async () => {
+    const { registerUsagePoller } = await import(
+      '../../orchestration/usageAdmission.js'
+    );
+    registerUsagePoller({ getCache: () => ({ available: false }) });
+
+    const orphanRow = { ...makeDeadRow(), status: 'running' };
+    vi.mocked(getSessionsByStatus).mockReturnValue([orphanRow]);
+
+    await sm.resumeOrphanSessions();
+
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
+  });
+});
+
 // ── resumeOrphanSessions — deferred done-transition boot sweep ───────────────
 
 describe('resumeOrphanSessions — deferred done-transition boot sweep', () => {

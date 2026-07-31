@@ -96,6 +96,8 @@ import {
   listStagedIntentsBySession,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
+import { isUsageAdmitted } from '../orchestration/usageAdmission';
+import { CrashBudget } from '../orchestration/crashBudget';
 import {
   countsAgainstConcurrency,
   countsAgainstCodeSessionConcurrency,
@@ -773,6 +775,16 @@ export class SessionManager extends EventEmitter {
   private _inTaskUpdate = false;
   /** Session IDs whose local branch should be deleted on worktree cleanup (merged PRs). */
   private _mergedSessionIds = new Set<string>();
+  /**
+   * Per-session escalating-backoff budget for mid-session (still-running)
+   * 529/500 transient API errors. Keyed by sessionId so it survives across
+   * the kill+respawn cycle a retry performs (a fresh AgentSession instance
+   * would otherwise reset an in-instance counter to zero every attempt).
+   */
+  private readonly inSessionOverloadBudget = new CrashBudget({
+    backoffScheduleMs: [10_000, 30_000, 60_000, 120_000, 300_000],
+    escalateAfter: 6,
+  });
 
   constructor(private readonly githubClient?: GitHubClient) {
     super();
@@ -2264,6 +2276,28 @@ export class SessionManager extends EventEmitter {
    * continuity — same card, same transcript.
    */
   private async resumeSession(row: Session): Promise<void> {
+    // Usage admission gate: don't spawn a resume into an exhausted plan-usage
+    // window. Unlike flagResumeFailure this is not a failure — the session
+    // row is left exactly as-is (still 'running' in the DB) so a later
+    // resumeOrphanSessions pass (next boot, or an operator-triggered retry)
+    // picks it back up once the deferral (persisted in usage_deferral)
+    // expires. Only tag the task, if any, so it's visible as deferred rather
+    // than silently stuck.
+    const usageAdmission = isUsageAdmitted();
+    if (!usageAdmission.allowed) {
+      logger.warn(
+        `[SessionManager] resumeSession ${row.session_id}: deferring — plan usage (${usageAdmission.window}) exhausted until ${usageAdmission.deferredUntil ? new Date(usageAdmission.deferredUntil).toISOString() : 'unknown'}`,
+      );
+      if (row.task_id) {
+        setTaskPauseReason(
+          row.task_id,
+          'usage_limit_deferred',
+          usageAdmission.window ?? 'unknown',
+        );
+      }
+      return;
+    }
+
     const project = getProjectById(row.project_id ?? '');
     if (!project) {
       logger.warn(
@@ -3004,6 +3038,30 @@ export class SessionManager extends EventEmitter {
    * in that case the grant still lands on whatever later resume path
    * (sendOrResume, resumeSession) eventually revives the session.
    */
+  /** See ISessionManager.recordInSessionOverloadEvent. */
+  recordInSessionOverloadEvent(sessionId: string): {
+    count: number;
+    escalated: boolean;
+    cooldownMs: number;
+  } {
+    return this.inSessionOverloadBudget.recordEvent(sessionId);
+  }
+
+  /** See ISessionManager.clearInSessionOverloadBudget. */
+  clearInSessionOverloadBudget(sessionId: string): void {
+    this.inSessionOverloadBudget.clear(sessionId);
+  }
+
+  /**
+   * See ISessionManager.respawnForTransientOverload. Reuses the same
+   * kill+respawn-with-worktree logic as respawnForCapabilityGrant — the
+   * mechanics (kill live process, reopen with --resume against the same
+   * worktree/session id) are identical; only the trigger differs.
+   */
+  async respawnForTransientOverload(sessionId: string): Promise<boolean> {
+    return this.respawnForCapabilityGrant(sessionId);
+  }
+
   private async respawnForCapabilityGrant(sessionId: string): Promise<boolean> {
     const row = getSession(sessionId);
     if (!row) return false;

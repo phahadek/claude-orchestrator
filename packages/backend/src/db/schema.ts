@@ -1615,4 +1615,19 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // usage_deferral: global (account-wide, not per-session-type) admission
+  // gate state for the plan-usage five_hour/seven_day windows. A row means
+  // "do not launch/resume/dispatch until deferred_until" — populated from
+  // the poller's resets_at when a window is observed exhausted, and
+  // persisted so a deferral survives a backend restart (in-memory-only
+  // state would otherwise resume the relaunch loop after any restart
+  // during the deferral window).
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS usage_deferral (
+      window          TEXT    PRIMARY KEY,
+      deferred_until  INTEGER NOT NULL,
+      recorded_at     INTEGER NOT NULL
+    );
+  `);
 }
