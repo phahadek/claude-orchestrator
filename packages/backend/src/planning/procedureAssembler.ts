@@ -1041,6 +1041,17 @@ function renderExplorationDirective(orientation: GroomOrientation): string[] {
   return lines;
 }
 
+/**
+ * Above this many region-intersected units, `renderGroomDigest` stops
+ * inlining full bodies and falls back to titles/ids + an on-demand fetch
+ * directive (mirroring `renderDesignDigest` / `renderOpsDigest`) — a broad
+ * task's scope can otherwise pull in dozens of units and balloon the
+ * injected prompt (see task evidence: 86-unit selections inlined to ~135KB,
+ * pushing organic session context occupancy to 74-83%). Tune against real
+ * digest sizes if that evidence shifts.
+ */
+const ARCH_UNIT_INLINE_CAP = 25;
+
 function renderGroomDigest(
   data: GroomDigestSlice,
   heading = '## Grooming Validation Slice',
@@ -1065,7 +1076,16 @@ function renderGroomDigest(
     lines.push(
       `- Arch-store-selected units (${data.archUnits.length}): ${data.archUnits.length ? data.archUnits.map((u) => u.title).join(', ') : '(none)'}`,
     );
-    if (data.archUnits.length) {
+    if (data.archUnits.length > ARCH_UNIT_INLINE_CAP) {
+      lines.push(
+        '',
+        '### Architecture unit bodies (titles only — fetch on demand)',
+        '',
+        `Selection exceeds the inline cap (${ARCH_UNIT_INLINE_CAP}); fetch a unit's full body with ` +
+          `${orchestratorMcpToolName('architecture.getUnit')} ({ id }) instead of assuming it is inlined below.`,
+        '',
+      );
+    } else if (data.archUnits.length) {
       lines.push('', '### Architecture unit bodies', '');
       for (const u of data.archUnits) {
         lines.push(`#### ${u.title} (${u.id})`, '', u.body || '(empty)', '');

@@ -1045,6 +1045,63 @@ describe('assemblePlanningProcedure', () => {
     );
   });
 
+  it('falls back to titles-only when the store-sourced selection exceeds the inline cap', () => {
+    const result = fixtureGroomLoadResult();
+    result.archSource = 'store';
+    result.targetTasks[0].archSource = 'store';
+    result.targetTasks[0].archUnits = Array.from({ length: 26 }, (_, i) => ({
+      id: `unit-${i}`,
+      title: `Unit ${i}`,
+      body: `Full body content for unit ${i}, verbatim.`,
+    }));
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(result, 'task-1'),
+      },
+    });
+
+    expect(output).toContain(
+      '### Architecture unit bodies (titles only — fetch on demand)',
+    );
+    expect(output).not.toContain('### Architecture unit bodies\n');
+    expect(output).not.toContain(
+      'Full body content for unit 0, verbatim.',
+    );
+  });
+
+  it('keeps inlining full bodies when the store-sourced selection is at the inline cap', () => {
+    const result = fixtureGroomLoadResult();
+    result.archSource = 'store';
+    result.targetTasks[0].archSource = 'store';
+    result.targetTasks[0].archUnits = Array.from({ length: 25 }, (_, i) => ({
+      id: `unit-${i}`,
+      title: `Unit ${i}`,
+      body: `Full body content for unit ${i}, verbatim.`,
+    }));
+
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(result, 'task-1'),
+      },
+    });
+
+    expect(output).toContain('### Architecture unit bodies\n');
+    expect(output).not.toContain('titles only');
+    expect(output).toContain('Full body content for unit 0, verbatim.');
+    expect(output).toContain('Full body content for unit 24, verbatim.');
+  });
+
   it('replaces the bare (none) with a bounded-exploration directive + orientation graft when regions resolve empty', () => {
     const result = fixtureGroomLoadResult();
     result.targetTasks[0].regions = { packages: [], files: [], planned: [] };
