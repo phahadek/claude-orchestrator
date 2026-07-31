@@ -33,6 +33,8 @@ interface Props {
   cleanBatchLabel?: string;
   batchException?: string;
   groupError?: string | null;
+  /** Resolved title for the card header (e.g. the target task's name + type), shown in place of the default "Group {groupId}" label — the groupId then demotes to secondary detail. Optional: DecisionPanel (session-scoped, no task list to resolve against) never passes this, so its header is unaffected. */
+  title?: ReactNode;
   inFlight: boolean;
   draft: GroupCardDraft;
   onSetDraft: (patch: Partial<GroupCardDraft>) => void;
@@ -101,6 +103,7 @@ export function GroupCard({
   cleanBatchLabel,
   batchException,
   groupError,
+  title,
   inFlight,
   draft,
   onSetDraft,
@@ -128,7 +131,12 @@ export function GroupCard({
       data-testid={dataTestId ?? `group-card-${groupId}`}
     >
       <div className={panelStyles.groupHeader}>
-        <span>Group {groupId}</span>
+        <span className={styles.cardTitleGroup}>
+          <span className={styles.cardTitle}>{title ?? `Group ${groupId}`}</span>
+          {title && (
+            <span className={styles.cardTitleDetail}>Group {groupId}</span>
+          )}
+        </span>
         {headerExtra}
         {isClean && (
           <label>

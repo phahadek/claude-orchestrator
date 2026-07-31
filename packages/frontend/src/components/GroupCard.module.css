@@ -2,6 +2,27 @@
   border-color: var(--ctp-blue);
 }
 
+.cardTitleGroup {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.cardTitle {
+  color: var(--text-primary);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardTitleDetail {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  margin-left: 4px;
+}
+
 .members {
   display: flex;
   flex-direction: column;

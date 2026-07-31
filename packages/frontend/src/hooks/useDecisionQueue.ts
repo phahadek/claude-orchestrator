@@ -44,7 +44,7 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
 
   const [intents, setIntents] = useState<StagedIntent[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [groupError, setGroupError] = useState<string | null>(null);
+  const [groupErrors, setGroupErrors] = useState<Record<string, string>>({});
   const [groupInFlight, setGroupInFlight] = useState<string | null>(null);
   const [rejectDrafts, setRejectDrafts] = useState<
     Record<string, DecisionQueueGroupDraft>
@@ -202,20 +202,33 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
     [],
   );
 
-  const handleApproveGroup = useCallback(async (groupId: string) => {
-    setGroupInFlight(groupId);
-    setGroupError(null);
-    try {
-      await stagedIntentsApi.approveGroup(groupId);
-      setIntents((prev) => prev.filter((i) => i.groupId !== groupId));
-    } catch (err) {
-      setGroupError(
-        err instanceof Error ? err.message : 'Failed to approve group',
-      );
-    } finally {
-      setGroupInFlight(null);
-    }
+  const clearGroupError = useCallback((groupId: string) => {
+    setGroupErrors((prev) => {
+      if (!(groupId in prev)) return prev;
+      const next = { ...prev };
+      delete next[groupId];
+      return next;
+    });
   }, []);
+
+  const handleApproveGroup = useCallback(
+    async (groupId: string) => {
+      setGroupInFlight(groupId);
+      clearGroupError(groupId);
+      try {
+        await stagedIntentsApi.approveGroup(groupId);
+        setIntents((prev) => prev.filter((i) => i.groupId !== groupId));
+      } catch (err) {
+        setGroupErrors((prev) => ({
+          ...prev,
+          [groupId]: err instanceof Error ? err.message : 'Failed to approve group',
+        }));
+      } finally {
+        setGroupInFlight(null);
+      }
+    },
+    [clearGroupError],
+  );
 
   const handleRejectGroup = useCallback(
     async (groupId: string) => {
@@ -223,7 +236,7 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
       const reason = draft.reason.trim();
       if (!reason) return;
       setGroupInFlight(groupId);
-      setGroupError(null);
+      clearGroupError(groupId);
       try {
         await stagedIntentsApi.rejectGroup(groupId, {
           outcome: draft.outcome,
@@ -231,14 +244,15 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
         });
         setIntents((prev) => prev.filter((i) => i.groupId !== groupId));
       } catch (err) {
-        setGroupError(
-          err instanceof Error ? err.message : 'Failed to reject group',
-        );
+        setGroupErrors((prev) => ({
+          ...prev,
+          [groupId]: err instanceof Error ? err.message : 'Failed to reject group',
+        }));
       } finally {
         setGroupInFlight(null);
       }
     },
-    [draftFor],
+    [draftFor, clearGroupError],
   );
 
   // Whole-panel signal for the session-scoped DecisionPanel: a session's
@@ -265,7 +279,7 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
     batchExceptions,
     handleApproveAllClean,
     groupInFlight,
-    groupError,
+    groupErrors,
     draftFor,
     setDraft,
     handleApproveGroup,

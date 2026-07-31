@@ -55,6 +55,7 @@ export function MilestoneDecisionStack({
       <MilestoneDecisionInbox
         projectId={projectId}
         milestone={milestone}
+        tasks={tasks}
         selectedCardId={selectedIntentCardId}
         onSelectIntent={(intent) => onSelect({ type: 'intent', intent })}
       />

@@ -1,12 +1,41 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import {
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+  within,
+} from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { MilestoneDecisionInbox } from '../MilestoneDecisionInbox';
 import { stagedIntentsApi } from '../../api/stagedIntents';
 import type { StagedIntent } from '../../api/stagedIntents';
+import type { TaskView } from '../../types/taskView';
 
 vi.mock('../../hooks/stagedIntentBus', () => ({
   subscribeStagedIntentChange: () => () => {},
 }));
+
+function makeTask(overrides: Partial<TaskView> & { taskId: string }): TaskView {
+  return {
+    taskName: 'Untitled task',
+    notionStatus: 'Ready',
+    displayStatus: 'ready',
+    pauseReason: null,
+    priority: '🟡 Medium',
+    notionUrl: '',
+    taskType: '💻 Code',
+    blocked: false,
+    blockerNames: [],
+    wave: 1,
+    codeSession: null,
+    planningSession: null,
+    pr: null,
+    review: null,
+    totalTokens: { input: 0, output: 0 },
+    assignedRepo: null,
+    ...overrides,
+  };
+}
 
 describe('MilestoneDecisionInbox', () => {
   afterEach(() => {
@@ -357,5 +386,143 @@ describe('MilestoneDecisionInbox', () => {
     // sibling stays read-only.
     fireEvent.click(screen.getByTestId('group-member-toggle-blocked-member'));
     expect(screen.getByRole('button', { name: /decline/i })).toBeTruthy();
+  });
+
+  it('shows a failed group approve error only on that group card, not on other group cards', async () => {
+    function group(groupId: string, taskId: string): StagedIntent[] {
+      return [
+        {
+          id: `${groupId}-status`,
+          kind: 'task.setStatus',
+          payload: { taskId, status: 'Ready' },
+          projectId: 'proj-1',
+          createdAt: 0,
+          groupId,
+          milestone: 'M1',
+          state: 'staged',
+        },
+      ];
+    }
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+      ...group('group-a', 't-a'),
+      ...group('group-b', 't-b'),
+    ]);
+    vi.spyOn(stagedIntentsApi, 'approveGroup').mockRejectedValue(
+      new Error('boom'),
+    );
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const cardA = screen.getByTestId('milestone-decision-card-group-a');
+    const cardB = screen.getByTestId('milestone-decision-card-group-b');
+
+    fireEvent.click(
+      within(cardA).getByRole('button', { name: /approve groom/i }),
+    );
+
+    await waitFor(() => expect(cardA.textContent).toContain('boom'));
+    expect(cardB.textContent).not.toContain('boom');
+  });
+
+  it("labels a group card with its target task's name and Type, not the raw group id", async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'group-a-status',
+        kind: 'task.setStatus',
+        payload: { taskId: 'notion:1', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 0,
+        groupId: 'group-a',
+        milestone: 'M1',
+        state: 'staged',
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    render(
+      <MilestoneDecisionInbox
+        projectId="proj-1"
+        milestone="M1"
+        tasks={[
+          makeTask({
+            taskId: 'notion:1',
+            taskName: 'Fix the flaky retry loop',
+            taskType: '💻 Code',
+          }),
+        ]}
+      />,
+    );
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = screen.getByTestId('milestone-decision-card-group-a');
+    expect(card.textContent).toContain('Fix the flaky retry loop');
+    expect(card.textContent).toContain('💻');
+    expect(card.textContent).toContain('Group group-a');
+  });
+
+  it("labels an ungrouped intent card with its target task's name and Type beside the session uuid", async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'ungrouped-1',
+        kind: 'task.updateBody',
+        payload: { taskId: 'notion:2', sections: {} },
+        projectId: 'proj-1',
+        createdAt: 0,
+        sessionId: '0067bf6b-9ff8-4782-bd94-d1d9579b68d1',
+        milestone: 'M1',
+        state: 'staged',
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    render(
+      <MilestoneDecisionInbox
+        projectId="proj-1"
+        milestone="M1"
+        tasks={[
+          makeTask({
+            taskId: 'notion:2',
+            taskName: 'Groom the wire-analyst MCP guide',
+            taskType: '📐 Design',
+          }),
+        ]}
+      />,
+    );
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = screen.getByTestId('milestone-decision-card-ungrouped-1');
+    expect(card.textContent).toContain('Groom the wire-analyst MCP guide');
+    expect(card.textContent).toContain('📐');
+    expect(
+      screen.getByTestId('provenance-badge-ungrouped-1').textContent,
+    ).toBe('0067bf6b-9ff8-4782-bd94-d1d9579b68d1');
+  });
+
+  it('falls back to a defined label, without crashing, for an intent with no resolvable task ref', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'pickone-no-task',
+        kind: 'decision.pickOne',
+        payload: {
+          prompt: 'Which approach?',
+          options: [{ label: 'A', description: 'Option A' }],
+          allowFreeForm: false,
+        },
+        projectId: 'proj-1',
+        createdAt: 0,
+        milestone: 'M1',
+        state: 'staged',
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    render(
+      <MilestoneDecisionInbox projectId="proj-1" milestone="M1" tasks={[]} />,
+    );
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = screen.getByTestId('milestone-decision-card-pickone-no-task');
+    expect(card.textContent).toContain('decision.pickOne');
   });
 });
