@@ -157,10 +157,18 @@ export function NonCodeTypeSection({
                     !opsBlocked &&
                     designCheckedIds !== undefined &&
                     (isDesignEligible?.(task) ?? false);
+                  const groomBlocked =
+                    !opsEligible &&
+                    !opsBlocked &&
+                    !designEligible &&
+                    groomCheckedIds !== undefined &&
+                    task.displayStatus === 'backlog' &&
+                    !!task.groomDepBlocked;
                   const groomable =
                     !opsEligible &&
                     !opsBlocked &&
                     !designEligible &&
+                    !groomBlocked &&
                     groomCheckedIds !== undefined &&
                     task.displayStatus === 'backlog';
                   const showCheckbox =
@@ -185,7 +193,11 @@ export function NonCodeTypeSection({
                       checked={checked}
                       onCheckChange={onCheckChange}
                       blockedReason={
-                        opsBlocked ? task.opsDepBlockedReason : null
+                        opsBlocked
+                          ? task.opsDepBlockedReason
+                          : groomBlocked
+                            ? task.groomDepBlockedReason
+                            : null
                       }
                       onClick={() => onSelectTask(task.taskId)}
                       showStatus

@@ -83,16 +83,22 @@ export function BacklogCodeSection({
 
       {isExpanded && (
         <div className={styles.groupCards}>
-          {sorted.map((task) => (
-            <CompactTaskCard
-              key={task.taskId}
-              task={task}
-              showCheckbox={groomable}
-              checked={groomable && groomCheckedIds!.has(task.taskId)}
-              onCheckChange={onGroomCheckChange ?? (() => {})}
-              onClick={() => onSelectTask(task.taskId)}
-            />
-          ))}
+          {sorted.map((task) => {
+            const depBlocked = groomable && !!task.groomDepBlocked;
+            return (
+              <CompactTaskCard
+                key={task.taskId}
+                task={task}
+                showCheckbox={groomable && !depBlocked}
+                checked={
+                  groomable && !depBlocked && groomCheckedIds!.has(task.taskId)
+                }
+                onCheckChange={onGroomCheckChange ?? (() => {})}
+                blockedReason={depBlocked ? task.groomDepBlockedReason : null}
+                onClick={() => onSelectTask(task.taskId)}
+              />
+            );
+          })}
         </div>
       )}
     </div>

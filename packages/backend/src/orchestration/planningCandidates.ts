@@ -16,12 +16,17 @@ const READY_TOKEN = 'Ready';
 const DONE_TOKEN = 'Done';
 const DESIGN_TOKEN = 'Design';
 const PLANNING_TOKEN = 'Planning';
+const INVESTIGATION_TOKEN = 'Investigation';
+const DEFERRED_TOKEN = 'Deferred';
 
 /**
- * Groom dep-gate: a Depends-On that is 📐 Design/📋 Planning must be ✅ Done;
- * any other-Type Depends-On must be groomed past 🔲 Backlog (at 🗂️ Ready or
- * beyond). A dependency absent from `tasksById` can't be verified as
- * cleared, so it fails the gate closed rather than assuming clearance.
+ * Groom dep-gate: a Depends-On that is a decision-producing Type (📐 Design /
+ * 📋 Planning / 🔎 Investigation) must be ✅ Done — grooming against an
+ * unresolved decision means grooming against an unanswered question. Any
+ * other-Type Depends-On must be groomed past 🔲 Backlog (at 🗂️ Ready or
+ * beyond) and must not be ⏭️ Deferred, which blocks regardless of Type. A
+ * dependency absent from `tasksById` can't be verified as cleared, so it
+ * fails the gate closed rather than assuming clearance.
  */
 export function passesGroomDepGate(
   task: NotionTask,
@@ -30,15 +35,54 @@ export function passesGroomDepGate(
   for (const depId of task.dependsOn) {
     const dep = tasksById.get(depId);
     if (!dep) return false;
-    const isDesignOrPlanning =
-      dep.type.includes(DESIGN_TOKEN) || dep.type.includes(PLANNING_TOKEN);
-    if (isDesignOrPlanning) {
+    const isDecisionType =
+      dep.type.includes(DESIGN_TOKEN) ||
+      dep.type.includes(PLANNING_TOKEN) ||
+      dep.type.includes(INVESTIGATION_TOKEN);
+    if (isDecisionType) {
       if (!dep.status.includes(DONE_TOKEN)) return false;
-    } else if (dep.status.includes(BACKLOG_TOKEN)) {
+    } else if (
+      dep.status.includes(BACKLOG_TOKEN) ||
+      dep.status.includes(DEFERRED_TOKEN)
+    ) {
       return false;
     }
   }
   return true;
+}
+
+/**
+ * Same per-dep Type+Status logic as passesGroomDepGate, but returns the
+ * titles of the deps that fail the gate rather than a single boolean — feeds
+ * the TaskView `groomDepBlockedReason` surfaced to the frontend. A dep
+ * missing from `tasksById` is reported by its raw id, since there's no title
+ * to show.
+ */
+export function groomBlockingDepTitles(
+  task: NotionTask,
+  tasksById: Map<string, NotionTask>,
+): string[] {
+  const titles: string[] = [];
+  for (const depId of task.dependsOn) {
+    const dep = tasksById.get(depId);
+    if (!dep) {
+      titles.push(depId);
+      continue;
+    }
+    const isDecisionType =
+      dep.type.includes(DESIGN_TOKEN) ||
+      dep.type.includes(PLANNING_TOKEN) ||
+      dep.type.includes(INVESTIGATION_TOKEN);
+    if (isDecisionType) {
+      if (!dep.status.includes(DONE_TOKEN)) titles.push(dep.title);
+    } else if (
+      dep.status.includes(BACKLOG_TOKEN) ||
+      dep.status.includes(DEFERRED_TOKEN)
+    ) {
+      titles.push(dep.title);
+    }
+  }
+  return titles;
 }
 
 export interface GroomCandidateDeps {

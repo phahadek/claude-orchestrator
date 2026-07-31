@@ -80,6 +80,10 @@ export interface TaskView {
   opsDepBlocked?: boolean;
   /** Human-readable reason when opsDepBlocked, e.g. "waiting on <dep title>". */
   opsDepBlockedReason?: string | null;
+  /** 🔲 Backlog task's groom dep-gate satisfaction (passesGroomDepGate) — absent for non-Backlog tasks. */
+  groomDepBlocked?: boolean;
+  /** Human-readable reason when groomDepBlocked, e.g. "waiting on <dep title>". */
+  groomDepBlockedReason?: string | null;
   codeSession: {
     sessionId: string;
     status: string;
