@@ -135,4 +135,67 @@ describe('useDecisionQueue', () => {
       expect(result.current.intents.map((i) => i.id)).toEqual(['i-same']),
     );
   });
+
+  it('a freshly-rendered group reject draft has no pre-selected outcome', async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({ type: 'session', sessionId: 'session-1' }),
+    );
+
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    expect(result.current.draftFor('group-1')).toEqual({
+      outcome: null,
+      reason: '',
+    });
+  });
+
+  it('refuses to reject a group with no outcome selected, even with a reason typed', async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+    const rejectGroup = vi.spyOn(stagedIntentsApi, 'rejectGroup');
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({ type: 'session', sessionId: 'session-1' }),
+    );
+
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    act(() => {
+      result.current.setDraft('group-1', { reason: 'No need' });
+    });
+    await act(async () => {
+      await result.current.handleRejectGroup('group-1');
+    });
+
+    expect(rejectGroup).not.toHaveBeenCalled();
+  });
+
+  it('issues outcome: decline when Decline is explicitly chosen — never inferred', async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+    const rejectGroup = vi
+      .spyOn(stagedIntentsApi, 'rejectGroup')
+      .mockResolvedValue({ ok: true, rejected: [] });
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({ type: 'session', sessionId: 'session-1' }),
+    );
+
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    act(() => {
+      result.current.setDraft('group-1', {
+        outcome: 'decline',
+        reason: 'out of scope',
+      });
+    });
+    await act(async () => {
+      await result.current.handleRejectGroup('group-1');
+    });
+
+    expect(rejectGroup).toHaveBeenCalledWith('group-1', {
+      outcome: 'decline',
+      reason: 'out of scope',
+    });
+  });
 });

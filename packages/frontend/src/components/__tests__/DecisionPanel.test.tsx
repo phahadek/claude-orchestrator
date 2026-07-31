@@ -190,6 +190,55 @@ describe('DecisionPanel', () => {
     );
   });
 
+  it('leaves the group reject submit disabled until an outcome is chosen, even with a reason typed', async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
+      groomGroupIntents('group-5', 't-5'),
+    );
+
+    render(<DecisionPanel sessionId="groom-session-1" />);
+    await waitFor(() => screen.getByTestId('decision-panel'));
+
+    fireEvent.change(
+      screen.getByPlaceholderText(/choose pushback or decline/i),
+      { target: { value: 'No need' } },
+    );
+
+    expect(
+      screen
+        .getByRole('button', { name: /reject groom/i })
+        .hasAttribute('disabled'),
+    ).toBe(true);
+  });
+
+  it('issues an explicit pushback (never inferred) when Pushback is chosen on the group reject toggle', async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
+      groomGroupIntents('group-6', 't-6'),
+    );
+    const rejectGroup = vi
+      .spyOn(stagedIntentsApi, 'rejectGroup')
+      .mockResolvedValue({
+        ok: true,
+        rejected: ['group-6-dep', 'group-6-status'],
+      });
+
+    render(<DecisionPanel sessionId="groom-session-1" />);
+    await waitFor(() => screen.getByTestId('decision-panel'));
+
+    fireEvent.click(screen.getByRole('radio', { name: /pushback/i }));
+    fireEvent.change(
+      screen.getByPlaceholderText(/what should the session revise/i),
+      { target: { value: 'please add tests' } },
+    );
+    fireEvent.click(screen.getByRole('button', { name: /pushback groom/i }));
+
+    await waitFor(() =>
+      expect(rejectGroup).toHaveBeenCalledWith('group-6', {
+        outcome: 'pushback',
+        reason: 'please add tests',
+      }),
+    );
+  });
+
   it('exposes a reachable dismiss control at mobile viewport widths, which collapses the panel to a reopenable badge', async () => {
     mockMobileViewport();
     vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
@@ -294,6 +343,11 @@ describe('DecisionPanel', () => {
 
       expect(screen.getByRole('radio', { name: /pushback/i })).toBeTruthy();
       expect(screen.getByRole('radio', { name: /decline/i })).toBeTruthy();
+      expect(
+        screen.getByPlaceholderText(/choose pushback or decline/i),
+      ).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('radio', { name: /pushback/i }));
       expect(
         screen.getByPlaceholderText(/what should the session revise/i),
       ).toBeTruthy();

@@ -23,7 +23,7 @@ const TERMINAL_STATES = new Set([
 ]);
 
 export interface DecisionQueueGroupDraft {
-  outcome: StagedIntentRejectOutcome;
+  outcome: StagedIntentRejectOutcome | null;
   reason: string;
 }
 
@@ -185,7 +185,7 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
 
   const draftFor = useCallback(
     (groupId: string): DecisionQueueGroupDraft =>
-      rejectDrafts[groupId] ?? { outcome: 'pushback', reason: '' },
+      rejectDrafts[groupId] ?? { outcome: null, reason: '' },
     [rejectDrafts],
   );
 
@@ -194,7 +194,7 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
       setRejectDrafts((prev) => ({
         ...prev,
         [groupId]: {
-          ...(prev[groupId] ?? { outcome: 'pushback', reason: '' }),
+          ...(prev[groupId] ?? { outcome: null, reason: '' }),
           ...patch,
         },
       }));
@@ -235,7 +235,7 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
     async (groupId: string) => {
       const draft = draftFor(groupId);
       const reason = draft.reason.trim();
-      if (!reason) return;
+      if (!reason || !draft.outcome) return;
       setGroupInFlight(groupId);
       clearGroupError(groupId);
       try {
