@@ -241,8 +241,7 @@ function isOpsTerminalKind(
 ): boolean {
   if (kind === 'journal.setState') {
     return (
-      (payload as Partial<JournalSetStatePayload> | null)?.state ===
-      'resolved'
+      (payload as Partial<JournalSetStatePayload> | null)?.state === 'resolved'
     );
   }
   if (!OPS_TERMINAL_KINDS.includes(kind) || !sessionId) return false;
