@@ -299,7 +299,7 @@ describe('DecisionPanel', () => {
       ).toBeTruthy();
     });
 
-    it("exposes a clean group's per-intent detail without a bespoke expand container", async () => {
+    it("exposes a clean group's per-intent detail via its own member toggle, not a bespoke triage-expand container", async () => {
       vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
         cleanTriageGroupIntents('group-clean-3', 't-clean-3'),
       );
@@ -307,8 +307,14 @@ describe('DecisionPanel', () => {
       render(<DecisionPanel sessionId="groom-session-2" />);
       await waitFor(() => screen.getByTestId('decision-panel'));
 
-      expect(screen.getByText(/depends on for/i)).toBeTruthy();
+      expect(screen.queryByText(/depends on for/i)).toBeNull();
       expect(screen.queryByTestId('triage-expand-group-clean-3')).toBeNull();
+
+      fireEvent.click(
+        screen.getByTestId('group-member-toggle-group-clean-3-dep'),
+      );
+
+      expect(screen.getByText(/depends on for/i)).toBeTruthy();
     });
 
     it('lets a clean group whose commit is refused server-side still be pushed back or declined', async () => {

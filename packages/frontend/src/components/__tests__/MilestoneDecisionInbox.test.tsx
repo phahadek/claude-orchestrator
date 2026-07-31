@@ -339,7 +339,7 @@ describe('MilestoneDecisionInbox', () => {
     );
     await waitFor(() =>
       expect(
-        screen.getByTestId(`committed-sibling-${committedMember.id}`),
+        screen.getByTestId(`group-member-${committedMember.id}`),
       ).toBeTruthy(),
     );
 
@@ -353,8 +353,9 @@ describe('MilestoneDecisionInbox', () => {
     expect(card.textContent).toContain('needs_revision');
 
     // The blocked member's own per-member Decline affordance is exposed
-    // (actions aren't hidden for it), while the committed sibling is
-    // read-only.
+    // (actions aren't hidden for it) once expanded, while the committed
+    // sibling stays read-only.
+    fireEvent.click(screen.getByTestId('group-member-toggle-blocked-member'));
     expect(screen.getByRole('button', { name: /decline/i })).toBeTruthy();
   });
 });

@@ -1,0 +1,51 @@
+.selected {
+  border-color: var(--ctp-blue);
+}
+
+.members {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.member {
+  display: flex;
+  flex-direction: column;
+}
+
+.memberSummary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.memberSummary:hover {
+  border-color: var(--border-strong);
+}
+
+.memberChevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.memberSummaryText {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memberDetail {
+  border-left: 2px solid var(--border);
+  margin-left: 6px;
+  padding-left: 8px;
+}

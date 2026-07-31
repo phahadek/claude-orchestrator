@@ -4,6 +4,7 @@ import { stagedIntentsApi } from '../api/stagedIntents';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import { DecisionPickOnePanel } from './DecisionPickOnePanel';
 import { TriageBatchPanel } from './TriageBatchPanel';
+import { GroupCard } from './GroupCard';
 import { taskIdFor } from './triageVerdict';
 import { useDecisionQueue } from '../hooks/useDecisionQueue';
 import panelStyles from './DecisionPanel.module.css';
@@ -219,167 +220,77 @@ export function MilestoneDecisionInbox({
         const inFlight = groupInFlight === groupId;
         const isClean = cleanGroupIds.includes(groupId);
         const provenance = provenanceOf(groupIntents);
+        const members = [
+          ...(committedByGroup[groupId] ?? []).map((intent) => ({
+            intent,
+            hideActions: true,
+          })),
+          ...groupIntents.map((intent) => {
+            // A blocked member (needs_revision | pending_verification) is
+            // the one live-surface exception to hideActions: its only
+            // operator-usable exit is a per-member Decline, exposed by
+            // StagedIntentPanel itself when actions aren't hidden.
+            const isBlockedMember =
+              intent.state === 'needs_revision' ||
+              intent.state === 'pending_verification';
+            return { intent, hideActions: !isBlockedMember };
+          }),
+        ];
 
         return (
-          <div
+          <GroupCard
             key={groupId}
-            className={`${panelStyles.group}${
-              selectedCardId === groupId ? ` ${styles.selectedCard}` : ''
-            }`}
+            groupId={groupId}
+            members={members}
+            onApplied={remove}
+            onRejected={remove}
+            onDismiss={remove}
+            onApproved={upsert}
+            isClean={isClean}
+            batchExcluded={!!batchExcluded[groupId]}
+            onToggleBatchExcluded={() => toggleBatchExcluded(groupId)}
+            cleanBatchLabel={taskIdFor(groupIntents) ?? groupId}
+            batchException={batchExceptions[groupId]}
+            groupError={groupInFlight === null ? groupError : null}
+            inFlight={inFlight}
+            draft={draft}
+            onSetDraft={(patch) => setDraft(groupId, patch)}
+            onApproveGroup={() => void handleApproveGroup(groupId)}
+            onRejectGroup={() => void handleRejectGroup(groupId)}
+            selected={selectedCardId === groupId}
+            className={
+              selectedCardId === groupId ? styles.selectedCard : undefined
+            }
             onClick={
               onSelectIntent && groupIntents[0]
                 ? () => onSelectIntent(groupIntents[0])
                 : undefined
             }
             data-testid={`milestone-decision-card-${groupId}`}
-          >
-            <div className={panelStyles.groupHeader}>
-              <span>Group {groupId}</span>
-              <span
-                className={styles.provenanceBadge}
-                data-testid={`provenance-badge-${groupId}`}
-              >
-                {provenance}
-              </span>
-              {groupIntents[0]?.sessionId && (
-                <button
-                  type="button"
-                  className={styles.sessionJumpButton}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    jumpToSession(groupIntents[0].sessionId!);
-                  }}
-                  data-testid={`session-jump-${groupId}`}
+            headerExtra={
+              <>
+                <span
+                  className={styles.provenanceBadge}
+                  data-testid={`provenance-badge-${groupId}`}
                 >
-                  View session
-                </button>
-              )}
-              {isClean && (
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={!batchExcluded[groupId]}
-                    onChange={() => toggleBatchExcluded(groupId)}
-                    aria-label={`Include ${taskIdFor(groupIntents) ?? groupId} in approve all clean`}
-                    data-testid={`clean-batch-include-${groupId}`}
-                  />
-                  <span
-                    className={panelStyles.cleanBadge}
-                    data-testid={`clean-badge-${groupId}`}
+                  {provenance}
+                </span>
+                {groupIntents[0]?.sessionId && (
+                  <button
+                    type="button"
+                    className={styles.sessionJumpButton}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      jumpToSession(groupIntents[0].sessionId!);
+                    }}
+                    data-testid={`session-jump-${groupId}`}
                   >
-                    Clean
-                  </span>
-                </label>
-              )}
-            </div>
-            {batchExceptions[groupId] && (
-              <div className={panelStyles.groupError}>
-                {batchExceptions[groupId]}
-              </div>
-            )}
-            {groupError && groupInFlight === null && (
-              <div className={panelStyles.groupError}>{groupError}</div>
-            )}
-            {(committedByGroup[groupId] ?? []).map((intent) => (
-              <div
-                key={intent.id}
-                data-testid={`committed-sibling-${intent.id}`}
-              >
-                <StagedIntentPanel
-                  intent={intent}
-                  onApplied={remove}
-                  onRejected={remove}
-                  onDismiss={remove}
-                  onApproved={upsert}
-                  hideActions
-                />
-              </div>
-            ))}
-            {groupIntents.map((intent) => {
-              // A blocked member (needs_revision | pending_verification) is
-              // the one live-surface exception to hideActions: its only
-              // operator-usable exit is a per-member Decline, exposed by
-              // StagedIntentPanel itself when actions aren't hidden.
-              const isBlockedMember =
-                intent.state === 'needs_revision' ||
-                intent.state === 'pending_verification';
-              return (
-                <StagedIntentPanel
-                  key={intent.id}
-                  intent={intent}
-                  onApplied={remove}
-                  onRejected={remove}
-                  onDismiss={remove}
-                  onApproved={upsert}
-                  hideActions={!isBlockedMember}
-                />
-              );
-            })}
-            <div className={panelStyles.groupActions}>
-              <button
-                type="button"
-                className={panelStyles.commitButton}
-                disabled={inFlight}
-                onClick={() => void handleApproveGroup(groupId)}
-              >
-                {inFlight ? 'Approving…' : '✓ Approve groom'}
-              </button>
-              <div
-                className={panelStyles.outcomeToggle}
-                role="radiogroup"
-                aria-label="Reject outcome"
-              >
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={draft.outcome === 'pushback'}
-                  className={
-                    draft.outcome === 'pushback'
-                      ? panelStyles.outcomeOptionActive
-                      : panelStyles.outcomeOption
-                  }
-                  onClick={() => setDraft(groupId, { outcome: 'pushback' })}
-                >
-                  Pushback
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={draft.outcome === 'decline'}
-                  className={
-                    draft.outcome === 'decline'
-                      ? panelStyles.outcomeOptionActive
-                      : panelStyles.outcomeOption
-                  }
-                  onClick={() => setDraft(groupId, { outcome: 'decline' })}
-                >
-                  Decline
-                </button>
-              </div>
-              <textarea
-                className={panelStyles.reasonInput}
-                placeholder={
-                  draft.outcome === 'pushback'
-                    ? 'What should the session revise?'
-                    : 'Why is this being declined?'
-                }
-                value={draft.reason}
-                onChange={(e) => setDraft(groupId, { reason: e.target.value })}
-              />
-              <button
-                type="button"
-                className={panelStyles.denyButton}
-                disabled={inFlight || !draft.reason.trim()}
-                onClick={() => void handleRejectGroup(groupId)}
-              >
-                {inFlight
-                  ? 'Submitting…'
-                  : draft.outcome === 'pushback'
-                    ? '↩ Pushback groom'
-                    : '✕ Decline groom'}
-              </button>
-            </div>
-          </div>
+                    View session
+                  </button>
+                )}
+              </>
+            }
+          />
         );
       })}
     </div>
