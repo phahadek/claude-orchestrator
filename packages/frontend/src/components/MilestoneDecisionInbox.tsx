@@ -25,6 +25,13 @@ function provenanceOf(intents: StagedIntent[]): string {
   return intents[0]?.sessionId ?? 'human';
 }
 
+/** Routes to the session that staged a card — the same app-wide jump used by GateReadinessPanel and ReviewDetailView. */
+function jumpToSession(sessionId: string) {
+  window.dispatchEvent(
+    new CustomEvent('selectSession', { detail: { sessionId } }),
+  );
+}
+
 /**
  * Flattens the backend's already-ranked ?milestone lens order into one card
  * per group_id (at the position of its first, i.e. highest-impact, member)
@@ -123,6 +130,19 @@ export function MilestoneDecisionInbox({
                 >
                   {provenance}
                 </span>
+                {intent.sessionId && (
+                  <button
+                    type="button"
+                    className={styles.sessionJumpButton}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      jumpToSession(intent.sessionId!);
+                    }}
+                    data-testid={`session-jump-${intent.id}`}
+                  >
+                    View session
+                  </button>
+                )}
               </div>
               {intent.kind === 'decision.pickOne' ? (
                 <DecisionPickOnePanel
@@ -171,6 +191,19 @@ export function MilestoneDecisionInbox({
               >
                 {provenance}
               </span>
+              {groupIntents[0]?.sessionId && (
+                <button
+                  type="button"
+                  className={styles.sessionJumpButton}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    jumpToSession(groupIntents[0].sessionId!);
+                  }}
+                  data-testid={`session-jump-${groupId}`}
+                >
+                  View session
+                </button>
+              )}
               {isClean && (
                 <label>
                   <input

@@ -2,6 +2,7 @@ import type { TaskView } from '../types/taskView';
 import type { StagedIntent } from '../api/stagedIntents';
 import { phaseForTask } from '../utils/phaseBurndown';
 import { MilestoneDecisionInbox } from './MilestoneDecisionInbox';
+import { CompactTaskCard } from './CompactTaskCard';
 import styles from './MilestoneDecisionStack.module.css';
 
 /** A middle-stack selection — either a pending intent/group card or a task row. Drives the right drill-down. */
@@ -89,18 +90,22 @@ function TaskSection({
         {title} ({tasks.length})
       </div>
       {tasks.map((task) => (
-        <button
+        <div
           key={task.taskId}
-          type="button"
-          className={`${styles.taskRow}${
-            selectedTaskId === task.taskId ? ` ${styles.taskRowSelected}` : ''
-          }`}
-          onClick={() => onSelectTask(task)}
+          className={
+            selectedTaskId === task.taskId ? styles.taskRowSelected : undefined
+          }
           data-testid={`milestone-task-row-${task.taskId}`}
         >
-          <span className={styles.taskName}>{task.taskName}</span>
-          <span className={styles.taskType}>{task.taskType}</span>
-        </button>
+          <CompactTaskCard
+            task={task}
+            showCheckbox={false}
+            checked={false}
+            onCheckChange={() => {}}
+            onClick={() => onSelectTask(task)}
+            showStatus
+          />
+        </div>
       ))}
     </div>
   );

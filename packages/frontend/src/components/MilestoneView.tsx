@@ -13,6 +13,8 @@ import {
   type MilestoneStackSelection,
 } from './MilestoneDecisionStack';
 import { MilestoneDrilldown } from './MilestoneDrilldown';
+import { GateReadinessPanel } from './GateReadinessPanel';
+import { isGatePhase } from '../utils/phaseBurndown';
 import styles from './MilestoneView.module.css';
 
 const MIN_MIDDLE_WIDTH_PCT = 30;
@@ -147,7 +149,17 @@ export function MilestoneView({
         style={{ width: `${middleWidthPct}%` }}
         data-testid="milestone-decision-stack-mount"
       >
-        {activeProjectId && milestoneKey ? (
+        {isGatePhase(phaseFilter) ? (
+          <GateReadinessPanel
+            activeProjectId={activeProjectId}
+            activeBoardMilestone={activeBoardMilestone}
+            sessions={sessions}
+            send={send}
+            setSessionArchived={setSessionArchived}
+            setSessionFavorited={setSessionFavorited}
+            project={project}
+          />
+        ) : activeProjectId && milestoneKey ? (
           <MilestoneDecisionStack
             projectId={activeProjectId}
             milestone={milestoneKey}

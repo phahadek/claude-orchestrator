@@ -181,6 +181,65 @@ describe('MilestoneDecisionInbox', () => {
     );
   });
 
+  it('exposes a per-card control that routes to the session that staged it, for ungrouped and grouped intents', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'ungrouped',
+        kind: 'task.setStatus',
+        payload: { taskId: 'notion:1', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 100,
+        sessionId: 'session-ungrouped',
+        milestone: 'M1',
+        state: 'staged',
+      },
+      {
+        id: 'grouped-dep',
+        kind: 'task.setDependsOn',
+        payload: { taskId: 'notion:2', dependsOn: [] },
+        projectId: 'proj-1',
+        createdAt: 1,
+        sessionId: 'session-grouped',
+        groupId: 'group-a',
+        milestone: 'M1',
+        state: 'staged',
+      },
+      {
+        id: 'grouped-status',
+        kind: 'task.setStatus',
+        payload: { taskId: 'notion:2', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 2,
+        sessionId: 'session-grouped',
+        groupId: 'group-a',
+        milestone: 'M1',
+        state: 'staged',
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+
+    fireEvent.click(screen.getByTestId('session-jump-ungrouped'));
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'selectSession',
+        detail: { sessionId: 'session-ungrouped' },
+      }),
+    );
+
+    fireEvent.click(screen.getByTestId('session-jump-group-a'));
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'selectSession',
+        detail: { sessionId: 'session-grouped' },
+      }),
+    );
+  });
+
   it('renders nothing when the milestone has no staged decisions', async () => {
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([]);
 

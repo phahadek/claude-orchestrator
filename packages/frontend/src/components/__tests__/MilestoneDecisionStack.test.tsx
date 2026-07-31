@@ -88,7 +88,10 @@ describe('MilestoneDecisionStack', () => {
     expect(screen.queryByTestId('milestone-task-row-code-launched')).toBeNull();
     expect(screen.queryByTestId('milestone-task-row-design-open')).toBeNull();
 
-    fireEvent.click(screen.getByTestId('milestone-task-row-code-open'));
+    // Renders through the shared CompactTaskCard, not bespoke row markup.
+    expect(screen.getAllByTestId('compact-task-card')).toHaveLength(2);
+
+    fireEvent.click(screen.getByText('Code open'));
     expect(onSelect).toHaveBeenCalledWith({
       type: 'task',
       task: tasks[0],
