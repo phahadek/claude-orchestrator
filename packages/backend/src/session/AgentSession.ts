@@ -36,6 +36,7 @@ import {
   hasActiveCapabilityRequestForSession,
   getGrantedCapabilities,
   setTaskPauseReason,
+  setHumanMergeOnly,
 } from '../db/queries';
 import { groomSessionConcludedWithDecision } from '../orchestration/planningDecisionKinds';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
@@ -2126,6 +2127,10 @@ The full task spec and all rules are in your system prompt. Begin implementing d
           `[AgentSession] handlePRDetected: upsertPullRequest rejected for repo "${repo}" — skipping pr_created broadcast`,
         );
         upsertSucceeded = false;
+      }
+
+      if (upsertSucceeded && this.sessionType === 'docs') {
+        setHumanMergeOnly(prNumber, repo, true);
       }
 
       // If head_sha or body was missing from the tool response (live-detection path

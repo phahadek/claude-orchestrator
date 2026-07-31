@@ -60,6 +60,7 @@ export type PlanningSessionType =
   | 'design'
   | 'ops'
   | 'split'
+  | 'docs'
   | 'standard';
 
 /**
@@ -90,6 +91,8 @@ function formatPlanningSessionName(
       return `Design: ${title}`;
     case 'ops':
       return `Ops: ${title}`;
+    case 'docs':
+      return `Docs: ${title}`;
     default:
       return title;
   }

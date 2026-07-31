@@ -365,7 +365,14 @@ function buildProactiveEscalationNudge(pendingText: string): string {
 
 export interface StartOptions {
   taskType?: string;
-  sessionType?: 'standard' | 'review' | 'groom' | 'design' | 'ops' | 'split';
+  sessionType?:
+    | 'standard'
+    | 'review'
+    | 'groom'
+    | 'design'
+    | 'ops'
+    | 'split'
+    | 'docs';
   customPrompt?: string;
   projectId?: string;
   taskName?: string;
@@ -843,7 +850,14 @@ export class SessionManager extends EventEmitter {
   private pendingStarts = new Map<
     string,
     {
-      sessionType: 'standard' | 'review' | 'groom' | 'design' | 'ops' | 'split';
+      sessionType:
+        | 'standard'
+        | 'review'
+        | 'groom'
+        | 'design'
+        | 'ops'
+        | 'split'
+        | 'docs';
     }
   >();
   /** Concurrency guard: prevents double-spawning when two concurrent sendOrResume calls race. */
