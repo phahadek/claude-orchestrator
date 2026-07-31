@@ -856,6 +856,18 @@ export function GateReadinessPanel({
     [withDispositionMutation, operatorName],
   );
 
+  const reclassifyItemHandler = useCallback(
+    (id: string, classification: GateItemClassification) => {
+      withDispositionMutation(id, () =>
+        gateApi.reclassifyItem(id, {
+          classification,
+          operator: operatorName || undefined,
+        }),
+      );
+    },
+    [withDispositionMutation, operatorName],
+  );
+
   const selectGateChip = useCallback((state: string) => {
     setStateFilter(state);
     setRunnableFilter('');
@@ -1139,8 +1151,26 @@ export function GateReadinessPanel({
                         <td onClick={() => toggleExpanded(item.id)}>
                           {item.text}
                         </td>
-                        <td onClick={() => toggleExpanded(item.id)}>
-                          {item.classification}
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <select
+                            value={item.classification}
+                            onChange={(e) =>
+                              reclassifyItemHandler(
+                                item.id,
+                                e.target.value as GateItemClassification,
+                              )
+                            }
+                            disabled={dispositionMutatingIds.has(item.id)}
+                            aria-label={`Reclassify ${item.text}`}
+                            data-testid={`gate-item-reclassify-${item.id}`}
+                            className={styles.reclassifySelect}
+                          >
+                            {CLASSIFICATION_OPTIONS.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </select>
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
                           {item.state}
