@@ -211,9 +211,9 @@ describe('GateReadinessPanel — operator reclassify control', () => {
       { timeout: 6000, interval: 200 },
     );
     await waitFor(() => {
-      expect(
-        screen.getByTestId('gate-items-table').textContent,
-      ).toContain('pass');
+      expect(screen.getByTestId('gate-items-table').textContent).toContain(
+        'pass',
+      );
     });
   }, 10000);
 });
