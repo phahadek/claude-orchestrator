@@ -93,6 +93,14 @@ export interface StagedIntent {
   dispositionReason?: string | null;
   /** The operator's answer to a decision.pickOne question-intent. Null until answered. */
   answer?: StagedIntentAnswer | null;
+  /**
+   * Derived per-session completeness: true once the owning session has
+   * staged something since its last stop and its turn has ended. False
+   * while a turn is in flight or a wake reverted the session to incomplete
+   * — apply/reject/commit are refused server-side while false. Null for
+   * human-staged intents (no owning session to gate on).
+   */
+  sessionComplete?: boolean | null;
 }
 
 /** The two explicit operator-chosen outcomes for a reject disposition. */

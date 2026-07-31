@@ -5549,6 +5549,38 @@ export function listStagedIntentsBySession(
   }) as StagedIntentRow[];
 }
 
+let _stmtHasActiveStagedIntentForSession: Database.Statement | null = null;
+
+/**
+ * Derived "is this session's proposal set complete" signal — never a
+ * persisted flag. True exactly when the session's turn is not in flight AND
+ * it has at least one currently-active (staged/approved) staged intent.
+ * Turn-in-flight lives only on the live AgentSession instance and is never
+ * persisted (see AgentSession.hasActiveTurn()/_turnInFlight) — callers must
+ * supply it; a session with no live instance in this process (parked across
+ * a restart, or never spawned here) has no turn in flight by construction.
+ * A wake (AgentSession.sendMessage) flips turn-in-flight back to true, so a
+ * previously-complete session's staged intents refuse disposition again
+ * until the resumed turn ends — no extra bookkeeping needed.
+ */
+export function isSessionComplete(
+  sessionId: string,
+  turnInFlight: boolean,
+): boolean {
+  if (turnInFlight) return false;
+  _stmtHasActiveStagedIntentForSession ??= db.prepare<{
+    session_id: string;
+  }>(
+    `SELECT 1 FROM staged_intent
+     WHERE session_id = @session_id AND state IN ('staged', 'approved')
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasActiveStagedIntentForSession.get({ session_id: sessionId }) !==
+    undefined
+  );
+}
+
 /** The standing staged/approved intent (if any) for this project+kind+task — the dedup slot. */
 export function findActiveStagedIntentForTask(
   projectId: string,
