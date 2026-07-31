@@ -29,6 +29,7 @@
   --bg-hover: var(--ctp-surface1);
   --border: var(--ctp-surface1);
   --border-subtle: var(--ctp-surface0);
+  --border-strong: var(--ctp-overlay0);
   --text-primary: var(--ctp-text);
   --text-muted: var(--ctp-subtext0);
   --text-faint: var(--ctp-overlay0);
