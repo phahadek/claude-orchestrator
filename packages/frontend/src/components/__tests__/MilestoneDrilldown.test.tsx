@@ -384,7 +384,9 @@ describe('MilestoneDrilldown', () => {
       />,
     );
 
-    await waitFor(() => expect(screen.getByText('No events yet.')).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText('No events yet.')).toBeTruthy(),
+    );
     const embed = screen.getByTestId('milestone-session-embed');
     expect(embed.textContent).not.toContain('Transcript not available');
   });
