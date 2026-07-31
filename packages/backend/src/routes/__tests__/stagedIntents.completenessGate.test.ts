@@ -637,12 +637,14 @@ describe('expected-terminal-kind XOR gate on the design closing synthesis', () =
     );
     expect(synthesis.decisionProposal).toContain('Widget architecture');
     expect(synthesis.decisionProposal).toContain('Build the widget');
-    expect((synthesis.payload as { sections: { implementationNotes?: string } }).sections.implementationNotes).toContain(
-      'Widget architecture',
-    );
-    expect((synthesis.payload as { sections: { implementationNotes?: string } }).sections.implementationNotes).toContain(
-      'Build the widget',
-    );
+    expect(
+      (synthesis.payload as { sections: { implementationNotes?: string } })
+        .sections.implementationNotes,
+    ).toContain('Widget architecture');
+    expect(
+      (synthesis.payload as { sections: { implementationNotes?: string } })
+        .sections.implementationNotes,
+    ).toContain('Build the widget');
   });
 });
 

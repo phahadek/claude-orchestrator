@@ -412,9 +412,7 @@ describe('StagedIntentPanel', () => {
     expect(
       screen.getByText(/task is already Ready, nothing to add/),
     ).toBeTruthy();
-    expect(
-      screen.queryByTestId('staged-intent-no-op-skipped-kind'),
-    ).toBeNull();
+    expect(screen.queryByTestId('staged-intent-no-op-skipped-kind')).toBeNull();
   });
 
   it('renders a skippedKind planning.noOp as a discrete line naming the skipped kind and reason, distinct from the whole-turn headline', () => {

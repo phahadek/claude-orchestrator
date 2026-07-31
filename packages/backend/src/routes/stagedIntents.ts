@@ -1647,10 +1647,7 @@ function assertExpectedTerminalKinds(
 
   const boundTaskId = normalizeTaskId(session.task_id);
   const payloadTaskId = extractTaskId(kind, payload);
-  if (
-    !payloadTaskId ||
-    normalizeTaskId(payloadTaskId) !== boundTaskId
-  ) {
+  if (!payloadTaskId || normalizeTaskId(payloadTaskId) !== boundTaskId) {
     return;
   }
 
@@ -1738,7 +1735,9 @@ function generateDesignClosingSynthesisAccount(sessionId: string): {
         .join('; ')}`
     : `(5) Follow-on Code tasks filed — none — no implementation work beyond ` +
       `the locked decisions${
-        findNoOpReason('task.create') ? ` (${findNoOpReason('task.create')})` : ''
+        findNoOpReason('task.create')
+          ? ` (${findNoOpReason('task.create')})`
+          : ''
       }`;
 
   return { architectureLine, followOnLine };
