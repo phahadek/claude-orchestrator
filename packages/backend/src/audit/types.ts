@@ -92,7 +92,8 @@ type EventType =
   | 'project_record_access_guide_blocks_escalation'
   | 'flow_arm_changed'
   | 'milestone_wrapped'
-  | 'base_fetch_failed';
+  | 'base_fetch_failed'
+  | 'mcp_stage_credential_rejected';
 
 type ActorType = 'ai' | 'human' | 'system';
 
