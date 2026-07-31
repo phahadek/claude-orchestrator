@@ -203,6 +203,91 @@ function assertReadyPathGrouped(
 }
 
 /**
+ * The ops-terminal member set: the staged-intent kinds an ops/investigation
+ * session's closing decision is made of — the journal.setState transition
+ * that closes the investigation, the task-body write recording the finding
+ * (task.updateBody / task.patchBodySection), and the follow-on task.create(s)
+ * the investigation produces. Single-sourced here, right beside
+ * READY_PATH_KINDS, so both member sets live in the same place and cannot
+ * independently drift — see isOpsTerminalKind, which (mirroring
+ * isReadyPathKind's task.setStatus handling) resolves journal.setState's
+ * conditional (target-state-`resolved`-only) membership.
+ */
+export const OPS_TERMINAL_KINDS: readonly string[] = [
+  'journal.setState',
+  'task.updateBody',
+  'task.patchBodySection',
+  'task.create',
+];
+
+/**
+ * True when this staged-intent (kind, payload) pair is a live ops-terminal
+ * member. journal.setState is conditional on its target state: an
+ * incidental mid-run journal.setState (recording a gap without closing the
+ * investigation — see "incidental-tooling-gap-not-a-blocker" in
+ * procedureCore.ts) never targets `resolved`, ops_journal's one terminal
+ * state (ALLOWED_TRANSITIONS, opsJournal.ts), so only a transition to
+ * `resolved` is a member — the same shape as task.setStatus's
+ * target-status-Ready-only membership in the Ready path. task.updateBody /
+ * task.patchBodySection / task.create are only ops-terminal when staged by an
+ * ops session (`session_type === 'ops'`) — every other session type stages
+ * those same kinds for unrelated reasons (design's closing synthesis, a
+ * split's narrowed original, groom's Manual-verification strip), which this
+ * must not reach.
+ */
+function isOpsTerminalKind(
+  kind: string,
+  payload: unknown,
+  sessionId: string | null | undefined,
+): boolean {
+  if (kind === 'journal.setState') {
+    return (
+      (payload as Partial<JournalSetStatePayload> | null)?.state === 'resolved'
+    );
+  }
+  if (!OPS_TERMINAL_KINDS.includes(kind) || !sessionId) return false;
+  const session = getSession(sessionId);
+  return session?.session_type === 'ops';
+}
+
+/**
+ * The ops-terminal twin of ReadyPathMissingGroupError: rejects an
+ * ops-terminal member the moment it is staged without a groupId, naming the
+ * member set so the staging session can self-correct in-turn.
+ */
+class OpsTerminalMissingGroupError extends Error {
+  constructor(kind: string) {
+    super(
+      `[stagedIntents] "${kind}" is an ops-terminal member (${OPS_TERMINAL_KINDS.join(', ')}) staged with no ` +
+        "groupId. An ops/investigation session's closing set — the journal.setState transition to " +
+        '"resolved", any task-body write recording the finding (task.updateBody / task.patchBodySection), ' +
+        'and any follow-on task.create the investigation produces — must share the same groupId as one ' +
+        'closing decision. Stage it again with a groupId.',
+    );
+    this.name = 'OpsTerminalMissingGroupError';
+  }
+}
+
+/**
+ * Stage-time enforcement of the ops-terminal grouping invariant, mirroring
+ * assertReadyPathGrouped: rejects a live ops-terminal member staged with no
+ * groupId at all, before the row ever reaches `staged`. An incidental
+ * mid-run journal.setState, and any planning.noOp / decision.pickOne, are
+ * untouched.
+ */
+function assertOpsTerminalGrouped(
+  kind: string,
+  payload: unknown,
+  groupId: string | null | undefined,
+  sessionId: string | null | undefined,
+): void {
+  if (groupId) return;
+  if (isOpsTerminalKind(kind, payload, sessionId)) {
+    throw new OpsTerminalMissingGroupError(kind);
+  }
+}
+
+/**
  * The durable replacement for groom-gate.mjs's self-reported hard_block_deps
  * array field: a task.setStatus->Ready apply is only allowed when its intent
  * group also carries a task.setDependsOn for the same task, forcing an
@@ -2064,6 +2149,7 @@ export function stageIntent(
       return rowToApi(existing);
     }
     assertReadyPathGrouped(kind, payload, groupId);
+    assertOpsTerminalGrouped(kind, payload, groupId, sessionId);
     const newRow: StagedIntentRow = {
       id: randomUUID(),
       kind,
@@ -2092,6 +2178,7 @@ export function stageIntent(
   }
 
   assertReadyPathGrouped(kind, payload, groupId);
+  assertOpsTerminalGrouped(kind, payload, groupId, sessionId);
   const row: StagedIntentRow = {
     id: randomUUID(),
     kind,

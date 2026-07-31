@@ -41,11 +41,14 @@ vi.mock('../db/queries', async (importOriginal) => {
 });
 
 import { db } from '../db/db';
-import { insertStagedIntent } from '../db/queries';
+import { insertStagedIntent, insertSession } from '../db/queries';
 import type { StagedIntentRow } from '../db/types';
 import {
   createStagedIntentsRouter,
   setStagedIntentBroadcast,
+  stageIntent,
+  READY_PATH_KINDS,
+  OPS_TERMINAL_KINDS,
 } from '../routes/stagedIntents';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage } from '../ws/types';
@@ -792,6 +795,226 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
         expect(applied.status).toBe(403);
       }
     }
+  });
+});
+
+describe('the ops-terminal closing set is mandated under one shared groupId', () => {
+  function seedOpsSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+    });
+  }
+
+  it('rejects an ops-terminal journal.setState targeting resolved when staged with no groupId', async () => {
+    const { upsertOpsJournalEntry } = await import('../db/queries');
+    upsertOpsJournalEntry({
+      task_id: 'notion:ops-1',
+      project: 'proj-ops',
+      milestone: 'M1',
+      state: 'candidate',
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date().toISOString(),
+    });
+
+    expect(() =>
+      stageIntent(
+        'journal.setState',
+        { taskId: 'notion:ops-1', state: 'resolved' },
+        'proj-ops',
+      ),
+    ).toThrow(/ops-terminal member/);
+  });
+
+  it('an incidental mid-run journal.setState (not targeting resolved) may still be staged standalone', async () => {
+    const { upsertOpsJournalEntry } = await import('../db/queries');
+    upsertOpsJournalEntry({
+      task_id: 'notion:ops-2',
+      project: 'proj-ops',
+      milestone: 'M1',
+      state: 'pending',
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date().toISOString(),
+    });
+
+    const intent = stageIntent(
+      'journal.setState',
+      { taskId: 'notion:ops-2', state: 'candidate' },
+      'proj-ops',
+    );
+    expect(intent.groupId).toBeNull();
+  });
+
+  it('rejects a follow-on task.create staged by an ops session with no groupId', () => {
+    seedOpsSession('ops-session-1', 'notion:ops-3');
+    expect(() =>
+      stageIntent(
+        'task.create',
+        { title: 'Follow-on from investigation', body: 'x' },
+        'proj-ops',
+        null,
+        'ops-session-1',
+      ),
+    ).toThrow(/ops-terminal member/);
+  });
+
+  it('rejects a task-body write recording the finding (task.updateBody / task.patchBodySection) staged by an ops session with no groupId', () => {
+    seedOpsSession('ops-session-2', 'notion:ops-4');
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: 'notion:ops-4', sections: {} },
+        'proj-ops',
+        null,
+        'ops-session-2',
+      ),
+    ).toThrow(/ops-terminal member/);
+
+    expect(() =>
+      stageIntent(
+        'task.patchBodySection',
+        {
+          taskId: 'notion:ops-4',
+          section: '### Finding',
+          operation: 'append',
+          content: 'x',
+        },
+        'proj-ops',
+        null,
+        'ops-session-2',
+      ),
+    ).toThrow(/ops-terminal member/);
+  });
+
+  it('a task.updateBody staged by a non-ops session is unaffected — the mandate is ops-scoped', () => {
+    insertSession({
+      session_id: 'groom-session-1',
+      task_id: 'notion:ops-5',
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'groom',
+    });
+    const intent = stageIntent(
+      'task.updateBody',
+      { taskId: 'notion:ops-5', sections: {} },
+      'proj-ops',
+      null,
+      'groom-session-1',
+    );
+    expect(intent.groupId).toBeNull();
+  });
+
+  it('planning.noOp and decision.pickOne remain legitimately ungrouped for an ops session', () => {
+    seedOpsSession('ops-session-3', 'notion:ops-6');
+    const noOp = stageIntent(
+      'planning.noOp',
+      { taskId: 'notion:ops-6', reason: 'nothing to add' },
+      'proj-ops',
+      null,
+      'ops-session-3',
+    );
+    expect(noOp.groupId).toBeNull();
+
+    const pickOne = stageIntent(
+      'decision.pickOne',
+      {
+        prompt: 'Which mitigation?',
+        options: [
+          { label: 'a', description: 'Option A' },
+          { label: 'b', description: 'Option B' },
+        ],
+        allowFreeForm: false,
+      },
+      'proj-ops',
+      null,
+      'ops-session-3',
+      'A decision the operator must make.',
+    );
+    expect(pickOne.groupId).toBeNull();
+  });
+
+  it('single-sources the ops-terminal member set, and it cannot drift from the Ready-path set — they are disjoint kinds carried in the same module', () => {
+    expect(OPS_TERMINAL_KINDS).toEqual(
+      expect.arrayContaining([
+        'journal.setState',
+        'task.updateBody',
+        'task.patchBodySection',
+        'task.create',
+      ]),
+    );
+    expect(OPS_TERMINAL_KINDS).toHaveLength(4);
+    for (const kind of OPS_TERMINAL_KINDS) {
+      expect(READY_PATH_KINDS).not.toContain(kind);
+    }
+  });
+
+  it('accepts the same closing set once staged under one shared groupId', async () => {
+    const { upsertOpsJournalEntry } = await import('../db/queries');
+    upsertOpsJournalEntry({
+      task_id: 'notion:ops-7',
+      project: 'proj-ops',
+      milestone: 'M1',
+      state: 'candidate',
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date().toISOString(),
+    });
+    seedOpsSession('ops-session-4', 'notion:ops-7');
+
+    const groupId = 'group-ops-close';
+    const journal = stageIntent(
+      'journal.setState',
+      { taskId: 'notion:ops-7', state: 'resolved' },
+      'proj-ops',
+      groupId,
+    );
+    const body = stageIntent(
+      'task.updateBody',
+      { taskId: 'notion:ops-7', sections: {} },
+      'proj-ops',
+      groupId,
+      'ops-session-4',
+    );
+    const followOn = stageIntent(
+      'task.create',
+      { title: 'Follow-on Code task', body: 'x' },
+      'proj-ops',
+      groupId,
+      'ops-session-4',
+    );
+
+    expect([journal.groupId, body.groupId, followOn.groupId]).toEqual([
+      groupId,
+      groupId,
+      groupId,
+    ]);
   });
 });
 
