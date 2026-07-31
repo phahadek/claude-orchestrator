@@ -22,7 +22,7 @@ import {
 import { parsePauseReason } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
 import { typedGetSetting } from '../config/settings';
-import { recordEvent } from '../audit/AuditLog';
+import { recordEvent, hasPrBodyMarkerUpdateSinceTimestamp } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
 import { classifyStalledPR, parseVerdict } from '../github/pollUtils';
@@ -243,6 +243,11 @@ export class StalledPRReconciler {
     const sessionId = pr.session_id;
     const headSha = pr.head_sha ?? null;
 
+    if (kind === 'session_inert') {
+      const forced = this.tryForceReReviewForAppliedRemedy(pr);
+      if (forced !== null) return forced;
+    }
+
     if (
       kind === 'gate_failed' ||
       kind === 'conflict_dead_session' ||
@@ -400,6 +405,82 @@ export class StalledPRReconciler {
    * job would just repeat the same silent delivery failure. Relaunch a
    * coding fixer bound to the PR's existing branch instead.
    */
+  /**
+   * session_inert only: disambiguates "the coding session already applied a
+   * PR-body-only remedy to an outstanding needs_changes verdict and is
+   * waiting on a re-review that neither the push trigger (no new head SHA)
+   * nor the session-end trigger (the session hasn't terminated) can fire"
+   * from "the session is genuinely silent and never responded" — the case
+   * the existing nudge (reDriveViaFixerRelaunch) already handles correctly.
+   *
+   * Disambiguated via the pr_body_updated_via_marker audit trail: if that
+   * event was recorded for this task after the outstanding needs_changes
+   * verdict, the session already responded and is parked waiting, so force a
+   * re-review at the current (unchanged) head SHA through
+   * ReviewOrchestrator.enqueueReview — which does not consult
+   * last_reviewed_sha, so a push-only dedup guard never blocks this
+   * non-push-triggered re-review.
+   *
+   * Returns null when the force-re-review conditions aren't met (caller
+   * should fall through to the existing nudge), or a boolean when this
+   * method fully handled the PR.
+   */
+  private tryForceReReviewForAppliedRemedy(
+    pr: PullRequestRow,
+  ): boolean | null {
+    const { pr_number: prNumber, repo } = pr;
+
+    if (!this.reviewOrchestrator || !pr.task_id || !pr.review_at) return null;
+    if (parseVerdict(pr.review_result) !== 'needs_changes') return null;
+
+    const maxIter = typedGetSetting('max_review_iterations');
+    if (pr.review_iteration >= maxIter) return null;
+
+    const verdictTs = new Date(pr.review_at).getTime();
+    if (!hasPrBodyMarkerUpdateSinceTimestamp(pr.task_id, verdictTs)) {
+      return null;
+    }
+
+    if (this.reviewOrchestrator.isReviewInFlight(prNumber, repo)) {
+      logger.info(
+        `[StalledPRReconciler] PR #${prNumber} (${repo}): review already in-flight — skipping forced re-review`,
+      );
+      return false;
+    }
+
+    const newCount = incrementStalledPRRetryCount(prNumber, repo);
+    const project = getProjectByGithubRepo(repo);
+    const session = pr.session_id ? getSession(pr.session_id) : null;
+
+    logger.info(
+      `[StalledPRReconciler] PR #${prNumber} (${repo}): forcing re-review at unchanged head — needs_changes remedy applied via PR-body update without a new push (attempt ${newCount}/${this.options.retryCap ?? DEFAULT_RETRY_CAP})`,
+    );
+
+    recordEvent({
+      event_type: 'stalled_pr_reconcile_attempt',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: project?.id ?? null,
+      task_id: pr.task_id,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        kind: 'session_inert_body_only_remedy',
+        attempt: newCount,
+      },
+    });
+
+    this.reviewOrchestrator.enqueueReview({
+      prNumber,
+      repo,
+      taskId: pr.task_id,
+      taskUrl: session?.task_url ?? '',
+      contextUrl: project?.contextUrl ?? '',
+    });
+
+    return true;
+  }
+
   private async reDriveViaFixerRelaunch(
     pr: PullRequestRow,
     kind: 'gate_failed' | 'conflict_dead_session' | 'session_inert',
