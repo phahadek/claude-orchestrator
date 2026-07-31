@@ -243,7 +243,9 @@ describe('verifyDispatchedGroupsForSession — group-level verify gate', () => {
 
   it('blocks a group whose body requires a Manual-verification strip that was never staged — completeness gap, not surfaced to the operator', async () => {
     mockGetTaskBackend.mockReturnValue(
-      makeBackend('## Summary\nClean.\n\n### 👁️ Manual verification\n- Check it.\n'),
+      makeBackend(
+        '## Summary\nClean.\n\n### 👁️ Manual verification\n- Check it.\n',
+      ),
     );
     const taskId = 'notion:group-no-mv-strip';
     recordAccretion(taskId);

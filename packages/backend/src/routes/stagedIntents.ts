@@ -2786,7 +2786,10 @@ async function precheckGroupCommit(
       payload,
     );
     if (failure) {
-      if (failure.kind === 'dependsOn' || failure.kind === 'manualVerificationStrip') {
+      if (
+        failure.kind === 'dependsOn' ||
+        failure.kind === 'manualVerificationStrip'
+      ) {
         return {
           status: 409,
           body: {
