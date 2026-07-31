@@ -2,6 +2,8 @@ import { apiRequest } from './projects';
 
 type SeedItemState = 'pending' | 'applied' | 'confirmed' | 'blocked';
 
+export type SeedItemEventOutcome = 'applied' | 'confirmed' | 'blocked';
+
 interface SeedItemSource {
   sourceTaskId: string;
   sourceTaskTitle: string;
@@ -10,7 +12,7 @@ interface SeedItemSource {
 }
 
 interface SeedItemEvent {
-  outcome: 'applied' | 'confirmed' | 'blocked';
+  outcome: SeedItemEventOutcome;
   evidence?: unknown;
   filedFollowon?: string;
   operator?: string;
@@ -66,6 +68,13 @@ export interface ListSeedItemsResult {
   page: number;
 }
 
+export interface RecordSeedItemEventInput {
+  outcome: SeedItemEventOutcome;
+  evidence?: unknown;
+  filedFollowon?: string;
+  operator?: string;
+}
+
 function buildQuery(params: object): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -96,6 +105,21 @@ export const seedApi = {
   ): Promise<ListSeedItemsResult> {
     return apiRequest<ListSeedItemsResult>(
       `/api/seed/items${buildQuery(params)}`,
+    );
+  },
+
+  /** Records an operator disposition (applied/confirmed/blocked) against a config-seed item. */
+  recordSeedItemEvent(
+    id: string,
+    input: RecordSeedItemEventInput,
+  ): Promise<SeedItem> {
+    return apiRequest<SeedItem>(
+      `/api/seed/items/${encodeURIComponent(id)}/events`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
     );
   },
 };

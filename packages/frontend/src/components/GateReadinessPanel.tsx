@@ -12,6 +12,7 @@ import type {
 import { seedApi } from '../api/seed';
 import type {
   SeedItem,
+  SeedItemEventOutcome,
   SeedReadiness,
   SeedMilestoneReadiness,
 } from '../api/seed';
@@ -60,6 +61,13 @@ const REOPEN_BLOCKED_STATES = new Set(['open', 'runnable', 'pending-approval']);
 
 const SEED_STATE_ORDER = ['pending', 'applied', 'confirmed', 'blocked'];
 const SEED_DONE_STATES = ['confirmed'];
+
+/** Mirrors the outcomes the POST /seed/items/:id/events route accepts (seedService.ts). */
+const SEED_EVENT_OUTCOMES: SeedItemEventOutcome[] = [
+  'applied',
+  'confirmed',
+  'blocked',
+];
 
 /**
  * Extracts the leading milestone short-token (e.g. "M12") from a board name
@@ -331,6 +339,13 @@ export function GateReadinessPanel({
   const [seedItemsTotal, setSeedItemsTotal] = useState(0);
   const [seedItemsLoading, setSeedItemsLoading] = useState(false);
   const [seedItemsError, setSeedItemsError] = useState<string | null>(null);
+
+  const [seedDispositionMutatingIds, setSeedDispositionMutatingIds] = useState<
+    Set<string>
+  >(new Set());
+  const [seedDispositionError, setSeedDispositionError] = useState<
+    string | null
+  >(null);
 
   const [deployLaunching, setDeployLaunching] = useState(false);
   const [deployLaunchError, setDeployLaunchError] = useState<string | null>(
@@ -816,6 +831,76 @@ export function GateReadinessPanel({
         });
     },
     [applyItemMutation],
+  );
+
+  // Reflects a mutated seed item back into the table and re-reads the
+  // milestone's seed readiness rollup — mirrors applyItemMutation above, but
+  // for the seed axis, whose state machine lives in seedService.ts.
+  const applySeedItemMutation = useCallback(
+    (updated: SeedItem) => {
+      setSeedItems((prev) =>
+        prev.map((item) =>
+          item.id === updated.id ? { ...item, ...updated } : item,
+        ),
+      );
+      if (selectedMilestone && activeProjectId) {
+        seedApi
+          .getSeedReadiness(activeProjectId, selectedMilestone)
+          .then((result) => setSeedReadiness(result))
+          .catch(() => {});
+      }
+    },
+    [selectedMilestone, activeProjectId],
+  );
+
+  const withSeedDispositionMutation = useCallback(
+    (id: string, run: () => Promise<SeedItem>) => {
+      setSeedDispositionError(null);
+      setSeedDispositionMutatingIds((prev) => new Set(prev).add(id));
+      return run()
+        .then((updated) => {
+          applySeedItemMutation(updated);
+        })
+        .catch((err) => {
+          setSeedDispositionError(
+            err instanceof Error ? err.message : String(err),
+          );
+        })
+        .finally(() => {
+          setSeedDispositionMutatingIds((prev) => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+          });
+        });
+    },
+    [applySeedItemMutation],
+  );
+
+  const recordSeedDisposition = useCallback(
+    (id: string, outcome: SeedItemEventOutcome, filedFollowon?: string) => {
+      withSeedDispositionMutation(id, () =>
+        seedApi.recordSeedItemEvent(id, {
+          outcome,
+          filedFollowon,
+          operator: operatorName || undefined,
+        }),
+      );
+    },
+    [withSeedDispositionMutation, operatorName],
+  );
+
+  // The `blocked` outcome requires a filedFollowon (appendSeedItemEvent's
+  // guard) — prompt for it up front rather than letting the POST 400.
+  const blockSeedItemHandler = useCallback(
+    (item: SeedItem) => {
+      const filedFollowon = window.prompt(
+        `Record "${item.spec}" as blocked — enter the follow-on task ID:`,
+      );
+      if (!filedFollowon) return;
+      recordSeedDisposition(item.id, 'blocked', filedFollowon);
+    },
+    [recordSeedDisposition],
   );
 
   const recordDisposition = useCallback(
@@ -1437,6 +1522,11 @@ export function GateReadinessPanel({
 
           {seedItemsLoading && <p className={styles.muted}>Loading items…</p>}
           {seedItemsError && <p className={styles.error}>{seedItemsError}</p>}
+          {seedDispositionError && (
+            <p className={styles.error} data-testid="seed-disposition-error">
+              {seedDispositionError}
+            </p>
+          )}
 
           {!seedItemsLoading && !seedItemsError && (
             <>
@@ -1449,6 +1539,7 @@ export function GateReadinessPanel({
                     <th>Item</th>
                     <th>State</th>
                     <th>Updated</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1457,11 +1548,42 @@ export function GateReadinessPanel({
                       <td>{item.spec}</td>
                       <td>{item.state}</td>
                       <td>{new Date(item.updatedAt).toLocaleString()}</td>
+                      <td className={styles.itemActions}>
+                        {SEED_EVENT_OUTCOMES.map((outcome) =>
+                          outcome === 'blocked' ? (
+                            <button
+                              key={outcome}
+                              type="button"
+                              onClick={() => blockSeedItemHandler(item)}
+                              disabled={seedDispositionMutatingIds.has(
+                                item.id,
+                              )}
+                              data-testid={`seed-item-blocked-${item.id}`}
+                            >
+                              Blocked
+                            </button>
+                          ) : (
+                            <button
+                              key={outcome}
+                              type="button"
+                              onClick={() =>
+                                recordSeedDisposition(item.id, outcome)
+                              }
+                              disabled={seedDispositionMutatingIds.has(
+                                item.id,
+                              )}
+                              data-testid={`seed-item-${outcome}-${item.id}`}
+                            >
+                              {outcome === 'applied' ? 'Applied' : 'Confirmed'}
+                            </button>
+                          ),
+                        )}
+                      </td>
                     </tr>
                   ))}
                   {seedItems.length === 0 && (
                     <tr>
-                      <td colSpan={3} className={styles.muted}>
+                      <td colSpan={4} className={styles.muted}>
                         No config-seed items match these filters.
                       </td>
                     </tr>
