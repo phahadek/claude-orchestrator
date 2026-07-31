@@ -66,6 +66,64 @@ export function getAuditLogByActorId(actorId: string): AuditLogEntry[] {
   }));
 }
 
+export interface AuditLogQueryFilters {
+  taskId?: string;
+  eventType?: string;
+  /** Inclusive lower bound on `ts` (epoch ms). */
+  since?: number;
+  /** Inclusive upper bound on `ts` (epoch ms). */
+  until?: number;
+}
+
+/**
+ * Returns every audit_log row for the given project, optionally narrowed by
+ * task id / event type / a `[since, until]` ts window — the query behind the
+ * `auditLog.query` MCP tool (see mcp/tools/auditLogReadTools.ts). Always
+ * project-scoped: there is no unscoped-across-all-projects variant, matching
+ * the `read:audit-log:<projectId>` capability shape it is gated behind.
+ * Backed by `idx_audit_log_project_task` (db/schema.ts) so this doesn't
+ * table-scan.
+ */
+export function queryAuditLogByProject(
+  projectId: string,
+  filters: AuditLogQueryFilters = {},
+): AuditLogEntry[] {
+  const clauses = ['project_id = ?'];
+  const params: (string | number)[] = [projectId];
+  if (filters.taskId !== undefined) {
+    clauses.push('task_id = ?');
+    params.push(filters.taskId);
+  }
+  if (filters.eventType !== undefined) {
+    clauses.push('event_type = ?');
+    params.push(filters.eventType);
+  }
+  if (filters.since !== undefined) {
+    clauses.push('ts >= ?');
+    params.push(filters.since);
+  }
+  if (filters.until !== undefined) {
+    clauses.push('ts <= ?');
+    params.push(filters.until);
+  }
+  const rows = db
+    .prepare<
+      (string | number)[],
+      AuditRow
+    >(`SELECT * FROM audit_log WHERE ${clauses.join(' AND ')} ORDER BY id ASC`)
+    .all(...params);
+  return rows.map((r) => ({
+    id: r.id,
+    ts: r.ts,
+    eventType: r.event_type,
+    actorType: r.actor_type,
+    actorId: r.actor_id,
+    projectId: r.project_id,
+    taskId: r.task_id,
+    payload: JSON.parse(r.payload) as unknown,
+  }));
+}
+
 /**
  * Returns the number of task_orphan_nudged events recorded for the given
  * session. Used to derive the persisted nudge count across sweeper cycles.

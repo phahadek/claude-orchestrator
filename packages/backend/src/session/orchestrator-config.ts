@@ -232,10 +232,9 @@ export function isGrantable(capability: string): boolean {
 /**
  * Prefix for the one grantable own-record read capability: the
  * orchestrator's own runtime records (session_events + audit_log) for a
- * single named target session id, brokered loopback via
- * `routes/sessionRecordRead.ts` and the sanctioned
- * `read-session-record.mjs` client — never a Bash-command prefix or MCP
- * verb, since the read reaches the orchestrator's own DB (outside a
+ * single named target session id, brokered via the `session.getRecord` MCP
+ * tool (`mcp/tools/sessionRecordReadTool.ts`) — never a Bash-command prefix
+ * or MCP verb, since the read reaches the orchestrator's own DB (outside a
  * dispatched session's worktree sandbox and its device-authed API) rather
  * than a tool this session's shell can already invoke. Read-only: there is
  * no write counterpart, and `isGrantable` never denies this prefix.
@@ -253,6 +252,30 @@ export function parseSessionRecordReadCapability(
 ): string | null {
   return capability.startsWith(SESSION_RECORD_READ_PREFIX)
     ? capability.slice(SESSION_RECORD_READ_PREFIX.length)
+    : null;
+}
+
+/**
+ * Prefix for the grantable project-scoped audit-log read capability: the
+ * orchestrator's own `audit_log` table, filtered to one project id, exposed
+ * via the `auditLog.query` MCP tool (see mcp/tools/auditLogReadTools.ts).
+ * Mirrors SESSION_RECORD_READ_PREFIX's shape — parameterized by an id, never
+ * a Bash-command prefix or bare MCP verb — but scoped to a project rather
+ * than a single target session, since audit-log rows span every session and
+ * human actor touching that project. Read-only: there is no write
+ * counterpart, and `isGrantable` never denies this prefix.
+ */
+const AUDIT_LOG_READ_PREFIX = 'read:audit-log:';
+
+/** Builds the exact capability string for querying one project's audit log. */
+export function auditLogReadCapability(projectId: string): string {
+  return `${AUDIT_LOG_READ_PREFIX}${projectId}`;
+}
+
+/** Extracts the target project id from a granted audit-log-read capability, or null if it isn't one. */
+export function parseAuditLogReadCapability(capability: string): string | null {
+  return capability.startsWith(AUDIT_LOG_READ_PREFIX)
+    ? capability.slice(AUDIT_LOG_READ_PREFIX.length)
     : null;
 }
 
@@ -276,20 +299,25 @@ function sanctionedAutoApproveCapabilities(): readonly string[] {
 /**
  * True iff `capability` is exactly the sanctioned read-only capability set
  * for `requestingSessionId` — either a literal member of the
- * `capability_auto_approve_allowlist` runtime setting, or the
- * own-record-read capability for the requesting session itself (never
- * another session's; a capability naming a different target session id is
- * not a match, even though it is grantable via the existing
- * operator-approval path). Exact-string comparison only — never a
+ * `capability_auto_approve_allowlist` runtime setting, the own-record-read
+ * capability for the requesting session itself (never another session's; a
+ * capability naming a different target session id is not a match, even
+ * though it is grantable via the existing operator-approval path), or the
+ * audit-log-read capability for the requesting session's own dispatched
+ * project (`requestingProjectId` — never a different project's, which parks
+ * for operator approval as usual). Exact-string comparison only — never a
  * prefix/heuristic match, so a Bash(*:*) prefix or any other tool-shaped
  * capability can never auto-approve.
  */
 export function isSanctionedAutoApproveCapability(
   capability: string,
   requestingSessionId: string,
+  requestingProjectId?: string | null,
 ): boolean {
   return (
     capability === sessionRecordReadCapability(requestingSessionId) ||
+    (requestingProjectId != null &&
+      capability === auditLogReadCapability(requestingProjectId)) ||
     sanctionedAutoApproveCapabilities().includes(capability)
   );
 }
@@ -297,10 +325,11 @@ export function isSanctionedAutoApproveCapability(
 /**
  * A granted capability shaped like an actual CLI tool permission — a Bash
  * command prefix or a named MCP verb. Only these widen `--allowed-tools` at
- * spawn (see `getSessionAllowedTools` below); the own-record-read capability
- * is checked directly by `routes/sessionRecordRead.ts` against
- * `getGrantedCapabilities`, not merged into the CLI tool allowlist, since it
- * names no tool the CLI resolves.
+ * spawn (see `getSessionAllowedTools` below); the own-record-read and
+ * audit-log-read capabilities are checked directly by the `session.getRecord`
+ * / `auditLog.query` MCP tool handlers against `getGrantedCapabilities`, not
+ * merged into the CLI tool allowlist, since they name no tool the CLI
+ * resolves.
  */
 export function isToolShapedCapability(capability: string): boolean {
   return capability.startsWith('Bash(') || capability.startsWith('mcp__');

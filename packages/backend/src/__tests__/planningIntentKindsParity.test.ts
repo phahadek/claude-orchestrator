@@ -49,6 +49,15 @@ const ARCHITECTURE_READ_TOOLS = [
 // it isn't in PLANNING_INTENT_KINDS, so every workflow's guard below excludes
 // it too (see config.ts's TASK_READ_MCP_TOOLS comment).
 const TASK_READ_TOOLS = [orchestratorMcpToolName('task.getById')];
+// session.getRecord / auditLog.query are the Tier-B capability-gated read
+// tools (mcp/tools/sessionRecordReadTool.ts, mcp/tools/auditLogReadTools.ts),
+// registered unconditionally like the tools above — not staged-intent kinds,
+// so every workflow's guard below excludes them too (see config.ts's
+// TIER_B_READ_MCP_TOOLS comment).
+const TIER_B_READ_TOOLS = [
+  orchestratorMcpToolName('session.getRecord'),
+  orchestratorMcpToolName('auditLog.query'),
+];
 
 const WORKFLOWS: {
   name: 'groom' | 'design' | 'ops';
@@ -62,6 +71,7 @@ const WORKFLOWS: {
       GROOM_PRECHECK_TOOL,
       ...ARCHITECTURE_READ_TOOLS,
       ...TASK_READ_TOOLS,
+      ...TIER_B_READ_TOOLS,
     ],
   },
   {
@@ -71,6 +81,7 @@ const WORKFLOWS: {
       ...COMPLETENESS_TOOLS,
       ...ARCHITECTURE_READ_TOOLS,
       ...TASK_READ_TOOLS,
+      ...TIER_B_READ_TOOLS,
     ],
   },
   {
@@ -80,6 +91,7 @@ const WORKFLOWS: {
       GATE_VERIFY_TOOL,
       ...ARCHITECTURE_READ_TOOLS,
       ...TASK_READ_TOOLS,
+      ...TIER_B_READ_TOOLS,
     ],
   },
 ];

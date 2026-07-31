@@ -107,6 +107,34 @@ describe('session.requestCapability decision-surface kind', () => {
     );
   });
 
+  it('grants the audit-log read capability (audit_log by project id) through the same approve -> grant -> re-dispatch loop', async () => {
+    const sessionManager = makeSessionManager();
+    const app = makeApp(sessionManager);
+
+    const intent = stageIntent(
+      'session.requestCapability',
+      {
+        capability: 'read:audit-log:proj-9',
+        plan: "verify a prior session's staged writes for this project",
+        evidence:
+          "no other grantable capability reaches this orchestrator's own DB",
+      },
+      'proj-1',
+      null,
+      'sess-verify-2',
+    );
+
+    const res = await supertest(app).post(
+      `/api/staged-intents/${intent.id}/approve`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(sessionManager.grantCapability).toHaveBeenCalledWith(
+      'sess-verify-2',
+      'read:audit-log:proj-9',
+    );
+  });
+
   it('never grants a broader or resolved/apply scope than the exact requested capability', async () => {
     const sessionManager = makeSessionManager();
     const app = makeApp(sessionManager);

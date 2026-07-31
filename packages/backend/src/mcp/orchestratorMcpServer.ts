@@ -12,6 +12,8 @@ import { registerArchitectureReadTools } from './tools/architectureReadTools';
 import { registerTaskReadTools } from './tools/taskReadTools';
 import { registerPullRequestReadTools } from './tools/pullRequestReadTools';
 import { registerGateSeedReadTools } from './tools/gateSeedReadTools';
+import { registerSessionRecordReadTool } from './tools/sessionRecordReadTool';
+import { registerAuditLogReadTools } from './tools/auditLogReadTools';
 import type { SessionManager } from '../session/SessionManager';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import type { PlanningWorkflow } from '../planning/planningIntentKinds';
@@ -84,6 +86,11 @@ export function buildOrchestratorMcpServerEntry(
  * mcp/tools/pullRequestReadTools.ts) and the read-only gate/seed item state
  * lookup (gateSeed.getState, see mcp/tools/gateSeedReadTools.ts) which never
  * exposes gate_item_event/seed_item_event rows or their operator column.
+ * Also always-on: the Tier-B (capability-gated) read surface —
+ * session.getRecord (see mcp/tools/sessionRecordReadTool.ts) and
+ * auditLog.query (see mcp/tools/auditLogReadTools.ts) — registered
+ * unconditionally since each call's grant check, not connection-time
+ * session type, is the sole gate.
  */
 export function buildMcpServer(
   sessionId: string,
@@ -151,6 +158,9 @@ export function buildMcpServer(
   });
 
   registerArchitectureReadTools(server, { workflow });
+
+  registerSessionRecordReadTool(server, { sessionId });
+  registerAuditLogReadTools(server, { sessionId });
 
   return server;
 }

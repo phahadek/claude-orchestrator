@@ -415,11 +415,15 @@ export function renderOpsCapabilities(): string[] {
       'data directory, but it holds no allow-listed client for the live SQLite ' +
       "file and no device auth for the orchestrator's API — so session_events/" +
       'audit_log for a specific session stay reachable only through the brokered ' +
-      'read, not a direct file or DB path. On approval, read the result with ' +
-      '`node ~/.claude/scripts/read-session-record.mjs <target-session-id>` — it ' +
-      "returns that session's session_events and audit_log, brokered by the " +
-      'orchestrator itself since this session holds no device auth. Read-only: ' +
-      'there is no write form of this capability.',
+      'read, not a direct file or DB path. On approval, read the result by calling the ' +
+      `\`${orchestratorMcpToolName('session.getRecord')}\` tool with ` +
+      '`{"targetSessionId":"<target-session-id>"}` — it returns that ' +
+      "session's session_events and audit_log, brokered by the orchestrator itself " +
+      'since this session holds no device auth. Read-only: there is no write form of ' +
+      'this capability. The same pattern applies to `read:audit-log:<projectId>`: once ' +
+      `granted, call the \`${orchestratorMcpToolName('auditLog.query')}\` tool with ` +
+      '`{"projectId":"<project-id>"}` (optionally narrowed by `taskId` / `eventType` / ' +
+      "`since` / `until`) to read this project's audit_log rows.",
     '',
     'Some things are never grantable this way, no matter what an operator approves: ' +
       'anything that reaches the resolved / ✅ Done / task-intent-apply transition ' +

@@ -290,7 +290,13 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       '(session_events/audit_log for a session by id) rather than project/prod data — ' +
       'never request a Bash command prefix for that read: a Bash prefix can neither ' +
       "reach this orchestrator's own DB (outside the sandbox) nor authenticate to its " +
-      'device-authed API, so it never materialises the read even once granted. DO NOT ' +
+      'device-authed API, so it never materialises the read even once granted. Once ' +
+      `granted, read it by calling the \`${orchestratorMcpToolName('session.getRecord')}\` ` +
+      'tool with `{"targetSessionId":"<target-session-id>"}`. DO request ' +
+      '`read:audit-log:<project-id>` instead, the same way, when the blocked read is ' +
+      "this project's own audit_log rather than a single session's record — once " +
+      `granted, read it by calling the \`${orchestratorMcpToolName('auditLog.query')}\` ` +
+      'tool with `{"projectId":"<project-id>"}`. DO NOT ' +
       'abstain straight to `needs-setup` when a live record is reachable this way — ' +
       'request the capability first. DO report `needs-setup` naming the missing ' +
       "capability when staging isn't possible or the need is a one-off read-only " +
@@ -316,7 +322,13 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
         '(session_events/audit_log for a session by id) rather than project/prod data — ' +
         'never request a Bash command prefix for that read: a Bash prefix can neither ' +
         "reach this orchestrator's own DB (outside the sandbox) nor authenticate to its " +
-        'device-authed API, so it never materialises the read even once granted. DO NOT ' +
+        'device-authed API, so it never materialises the read even once granted. Once ' +
+        `granted, read it by calling the \`${orchestratorMcpToolName('session.getRecord')}\` ` +
+        'tool with `{"targetSessionId":"<target-session-id>"}`. DO request ' +
+        '`read:audit-log:<project-id>` instead, the same way, when the blocked read is ' +
+        "this project's own audit_log rather than a single session's record — once " +
+        `granted, read it by calling the \`${orchestratorMcpToolName('auditLog.query')}\` ` +
+        'tool with `{"projectId":"<project-id>"}`. DO NOT ' +
         'end the turn on the blocker alone when the capability can be requested instead ' +
         '— request it first. DO end the turn naming the blocker explicitly when staging ' +
         "the request isn't possible or the need is a one-off read-only investigation: " +
@@ -342,7 +354,13 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
         '(session_events/audit_log for a session by id) rather than project/prod data — ' +
         'never request a Bash command prefix for that read: a Bash prefix can neither ' +
         "reach this orchestrator's own DB (outside the sandbox) nor authenticate to its " +
-        'device-authed API, so it never materialises the read even once granted. DO NOT ' +
+        'device-authed API, so it never materialises the read even once granted. Once ' +
+        `granted, read it by calling the \`${orchestratorMcpToolName('session.getRecord')}\` ` +
+        'tool with `{"targetSessionId":"<target-session-id>"}`. DO request ' +
+        '`read:audit-log:<project-id>` instead, the same way, when the blocked read is ' +
+        "this project's own audit_log rather than a single session's record — once " +
+        `granted, read it by calling the \`${orchestratorMcpToolName('auditLog.query')}\` ` +
+        'tool with `{"projectId":"<project-id>"}`. DO NOT ' +
         'end the turn on the blocker alone when the capability can be requested instead ' +
         '— request it first. DO end the turn naming the blocker explicitly when staging ' +
         "the request isn't possible or the need is a one-off read-only investigation: " +

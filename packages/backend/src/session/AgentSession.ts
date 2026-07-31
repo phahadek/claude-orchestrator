@@ -733,12 +733,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
             ORCHESTRATOR_BACKEND_PORT: String(
               getOrchestratorConfig().server.port,
             ),
-            // Sessions stage task-write intents and deliver verdicts through
-            // the orchestrator MCP tool surface (see mcpConfigPath above),
-            // authenticated by this same per-session stage credential. The
-            // token is also read directly by the vendored
-            // ~/.claude/scripts/read-session-record.mjs client for the one
-            // brokered REST read this session may hold no other way to reach.
+            // Sessions stage task-write intents, deliver verdicts, and read
+            // their own-record/audit-log grants (session.getRecord /
+            // auditLog.query) through the orchestrator MCP tool surface (see
+            // mcpConfigPath above), authenticated by this same per-session
+            // stage credential.
             ORCHESTRATOR_STAGE_TOKEN: stageToken,
           },
         },

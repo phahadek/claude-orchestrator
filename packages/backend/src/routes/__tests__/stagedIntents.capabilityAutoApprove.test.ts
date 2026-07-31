@@ -21,7 +21,10 @@ import {
   routeStageTimeBlock,
   type StagedIntent,
 } from '../stagedIntents';
-import { sessionRecordReadCapability } from '../../session/orchestrator-config';
+import {
+  sessionRecordReadCapability,
+  auditLogReadCapability,
+} from '../../session/orchestrator-config';
 import { getAuditLogByActorId } from '../../audit/AuditLog';
 import { runtimeSettings } from '../../config';
 import type { SessionManager } from '../../session/SessionManager';
@@ -77,6 +80,32 @@ describe('session.requestCapability auto-approve policy', () => {
     const [sessionId, source] = sessionManager.enqueueFeedback.mock.calls[0];
     expect(sessionId).toBe('sess-auto-1');
     expect(source).toBe('operator-disposition');
+  });
+
+  it("auto-grants and re-dispatches an audit-log-read request for the requesting session's own dispatched project (proj-1) without an operator park", async () => {
+    const sessionManager = makeSessionManager();
+    const capability = auditLogReadCapability('proj-1');
+    const intent = stageCapabilityRequest('sess-auto-audit-1', capability);
+    expect(intent.state).toBe('staged');
+
+    const checked = await routeStageTimeBlock(intent, sessionManager);
+
+    expect(checked.state).toBe('committed');
+    expect(sessionManager.grantCapability).toHaveBeenCalledWith(
+      'sess-auto-audit-1',
+      capability,
+    );
+  });
+
+  it("parks an audit-log-read request for a different project than the requester's own — only own-project reads are sanctioned", async () => {
+    const sessionManager = makeSessionManager();
+    const capability = auditLogReadCapability('some-other-project');
+    const intent = stageCapabilityRequest('sess-park-audit-1', capability);
+
+    const checked = await routeStageTimeBlock(intent, sessionManager);
+
+    expect(checked.state).toBe('staged');
+    expect(sessionManager.grantCapability).not.toHaveBeenCalled();
   });
 
   it('parks a write/prefix request unchanged — never auto-approved', async () => {

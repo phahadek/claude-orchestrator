@@ -44,6 +44,10 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'architecture.queryUnits',
   'task.getById',
   'planning.noOp',
+  'pullRequest.getByTaskId',
+  'gateSeed.getState',
+  'session.getRecord',
+  'auditLog.query',
 ];
 
 const REGISTERED_TOOL_NAMES = new Set(

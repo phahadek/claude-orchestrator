@@ -103,6 +103,7 @@ import { rankDecisions } from '../convergence/decisionRanking';
 import {
   isToolShapedCapability,
   parseSessionRecordReadCapability,
+  parseAuditLogReadCapability,
   isSanctionedAutoApproveCapability,
 } from '../session/orchestrator-config';
 import { runtimeSettings } from '../config';
@@ -858,24 +859,28 @@ function toArchUnitUpdateFields(
 
 /**
  * Locks the capability vocabulary at stage time (see the design task "Lock
- * the capability vocabulary for dispatched planning sessions"): a
+ * the capability vocabulary for dispatched planning sessions" and its
+ * follow-up "Capability request vocabulary is closed to tool-shaped,
+ * session-record-read, and audit-log-read shapes"): a
  * session.requestCapability's `capability` must be tool-shaped
- * (`isToolShapedCapability` — `Bash(...)`/`mcp__...`) or the registered
+ * (`isToolShapedCapability` — `Bash(...)`/`mcp__...`), the registered
  * own-record-read prefix (`parseSessionRecordReadCapability` —
- * `read:session-record:<id>`), since those are the only shapes that ever
- * actually widen a session's access. A non-conforming string (e.g.
- * "banana") is rejected here, before the row ever reaches `staged`, rather
- * than being durably granted and silently never taking effect. This is
- * distinct from and does not replace `isGrantable`'s denylist check, which
- * stays at grant/approval time for well-formed-but-denylisted requests
- * (e.g. `Write`).
+ * `read:session-record:<id>`), or the registered audit-log-read prefix
+ * (`parseAuditLogReadCapability` — `read:audit-log:<projectId>`), since
+ * those are the only shapes that ever actually widen a session's access. A
+ * non-conforming string (e.g. "banana") is rejected here, before the row
+ * ever reaches `staged`, rather than being durably granted and silently
+ * never taking effect. This is distinct from and does not replace
+ * `isGrantable`'s denylist check, which stays at grant/approval time for
+ * well-formed-but-denylisted requests (e.g. `Write`).
  */
 class CapabilityRequestValidationError extends Error {
   constructor(capability: string) {
     super(
       `[stagedIntents] session.requestCapability rejected: "${capability}" is not a ` +
         'supported capability shape — expected a tool-shaped capability ' +
-        '("Bash(...)" or "mcp__...") or "read:session-record:<id>"',
+        '("Bash(...)" or "mcp__...") or "read:session-record:<id>" or ' +
+        '"read:audit-log:<projectId>"',
     );
     this.name = 'CapabilityRequestValidationError';
   }
@@ -891,7 +896,8 @@ function validateCapabilityRequestPayload(
   }
   if (
     !isToolShapedCapability(capability) &&
-    parseSessionRecordReadCapability(capability) === null
+    parseSessionRecordReadCapability(capability) === null &&
+    parseAuditLogReadCapability(capability) === null
   ) {
     throw new CapabilityRequestValidationError(capability);
   }
@@ -2482,8 +2488,9 @@ async function resumeCapabilityRequester(
 /**
  * Stage-time auto-approve for `session.requestCapability`: when the
  * requested capability exactly matches the curated sanctioned read-only
- * allowlist (`isSanctionedAutoApproveCapability` — today, only the
- * requesting session's own-record reader), the request is granted and the
+ * allowlist (`isSanctionedAutoApproveCapability` — the requesting session's
+ * own-record reader, or the audit-log reader for the requesting session's
+ * own dispatched project), the request is granted and the
  * session re-dispatched immediately through the same
  * grant -> resume path an operator approval takes (`resumeCapabilityRequester`
  * with provenance `'auto'`), never parking for the operator. Every other
@@ -2510,7 +2517,11 @@ async function maybeAutoApproveCapabilityRequest(
 
   const payload = intent.payload as CapabilityRequestPayload;
   if (
-    !isSanctionedAutoApproveCapability(payload.capability, intent.sessionId)
+    !isSanctionedAutoApproveCapability(
+      payload.capability,
+      intent.sessionId,
+      intent.projectId,
+    )
   ) {
     return intent;
   }
