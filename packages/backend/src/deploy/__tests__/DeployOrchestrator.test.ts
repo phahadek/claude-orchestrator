@@ -980,16 +980,15 @@ describe('DeployOrchestrator: binding substitution for confirm-gate/agentic step
       }),
     ]);
     let seenPrompt: string | undefined;
-    let orchestrator: DeployOrchestrator;
-    const spawnAgenticStep = vi.fn(({ runId, step: s }) => {
+    const deps = makeDeps(playbook, {
+      loadDeployBindings: () => ({ ok: true, bindings: { TARGET: 'db' } }),
+      spawnAgenticStep: vi.fn(),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    deps.spawnAgenticStep = vi.fn(({ runId, step: s }) => {
       seenPrompt = s.command_or_prompt;
       orchestrator.reportAgenticVerdict(runId, s.id, 'approved');
     });
-    const deps = makeDeps(playbook, {
-      loadDeployBindings: () => ({ ok: true, bindings: { TARGET: 'db' } }),
-      spawnAgenticStep,
-    });
-    orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
     await orchestrator.startDeploy('sha-target');
     await flush();
 
