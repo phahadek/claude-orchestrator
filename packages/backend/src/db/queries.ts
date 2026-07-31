@@ -6158,3 +6158,64 @@ export function upsertArm(
   });
   return { previous };
 }
+
+// ─── usage_deferral ─────────────────────────────────────────────────────────
+// Global (account-wide) admission-gate state for the plan-usage five_hour /
+// seven_day windows. A row's presence with deferred_until in the future means
+// "do not launch/resume/dispatch a session until then" — persisted so the
+// gate survives a backend restart.
+
+export type UsageDeferralWindow = 'five_hour' | 'seven_day';
+
+let _stmtGetUsageDeferral: Database.Statement | null = null;
+let _stmtUpsertUsageDeferral: Database.Statement | null = null;
+let _stmtDeleteUsageDeferral: Database.Statement | null = null;
+
+/**
+ * Returns the recorded deferred-until timestamp (ms) for `window`, or null
+ * if no deferral is recorded or the recorded instant has already passed —
+ * in the latter case the stale row is deleted so it doesn't linger.
+ */
+export function getUsageDeferral(window: UsageDeferralWindow): number | null {
+  _stmtGetUsageDeferral ??= db.prepare(
+    `SELECT deferred_until FROM usage_deferral WHERE window = ?`,
+  );
+  const row = _stmtGetUsageDeferral.get(window) as
+    | { deferred_until: number }
+    | undefined;
+  if (!row) return null;
+  if (row.deferred_until <= Date.now()) {
+    clearUsageDeferral(window);
+    return null;
+  }
+  return row.deferred_until;
+}
+
+export function setUsageDeferral(
+  window: UsageDeferralWindow,
+  deferredUntil: number,
+): void {
+  _stmtUpsertUsageDeferral ??= db.prepare<{
+    window: string;
+    deferred_until: number;
+    recorded_at: number;
+  }>(`
+    INSERT INTO usage_deferral (window, deferred_until, recorded_at)
+    VALUES (@window, @deferred_until, @recorded_at)
+    ON CONFLICT (window) DO UPDATE SET
+      deferred_until = excluded.deferred_until,
+      recorded_at = excluded.recorded_at
+  `);
+  _stmtUpsertUsageDeferral.run({
+    window,
+    deferred_until: deferredUntil,
+    recorded_at: Date.now(),
+  });
+}
+
+export function clearUsageDeferral(window: UsageDeferralWindow): void {
+  _stmtDeleteUsageDeferral ??= db.prepare(
+    `DELETE FROM usage_deferral WHERE window = ?`,
+  );
+  _stmtDeleteUsageDeferral.run(window);
+}

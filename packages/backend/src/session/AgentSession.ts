@@ -35,6 +35,7 @@ import {
   markSessionInitiatedPRClose,
   hasActiveCapabilityRequestForSession,
   getGrantedCapabilities,
+  setTaskPauseReason,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -416,8 +417,8 @@ export class AgentSession extends EventEmitter {
   public model: string | null = null;
   /** Count of consecutive transient-error retries for this session instance. Resets on clean exit. */
   private retryCount = 0;
-  /** Guard: fires at most once per session to avoid duplicate pause broadcasts. */
-  private inSessionApiErrorFired = false;
+  /** Guard: prevents re-entrant handling while a retry/escalation is already in flight for this instance. */
+  private inSessionOverloadHandling = false;
   /** Set when a context-overflow result event is detected; suppresses generic retry. */
   private contextOverflowDetected = false;
   /** Set by tryEscalateForOverflow() — target model for the escalated spawn. */
@@ -972,13 +973,110 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
   /**
    * Called when a transient API error (529/500) is detected in a live session
-   * that has not exited. Pauses the session immediately without auto-retry since
-   * there is no --resume target while the CLI process is still running.
+   * that has not exited. The CLI process is still running, so there is no
+   * exit-code retry path to fall into (that path only fires post-exit) — this
+   * kills the process and respawns it in place via --resume, on a shared
+   * per-session escalating-backoff budget (SessionManager.inSessionOverloadBudget,
+   * keyed by sessionId so the count survives the respawn even though this
+   * AgentSession instance does not). Once the bounded retry budget is
+   * exhausted, falls back to a distinct needs-attention pause
+   * (api_overloaded_exhausted) instead of parking silently under the
+   * original 'api_overloaded' reason forever.
    */
   private handleInSessionApiError(): void {
-    if (this.inSessionApiErrorFired) return;
-    this.inSessionApiErrorFired = true;
+    if (this.inSessionOverloadHandling) return;
+    this.inSessionOverloadHandling = true;
 
+    if (!this.sessionManager?.recordInSessionOverloadEvent) {
+      this.pauseForManualOverloadRecovery();
+      return;
+    }
+
+    const { count, escalated, cooldownMs } =
+      this.sessionManager.recordInSessionOverloadEvent(this.sessionId);
+
+    if (escalated) {
+      this.escalateExhaustedOverloadRetries();
+      return;
+    }
+
+    sessionLog(
+      this.sessionId,
+      `in-session transient API error — auto-retry ${count} after ${cooldownMs}ms`,
+    );
+    insertPauseInterval(this.sessionId, 'api_overloaded');
+    this.broadcast({
+      type: 'session_status',
+      sessionId: this.sessionId,
+      status: 'retrying',
+    });
+    setTimeout(() => {
+      void this.retryAfterInSessionOverload();
+    }, cooldownMs);
+  }
+
+  /** Kill+respawn this session in place once the backoff delay elapses. Falls back to escalation on any failure. */
+  private async retryAfterInSessionOverload(): Promise<void> {
+    if (this.isKilling || this.isPausingForShutdown || this.hasEnded) return;
+    try {
+      const respawned =
+        (await this.sessionManager?.respawnForTransientOverload?.(
+          this.sessionId,
+        )) ?? false;
+      if (!respawned) {
+        this.escalateExhaustedOverloadRetries();
+      }
+    } catch (err) {
+      logger.warn(
+        `[AgentSession] respawnForTransientOverload failed for ${this.sessionId}: ${(err as Error).message}`,
+      );
+      this.escalateExhaustedOverloadRetries();
+    }
+  }
+
+  /**
+   * The retry budget for a mid-session 529/500 is exhausted (or a respawn
+   * attempt itself failed) — pause with the distinct api_overloaded_exhausted
+   * reason so this is visible as needing a human, not indistinguishable from
+   * a clean park.
+   */
+  private escalateExhaustedOverloadRetries(): void {
+    const pr = getPRBySessionId(this.sessionId);
+    if (pr) {
+      setPauseReason(pr.pr_number, pr.repo, 'api_overloaded_exhausted');
+    }
+    if (this.taskId) {
+      setTaskPauseReason(
+        this.taskId,
+        'api_overloaded_exhausted',
+        'in-session 529/500 auto-retry budget exhausted',
+      );
+    }
+    insertPauseInterval(this.sessionId, 'api_overloaded_exhausted');
+
+    const pauseMessage =
+      'The Anthropic API kept returning 529 Overloaded / 500 errors after ' +
+      'several automatic retries. This session has been paused and flagged ' +
+      'for manual attention.';
+    if (this.sessionManager) {
+      try {
+        this.sessionManager.send(this.sessionId, pauseMessage);
+      } catch (err) {
+        logger.warn(
+          `[AgentSession] send failed for ${this.sessionId}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    this.broadcast({
+      type: 'api_overloaded_paused',
+      sessionId: this.sessionId,
+      ...(pr ? { prNumber: pr.pr_number, repo: pr.repo } : {}),
+    });
+  }
+
+  /** Fallback for environments with no sessionManager (e.g. unit tests) — no respawn target, so pause for manual recovery under the original reason. */
+  private pauseForManualOverloadRecovery(): void {
     const pr = getPRBySessionId(this.sessionId);
     if (pr) {
       setPauseReason(pr.pr_number, pr.repo, 'api_overloaded');
@@ -1425,6 +1523,12 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         totalInputTokens: this.totalInputTokens,
         totalOutputTokens: this.totalOutputTokens,
       });
+      // A completed turn means the API has recovered — reset the in-session
+      // overload retry budget so a future 529/500 gets the full bounded
+      // retry allowance again instead of inheriting an exhausted count.
+      if (event.is_error !== true) {
+        this.sessionManager?.clearInSessionOverloadBudget?.(this.sessionId);
+      }
     }
 
     // Skip broadcasting user events that contain only system-injected content

@@ -1815,3 +1815,78 @@ describe('AutoLauncher — ready-transition pause clearing', () => {
     expect(sessionManager.start).toHaveBeenCalledOnce();
   });
 });
+
+describe('AutoLauncher — usage admission gate', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    const { clearUsageDeferral } = await import('../../db/queries.js');
+    registerUsagePoller({ getCache: () => ({ available: false }) });
+    clearUsageDeferral('five_hour');
+    clearUsageDeferral('seven_day');
+  });
+
+  it('does not spawn a launch while the five-hour window is exhausted', async () => {
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    const resetsAt = new Date(Date.now() + 60_000).toISOString();
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: { percent: 100, resetsAt, severity: 'exceeded' },
+      }),
+    });
+
+    const task = makeResolvedTask({ id: 'task-usage-gated' });
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).not.toHaveBeenCalled();
+  });
+
+  it('launches normally once usage is available again (existing admission unaffected)', async () => {
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: {
+          percent: 10,
+          resetsAt: '2099-01-01T00:00:00Z',
+          severity: 'normal',
+        },
+      }),
+    });
+
+    const task = makeResolvedTask({ id: 'task-usage-ok' });
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+});

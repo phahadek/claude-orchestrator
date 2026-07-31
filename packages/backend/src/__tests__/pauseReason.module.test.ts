@@ -13,8 +13,27 @@ const ALL_REASONS = Object.keys(
 ) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
-  it('contains exactly 32 canonical reasons', () => {
-    expect(ALL_REASONS).toHaveLength(32);
+  it('contains exactly 35 canonical reasons', () => {
+    expect(ALL_REASONS).toHaveLength(35);
+  });
+
+  it('includes usage_limit_deferred as a recoverable, automatically-retried reason', () => {
+    expect(PAUSE_REASON_REGISTRY.usage_limit_deferred).toEqual({
+      source: 'session',
+      severity: 'recoverable',
+      retry_strategy: 'automatic',
+    });
+  });
+
+  it('includes api_overloaded_exhausted as a needs_attention reason distinct from api_overloaded', () => {
+    expect(PAUSE_REASON_REGISTRY.api_overloaded_exhausted).toEqual({
+      source: 'session',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
+    expect(PAUSE_REASON_REGISTRY.api_overloaded_exhausted).not.toEqual(
+      PAUSE_REASON_REGISTRY.api_overloaded,
+    );
   });
 
   it('includes planning_terminal_no_decision with a valid severity and retry strategy', () => {

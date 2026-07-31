@@ -167,3 +167,46 @@ describe('DispatchTriggerEvaluator scan scope — wrapped_at exclusion', () => {
     ]);
   });
 });
+
+describe('DispatchTriggerEvaluator — usage admission gate', () => {
+  beforeEach(async () => {
+    const { clearUsageDeferral } = await import('../../db/queries.js');
+    clearUsageDeferral('five_hour');
+    clearUsageDeferral('seven_day');
+  });
+
+  it('does not scan or dispatch any project while the seven-day window is exhausted', async () => {
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    const resetsAt = new Date(Date.now() + 3600_000).toISOString();
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        weekly: { percent: 100, resetsAt, severity: 'exceeded' },
+      }),
+    });
+
+    const listProjects = vi.fn().mockReturnValue(['proj-should-not-scan']);
+    const evaluator = new DispatchTriggerEvaluator({} as never, {} as never, {
+      listProjects: listProjects as never,
+    });
+
+    const dispatched = await evaluator.tickOnce();
+
+    expect(dispatched).toBe(0);
+    expect(listProjects).not.toHaveBeenCalled();
+  });
+
+  it('scans normally once usage is available', async () => {
+    const { registerUsagePoller } = await import('../usageAdmission.js');
+    registerUsagePoller({ getCache: () => ({ available: false }) });
+
+    const listProjects = vi.fn().mockReturnValue([]);
+    const evaluator = new DispatchTriggerEvaluator({} as never, {} as never, {
+      listProjects: listProjects as never,
+    });
+
+    await evaluator.tickOnce();
+
+    expect(listProjects).toHaveBeenCalledOnce();
+  });
+});

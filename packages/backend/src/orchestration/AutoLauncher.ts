@@ -25,6 +25,7 @@ import { runWithConcurrency } from '../utils/concurrency';
 import { getProjectRepos } from '../projects/ProjectService';
 import { hasMemoryHeadroom } from './memoryAdmission';
 import { CrashBudget } from './crashBudget';
+import { isUsageAdmitted } from './usageAdmission';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -457,6 +458,13 @@ export class AutoLauncher {
     if (!hasMemoryHeadroom()) {
       logger.info(
         '[AutoLauncher] deferring dispatch — projected free host memory below configured budget',
+      );
+      return false;
+    }
+    const usageAdmission = isUsageAdmitted();
+    if (!usageAdmission.allowed) {
+      logger.info(
+        `[AutoLauncher] deferring dispatch — plan usage (${usageAdmission.window}) exhausted until ${usageAdmission.deferredUntil ? new Date(usageAdmission.deferredUntil).toISOString() : 'unknown'}`,
       );
       return false;
     }

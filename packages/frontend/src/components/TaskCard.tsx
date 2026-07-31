@@ -111,6 +111,10 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Planning session reached a terminal state without ever staging a decision — review and redispatch planning when ready.',
   planning_terminal_blocked_members:
     'Planning session reached a terminal state with staged intents still blocked in verification — the group can no longer be superseded by that session; review and disposition the blocked members manually.',
+  usage_limit_deferred:
+    'Plan usage limit exhausted — launch deferred until the window resets. Will resume automatically.',
+  api_overloaded_exhausted:
+    'API overloaded (529) — automatic retries were exhausted. Review and resume manually.',
 };
 
 function verdictLabel(verdict: string): string {

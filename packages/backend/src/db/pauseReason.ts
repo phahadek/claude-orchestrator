@@ -46,7 +46,9 @@ export type CanonicalPauseReason =
   | 'planning_crashed'
   | 'planning_first_turn_empty'
   | 'planning_terminal_no_decision'
-  | 'planning_terminal_blocked_members';
+  | 'planning_terminal_blocked_members'
+  | 'usage_limit_deferred'
+  | 'api_overloaded_exhausted';
 
 export interface PauseReasonStruct {
   reason: CanonicalPauseReason;
@@ -226,6 +228,23 @@ export const PAUSE_REASON_REGISTRY: Record<
     retry_strategy: 'manual_action',
   },
   planning_terminal_blocked_members: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  // Distinct death reasons for the two external-roadblock conditions the
+  // orchestrator now recognizes: a usage-limit deferral (five_hour/seven_day
+  // exhausted — auto-recovers at the recorded resets_at) and an exhausted
+  // 529/500 retry budget (transient but didn't recover within the bounded
+  // backoff — needs a human to look). Both are clean parks, not crashes, so
+  // they must be distinguishable from stalled_idle/a normal terminal park —
+  // that's what made the pre-fix relaunch loop invisible.
+  usage_limit_deferred: {
+    source: 'session',
+    severity: 'recoverable',
+    retry_strategy: 'automatic',
+  },
+  api_overloaded_exhausted: {
     source: 'session',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',

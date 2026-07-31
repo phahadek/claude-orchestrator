@@ -51,6 +51,27 @@ export interface ISessionManager {
   sendOrResume?(sessionId: string, text: string): Promise<string | null>;
   /** Re-deliver undelivered inbox items for all resumable sessions at boot. */
   reconcileInboxAtBoot?(): Promise<void>;
+  /**
+   * Record one mid-session (still-running) 529/500 transient-error event for
+   * `sessionId` against the shared per-session escalating-backoff budget.
+   * Returns the updated count/escalated/cooldownMs state — the caller
+   * (AgentSession) retries via respawnForTransientOverload while
+   * escalated is false, and raises needs-attention once it flips true.
+   */
+  recordInSessionOverloadEvent?(sessionId: string): {
+    count: number;
+    escalated: boolean;
+    cooldownMs: number;
+  };
+  /** Reset a session's in-session-overload retry budget (called on a successful turn). */
+  clearInSessionOverloadBudget?(sessionId: string): void;
+  /**
+   * Kill the live process for `sessionId` and respawn it in place via
+   * --resume, reusing its worktree and session id (mirrors
+   * respawnForCapabilityGrant). Returns false without killing anything if
+   * the worktree can't be found.
+   */
+  respawnForTransientOverload?(sessionId: string): Promise<boolean>;
 }
 
 /**
