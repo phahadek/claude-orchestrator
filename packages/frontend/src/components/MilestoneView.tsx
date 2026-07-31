@@ -169,6 +169,8 @@ export function MilestoneView({
         onPhaseSelect={handlePhaseFilterChange}
         onWarningSelect={handleWarningSelect}
         activeWarningPhase={flaggedOnly ? phaseFilter : null}
+        projectId={activeProjectId}
+        milestoneId={activeBoardMilestone ? activeBoardId : null}
       />
       <FlowArmToggle
         milestoneId={activeBoardId}

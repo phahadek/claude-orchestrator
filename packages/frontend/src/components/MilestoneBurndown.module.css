@@ -5,6 +5,89 @@
   width: 100%;
 }
 
+.convergenceHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 8px 12px;
+  border-bottom: 1px solid var(--bg-tertiary, #313244);
+}
+
+.convergenceTop {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.statusDot {
+  align-self: center;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.statusGreen {
+  background: var(--color-green, #a6e3a1);
+}
+
+.statusBlocked {
+  background: var(--color-red, #f38ba8);
+}
+
+.distanceFigure {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary, #cdd6f4);
+}
+
+.distanceLabel {
+  font-size: 0.6875rem;
+  color: var(--text-faint, #6c7086);
+}
+
+.axisChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.axisChip {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.6875rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-tertiary, #313244);
+  color: var(--text-primary, #cdd6f4);
+}
+
+.axisChipClickable {
+  cursor: pointer;
+}
+
+.axisChipClickable:hover {
+  outline: 1px solid var(--color-blue, #89b4fa);
+}
+
+.axisChip_green {
+  color: var(--color-green, #a6e3a1);
+}
+
+.axisChip_blocked {
+  color: var(--color-red, #f38ba8);
+}
+
+.axisChip_unavailable {
+  color: var(--text-faint, #6c7086);
+  font-style: italic;
+}
+
+.sparklineWrap {
+  width: 100%;
+}
+
 .phaseRow {
   all: unset;
   display: flex;

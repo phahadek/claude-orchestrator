@@ -4234,23 +4234,65 @@ export function getLatestConvergenceSnapshot(
     | undefined;
 }
 
-/** Full retained series for a milestone, oldest first — feeds the burndown viz's history route. */
+export interface ConvergenceSnapshotHistoryWindow {
+  /** Cap on rows returned — the most recent N, still ordered oldest first. */
+  limit?: number;
+  /** Only rows with ts >= this ISO-8601 timestamp. */
+  sinceTs?: string;
+}
+
+/**
+ * Series for a milestone, oldest first — feeds the burndown viz's history
+ * route. With no window, returns the full retained (never-pruned) series, so
+ * existing callers keep their current unbounded meaning. A window bounds the
+ * query itself rather than relying on the caller to slice a full fetch.
+ */
 export function listConvergenceSnapshotHistory(
   project: string,
   milestone: string,
+  window?: ConvergenceSnapshotHistoryWindow,
 ): ConvergenceSnapshotRow[] {
-  _stmtListConvergenceSnapshotHistory ??= db.prepare<{
-    project: string;
-    milestone: string;
-  }>(
-    `SELECT * FROM convergence_snapshot
-     WHERE project = @project AND milestone = @milestone
-     ORDER BY ts ASC`,
-  );
-  return _stmtListConvergenceSnapshotHistory.all({
-    project,
-    milestone,
-  }) as ConvergenceSnapshotRow[];
+  if (!window?.limit && !window?.sinceTs) {
+    _stmtListConvergenceSnapshotHistory ??= db.prepare<{
+      project: string;
+      milestone: string;
+    }>(
+      `SELECT * FROM convergence_snapshot
+       WHERE project = @project AND milestone = @milestone
+       ORDER BY ts ASC`,
+    );
+    return _stmtListConvergenceSnapshotHistory.all({
+      project,
+      milestone,
+    }) as ConvergenceSnapshotRow[];
+  }
+
+  const conditions = ['project = @project', 'milestone = @milestone'];
+  const params: Record<string, string | number> = { project, milestone };
+  if (window.sinceTs) {
+    conditions.push('ts >= @sinceTs');
+    params.sinceTs = window.sinceTs;
+  }
+
+  const whereClause = conditions.join(' AND ');
+  if (!window.limit) {
+    return db
+      .prepare(
+        `SELECT * FROM convergence_snapshot WHERE ${whereClause} ORDER BY ts ASC`,
+      )
+      .all(params) as ConvergenceSnapshotRow[];
+  }
+
+  params.limit = window.limit;
+  return db
+    .prepare(
+      `SELECT * FROM (
+         SELECT * FROM convergence_snapshot WHERE ${whereClause}
+         ORDER BY ts DESC LIMIT @limit
+       ) recent
+       ORDER BY recent.ts ASC`,
+    )
+    .all(params) as ConvergenceSnapshotRow[];
 }
 
 export interface SchedulerAuditStats {

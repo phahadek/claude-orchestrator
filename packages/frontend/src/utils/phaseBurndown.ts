@@ -36,7 +36,7 @@ export const PHASE_SEGMENT_ORDER: Record<PhaseKey, readonly SegmentState[]> = {
 };
 
 /** The one PhaseKey that isn't a task filter — gate items are gate_item rows, not tasks (see isGatePhase). */
-const GATE_PHASE: PhaseKey = 'gate';
+export const GATE_PHASE: PhaseKey = 'gate';
 
 /**
  * True when the burndown's selected bar is the gate-items bar. Unlike the
