@@ -342,7 +342,7 @@ describe('reconcileGateRunnability', () => {
     });
   });
 
-  it('keeps an item\'s existing disposition when it flips open -> runnable without being reopened in the tick', () => {
+  it("keeps an item's existing disposition when it flips open -> runnable without being reopened in the tick", () => {
     const item = makeItem();
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
     advanceState(item.id, 'open', 'needs-setup', new Date(1).toISOString());
@@ -354,7 +354,7 @@ describe('reconcileGateRunnability', () => {
     expect(getGateItem(item.id)?.currentDisposition).toBe('needs-setup');
   });
 
-  it('keeps an item\'s existing disposition when it flips runnable -> open after becoming uncovered', () => {
+  it("keeps an item's existing disposition when it flips runnable -> open after becoming uncovered", () => {
     const item = makeItem();
     mergeSource(item.id, 'sha1', new Date(1).toISOString());
     reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
