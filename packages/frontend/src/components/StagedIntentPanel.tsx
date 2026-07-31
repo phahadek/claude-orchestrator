@@ -145,6 +145,10 @@ function BodySectionDiff({ intent }: { intent: StagedIntent }) {
 
   return (
     <div data-testid="staged-intent-body-diff" className={styles.bodyDiff}>
+      <p className={styles.text} data-testid="staged-intent-body-diff-count">
+        {changedSections.length} section{changedSections.length === 1 ? '' : 's'}{' '}
+        changed
+      </p>
       {changedSections.map((section) => (
         <div key={section.name} className={styles.diffSection}>
           <div className={styles.diffSectionHeading}>## {section.name}</div>
@@ -236,6 +240,9 @@ function PatchBodySectionDiff({ intent }: { intent: StagedIntent }) {
       data-testid="staged-intent-patch-body-section"
       className={styles.bodyDiff}
     >
+      <p className={styles.text} data-testid="staged-intent-body-diff-count">
+        1 section changed
+      </p>
       <div className={styles.diffSection}>
         <div className={styles.diffSectionHeading}>## {payload.section}</div>
         {payload.operation === 'replace' && (
@@ -669,6 +676,177 @@ function NoOpHeadline({ intent }: { intent: StagedIntent }) {
   );
 }
 
+interface GateContributionItemPayload {
+  text: string;
+  classification?: string;
+}
+
+interface GateAccretePayload {
+  sourceTask: { id: string; title: string };
+  items: GateContributionItemPayload[];
+  classification: string;
+  reason?: string;
+}
+
+/** The grooming gate contribution kind — the source task's runtime-observable items minted onto the milestone gate, or a bare classification with no items. */
+function GateAccreteHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as GateAccretePayload;
+  const count = payload.items?.length ?? 0;
+  return (
+    <div className={styles.text} data-testid="staged-intent-gate-accrete">
+      <p>
+        {count} item{count === 1 ? '' : 's'} added to gate (
+        {payload.classification})
+      </p>
+      {count > 0 && (
+        <details className={styles.expandDetail}>
+          <summary className={styles.expandSummary}>Show items</summary>
+          <ul>
+            {payload.items.map((item, idx) => (
+              <li key={idx}>
+                {item.text}
+                {item.classification ? ` (${item.classification})` : ''}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {payload.reason && <p>Reason: {payload.reason}</p>}
+    </div>
+  );
+}
+
+interface SeedContributionItemPayload {
+  spec: string;
+}
+
+interface SeedStagePayload {
+  sourceTask: { id: string; title: string };
+  seeds: SeedContributionItemPayload[];
+  decision: string;
+}
+
+/** The grooming seed contribution kind — the source task's config-change seeds minted onto the milestone seed store. */
+function SeedStageHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as SeedStagePayload;
+  const count = payload.seeds?.length ?? 0;
+  return (
+    <div className={styles.text} data-testid="staged-intent-seed-stage">
+      <p>
+        {count} seed{count === 1 ? '' : 's'} staged ({payload.decision})
+      </p>
+      {count > 0 && (
+        <details className={styles.expandDetail}>
+          <summary className={styles.expandSummary}>Show specs</summary>
+          <ul>
+            {payload.seeds.map((seed, idx) => (
+              <li key={idx}>{seed.spec}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
+interface ArchUnitMetadataPayload {
+  kind: string;
+  topic?: string;
+  regions?: string[];
+  status?: string;
+}
+
+interface ArchCreateUnitPayload {
+  title: string;
+  metadata: ArchUnitMetadataPayload;
+  body: string;
+}
+
+interface ArchUpdateUnitPayload {
+  unitId: string;
+  baseVersion: number;
+  title?: string;
+  metadata?: Partial<ArchUnitMetadataPayload>;
+  body?: string;
+}
+
+interface ArchSupersedeUnitPayload {
+  unitId: string;
+  baseVersion: number;
+  replacement: ArchCreateUnitPayload;
+}
+
+/** The architecture-unit creation kind — a new titled architecture statement (subsystem/invariant/decision/contract/reference). */
+function ArchCreateUnitHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as ArchCreateUnitPayload;
+  return (
+    <div className={styles.text} data-testid="staged-intent-arch-create-unit">
+      <p>
+        <strong>{payload.title}</strong> ({payload.metadata.kind})
+      </p>
+      <details className={styles.expandDetail}>
+        <summary className={styles.expandSummary}>Show body</summary>
+        <pre className={styles.payload}>{payload.body}</pre>
+      </details>
+    </div>
+  );
+}
+
+/** The architecture-unit edit kind — an in-place edit against baseVersion (optimistic concurrency). */
+function ArchUpdateUnitHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as ArchUpdateUnitPayload;
+  const label = payload.title ?? payload.unitId;
+  const kind = payload.metadata?.kind ?? 'update';
+  return (
+    <div className={styles.text} data-testid="staged-intent-arch-update-unit">
+      <p>
+        <strong>{label}</strong> ({kind})
+      </p>
+      {payload.body && (
+        <details className={styles.expandDetail}>
+          <summary className={styles.expandSummary}>Show body</summary>
+          <pre className={styles.payload}>{payload.body}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** The architecture-unit supersede kind — retires unitId at baseVersion and lands a replacement unit in its place. */
+function ArchSupersedeUnitHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as ArchSupersedeUnitPayload;
+  return (
+    <div
+      className={styles.text}
+      data-testid="staged-intent-arch-supersede-unit"
+    >
+      <p>
+        <strong>{payload.replacement.title}</strong> (
+        {payload.replacement.metadata.kind}) — supersedes {payload.unitId}
+      </p>
+      <details className={styles.expandDetail}>
+        <summary className={styles.expandSummary}>Show body</summary>
+        <pre className={styles.payload}>{payload.replacement.body}</pre>
+      </details>
+    </div>
+  );
+}
+
+interface IntentWithdrawPayload {
+  intentId: string;
+  reason: string;
+}
+
+/** The self-withdrawal kind — a session cancelling an intent it staged before an operator disposed of it. */
+function IntentWithdrawHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as IntentWithdrawPayload;
+  return (
+    <p className={styles.text} data-testid="staged-intent-withdraw">
+      Withdraw <strong>{payload.intentId}</strong>: {payload.reason}
+    </p>
+  );
+}
+
 function renderHeadline(intent: StagedIntent): ReactNode {
   switch (intent.kind) {
     case 'completeness.disposition':
@@ -701,6 +879,18 @@ function renderHeadline(intent: StagedIntent): ReactNode {
       return <JournalSetStateHeadline intent={intent} />;
     case 'planning.noOp':
       return <NoOpHeadline intent={intent} />;
+    case 'gate.accrete':
+      return <GateAccreteHeadline intent={intent} />;
+    case 'seed.stage':
+      return <SeedStageHeadline intent={intent} />;
+    case 'arch.createUnit':
+      return <ArchCreateUnitHeadline intent={intent} />;
+    case 'arch.updateUnit':
+      return <ArchUpdateUnitHeadline intent={intent} />;
+    case 'arch.supersedeUnit':
+      return <ArchSupersedeUnitHeadline intent={intent} />;
+    case 'intent.withdraw':
+      return <IntentWithdrawHeadline intent={intent} />;
     default:
       return renderFallback(intent.payload);
   }
