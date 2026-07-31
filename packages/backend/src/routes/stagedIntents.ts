@@ -170,13 +170,7 @@ class SessionIncompleteError extends Error {
  * True unless the intent is owned by a session that is not yet complete.
  * Human-staged intents (no sessionId) are never gated. Turn-in-flight is
  * read off the live AgentSession instance when one exists in this process;
- * absent that, the session is presumed parked (exited this process without a
- * live handle to check) rather than mid-turn — see isSessionComplete. This
- * is the disposition (apply/commit) gate, distinct from the milestone
- * inbox's display-only `sessionComplete` field on rowToApi below, which
- * fails toward incomplete instead: a wrongly-gated apply is a loud 409 an
- * operator can retry, but a wrongly-revealed inbox card is a silent,
- * unnoticed mistake.
+ * absent that, the turn cannot be in flight (see isSessionComplete).
  */
 function assertOwningSessionComplete(
   sessionId: string | null | undefined,
@@ -595,24 +589,6 @@ export interface StagedIntent {
  */
 let stagedIntentSessionManager: SessionManager | undefined;
 
-/**
- * Turn-in-flight for the milestone inbox's display-only `sessionComplete`
- * field — deliberately the inverse fallback of assertOwningSessionComplete's
- * gating check above: a session absent from the live map is presumed
- * mid-turn (fails toward incomplete/suppressed), not parked, because
- * turn-in-flight is never persisted (see isSessionComplete in
- * db/queries.ts) and therefore unrecoverable for such a session. Revealing a
- * card that's still mid-turn is a silent, unnoticed mistake an operator has
- * no reason to double-check; a card staying suppressed a beat longer than
- * strictly necessary is not.
- */
-function resolveTurnInFlightForDisplay(
-  sessionId: string,
-  sessionManager: SessionManager | undefined,
-): boolean {
-  return sessionManager?.getLiveSession?.(sessionId)?.hasActiveTurn() ?? true;
-}
-
 function rowToApi(row: StagedIntentRow): StagedIntent {
   return {
     id: row.id,
@@ -640,10 +616,9 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
     sessionComplete: row.session_id
       ? isSessionComplete(
           row.session_id,
-          resolveTurnInFlightForDisplay(
-            row.session_id,
-            stagedIntentSessionManager,
-          ),
+          stagedIntentSessionManager
+            ?.getLiveSession?.(row.session_id)
+            ?.hasActiveTurn() ?? false,
         )
       : null,
   };
@@ -3614,6 +3589,24 @@ export function createStagedIntentsRouter(
 ): Router {
   const router = Router();
   stagedIntentSessionManager = sessionManager;
+
+  // A session's turn ending flips its already-staged intents' sessionComplete
+  // from false to true (see isSessionComplete), but no staged_intent row
+  // changes when that happens — so the milestone inbox's cached copies would
+  // stay suppressed until a refetch with no notification otherwise. Ride the
+  // existing session_event/'result' signal already on the SessionManager
+  // 'message' stream (the same channel server.ts forwards to WS clients) and
+  // re-broadcast each of that session's still-active staged intents via the
+  // existing per-intent broadcastIntentById — recomputing sessionComplete
+  // through rowToApi/isSessionComplete exactly as any other read, rather
+  // than deriving it a second way.
+  sessionManager?.on?.('message', (msg: ServerMessage) => {
+    if (msg.type !== 'session_event' || msg.eventType !== 'result') return;
+    const active = listStagedIntentsBySession(msg.sessionId).filter((row) =>
+      (['staged', 'approved'] as StagedIntentState[]).includes(row.state),
+    );
+    for (const row of active) broadcastIntentById(row.id);
+  });
 
   // ── GET /api/staged-intents ─────────────────────────────────────────────
   // ?sessionId=<id> is the SessionPanel decision-panel lens: correlates

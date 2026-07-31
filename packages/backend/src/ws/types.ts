@@ -295,19 +295,6 @@ export type ServerMessage =
       intent: StagedIntent;
     }
   | {
-      /**
-       * sessionComplete is a per-session property (see isSessionComplete)
-       * but is only ever carried as a field on individual staged-intent
-       * broadcasts. No staged_intent row changes at a turn boundary, so this
-       * is the sole notification that a session's already-staged intents
-       * just became visible — clients recompute completeness by re-fetching
-       * or, for milestone scope, by flipping sessionComplete in place for
-       * every cached intent matching this sessionId (no reorder).
-       */
-      type: 'session_turn_completed';
-      sessionId: string;
-    }
-  | {
       type: 'auto_launch';
       projectId: string;
       taskId: string;

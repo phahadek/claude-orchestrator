@@ -36,7 +36,6 @@ import {
   hasActiveCapabilityRequestForSession,
   getGrantedCapabilities,
   setTaskPauseReason,
-  isSessionComplete,
 } from '../db/queries';
 import { groomSessionConcludedWithDecision } from '../orchestration/planningDecisionKinds';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
@@ -1364,17 +1363,6 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // Also signal turn completion so the server can check for new commits.
     if (rawType === 'result') {
       this._turnInFlight = false;
-      // The session-level completeness signal (isSessionComplete) can only
-      // flip false -> true at a turn boundary, and no staged_intent row
-      // changes when it does — so the milestone inbox needs an explicit
-      // nudge here, or its cached copies of this session's already-staged
-      // intents stay suppressed until the client remounts.
-      if (isSessionComplete(this.sessionId, false)) {
-        this.broadcast({
-          type: 'session_turn_completed',
-          sessionId: this.sessionId,
-        });
-      }
       const pr = getPRBySessionId(this.sessionId);
       if (pr?.review_session_id || (pr && isPreReviewBlocked(pr))) {
         // Gate on actual HEAD SHA advance — skip when no new commits were made.

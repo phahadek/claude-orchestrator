@@ -7,10 +7,7 @@ import {
   stagedIntentsApi,
   UNATTRIBUTED_MILESTONE_BUCKET,
 } from '../api/stagedIntents';
-import {
-  subscribeStagedIntentChange,
-  subscribeSessionTurnCompleted,
-} from './stagedIntentBus';
+import { subscribeStagedIntentChange } from './stagedIntentBus';
 import { triageVerdict } from '../components/triageVerdict';
 
 /** Which lens the queue fetches through — the only thing that differs between the session DecisionPanel and MilestoneDecisionInbox. */
@@ -107,25 +104,6 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
         // reordered. A refetch (e.g. on next mount) restores the true rank.
         return [...withoutIntent, intent];
       });
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scopeKey]);
-
-  // Milestone scope only: a turn-end flips sessionComplete for every
-  // already-staged intent from that session, but no staged_intent row
-  // changes, so there is no per-intent broadcast to ride. Flip the field in
-  // place for cached intents matching the session — never remove-and-append,
-  // which would reorder the backend-ranked list (see module docstring).
-  useEffect(() => {
-    if (scope.type !== 'milestone') return;
-    return subscribeSessionTurnCompleted((sessionId) => {
-      setIntents((prev) =>
-        prev.map((intent) =>
-          intent.sessionId === sessionId
-            ? { ...intent, sessionComplete: true }
-            : intent,
-        ),
-      );
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeKey]);

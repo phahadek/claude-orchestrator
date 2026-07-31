@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
+import { EventEmitter } from 'events';
 
 const { mockGetTaskBackend, mockRecordEvent } = vi.hoisted(() => ({
   mockGetTaskBackend: vi.fn(),
@@ -40,7 +41,14 @@ vi.mock('../db/queries', async (importOriginal) => {
 });
 
 import { db } from '../db/db';
-import { createStagedIntentsRouter } from '../routes/stagedIntents';
+import { insertStagedIntent } from '../db/queries';
+import type { StagedIntentRow } from '../db/types';
+import {
+  createStagedIntentsRouter,
+  setStagedIntentBroadcast,
+} from '../routes/stagedIntents';
+import type { SessionManager } from '../session/SessionManager';
+import type { ServerMessage } from '../ws/types';
 
 function makeApp() {
   const app = express();
@@ -829,5 +837,132 @@ describe('POST /api/staged-intents — decision-proposal annotation', () => {
     expect(found.decisionProposal).toBe(
       'Superseded by task notion:abc — defer instead of grooming to Ready.',
     );
+  });
+});
+
+describe('milestone-inbox turn-boundary reveal', () => {
+  const SESSION_ID = 'session-turn-boundary';
+  let turnInFlight: boolean;
+  let sessionManager: SessionManager & EventEmitter;
+
+  function makeSessionManager() {
+    turnInFlight = true;
+    const emitter = new EventEmitter();
+    return Object.assign(emitter, {
+      getLiveSession: vi.fn().mockReturnValue({
+        hasActiveTurn: () => turnInFlight,
+      }),
+    }) as unknown as SessionManager & EventEmitter;
+  }
+
+  let counter = 0;
+  function stageIntent(
+    overrides: Partial<StagedIntentRow> = {},
+  ): StagedIntentRow {
+    counter += 1;
+    const now = Date.now();
+    const row: StagedIntentRow = {
+      id: `intent-${counter}`,
+      kind: 'task.updateBody',
+      payload: JSON.stringify({ taskId: 'task-1' }),
+      payload_hash: `hash-${counter}`,
+      task_id: 'task-1',
+      project_id: 'proj-turn-boundary',
+      session_id: SESSION_ID,
+      group_id: null,
+      milestone: null,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: now,
+      updated_at: now,
+      ...overrides,
+    };
+    insertStagedIntent(row);
+    return row;
+  }
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM staged_intent').run();
+    counter = 0;
+    sessionManager = makeSessionManager();
+    setStagedIntentBroadcast(() => {});
+  });
+
+  it('an intent staged mid-turn reads sessionComplete: false', async () => {
+    const staged = stageIntent();
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createStagedIntentsRouter(undefined, sessionManager));
+    const agent = supertest(app);
+
+    const res = await agent
+      .get('/api/staged-intents')
+      .query({ sessionId: SESSION_ID });
+    const found = res.body.intents.find(
+      (i: { id: string }) => i.id === staged.id,
+    );
+    expect(found.sessionComplete).toBe(false);
+  });
+
+  it("re-broadcasts staged_intent_changed for each of a session's still-active intents when its turn ends, recomputed through isSessionComplete/rowToApi", async () => {
+    const staged = stageIntent();
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createStagedIntentsRouter(undefined, sessionManager));
+
+    const broadcasts: ServerMessage[] = [];
+    setStagedIntentBroadcast((msg) => broadcasts.push(msg));
+
+    // Turn ends: hasActiveTurn flips false, then the existing
+    // session_event/'result' signal lands on the SessionManager 'message'
+    // stream — the same channel server.ts forwards to WS clients.
+    turnInFlight = false;
+    sessionManager.emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'result',
+      content: '{}',
+    } satisfies ServerMessage);
+
+    const changed = broadcasts.filter(
+      (m): m is Extract<ServerMessage, { type: 'staged_intent_changed' }> =>
+        m.type === 'staged_intent_changed',
+    );
+    expect(changed).toHaveLength(1);
+    expect(changed[0].intent.id).toBe(staged.id);
+    expect(changed[0].intent.sessionComplete).toBe(true);
+  });
+
+  it('does not re-broadcast for an unrelated session_event, or for a different session', async () => {
+    stageIntent();
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createStagedIntentsRouter(undefined, sessionManager));
+
+    const broadcasts: ServerMessage[] = [];
+    setStagedIntentBroadcast((msg) => broadcasts.push(msg));
+
+    sessionManager.emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'text',
+      content: 'not a turn boundary',
+    } satisfies ServerMessage);
+    sessionManager.emit('message', {
+      type: 'session_event',
+      sessionId: 'some-other-session',
+      eventType: 'result',
+      content: '{}',
+    } satisfies ServerMessage);
+
+    expect(
+      broadcasts.filter((m) => m.type === 'staged_intent_changed'),
+    ).toHaveLength(0);
   });
 });

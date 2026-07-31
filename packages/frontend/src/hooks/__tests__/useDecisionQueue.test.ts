@@ -2,10 +2,7 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { useDecisionQueue } from '../useDecisionQueue';
 import { stagedIntentsApi } from '../../api/stagedIntents';
-import {
-  publishStagedIntentChange,
-  publishSessionTurnCompleted,
-} from '../stagedIntentBus';
+import { publishStagedIntentChange } from '../stagedIntentBus';
 import type { StagedIntent } from '../../api/stagedIntents';
 
 describe('useDecisionQueue', () => {
@@ -211,7 +208,7 @@ describe('useDecisionQueue', () => {
     expect(result.current.intents).toEqual([]);
   });
 
-  it("milestone scope reveals a session_turn_completed session's intents in place, without reordering", async () => {
+  it("milestone scope reveals a newly-completed session's intent via a re-broadcast staged_intent_changed, without reordering already-visible cards", async () => {
     const intents: StagedIntent[] = [
       {
         id: 'already-visible',
@@ -262,8 +259,15 @@ describe('useDecisionQueue', () => {
       'already-visible',
     ]);
 
+    // The backend re-broadcasts staged_intent_changed for each of a
+    // session's still-active intents once its turn ends — the same live
+    // channel every other disposition rides, recomputed through
+    // isSessionComplete/rowToApi rather than a separate signal.
     act(() => {
-      publishSessionTurnCompleted('session-b');
+      publishStagedIntentChange({
+        ...intents[1],
+        sessionComplete: true,
+      });
     });
 
     await waitFor(() =>
