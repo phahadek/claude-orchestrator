@@ -1,4 +1,5 @@
 import { logger } from '../logger';
+import { normalizeBoardId } from '../tasks/taskId';
 import type { SessionManager } from '../session/SessionManager';
 import type { Scheduler } from './Scheduler';
 import type { OpsSessionLauncher } from './OpsSessionLauncher';
@@ -215,7 +216,7 @@ export class DispatchTriggerEvaluator {
       if (!groomArmed && !designArmed) continue;
       const tasks = this.loadBoardTasks(milestone.id);
       if (tasks.length === 0) continue;
-      const tasksById = new Map(tasks.map((t) => [t.id, t]));
+      const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
       for (const task of tasks) {
         if (!groomArmed && !isDesignEligibleType(task.type)) continue;
         if (
@@ -248,7 +249,7 @@ export class DispatchTriggerEvaluator {
       if (!getArm(milestone.id, 'ops')) continue;
       const tasks = this.loadBoardTasks(milestone.id);
       if (tasks.length === 0) continue;
-      const tasksById = new Map(tasks.map((t) => [t.id, t]));
+      const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
       for (const task of tasks) {
         const candidate = await isOpsCandidate(task, {
           tasksById,
@@ -278,7 +279,7 @@ export class DispatchTriggerEvaluator {
       if (!armed) continue;
       const tasks = this.loadBoardTasks(milestone.id);
       if (tasks.length === 0) continue;
-      const tasksById = new Map(tasks.map((t) => [t.id, t]));
+      const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
       for (const task of tasks) {
         if (
           isDesignCandidate(task, {

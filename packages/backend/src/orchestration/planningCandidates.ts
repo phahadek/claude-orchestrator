@@ -1,5 +1,7 @@
 import type { NotionTask } from '../notion/types';
 import { isOpsEligibleType, computeOpsBlockingDeps } from '../ops/opsLoad';
+import { normalizeBoardId } from '../tasks/taskId';
+import { logger } from '../logger';
 
 /**
  * Candidate predicates for DispatchTriggerEvaluator, one per flow: a pure
@@ -33,8 +35,13 @@ export function passesGroomDepGate(
   tasksById: Map<string, NotionTask>,
 ): boolean {
   for (const depId of task.dependsOn) {
-    const dep = tasksById.get(depId);
-    if (!dep) return false;
+    const dep = tasksById.get(normalizeBoardId(depId));
+    if (!dep) {
+      logger.warn(
+        `[passesGroomDepGate] unresolved dependency: task ${task.id} depends on ${depId}, which is not present in tasksById (not a lookup miss vs unsatisfied — this dep is absent from the board)`,
+      );
+      return false;
+    }
     const isDecisionType =
       dep.type.includes(DESIGN_TOKEN) ||
       dep.type.includes(PLANNING_TOKEN) ||
@@ -64,7 +71,7 @@ export function groomBlockingDepTitles(
 ): string[] {
   const titles: string[] = [];
   for (const depId of task.dependsOn) {
-    const dep = tasksById.get(depId);
+    const dep = tasksById.get(normalizeBoardId(depId));
     if (!dep) {
       titles.push(depId);
       continue;
@@ -215,8 +222,13 @@ export function passesDesignDepGate(
   tasksById: Map<string, NotionTask>,
 ): boolean {
   for (const depId of task.dependsOn) {
-    const dep = tasksById.get(depId);
-    if (!dep) return false;
+    const dep = tasksById.get(normalizeBoardId(depId));
+    if (!dep) {
+      logger.warn(
+        `[passesDesignDepGate] unresolved dependency: task ${task.id} depends on ${depId}, which is not present in tasksById (not a lookup miss vs unsatisfied — this dep is absent from the board)`,
+      );
+      return false;
+    }
     if (!dep.status.includes(DONE_TOKEN)) return false;
   }
   return true;
