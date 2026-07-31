@@ -121,19 +121,22 @@ describe('getOtherRunningSessionsForTask', () => {
     ['hyphenated', 'notion:abcd1234-ab12-cd34-ef56-1234567890ab'],
     ['hyphenless', 'notion:abcd1234ab12cd34ef561234567890ab'],
     ['bare hyphenless (no source prefix)', 'abcd1234ab12cd34ef561234567890ab'],
-  ])('matches the %s form of the task id to a hyphenated stored row', (_label, candidateId) => {
-    seedSession({
-      sessionId: 'stale-standard',
-      taskId: TASK_ID,
-      sessionType: 'standard',
-    });
+  ])(
+    'matches the %s form of the task id to a hyphenated stored row',
+    (_label, candidateId) => {
+      seedSession({
+        sessionId: 'stale-standard',
+        taskId: TASK_ID,
+        sessionType: 'standard',
+      });
 
-    const result = getOtherRunningSessionsForTask(
-      candidateId,
-      'resuming',
-      'standard',
-    );
+      const result = getOtherRunningSessionsForTask(
+        candidateId,
+        'resuming',
+        'standard',
+      );
 
-    expect(result.map((r) => r.session_id)).toEqual(['stale-standard']);
-  });
+      expect(result.map((r) => r.session_id)).toEqual(['stale-standard']);
+    },
+  );
 });
