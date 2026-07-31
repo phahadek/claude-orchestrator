@@ -20,6 +20,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerCompletenessTools } from './completenessTools';
 import {
   listCompletenessDispositions,
+  listStagedIntentsByMilestone,
   listStagedIntentsByProject,
   upsertTaskCache,
 } from '../../db/queries';
@@ -45,12 +46,14 @@ beforeEach(() => {
 async function connectedClient(
   workflow: PlanningWorkflow | null = 'design',
   projectId?: string,
+  milestone?: string | null,
 ) {
   const server = new McpServer({ name: 'test', version: '1.0.0' });
   registerCompletenessTools(server, {
     sessionId: 'session-1',
     workflow,
     projectId,
+    milestone,
   });
   const [serverTransport, clientTransport] =
     InMemoryTransport.createLinkedPair();
@@ -322,6 +325,75 @@ describe('completeness.disposition', () => {
     expect(intents[0].kind).toBe('completeness.disposition');
     expect(intents[0].session_id).toBe('session-1');
     expect(intents[0].state).toBe('staged');
+    await close();
+  });
+
+  it('attributes the staged intent to the session-derived milestone, not a supplied milestone argument', async () => {
+    const { client, close } = await connectedClient('design', 'proj-1', 'M13');
+    await client.callTool({
+      name: 'completeness.disposition',
+      arguments: {
+        taskId: 'notion:design4',
+        milestone: 'M99',
+        probed: PROBED,
+        questions: [
+          { question: 'Q?', disposition: 'resolved', reason: 'resolved' },
+        ],
+        runAt: '2026-07-28T00:00:00.000Z',
+      },
+    });
+
+    const intents = listStagedIntentsByProject('proj-1');
+    expect(intents).toHaveLength(1);
+    expect(intents[0].milestone).toBe('M13');
+
+    const attributed = listStagedIntentsByMilestone('proj-1', 'M13');
+    expect(attributed).toHaveLength(1);
+    expect(attributed[0].kind).toBe('completeness.disposition');
+
+    const unattributed = listStagedIntentsByMilestone('proj-1', 'unattributed');
+    expect(unattributed).toHaveLength(0);
+    await close();
+  });
+
+  it('stages the intent with milestone = null and does not throw when the session resolves to no milestone', async () => {
+    const { client, close } = await connectedClient('design', 'proj-1', null);
+    const result = await client.callTool({
+      name: 'completeness.disposition',
+      arguments: {
+        taskId: 'notion:design4',
+        probed: PROBED,
+        questions: [
+          { question: 'Q?', disposition: 'resolved', reason: 'resolved' },
+        ],
+        runAt: '2026-07-28T00:00:00.000Z',
+      },
+    });
+    expect(result.isError).toBeFalsy();
+
+    const intents = listStagedIntentsByProject('proj-1');
+    expect(intents).toHaveLength(1);
+    expect(intents[0].milestone).toBeNull();
+    await close();
+  });
+
+  it('leaves the durable completeness_disposition row milestone column driven by the argument, unchanged in behaviour', async () => {
+    const { client, close } = await connectedClient('design', 'proj-1', 'M13');
+    await client.callTool({
+      name: 'completeness.disposition',
+      arguments: {
+        taskId: 'notion:design4',
+        milestone: 'M99',
+        probed: PROBED,
+        questions: [
+          { question: 'Q?', disposition: 'resolved', reason: 'resolved' },
+        ],
+        runAt: '2026-07-28T00:00:00.000Z',
+      },
+    });
+
+    const rows = listCompletenessDispositions('notion:design4');
+    expect(rows[0].milestone).toBe('M99');
     await close();
   });
 
