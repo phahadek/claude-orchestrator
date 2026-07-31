@@ -201,3 +201,28 @@ export function hasTaskEditSinceTimestamp(
     .get(taskId, sinceTs);
   return row !== undefined;
 }
+
+/**
+ * True when a pr_body_updated_via_marker event has been recorded for
+ * `taskId` after `sinceTs` — the signal that a coding session already applied
+ * a PR-body-only remedy (see AgentSession.handlePRBodyMarker) to an
+ * outstanding needs_changes verdict. Used by StalledPRReconciler to
+ * disambiguate "the session responded via a non-push remedy and is waiting on
+ * a re-review neither the push nor session-end trigger can fire" from "the
+ * session is genuinely silent," so its session_inert remedy can force a
+ * re-review in the former case instead of nudging a session that already did
+ * its part.
+ */
+export function hasPrBodyMarkerUpdateSinceTimestamp(
+  taskId: string,
+  sinceTs: number,
+): boolean {
+  const row = db
+    .prepare<[string, number], { one: number }>(
+      `SELECT 1 AS one FROM audit_log
+       WHERE task_id = ? AND event_type = 'pr_body_updated_via_marker' AND ts > ?
+       LIMIT 1`,
+    )
+    .get(taskId, sinceTs);
+  return row !== undefined;
+}
