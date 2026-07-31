@@ -285,9 +285,9 @@ describe('groom.precheck — server-derived existsInRepo parity (task 3ae22f91)'
         (precheck.gateReasons as string[]).includes(r),
       ),
     ).toBe(true);
-    expect(
-      annotation.reasons.some((r) => r.includes('does not resolve')),
-    ).toBe(true);
+    expect(annotation.reasons.some((r) => r.includes('does not resolve'))).toBe(
+      true,
+    );
 
     const truthfulPayload = {
       taskId: 'notion:understated-exists',
