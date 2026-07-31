@@ -7,6 +7,7 @@ import {
   passesDesignDepGate,
   isDesignEligibleType,
 } from '../planningCandidates';
+import { normalizeBoardId } from '../../tasks/taskId';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -36,91 +37,72 @@ function task(overrides: Partial<NotionTask> = {}): NotionTask {
   };
 }
 
+/** Builds a tasksById map keyed the same way DispatchTriggerEvaluator does — normalized, so lookups match regardless of hyphenation/prefix. */
+function depsMap(tasks: NotionTask[]): Map<string, NotionTask> {
+  return new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
+}
+
 describe('passesGroomDepGate', () => {
   it('requires a 📐 Design/📋 Planning dep to be ✅ Done', () => {
     const t = task({ dependsOn: ['design-dep'] });
-    const notDone = new Map([
-      [
-        'design-dep',
-        task({ id: 'design-dep', type: '📐 Design', status: '📐 In Progress' }),
-      ],
+    const notDone = depsMap([
+      task({ id: 'design-dep', type: '📐 Design', status: '📐 In Progress' }),
     ]);
     expect(passesGroomDepGate(t, notDone)).toBe(false);
 
-    const done = new Map([
-      [
-        'design-dep',
-        task({ id: 'design-dep', type: '📐 Design', status: '✅ Done' }),
-      ],
+    const done = depsMap([
+      task({ id: 'design-dep', type: '📐 Design', status: '✅ Done' }),
     ]);
     expect(passesGroomDepGate(t, done)).toBe(true);
   });
 
   it('requires an other-Type dep to be groomed past 🔲 Backlog (at 🗂️ Ready or beyond)', () => {
     const t = task({ dependsOn: ['code-dep'] });
-    const stillBacklog = new Map([
-      [
-        'code-dep',
-        task({ id: 'code-dep', type: '💻 Code', status: '🔲 Backlog' }),
-      ],
+    const stillBacklog = depsMap([
+      task({ id: 'code-dep', type: '💻 Code', status: '🔲 Backlog' }),
     ]);
     expect(passesGroomDepGate(t, stillBacklog)).toBe(false);
 
-    const groomed = new Map([
-      [
-        'code-dep',
-        task({ id: 'code-dep', type: '💻 Code', status: '🗂️ Ready' }),
-      ],
+    const groomed = depsMap([
+      task({ id: 'code-dep', type: '💻 Code', status: '🗂️ Ready' }),
     ]);
     expect(passesGroomDepGate(t, groomed)).toBe(true);
   });
 
   it('requires a 🔎 Investigation dep to be ✅ Done, like Design/Planning', () => {
     const t = task({ dependsOn: ['investigation-dep'] });
-    const ready = new Map([
-      [
-        'investigation-dep',
-        task({
-          id: 'investigation-dep',
-          type: '🔎 Investigation',
-          status: '🗂️ Ready',
-        }),
-      ],
+    const ready = depsMap([
+      task({
+        id: 'investigation-dep',
+        type: '🔎 Investigation',
+        status: '🗂️ Ready',
+      }),
     ]);
     expect(passesGroomDepGate(t, ready)).toBe(false);
 
-    const inProgress = new Map([
-      [
-        'investigation-dep',
-        task({
-          id: 'investigation-dep',
-          type: '🔎 Investigation',
-          status: '🔄 In Progress',
-        }),
-      ],
+    const inProgress = depsMap([
+      task({
+        id: 'investigation-dep',
+        type: '🔎 Investigation',
+        status: '🔄 In Progress',
+      }),
     ]);
     expect(passesGroomDepGate(t, inProgress)).toBe(false);
 
-    const done = new Map([
-      [
-        'investigation-dep',
-        task({
-          id: 'investigation-dep',
-          type: '🔎 Investigation',
-          status: '✅ Done',
-        }),
-      ],
+    const done = depsMap([
+      task({
+        id: 'investigation-dep',
+        type: '🔎 Investigation',
+        status: '✅ Done',
+      }),
     ]);
     expect(passesGroomDepGate(t, done)).toBe(true);
   });
 
   it('blocks on a ⏭️ Deferred dep of any Type, including non-decision types', () => {
     const t = task({ dependsOn: ['code-dep'] });
-    const deferred = new Map([
-      [
-        'code-dep',
-        task({ id: 'code-dep', type: '💻 Code', status: '⏭️ Deferred' }),
-      ],
+    const deferred = depsMap([
+      task({ id: 'code-dep', type: '💻 Code', status: '⏭️ Deferred' }),
     ]);
     expect(passesGroomDepGate(t, deferred)).toBe(false);
   });
@@ -132,6 +114,101 @@ describe('passesGroomDepGate', () => {
 
   it('passes with no dependencies', () => {
     expect(passesGroomDepGate(task(), new Map())).toBe(true);
+  });
+
+  it('resolves a hyphenless dependsOn id against a hyphenated tasksById key', () => {
+    const t = task({
+      dependsOn: ['ab12cd34ef5678900000000000000000'],
+    });
+    const tasksById = depsMap([
+      task({
+        id: 'ab12cd34-ef56-7890-0000-000000000000',
+        type: '💻 Code',
+        status: '🗂️ Ready',
+      }),
+    ]);
+    expect(passesGroomDepGate(t, tasksById)).toBe(true);
+  });
+
+  it('resolves a hyphenated dependsOn id against a hyphenless tasksById key', () => {
+    const t = task({
+      dependsOn: ['ab12cd34-ef56-7890-0000-000000000000'],
+    });
+    const tasksById = depsMap([
+      task({
+        id: 'ab12cd34ef5678900000000000000000',
+        type: '💻 Code',
+        status: '🗂️ Ready',
+      }),
+    ]);
+    expect(passesGroomDepGate(t, tasksById)).toBe(true);
+  });
+
+  it('resolves a notion:-prefixed dependsOn id against an unprefixed board id', () => {
+    const t = task({
+      dependsOn: ['notion:ab12cd34-ef56-7890-0000-000000000000'],
+    });
+    const tasksById = depsMap([
+      task({
+        id: 'ab12cd34-ef56-7890-0000-000000000000',
+        type: '💻 Code',
+        status: '🗂️ Ready',
+      }),
+    ]);
+    expect(passesGroomDepGate(t, tasksById)).toBe(true);
+  });
+
+  it('resolves an unprefixed dependsOn id against a notion:-prefixed board id', () => {
+    const t = task({
+      dependsOn: ['ab12cd34-ef56-7890-0000-000000000000'],
+    });
+    const tasksById = depsMap([
+      task({
+        id: 'notion:ab12cd34-ef56-7890-0000-000000000000',
+        type: '💻 Code',
+        status: '🗂️ Ready',
+      }),
+    ]);
+    expect(passesGroomDepGate(t, tasksById)).toBe(true);
+  });
+
+  it('still fails closed when a normalized dependsOn id matches no board task', () => {
+    const t = task({ dependsOn: ['zz99zz99-zz99-zz99-zz99-zz99zz99zz99'] });
+    const tasksById = depsMap([
+      task({
+        id: 'ab12cd34-ef56-7890-0000-000000000000',
+        type: '💻 Code',
+        status: '🗂️ Ready',
+      }),
+    ]);
+    expect(passesGroomDepGate(t, tasksById)).toBe(false);
+  });
+
+  it('logs an unresolved dependency distinguishably from a resolved-but-unsatisfied one', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const unresolved = task({
+        id: 'task-unresolved',
+        dependsOn: ['missing-dep'],
+      });
+      passesGroomDepGate(unresolved, new Map());
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('unresolved dependency'),
+      );
+      warnSpy.mockClear();
+
+      const unsatisfied = task({
+        id: 'task-unsatisfied',
+        dependsOn: ['code-dep'],
+      });
+      const tasksById = depsMap([
+        task({ id: 'code-dep', type: '💻 Code', status: '🔲 Backlog' }),
+      ]);
+      passesGroomDepGate(unsatisfied, tasksById);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 
@@ -341,19 +418,13 @@ describe('isGroomNoOpSuppressed', () => {
 describe('passesDesignDepGate', () => {
   it('requires every dep to be ✅ Done, regardless of Type', () => {
     const t = task({ dependsOn: ['code-dep'] });
-    const notDone = new Map([
-      [
-        'code-dep',
-        task({ id: 'code-dep', type: '💻 Code', status: '🗂️ Ready' }),
-      ],
+    const notDone = depsMap([
+      task({ id: 'code-dep', type: '💻 Code', status: '🗂️ Ready' }),
     ]);
     expect(passesDesignDepGate(t, notDone)).toBe(false);
 
-    const done = new Map([
-      [
-        'code-dep',
-        task({ id: 'code-dep', type: '💻 Code', status: '✅ Done' }),
-      ],
+    const done = depsMap([
+      task({ id: 'code-dep', type: '💻 Code', status: '✅ Done' }),
     ]);
     expect(passesDesignDepGate(t, done)).toBe(true);
   });
@@ -432,11 +503,8 @@ describe('isDesignCandidate', () => {
       type: '📐 Design',
       dependsOn: ['code-dep'],
     });
-    const notDone = new Map([
-      [
-        'code-dep',
-        task({ id: 'code-dep', type: '💻 Code', status: '🗂️ Ready' }),
-      ],
+    const notDone = depsMap([
+      task({ id: 'code-dep', type: '💻 Code', status: '🗂️ Ready' }),
     ]);
     expect(isDesignCandidate(t, { ...baseDeps, tasksById: notDone })).toBe(
       false,
@@ -514,11 +582,8 @@ describe('isDesignEligibleType — the shared predicate design-armed groom narro
       status: '🔲 Backlog',
       dependsOn: ['code-dep'],
     });
-    const stillBacklog = new Map([
-      [
-        'code-dep',
-        task({ id: 'code-dep', type: '💻 Code', status: '🔲 Backlog' }),
-      ],
+    const stillBacklog = depsMap([
+      task({ id: 'code-dep', type: '💻 Code', status: '🔲 Backlog' }),
     ]);
     expect(isDesignEligibleType(t.type)).toBe(true);
     expect(passesGroomDepGate(t, stillBacklog)).toBe(false);
