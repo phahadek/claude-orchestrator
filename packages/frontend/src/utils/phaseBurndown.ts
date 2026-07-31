@@ -14,6 +14,18 @@ export const PHASE_ORDER = [
 
 export type PhaseKey = (typeof PHASE_ORDER)[number];
 
+/** The one PhaseKey that isn't a task filter — gate items are gate_item rows, not tasks (see isGatePhase). */
+const GATE_PHASE: PhaseKey = 'gate';
+
+/**
+ * True when the burndown's selected bar is the gate-items bar. Unlike the
+ * other bars, 'gate' has no corresponding task phase (phaseForTask never
+ * returns it) — selecting it must route to the gate panel, not filter tasks.
+ */
+export function isGatePhase(phase: string | null): boolean {
+  return phase === GATE_PHASE;
+}
+
 export const PHASE_LABELS: Record<PhaseKey, string> = {
   design: 'Design',
   grooming: 'Grooming',
