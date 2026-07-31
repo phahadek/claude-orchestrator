@@ -11,6 +11,7 @@ import {
   getLatestCodeSessionByNotionTaskId,
   hasActiveSessionForTask,
   hasNonTerminalPlanningSessionForTask,
+  isSessionAwaitingCapabilityDisposition,
   getPRBySessionId,
   getLocalBranchBySession,
   setSessionPauseReason,
@@ -195,6 +196,18 @@ export class OrphanedTaskSweeper {
     // only ever see 'standard' sessions, so an idle planning session would
     // otherwise fall through to the revert/nudge paths below unnoticed.
     if (hasNonTerminalPlanningSessionForTask(taskId)) return;
+
+    // An idle session parked awaiting a capability disposition is always
+    // legitimate — it is not stalled, not abandoned, and not a candidate for
+    // any terminal action (nudge, revert-to-Ready, surface-to-operator) or
+    // crash-budget accounting. It is the system working: the session asked
+    // and is waiting for an answer only the operator can give.
+    if (
+      latestSession?.status === 'idle' &&
+      isSessionAwaitingCapabilityDisposition(latestSession)
+    ) {
+      return;
+    }
 
     // Orphan confirmed: Notion shows In Progress, no live session.
     const lastSeenAt =
