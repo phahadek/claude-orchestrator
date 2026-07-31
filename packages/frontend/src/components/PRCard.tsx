@@ -33,6 +33,7 @@ export function PRCard({ pr, ...rest }: PRCardProps) {
     type: 'pr',
     branchName: pr.headBranch ?? '',
     autoMergeEnabled: false,
+    reviewVerdict: pr.reviewResult?.verdict ?? null,
   };
   return <WorkItemCard item={item} {...rest} />;
 }

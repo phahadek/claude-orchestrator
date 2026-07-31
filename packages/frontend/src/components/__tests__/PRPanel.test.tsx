@@ -18,7 +18,7 @@ function makePR(overrides: Partial<PRWorkItem> = {}): PRWorkItem {
     notionTaskTitle: null,
     sessionId: null,
     reviewSessionId: null,
-    reviewResult: null,
+    reviewVerdict: null,
     reviewedAt: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
@@ -222,7 +222,7 @@ describe('PRPanel — inflight state cleared by WS events', () => {
     const pr = makePR({
       prNumber: 1,
       state: 'open',
-      reviewResult: { verdict: 'approved', summary: '' },
+      reviewVerdict: 'approved',
       mergeState: null,
     });
     const mergePending = new Promise(() => {});
@@ -408,7 +408,7 @@ describe('PRPanel — inflight state cleared by WS events', () => {
     const pr = makePR({
       prNumber: 1,
       state: 'open',
-      reviewResult: { verdict: 'approved', summary: '' },
+      reviewVerdict: 'approved',
       mergeState: null,
     });
     const mergeabilityPending = new Promise(() => {});

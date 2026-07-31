@@ -18,7 +18,7 @@ function makePR(overrides: Partial<PRWorkItem> = {}): PRWorkItem {
     notionTaskTitle: null,
     sessionId: null,
     reviewSessionId: null,
-    reviewResult: null,
+    reviewVerdict: null,
     reviewedAt: null,
     createdAt: '2024-01-01T00:00:00Z',
     updatedAt: '2024-01-01T00:00:00Z',

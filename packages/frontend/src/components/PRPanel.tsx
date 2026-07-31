@@ -226,6 +226,7 @@ export function PRPanel({
         item.type === 'pr' && item.prNumber === prReviewEvent.prNumber
           ? {
               ...item,
+              reviewVerdict: prReviewEvent.verdict as PRReviewResult['verdict'],
               reviewResult: {
                 verdict: prReviewEvent.verdict as PRReviewResult['verdict'],
                 summary: prReviewEvent.summary,
@@ -514,6 +515,31 @@ export function PRPanel({
     }
   };
 
+  const handleLoadReviewDetails = async (prNumber: number) => {
+    const item = prs.find((p) => p.type === 'pr' && p.prNumber === prNumber);
+    if (!item || item.type !== 'pr') return;
+    const [owner, repoName] = item.repo.split('/');
+    try {
+      const res = await authedFetch(
+        `/api/prs/${owner}/${repoName}/${prNumber}/review-result`,
+      );
+      if (!res.ok) return;
+      const body = (await res.json()) as {
+        reviewResult: PRReviewResult | null;
+        reviewedAt: string | null;
+      };
+      setPRs((prev) =>
+        prev.map((p) =>
+          p.type === 'pr' && p.prNumber === prNumber
+            ? { ...p, reviewResult: body.reviewResult }
+            : p,
+        ),
+      );
+    } catch {
+      // best-effort — the toggle stays on "Loading…" and can be retried
+    }
+  };
+
   const handleRemovePR = async (prNumber: number) => {
     if (!activeProjectId) return;
     setRemoveInFlight((prev) => new Set(prev).add(prNumber));
@@ -661,6 +687,7 @@ export function PRPanel({
                     onReReview={handleReReview}
                     onFixConflicts={handleFixConflicts}
                     onApprove={handleApprove}
+                    onLoadReviewDetails={handleLoadReviewDetails}
                     reviewInFlight={reviewInFlight.has(prNumber)}
                     mergeInFlight={mergeInFlight.has(prNumber)}
                     checkingMergeability={checkingMergeability.has(prNumber)}
