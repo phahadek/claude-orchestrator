@@ -16,11 +16,13 @@ import {
   GroomTaskSourceUnsupportedError,
   NotionReadClient,
   NotionTaskLike,
+  isSizeCheckSeedOverThreshold,
 } from '../groomLoad';
 import { toExternalId } from '../../tasks/taskId';
 import { bindingConstraintIdsForRegions } from '../constraintCatalog';
 import { insertProject, updateProject } from '../../db/queries';
 import { createUnit } from '../../architecture/ArchUnitStore';
+import { SIZE_TYPE_CHECK } from '../../planning/procedureCore';
 
 function git(args: string[], cwd: string) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
@@ -673,5 +675,42 @@ describe('loadGroomContext', () => {
         'Notion-client subsystem unit',
       ]);
     });
+  });
+});
+
+describe('isSizeCheckSeedOverThreshold', () => {
+  it('nominates a split when files exceeds the file threshold, even with locEstimate below the LoC threshold', () => {
+    expect(
+      isSizeCheckSeedOverThreshold({
+        files: SIZE_TYPE_CHECK.fileSplitThreshold + 1,
+        locEstimate: SIZE_TYPE_CHECK.locSplitThreshold - 1,
+      }),
+    ).toBe(true);
+  });
+
+  it('nominates a split when locEstimate exceeds the LoC threshold, even with files below the file threshold', () => {
+    expect(
+      isSizeCheckSeedOverThreshold({
+        files: SIZE_TYPE_CHECK.fileSplitThreshold - 1,
+        locEstimate: SIZE_TYPE_CHECK.locSplitThreshold + 1,
+      }),
+    ).toBe(true);
+  });
+
+  it('does not nominate a split when both files and locEstimate are below their thresholds', () => {
+    expect(
+      isSizeCheckSeedOverThreshold({
+        files: SIZE_TYPE_CHECK.fileSplitThreshold - 1,
+        locEstimate: SIZE_TYPE_CHECK.locSplitThreshold - 1,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not nominate a split when locEstimate is omitted and files is below the file threshold', () => {
+    expect(
+      isSizeCheckSeedOverThreshold({
+        files: SIZE_TYPE_CHECK.fileSplitThreshold - 1,
+      }),
+    ).toBe(false);
   });
 });

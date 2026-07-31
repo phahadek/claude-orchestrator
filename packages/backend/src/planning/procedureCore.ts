@@ -1324,13 +1324,18 @@ export const READINESS_BAR = {
  */
 export const SIZE_TYPE_CHECK = {
   locSplitThreshold: 500,
+  fileSplitThreshold: 20,
   description:
-    'Code/Tooling tasks default to < 500 LoC estimated; larger tasks split unless ' +
-    'demonstrably unsplittable. Design/Planning tasks are sized in open-question ' +
-    'count instead, recorded as `{decision: "n/a"}`. type_check is an advisory ' +
-    'keyword/heuristic scan for a task body whose content does not match its ' +
-    'declared Type ("smuggling") — it never hard-blocks; the groomer records a ' +
-    'disposition.',
+    'Code/Tooling tasks default to < 500 LoC estimated and < 20 files touched; ' +
+    'exceeding either threshold nominates the task for a split — the threshold ' +
+    'nominates, it does not force, and `unsplittable` with a recorded reason ' +
+    'remains a legitimate outcome above either one. Where a task\'s files cluster ' +
+    'into distinct root-causes, the file-count signal should read as a nomination ' +
+    'to split along those clusters rather than a flat count. Design/Planning ' +
+    'tasks are sized in open-question count instead, recorded as ' +
+    '`{decision: "n/a"}`. type_check is an advisory keyword/heuristic scan for a ' +
+    'task body whose content does not match its declared Type ("smuggling") — it ' +
+    'never hard-blocks; the groomer records a disposition.',
   implementedBy: [
     'packages/backend/src/groom/groomLoad.ts (sizeCheckSeed)',
     'packages/backend/src/groom/typeCheck.ts',

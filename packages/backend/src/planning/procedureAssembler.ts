@@ -41,6 +41,7 @@
  */
 
 import {
+  SIZE_TYPE_CHECK,
   SKILL_LABELS,
   principlesFor,
   renderPrinciple,
@@ -798,7 +799,10 @@ function renderSkeleton(
           'flip at commit time on anything missing, and the block is surfaced back to ' +
           'you at stage time, not silently dropped): `size_check` ' +
           '(`{"decision": "no_split"|"split_now"|"unsplittable"|"n/a"}` — Code/Tooling ' +
-          'tasks default to "no_split" under the 500-LoC-estimated threshold, "n/a" is ' +
+          `tasks default to "no_split" under both the ${SIZE_TYPE_CHECK.locSplitThreshold}` +
+          `-LoC-estimated threshold and the ${SIZE_TYPE_CHECK.fileSplitThreshold}-file ` +
+          'threshold; exceeding either nominates a split (nominates, not forces — ' +
+          '"unsplittable" with a recorded reason remains valid above either one), "n/a" is ' +
           'for Design/Planning types only), `type_check` (`{"decision": "none"|' +
           '"flagged"|"n/a"}`, plus `signals` naming the matched phrases when ' +
           '"flagged"), `type` (the task\'s display-format Type, e.g. `"💻 Code"`), ' +

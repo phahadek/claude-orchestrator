@@ -188,7 +188,16 @@ describe('procedureCore', () => {
       'packages/backend/src/tasks/readinessGate.ts',
     );
     expect(SIZE_TYPE_CHECK.locSplitThreshold).toBe(500);
+    expect(SIZE_TYPE_CHECK.fileSplitThreshold).toBe(20);
     expect(SIZE_TYPE_CHECK.implementedBy.length).toBeGreaterThan(0);
+  });
+
+  it('states both size thresholds and the exceeding-either-nominates rule in the size_check description', () => {
+    expect(SIZE_TYPE_CHECK.description).toContain('500 LoC');
+    expect(SIZE_TYPE_CHECK.description).toContain('20 files');
+    expect(SIZE_TYPE_CHECK.description).toMatch(/exceeding either/i);
+    expect(SIZE_TYPE_CHECK.description).toMatch(/nominates/i);
+    expect(SIZE_TYPE_CHECK.description).toMatch(/unsplittable/i);
   });
 
   it('states the staging-as-terminal mandate as an explicit imperative DO/DO NOT directive for groom, design, and ops', () => {
