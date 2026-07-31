@@ -996,10 +996,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     const lastEvent = events[events.length - 1];
     if (lastEvent) {
       try {
-        const parsed = JSON.parse(lastEvent.payload) as Record<
-          string,
-          unknown
-        >;
+        const parsed = JSON.parse(lastEvent.payload) as Record<string, unknown>;
         if (typeof parsed.result === 'string') resultMessage = parsed.result;
       } catch {
         // Fall through with resultMessage undefined — recordObservedUsageLimit

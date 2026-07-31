@@ -56,9 +56,7 @@ vi.mock('../filePollutionCheck', () => ({
 }));
 
 vi.mock('../../github/PRBodyValidator', () => ({
-  validatePRBody: vi
-    .fn()
-    .mockReturnValue({ valid: true, missingSections: [] }),
+  validatePRBody: vi.fn().mockReturnValue({ valid: true, missingSections: [] }),
   buildValidationComment: vi.fn().mockReturnValue(''),
 }));
 

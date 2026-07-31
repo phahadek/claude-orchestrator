@@ -1679,9 +1679,8 @@ describe('sendOrResume — usage admission gate', () => {
   });
 
   it('does not spawn a process when usage is exhausted, and records a deferral carrying the window resets_at', async () => {
-    const { registerUsagePoller } = await import(
-      '../../orchestration/usageAdmission.js'
-    );
+    const { registerUsagePoller } =
+      await import('../../orchestration/usageAdmission.js');
     const { getUsageDeferral } = await import('../../db/queries.js');
     const resetsAt = new Date(Date.now() + 60_000).toISOString();
     registerUsagePoller({
@@ -1699,9 +1698,8 @@ describe('sendOrResume — usage admission gate', () => {
   });
 
   it('a deferred respawn leaves the session row unchanged — no status rewrite, no task-status revert — and does not kill the session', async () => {
-    const { registerUsagePoller } = await import(
-      '../../orchestration/usageAdmission.js'
-    );
+    const { registerUsagePoller } =
+      await import('../../orchestration/usageAdmission.js');
     const resetsAt = new Date(Date.now() + 60_000).toISOString();
     registerUsagePoller({
       getCache: () => ({
@@ -1723,9 +1721,8 @@ describe('sendOrResume — usage admission gate', () => {
   });
 
   it('resumes normally once usage is available (existing sendOrResume behavior unaffected)', async () => {
-    const { registerUsagePoller } = await import(
-      '../../orchestration/usageAdmission.js'
-    );
+    const { registerUsagePoller } =
+      await import('../../orchestration/usageAdmission.js');
     registerUsagePoller({ getCache: () => ({ available: false }) });
 
     const p = sm.sendOrResume(SESSION_ID, 'hello');

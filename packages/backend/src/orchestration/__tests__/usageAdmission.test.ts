@@ -216,7 +216,9 @@ describe('recordObservedUsageLimit', () => {
   });
 
   it('causes a subsequent admission check to block until the recorded instant', () => {
-    recordObservedUsageLimit("You've hit your session limit · resets 11:59pm (UTC)");
+    recordObservedUsageLimit(
+      "You've hit your session limit · resets 11:59pm (UTC)",
+    );
     expect(isUsageAdmitted().allowed).toBe(false);
   });
 });
