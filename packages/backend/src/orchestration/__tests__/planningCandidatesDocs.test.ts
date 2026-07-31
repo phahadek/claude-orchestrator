@@ -128,9 +128,7 @@ describe('isDocsCandidate', () => {
 
   it('excludes a 🗂️ Ready 📝 Docs task while the docs flow is disarmed', async () => {
     const t = task();
-    expect(await isDocsCandidate(t, { ...baseDeps, armed: false })).toBe(
-      false,
-    );
+    expect(await isDocsCandidate(t, { ...baseDeps, armed: false })).toBe(false);
   });
 
   it('includes a 🗂️ Ready 📝 Docs task once the docs flow is armed', async () => {
@@ -149,9 +147,7 @@ describe('isDocsCandidate', () => {
       const armed = armState === 'armed';
 
       const noDeps = task({ type: '🎨 Assets' });
-      expect(await isDocsCandidate(noDeps, { ...baseDeps, armed })).toBe(
-        false,
-      );
+      expect(await isDocsCandidate(noDeps, { ...baseDeps, armed })).toBe(false);
 
       seedMergedDep('dep-task', headSha);
       recordProjectDeployedSha(PROJECT, headSha);
