@@ -239,7 +239,7 @@
   gap: 4px;
 }
 
-.capabilityBadge {
+.capabilityChip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -253,11 +253,11 @@
   white-space: nowrap;
 }
 
-.capabilityBadge--auto {
+.capabilityChip--auto {
   background: rgba(166, 227, 161, 0.35);
 }
 
-.capabilityBadge--operator {
+.capabilityChip--operator {
   background: rgba(137, 180, 250, 0.35);
 }
 
@@ -308,24 +308,6 @@
 
 .tagInput:focus {
   border-bottom-color: #89b4fa;
-}
-
-.capabilityRow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-}
-
-.capabilityPill {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 10px;
-  color: var(--ctp-text, #cdd6f4);
-  background: rgba(250, 179, 135, 0.5);
-  border-radius: var(--radius-sm, 4px);
-  padding: 1px 6px;
 }
 
 .capabilityRemove {
