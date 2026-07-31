@@ -743,6 +743,65 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     expect(injectedProcedureContent).toContain('.claude/session-prompts/');
     expect(injectedProcedureContent).toMatch(/must say what you\s+searched/i);
   });
+
+  it('permits exactly one bounded instrumental write and states its boundaries', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-1',
+      disposition: { disposition: 'needs-setup' },
+    });
+    await resultPromise;
+
+    const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
+    const injectedProcedureContent = (
+      dispatchOpts as { injectedProcedureContent: string }
+    ).injectedProcedureContent;
+
+    // The narrow write exception is documented, bounded to one atomic action.
+    expect(injectedProcedureContent).toMatch(/one narrow write exception/i);
+    expect(injectedProcedureContent).toMatch(
+      /exactly\s+one atomic,?\s+instrumental write/i,
+    );
+    expect(injectedProcedureContent).toMatch(
+      /never a multi-step or open-ended action|never the start of a longer procedure/i,
+    );
+
+    // What remains explicitly out of scope for the exception.
+    expect(injectedProcedureContent).toMatch(/reconcile-and-capture/i);
+    expect(injectedProcedureContent).toMatch(/ops_journal/);
+    expect(injectedProcedureContent).toMatch(
+      /any other\s+multi-step operational change/i,
+    );
+    expect(injectedProcedureContent).toMatch(/any gate-write call/i);
+
+    // The write is instrumental only, never the verdict itself.
+    expect(injectedProcedureContent).toMatch(
+      /instrumental only and never itself the verdict/i,
+    );
+    expect(injectedProcedureContent).toMatch(
+      /backend remains the sole writer of gate state/i,
+    );
+
+    // Abstain stays the default until the single closing action is identified.
+    expect(injectedProcedureContent).toMatch(/abstain remains the default/i);
+    expect(injectedProcedureContent).toMatch(
+      /single closing action.*already\s+identified|already identified.*single closing action/i,
+    );
+    expect(injectedProcedureContent).toMatch(/genuine ambiguity.*needs-setup/i);
+
+    // A worked session.requestCapability payload example for this write class.
+    expect(injectedProcedureContent).toMatch(
+      /"capability":"<one Bash command prefix or one named\s+MCP write verb>"/,
+    );
+    expect(injectedProcedureContent).toMatch(
+      /seed\/trigger exactly this one row\/event/i,
+    );
+  });
 });
 
 describe('SessionGateItemVerifier — one-shot gate-verify appeal', () => {
