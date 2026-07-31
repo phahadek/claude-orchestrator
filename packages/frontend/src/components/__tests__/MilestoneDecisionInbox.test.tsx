@@ -425,6 +425,75 @@ describe('MilestoneDecisionInbox', () => {
     expect(cardB.textContent).not.toContain('boom');
   });
 
+  it('disables the group reject submit until an outcome is chosen, even with a reason typed', async () => {
+    const groupId = 'group-reject';
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+      {
+        id: `${groupId}-status`,
+        kind: 'task.setStatus',
+        payload: { taskId: 't-reject', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 0,
+        groupId,
+        milestone: 'M1',
+        state: 'staged',
+      },
+    ]);
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = screen.getByTestId(`milestone-decision-card-${groupId}`);
+    fireEvent.change(within(card).getByPlaceholderText(/pushback or decline/i), {
+      target: { value: 'No need' },
+    });
+
+    expect(
+      within(card)
+        .getByRole('button', { name: /reject groom/i })
+        .hasAttribute('disabled'),
+    ).toBe(true);
+  });
+
+  it('issues an explicit decline (never inferred) when Decline is chosen on the group reject toggle', async () => {
+    const groupId = 'group-decline';
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+      {
+        id: `${groupId}-status`,
+        kind: 'task.setStatus',
+        payload: { taskId: 't-decline', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 0,
+        groupId,
+        milestone: 'M1',
+        state: 'staged',
+      },
+    ]);
+    const rejectGroup = vi
+      .spyOn(stagedIntentsApi, 'rejectGroup')
+      .mockResolvedValue({ ok: true, rejected: [`${groupId}-status`] });
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const card = screen.getByTestId(`milestone-decision-card-${groupId}`);
+    fireEvent.click(within(card).getByRole('radio', { name: /decline/i }));
+    fireEvent.change(
+      within(card).getByPlaceholderText(/why is this being declined/i),
+      { target: { value: 'no longer needed' } },
+    );
+    fireEvent.click(
+      within(card).getByRole('button', { name: /decline groom/i }),
+    );
+
+    await waitFor(() =>
+      expect(rejectGroup).toHaveBeenCalledWith(groupId, {
+        outcome: 'decline',
+        reason: 'no longer needed',
+      }),
+    );
+  });
+
   it("labels a group card with its target task's name and Type, not the raw group id", async () => {
     const intents: StagedIntent[] = [
       {

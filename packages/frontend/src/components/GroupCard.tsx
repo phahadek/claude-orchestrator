@@ -16,7 +16,7 @@ interface GroupCardMember {
 }
 
 interface GroupCardDraft {
-  outcome: StagedIntentRejectOutcome;
+  outcome: StagedIntentRejectOutcome | null;
   reason: string;
 }
 
@@ -299,7 +299,9 @@ export function GroupCard({
           placeholder={
             draft.outcome === 'pushback'
               ? 'What should the session revise?'
-              : 'Why is this being declined?'
+              : draft.outcome === 'decline'
+                ? 'Why is this being declined?'
+                : 'Choose Pushback or Decline, then explain why'
           }
           value={draft.reason}
           onChange={(e) => onSetDraft({ reason: e.target.value })}
@@ -307,14 +309,16 @@ export function GroupCard({
         <button
           type="button"
           className={panelStyles.denyButton}
-          disabled={inFlight || disabled || !draft.reason.trim()}
+          disabled={inFlight || disabled || !draft.outcome || !draft.reason.trim()}
           onClick={onRejectGroup}
         >
           {inFlight
             ? 'Submitting…'
             : draft.outcome === 'pushback'
               ? '↩ Pushback groom'
-              : '✕ Decline groom'}
+              : draft.outcome === 'decline'
+                ? '✕ Decline groom'
+                : 'Reject groom'}
         </button>
       </div>
     </div>
