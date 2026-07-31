@@ -18,6 +18,8 @@ import {
   type SkillId,
 } from '../procedureCore';
 import { ALLOWED_TRANSITIONS } from '../../ops/opsJournal';
+import { passesGroomDepGate } from '../../orchestration/planningCandidates';
+import type { NotionTask } from '../../notion/types';
 
 const repoRoot = join(__dirname, '..', '..', '..', '..', '..');
 const sharedHardRulesPath = join(
@@ -256,6 +258,77 @@ describe('procedureCore', () => {
     expect(text).toMatch(
       /short one-line note \(e\.g\. in Context\) naming the siblings/,
     );
+  });
+
+  it('states the groom dependency-promotion rule, distinguished from dispatch satisfaction, and matching passesGroomDepGate', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'present-for-signoff')!;
+    const text = stepSummaryFor(step, 'groom');
+
+    // A decision-producing Type dependency blocks promotion until Done.
+    expect(text).toMatch(
+      /📐 Design \/ 📋 Planning \/ 🔎 Investigation[\s\S]{0,120}blocks promotion to Ready for as long as it is not ✅ Done/,
+    );
+    // A Code (or any other-Type) dependency only blocks at Backlog/Deferred.
+    expect(text).toMatch(
+      /including 💻 Code, blocks promotion\s+only while it sits at 🔲 Backlog or ⏭️ Deferred/,
+    );
+    expect(text).toMatch(
+      /once it has been\s+groomed to 🗂️ Ready, or picked up \(🔄 In Progress, 👀 In Review\), it\s+no longer blocks promotion/,
+    );
+    // Promotion is not dispatch: the auto-dispatcher independently gates on Done.
+    expect(text).toMatch(/Promotion is not dispatch/);
+    expect(text).toMatch(
+      /auto-dispatcher independently holds every Ready task until\s+all of its dependencies reach ✅ Done/,
+    );
+    // The rule is asserted against the real predicate, not restated as an
+    // independent — and driftable — source of truth.
+    expect(text).toContain('passesGroomDepGate');
+
+    // Distinguished from the existing Deferred/dispatch-satisfaction sentence
+    // below it, which must remain present and unmodified.
+    expect(text).toMatch(
+      /separate from the Deferred-path warning below,\s+which is about what a split leaves for a task's own dependents to\s+satisfy — not about what blocks this task's own promotion/,
+    );
+    expect(text).toMatch(
+      /a split that ends\s+on Deferred silently blocks the original's dependents, since only\s+✅ Done satisfies a Depends On/,
+    );
+  });
+
+  it('matches passesGroomDepGate: a 💻 Code dependency in flight (In Progress) does not block promotion, but one at Backlog does', () => {
+    const inFlightDep: NotionTask = {
+      id: 'dep-in-progress',
+      title: 'Code dep in progress',
+      status: '🔄 In Progress',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: '',
+    };
+    const backlogDep: NotionTask = {
+      ...inFlightDep,
+      id: 'dep-backlog',
+      status: '🔲 Backlog',
+    };
+    const taskWithInFlightDep: NotionTask = {
+      id: 'task-1',
+      title: 'Task',
+      status: '🔲 Backlog',
+      type: '💻 Code',
+      dependsOn: ['dep-in-progress'],
+      notionUrl: '',
+    };
+    const taskWithBacklogDep: NotionTask = {
+      ...taskWithInFlightDep,
+      id: 'task-2',
+      dependsOn: ['dep-backlog'],
+    };
+    const tasksById = new Map(
+      [inFlightDep, backlogDep, taskWithInFlightDep, taskWithBacklogDep].map(
+        (t) => [t.id, t],
+      ),
+    );
+
+    expect(passesGroomDepGate(taskWithInFlightDep, tasksById)).toBe(true);
+    expect(passesGroomDepGate(taskWithBacklogDep, tasksById)).toBe(false);
   });
 
   it('names task.create among the intents that share the decision groupId when splitting-by-narrowing produces one', () => {
