@@ -15,9 +15,6 @@ import type {
   NewSession,
   SessionEvent,
   NewSessionEvent,
-  PermissionEvent,
-  NewPermissionEvent,
-  PermissionRule,
   PermissionDenialRow,
   NewPermissionDenialRow,
   TaskCache,
@@ -1208,51 +1205,10 @@ export function getEventsBySession(sessionId: string): SessionEvent[] {
   }) as SessionEvent[];
 }
 
-// ─── permission_events ─────────────────────────────────────────────────────
-
-const stmtInsertPermissionEvent = db.prepare<NewPermissionEvent>(`
-  INSERT INTO permission_events
-    (session_id, tool_name, proposed_action, decision, rule_matched, decided_at)
-  VALUES
-    (@session_id, @tool_name, @proposed_action, @decision, @rule_matched, @decided_at)
-`);
-
-export function insertPermissionEvent(e: NewPermissionEvent): void {
-  stmtInsertPermissionEvent.run(e);
-}
-
-export function getRecentPermissionEvents(
-  limit: number,
-): Array<PermissionEvent & { task_url: string | null }> {
-  return db
-    .prepare(
-      `SELECT pe.*, s.task_url FROM permission_events pe
-       LEFT JOIN sessions s ON pe.session_id = s.session_id
-       ORDER BY pe.decided_at DESC LIMIT ?`,
-    )
-    .all(limit) as Array<PermissionEvent & { task_url: string | null }>;
-}
-
-const stmtClearPermissionEvents = db.prepare(`DELETE FROM permission_events`);
-
-export function clearPermissionEvents(): void {
-  stmtClearPermissionEvents.run();
-}
-
 const stmtClearPermissionDenials = db.prepare(`DELETE FROM permission_denials`);
 
 export function clearPermissionDenials(): void {
   stmtClearPermissionDenials.run();
-}
-
-// ─── permission_rules ──────────────────────────────────────────────────────
-
-const stmtGetRules = db.prepare(`
-  SELECT * FROM permission_rules WHERE enabled = 1 ORDER BY order_index ASC
-`);
-
-export function getRules(): PermissionRule[] {
-  return stmtGetRules.all() as PermissionRule[];
 }
 
 // ─── permission_denials ─────────────────────────────────────────────────────

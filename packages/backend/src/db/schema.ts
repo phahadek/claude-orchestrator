@@ -38,27 +38,6 @@ export function runMigrations(target: Database.Database): void {
       FOREIGN KEY (session_id) REFERENCES sessions(session_id)
     );
 
-    CREATE TABLE IF NOT EXISTS permission_events (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id      TEXT    NOT NULL,
-      tool_name       TEXT    NOT NULL,
-      proposed_action TEXT,
-      decision        TEXT    NOT NULL,
-      rule_matched    TEXT,
-      decided_at      INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS permission_rules (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      order_index INTEGER NOT NULL,
-      pattern     TEXT    NOT NULL,
-      match_type  TEXT    NOT NULL,
-      decision    TEXT    NOT NULL,
-      label       TEXT,
-      enabled     INTEGER NOT NULL DEFAULT 1
-    );
-
     CREATE TABLE IF NOT EXISTS permission_denials (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id  TEXT    NOT NULL,
@@ -818,30 +797,6 @@ export function runMigrations(target: Database.Database): void {
         CREATE INDEX idx_session_events_session_id_id ON session_events(session_id, id DESC);
         CREATE INDEX idx_session_events_session_id_event_type ON session_events(session_id, event_type);
         CREATE INDEX idx_session_events_timestamp ON session_events(timestamp DESC);
-        COMMIT;
-      `);
-    }
-
-    if (!getTableSql('permission_events').includes('ON DELETE CASCADE')) {
-      target.exec(`
-        BEGIN TRANSACTION;
-        DROP TABLE IF EXISTS permission_events__new;
-        CREATE TABLE permission_events__new (
-          id              INTEGER PRIMARY KEY AUTOINCREMENT,
-          session_id      TEXT    NOT NULL,
-          tool_name       TEXT    NOT NULL,
-          proposed_action TEXT,
-          decision        TEXT    NOT NULL,
-          rule_matched    TEXT,
-          decided_at      INTEGER NOT NULL,
-          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-        );
-        INSERT INTO permission_events__new (id, session_id, tool_name, proposed_action, decision, rule_matched, decided_at)
-          SELECT id, session_id, tool_name, proposed_action, decision, rule_matched, decided_at
-          FROM permission_events
-          WHERE session_id IN (SELECT session_id FROM sessions);
-        DROP TABLE permission_events;
-        ALTER TABLE permission_events__new RENAME TO permission_events;
         COMMIT;
       `);
     }
