@@ -12,7 +12,28 @@ type BurndownState = 'pending' | 'staged' | 'done';
  */
 type GroomingState = 'blocked' | 'inGrooming' | 'untouched';
 
-export type SegmentState = BurndownState | GroomingState;
+/** Gate's own state-machine vocabulary (see gateService.ts GATE_STATES), rendered in full so resolved items are visible alongside outstanding ones. */
+type GateState =
+  | 'open'
+  | 'runnable'
+  | 'pendingApproval'
+  | 'pass'
+  | 'fail'
+  | 'deferred'
+  | 'discarded';
+
+export type SegmentState = BurndownState | GroomingState | GateState;
+
+/** Maps a gate item's raw state string (gateService.ts) to its SegmentState key. */
+const GATE_STATE_KEY: Record<string, GateState> = {
+  open: 'open',
+  runnable: 'runnable',
+  'pending-approval': 'pendingApproval',
+  pass: 'pass',
+  fail: 'fail',
+  deferred: 'deferred',
+  discarded: 'discarded',
+};
 
 export const PHASE_ORDER = [
   'design',
@@ -32,7 +53,15 @@ export const PHASE_SEGMENT_ORDER: Record<PhaseKey, readonly SegmentState[]> = {
   code: ['pending', 'staged', 'done'],
   investigation: ['pending', 'staged', 'done'],
   ops: ['pending', 'staged', 'done'],
-  gate: ['pending'],
+  gate: [
+    'open',
+    'runnable',
+    'pendingApproval',
+    'pass',
+    'fail',
+    'deferred',
+    'discarded',
+  ],
 };
 
 /** The one PhaseKey that isn't a task filter — gate items are gate_item rows, not tasks (see isGatePhase). */
@@ -63,6 +92,13 @@ export const SEGMENT_STATE_LABELS: Record<SegmentState, string> = {
   blocked: 'Blocked',
   inGrooming: 'In grooming',
   untouched: 'Untouched',
+  open: 'Open',
+  runnable: 'Runnable',
+  pendingApproval: 'Pending approval',
+  pass: 'Pass',
+  fail: 'Fail',
+  deferred: 'Deferred',
+  discarded: 'Discarded',
 };
 
 /** Task types that map to a phase once a task has cleared grooming (Ready or beyond). */
@@ -152,7 +188,11 @@ export function computePhaseBurndown(
 
   const gate = convergence?.axes.gate;
   if (gate) {
-    result.gate.counts.pending = gate.blockingCount;
+    const gateCounts = result.gate.counts;
+    for (const [rawState, count] of Object.entries(gate.counts)) {
+      const key = GATE_STATE_KEY[rawState] ?? 'open';
+      gateCounts[key] = (gateCounts[key] ?? 0) + count;
+    }
     result.gate.blockerCount = gate.bespokeCount;
   }
 

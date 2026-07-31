@@ -55,6 +55,7 @@ function makeConvergence(
         status: 'blocked',
         blockingCount: 2,
         bespokeCount: 1,
+        counts: { open: 1, runnable: 1, pass: 3 },
         blocking: [],
       },
       seed: { status: 'green', blockingCount: 0, blocking: [] },
@@ -168,9 +169,24 @@ describe('MilestoneBurndown', () => {
     );
 
     const gateRow = screen.getByTestId('phase-segment-gate');
-    expect(gateRow.textContent).toContain('2');
+    expect(gateRow.textContent).toContain('5');
     const gateWarning = screen.getByTestId('phase-blockers-gate');
     expect(gateWarning.textContent).toContain('1');
+  });
+
+  it('renders a resolved (pass) segment in the gate row alongside outstanding states', () => {
+    render(
+      <MilestoneBurndown
+        tasks={[]}
+        convergence={makeConvergence()}
+        activePhase={null}
+        onPhaseSelect={vi.fn()}
+      />,
+    );
+
+    const gateRow = screen.getByTestId('phase-segment-gate');
+    const fills = gateRow.querySelectorAll('[class*="fill"]');
+    expect(fills.length).toBeGreaterThan(1);
   });
 
   it('clicking a phase segment invokes the shell phase filter callback', () => {
@@ -293,6 +309,7 @@ describe('MilestoneBurndown convergence header', () => {
               status: 'green',
               blockingCount: 0,
               bespokeCount: 0,
+              counts: {},
               blocking: [],
             },
             seed: { status: 'green', blockingCount: 0, blocking: [] },

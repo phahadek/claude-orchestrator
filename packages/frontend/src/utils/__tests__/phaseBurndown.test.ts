@@ -46,6 +46,14 @@ function makeConvergence(
         status: 'blocked',
         blockingCount: 121,
         bespokeCount: 3,
+        counts: {
+          open: 100,
+          runnable: 20,
+          'pending-approval': 1,
+          pass: 200,
+          fail: 5,
+          deferred: 3,
+        },
         blocking: [],
       },
       seed: { status: 'green', blockingCount: 0, blocking: [] },
@@ -163,9 +171,21 @@ describe('computePhaseBurndown', () => {
 
   it('derives the gate bar warning from a different quantity than its total', () => {
     const result = computePhaseBurndown([], makeConvergence());
-    expect(phaseTotal(result.gate.counts)).toBe(121);
+    expect(phaseTotal(result.gate.counts)).toBe(329);
     expect(result.gate.blockerCount).toBe(3);
     expect(result.gate.blockerCount).not.toBe(phaseTotal(result.gate.counts));
+  });
+
+  it('carries per-state gate counts through, including resolved states', () => {
+    const result = computePhaseBurndown([], makeConvergence());
+    expect(result.gate.counts).toEqual({
+      open: 100,
+      runnable: 20,
+      pendingApproval: 1,
+      pass: 200,
+      fail: 5,
+      deferred: 3,
+    });
   });
 
   it('counts blockers per phase for task-backed phases', () => {

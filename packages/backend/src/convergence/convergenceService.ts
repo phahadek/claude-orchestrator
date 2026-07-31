@@ -57,6 +57,8 @@ interface GateAxis {
   blockingCount: number;
   /** Subset of blocking items sitting in a bespoke (unrecognized) state — needs human re-disposition, distinct from the blocking total. */
   bespokeCount: number;
+  /** Per-state item totals (open/runnable/pass/fail/deferred/etc), independent of the blocking filter — sums to the milestone's full gate-item count. */
+  counts: Record<string, number>;
   blocking: GateAxisBlockingItem[];
 }
 
@@ -167,6 +169,7 @@ export function getMilestoneConvergence(
     status: gateReadiness.status,
     blockingCount: gateReadiness.blocking.length,
     bespokeCount: gateReadiness.bespokeStates.length,
+    counts: gateReadiness.counts,
     blocking: gateReadiness.blocking.map((b) => ({
       id: b.id,
       text: b.text,
