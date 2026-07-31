@@ -6,6 +6,7 @@ import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import type { StagedIntent } from '../api/stagedIntents';
 import type { SessionState } from '../hooks/useSessionStore';
 import { useMilestoneConvergence } from '../hooks/useMilestoneConvergence';
+import { useIsMobile } from '../hooks/useIsMobile';
 import { MilestoneBurndown } from './MilestoneBurndown';
 import { FlowArmToggle } from './FlowArmToggle';
 import {
@@ -20,6 +21,14 @@ import styles from './MilestoneView.module.css';
 const MIN_MIDDLE_WIDTH_PCT = 30;
 const MAX_MIDDLE_WIDTH_PCT = 80;
 const DEFAULT_MIDDLE_WIDTH_PCT = 55;
+
+type MobileRegion = 'burndown' | 'stack' | 'drilldown';
+
+const MOBILE_REGIONS: Array<{ id: MobileRegion; label: string }> = [
+  { id: 'burndown', label: 'Burndown' },
+  { id: 'stack', label: 'Decisions' },
+  { id: 'drilldown', label: 'Drill-down' },
+];
 
 interface Props {
   activeProjectId: string | null;
@@ -57,6 +66,8 @@ export function MilestoneView({
   const [selection, setSelection] = useState<MilestoneStackSelection | null>(
     null,
   );
+  const isMobile = useIsMobile();
+  const [mobileRegion, setMobileRegion] = useState<MobileRegion>('burndown');
 
   const invalidationKey = useMemo(
     () => `${lastTaskUpdate?.taskId ?? ''}:${lastStagedIntentChange?.id ?? ''}`,
@@ -125,6 +136,111 @@ export function MilestoneView({
     );
   }
 
+  const burndownContent = (
+    <>
+      <MilestoneBurndown
+        tasks={tasks}
+        convergence={convergence}
+        activePhase={phaseFilter}
+        onPhaseSelect={handlePhaseFilterChange}
+      />
+      <FlowArmToggle
+        milestoneId={activeBoardId}
+        autoLaunchEnabled={project?.autoLaunchEnabled}
+      />
+    </>
+  );
+
+  const decisionStackContent = isGatePhase(phaseFilter) ? (
+    <GateReadinessPanel
+      activeProjectId={activeProjectId}
+      activeBoardMilestone={activeBoardMilestone}
+      sessions={sessions}
+      send={send}
+      setSessionArchived={setSessionArchived}
+      setSessionFavorited={setSessionFavorited}
+      project={project}
+    />
+  ) : activeProjectId && milestoneKey ? (
+    <MilestoneDecisionStack
+      projectId={activeProjectId}
+      milestone={milestoneKey}
+      tasks={tasks}
+      phaseFilter={phaseFilter}
+      selection={selection}
+      onSelect={setSelection}
+    />
+  ) : (
+    <div className={styles.mountPlaceholder}>
+      Decision stack{phaseFilter ? ` (filtered: ${phaseFilter})` : ''}
+    </div>
+  );
+
+  const drilldownContent = (
+    <MilestoneDrilldown
+      selection={selection}
+      tasks={tasks}
+      projectId={activeProjectId}
+      sessions={sessions}
+      send={send}
+      setSessionArchived={setSessionArchived}
+      setSessionFavorited={setSessionFavorited}
+      project={project}
+    />
+  );
+
+  if (isMobile) {
+    return (
+      <div
+        className={styles.mobileContainer}
+        ref={containerRef}
+        data-testid="milestone-view-shell"
+      >
+        <div className={styles.mobileTabs} role="tablist">
+          {MOBILE_REGIONS.map((region) => (
+            <button
+              key={region.id}
+              type="button"
+              role="tab"
+              aria-selected={mobileRegion === region.id}
+              className={styles.mobileTab}
+              onClick={() => setMobileRegion(region.id)}
+            >
+              {region.label}
+            </button>
+          ))}
+        </div>
+
+        {mobileRegion === 'burndown' && (
+          <div
+            className={styles.mobileRegion}
+            data-testid="milestone-burndown-mount"
+          >
+            {burndownContent}
+          </div>
+        )}
+
+        {mobileRegion === 'stack' && (
+          <div
+            className={styles.mobileRegion}
+            data-testid="milestone-decision-stack-mount"
+          >
+            {decisionStackContent}
+          </div>
+        )}
+
+        {mobileRegion === 'drilldown' && (
+          <div
+            className={styles.mobileRegion}
+            data-testid="milestone-drilldown-mount"
+          >
+            {drilldownContent}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       className={styles.container}
@@ -132,16 +248,7 @@ export function MilestoneView({
       data-testid="milestone-view-shell"
     >
       <div className={styles.leftColumn} data-testid="milestone-burndown-mount">
-        <MilestoneBurndown
-          tasks={tasks}
-          convergence={convergence}
-          activePhase={phaseFilter}
-          onPhaseSelect={handlePhaseFilterChange}
-        />
-        <FlowArmToggle
-          milestoneId={activeBoardId}
-          autoLaunchEnabled={project?.autoLaunchEnabled}
-        />
+        {burndownContent}
       </div>
 
       <div
@@ -149,30 +256,7 @@ export function MilestoneView({
         style={{ width: `${middleWidthPct}%` }}
         data-testid="milestone-decision-stack-mount"
       >
-        {isGatePhase(phaseFilter) ? (
-          <GateReadinessPanel
-            activeProjectId={activeProjectId}
-            activeBoardMilestone={activeBoardMilestone}
-            sessions={sessions}
-            send={send}
-            setSessionArchived={setSessionArchived}
-            setSessionFavorited={setSessionFavorited}
-            project={project}
-          />
-        ) : activeProjectId && milestoneKey ? (
-          <MilestoneDecisionStack
-            projectId={activeProjectId}
-            milestone={milestoneKey}
-            tasks={tasks}
-            phaseFilter={phaseFilter}
-            selection={selection}
-            onSelect={setSelection}
-          />
-        ) : (
-          <div className={styles.mountPlaceholder}>
-            Decision stack{phaseFilter ? ` (filtered: ${phaseFilter})` : ''}
-          </div>
-        )}
+        {decisionStackContent}
       </div>
 
       <div
@@ -184,16 +268,7 @@ export function MilestoneView({
         className={styles.rightPanel}
         data-testid="milestone-drilldown-mount"
       >
-        <MilestoneDrilldown
-          selection={selection}
-          tasks={tasks}
-          projectId={activeProjectId}
-          sessions={sessions}
-          send={send}
-          setSessionArchived={setSessionArchived}
-          setSessionFavorited={setSessionFavorited}
-          project={project}
-        />
+        {drilldownContent}
       </div>
     </div>
   );
