@@ -796,9 +796,7 @@ describe('runGateReconcilerTick', () => {
 
     expect(verify).toHaveBeenCalledTimes(1);
     const sessionCount = db
-      .prepare(
-        `SELECT COUNT(*) as c FROM sessions WHERE task_id = ?`,
-      )
+      .prepare(`SELECT COUNT(*) as c FROM sessions WHERE task_id = ?`)
       .get(`gate-item:${item.id}`) as { c: number };
     expect(sessionCount.c).toBe(1);
   });

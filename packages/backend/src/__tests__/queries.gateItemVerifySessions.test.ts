@@ -133,7 +133,7 @@ describe('hasLiveVerifySessionForGateItem() — per-item dispatch guard', () => 
   });
 
   it.each(['done', 'error', 'killed', 'superseded'])(
-    'is false when the item\'s only prior session is terminal (%s)',
+    "is false when the item's only prior session is terminal (%s)",
     (status) => {
       insertSession({
         session_id: `sess-${status}`,
