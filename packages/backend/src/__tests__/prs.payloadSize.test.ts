@@ -109,11 +109,7 @@ describe('GET /api/prs — measured payload size', () => {
     const github = makeMockGitHub();
     app.use(
       '/api',
-      createPrsRouter(
-        github,
-        {} as PRReviewService,
-        {} as SessionManager,
-      ),
+      createPrsRouter(github, {} as PRReviewService, {} as SessionManager),
     );
 
     const res = await supertest(app).get('/api/prs?projectId=proj-1');
