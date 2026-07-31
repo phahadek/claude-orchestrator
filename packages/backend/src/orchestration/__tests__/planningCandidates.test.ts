@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { NotionTask } from '../../notion/types';
 import {
   isGroomCandidate,
@@ -6,6 +6,14 @@ import {
   isDesignCandidate,
   passesDesignDepGate,
 } from '../planningCandidates';
+
+vi.mock('../../db/db.js', async () => {
+  const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
+});
+
+import { db } from '../../db/db.js';
+import { updateTaskStatusInBoardCaches, getTaskCache } from '../../db/queries';
 
 function task(overrides: Partial<NotionTask> = {}): NotionTask {
   return {
@@ -268,5 +276,41 @@ describe('isDesignCandidate', () => {
     expect(isDesignCandidate(t, { ...baseDeps, tasksById: notDone })).toBe(
       false,
     );
+  });
+});
+
+describe('isGroomCandidate — post-write candidate suppression via the board-cache write-through', () => {
+  beforeEach(() => {
+    db.prepare('DELETE FROM task_cache').run();
+  });
+
+  const baseDeps = {
+    tasksById: new Map<string, NotionTask>(),
+    hasActiveSession: () => false,
+    hasActiveGroomSession: () => false,
+    inCrashCooldown: () => false,
+  };
+
+  it('a task read back after updateTaskStatusInBoardCaches(Backlog -> Ready) is no longer a groom candidate', () => {
+    const rawId = 'abc12345-0000-0000-0000-000000000000';
+    db.prepare(
+      `INSERT INTO task_cache (task_id, fetched_at, raw_json) VALUES (?, ?, ?)`,
+    ).run(
+      'board:m1',
+      1000,
+      JSON.stringify([task({ id: rawId, status: '🔲 Backlog' })]),
+    );
+
+    const before = JSON.parse(
+      getTaskCache('board:m1')!.raw_json,
+    ) as NotionTask[];
+    expect(isGroomCandidate(before[0], baseDeps)).toBe(true);
+
+    updateTaskStatusInBoardCaches(`notion:${rawId}`, '🗂️ Ready');
+
+    const after = JSON.parse(
+      getTaskCache('board:m1')!.raw_json,
+    ) as NotionTask[];
+    expect(isGroomCandidate(after[0], baseDeps)).toBe(false);
   });
 });
