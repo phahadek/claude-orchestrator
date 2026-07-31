@@ -80,6 +80,7 @@ import { register as registerWorktreeReconciler } from './orchestration/Worktree
 import {
   register as registerGateReconciler,
   configureGateVerification,
+  reattachOutstandingGateVerifications,
 } from './gate/gateReconciler';
 import { registerGateMergeConsumer } from './gate/gateMergeConsumer';
 import { SessionGateItemVerifier } from './gate/gateItemVerifier';
@@ -576,6 +577,9 @@ void runBootSequence({
   scheduler,
   sessionEventsPruner,
   stalledPRReconciler,
+  gateVerifyReconciler: {
+    reattachOutstanding: reattachOutstandingGateVerifications,
+  },
   server,
   port: PORT,
   broadcast,

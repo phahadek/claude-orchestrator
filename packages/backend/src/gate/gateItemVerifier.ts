@@ -2,6 +2,7 @@ import { logger } from '../logger';
 import { getProjectById } from '../config';
 import {
   getSession,
+  hasActiveCapabilityRequestForSession,
   markSessionDone,
   TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
@@ -885,6 +886,20 @@ export class SessionGateItemVerifier implements GateItemVerifier {
   }
 
   /**
+   * Re-attaches an `awaitDisposition` listener to an already-dispatched,
+   * still-live gate-verify session — no new session dispatch, since the
+   * session found by boot reconciliation is already parked awaiting its
+   * operator capability-request disposition and will resume on its own.
+   * Recovers the case a backend restart loses: the in-memory listener that
+   * would have routed the session's eventual `gate_verify_disposition`
+   * report died with the old process, so without this the report fires
+   * into a void and the item never leaves its non-terminal state.
+   */
+  reattach(item: GateItem, sessionId: string): Promise<GateVerificationResult> {
+    return this.awaitDisposition(item, sessionId);
+  }
+
+  /**
    * Awaits the dispatched session's disposition, applying the pass/abstention
    * evidence contracts while the session is still live — ahead of teardown,
    * not after it — so a contract-downgraded `pass` can be routed back to the
@@ -1103,12 +1118,32 @@ export class SessionGateItemVerifier implements GateItemVerifier {
         }
       }, this.pollIntervalMs);
 
-      handles.budget = setTimeout(() => {
+      /**
+       * The wall-clock budget, exempted while this session has a pending
+       * `session.requestCapability` intent outstanding — the same shape of
+       * race `appealInFlight` already guards against, but for a parked
+       * write-capability request awaiting operator disposition rather than
+       * an appeal revision. A budget firing mid-request would tear the
+       * session down (markSessionDone + archiveAndEndSession) out from
+       * under a legitimately parked request, racing the human review the
+       * request exists to wait for. While parked, recheck on the poll
+       * cadence instead of failing; once the request clears, re-arm a full,
+       * fresh budget window so the verifier's own remaining investigative
+       * effort — not the parked wait — is what gets governed from here on.
+       */
+      const onBudgetFire = () => {
         if (appealInFlight) {
           logger.warn(
             `[GateItemVerifier] session ${sessionId.slice(0, 8)} exceeded budget while its gate-verify appeal was outstanding`,
           );
           teardown(applyContracts(appealFallback!));
+          return;
+        }
+        if (hasActiveCapabilityRequestForSession(sessionId)) {
+          logger.info(
+            `[GateItemVerifier] session ${sessionId.slice(0, 8)} exceeded budget while a capability request was outstanding — suspending budget until it clears`,
+          );
+          handles.budget = setTimeout(waitForCapabilityClear, this.pollIntervalMs);
           return;
         }
         teardown(
@@ -1117,7 +1152,17 @@ export class SessionGateItemVerifier implements GateItemVerifier {
             evidence: { reason: 'verification budget exceeded', sessionId },
           }),
         );
-      }, this.budgetMs);
+      };
+
+      const waitForCapabilityClear = () => {
+        if (hasActiveCapabilityRequestForSession(sessionId)) {
+          handles.budget = setTimeout(waitForCapabilityClear, this.pollIntervalMs);
+          return;
+        }
+        handles.budget = setTimeout(onBudgetFire, this.budgetMs);
+      };
+
+      handles.budget = setTimeout(onBudgetFire, this.budgetMs);
 
       if (preCaptured) {
         handleReport(toResult(preCaptured));

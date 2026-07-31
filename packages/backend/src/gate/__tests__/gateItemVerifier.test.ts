@@ -4,6 +4,7 @@ import { EventEmitter } from 'events';
 vi.mock('../../db/queries', () => ({
   getSession: vi.fn(),
   markSessionDone: vi.fn(),
+  hasActiveCapabilityRequestForSession: vi.fn().mockReturnValue(false),
   TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
 }));
 
@@ -28,7 +29,11 @@ import {
   isPreconditionOnlyEvidence,
   SessionGateItemVerifier,
 } from '../gateItemVerifier';
-import { getSession, markSessionDone } from '../../db/queries';
+import {
+  getSession,
+  markSessionDone,
+  hasActiveCapabilityRequestForSession,
+} from '../../db/queries';
 import { appendGateItemEvent } from '../gateService';
 import type { GateItem } from '../gateStore';
 
@@ -387,6 +392,7 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     vi.mocked(getSession).mockReset();
     vi.mocked(markSessionDone).mockReset();
     vi.mocked(appendGateItemEvent).mockReset();
+    vi.mocked(hasActiveCapabilityRequestForSession).mockReset().mockReturnValue(false);
   });
 
   it('marks the session done once the gate_verify_disposition event fires', async () => {
@@ -623,6 +629,43 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     expect(sessionManager.archiveAndEndSession).not.toHaveBeenCalled();
   });
 
+  it('exempts the wall-clock budget while a capability request is outstanding, and still resolves once granted', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+    // Outstanding past the (tiny, test-scale) budget window — the budget
+    // must not tear the session down while this holds true.
+    vi.mocked(hasActiveCapabilityRequestForSession).mockReturnValue(true);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never, {
+      budgetMs: 15,
+      pollIntervalMs: 5,
+    });
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Well past the 15ms budget — without the exemption this would already
+    // have torn the session down as a budget-exceeded needs-setup.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sessionManager.archiveAndEndSession).not.toHaveBeenCalled();
+
+    // The request clears (operator grants it) — the session resumes and
+    // eventually reports its disposition.
+    vi.mocked(hasActiveCapabilityRequestForSession).mockReturnValue(false);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-1',
+      disposition: {
+        disposition: 'pass',
+        evidence: { basis: 'operational', note: 'audit_log shows the run' },
+      },
+    });
+
+    const result = await resultPromise;
+    expect(result.disposition).toBe('pass');
+    expect(sessionManager.archiveAndEndSession).toHaveBeenCalledWith('sess-1');
+  });
+
   it('captures a gate_verify_disposition emitted synchronously as start() resolves, before the poll fallback can fire', async () => {
     // A fast session can emit its disposition the instant sessionManager.start()
     // resolves — before any code after the `await` has had a chance to attach a
@@ -842,6 +885,7 @@ describe('SessionGateItemVerifier — one-shot gate-verify appeal', () => {
     vi.mocked(getSession).mockReset();
     vi.mocked(markSessionDone).mockReset();
     vi.mocked(appendGateItemEvent).mockReset();
+    vi.mocked(hasActiveCapabilityRequestForSession).mockReset().mockReturnValue(false);
   });
 
   it('delivers appeal feedback naming the failing clause while the session is still live, before any teardown', async () => {
@@ -1060,6 +1104,7 @@ describe('SessionGateItemVerifier — one-shot reclassify-omission appeal', () =
     vi.mocked(getSession).mockReset();
     vi.mocked(markSessionDone).mockReset();
     vi.mocked(appendGateItemEvent).mockReset();
+    vi.mocked(hasActiveCapabilityRequestForSession).mockReset().mockReturnValue(false);
   });
 
   it('delivers exactly one appeal naming the omission for a needs-setup asserting structural unverifiability with no reclassify', async () => {

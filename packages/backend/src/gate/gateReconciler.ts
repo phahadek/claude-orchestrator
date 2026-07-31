@@ -3,7 +3,11 @@ import type { Scheduler } from '../orchestration/Scheduler';
 import { getAllProjects, getProjectById, runtimeSettings } from '../config';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { getProjectDeployedSha } from '../deploy/deployService';
-import { getArm, hasLiveVerifySessionForGateItem } from '../db/queries';
+import {
+  getArm,
+  getGateItemsWithPendingCapabilityRequest,
+  hasLiveVerifySessionForGateItem,
+} from '../db/queries';
 import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
 import { catchUpMergeCommits } from './gateMergeConsumer';
@@ -68,6 +72,25 @@ export interface GateVerificationResult {
  */
 export interface GateItemVerifier {
   verify(item: GateItem): Promise<GateVerificationResult>;
+}
+
+/**
+ * A verifier that can also re-attach to an already-dispatched, still-live
+ * verify session — no new dispatch, just a fresh `awaitDisposition`
+ * listener. Boot reconciliation uses this (when the wired verifier
+ * implements it, e.g. SessionGateItemVerifier) to recover a session left
+ * parked on an outstanding capability request across a restart, since the
+ * old process's in-memory listener died with it.
+ */
+export interface ReattachableGateItemVerifier extends GateItemVerifier {
+  reattach(item: GateItem, sessionId: string): Promise<GateVerificationResult>;
+}
+
+function isReattachable(
+  verifier: GateItemVerifier,
+): verifier is ReattachableGateItemVerifier {
+  return typeof (verifier as ReattachableGateItemVerifier).reattach ===
+    'function';
 }
 
 interface FollowupFixTask {
@@ -272,6 +295,136 @@ async function processItem(
   );
 }
 
+/**
+ * The post-`verify()` routing body: pass/fail/needs-setup/reclassify ->
+ * appendGateItemEvent + follow-up-fix logic. Split out from
+ * runReservedVerification so it's reusable from the boot-reattachment path
+ * (reattachOutstandingGateVerifications below), which obtains its result via
+ * a verifier's `reattach` rather than a fresh `verify()` dispatch but routes
+ * it identically.
+ */
+async function routeVerificationResult(
+  item: GateItem,
+  result: GateVerificationResult,
+  followupFiler: FollowupFixTaskFiler,
+  deploySha: string | null,
+  concurrency: GateVerificationConcurrencyConfig = {},
+  /** true = unattended (reconciler auto-launch / boot reattachment); false = operator-triggered manual dispatch (dispatchGateItemVerification) — recorded on every event this run appends. */
+  unattended = false,
+): Promise<ProcessedGateItem> {
+  const maxFixAttempts = concurrency.maxFixAttempts ?? DEFAULT_MAX_FIX_ATTEMPTS;
+
+  if (result.reclassify) {
+    const outcome = proposeGateItemReclassification(
+      item.id,
+      result.reclassify.to,
+      result.reclassify.reason,
+    );
+    if (outcome.applied) {
+      logger.info(
+        `[GateReconciler] gate item ${item.id} reclassified ${item.classification} -> ${outcome.item.classification} by verifier: ${result.reclassify.reason}`,
+      );
+      return {
+        itemId: item.id,
+        classification: outcome.item.classification,
+        disposition: 'needs-setup',
+        reclassifiedTo: outcome.item.classification,
+      };
+    }
+    // Rejected (invalid target, no-op, or the ping-pong guard) — abstain
+    // rather than silently drop the run; the rejection reason and the
+    // session's original evidence both ride along for a human to see.
+    appendGateItemEvent(item.id, {
+      disposition: 'needs-setup',
+      evidence: {
+        reason: 'verifier-proposed reclassification rejected',
+        rejectedReason: outcome.rejectedReason,
+        proposedReclassify: result.reclassify,
+        verifierEvidence: result.evidence,
+      },
+      deploySha: deploySha ?? undefined,
+      unattended,
+    });
+    return {
+      itemId: item.id,
+      classification: item.classification,
+      disposition: 'needs-setup',
+    };
+  }
+  if (result.disposition === 'needs-setup') {
+    appendGateItemEvent(item.id, {
+      disposition: 'needs-setup',
+      evidence: result.evidence,
+      deploySha: deploySha ?? undefined,
+      unattended,
+    });
+  } else if (result.disposition === 'fail') {
+    const priorFollowon = latestFailFollowon(item);
+    const dedup =
+      priorFollowon !== undefined && !isFollowupTaskDone(priorFollowon);
+    const fixAttempts = countFixAttempts(item);
+
+    if (dedup) {
+      appendGateItemEvent(item.id, {
+        disposition: 'fail',
+        evidence: failEvidence(item, result.evidence),
+        filedFollowon: priorFollowon,
+        deploySha: deploySha ?? undefined,
+        unattended,
+      });
+      gateStore.advanceState(item.id, 'open', 'fail', new Date().toISOString());
+    } else if (fixAttempts >= maxFixAttempts) {
+      appendGateItemEvent(item.id, {
+        disposition: 'needs-setup',
+        evidence: {
+          verifierEvidence: result.evidence,
+          reason: `max-fix-attempts (${maxFixAttempts}) reached — escalate to operator`,
+        },
+        unattended,
+      });
+      return {
+        itemId: item.id,
+        classification: item.classification,
+        disposition: 'needs-setup',
+      };
+    } else {
+      const followup = await followupFiler.fileFollowupFixTask(item, result);
+      appendGateItemEvent(item.id, {
+        disposition: 'fail',
+        evidence: failEvidence(item, result.evidence),
+        filedFollowon: followup.taskId,
+        deploySha: deploySha ?? undefined,
+        unattended,
+      });
+      const now = new Date().toISOString();
+      gateStore.addSource(
+        item.id,
+        {
+          sourceTaskId: followup.taskId,
+          sourceTaskTitle: followup.taskTitle,
+        },
+        now,
+      );
+      gateStore.advanceState(item.id, 'open', 'fail', now);
+    }
+  } else {
+    // pass — auto-pass is provenance-tagged, never anonymous.
+    appendGateItemEvent(item.id, {
+      disposition: result.disposition,
+      evidence: result.evidence,
+      deploySha: deploySha ?? undefined,
+      operator: 'gate-verifier',
+      unattended,
+    });
+  }
+
+  return {
+    itemId: item.id,
+    classification: item.classification,
+    disposition: result.disposition,
+  };
+}
+
 /** The verify-dispatch-and-route body, assuming the in-flight slot is already reserved (by processItem or dispatchGateItemVerification). Always releases it. */
 async function runReservedVerification(
   item: GateItem,
@@ -284,7 +437,6 @@ async function runReservedVerification(
 ): Promise<ProcessedGateItem | null> {
   const maxDispatchAttempts =
     concurrency.maxDispatchAttempts ?? DEFAULT_MAX_DISPATCH_ATTEMPTS;
-  const maxFixAttempts = concurrency.maxFixAttempts ?? DEFAULT_MAX_FIX_ATTEMPTS;
 
   let result: GateVerificationResult;
   try {
@@ -318,123 +470,66 @@ async function runReservedVerification(
   crashCounts.delete(item.id);
 
   try {
-    if (result.reclassify) {
-      const outcome = proposeGateItemReclassification(
-        item.id,
-        result.reclassify.to,
-        result.reclassify.reason,
-      );
-      if (outcome.applied) {
-        logger.info(
-          `[GateReconciler] gate item ${item.id} reclassified ${item.classification} -> ${outcome.item.classification} by verifier: ${result.reclassify.reason}`,
-        );
-        return {
-          itemId: item.id,
-          classification: outcome.item.classification,
-          disposition: 'needs-setup',
-          reclassifiedTo: outcome.item.classification,
-        };
-      }
-      // Rejected (invalid target, no-op, or the ping-pong guard) — abstain
-      // rather than silently drop the run; the rejection reason and the
-      // session's original evidence both ride along for a human to see.
-      appendGateItemEvent(item.id, {
-        disposition: 'needs-setup',
-        evidence: {
-          reason: 'verifier-proposed reclassification rejected',
-          rejectedReason: outcome.rejectedReason,
-          proposedReclassify: result.reclassify,
-          verifierEvidence: result.evidence,
-        },
-        deploySha: deploySha ?? undefined,
-        unattended,
-      });
-      return {
-        itemId: item.id,
-        classification: item.classification,
-        disposition: 'needs-setup',
-      };
-    }
-    if (result.disposition === 'needs-setup') {
-      appendGateItemEvent(item.id, {
-        disposition: 'needs-setup',
-        evidence: result.evidence,
-        deploySha: deploySha ?? undefined,
-        unattended,
-      });
-    } else if (result.disposition === 'fail') {
-      const priorFollowon = latestFailFollowon(item);
-      const dedup =
-        priorFollowon !== undefined && !isFollowupTaskDone(priorFollowon);
-      const fixAttempts = countFixAttempts(item);
-
-      if (dedup) {
-        appendGateItemEvent(item.id, {
-          disposition: 'fail',
-          evidence: failEvidence(item, result.evidence),
-          filedFollowon: priorFollowon,
-          deploySha: deploySha ?? undefined,
-          unattended,
-        });
-        gateStore.advanceState(
-          item.id,
-          'open',
-          'fail',
-          new Date().toISOString(),
-        );
-      } else if (fixAttempts >= maxFixAttempts) {
-        appendGateItemEvent(item.id, {
-          disposition: 'needs-setup',
-          evidence: {
-            verifierEvidence: result.evidence,
-            reason: `max-fix-attempts (${maxFixAttempts}) reached — escalate to operator`,
-          },
-          unattended,
-        });
-        return {
-          itemId: item.id,
-          classification: item.classification,
-          disposition: 'needs-setup',
-        };
-      } else {
-        const followup = await followupFiler.fileFollowupFixTask(item, result);
-        appendGateItemEvent(item.id, {
-          disposition: 'fail',
-          evidence: failEvidence(item, result.evidence),
-          filedFollowon: followup.taskId,
-          deploySha: deploySha ?? undefined,
-          unattended,
-        });
-        const now = new Date().toISOString();
-        gateStore.addSource(
-          item.id,
-          {
-            sourceTaskId: followup.taskId,
-            sourceTaskTitle: followup.taskTitle,
-          },
-          now,
-        );
-        gateStore.advanceState(item.id, 'open', 'fail', now);
-      }
-    } else {
-      // pass — auto-pass is provenance-tagged, never anonymous.
-      appendGateItemEvent(item.id, {
-        disposition: result.disposition,
-        evidence: result.evidence,
-        deploySha: deploySha ?? undefined,
-        operator: 'gate-verifier',
-        unattended,
-      });
-    }
+    return await routeVerificationResult(
+      item,
+      result,
+      followupFiler,
+      deploySha,
+      concurrency,
+      unattended,
+    );
   } finally {
     inFlightVerifications.delete(item.id);
   }
+}
 
-  return {
-    itemId: item.id,
-    classification: item.classification,
-    disposition: result.disposition,
-  };
+/**
+ * Boot-reconciliation recovery for a gate-verify session left parked on an
+ * outstanding capability request across a restart: the old process's
+ * in-memory `awaitDisposition` listener died with it, so without this the
+ * session's eventual `gate_verify_disposition` report fires into a void and
+ * `hasLiveVerifySessionForGateItem` keeps the item permanently skipped on
+ * every future reconcile tick even though the session itself completes and
+ * archives cleanly. No new session is dispatched — the existing session is
+ * already parked and will be resumed by the operator's disposition through
+ * the existing `resumeCapabilityRequester` path; this just re-attaches a
+ * listener via the configured verifier so that resumption's eventual report
+ * is actually routed somewhere.
+ */
+export async function reattachOutstandingGateVerifications(): Promise<void> {
+  const configured = configuredVerificationOptions;
+  if (!configured?.verifier || !isReattachable(configured.verifier)) return;
+  const verifier = configured.verifier;
+  const followupFiler = configured.followupFiler ?? defaultFollowupFiler;
+  const trigger = configured.deployAdvanceTrigger ?? defaultDeployAdvanceTrigger;
+  const concurrency = configured.concurrency;
+
+  const pending = getGateItemsWithPendingCapabilityRequest();
+  for (const { itemId, sessionId } of pending) {
+    const item = gateStore.getItem(itemId);
+    if (!item) continue;
+    if (!tryReserveInFlight(itemId)) continue;
+    void (async () => {
+      try {
+        const deploySha = await trigger.latestDeploySha(item.project);
+        const result = await verifier.reattach(item, sessionId);
+        await routeVerificationResult(
+          item,
+          result,
+          followupFiler,
+          deploySha,
+          concurrency,
+          true,
+        );
+      } catch (err) {
+        logger.error(
+          `[GateReconciler] boot reattachment failed for gate item ${itemId} (session ${sessionId.slice(0, 8)}): ${err instanceof Error ? err.message : err}`,
+        );
+      } finally {
+        inFlightVerifications.delete(itemId);
+      }
+    })();
+  }
 }
 
 /**
