@@ -14,7 +14,7 @@ import type { StagedIntentRow } from '../db/types';
 export const NO_OP_INTENT_KIND = 'planning.noOp';
 
 /** The ops_journal disposition kind — a staged transition counts as a decision. */
-export const OPS_JOURNAL_INTENT_KIND = 'journal.setState';
+const OPS_JOURNAL_INTENT_KIND = 'journal.setState';
 
 /**
  * Kinds that constitute "staged a decision" — every real task-write /
@@ -26,7 +26,7 @@ export const OPS_JOURNAL_INTENT_KIND = 'journal.setState';
  * OPS_JOURNAL_INTENT_KIND and NO_OP_INTENT_KIND count as decisions too (see
  * hasStagedDecision) but are tracked separately since they aren't task-writes.
  */
-export const DECISION_INTENT_KINDS: ReadonlySet<string> = new Set([
+const DECISION_INTENT_KINDS: ReadonlySet<string> = new Set([
   'task.create',
   'task.setStatus',
   'task.setDependsOn',
