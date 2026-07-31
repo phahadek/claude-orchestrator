@@ -285,6 +285,45 @@ describe('getSessionAllowedTools', () => {
     expect(groom).not.toContain('mcp__orchestrator__gate_verify');
   });
 
+  describe('docs tool set', () => {
+    it('returns DOCS_ALLOWED_TOOLS including Write/Edit, git-write, and the PR-open exception', () => {
+      const tools = getSessionAllowedTools('docs', { allowed_tools: [] });
+      expect(tools).toContain('Write');
+      expect(tools).toContain('Edit');
+      expect(tools).toContain('Bash(git:*)');
+      expect(tools).toContain('Bash(gh pr create:*)');
+      expect(tools).toContain('mcp__github__create_pull_request');
+      expect(tools).toContain('mcp__orchestrator__notion_pageEdit');
+    });
+
+    it('merges an allowlisted WebFetch entry per declared source domain and never grants open WebSearch', () => {
+      const tools = getSessionAllowedTools(
+        'docs',
+        { allowed_tools: [] },
+        [],
+        undefined,
+        ['docs.example.com', 'developer.example.org'],
+      );
+      expect(tools).toContain('WebFetch(domain:docs.example.com)');
+      expect(tools).toContain('WebFetch(domain:developer.example.org)');
+      expect(tools).not.toContain('WebSearch');
+      expect(tools.some((t) => t === 'WebFetch')).toBe(false);
+    });
+
+    it('grants no WebFetch at all when no source domains are declared', () => {
+      const tools = getSessionAllowedTools('docs', { allowed_tools: [] });
+      expect(tools.some((t) => t.startsWith('WebFetch'))).toBe(false);
+      expect(tools).not.toContain('WebSearch');
+    });
+
+    it('never merges per-project allowed_tools extras into the docs base (unlike ops)', () => {
+      const tools = getSessionAllowedTools('docs', {
+        allowed_tools: ['mcp__analyst__query_alarm_rules'],
+      });
+      expect(tools).not.toContain('mcp__analyst__query_alarm_rules');
+    });
+  });
+
   describe('task-source-gated Notion read tools', () => {
     it.each(['groom', 'design', 'ops'] as const)(
       "merges NOTION_READ_MCP_TOOLS into a %s session's allow-list for a Notion-task-source project",

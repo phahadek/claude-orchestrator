@@ -71,6 +71,7 @@ const SKILLS = [
   'sync-guidelines',
   'gate',
   'milestone-wrap',
+  'docs',
 ];
 const SCRIPT_SOURCES = [
   {
