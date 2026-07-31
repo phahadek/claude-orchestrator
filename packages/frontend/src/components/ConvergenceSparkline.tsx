@@ -6,7 +6,7 @@ interface Props {
 }
 
 const WIDTH = 160;
-const HEIGHT = 32;
+const HEIGHT = 64;
 
 interface SeriesDef {
   key: 'tasks_open' | 'gate_open' | 'seed_open';
@@ -46,30 +46,62 @@ function toPath(normalized: number[]): string {
     .join(' ');
 }
 
+function formatRange(first: number, last: number, range: number): string {
+  if (range === 0) return `${first} (no change)`;
+  const delta = last - first;
+  const sign = delta > 0 ? '+' : '';
+  return `${first} → ${last} (${sign}${delta})`;
+}
+
 export function ConvergenceSparkline({ points }: Props) {
   if (points.length === 0) return null;
 
+  const series = SERIES.map(({ key, label, className }) => {
+    const values = points.map((p) => Number(p[key]));
+    const first = values[0];
+    const last = values[values.length - 1];
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min;
+    const path = toPath(normalize(values));
+    return { key, label, className, path, first, last, range };
+  });
+
   return (
-    <svg
-      className={styles.sparkline}
-      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      data-testid="convergence-sparkline"
-      role="img"
-      aria-label="Convergence trend by axis — tasks, gate, seed"
-    >
-      {SERIES.map(({ key, label, className }) => {
-        const path = toPath(normalize(points.map((p) => Number(p[key]))));
-        return (
+    <div className={styles.wrap}>
+      <svg
+        className={styles.sparkline}
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+        preserveAspectRatio="none"
+        data-testid="convergence-sparkline"
+        role="img"
+        aria-label="Convergence trend by axis — tasks, gate, seed"
+      >
+        {series.map(({ key, label, className, path, range }) => (
           <path
             key={key}
             d={path}
-            className={`${styles.line} ${className}`}
+            className={`${styles.line} ${className} ${range === 0 ? styles.lineFlat : ''}`}
             data-testid={`convergence-sparkline-series-${key}`}
           >
             <title>{label}</title>
           </path>
-        );
-      })}
-    </svg>
+        ))}
+      </svg>
+      <ul className={styles.legend} data-testid="convergence-sparkline-legend">
+        {series.map(({ key, label, className, first, last, range }) => (
+          <li key={key} className={styles.legendItem}>
+            <span className={`${styles.swatch} ${className}`} aria-hidden="true" />
+            <span className={styles.legendLabel}>{label}</span>
+            <span
+              className={styles.legendRange}
+              data-testid={`convergence-sparkline-range-${key}`}
+            >
+              {formatRange(first, last, range)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
