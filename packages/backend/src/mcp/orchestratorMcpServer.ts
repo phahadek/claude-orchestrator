@@ -10,6 +10,8 @@ import { registerCompletenessTools } from './tools/completenessTools';
 import { registerGroomPrecheckTool } from './tools/groomPrecheckTool';
 import { registerArchitectureReadTools } from './tools/architectureReadTools';
 import { registerTaskReadTools } from './tools/taskReadTools';
+import { registerPullRequestReadTools } from './tools/pullRequestReadTools';
+import { registerGateSeedReadTools } from './tools/gateSeedReadTools';
 import type { SessionManager } from '../session/SessionManager';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import type { PlanningWorkflow } from '../planning/planningIntentKinds';
@@ -75,7 +77,13 @@ export function buildOrchestratorMcpServerEntry(
  * since architecture content is these workflows' non-negotiable input —
  * and the read-only task-summary lookup (task.getById, see
  * mcp/tools/taskReadTools.ts), same always-on precedent, for a task id
- * outside the session's injected digest.
+ * outside the session's injected digest — and, for ANY session resolving to
+ * a project (not workflow-gated, since verify/investigation sessions run
+ * under session_type standard/review with workflow=null), the read-only
+ * pull-request lookup (pullRequest.getByTaskId, see
+ * mcp/tools/pullRequestReadTools.ts) and the read-only gate/seed item state
+ * lookup (gateSeed.getState, see mcp/tools/gateSeedReadTools.ts) which never
+ * exposes gate_item_event/seed_item_event rows or their operator column.
  */
 export function buildMcpServer(
   sessionId: string,
@@ -124,6 +132,8 @@ export function buildMcpServer(
       projectId: session.project_id,
       workflow,
     });
+    registerPullRequestReadTools(server);
+    registerGateSeedReadTools(server, { projectId: session.project_id });
     registerCompletenessTools(server, {
       sessionId,
       workflow,

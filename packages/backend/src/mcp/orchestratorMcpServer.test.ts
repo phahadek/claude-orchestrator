@@ -147,6 +147,8 @@ describe('buildMcpServer — tool surface per session type', () => {
         'architecture.getUnit',
         'architecture.queryUnits',
         'task.getById',
+        'pullRequest.getByTaskId',
+        'gateSeed.getState',
       ].sort(),
     );
   });
@@ -172,6 +174,8 @@ describe('buildMcpServer — tool surface per session type', () => {
         'architecture.getUnit',
         'architecture.queryUnits',
         'task.getById',
+        'pullRequest.getByTaskId',
+        'gateSeed.getState',
       ].sort(),
     );
     expect(names).toContain('decision.pickOne');
@@ -196,11 +200,13 @@ describe('buildMcpServer — tool surface per session type', () => {
     expect(names).toContain('architecture.getUnit');
     expect(names).toContain('architecture.queryUnits');
     expect(names).toContain('task.getById');
+    expect(names).toContain('pullRequest.getByTaskId');
+    expect(names).toContain('gateSeed.getState');
     expect(names).not.toContain('review.disposition');
     expect(names).not.toContain('flaky.confirm');
   });
 
-  it('a standard session still exposes review.disposition and flaky.confirm, not the architecture read tools', async () => {
+  it('a standard session still exposes review.disposition and flaky.confirm, not the architecture read tools, but does get the Tier-A read tools', async () => {
     insertSession({
       session_id: 'mcp-standard-1',
       task_id: null,
@@ -218,6 +224,8 @@ describe('buildMcpServer — tool surface per session type', () => {
     expect(names).not.toContain('architecture.queryUnits');
     expect(names).not.toContain('task.getById');
     expect(names).not.toContain('gate.verify');
+    expect(names).toContain('pullRequest.getByTaskId');
+    expect(names).toContain('gateSeed.getState');
   });
 });
 
