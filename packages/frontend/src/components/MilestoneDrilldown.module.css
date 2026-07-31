@@ -20,9 +20,20 @@
   padding: 12px;
 }
 
+.headingRow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 .heading {
   font-weight: 600;
-  margin-bottom: 8px;
+}
+
+.headingType {
+  color: var(--text-muted);
+  font-size: 0.8rem;
 }
 
 .taskMarkdown {

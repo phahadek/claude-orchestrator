@@ -198,7 +198,14 @@ export function MilestoneDrilldown({
   return (
     <div className={styles.drilldown} data-testid="milestone-drilldown">
       <div className={styles.taskReader} data-testid="milestone-task-reader">
-        <div className={styles.heading}>{resolvedTask?.taskName ?? 'Task'}</div>
+        <div className={styles.headingRow}>
+          <div className={styles.heading}>
+            {resolvedTask?.taskName ?? 'No task selected'}
+          </div>
+          {resolvedTask && (
+            <span className={styles.headingType}>{resolvedTask.taskType}</span>
+          )}
+        </div>
         {!taskId && (
           <p
             className={styles.muted}

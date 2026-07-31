@@ -39,6 +39,65 @@ describe('MilestoneDrilldown', () => {
     vi.restoreAllMocks();
   });
 
+  it("renders the resolved task's name and Type in the header", async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+    const task = makeTask({
+      taskId: 'task-1',
+      taskName: 'Do the thing',
+      taskType: '💻 Code',
+    });
+
+    render(
+      <MilestoneDrilldown
+        selection={{ type: 'task', task }}
+        tasks={[task]}
+        projectId="proj-1"
+        sessions={[]}
+        send={noop}
+        setSessionArchived={noop}
+        setSessionFavorited={noop}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('milestone-task-reader').textContent).toContain(
+        'Do the thing',
+      ),
+    );
+    expect(screen.getByTestId('milestone-task-reader').textContent).toContain(
+      '💻 Code',
+    );
+  });
+
+  it('renders a defined, non-"Task" fallback when no task resolves', () => {
+    const intent: StagedIntent = {
+      id: 'intent-create',
+      kind: 'task.create',
+      payload: { title: 'New task' },
+      projectId: 'proj-1',
+      createdAt: 1,
+      sessionId: null,
+      milestone: 'M1',
+      state: 'staged',
+    };
+
+    render(
+      <MilestoneDrilldown
+        selection={{ type: 'intent', intent }}
+        tasks={[]}
+        projectId="proj-1"
+        sessions={[]}
+        send={noop}
+        setSessionArchived={noop}
+        setSessionFavorited={noop}
+      />,
+    );
+
+    const heading = screen.getByTestId('milestone-task-reader');
+    expect(heading.textContent).not.toContain('Task');
+    expect(heading.textContent?.trim().length).toBeGreaterThan(0);
+  });
+
   it('shows an empty state when nothing is selected', () => {
     render(
       <MilestoneDrilldown
