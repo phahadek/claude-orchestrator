@@ -11,6 +11,8 @@ interface Props {
   intent: StagedIntent;
   onAnswered?: (intent: StagedIntent, result: StagedIntent) => void;
   onDismiss?: (intent: StagedIntent) => void;
+  /** True while the owning session hasn't signaled its proposal set complete for the turn — the backend refuses an answer too, so Submit is disabled rather than left to fail. */
+  disabled?: boolean;
 }
 
 function isNotFoundError(err: unknown): boolean {
@@ -25,7 +27,12 @@ function isNotFoundError(err: unknown): boolean {
  * intent via POST /staged-intents/:id/answer, which re-turns the
  * originating session; the panel never writes the task store itself.
  */
-export function DecisionPickOnePanel({ intent, onAnswered, onDismiss }: Props) {
+export function DecisionPickOnePanel({
+  intent,
+  onAnswered,
+  onDismiss,
+  disabled = false,
+}: Props) {
   const payload = intent.payload as DecisionPickOnePayload;
   const [chosenLabel, setChosenLabel] = useState<string | null>(null);
   const [freeForm, setFreeForm] = useState('');
@@ -112,7 +119,7 @@ export function DecisionPickOnePanel({ intent, onAnswered, onDismiss }: Props) {
         <button
           type="button"
           className={styles.approveButton}
-          disabled={inFlight || !canSubmit}
+          disabled={inFlight || !canSubmit || disabled}
           onClick={() => void handleSubmit()}
         >
           {inFlight ? 'Submitting...' : '✓ Submit'}

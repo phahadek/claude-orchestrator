@@ -57,6 +57,34 @@ describe('DecisionPanel', () => {
     expect(screen.getByText('Stand up off-box backups')).toBeTruthy();
   });
 
+  it('disables disposition controls and shows a still-filing indicator while the owning session is incomplete', async () => {
+    const incompleteDecision: StagedIntent = {
+      id: 'intent-incomplete',
+      kind: 'journal.setState',
+      payload: { taskId: 'notion:abc', state: 'staged-proposal' },
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: 'ops-session-3',
+      state: 'staged',
+      decisionProposal: 'Still being filed',
+      sessionComplete: false,
+    };
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([
+      incompleteDecision,
+    ]);
+
+    render(<DecisionPanel sessionId="ops-session-3" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('decision-panel')).toBeTruthy();
+    });
+    expect(screen.getByTestId('session-still-filing')).toBeTruthy();
+    expect(screen.getByTestId('staged-intent-still-filing')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: '✓ Commit' }).hasAttribute('disabled'),
+    ).toBe(true);
+  });
+
   it('renders nothing when the session has no staged decision', async () => {
     vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
 

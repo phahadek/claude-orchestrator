@@ -53,6 +53,15 @@ export interface StagedIntent {
   createdAt: number;
   /** The originating session, for panel correlation + pushback routing. Null for human-staged intents. */
   sessionId?: string | null;
+  /**
+   * Whether the originating session has signaled its proposal set for the
+   * current turn is complete. False while the session may still stage more
+   * intents this turn — disposition controls must stay disabled and the
+   * milestone inbox must suppress the card until this flips true. Undefined/
+   * null (human-staged intents, or rows predating this signal) is treated as
+   * complete.
+   */
+  sessionComplete?: boolean | null;
   /** Current lifecycle state. */
   state?: StagedIntentState;
   /** Pointer to the intent this one replaces, if any. */

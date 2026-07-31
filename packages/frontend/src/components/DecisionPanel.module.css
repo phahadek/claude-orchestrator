@@ -212,6 +212,19 @@
   padding: 4px 10px;
 }
 
+/* Shown on the session DecisionPanel while its owning session hasn't
+   signaled its proposal set complete for the turn — the milestone inbox
+   suppresses these cards entirely instead of showing them disabled. */
+.stillFilingBadge {
+  background: rgba(249, 226, 175, 0.15);
+  border: 1px solid rgba(249, 226, 175, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-yellow);
+  font-size: 0.72rem;
+  padding: 2px 6px;
+  flex-shrink: 0;
+}
+
 .reasonInput {
   font-size: 0.82rem;
   padding: 6px 8px;
