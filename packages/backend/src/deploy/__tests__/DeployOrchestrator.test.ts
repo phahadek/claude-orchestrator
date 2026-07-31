@@ -858,7 +858,11 @@ describe('DeployOrchestrator + real spawnShell: host-binding substitution', () =
     const loadResult: LoadPlaybookResult = { ok: true, playbook };
     const orchestrator = new DeployOrchestrator('proj', process.cwd(), {
       loadPlaybook: () => loadResult,
-      loadDeployBindings: () => ({ ok: true, bindings: {}, bindingsPath: null }),
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: {},
+        bindingsPath: null,
+      }),
       spawnAgenticStep: vi.fn(),
       waitForConfirmGate: vi.fn(async () => true),
       getDiffPaths: vi.fn(async () => []),
@@ -967,7 +971,11 @@ describe('DeployOrchestrator: binding substitution for confirm-gate/agentic step
     ]);
     const waitForConfirmGate = vi.fn(async () => true);
     const deps = makeDeps(playbook, {
-      loadDeployBindings: () => ({ ok: true, bindings: {}, bindingsPath: null }),
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: {},
+        bindingsPath: null,
+      }),
       waitForConfirmGate,
     });
     const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
@@ -1016,7 +1024,11 @@ describe('DeployOrchestrator: binding substitution for confirm-gate/agentic step
     ]);
     const spawnAgenticStep = vi.fn();
     const deps = makeDeps(playbook, {
-      loadDeployBindings: () => ({ ok: true, bindings: {}, bindingsPath: null }),
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: {},
+        bindingsPath: null,
+      }),
       spawnAgenticStep,
     });
     const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
@@ -1063,7 +1075,8 @@ describe('validateBindingReferences: preflight message content', () => {
     const result = validateBindingReferences(playbook, {
       ok: true,
       bindings: {},
-      bindingsPath: '/srv/orchestrator/projects/config/projects/proj/deploy-bindings.yml',
+      bindingsPath:
+        '/srv/orchestrator/projects/config/projects/proj/deploy-bindings.yml',
     });
     expect(result).toEqual({
       ok: false,
