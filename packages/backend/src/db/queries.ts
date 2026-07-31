@@ -1808,7 +1808,9 @@ export function getPRs(
   `,
     )
     .all({ repo, limit: terminalLimit }) as PullRequestRow[];
-  return [...openRows, ...terminalRows].sort((a, b) => b.pr_number - a.pr_number);
+  return [...openRows, ...terminalRows].sort(
+    (a, b) => b.pr_number - a.pr_number,
+  );
 }
 
 export function getPRByNumber(

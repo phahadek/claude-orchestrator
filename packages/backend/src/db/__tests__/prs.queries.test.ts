@@ -84,7 +84,11 @@ describe('getPRs', () => {
   });
 
   it('combines all open rows with the capped terminal rows', () => {
-    insertPR({ pr_number: 100, state: 'open', updated_at: '2024-02-01T00:00:00Z' });
+    insertPR({
+      pr_number: 100,
+      state: 'open',
+      updated_at: '2024-02-01T00:00:00Z',
+    });
     for (let i = 0; i < 5; i++) {
       insertPR({
         pr_number: i,
