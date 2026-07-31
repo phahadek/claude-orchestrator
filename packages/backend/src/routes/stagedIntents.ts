@@ -64,6 +64,7 @@ import {
   getSession,
   updateCompletenessDispositionApproval,
   deleteCompletenessDisposition,
+  isSessionComplete,
 } from '../db/queries';
 import { parseTaskId, normalizeTaskId } from '../tasks/taskId';
 import { NotionApiError } from '../notion/types';
@@ -143,6 +144,42 @@ class DependsOnCompletenessError extends Error {
         'dependency classification (an empty array is a valid "no deps") in the same group before promoting.',
     );
     this.name = 'DependsOnCompletenessError';
+  }
+}
+
+/**
+ * Blocks a disposition against a staged intent whose owning session is not
+ * yet "complete" — see isSessionComplete: the session must have staged at
+ * least one intent since its last stop and its turn must have ended. A
+ * session's staged intents are inert until the session itself goes
+ * complete; this is the enforcement point for that invariant.
+ */
+class SessionIncompleteError extends Error {
+  constructor(sessionId: string) {
+    super(
+      `[stagedIntents] session "${sessionId}" is not yet complete — its turn ` +
+        'is still in flight or it has staged nothing since its last stop. ' +
+        'Staged intents from this session cannot be applied/committed until it stops again.',
+    );
+    this.name = 'SessionIncompleteError';
+  }
+}
+
+/**
+ * True unless the intent is owned by a session that is not yet complete.
+ * Human-staged intents (no sessionId) are never gated. Turn-in-flight is
+ * read off the live AgentSession instance when one exists in this process;
+ * absent that, the turn cannot be in flight (see isSessionComplete).
+ */
+function assertOwningSessionComplete(
+  sessionId: string | null | undefined,
+  sessionManager: SessionManager | undefined,
+): void {
+  if (!sessionId) return;
+  const turnInFlight =
+    sessionManager?.getLiveSession?.(sessionId)?.hasActiveTurn() ?? false;
+  if (!isSessionComplete(sessionId, turnInFlight)) {
+    throw new SessionIncompleteError(sessionId);
   }
 }
 
@@ -511,7 +548,23 @@ export interface StagedIntent {
   dispositionReason?: string | null;
   /** The operator's answer to a decision.pickOne question-intent. Null until answered. */
   answer?: StagedIntentAnswer | null;
+  /**
+   * Derived per-session completeness (see isSessionComplete in db/queries.ts):
+   * true once the owning session has staged something since its last stop
+   * and its turn has ended — false while the turn is in flight or a wake has
+   * reverted it to incomplete. Never persisted; recomputed on every read.
+   * Null for human-staged intents (no owning session to gate on).
+   */
+  sessionComplete?: boolean | null;
 }
+
+/**
+ * The SessionManager instance wired in by createStagedIntentsRouter, used by
+ * rowToApi to compute the live sessionComplete field without threading a
+ * sessionManager param through every one of rowToApi's call sites. Set once
+ * at router construction (startup), read on every subsequent request.
+ */
+let stagedIntentSessionManager: SessionManager | undefined;
 
 function rowToApi(row: StagedIntentRow): StagedIntent {
   return {
@@ -537,6 +590,14 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
       : null,
     dispositionReason: row.disposition_reason,
     answer: row.answer ? (JSON.parse(row.answer) as StagedIntentAnswer) : null,
+    sessionComplete: row.session_id
+      ? isSessionComplete(
+          row.session_id,
+          stagedIntentSessionManager
+            ?.getLiveSession?.(row.session_id)
+            ?.hasActiveTurn() ?? false,
+        )
+      : null,
   };
 }
 
@@ -1783,10 +1844,12 @@ async function applyIntent(
   override?: { reason: string },
   actorType: ApplyActorType = 'human',
   triageMilestoneLabel?: string,
+  sessionManager?: SessionManager,
 ): Promise<unknown> {
   if (HUMAN_APPLY_ONLY_KINDS.has(intent.kind) && actorType !== 'human') {
     throw new HumanApplyOnlyError(intent.kind);
   }
+  assertOwningSessionComplete(intent.sessionId, sessionManager);
 
   const backend = getTaskBackend(intent.projectId);
   const commands = new BackendTaskWriteCommands(backend, intent.projectId);
@@ -2944,6 +3007,7 @@ async function commitGroupIntents(
   groupId: string,
   opts: GroupCommitOptions,
   planningOrchestrator?: PlanningOrchestrator,
+  sessionManager?: SessionManager,
 ): Promise<GroupCommitResult> {
   const allMembers = listStagedIntentsByGroup(groupId);
   // A member stuck in pending_verification/needs_revision is not in
@@ -2972,6 +3036,23 @@ async function commitGroupIntents(
     return {
       status: 404,
       body: { error: `no live staged intents found for group "${groupId}"` },
+    };
+  }
+  // Precheck every live member's owning session up front — a partial
+  // commit that fails midway through `ordered` would leave the group in a
+  // worse state than refusing outright before anything applies.
+  const incompleteMember = live.find((r) => {
+    if (!r.session_id) return false;
+    const turnInFlight =
+      sessionManager?.getLiveSession?.(r.session_id)?.hasActiveTurn() ?? false;
+    return !isSessionComplete(r.session_id, turnInFlight);
+  });
+  if (incompleteMember) {
+    return {
+      status: 409,
+      body: {
+        error: new SessionIncompleteError(incompleteMember.session_id!).message,
+      },
     };
   }
   // Defense-in-depth alongside the stage-time refusal in stageIntent: a
@@ -3067,6 +3148,7 @@ async function commitGroupIntents(
         opts.override ? { reason: opts.reason } : undefined,
         opts.actorType,
         opts.triageMilestoneLabel,
+        sessionManager,
       );
       if (intent.kind === 'task.create') {
         createdTaskIds.set(intent.id, (result as { id: string }).id);
@@ -3188,6 +3270,7 @@ export function createStagedIntentsRouter(
   sessionManager?: SessionManager,
 ): Router {
   const router = Router();
+  stagedIntentSessionManager = sessionManager;
 
   // ── GET /api/staged-intents ─────────────────────────────────────────────
   // ?sessionId=<id> is the SessionPanel decision-panel lens: correlates
@@ -3365,6 +3448,8 @@ export function createStagedIntentsRouter(
           intent,
           override ? { reason } : undefined,
           actorType,
+          undefined,
+          sessionManager,
         );
         const committed = transitionStagedIntent(intent.id, 'committed', {
           annotation: null,
@@ -3406,7 +3491,8 @@ export function createStagedIntentsRouter(
         }
         if (
           err instanceof DependsOnCompletenessError ||
-          err instanceof ManualVerificationStripCompletenessError
+          err instanceof ManualVerificationStripCompletenessError ||
+          err instanceof SessionIncompleteError
         ) {
           res.status(409).json({ error: err.message });
           return;
@@ -3683,6 +3769,7 @@ export function createStagedIntentsRouter(
         groupId,
         { override, reason, actorType },
         planningOrchestrator,
+        sessionManager,
       );
       res.status(result.status).json(result.body);
     },
@@ -3720,6 +3807,7 @@ export function createStagedIntentsRouter(
         groupId,
         { override, reason, actorType, autoApprove: true },
         planningOrchestrator,
+        sessionManager,
       );
       res.status(result.status).json(result.body);
     },
@@ -3895,6 +3983,7 @@ export function createStagedIntentsRouter(
             triageMilestoneLabel: milestoneLabel,
           },
           planningOrchestrator,
+          sessionManager,
         );
         if (result.status === 200) {
           committed.push(groupId);
