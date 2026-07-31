@@ -2068,7 +2068,10 @@ describe('fetchBaseBranchCoalesced — direct unit tests', () => {
       },
     );
 
-    const outcome = await fetchBaseBranchCoalesced('/fetch-test-failure', 'dev');
+    const outcome = await fetchBaseBranchCoalesced(
+      '/fetch-test-failure',
+      'dev',
+    );
 
     expect(outcome.ok).toBe(false);
     expect(outcome.error).toBeDefined();
