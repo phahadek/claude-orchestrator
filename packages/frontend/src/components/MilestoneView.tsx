@@ -93,6 +93,10 @@ export function MilestoneView({
   );
   const middleWidthRef = useRef(middleWidthPct);
   const containerRef = useRef<HTMLDivElement>(null);
+  // The centre column's actual scrollable element — only mounted on desktop
+  // (mobile shows one region at a time via tabs, so scroll-follow never
+  // observes an ancestor there and stays a no-op).
+  const middlePanelRef = useRef<HTMLDivElement>(null);
 
   const handlePhaseFilterChange = useCallback((phase: string | null) => {
     setPhaseFilter((prev) => (prev === phase ? null : phase));
@@ -198,6 +202,7 @@ export function MilestoneView({
       flaggedOnly={flaggedOnly}
       selection={selection}
       onSelect={setSelection}
+      scrollContainerRef={middlePanelRef}
     />
   ) : (
     <div className={styles.mountPlaceholder}>
@@ -281,6 +286,7 @@ export function MilestoneView({
       </div>
 
       <div
+        ref={middlePanelRef}
         className={styles.middlePanel}
         style={{ width: `${middleWidthPct}%` }}
         data-testid="milestone-decision-stack-mount"

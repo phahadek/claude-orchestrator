@@ -253,7 +253,7 @@ describe('MilestoneDecisionInbox', () => {
     );
   });
 
-  it('exposes a per-card control that routes to the session that staged it, for ungrouped and grouped intents', async () => {
+  it('exposes a per-card control that selects the card (staying on the Milestones tab), for ungrouped and grouped intents, without dispatching a selectSession navigation event', async () => {
     const intents: StagedIntent[] = [
       {
         id: 'ungrouped',
@@ -290,25 +290,30 @@ describe('MilestoneDecisionInbox', () => {
     ];
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
 
-    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    const onSelectIntent = vi.fn();
+    render(
+      <MilestoneDecisionInbox
+        projectId="proj-1"
+        milestone="M1"
+        onSelectIntent={onSelectIntent}
+      />,
+    );
     await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
 
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
 
     fireEvent.click(screen.getByTestId('session-jump-ungrouped'));
-    expect(dispatchSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'selectSession',
-        detail: { sessionId: 'session-ungrouped' },
-      }),
+    expect(onSelectIntent).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ungrouped' }),
     );
 
     fireEvent.click(screen.getByTestId('session-jump-group-a'));
-    expect(dispatchSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'selectSession',
-        detail: { sessionId: 'session-grouped' },
-      }),
+    expect(onSelectIntent).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'grouped-dep' }),
+    );
+
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'selectSession' }),
     );
   });
 
@@ -569,6 +574,129 @@ describe('MilestoneDecisionInbox', () => {
     expect(screen.getByTestId('provenance-badge-ungrouped-1').textContent).toBe(
       '0067bf6b-9ff8-4782-bd94-d1d9579b68d1',
     );
+  });
+
+  it('narrows to intents whose target task is in the selected phase, while keeping a card with no resolvable task ref visible under every phase', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'code-intent',
+        kind: 'task.setStatus',
+        payload: { taskId: 'notion:code', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 2,
+        milestone: 'M1',
+        state: 'staged',
+      },
+      {
+        id: 'design-intent',
+        kind: 'task.setStatus',
+        payload: { taskId: 'notion:design', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 1,
+        milestone: 'M1',
+        state: 'staged',
+      },
+      {
+        id: 'pickone-no-task',
+        kind: 'decision.pickOne',
+        payload: {
+          prompt: 'Which approach?',
+          options: [{ label: 'A', description: 'Option A' }],
+          allowFreeForm: false,
+        },
+        projectId: 'proj-1',
+        createdAt: 0,
+        milestone: 'M1',
+        state: 'staged',
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    render(
+      <MilestoneDecisionInbox
+        projectId="proj-1"
+        milestone="M1"
+        phaseFilter="code"
+        tasks={[
+          makeTask({
+            taskId: 'notion:code',
+            taskName: 'A code task',
+            taskType: '💻 Code',
+            displayStatus: 'ready',
+          }),
+          makeTask({
+            taskId: 'notion:design',
+            taskName: 'A design task',
+            taskType: '📐 Design',
+            displayStatus: 'ready',
+          }),
+        ]}
+      />,
+    );
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    expect(
+      screen.getByTestId('milestone-decision-card-code-intent'),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId('milestone-decision-card-design-intent'),
+    ).toBeNull();
+    expect(
+      screen.getByTestId('milestone-decision-card-pickone-no-task'),
+    ).toBeTruthy();
+  });
+
+  it('narrows to intents whose target task is blocked when flaggedOnly is set, the same way task rows narrow', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'blocked-intent',
+        kind: 'task.setStatus',
+        payload: { taskId: 'notion:blocked', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 1,
+        milestone: 'M1',
+        state: 'staged',
+      },
+      {
+        id: 'open-intent',
+        kind: 'task.setStatus',
+        payload: { taskId: 'notion:open', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 0,
+        milestone: 'M1',
+        state: 'staged',
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    render(
+      <MilestoneDecisionInbox
+        projectId="proj-1"
+        milestone="M1"
+        phaseFilter="code"
+        flaggedOnly
+        tasks={[
+          makeTask({
+            taskId: 'notion:blocked',
+            taskName: 'Blocked task',
+            blocked: true,
+          }),
+          makeTask({
+            taskId: 'notion:open',
+            taskName: 'Open task',
+            blocked: false,
+          }),
+        ]}
+      />,
+    );
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    expect(
+      screen.getByTestId('milestone-decision-card-blocked-intent'),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId('milestone-decision-card-open-intent'),
+    ).toBeNull();
   });
 
   it('falls back to a defined label, without crashing, for an intent with no resolvable task ref', async () => {

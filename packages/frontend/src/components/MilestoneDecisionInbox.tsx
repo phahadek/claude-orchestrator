@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { StagedIntent } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import type { TaskView } from '../types/taskView';
+import { phaseForTask } from '../utils/phaseBurndown';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import { DecisionPickOnePanel } from './DecisionPickOnePanel';
 import { TriageBatchPanel } from './TriageBatchPanel';
@@ -12,6 +13,12 @@ import { useDecisionQueue } from '../hooks/useDecisionQueue';
 import panelStyles from './DecisionPanel.module.css';
 import styles from './MilestoneDecisionInbox.module.css';
 
+/** A card's scroll-follow registration — the DOM node to watch plus the action that reproduces its click-to-select behaviour. */
+export interface CardScrollTarget {
+  el: HTMLElement;
+  select: () => void;
+}
+
 interface Props {
   projectId: string;
   milestone: string;
@@ -21,6 +28,12 @@ interface Props {
   selectedCardId?: string | null;
   /** Drives the middle-stack selection -> right drill-down wiring. Omit to render read-only (no selection affordance). */
   onSelectIntent?: (intent: StagedIntent) => void;
+  /** The shared phase filter emitted by the burndown (left column) — matched against each card's target task's derived phase. A card with no resolvable task ref stays visible under every phase. */
+  phaseFilter?: string | null;
+  /** True when phaseFilter was activated via a phase's ⚠ warning badge — narrows to cards whose target task is blocked, same as the task rows. */
+  flaggedOnly?: boolean;
+  /** Registers (or unregisters, on null) a card's scroll-follow target — called for every rendered card, keyed by its own id. Omit to skip scroll-follow registration. */
+  registerScrollTarget?: (id: string, target: CardScrollTarget | null) => void;
 }
 
 interface TaskLabel {
@@ -48,11 +61,24 @@ function provenanceOf(intents: StagedIntent[]): string {
   return intents[0]?.sessionId ?? 'human';
 }
 
-/** Routes to the session that staged a card — the same app-wide jump used by GateReadinessPanel and ReviewDetailView. */
-function jumpToSession(sessionId: string) {
-  window.dispatchEvent(
-    new CustomEvent('selectSession', { detail: { sessionId } }),
-  );
+/**
+ * True when a card should show under the current phase/flagged filter. A
+ * card whose target task doesn't resolve (decision.pickOne legitimately
+ * carries no task ref) stays visible under every filter — it can't be
+ * recovered from a task row, so dropping it would hide it entirely.
+ */
+function cardVisible(
+  taskId: string | null,
+  taskById: Map<string, TaskView>,
+  phaseFilter: string | null | undefined,
+  flaggedOnly: boolean | undefined,
+): boolean {
+  if (!taskId) return true;
+  const task = taskById.get(taskId);
+  if (!task) return true;
+  if (phaseFilter && phaseForTask(task) !== phaseFilter) return false;
+  if (flaggedOnly && !task.blocked) return false;
+  return true;
 }
 
 /**
@@ -92,6 +118,9 @@ export function MilestoneDecisionInbox({
   tasks = [],
   selectedCardId = null,
   onSelectIntent,
+  phaseFilter = null,
+  flaggedOnly = false,
+  registerScrollTarget,
 }: Props) {
   const taskById = new Map(tasks.map((t) => [t.taskId, t]));
   const {
@@ -166,7 +195,13 @@ export function MilestoneDecisionInbox({
 
   if (!loaded || intents.length === 0) return null;
 
-  const cardOrder = buildCardOrder(intents);
+  const cardOrder = buildCardOrder(intents).filter((card) => {
+    const taskId =
+      card.type === 'intent'
+        ? taskIdFromIntent(card.intent)
+        : taskIdFor(groups.get(card.groupId) ?? []);
+    return cardVisible(taskId, taskById, phaseFilter, flaggedOnly);
+  });
 
   return (
     <div className={styles.inbox} data-testid="milestone-decision-inbox">
@@ -188,6 +223,14 @@ export function MilestoneDecisionInbox({
           return (
             <div
               key={intent.id}
+              ref={(el) =>
+                registerScrollTarget?.(
+                  intent.id,
+                  el && onSelectIntent
+                    ? { el, select: () => onSelectIntent(intent) }
+                    : null,
+                )
+              }
               className={`${panelStyles.group}${
                 selectedCardId === intent.id ? ` ${styles.selectedCard}` : ''
               }`}
@@ -226,7 +269,7 @@ export function MilestoneDecisionInbox({
                     className={styles.sessionJumpButton}
                     onClick={(e) => {
                       e.stopPropagation();
-                      jumpToSession(intent.sessionId!);
+                      onSelectIntent?.(intent);
                     }}
                     data-testid={`session-jump-${intent.id}`}
                   >
@@ -278,8 +321,18 @@ export function MilestoneDecisionInbox({
         ];
 
         return (
-          <GroupCard
+          <div
             key={groupId}
+            ref={(el) =>
+              registerScrollTarget?.(
+                groupId,
+                el && onSelectIntent && groupIntents[0]
+                  ? { el, select: () => onSelectIntent(groupIntents[0]) }
+                  : null,
+              )
+            }
+          >
+          <GroupCard
             groupId={groupId}
             members={members}
             onApplied={remove}
@@ -331,7 +384,7 @@ export function MilestoneDecisionInbox({
                     className={styles.sessionJumpButton}
                     onClick={(e) => {
                       e.stopPropagation();
-                      jumpToSession(groupIntents[0].sessionId!);
+                      onSelectIntent?.(groupIntents[0]);
                     }}
                     data-testid={`session-jump-${groupId}`}
                   >
@@ -341,6 +394,7 @@ export function MilestoneDecisionInbox({
               </>
             }
           />
+          </div>
         );
       })}
     </div>
