@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import type { StagedIntent } from '../api/stagedIntents';
+import { stagedIntentsApi } from '../api/stagedIntents';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import { DecisionPickOnePanel } from './DecisionPickOnePanel';
 import { TriageBatchPanel } from './TriageBatchPanel';
@@ -90,6 +92,54 @@ export function MilestoneDecisionInbox({
     upsert,
     remove,
   } = useDecisionQueue({ type: 'milestone', projectId, milestone });
+
+  // Already-committed siblings never reappear on the live active/blocked
+  // surface `intents` is drawn from (that would perpetually resurface a
+  // long-done group), so a partially-applied group — some members committed,
+  // one still blocked — is fetched separately per group via the diagnostic
+  // full-group read, purely for display: legible proof the body patches,
+  // dependency write, and gate/seed accretion already landed behind the one
+  // member still stuck.
+  const [committedByGroup, setCommittedByGroup] = useState<
+    Record<string, StagedIntent[]>
+  >({});
+  const groupIdsKey = [
+    ...new Set(
+      intents
+        .filter((i): i is StagedIntent & { groupId: string } => !!i.groupId)
+        .map((i) => i.groupId),
+    ),
+  ]
+    .sort()
+    .join(',');
+
+  useEffect(() => {
+    const groupIds = groupIdsKey ? groupIdsKey.split(',') : [];
+    if (groupIds.length === 0) {
+      setCommittedByGroup({});
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      groupIds.map((groupId) =>
+        stagedIntentsApi
+          .listGroup(groupId)
+          .then(
+            (res) =>
+              [
+                groupId,
+                res.intents.filter((i) => i.state === 'committed'),
+              ] as const,
+          )
+          .catch(() => [groupId, []] as const),
+      ),
+    ).then((entries) => {
+      if (!cancelled) setCommittedByGroup(Object.fromEntries(entries));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [groupIdsKey]);
 
   if (!loaded || intents.length === 0) return null;
 
@@ -230,17 +280,41 @@ export function MilestoneDecisionInbox({
             {groupError && groupInFlight === null && (
               <div className={panelStyles.groupError}>{groupError}</div>
             )}
-            {groupIntents.map((intent) => (
-              <StagedIntentPanel
+            {(committedByGroup[groupId] ?? []).map((intent) => (
+              <div
                 key={intent.id}
-                intent={intent}
-                onApplied={remove}
-                onRejected={remove}
-                onDismiss={remove}
-                onApproved={upsert}
-                hideActions
-              />
+                data-testid={`committed-sibling-${intent.id}`}
+              >
+                <StagedIntentPanel
+                  intent={intent}
+                  onApplied={remove}
+                  onRejected={remove}
+                  onDismiss={remove}
+                  onApproved={upsert}
+                  hideActions
+                />
+              </div>
             ))}
+            {groupIntents.map((intent) => {
+              // A blocked member (needs_revision | pending_verification) is
+              // the one live-surface exception to hideActions: its only
+              // operator-usable exit is a per-member Decline, exposed by
+              // StagedIntentPanel itself when actions aren't hidden.
+              const isBlockedMember =
+                intent.state === 'needs_revision' ||
+                intent.state === 'pending_verification';
+              return (
+                <StagedIntentPanel
+                  key={intent.id}
+                  intent={intent}
+                  onApplied={remove}
+                  onRejected={remove}
+                  onDismiss={remove}
+                  onApproved={upsert}
+                  hideActions={!isBlockedMember}
+                />
+              );
+            })}
             <div className={panelStyles.groupActions}>
               <button
                 type="button"

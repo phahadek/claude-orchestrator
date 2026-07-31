@@ -703,12 +703,22 @@ export function StagedIntentPanel({
   onApproved,
   hideActions,
 }: Props) {
+  // A member stuck off the active surface (needs_revision |
+  // pending_verification) — its only operator-usable exit is decline
+  // (needs_revision -> needs_revision isn't a legal transition, so a
+  // pushback here would just fail server-side); see
+  // routes/stagedIntents.ts's `/:id/reject` handling.
+  const isBlockedState =
+    intent.state === 'needs_revision' ||
+    intent.state === 'pending_verification';
+
   const [inFlight, setInFlight] = useState<
     'apply' | 'reject' | 'approve' | 'override' | null
   >(null);
   const [error, setError] = useState<string | null>(null);
-  const [rejectOutcome, setRejectOutcome] =
-    useState<StagedIntentRejectOutcome>('pushback');
+  const [rejectOutcome, setRejectOutcome] = useState<StagedIntentRejectOutcome>(
+    isBlockedState ? 'decline' : 'pushback',
+  );
   const [rejectReason, setRejectReason] = useState('');
   const [showOverride, setShowOverride] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
@@ -865,19 +875,21 @@ export function StagedIntentPanel({
               role="radiogroup"
               aria-label="Reject outcome"
             >
-              <button
-                type="button"
-                role="radio"
-                aria-checked={rejectOutcome === 'pushback'}
-                className={
-                  rejectOutcome === 'pushback'
-                    ? styles.outcomeOptionActive
-                    : styles.outcomeOption
-                }
-                onClick={() => setRejectOutcome('pushback')}
-              >
-                Pushback
-              </button>
+              {!isBlockedState && (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={rejectOutcome === 'pushback'}
+                  className={
+                    rejectOutcome === 'pushback'
+                      ? styles.outcomeOptionActive
+                      : styles.outcomeOption
+                  }
+                  onClick={() => setRejectOutcome('pushback')}
+                >
+                  Pushback
+                </button>
+              )}
               <button
                 type="button"
                 role="radio"
@@ -925,20 +937,22 @@ export function StagedIntentPanel({
                 Override block…
               </button>
             )}
-            {(isGrouped || skipsApply) && intent.state !== 'approved' && (
-              <button
-                type="button"
-                className={styles.approveButton}
-                disabled={inFlight !== null}
-                onClick={() => void handleApprove()}
-              >
-                {inFlight === 'approve'
-                  ? 'Approving...'
-                  : isCapabilityRequest
-                    ? '✓ Grant'
-                    : 'Approve'}
-              </button>
-            )}
+            {(isGrouped || skipsApply) &&
+              intent.state !== 'approved' &&
+              !isBlockedState && (
+                <button
+                  type="button"
+                  className={styles.approveButton}
+                  disabled={inFlight !== null}
+                  onClick={() => void handleApprove()}
+                >
+                  {inFlight === 'approve'
+                    ? 'Approving...'
+                    : isCapabilityRequest
+                      ? '✓ Grant'
+                      : 'Approve'}
+                </button>
+              )}
             <button
               type="button"
               className={styles.denyButton}

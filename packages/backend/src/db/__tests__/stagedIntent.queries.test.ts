@@ -415,6 +415,28 @@ describe('listStagedIntentsByMilestone', () => {
 
     expect(rows.map((r) => r.id)).toEqual(['m12-staged']);
   });
+
+  it('includes blocked (needs_revision/pending_verification) rows — a group with a blocked member must stay visible to the operator, not vanish off the inbox', () => {
+    insertStagedIntent(
+      makeRow({ id: 'm12-needs-revision', group_id: 'g-1', milestone: 'M12' }),
+    );
+    transitionStagedIntent('m12-needs-revision', 'needs_revision');
+    insertStagedIntent(
+      makeRow({
+        id: 'm12-pending-verification',
+        group_id: 'g-2',
+        milestone: 'M12',
+      }),
+    );
+    transitionStagedIntent('m12-pending-verification', 'pending_verification');
+
+    const rows = listStagedIntentsByMilestone('proj-1', 'M12');
+
+    expect(rows.map((r) => r.id).sort()).toEqual([
+      'm12-needs-revision',
+      'm12-pending-verification',
+    ]);
+  });
 });
 
 describe('backfillStagedIntentMilestones', () => {

@@ -255,4 +255,63 @@ describe('MilestoneDecisionInbox', () => {
     );
     expect(container.firstChild).toBeNull();
   });
+
+  it('renders a partially-applied group as such — an already-committed sibling alongside the one member still blocked', async () => {
+    const groupId = 'group-partial';
+    const blockedMember: StagedIntent = {
+      id: 'blocked-member',
+      kind: 'task.setStatus',
+      payload: { taskId: 'notion:2', status: 'Ready' },
+      projectId: 'proj-1',
+      createdAt: 1,
+      sessionId: 'session-groom',
+      groupId,
+      milestone: 'M1',
+      state: 'needs_revision',
+    };
+    const committedMember: StagedIntent = {
+      id: 'committed-member',
+      kind: 'task.setDependsOn',
+      payload: { taskId: 'notion:2', dependsOn: [] },
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: 'session-groom',
+      groupId,
+      milestone: 'M1',
+      state: 'committed',
+    };
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+      blockedMember,
+    ]);
+    vi.spyOn(stagedIntentsApi, 'listGroup').mockResolvedValue({
+      groupId,
+      wedged: false,
+      intents: [committedMember, blockedMember],
+    });
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('milestone-decision-inbox')).toBeTruthy(),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByTestId(`committed-sibling-${committedMember.id}`),
+      ).toBeTruthy(),
+    );
+
+    // The already-committed sibling and the still-blocked member both render
+    // on the same card — a partially-applied group reads as such instead of
+    // an orphaned status-only intent.
+    const card = screen.getByTestId(`milestone-decision-card-${groupId}`);
+    expect(card.textContent).toContain('task.setDependsOn');
+    expect(card.textContent).toContain('task.setStatus');
+    expect(card.textContent).toContain('committed');
+    expect(card.textContent).toContain('needs_revision');
+
+    // The blocked member's own per-member Decline affordance is exposed
+    // (actions aren't hidden for it), while the committed sibling is
+    // read-only.
+    expect(screen.getByRole('button', { name: /decline/i })).toBeTruthy();
+  });
 });

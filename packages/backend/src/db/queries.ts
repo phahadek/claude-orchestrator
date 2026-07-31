@@ -5384,11 +5384,17 @@ let _stmtListStagedIntentsByMilestone: Database.Statement | null = null;
 let _stmtListStagedIntentsUnattributed: Database.Statement | null = null;
 
 /**
- * Active (staged/approved) intents for a project scoped to one milestone —
- * the decision-inbox's ?milestone list lens. `UNATTRIBUTED_MILESTONE_BUCKET`
- * resolves to every row with milestone IS NULL (legacy rows, or a stage-time
- * attribution that couldn't be resolved) instead of an exact-match filter —
- * these rows are never dropped from the surface, just bucketed separately.
+ * Active (staged/approved) *plus* blocked (needs_revision/pending_verification)
+ * intents for a project scoped to one milestone — the decision-inbox's
+ * ?milestone list lens. Blocked states are included, not just active ones,
+ * so a group with a blocked member still surfaces as a card the operator can
+ * act on (decline the member, or reject the group) instead of silently
+ * vanishing from the inbox the moment a member falls out of staged/approved —
+ * exactly the state that used to leave a wedged group with no operator-usable
+ * surface at all. `UNATTRIBUTED_MILESTONE_BUCKET` resolves to every row with
+ * milestone IS NULL (legacy rows, or a stage-time attribution that couldn't
+ * be resolved) instead of an exact-match filter — these rows are never
+ * dropped from the surface, just bucketed separately.
  */
 export function listStagedIntentsByMilestone(
   projectId: string,
@@ -5399,7 +5405,8 @@ export function listStagedIntentsByMilestone(
       project_id: string;
     }>(
       `SELECT * FROM staged_intent
-       WHERE project_id = @project_id AND milestone IS NULL AND state IN ('staged', 'approved')
+       WHERE project_id = @project_id AND milestone IS NULL
+         AND state IN ('staged', 'approved', 'needs_revision', 'pending_verification')
        ORDER BY created_at ASC`,
     );
     return _stmtListStagedIntentsUnattributed.all({
@@ -5411,7 +5418,8 @@ export function listStagedIntentsByMilestone(
     milestone: string;
   }>(
     `SELECT * FROM staged_intent
-     WHERE project_id = @project_id AND milestone = @milestone AND state IN ('staged', 'approved')
+     WHERE project_id = @project_id AND milestone = @milestone
+       AND state IN ('staged', 'approved', 'needs_revision', 'pending_verification')
      ORDER BY created_at ASC`,
   );
   return _stmtListStagedIntentsByMilestone.all({

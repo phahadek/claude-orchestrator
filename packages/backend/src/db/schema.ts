@@ -1630,4 +1630,31 @@ export function runMigrations(target: Database.Database): void {
       recorded_at     INTEGER NOT NULL
     );
   `);
+
+  // Wedged-group-recovery backfill: before this migration, a grouped member
+  // stuck in needs_revision/pending_verification had no route off that
+  // state — commitGroupIntents refuses any group containing one, and
+  // nothing could move it to `rejected`. This declines every such member
+  // outright (the same exit routes/stagedIntents.ts now exposes going
+  // forward per-member and per-group), never touching a live
+  // (staged/approved) sibling, so a group still doing live work keeps that
+  // work untouched — only its non-live blocked member is retired. Also
+  // scrubs the specific self-referential failure mode observed live: a
+  // prior pushback that recorded the commit guard's own 409 refusal text as
+  // disposition_reason, which destroyed the record of why the member was
+  // actually blocked. Runs on every startup; idempotent — once no row is
+  // left in either state, the UPDATE matches nothing.
+  target.exec(`
+    UPDATE staged_intent
+    SET state = 'rejected',
+        disposition_reason = CASE
+          WHEN disposition_reason IS NULL OR trim(disposition_reason) = '' THEN
+            'Auto-resolved by migration: this member was blocked with no operator-usable route to disposition it.'
+          WHEN disposition_reason LIKE '%it must be recovered or resolved before this group can commit%' THEN
+            'Auto-resolved by migration: the previously recorded reason was the commit-refusal message itself, not a real disposition reason.'
+          ELSE disposition_reason
+        END,
+        updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+    WHERE group_id IS NOT NULL AND state IN ('needs_revision', 'pending_verification');
+  `);
 }

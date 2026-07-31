@@ -229,6 +229,23 @@ export const stagedIntentsApi = {
   },
 
   /**
+   * Diagnostic full-group read: every intent ever staged for the group,
+   * regardless of state — including already-committed siblings and any
+   * blocked (needs_revision/pending_verification) member — so a
+   * partially-applied group can be rendered as such instead of reading as
+   * an orphaned status-only intent.
+   */
+  listGroup(
+    groupId: string,
+  ): Promise<{ groupId: string; intents: StagedIntent[]; wedged: boolean }> {
+    return apiRequest<{
+      groupId: string;
+      intents: StagedIntent[];
+      wedged: boolean;
+    }>(`/api/staged-intents/group/${encodeURIComponent(groupId)}`);
+  },
+
+  /**
    * The group-level twin of `approveGroup`: pushback | decline the whole
    * grooming decision as one unit — every live intent in the group is
    * rejected with the same outcome + reason, none of them committed.
