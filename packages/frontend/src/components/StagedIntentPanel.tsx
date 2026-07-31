@@ -33,6 +33,13 @@ interface Props {
    * only the per-item action surface is hidden.
    */
   hideActions?: boolean;
+  /**
+   * True while the owning session hasn't signaled its proposal set complete
+   * for the turn — the backend refuses apply/approve/reject too, so every
+   * disposition control is disabled rather than left to fail. The headline,
+   * registers, and proposal are still rendered read-only.
+   */
+  disabled?: boolean;
 }
 
 function isNotFoundError(err: unknown): boolean {
@@ -702,6 +709,7 @@ export function StagedIntentPanel({
   onDismiss,
   onApproved,
   hideActions,
+  disabled = false,
 }: Props) {
   // A member stuck off the active surface (needs_revision |
   // pending_verification) — its only operator-usable exit is decline
@@ -839,6 +847,14 @@ export function StagedIntentPanel({
             <span className={styles.stateBadge}>{intent.state}</span>
           )
         )}
+        {disabled && (
+          <span
+            className={styles.stateBadge}
+            data-testid="staged-intent-still-filing"
+          >
+            Still filing…
+          </span>
+        )}
       </div>
 
       {intent.state === 'withdrawn' && intent.dispositionReason && (
@@ -872,7 +888,7 @@ export function StagedIntentPanel({
           <button
             type="button"
             className={styles.approveButton}
-            disabled={inFlight !== null}
+            disabled={inFlight !== null || disabled}
             data-testid="staged-intent-acknowledge"
             onClick={() => void handleAcknowledge()}
           >
@@ -892,7 +908,7 @@ export function StagedIntentPanel({
               <button
                 type="button"
                 className={styles.approveButton}
-                disabled={inFlight !== null || !overrideReason.trim()}
+                disabled={inFlight !== null || disabled || !overrideReason.trim()}
                 onClick={() => void handleApply({ reason: overrideReason })}
               >
                 {inFlight === 'override' ? 'Applying…' : 'Apply with override'}
@@ -952,7 +968,7 @@ export function StagedIntentPanel({
               <button
                 type="button"
                 className={styles.approveButton}
-                disabled={inFlight !== null}
+                disabled={inFlight !== null || disabled}
                 onClick={() => void handleApply()}
               >
                 {inFlight === 'apply' ? 'Committing...' : '✓ Commit'}
@@ -962,7 +978,7 @@ export function StagedIntentPanel({
               <button
                 type="button"
                 className={styles.approveButton}
-                disabled={inFlight !== null}
+                disabled={inFlight !== null || disabled}
                 onClick={() => setShowOverride(true)}
               >
                 Override block…
@@ -974,7 +990,7 @@ export function StagedIntentPanel({
                 <button
                   type="button"
                   className={styles.approveButton}
-                  disabled={inFlight !== null}
+                  disabled={inFlight !== null || disabled}
                   onClick={() => void handleApprove()}
                 >
                   {inFlight === 'approve'
@@ -987,7 +1003,7 @@ export function StagedIntentPanel({
             <button
               type="button"
               className={styles.denyButton}
-              disabled={inFlight !== null || !rejectReason.trim()}
+              disabled={inFlight !== null || disabled || !rejectReason.trim()}
               onClick={() => void handleReject()}
             >
               {inFlight === 'reject'

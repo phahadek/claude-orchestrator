@@ -40,6 +40,7 @@ export function DecisionPanel({ sessionId }: Props) {
     loaded,
     groupEntries,
     ungrouped,
+    sessionIncomplete,
     cleanGroupIds,
     includedCleanGroupIds,
     batchExcluded,
@@ -133,6 +134,14 @@ export function DecisionPanel({ sessionId }: Props) {
             : intents.length}
           )
         </div>
+        {sessionIncomplete && (
+          <span
+            className={styles.stillFilingBadge}
+            data-testid="session-still-filing"
+          >
+            Still filing…
+          </span>
+        )}
         <button
           type="button"
           className={styles.dismissButton}
@@ -149,6 +158,7 @@ export function DecisionPanel({ sessionId }: Props) {
         inFlight={batchInFlight}
         error={batchError}
         onApprove={() => void handleApproveAllClean()}
+        disabled={sessionIncomplete}
       />
 
       {groupEntries.map(([groupId, groupIntents]) => {
@@ -194,13 +204,14 @@ export function DecisionPanel({ sessionId }: Props) {
                 onDismiss={remove}
                 onApproved={upsert}
                 hideActions
+                disabled={sessionIncomplete}
               />
             ))}
             <div className={styles.groupActions}>
               <button
                 type="button"
                 className={styles.commitButton}
-                disabled={inFlight}
+                disabled={inFlight || sessionIncomplete}
                 onClick={() => void handleApproveGroup(groupId)}
               >
                 {inFlight ? 'Approving…' : '✓ Approve groom'}
@@ -250,7 +261,7 @@ export function DecisionPanel({ sessionId }: Props) {
               <button
                 type="button"
                 className={styles.denyButton}
-                disabled={inFlight || !draft.reason.trim()}
+                disabled={inFlight || sessionIncomplete || !draft.reason.trim()}
                 onClick={() => void handleRejectGroup(groupId)}
               >
                 {inFlight
@@ -271,6 +282,7 @@ export function DecisionPanel({ sessionId }: Props) {
             intent={intent}
             onAnswered={remove}
             onDismiss={remove}
+            disabled={sessionIncomplete}
           />
         ) : (
           <StagedIntentPanel
@@ -280,6 +292,7 @@ export function DecisionPanel({ sessionId }: Props) {
             onRejected={remove}
             onDismiss={remove}
             onApproved={upsert}
+            disabled={sessionIncomplete}
           />
         ),
       )}

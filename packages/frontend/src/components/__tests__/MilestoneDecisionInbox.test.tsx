@@ -61,6 +61,49 @@ describe('MilestoneDecisionInbox', () => {
     ).toBe('session-ops');
   });
 
+  it("excludes a card from both the list and the count while its owning session is incomplete", async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'complete-intent',
+        kind: 'task.setStatus',
+        payload: { taskId: 'notion:1', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 100,
+        sessionId: 'session-groom',
+        milestone: 'M1',
+        state: 'staged',
+        decisionProposal: 'Promote task 1',
+        sessionComplete: true,
+      },
+      {
+        id: 'incomplete-intent',
+        kind: 'task.updateBody',
+        payload: { taskId: 'notion:2', sections: {} },
+        projectId: 'proj-1',
+        createdAt: 1,
+        sessionId: 'session-ops',
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: false,
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('milestone-decision-inbox')).toBeTruthy(),
+    );
+
+    expect(screen.getByText('Decisions (1)')).toBeTruthy();
+    expect(
+      screen.getByTestId('milestone-decision-card-complete-intent'),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId('milestone-decision-card-incomplete-intent'),
+    ).toBeNull();
+  });
+
   it('renders an unanswered decision.pickOne first when the backend floats it to the top', async () => {
     const intents: StagedIntent[] = [
       {

@@ -122,9 +122,19 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
     setIntents((prev) => prev.filter((i) => i.id !== intent.id));
   }, []);
 
+  // A session that hasn't signaled its proposal set complete for this turn
+  // may still stage more intents — the milestone inbox (a ranked
+  // act-on-this-now queue) suppresses those cards entirely until the owning
+  // session goes complete. The session-scoped DecisionPanel keeps them
+  // visible (read-only) instead, so it does not filter here.
+  const visibleIntents =
+    scope.type === 'milestone'
+      ? intents.filter((intent) => intent.sessionComplete !== false)
+      : intents;
+
   const groups = new Map<string, StagedIntent[]>();
   const ungrouped: StagedIntent[] = [];
-  for (const intent of intents) {
+  for (const intent of visibleIntents) {
     if (intent.groupId) {
       const arr = groups.get(intent.groupId) ?? [];
       arr.push(intent);
@@ -231,12 +241,21 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
     [draftFor],
   );
 
+  // Whole-panel signal for the session-scoped DecisionPanel: a session's
+  // completeness is uniform across its own intents (it is a property of the
+  // session, not the individual intent), so any one incomplete intent means
+  // the session is still filing.
+  const sessionIncomplete = visibleIntents.some(
+    (intent) => intent.sessionComplete === false,
+  );
+
   return {
-    intents,
+    intents: visibleIntents,
     loaded,
     groups,
     groupEntries,
     ungrouped,
+    sessionIncomplete,
     cleanGroupIds,
     includedCleanGroupIds,
     batchExcluded,

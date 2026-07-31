@@ -8,6 +8,8 @@ interface Props {
   inFlight: boolean;
   error: string | null;
   onApprove: () => void;
+  /** True while the owning session (session scope) hasn't signaled its proposal set complete for the turn — the backend refuses these too, so the control is disabled rather than left to fail. */
+  disabled?: boolean;
 }
 
 /**
@@ -25,6 +27,7 @@ export function TriageBatchPanel({
   inFlight,
   error,
   onApprove,
+  disabled = false,
 }: Props) {
   if (cleanGroupIds.length === 0) return null;
 
@@ -36,7 +39,7 @@ export function TriageBatchPanel({
       <button
         type="button"
         className={styles.commitButton}
-        disabled={includedCount === 0 || inFlight}
+        disabled={includedCount === 0 || inFlight || disabled}
         onClick={onApprove}
         data-testid="approve-all-clean"
       >
