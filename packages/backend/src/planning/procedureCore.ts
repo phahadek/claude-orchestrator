@@ -1042,7 +1042,7 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'name; reach for `planning.noOp` only when there genuinely is none. ' +
         'The promotion rule (distinct from the dispatch-satisfaction rule ' +
         'below) — this is what decides whether a dependency blocks the Ready ' +
-        'path, and it is the dep gate\'s own behavior ' +
+        "path, and it is the dep gate's own behavior " +
         '(`orchestration/planningCandidates.ts` `passesGroomDepGate`), stated ' +
         'here so a groom session applies it rather than reasoning about ' +
         'dependencies from first principles: a Depends-On of a ' +
@@ -1060,8 +1060,8 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'that later, dispatch-time sequencing itself — that duplicates a rule ' +
         'the dispatcher already owns and leaves a groomable task stranded at ' +
         'Backlog. (This is separate from the Deferred-path warning below, ' +
-        'which is about what a split leaves for a task\'s own dependents to ' +
-        'satisfy — not about what blocks this task\'s own promotion.) ' +
+        "which is about what a split leaves for a task's own dependents to " +
+        "satisfy — not about what blocks this task's own promotion.) " +
         'When investigation concludes the task is simply too large — a coherent ' +
         'subset should be retained and the rest carved off — that is still the ' +
         'Ready path, not Deferred: stage a `task.updateBody` (or targeted ' +
