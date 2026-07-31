@@ -1070,9 +1070,7 @@ describe('assemblePlanningProcedure', () => {
       '### Architecture unit bodies (titles only — fetch on demand)',
     );
     expect(output).not.toContain('### Architecture unit bodies\n');
-    expect(output).not.toContain(
-      'Full body content for unit 0, verbatim.',
-    );
+    expect(output).not.toContain('Full body content for unit 0, verbatim.');
   });
 
   it('keeps inlining full bodies when the store-sourced selection is at the inline cap', () => {
