@@ -26,6 +26,7 @@ import {
   isGroomCandidate,
   isOpsCandidate,
   isDesignCandidate,
+  isDesignEligibleType,
 } from './planningCandidates';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
@@ -191,7 +192,15 @@ export class DispatchTriggerEvaluator {
     return dispatched;
   }
 
-  /** All groom-armed, dependency-cleared, un-dispatched Backlog tasks across a project's non-Done milestones, in board order (FIFO-by-age proxy). */
+  /**
+   * All dependency-cleared, un-dispatched Backlog tasks across a project's
+   * non-Done milestones, in board order (FIFO-by-age proxy). With the groom
+   * arm set, every Type is in scope, unchanged from before. With the groom
+   * arm unset but the design arm set, the pool narrows to design-eligible
+   * Types only (per isDesignEligibleType, shared with isDesignCandidate) —
+   * this lets design self-feed from Backlog without also promoting unrelated
+   * Code tasks. With neither armed, the milestone is skipped entirely.
+   */
   private async scanProjectGroomCandidates(
     projectId: string,
   ): Promise<FlowCandidate[]> {
@@ -201,11 +210,14 @@ export class DispatchTriggerEvaluator {
     );
     for (const milestone of milestones) {
       await yieldToEventLoop();
-      if (!getArm(milestone.id, 'groom')) continue;
+      const groomArmed = getArm(milestone.id, 'groom');
+      const designArmed = getArm(milestone.id, 'design');
+      if (!groomArmed && !designArmed) continue;
       const tasks = this.loadBoardTasks(milestone.id);
       if (tasks.length === 0) continue;
       const tasksById = new Map(tasks.map((t) => [t.id, t]));
       for (const task of tasks) {
+        if (!groomArmed && !isDesignEligibleType(task.type)) continue;
         if (
           isGroomCandidate(task, {
             tasksById,

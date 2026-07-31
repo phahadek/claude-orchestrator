@@ -5,11 +5,15 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
-vi.mock('../planningCandidates.js', () => ({
-  isGroomCandidate: () => true,
-  isOpsCandidate: async () => true,
-  isDesignCandidate: () => true,
-}));
+vi.mock('../planningCandidates.js', async (importOriginal) => {
+  const actual = (await importOriginal()) as object;
+  return {
+    ...actual,
+    isGroomCandidate: () => true,
+    isOpsCandidate: async () => true,
+    isDesignCandidate: () => true,
+  };
+});
 
 import {
   computeAvailableCapacity,
@@ -258,6 +262,108 @@ describe('DispatchTriggerEvaluator — board blob memoisation', () => {
     const after = await (evaluator as any).scanProjectGroomCandidates(PROJECT);
     expect(before[0].task).not.toBe(after[0].task);
     expect(after[0].task.status).toBe('🗂️ Ready');
+  });
+});
+
+describe('DispatchTriggerEvaluator — design-armed groom narrowing', () => {
+  const PROJECT = 'proj-groom-narrowing';
+  const MILESTONE = 'milestone-groom-narrowing';
+
+  function makeTask(id: string, type: string): NotionTask {
+    return {
+      id,
+      title: `Task ${id}`,
+      status: '🔲 Backlog',
+      type,
+      dependsOn: [],
+      notionUrl: `https://notion.so/${id}`,
+    };
+  }
+
+  beforeEach(async () => {
+    const { db } = await import('../../db/db.js');
+    db.prepare('DELETE FROM task_cache').run();
+    db.prepare('DELETE FROM flow_arm').run();
+    db.prepare('DELETE FROM milestones').run();
+    db.prepare('DELETE FROM projects').run();
+
+    insertProject({
+      id: PROJECT,
+      name: 'Groom Narrowing Project',
+      project_dir: '/tmp/proj-groom-narrowing',
+      context_url: null,
+      github_repo: null,
+      task_source: 'notion',
+    });
+    insertMilestone({
+      id: MILESTONE,
+      project_id: PROJECT,
+      name: 'Groom Narrowing Milestone',
+      source_id: null,
+      canonical_short_id: null,
+      wrapped_at: null,
+    });
+
+    const tasks = [
+      makeTask('design-task', '📐 Design'),
+      makeTask('planning-task', '📋 Planning'),
+      makeTask('code-task', '💻 Code'),
+    ];
+    upsertTaskCache(`board:${MILESTONE}`, JSON.stringify(tasks));
+  });
+
+  function makeEvaluator(): DispatchTriggerEvaluator {
+    return new DispatchTriggerEvaluator({} as never, {} as never);
+  }
+
+  it('with design armed and groom disarmed, admits only design-eligible Backlog tasks', async () => {
+    upsertArm(MILESTONE, 'design', true, Date.now());
+    upsertArm(MILESTONE, 'groom', false, Date.now());
+
+    const evaluator = makeEvaluator();
+    const candidates = await (evaluator as any).scanProjectGroomCandidates(
+      PROJECT,
+    );
+    const ids = candidates.map((c: any) => c.task.id).sort();
+    expect(ids).toEqual(['design-task', 'planning-task']);
+  });
+
+  it('with both groom and design armed, admits every Type (unchanged from today)', async () => {
+    upsertArm(MILESTONE, 'design', true, Date.now());
+    upsertArm(MILESTONE, 'groom', true, Date.now());
+
+    const evaluator = makeEvaluator();
+    const candidates = await (evaluator as any).scanProjectGroomCandidates(
+      PROJECT,
+    );
+    const ids = candidates.map((c: any) => c.task.id).sort();
+    expect(ids).toEqual(['code-task', 'design-task', 'planning-task']);
+  });
+
+  it('with both disarmed, admits nothing', async () => {
+    upsertArm(MILESTONE, 'design', false, Date.now());
+    upsertArm(MILESTONE, 'groom', false, Date.now());
+
+    const evaluator = makeEvaluator();
+    const candidates = await (evaluator as any).scanProjectGroomCandidates(
+      PROJECT,
+    );
+    expect(candidates).toEqual([]);
+  });
+
+  it('leaves ops candidate scanning unaffected by the groom/design arm combination', async () => {
+    upsertArm(MILESTONE, 'design', true, Date.now());
+    upsertArm(MILESTONE, 'groom', false, Date.now());
+    upsertArm(MILESTONE, 'ops', true, Date.now());
+
+    const evaluator = makeEvaluator();
+    const opsCandidates = await (evaluator as any).scanProjectOpsCandidates(
+      PROJECT,
+    );
+    // isOpsCandidate is mocked to always true, so every task on the board
+    // surfaces regardless of the groom/design arm combination above.
+    const ids = opsCandidates.map((c: any) => c.task.id).sort();
+    expect(ids).toEqual(['code-task', 'design-task', 'planning-task']);
   });
 });
 
