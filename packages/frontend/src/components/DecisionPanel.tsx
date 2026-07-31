@@ -51,7 +51,7 @@ export function DecisionPanel({ sessionId }: Props) {
     batchExceptions,
     handleApproveAllClean,
     groupInFlight,
-    groupError,
+    groupErrors,
     draftFor,
     setDraft,
     handleApproveGroup,
@@ -183,7 +183,9 @@ export function DecisionPanel({ sessionId }: Props) {
             onToggleBatchExcluded={() => toggleBatchExcluded(groupId)}
             cleanBatchLabel={taskIdFor(groupIntents) ?? groupId}
             batchException={batchExceptions[groupId]}
-            groupError={groupInFlight === null ? groupError : null}
+            groupError={
+              groupInFlight === groupId ? null : (groupErrors[groupId] ?? null)
+            }
             inFlight={inFlight}
             draft={draft}
             onSetDraft={(patch) => setDraft(groupId, patch)}

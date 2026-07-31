@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import type { StagedIntent } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
+import type { TaskView } from '../types/taskView';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import { DecisionPickOnePanel } from './DecisionPickOnePanel';
 import { TriageBatchPanel } from './TriageBatchPanel';
 import { GroupCard } from './GroupCard';
 import { taskIdFor } from './triageVerdict';
+import { taskIdFromIntent } from '../utils/milestoneStack';
 import { useDecisionQueue } from '../hooks/useDecisionQueue';
 import panelStyles from './DecisionPanel.module.css';
 import styles from './MilestoneDecisionInbox.module.css';
@@ -13,10 +15,28 @@ import styles from './MilestoneDecisionInbox.module.css';
 interface Props {
   projectId: string;
   milestone: string;
+  /** The milestone's tasks — resolved against each card's intent(s) to label the card by its target task's name + Type instead of an internal id. */
+  tasks?: TaskView[];
   /** The currently drill-down-selected intent/group card id, if any — highlights that card. */
   selectedCardId?: string | null;
   /** Drives the middle-stack selection -> right drill-down wiring. Omit to render read-only (no selection affordance). */
   onSelectIntent?: (intent: StagedIntent) => void;
+}
+
+interface TaskLabel {
+  icon: string;
+  name: string;
+}
+
+/** Resolves a card's target task name + type icon from the milestone's task list — null when the intent carries no task ref (e.g. decision.pickOne) or the ref doesn't resolve, so the caller can fall back to a defined label. */
+function taskLabelFor(
+  taskId: string | null,
+  taskById: Map<string, TaskView>,
+): TaskLabel | null {
+  if (!taskId) return null;
+  const task = taskById.get(taskId);
+  if (!task) return null;
+  return { icon: task.taskType.split(' ')[0], name: task.taskName };
 }
 
 type Card =
@@ -69,9 +89,11 @@ function buildCardOrder(intents: StagedIntent[]): Card[] {
 export function MilestoneDecisionInbox({
   projectId,
   milestone,
+  tasks = [],
   selectedCardId = null,
   onSelectIntent,
 }: Props) {
+  const taskById = new Map(tasks.map((t) => [t.taskId, t]));
   const {
     intents,
     loaded,
@@ -85,7 +107,7 @@ export function MilestoneDecisionInbox({
     batchExceptions,
     handleApproveAllClean,
     groupInFlight,
-    groupError,
+    groupErrors,
     draftFor,
     setDraft,
     handleApproveGroup,
@@ -162,6 +184,7 @@ export function MilestoneDecisionInbox({
         if (card.type === 'intent') {
           const { intent } = card;
           const provenance = provenanceOf([intent]);
+          const label = taskLabelFor(taskIdFromIntent(intent), taskById);
           return (
             <div
               key={intent.id}
@@ -174,7 +197,23 @@ export function MilestoneDecisionInbox({
               data-testid={`milestone-decision-card-${intent.id}`}
             >
               <div className={panelStyles.groupHeader}>
-                <span>{intent.kind}</span>
+                <span className={styles.cardTitleGroup}>
+                  <span className={styles.cardTitle}>
+                    {label ? (
+                      <>
+                        <span aria-hidden="true">{label.icon}</span>{' '}
+                        {label.name}
+                      </>
+                    ) : (
+                      intent.kind
+                    )}
+                  </span>
+                  {label && (
+                    <span className={styles.cardTitleDetail}>
+                      {intent.kind}
+                    </span>
+                  )}
+                </span>
                 <span
                   className={styles.provenanceBadge}
                   data-testid={`provenance-badge-${intent.id}`}
@@ -220,6 +259,7 @@ export function MilestoneDecisionInbox({
         const inFlight = groupInFlight === groupId;
         const isClean = cleanGroupIds.includes(groupId);
         const provenance = provenanceOf(groupIntents);
+        const groupLabel = taskLabelFor(taskIdFor(groupIntents), taskById);
         const members = [
           ...(committedByGroup[groupId] ?? []).map((intent) => ({
             intent,
@@ -251,7 +291,17 @@ export function MilestoneDecisionInbox({
             onToggleBatchExcluded={() => toggleBatchExcluded(groupId)}
             cleanBatchLabel={taskIdFor(groupIntents) ?? groupId}
             batchException={batchExceptions[groupId]}
-            groupError={groupInFlight === null ? groupError : null}
+            groupError={
+              groupInFlight === groupId ? null : (groupErrors[groupId] ?? null)
+            }
+            title={
+              groupLabel ? (
+                <>
+                  <span aria-hidden="true">{groupLabel.icon}</span>{' '}
+                  {groupLabel.name}
+                </>
+              ) : undefined
+            }
             inFlight={inFlight}
             draft={draft}
             onSetDraft={(patch) => setDraft(groupId, patch)}
