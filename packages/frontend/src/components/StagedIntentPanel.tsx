@@ -7,6 +7,7 @@ import type {
 } from '../api/stagedIntents';
 import { stagedIntentsApi } from '../api/stagedIntents';
 import { diffTaskBody, splitSections, type SectionDiff } from './bodyDiff';
+import { CollapsibleField } from './CollapsibleField';
 import styles from './StagedIntentPanel.module.css';
 
 interface Props {
@@ -465,15 +466,25 @@ function GroomProposalSummary({ proposal }: { proposal: GroomProposalFields }) {
       data-testid="staged-intent-groom-proposal"
     >
       <dt>Achieves</dt>
-      <dd>{proposal.achieves}</dd>
+      <dd>
+        <CollapsibleField text={proposal.achieves} />
+      </dd>
       <dt>Open questions</dt>
-      <dd>{proposal.openQuestions}</dd>
+      <dd>
+        <CollapsibleField text={proposal.openQuestions} />
+      </dd>
       <dt>Automated tests</dt>
-      <dd>{proposal.automatedTests}</dd>
+      <dd>
+        <CollapsibleField text={proposal.automatedTests} />
+      </dd>
       <dt>Manual verification</dt>
-      <dd>{proposal.manualVerification}</dd>
+      <dd>
+        <CollapsibleField text={proposal.manualVerification} />
+      </dd>
       <dt>Operational seed</dt>
-      <dd>{proposal.operationalSeed}</dd>
+      <dd>
+        <CollapsibleField text={proposal.operationalSeed} />
+      </dd>
     </dl>
   );
 }
@@ -1179,7 +1190,9 @@ export function StagedIntentPanel({
         <GroomProposalSummary proposal={intent.groomProposal} />
       ) : (
         intent.decisionProposal && (
-          <p className={styles.rationale}>{intent.decisionProposal}</p>
+          <p className={styles.rationale}>
+            <CollapsibleField text={intent.decisionProposal} />
+          </p>
         )
       )}
 
