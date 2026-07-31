@@ -56,7 +56,7 @@ steps:
 
   - id: sync-runtime
     kind: shell
-    command_or_prompt: "rsync -a --delete --exclude='.git/' --exclude='.claude/' --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' --exclude='.env' ./ \"$RUNTIME_DIR/\""
+    command_or_prompt: 'rsync -a --delete --exclude=''.git/'' --exclude=''.claude/'' --exclude=''*.db'' --exclude=''*.db-wal'' --exclude=''*.db-shm'' --exclude=''.env'' ./ "$RUNTIME_DIR/"'
     is_prod_mutating: true
     supports_dry_run: true
 
