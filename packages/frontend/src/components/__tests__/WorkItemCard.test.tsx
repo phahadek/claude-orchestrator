@@ -18,7 +18,7 @@ function makePR(overrides: Partial<PRWorkItem> = {}): PRWorkItem {
     sessionId: null,
     reviewSessionId: null,
     repo: 'owner/repo',
-    reviewResult: null,
+    reviewVerdict: null,
     reviewedAt: null,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
@@ -174,13 +174,7 @@ describe('WorkItemCard — pr (regression)', () => {
   it('shows approved badge when verdict is approved', () => {
     render(
       <WorkItemCard
-        item={makePR({
-          reviewResult: {
-            verdict: 'approved',
-            dimensions: [],
-            summary: 'Looks good',
-          },
-        })}
+        item={makePR({ reviewVerdict: 'approved' })}
         {...defaultProps}
       />,
     );
@@ -196,9 +190,7 @@ describe('WorkItemCard — pr (regression)', () => {
   it('enables Merge button when verdict is approved and state is open', () => {
     render(
       <WorkItemCard
-        item={makePR({
-          reviewResult: { verdict: 'approved', dimensions: [], summary: '' },
-        })}
+        item={makePR({ reviewVerdict: 'approved' })}
         {...defaultProps}
       />,
     );
@@ -229,7 +221,7 @@ describe('WorkItemCard — pr (regression)', () => {
     render(
       <WorkItemCard
         item={makePR({
-          reviewResult: { verdict: 'approved', dimensions: [], summary: '' },
+          reviewVerdict: 'approved',
           mergeState: 'dirty',
         })}
         {...defaultProps}
@@ -256,9 +248,7 @@ describe('WorkItemCard — verdict badge for both types', () => {
   it('renders approved verdict for pr type', () => {
     render(
       <WorkItemCard
-        item={makePR({
-          reviewResult: { verdict: 'approved', summary: 'ok', dimensions: [] },
-        })}
+        item={makePR({ reviewVerdict: 'approved' })}
         {...defaultProps}
       />,
     );
@@ -280,13 +270,7 @@ describe('WorkItemCard — verdict badge for both types', () => {
   it('renders needs_changes verdict for pr type', () => {
     render(
       <WorkItemCard
-        item={makePR({
-          reviewResult: {
-            verdict: 'needs_changes',
-            summary: 'fix',
-            dimensions: [],
-          },
-        })}
+        item={makePR({ reviewVerdict: 'needs_changes' })}
         {...defaultProps}
       />,
     );

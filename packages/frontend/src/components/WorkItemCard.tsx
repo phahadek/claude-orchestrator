@@ -32,7 +32,10 @@ export interface PRWorkItem {
   sessionId: string | null;
   reviewSessionId: string | null;
   repo: string;
-  reviewResult: PRReviewResult | null;
+  /** Lightweight verdict carried by the list endpoint — full detail is fetched on demand. */
+  reviewVerdict: PRReviewResult['verdict'] | null;
+  /** Full review detail (dimensions, summary, errorDetail); populated lazily via onLoadReviewDetails. */
+  reviewResult?: PRReviewResult | null;
   reviewedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -71,6 +74,7 @@ export interface WorkItemCardProps {
   onReReview: (prNumber: number) => void;
   onFixConflicts: (prNumber: number) => void;
   onApprove: (prNumber: number) => void;
+  onLoadReviewDetails?: (prNumber: number) => void;
   reviewInFlight: boolean;
   mergeInFlight: boolean;
   checkingMergeability?: boolean;
@@ -211,6 +215,7 @@ function PRWorkItemCard({
   onReReview,
   onFixConflicts,
   onApprove,
+  onLoadReviewDetails,
   reviewInFlight,
   mergeInFlight,
   checkingMergeability = false,
@@ -225,7 +230,7 @@ function PRWorkItemCard({
 
   const prPauseStruct = parsePauseReason(pr.pauseReason ?? null);
   const isFinished = pr.state === 'merged' || pr.state === 'closed';
-  const verdict = pr.reviewResult?.verdict ?? null;
+  const verdict = pr.reviewVerdict;
   const hasConflicts = !isFinished && pr.mergeState === 'dirty';
   const hasCiFailures = !isFinished && pr.mergeState === 'ci_failed';
   const isBlocked = !isFinished && pr.mergeState === 'blocked';
@@ -468,44 +473,51 @@ function PRWorkItemCard({
 
       {error && <div className={styles.inlineError}>{error}</div>}
 
-      {pr.reviewResult && (
+      {verdict && (
         <div className={styles.reviewDetails}>
           <button
             type="button"
             className={styles.detailsToggle}
-            onClick={() => setDetailsOpen((o) => !o)}
+            onClick={() => {
+              const next = !detailsOpen;
+              setDetailsOpen(next);
+              if (next && !pr.reviewResult) onLoadReviewDetails?.(pr.prNumber);
+            }}
           >
             {detailsOpen ? '▼' : '▶'} Review details
           </button>
-          {detailsOpen && (
-            <div className={styles.detailsBody}>
-              {pr.reviewResult.verdict === 'error' ? (
-                <div className={styles.reviewError}>
-                  Review failed: {pr.reviewResult.summary}
-                </div>
-              ) : (
-                <>
-                  {(pr.reviewResult.dimensions ?? []).map((dim) => (
-                    <div key={dim.name} className={styles.dimension}>
-                      <span className={styles.dimIcon}>
-                        {dim.passed ? '✅' : '⚠️'}
-                      </span>
-                      <span className={styles.dimName}>{dim.name}</span>
-                      <span className={styles.dimNotes}>{dim.notes}</span>
-                    </div>
-                  ))}
-                  <div className={styles.reviewSummary}>
-                    {pr.reviewResult.summary}
+          {detailsOpen &&
+            (pr.reviewResult ? (
+              <div className={styles.detailsBody}>
+                {pr.reviewResult.verdict === 'error' ? (
+                  <div className={styles.reviewError}>
+                    Review failed: {pr.reviewResult.summary}
                   </div>
-                  {pr.reviewResult.errorDetail && (
-                    <pre className={styles.reviewErrorDetail}>
-                      {pr.reviewResult.errorDetail}
-                    </pre>
-                  )}
-                </>
-              )}
-            </div>
-          )}
+                ) : (
+                  <>
+                    {(pr.reviewResult.dimensions ?? []).map((dim) => (
+                      <div key={dim.name} className={styles.dimension}>
+                        <span className={styles.dimIcon}>
+                          {dim.passed ? '✅' : '⚠️'}
+                        </span>
+                        <span className={styles.dimName}>{dim.name}</span>
+                        <span className={styles.dimNotes}>{dim.notes}</span>
+                      </div>
+                    ))}
+                    <div className={styles.reviewSummary}>
+                      {pr.reviewResult.summary}
+                    </div>
+                    {pr.reviewResult.errorDetail && (
+                      <pre className={styles.reviewErrorDetail}>
+                        {pr.reviewResult.errorDetail}
+                      </pre>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className={styles.detailsBody}>Loading…</div>
+            ))}
         </div>
       )}
     </div>

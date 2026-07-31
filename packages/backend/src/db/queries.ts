@@ -1775,14 +1775,40 @@ export function getMergedPRForTask(taskId: string): PullRequestRow | null {
     .get({ task_id: taskId }) as PullRequestRow | null;
 }
 
-export function getPRs(repo: string): PullRequestRow[] {
-  return db
+/**
+ * Default cap on terminal (merged/closed) rows returned by getPRs. Open rows
+ * are never subject to this cap — the request-scoped stale-open reconciliation
+ * in routes/prs.ts is the only repair path for escalated state='open' rows,
+ * so every open row must always be visible to it.
+ */
+export const PR_LIST_TERMINAL_LIMIT = 50;
+
+/**
+ * Returns all open PRs for a repo plus the most recently updated terminal
+ * (merged/closed) PRs, capped at `terminalLimit`. Unlike a flat "most recent
+ * N overall" query, this guarantees every open row is present regardless of
+ * how many terminal rows the project has accumulated.
+ */
+export function getPRs(
+  repo: string,
+  terminalLimit: number = PR_LIST_TERMINAL_LIMIT,
+): PullRequestRow[] {
+  const openRows = db
     .prepare<{ repo: string }>(
       `
-    SELECT * FROM pull_requests WHERE repo = @repo ORDER BY pr_number DESC
+    SELECT * FROM pull_requests WHERE repo = @repo AND state = 'open' ORDER BY pr_number DESC
   `,
     )
     .all({ repo }) as PullRequestRow[];
+  const terminalRows = db
+    .prepare<{ repo: string; limit: number }>(
+      `
+    SELECT * FROM pull_requests WHERE repo = @repo AND state != 'open'
+    ORDER BY updated_at DESC LIMIT @limit
+  `,
+    )
+    .all({ repo, limit: terminalLimit }) as PullRequestRow[];
+  return [...openRows, ...terminalRows].sort((a, b) => b.pr_number - a.pr_number);
 }
 
 export function getPRByNumber(

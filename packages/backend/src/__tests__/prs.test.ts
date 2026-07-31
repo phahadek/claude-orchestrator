@@ -398,6 +398,69 @@ describe('GET /api/prs', () => {
     expect(res.status).toBe(200);
     expect(res.body[0].autoMergeEnabled).toBe(false);
   });
+
+  it('does not include reviewResult on list rows, and carries reviewVerdict instead', async () => {
+    const reviewedRow: PullRequestRow = {
+      ...mockPRRow,
+      review_result: JSON.stringify({
+        verdict: 'approved',
+        summary: 'Looks good',
+        dimensions: [{ name: 'tests', passed: true, notes: 'ok' }],
+      }),
+    };
+    vi.mocked(queries.getPRs).mockReturnValue([reviewedRow]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].reviewResult).toBeUndefined();
+    expect(res.body[0].reviewVerdict).toBe('approved');
+  });
+
+  it('reviewVerdict is null when no review has run', async () => {
+    vi.mocked(queries.getPRs).mockReturnValue([mockPRRow]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].reviewVerdict).toBeNull();
+  });
+});
+
+// ── GET /api/prs/:owner/:repoName/:prNumber/review-result ──────────────────
+
+describe('GET /api/prs/:owner/:repoName/:prNumber/review-result', () => {
+  it('returns the full reviewResult the list endpoint used to carry', async () => {
+    const reviewResult = {
+      verdict: 'approved',
+      summary: 'Looks good',
+      dimensions: [{ name: 'tests', passed: true, notes: 'ok' }],
+    };
+    vi.mocked(queries.getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_result: JSON.stringify(reviewResult),
+      review_at: '2024-01-02T00:00:00Z',
+    });
+    const res = await supertest(buildApp()).get(
+      '/api/prs/owner/repo/42/review-result',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.reviewResult).toEqual(reviewResult);
+    expect(res.body.reviewedAt).toBe('2024-01-02T00:00:00Z');
+  });
+
+  it('returns null reviewResult when the PR has never been reviewed', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const res = await supertest(buildApp()).get(
+      '/api/prs/owner/repo/42/review-result',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.reviewResult).toBeNull();
+  });
+
+  it('returns 404 when the PR is not tracked', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(null);
+    const res = await supertest(buildApp()).get(
+      '/api/prs/owner/repo/999/review-result',
+    );
+    expect(res.status).toBe(404);
+  });
 });
 
 // ── GET /api/prs — awaitingReReview mapper ───────────────────────────────────
