@@ -89,8 +89,9 @@ export interface ReattachableGateItemVerifier extends GateItemVerifier {
 function isReattachable(
   verifier: GateItemVerifier,
 ): verifier is ReattachableGateItemVerifier {
-  return typeof (verifier as ReattachableGateItemVerifier).reattach ===
-    'function';
+  return (
+    typeof (verifier as ReattachableGateItemVerifier).reattach === 'function'
+  );
 }
 
 interface FollowupFixTask {
@@ -501,7 +502,8 @@ export async function reattachOutstandingGateVerifications(): Promise<void> {
   if (!configured?.verifier || !isReattachable(configured.verifier)) return;
   const verifier = configured.verifier;
   const followupFiler = configured.followupFiler ?? defaultFollowupFiler;
-  const trigger = configured.deployAdvanceTrigger ?? defaultDeployAdvanceTrigger;
+  const trigger =
+    configured.deployAdvanceTrigger ?? defaultDeployAdvanceTrigger;
   const concurrency = configured.concurrency;
 
   const pending = getGateItemsWithPendingCapabilityRequest();

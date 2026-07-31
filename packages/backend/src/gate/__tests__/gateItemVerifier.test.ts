@@ -392,7 +392,9 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     vi.mocked(getSession).mockReset();
     vi.mocked(markSessionDone).mockReset();
     vi.mocked(appendGateItemEvent).mockReset();
-    vi.mocked(hasActiveCapabilityRequestForSession).mockReset().mockReturnValue(false);
+    vi.mocked(hasActiveCapabilityRequestForSession)
+      .mockReset()
+      .mockReturnValue(false);
   });
 
   it('marks the session done once the gate_verify_disposition event fires', async () => {
@@ -885,7 +887,9 @@ describe('SessionGateItemVerifier — one-shot gate-verify appeal', () => {
     vi.mocked(getSession).mockReset();
     vi.mocked(markSessionDone).mockReset();
     vi.mocked(appendGateItemEvent).mockReset();
-    vi.mocked(hasActiveCapabilityRequestForSession).mockReset().mockReturnValue(false);
+    vi.mocked(hasActiveCapabilityRequestForSession)
+      .mockReset()
+      .mockReturnValue(false);
   });
 
   it('delivers appeal feedback naming the failing clause while the session is still live, before any teardown', async () => {
@@ -1104,7 +1108,9 @@ describe('SessionGateItemVerifier — one-shot reclassify-omission appeal', () =
     vi.mocked(getSession).mockReset();
     vi.mocked(markSessionDone).mockReset();
     vi.mocked(appendGateItemEvent).mockReset();
-    vi.mocked(hasActiveCapabilityRequestForSession).mockReset().mockReturnValue(false);
+    vi.mocked(hasActiveCapabilityRequestForSession)
+      .mockReset()
+      .mockReturnValue(false);
   });
 
   it('delivers exactly one appeal naming the omission for a needs-setup asserting structural unverifiability with no reclassify', async () => {

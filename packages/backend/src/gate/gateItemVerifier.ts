@@ -1143,7 +1143,10 @@ export class SessionGateItemVerifier implements GateItemVerifier {
           logger.info(
             `[GateItemVerifier] session ${sessionId.slice(0, 8)} exceeded budget while a capability request was outstanding — suspending budget until it clears`,
           );
-          handles.budget = setTimeout(waitForCapabilityClear, this.pollIntervalMs);
+          handles.budget = setTimeout(
+            waitForCapabilityClear,
+            this.pollIntervalMs,
+          );
           return;
         }
         teardown(
@@ -1156,7 +1159,10 @@ export class SessionGateItemVerifier implements GateItemVerifier {
 
       const waitForCapabilityClear = () => {
         if (hasActiveCapabilityRequestForSession(sessionId)) {
-          handles.budget = setTimeout(waitForCapabilityClear, this.pollIntervalMs);
+          handles.budget = setTimeout(
+            waitForCapabilityClear,
+            this.pollIntervalMs,
+          );
           return;
         }
         handles.budget = setTimeout(onBudgetFire, this.budgetMs);

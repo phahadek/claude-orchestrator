@@ -943,7 +943,10 @@ describe('reattachOutstandingGateVerifications', () => {
 
   it('is a no-op when the configured verifier does not support reattach', async () => {
     const item = makeRunnableItem({ classification: 'Read-Only' });
-    insertVerifySession(item.id, { sessionId: 'sess-parked-2', status: 'running' });
+    insertVerifySession(item.id, {
+      sessionId: 'sess-parked-2',
+      status: 'running',
+    });
     insertPendingCapabilityRequest('sess-parked-2');
 
     const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
@@ -952,7 +955,9 @@ describe('reattachOutstandingGateVerifications', () => {
       deployAdvanceTrigger: fixedTrigger('sha1'),
     });
 
-    await expect(reattachOutstandingGateVerifications()).resolves.toBeUndefined();
+    await expect(
+      reattachOutstandingGateVerifications(),
+    ).resolves.toBeUndefined();
     expect(getItem(item.id)?.state).toBe('runnable');
   });
 });
