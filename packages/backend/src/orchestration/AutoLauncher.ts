@@ -91,9 +91,14 @@ export class AutoLauncher {
     60 * 60_000,
   ];
   private static readonly MAX_ATTEMPTS_BEFORE_AUDIT = 5;
-  /** Backoff schedule for launch_failed cooldown (separate from crash budget). */
+  /**
+   * Backoff schedule for launch_failed cooldown (separate from crash budget).
+   * The first tier must outlast the auto-launch poll interval — a shorter
+   * cooldown expires before the next poll and gates nothing. See the
+   * assertion in AutoLauncher.test.ts.
+   */
   private static readonly LAUNCH_FAILED_BACKOFF_MS = [
-    30_000,
+    90_000,
     2 * 60_000,
     10 * 60_000,
   ];
@@ -128,6 +133,9 @@ export class AutoLauncher {
           this.onSessionLaunchFailed(
             (msg as { type: string; taskId: string }).taskId,
           );
+        } else if (msg.type === 'session_started') {
+          const taskId = (msg as { taskId?: string }).taskId;
+          if (taskId) this.onSessionStarted(taskId);
         }
       });
     }
@@ -163,6 +171,19 @@ export class AutoLauncher {
         `[AutoLauncher] task ${taskId} launch_failed (attempt ${count}) — cooldown ${cooldownMs / 1000}s`,
       );
     }
+  }
+
+  /**
+   * Called when a session_started event confirms a launch actually succeeded
+   * (worktree established, runner spawned) — as opposed to merely dispatched.
+   * Only a confirmed-successful launch clears the crash budget; clearing on
+   * dispatch instead would wipe the failure record before the outcome is
+   * known, letting a deterministically failing task retry forever instead of
+   * escalating.
+   */
+  private onSessionStarted(taskId: string): void {
+    clearTaskPauseReason(taskId);
+    this.crashBudget.clear(taskId);
   }
 
   register(scheduler: Scheduler): void {
@@ -551,8 +572,9 @@ export class AutoLauncher {
           repo: resolvedRepo,
         },
       );
-      clearTaskPauseReason(task.id);
-      this.crashBudget.clear(task.id);
+      // The crash budget and pause reason are cleared only once session_started
+      // confirms the launch actually succeeded (see onSessionStarted) — start()
+      // resolving here means dispatch was accepted, not that the launch worked.
       logger.info(
         `[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}${resolvedRepo ? ` repo=${resolvedRepo}` : ''}`,
       );
