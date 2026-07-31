@@ -3356,12 +3356,13 @@ export function createStagedIntentsRouter(
 
   // ── GET /api/staged-intents/group/:groupId ────────────────────────────────
   // Diagnostic surface: every intent ever staged for this group, regardless
-  // of state — including needs_revision, which /staged-intents (ACTIVE_STATES
-  // only) never surfaces. `wedged` flags the exact failure mode this route
-  // exists for: a non-empty group whose every member sits in needs_revision,
-  // reachable by no commit (commitGroupIntents refuses outright while any
-  // member is needs_revision/pending_verification) and no per-item
-  // apply/reject (getActiveStagedIntent finds nothing live either).
+  // of state — including needs_revision/pending_verification, which
+  // /staged-intents (ACTIVE_STATES only) never surfaces. `wedged` flags the
+  // exact failure mode this route exists for: a non-empty group whose every
+  // member sits in needs_revision and/or pending_verification, reachable by
+  // no commit (commitGroupIntents refuses outright while any member is
+  // needs_revision/pending_verification) and no per-item apply/reject
+  // (getActiveStagedIntent finds nothing live either).
   router.get(
     '/staged-intents/group/:groupId',
     (req: Request, res: Response) => {
@@ -3369,17 +3370,21 @@ export function createStagedIntentsRouter(
       const members = listStagedIntentsByGroup(groupId);
       const wedged =
         members.length > 0 &&
-        members.every((r) => r.state === 'needs_revision');
+        members.every(
+          (r) =>
+            r.state === 'needs_revision' || r.state === 'pending_verification',
+        );
       res.json({ groupId, intents: members.map(rowToApi), wedged });
     },
   );
 
   // ── POST /api/staged-intents/group/:groupId/recover ───────────────────────
-  // Wedged-group recovery: re-surfaces every needs_revision member of the
-  // group onto the normal staged/approved surface (ACTIVE_STATES), so the
-  // usual commit or per-item disposition (approve/reject) routes can act on
-  // it again — the state machine (STAGED_INTENT_TRANSITIONS in
-  // db/queries.ts) permits needs_revision -> staged only via this
+  // Wedged-group recovery: re-surfaces every needs_revision/pending_verification
+  // member of the group onto the normal staged/approved surface
+  // (ACTIVE_STATES), so the usual commit or per-item disposition
+  // (approve/reject) routes can act on it again — the state machine
+  // (STAGED_INTENT_TRANSITIONS in db/queries.ts) permits needs_revision ->
+  // staged and pending_verification -> staged only via this
   // operator-initiated route, never implicitly. Also strips group_id: a
   // session.requestCapability must never carry one (see
   // validateCapabilityRequestDoesNotCarryGroup), so a recovered instance of
@@ -3392,11 +3397,12 @@ export function createStagedIntentsRouter(
     (req: Request, res: Response) => {
       const groupId = String(req.params.groupId);
       const blocked = listStagedIntentsByGroup(groupId).filter(
-        (r) => r.state === 'needs_revision',
+        (r) =>
+          r.state === 'needs_revision' || r.state === 'pending_verification',
       );
       if (blocked.length === 0) {
         res.status(404).json({
-          error: `no needs_revision intents found for group "${groupId}"`,
+          error: `no needs_revision or pending_verification intents found for group "${groupId}"`,
         });
         return;
       }
