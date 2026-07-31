@@ -188,10 +188,7 @@ export function MilestoneBurndown({
         </div>
       )}
       {projectId && milestoneId && (
-        <div
-          className={styles.trustRates}
-          data-testid="trust-rate-panel"
-        >
+        <div className={styles.trustRates} data-testid="trust-rate-panel">
           <span className={styles.trustRatesLabel}>Trust precision</span>
           {TRUST_PRECISION_FLOWS.map((flow) => (
             <span

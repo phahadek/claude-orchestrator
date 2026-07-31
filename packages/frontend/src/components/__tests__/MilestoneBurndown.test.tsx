@@ -11,9 +11,8 @@ vi.mock('../../hooks/useConvergenceHistory', () => ({
 
 const getFlowRejectionRateMock = vi.hoisted(() => vi.fn());
 vi.mock('../../api/gate', async () => {
-  const actual = await vi.importActual<typeof import('../../api/gate')>(
-    '../../api/gate',
-  );
+  const actual =
+    await vi.importActual<typeof import('../../api/gate')>('../../api/gate');
   return {
     ...actual,
     gateApi: {
@@ -517,8 +516,18 @@ describe('MilestoneBurndown trust-rate panel', () => {
       (_project: string, _milestone: string, flow: string) =>
         Promise.resolve(
           flow === 'gate-verify'
-            ? makeTrustRate({ flow: 'gate-verify', total: 28, rejected: 16, rate: 16 / 28 })
-            : makeTrustRate({ flow: flow as never, total: 3, rejected: 1, rate: 1 / 3 }),
+            ? makeTrustRate({
+                flow: 'gate-verify',
+                total: 28,
+                rejected: 16,
+                rate: 16 / 28,
+              })
+            : makeTrustRate({
+                flow: flow as never,
+                total: 3,
+                rejected: 1,
+                rate: 1 / 3,
+              }),
         ),
     );
 
@@ -539,11 +548,7 @@ describe('MilestoneBurndown trust-rate panel', () => {
       );
     });
     for (const flow of TRUST_PRECISION_FLOWS) {
-      expect(getFlowRejectionRateMock).toHaveBeenCalledWith(
-        'proj',
-        'M1',
-        flow,
-      );
+      expect(getFlowRejectionRateMock).toHaveBeenCalledWith('proj', 'M1', flow);
       expect(screen.getByTestId(`trust-rate-${flow}`)).toBeDefined();
     }
 
@@ -556,8 +561,18 @@ describe('MilestoneBurndown trust-rate panel', () => {
       (_project: string, _milestone: string, flow: string) =>
         Promise.resolve(
           flow === 'gate-verify'
-            ? makeTrustRate({ flow: 'gate-verify', total: 28, rejected: 2, rate: 2 / 28 })
-            : makeTrustRate({ flow: flow as never, total: 3, rejected: 2, rate: 2 / 3 }),
+            ? makeTrustRate({
+                flow: 'gate-verify',
+                total: 28,
+                rejected: 2,
+                rate: 2 / 28,
+              })
+            : makeTrustRate({
+                flow: flow as never,
+                total: 3,
+                rejected: 2,
+                rate: 2 / 3,
+              }),
         ),
     );
 
@@ -573,13 +588,11 @@ describe('MilestoneBurndown trust-rate panel', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId('trust-rate-gate-verify').textContent).toContain(
-        '2/28',
-      );
+      expect(
+        screen.getByTestId('trust-rate-gate-verify').textContent,
+      ).toContain('2/28');
     });
-    expect(screen.getByTestId('trust-rate-groom').textContent).toContain(
-      '2/3',
-    );
+    expect(screen.getByTestId('trust-rate-groom').textContent).toContain('2/3');
     expect(
       screen.getByTestId('trust-rate-gate-verify').textContent,
     ).not.toEqual(screen.getByTestId('trust-rate-groom').textContent);
