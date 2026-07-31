@@ -186,6 +186,18 @@ export const stagedIntentsApi = {
     );
   },
 
+  /**
+   * planning.noOp's sole disposition: commits the marker straight to
+   * `committed` with no applyIntent call (there is nothing to apply) — the
+   * operator's "understood" for an informational no-op notice.
+   */
+  acknowledge(id: string): Promise<StagedIntent> {
+    return apiRequest<StagedIntent>(
+      `/api/staged-intents/${encodeURIComponent(id)}/acknowledge`,
+      { method: 'POST' },
+    );
+  },
+
   /** Atomic, dependency-ordered commit of every live intent in the group. */
   commitGroup(
     groupId: string,

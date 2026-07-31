@@ -713,7 +713,7 @@ export function StagedIntentPanel({
     intent.state === 'pending_verification';
 
   const [inFlight, setInFlight] = useState<
-    'apply' | 'reject' | 'approve' | 'override' | null
+    'apply' | 'reject' | 'approve' | 'override' | 'acknowledge' | null
   >(null);
   const [error, setError] = useState<string | null>(null);
   const [rejectOutcome, setRejectOutcome] = useState<StagedIntentRejectOutcome>(
@@ -777,6 +777,25 @@ export function StagedIntentPanel({
         return;
       }
       setError(err instanceof Error ? err.message : 'Failed to approve intent');
+    } finally {
+      setInFlight(null);
+    }
+  };
+
+  const handleAcknowledge = async () => {
+    setInFlight('acknowledge');
+    setError(null);
+    try {
+      const updated = await stagedIntentsApi.acknowledge(intent.id);
+      onApplied?.(intent, updated);
+    } catch (err) {
+      if (isNotFoundError(err)) {
+        onDismiss?.(intent);
+        return;
+      }
+      setError(
+        err instanceof Error ? err.message : 'Failed to acknowledge intent',
+      );
     } finally {
       setInFlight(null);
     }
@@ -848,7 +867,19 @@ export function StagedIntentPanel({
 
       {error && <div className={styles.error}>{error}</div>}
 
-      {hideActions || isNoOp ? null : (
+      {hideActions ? null : isNoOp ? (
+        <div className={styles.rejectForm}>
+          <button
+            type="button"
+            className={styles.approveButton}
+            disabled={inFlight !== null}
+            data-testid="staged-intent-acknowledge"
+            onClick={() => void handleAcknowledge()}
+          >
+            {inFlight === 'acknowledge' ? 'Acknowledging…' : 'Acknowledge'}
+          </button>
+        </div>
+      ) : (
         <>
           {showOverride && (
             <div className={styles.overrideBox}>

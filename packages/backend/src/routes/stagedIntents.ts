@@ -3478,6 +3478,50 @@ export function createStagedIntentsRouter(
     },
   );
 
+  // ── POST /api/staged-intents/:id/acknowledge ──────────────────────────────
+  // planning.noOp's sole disposition: the intent proposes nothing, so there
+  // is nothing to route through applyIntent (which has, and must keep, no
+  // case for this kind — see the default: unknown-kind throw). Acknowledging
+  // transitions the row straight to `committed`, records the same
+  // staged_intent_disposition audit event every other disposition uses, and
+  // does not call planningOrchestrator.handleDisposition: a noOp's session
+  // already reached terminal by staging it (checkTerminal's `countable`
+  // filter excludes it), so there is no session left to resume and no
+  // decision for it to act on.
+  router.post(
+    '/staged-intents/:id/acknowledge',
+    (req: Request, res: Response) => {
+      const row = getActiveStagedIntent(String(req.params.id));
+      if (!row) {
+        res.status(404).json({ error: 'staged intent not found' });
+        return;
+      }
+      if (row.kind !== 'planning.noOp') {
+        res.status(409).json({
+          error: `staged intent "${row.id}" is not a planning.noOp — acknowledge only resolves a no-op marker`,
+        });
+        return;
+      }
+
+      const committed = transitionStagedIntent(row.id, 'committed', {
+        annotation: null,
+      });
+      const committedIntent = rowToApi(committed);
+      broadcastIntentChange(committedIntent);
+
+      recordEvent({
+        event_type: 'staged_intent_disposition',
+        actor_type: 'human',
+        actor_id: null,
+        project_id: committedIntent.projectId,
+        task_id: row.task_id,
+        payload: { intentId: row.id, disposition: 'acknowledge' },
+      });
+
+      res.json(committedIntent);
+    },
+  );
+
   // ── GET /api/staged-intents/group/:groupId ────────────────────────────────
   // Diagnostic surface: every intent ever staged for this group, regardless
   // of state — including needs_revision/pending_verification, which
