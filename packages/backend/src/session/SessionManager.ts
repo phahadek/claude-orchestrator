@@ -648,6 +648,90 @@ async function withRepoWorktreeLock<T>(
 }
 
 /**
+ * Outcome of a pre-launch base-branch fetch: `ok: false` means the fetch
+ * failed (or lost the ref lock to a concurrent fetch outside this process)
+ * and the caller is proceeding against whatever the local ref already holds.
+ */
+export interface BaseFetchOutcome {
+  ok: boolean;
+  error?: unknown;
+}
+
+/**
+ * Per-project state for the pre-launch `git fetch origin <base>` into the
+ * shared checkout. Every launch for a project fetches into the same
+ * `projectDir` (worktrees are created from it, but the fetch itself runs
+ * against the shared `.git`), so unserialized concurrent fetches contend for
+ * the same `refs/remotes/origin/<base>` ref and git's own ref lock correctly
+ * rejects the loser. `inFlight` serializes: a caller that arrives while a
+ * fetch is running reuses that fetch's outcome instead of starting a second
+ * one. `completedAt`/`lastOutcome` additionally coalesce: a caller that
+ * arrives shortly after a fetch *finished* also reuses its outcome, so a
+ * burst of launches in one tick issues one fetch, not N.
+ */
+interface BaseFetchState {
+  inFlight: Promise<BaseFetchOutcome> | null;
+  completedAt: number | null;
+  lastOutcome: BaseFetchOutcome | null;
+}
+
+const baseFetchStates = new Map<string, BaseFetchState>();
+
+/** Reuse a fetch outcome from within this window of the fetch completing. */
+const BASE_FETCH_COALESCE_WINDOW_MS = 5_000;
+
+/**
+ * Serialized, coalesced `git fetch origin <baseBranch>` for the shared
+ * project checkout at `projectDir`. Keyed by resolved project path, not
+ * global, so fetches for different projects still run concurrently. Never
+ * retries past a git ref-lock failure and never forces the fetch — a failure
+ * is reported via the returned outcome for the caller to log/record, not
+ * masked or fought past.
+ */
+export async function fetchBaseBranchCoalesced(
+  projectDir: string,
+  baseBranch: string,
+): Promise<BaseFetchOutcome> {
+  const key = path.resolve(projectDir);
+  let state = baseFetchStates.get(key);
+  if (!state) {
+    state = { inFlight: null, completedAt: null, lastOutcome: null };
+    baseFetchStates.set(key, state);
+  }
+
+  if (state.inFlight) {
+    return state.inFlight;
+  }
+
+  if (
+    state.completedAt !== null &&
+    state.lastOutcome !== null &&
+    Date.now() - state.completedAt < BASE_FETCH_COALESCE_WINDOW_MS
+  ) {
+    return state.lastOutcome;
+  }
+
+  const promise = (async (): Promise<BaseFetchOutcome> => {
+    try {
+      await exec(`git fetch origin ${baseBranch}`, {
+        cwd: projectDir,
+        timeout: 30_000,
+      });
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  })();
+
+  state.inFlight = promise;
+  const outcome = await promise;
+  state.inFlight = null;
+  state.completedAt = Date.now();
+  state.lastOutcome = outcome;
+  return outcome;
+}
+
+/**
  * A `child_process.exec()` failure with empty stderr and a killed/signal
  * outcome is not a real git/command failure — the child never ran far enough
  * to write diagnostic output. This is the signature of a degraded spawn
@@ -1403,15 +1487,29 @@ export class SessionManager extends EventEmitter {
             );
           }
         } else {
-          try {
-            await exec(`git fetch origin ${project.baseBranch}`, {
-              cwd: projectDir,
-              timeout: 30_000,
-            });
-          } catch (err) {
+          const fetchOutcome = await fetchBaseBranchCoalesced(
+            projectDir,
+            project.baseBranch,
+          );
+          if (!fetchOutcome.ok) {
             logger.warn(
-              `[SessionManager] git fetch origin ${project.baseBranch} failed (continuing with local ref): ${err}`,
+              `[SessionManager] git fetch origin ${project.baseBranch} failed (continuing with local ref): ${fetchOutcome.error}`,
             );
+            setSessionLastErrorDetail(
+              sessionId,
+              `Pre-launch fetch of origin/${project.baseBranch} failed; session may be starting from a stale base: ${fetchOutcome.error}`,
+            );
+            recordEvent({
+              event_type: 'base_fetch_failed',
+              actor_type: 'system',
+              actor_id: sessionId,
+              project_id: projectId || null,
+              task_id: sessionTaskId || null,
+              payload: {
+                baseBranch: project.baseBranch,
+                error: String(fetchOutcome.error),
+              },
+            });
           }
         }
       }
@@ -3723,15 +3821,29 @@ export class SessionManager extends EventEmitter {
           );
         }
       } else {
-        try {
-          execSync(`git fetch origin ${project.baseBranch}`, {
-            cwd: projectDir,
-            timeout: 30_000,
-          });
-        } catch (err) {
+        const fetchOutcome = await fetchBaseBranchCoalesced(
+          projectDir,
+          project.baseBranch,
+        );
+        if (!fetchOutcome.ok) {
           logger.warn(
-            `[SessionManager] sendOrResume: git fetch origin ${project.baseBranch} failed (continuing with local ref): ${err}`,
+            `[SessionManager] sendOrResume: git fetch origin ${project.baseBranch} failed (continuing with local ref): ${fetchOutcome.error}`,
           );
+          setSessionLastErrorDetail(
+            sessionId,
+            `Pre-launch fetch of origin/${project.baseBranch} failed; session may be starting from a stale base: ${fetchOutcome.error}`,
+          );
+          recordEvent({
+            event_type: 'base_fetch_failed',
+            actor_type: 'system',
+            actor_id: sessionId,
+            project_id: row.project_id || null,
+            task_id: row.task_id || null,
+            payload: {
+              baseBranch: project.baseBranch,
+              error: String(fetchOutcome.error),
+            },
+          });
         }
       }
     }
