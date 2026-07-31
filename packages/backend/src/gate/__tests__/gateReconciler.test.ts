@@ -38,10 +38,12 @@ import {
   configureGateVerification,
   getGateVerificationOptions,
   dispatchGateItemVerification,
+  reattachOutstandingGateVerifications,
   type DeployAdvanceTrigger,
   type GateItemVerifier,
   type FollowupFixTaskFiler,
   type GateVerificationConcurrencyConfig,
+  type ReattachableGateItemVerifier,
 } from '../gateReconciler.js';
 
 beforeEach(() => {
@@ -52,6 +54,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM task_cache').run();
   db.prepare('DELETE FROM flow_arm').run();
   db.prepare('DELETE FROM sessions').run();
+  db.prepare('DELETE FROM staged_intent').run();
   deployServiceMock.getProjectDeployedSha.mockReset().mockReturnValue(null);
 });
 
@@ -105,6 +108,15 @@ function insertVerifySession(
     status: opts.status,
     startedAt: opts.startedAt ?? 0,
   });
+}
+
+/** Seeds a pending `session.requestCapability` staged_intent for a session — the durable check `hasActiveCapabilityRequestForSession`/`getGateItemsWithPendingCapabilityRequest` key off. */
+function insertPendingCapabilityRequest(sessionId: string) {
+  db.prepare(
+    `INSERT INTO staged_intent
+       (id, kind, payload, payload_hash, project_id, session_id, state, created_at, updated_at)
+     VALUES (@id, 'session.requestCapability', '{}', 'hash', 'polimarket-analyser', @sessionId, 'staged', 0, 0)`,
+  ).run({ id: `intent-${sessionId}`, sessionId });
 }
 
 describe('register', () => {
@@ -870,5 +882,82 @@ describe('runGateReconcilerTick — default deploy-advance trigger (getProjectDe
 
     expect(result.deployShaByProject['polimarket-analyser']).toBe('sha1');
     expect(getItem(gated.id)?.state).toBe('runnable');
+  });
+});
+
+describe('reattachOutstandingGateVerifications', () => {
+  it('reattaches to a gate-item session left non-terminal with a pending capability request, and routes its eventual disposition once reconciliation runs', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    insertVerifySession(item.id, {
+      sessionId: 'sess-parked',
+      status: 'running',
+    });
+    insertPendingCapabilityRequest('sess-parked');
+
+    const reattach = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const verifier: ReattachableGateItemVerifier = {
+      verify: vi.fn(),
+      reattach,
+    };
+    configureGateVerification({
+      verifier,
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+    });
+
+    await reattachOutstandingGateVerifications();
+
+    expect(reattach).toHaveBeenCalledTimes(1);
+    expect(reattach.mock.calls[0][0]).toMatchObject({ id: item.id });
+    expect(reattach.mock.calls[0][1]).toBe('sess-parked');
+    await vi.waitFor(() => {
+      expect(getItem(item.id)?.state).toBe('pass');
+    });
+    expect(getItem(item.id)?.events.at(-1)).toMatchObject({
+      disposition: 'pass',
+      operator: 'gate-verifier',
+      unattended: true,
+    });
+  });
+
+  it('does nothing when no session has a pending capability request', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    insertVerifySession(item.id, {
+      sessionId: 'sess-live-no-request',
+      status: 'running',
+    });
+
+    const reattach = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const verifier: ReattachableGateItemVerifier = {
+      verify: vi.fn(),
+      reattach,
+    };
+    configureGateVerification({
+      verifier,
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+    });
+
+    await reattachOutstandingGateVerifications();
+
+    expect(reattach).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the configured verifier does not support reattach', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    insertVerifySession(item.id, {
+      sessionId: 'sess-parked-2',
+      status: 'running',
+    });
+    insertPendingCapabilityRequest('sess-parked-2');
+
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    configureGateVerification({
+      verifier: { verify },
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+    });
+
+    await expect(
+      reattachOutstandingGateVerifications(),
+    ).resolves.toBeUndefined();
+    expect(getItem(item.id)?.state).toBe('runnable');
   });
 });

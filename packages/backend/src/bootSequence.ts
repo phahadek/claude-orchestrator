@@ -63,6 +63,9 @@ export interface BootDeps {
   stalledPRReconciler: {
     reconcileOnce(): Promise<void>;
   };
+  gateVerifyReconciler: {
+    reattachOutstanding(): Promise<void>;
+  };
   server: http.Server;
   port: number;
   broadcast: (msg: ServerMessage) => void;
@@ -230,6 +233,7 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'boot_idle_reconciliation',
     'feedback_inbox_reconciliation',
     'stalled_pr_reconciliation',
+    'gate_verify_reattachment',
     'auto_launcher_start',
   ]);
   await tracker.runStep('jsonl_import', () => deps.jsonlReader.importAll(), {
@@ -269,6 +273,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   );
   await tracker.runStep('stalled_pr_reconciliation', () =>
     deps.stalledPRReconciler.reconcileOnce(),
+  );
+  await tracker.runStep('gate_verify_reattachment', () =>
+    deps.gateVerifyReconciler.reattachOutstanding(),
   );
   await tracker.runStep('auto_launcher_start', () =>
     deps.autoLauncher.pollOnce(),

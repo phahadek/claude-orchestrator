@@ -756,6 +756,41 @@ export function hasLiveVerifySessionForGateItem(itemId: string): boolean {
   return (row?.c ?? 0) > 0;
 }
 
+export interface GateItemPendingCapabilitySession {
+  itemId: string;
+  sessionId: string;
+}
+
+/**
+ * Non-terminal gate-item verify sessions (task_id `gate-item:<id>`) that
+ * currently have an outstanding `session.requestCapability` intent —
+ * exactly the sessions a boot restart would otherwise silently abandon,
+ * since the in-memory `awaitDisposition` listener that would have resumed
+ * them died with the old process. Boot reconciliation uses this to
+ * re-attach a fresh listener per item (see gateReconciler's
+ * reattachOutstandingGateVerifications).
+ */
+export function getGateItemsWithPendingCapabilityRequest(): GateItemPendingCapabilitySession[] {
+  const rows = db
+    .prepare(
+      `SELECT s.session_id AS session_id, s.task_id AS task_id
+       FROM sessions s
+       WHERE s.task_id LIKE '${GATE_ITEM_TASK_PREFIX}%'
+         AND s.status NOT IN ('done', 'error', 'killed', 'superseded')
+         AND EXISTS (
+           SELECT 1 FROM staged_intent si
+           WHERE si.session_id = s.session_id
+             AND si.kind = 'session.requestCapability'
+             AND si.state IN ('staged', 'approved')
+         )`,
+    )
+    .all() as { session_id: string; task_id: string }[];
+  return rows.map((r) => ({
+    itemId: r.task_id.slice(GATE_ITEM_TASK_PREFIX.length),
+    sessionId: r.session_id,
+  }));
+}
+
 /**
  * True if this task has a non-terminal planning (groom/design/ops) session —
  * including one parked idle awaiting operator disposition. Per the no-timeout
