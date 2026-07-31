@@ -4,16 +4,32 @@ import type { MilestoneConvergence } from '@claude-orchestrator/backend/src/conv
 import {
   PHASE_ORDER,
   PHASE_LABELS,
+  PHASE_SEGMENT_ORDER,
+  SEGMENT_STATE_LABELS,
   computePhaseBurndown,
   phaseTotal,
+  type SegmentState,
 } from '../utils/phaseBurndown';
 import styles from './MilestoneBurndown.module.css';
+
+const SEGMENT_FILL_CLASS: Record<SegmentState, string> = {
+  pending: styles.fillPending,
+  staged: styles.fillStaged,
+  done: styles.fillDone,
+  blocked: styles.fillPending,
+  inGrooming: styles.fillStaged,
+  untouched: styles.fillUntouched,
+};
 
 interface Props {
   tasks: TaskView[];
   convergence: MilestoneConvergence | null;
   activePhase: string | null;
   onPhaseSelect: (phase: string | null) => void;
+  /** Invoked when a phase's ⚠ warning badge is activated — distinct from selecting the phase via its label. */
+  onWarningSelect?: (phase: string) => void;
+  /** The phase whose warning is currently the active selection, if any. */
+  activeWarningPhase?: string | null;
 }
 
 export function MilestoneBurndown({
@@ -21,6 +37,8 @@ export function MilestoneBurndown({
   convergence,
   activePhase,
   onPhaseSelect,
+  onWarningSelect,
+  activeWarningPhase = null,
 }: Props) {
   const phases = useMemo(
     () => computePhaseBurndown(tasks, convergence),
@@ -32,7 +50,8 @@ export function MilestoneBurndown({
       {PHASE_ORDER.map((phase) => {
         const segment = phases[phase];
         const total = phaseTotal(segment.counts);
-        const isActive = activePhase === phase;
+        const isActive = activePhase === phase || activeWarningPhase === phase;
+        const isWarningActive = activeWarningPhase === phase;
 
         return (
           <button
@@ -48,9 +67,23 @@ export function MilestoneBurndown({
               <span className={styles.phaseCount}>{total}</span>
               {segment.blockerCount > 0 && (
                 <span
-                  className={styles.blockerBadge}
+                  role="button"
+                  tabIndex={0}
+                  className={`${styles.blockerBadge} ${isWarningActive ? styles.blockerBadgeActive : ''}`}
                   data-testid={`phase-blockers-${phase}`}
-                  title={`${segment.blockerCount} blocker${segment.blockerCount === 1 ? '' : 's'}`}
+                  aria-pressed={isWarningActive}
+                  title={`${segment.blockerCount} blocker${segment.blockerCount === 1 ? '' : 's'} — click to view`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onWarningSelect?.(phase);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      onWarningSelect?.(phase);
+                    }
+                  }}
                 >
                   ⚠ {segment.blockerCount}
                 </span>
@@ -60,32 +93,18 @@ export function MilestoneBurndown({
               {total === 0 ? (
                 <div className={styles.emptySegment} />
               ) : (
-                <>
-                  {segment.counts.pending > 0 && (
+                PHASE_SEGMENT_ORDER[phase].map((state) => {
+                  const count = segment.counts[state] ?? 0;
+                  if (count === 0) return null;
+                  return (
                     <div
-                      className={`${styles.fill} ${styles.fillPending}`}
-                      style={{
-                        width: `${(segment.counts.pending / total) * 100}%`,
-                      }}
+                      key={state}
+                      className={`${styles.fill} ${SEGMENT_FILL_CLASS[state]}`}
+                      style={{ width: `${(count / total) * 100}%` }}
+                      title={`${SEGMENT_STATE_LABELS[state]}: ${count}`}
                     />
-                  )}
-                  {segment.counts.staged > 0 && (
-                    <div
-                      className={`${styles.fill} ${styles.fillStaged}`}
-                      style={{
-                        width: `${(segment.counts.staged / total) * 100}%`,
-                      }}
-                    />
-                  )}
-                  {segment.counts.done > 0 && (
-                    <div
-                      className={`${styles.fill} ${styles.fillDone}`}
-                      style={{
-                        width: `${(segment.counts.done / total) * 100}%`,
-                      }}
-                    />
-                  )}
-                </>
+                  );
+                })
               )}
             </div>
           </button>

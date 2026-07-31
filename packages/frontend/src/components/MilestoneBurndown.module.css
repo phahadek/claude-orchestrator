@@ -81,3 +81,16 @@
 .fillDone {
   background: var(--color-green, #a6e3a1);
 }
+
+.fillUntouched {
+  background: var(--text-faint, #6c7086);
+}
+
+.blockerBadge {
+  cursor: pointer;
+}
+
+.blockerBadge:hover,
+.blockerBadgeActive {
+  text-decoration: underline;
+}

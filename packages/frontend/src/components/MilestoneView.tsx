@@ -63,6 +63,9 @@ export function MilestoneView({
   // Shared filter state: the burndown (left) emits a phase, the decision
   // stack (middle) consumes it.
   const [phaseFilter, setPhaseFilter] = useState<string | null>(null);
+  // True when phaseFilter was set via a bar's ⚠ warning badge rather than its
+  // label — narrows the middle panel to the flagged (blocked) tasks only.
+  const [flaggedOnly, setFlaggedOnly] = useState(false);
   const [selection, setSelection] = useState<MilestoneStackSelection | null>(
     null,
   );
@@ -93,7 +96,28 @@ export function MilestoneView({
 
   const handlePhaseFilterChange = useCallback((phase: string | null) => {
     setPhaseFilter((prev) => (prev === phase ? null : phase));
+    setFlaggedOnly(false);
   }, []);
+
+  // Gate's flagged set is gate_item rows, not tasks — not expressible as a
+  // task filter, so its warning routes to the same gate panel its label
+  // does. For every other bar, the warning narrows the middle panel to the
+  // flagged (blocked) tasks within that phase.
+  const handleWarningSelect = useCallback(
+    (phase: string) => {
+      if (isGatePhase(phase)) {
+        setPhaseFilter((prev) => (prev === phase ? null : phase));
+        setFlaggedOnly(false);
+        return;
+      }
+      setPhaseFilter((prev) => {
+        const isSameFlagged = prev === phase && flaggedOnly;
+        return isSameFlagged ? null : phase;
+      });
+      setFlaggedOnly((prev) => !(phaseFilter === phase && prev));
+    },
+    [phaseFilter, flaggedOnly],
+  );
 
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -143,6 +167,8 @@ export function MilestoneView({
         convergence={convergence}
         activePhase={phaseFilter}
         onPhaseSelect={handlePhaseFilterChange}
+        onWarningSelect={handleWarningSelect}
+        activeWarningPhase={flaggedOnly ? phaseFilter : null}
       />
       <FlowArmToggle
         milestoneId={activeBoardId}
@@ -167,6 +193,7 @@ export function MilestoneView({
       milestone={milestoneKey}
       tasks={tasks}
       phaseFilter={phaseFilter}
+      flaggedOnly={flaggedOnly}
       selection={selection}
       onSelect={setSelection}
     />

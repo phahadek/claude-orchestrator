@@ -55,6 +55,8 @@ interface GateAxisBlockingItem {
 interface GateAxis {
   status: 'green' | 'blocked';
   blockingCount: number;
+  /** Subset of blocking items sitting in a bespoke (unrecognized) state — needs human re-disposition, distinct from the blocking total. */
+  bespokeCount: number;
   blocking: GateAxisBlockingItem[];
 }
 
@@ -164,6 +166,7 @@ export function getMilestoneConvergence(
   const gate: GateAxis = {
     status: gateReadiness.status,
     blockingCount: gateReadiness.blocking.length,
+    bespokeCount: gateReadiness.bespokeStates.length,
     blocking: gateReadiness.blocking.map((b) => ({
       id: b.id,
       text: b.text,
