@@ -3,7 +3,11 @@ import { createHash, randomUUID } from 'crypto';
 import { db } from './db';
 import { logger } from '../logger';
 import { recordEvent, hasTaskEditSinceTimestamp } from '../audit/AuditLog';
-import { normalizeTaskId, normalizeBoardId, toExternalId } from '../tasks/taskId';
+import {
+  normalizeTaskId,
+  normalizeBoardId,
+  toExternalId,
+} from '../tasks/taskId';
 import { isCodeSession } from '../session/sessionPredicates';
 import {
   pauseReasonFromCanonical,

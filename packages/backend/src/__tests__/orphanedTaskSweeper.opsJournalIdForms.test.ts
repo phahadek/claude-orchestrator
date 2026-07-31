@@ -151,7 +151,9 @@ describe('OrphanedTaskSweeper ops_journal guard — cross id-form resolution', (
 
   it('does not revert when the sweeper holds the bare id and ops_journal was written via the prefixed form', async () => {
     seedJournal(NOTION_ID, 'candidate');
-    const { backend, sweeper } = runSweeper([makeTask(BARE_ID, '🔧 Operational')]);
+    const { backend, sweeper } = runSweeper([
+      makeTask(BARE_ID, '🔧 Operational'),
+    ]);
 
     await sweeper.sweepOnce();
 
