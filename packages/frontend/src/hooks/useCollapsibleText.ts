@@ -39,5 +39,11 @@ export function useCollapsibleText(
       ? lines.slice(0, collapseLines).join('\n')
       : (text ?? '');
 
-  return { shouldCollapse, expanded, toggle, displayText, lineCount: lines.length };
+  return {
+    shouldCollapse,
+    expanded,
+    toggle,
+    displayText,
+    lineCount: lines.length,
+  };
 }
