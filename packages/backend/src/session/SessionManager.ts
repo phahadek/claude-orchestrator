@@ -3450,8 +3450,16 @@ export class SessionManager extends EventEmitter {
     text: string,
     opts: { allowTerminal?: boolean } = {},
   ): Promise<string | null> {
-    // Live session — deliver directly
-    if (this.sessions.has(sessionId)) {
+    // Live session — deliver directly. hasEnded excludes a session whose
+    // process has already exited (session_ended broadcast) but whose map
+    // entry hasn't been reaped yet by cleanupWorktree (run().then() only
+    // fires after this synchronous session_ended handling returns) — writing
+    // to that session's stdin lands on a closed pipe and is silently
+    // dropped (CliSessionRunner.sendMessage's writable guard), losing the
+    // message with no error and no respawn. Falling through to the respawn
+    // path below instead delivers it via a fresh --resume process.
+    const liveSession = this.sessions.get(sessionId);
+    if (liveSession && !liveSession.hasEnded) {
       this.send(sessionId, text);
       // Mirror the respawn path: ensure status reflects the resumed activity
       // so the UI doesn't keep rendering this session as idle. Terminal is

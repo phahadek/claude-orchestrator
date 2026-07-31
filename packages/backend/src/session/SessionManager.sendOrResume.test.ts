@@ -175,4 +175,31 @@ describe('SessionManager.sendOrResume — null sentinel on non-resumable session
 
     expect(result).toBe('live-session-id');
   });
+
+  it('does not deliver via stdin to a live map entry whose process has already ended (hasEnded) — falls through to the respawn path instead', async () => {
+    const sm = new SessionManager();
+    // A session_ended broadcast sets hasEnded=true synchronously, but the
+    // map entry itself is only removed later by cleanupWorktree (chained
+    // onto the session's run() promise) — so a caller can observe this
+    // in-between state where the entry is present but the process is gone.
+    // Writing to its stdin here would silently no-op (closed pipe) and lose
+    // the message; the fix is falling through to a --resume respawn.
+    const fakeSendMessage = vi.fn();
+    (sm as any).sessions.set('ended-session-id', {
+      sendMessage: fakeSendMessage,
+      hasEnded: true,
+    });
+    vi.mocked(getSession).mockReturnValue({
+      status: 'running',
+      project_id: 'missing-project',
+    } as any);
+
+    const result = await sm.sendOrResume('ended-session-id', 'hello');
+
+    // getProjectById is mocked to return null, so the respawn path returns
+    // early with the sessionId — the assertion that matters is that the
+    // live-delivery branch (fakeSendMessage) was never reached.
+    expect(fakeSendMessage).not.toHaveBeenCalled();
+    expect(result).toBe('ended-session-id');
+  });
 });
