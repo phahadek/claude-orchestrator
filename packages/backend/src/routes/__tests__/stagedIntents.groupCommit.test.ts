@@ -325,7 +325,7 @@ describe('stage-time gate/seed contribution check — grouped Ready-flips', () =
     expect(seedStage.status).toBe(201);
   });
 
-  it('still attaches a missing-contribution blocked annotation to an ungrouped Ready-flip with no applied gate/seed markers', async () => {
+  it('rejects an ungrouped Ready-flip at stage time before ever reaching the missing-contribution check', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
@@ -345,14 +345,8 @@ describe('stage-time gate/seed contribution check — grouped Ready-flips', () =
       },
     });
 
-    expect(setStatus.status).toBe(201);
-    expect(setStatus.body.annotation).toEqual({
-      blocked: true,
-      reasons: expect.arrayContaining([
-        expect.stringContaining('gate_contribution'),
-        expect.stringContaining('seed_contribution'),
-      ]),
-    });
+    expect(setStatus.status).toBe(400);
+    expect(setStatus.body.error).toMatch(/Ready-path member/);
   });
 
   it('is order-insensitive — staging setStatus before or after its group accretions yields the same clean stage-time result', async () => {

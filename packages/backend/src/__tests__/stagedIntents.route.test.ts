@@ -235,10 +235,14 @@ describe('POST /api/staged-intents/group/:groupId/commit — readiness gate', ()
     const app = makeApp();
     const agent = supertest(app);
 
+    // Backlog, not Ready — a Ready-targeting task.setStatus is a Ready-path
+    // member and must carry a groupId (see ReadyPathMissingGroupError),
+    // which would force it through the group commit route instead of this
+    // standalone /apply override+reason check.
     const staged = await agent.post('/api/staged-intents').send({
       kind: 'task.setStatus',
       projectId: 'proj-no-reason',
-      payload: { taskId: 'notion:abc', status: 'Ready' },
+      payload: { taskId: 'notion:abc', status: 'Backlog' },
     });
 
     const applied = await agent
@@ -391,6 +395,7 @@ describe('POST /api/staged-intents — kind validation', () => {
         kind,
         projectId: 'proj-kinds',
         payload: { taskId: 'notion:abc' },
+        groupId: 'group-kinds',
       });
       expect(res.status).toBe(201);
     }
@@ -611,9 +616,13 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
     const app = makeApp();
     const agent = supertest(app);
 
+    // gate.accrete is a Ready-path member and must carry a groupId (see
+    // ReadyPathMissingGroupError), so it applies via the group commit route
+    // rather than standalone /apply.
     const staged = await agent.post('/api/staged-intents').send({
       kind: 'gate.accrete',
       projectId: 'proj-gate',
+      groupId: 'group-gate',
       payload: {
         sourceTask: {
           id: 'notion:abc',
@@ -627,17 +636,12 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
     });
     expect(staged.status).toBe(201);
 
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+    const committed = await agent
+      .post('/api/staged-intents/group/group-gate/commit')
       .send({});
-    expect(applied.status).toBe(200);
-    expect(applied.body.result.itemIds).toHaveLength(1);
-    expect(applied.body.result.marker).toEqual(
-      expect.objectContaining({
-        sourceTaskId: 'notion:abc',
-        decision: 'items',
-      }),
-    );
+    expect(committed.status).toBe(200);
+    expect(committed.body.committed).toEqual([staged.body.id]);
   });
 
   it('applies seed.stage by dispatching through stageSeedContribution', async () => {
@@ -652,9 +656,13 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
     const app = makeApp();
     const agent = supertest(app);
 
+    // seed.stage is a Ready-path member and must carry a groupId (see
+    // ReadyPathMissingGroupError), so it applies via the group commit route
+    // rather than standalone /apply.
     const staged = await agent.post('/api/staged-intents').send({
       kind: 'seed.stage',
       projectId: 'proj-seed',
+      groupId: 'group-seed',
       payload: {
         sourceTask: {
           id: 'notion:def',
@@ -668,17 +676,12 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
     });
     expect(staged.status).toBe(201);
 
-    const applied = await agent
-      .post(`/api/staged-intents/${staged.body.id}/apply`)
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+    const committed = await agent
+      .post('/api/staged-intents/group/group-seed/commit')
       .send({});
-    expect(applied.status).toBe(200);
-    expect(applied.body.result.itemIds).toHaveLength(1);
-    expect(applied.body.result.marker).toEqual(
-      expect.objectContaining({
-        sourceTaskId: 'notion:def',
-        decision: 'seeds',
-      }),
-    );
+    expect(committed.status).toBe(200);
+    expect(committed.body.committed).toEqual([staged.body.id]);
   });
 
   it('applies journal.setState by dispatching through the validated setEntryState', async () => {
@@ -724,7 +727,12 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
     const app = makeApp();
     const agent = supertest(app);
 
-    for (const [kind, payload] of [
+    // gate.accrete and seed.stage are Ready-path members and must carry a
+    // groupId (see ReadyPathMissingGroupError), so the human-apply-only
+    // check for them is exercised via the group commit route instead of
+    // standalone /apply; journal.setState is unaffected and keeps using
+    // standalone /apply directly.
+    for (const [kind, payload, groupId] of [
       [
         'gate.accrete',
         {
@@ -737,6 +745,7 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
           items: [],
           classification: 'n/a',
         },
+        'group-session-gate',
       ],
       [
         'seed.stage',
@@ -750,18 +759,30 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
           seeds: [],
           decision: 'n/a',
         },
+        'group-session-seed',
       ],
-      ['journal.setState', { taskId: 'notion:pqr', state: 'candidate' }],
+      ['journal.setState', { taskId: 'notion:pqr', state: 'candidate' }, null],
     ] as const) {
       const staged = await agent.post('/api/staged-intents').send({
         kind,
         projectId: 'proj-session-2',
         payload,
+        ...(groupId ? { groupId } : {}),
       });
-      const applied = await agent
-        .post(`/api/staged-intents/${staged.body.id}/apply`)
-        .send({ actorType: 'session' });
-      expect(applied.status).toBe(403);
+      if (groupId) {
+        await agent
+          .post(`/api/staged-intents/${staged.body.id}/approve`)
+          .send({});
+        const committed = await agent
+          .post(`/api/staged-intents/group/${groupId}/commit`)
+          .send({ actorType: 'session' });
+        expect(committed.status).toBe(403);
+      } else {
+        const applied = await agent
+          .post(`/api/staged-intents/${staged.body.id}/apply`)
+          .send({ actorType: 'session' });
+        expect(applied.status).toBe(403);
+      }
     }
   });
 });

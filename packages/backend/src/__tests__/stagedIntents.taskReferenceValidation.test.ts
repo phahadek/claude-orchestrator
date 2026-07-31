@@ -84,6 +84,7 @@ describe('stage-time task reference validation', () => {
       kind: 'task.setDependsOn',
       payload: { taskId: 't-1', dependsOn: ['known-task-1'] },
       projectId: 'proj-1',
+      groupId: 'group-1',
     });
 
     expect(res.status).toBe(201);
@@ -241,6 +242,7 @@ describe('Investigation accretion rejection', () => {
         classification: 'Human-Observation',
       },
       projectId: 'proj-1',
+      groupId: 'group-1',
     });
 
     expect(res.status).toBe(201);
@@ -262,6 +264,7 @@ describe('Investigation accretion rejection', () => {
         classification: 'Human-Observation',
       },
       projectId: 'proj-1',
+      groupId: 'group-1',
     });
 
     expect(res.status).toBe(201);

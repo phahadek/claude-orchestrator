@@ -20,7 +20,11 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
-import { createStagedIntentsRouter } from '../stagedIntents';
+import {
+  createStagedIntentsRouter,
+  READY_PATH_KINDS,
+  stageIntent,
+} from '../stagedIntents';
 
 function buildApp() {
   const app = express();
@@ -42,6 +46,24 @@ async function stage(app: ReturnType<typeof buildApp>, body: unknown) {
   const res = await supertest(app).post('/api/staged-intents').send(body);
   expect(res.status).toBe(201);
   return res.body;
+}
+
+/**
+ * gate.accrete / seed.stage resolve their sourceTask's milestone against a
+ * real project (resolveMilestoneForProject -> ProjectService.getById) —
+ * seed a project + milestone row so that lookup succeeds.
+ */
+function insertProjectWithMilestone(
+  projectId: string,
+  milestone: string,
+): void {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO projects (id, name, project_dir, task_source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(projectId, projectId, `/tmp/${projectId}`, 'notion', now, now);
+  db.prepare(
+    `INSERT INTO milestones (id, project_id, name, source_id, display_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(`${projectId}-ms`, projectId, milestone, null, 0, now, now);
 }
 
 beforeEach(() => {
@@ -81,19 +103,19 @@ describe('POST /api/staged-intents/group/:groupId/commit — setDependsOn group-
     expect(res.body.error).toMatch(/task\.setDependsOn/);
   });
 
-  it('rejects a Ready apply when the intent has no groupId at all', async () => {
+  it('rejects staging a task.setStatus -> Ready intent with no groupId at all', async () => {
     const app = buildApp();
-    const intent = await stage(app, {
-      kind: 'task.setStatus',
-      payload: { taskId: 't-1', status: 'Ready' },
-      projectId: 'proj-1',
-    });
 
     const res = await supertest(app)
-      .post(`/api/staged-intents/${intent.id}/apply`)
-      .send({});
+      .post('/api/staged-intents')
+      .send({
+        kind: 'task.setStatus',
+        payload: { taskId: 't-1', status: 'Ready' },
+        projectId: 'proj-1',
+      });
 
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Ready-path member/);
   });
 
   it('succeeds when the group includes a still-staged (now approved) task.setDependsOn (including an empty array)', async () => {
@@ -178,5 +200,232 @@ describe('POST /api/staged-intents/group/:groupId/commit — setDependsOn group-
       .send({});
 
     expect(res.status).toBe(200);
+  });
+});
+
+// The stage-time enforcement of the Ready-path grouping invariant: staging
+// gate.accrete, seed.stage, task.setDependsOn, or a task.setStatus targeting
+// Ready without a groupId is rejected before the row ever reaches `staged`,
+// naming the Ready-path member set so a session can self-correct in-turn —
+// the same actionable shape as the DependsOnCompletenessError guard above,
+// but closing the gap that guard leaves open: an intent staged with no
+// group at all belongs to no group, so a commit-time within-group check
+// never sees it.
+describe('stageIntent — Ready-path member set requires a groupId at stage time', () => {
+  it('rejects staging gate.accrete without a groupId, naming the missing groupId', () => {
+    expect(() =>
+      stageIntent(
+        'gate.accrete',
+        {
+          sourceTask: {
+            id: 't-1',
+            title: 'T',
+            project: 'proj-1',
+            milestone: 'M1',
+          },
+          items: [],
+          classification: 'n/a',
+          reason: 'exempt',
+        },
+        'proj-1',
+      ),
+    ).toThrow(/groupId/);
+  });
+
+  it('rejects staging seed.stage without a groupId, naming the missing groupId', () => {
+    expect(() =>
+      stageIntent(
+        'seed.stage',
+        {
+          sourceTask: {
+            id: 't-1',
+            title: 'T',
+            project: 'proj-1',
+            milestone: 'M1',
+          },
+          seeds: [],
+          decision: 'n/a',
+        },
+        'proj-1',
+      ),
+    ).toThrow(/groupId/);
+  });
+
+  it('rejects staging task.setDependsOn without a groupId, naming the missing groupId', () => {
+    expect(() =>
+      stageIntent(
+        'task.setDependsOn',
+        { taskId: 't-1', dependsOn: [] },
+        'proj-1',
+      ),
+    ).toThrow(/groupId/);
+  });
+
+  it('rejects staging task.setStatus targeting Ready without a groupId', () => {
+    expect(() =>
+      stageIntent(
+        'task.setStatus',
+        { taskId: 't-1', status: 'Ready' },
+        'proj-1',
+      ),
+    ).toThrow(/groupId/);
+  });
+
+  it('still allows staging task.setStatus targeting Deferred without a groupId', () => {
+    expect(() =>
+      stageIntent(
+        'task.setStatus',
+        { taskId: 't-1', status: 'Deferred' },
+        'proj-1',
+      ),
+    ).not.toThrow();
+  });
+
+  it('still allows staging decision.pickOne without a groupId, and still rejects it with one', () => {
+    expect(() =>
+      stageIntent(
+        'decision.pickOne',
+        {
+          prompt: 'Which approach?',
+          options: [
+            { label: 'A', description: 'first' },
+            { label: 'B', description: 'second' },
+          ],
+          allowFreeForm: false,
+        },
+        'proj-1',
+        null,
+        'sess-1',
+        'A genuine fork the session cannot resolve confidently.',
+      ),
+    ).not.toThrow();
+
+    expect(() =>
+      stageIntent(
+        'decision.pickOne',
+        {
+          prompt: 'A different question?',
+          options: [
+            { label: 'A', description: 'first' },
+            { label: 'B', description: 'second' },
+          ],
+          allowFreeForm: false,
+        },
+        'proj-1',
+        'group-1',
+        'sess-1',
+        'A genuine fork the session cannot resolve confidently.',
+      ),
+    ).toThrow(/cannot belong to a group/);
+  });
+
+  it('still allows staging planning.noOp without a groupId', () => {
+    expect(() =>
+      stageIntent(
+        'planning.noOp',
+        { taskId: 't-1', reason: 'nothing to change this pass' },
+        'proj-1',
+      ),
+    ).not.toThrow();
+  });
+
+  it('stages a full Ready-path set sharing one groupId unchanged', async () => {
+    const app = buildApp();
+    insertProjectWithMilestone('proj-1', 'M1');
+    const groupId = 'group-full-ready-path';
+
+    const dependsOn = await stage(app, {
+      kind: 'task.setDependsOn',
+      payload: { taskId: 't-full', dependsOn: [] },
+      projectId: 'proj-1',
+      groupId,
+    });
+    const gateAccrete = await stage(app, {
+      kind: 'gate.accrete',
+      payload: {
+        sourceTask: {
+          id: 't-full',
+          title: 'T',
+          project: 'proj-1',
+          milestone: 'M1',
+        },
+        items: [],
+        classification: 'n/a',
+        reason: 'exempt',
+      },
+      projectId: 'proj-1',
+      groupId,
+    });
+    const seedStage = await stage(app, {
+      kind: 'seed.stage',
+      payload: {
+        sourceTask: {
+          id: 't-full',
+          title: 'T',
+          project: 'proj-1',
+          milestone: 'M1',
+        },
+        seeds: [],
+        decision: 'n/a',
+      },
+      projectId: 'proj-1',
+      groupId,
+    });
+    const setStatus = await stage(app, {
+      kind: 'task.setStatus',
+      payload: {
+        taskId: 't-full',
+        status: 'Ready',
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+        },
+      },
+      projectId: 'proj-1',
+      groupId,
+    });
+
+    expect(
+      [dependsOn, gateAccrete, seedStage, setStatus].map((i) => i.groupId),
+    ).toEqual([groupId, groupId, groupId, groupId]);
+
+    await approve(app, dependsOn.id);
+    await approve(app, gateAccrete.id);
+    await approve(app, seedStage.id);
+    await approve(app, setStatus.id);
+
+    const res = await supertest(app)
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+    expect(res.status).toBe(200);
+  });
+
+  it('names the Ready-path member set in the rejection error, so a session can self-correct from the message alone', () => {
+    let error: Error | undefined;
+    try {
+      stageIntent(
+        'task.setDependsOn',
+        { taskId: 't-1', dependsOn: [] },
+        'proj-1',
+      );
+    } catch (err) {
+      error = err as Error;
+    }
+    expect(error).toBeDefined();
+    for (const kind of READY_PATH_KINDS) {
+      expect(error!.message).toContain(kind);
+    }
+  });
+
+  it('single-sources the Ready-path member set — the same set the commit-time completeness guard checks against', () => {
+    expect(READY_PATH_KINDS).toEqual(
+      expect.arrayContaining([
+        'gate.accrete',
+        'seed.stage',
+        'task.setDependsOn',
+        'task.setStatus',
+      ]),
+    );
+    expect(READY_PATH_KINDS).toHaveLength(4);
   });
 });

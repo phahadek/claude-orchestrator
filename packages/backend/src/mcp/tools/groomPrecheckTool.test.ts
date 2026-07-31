@@ -183,6 +183,7 @@ describe('groom.precheck — parity with the stage-time check', () => {
         name: 'task.setStatus',
         arguments: {
           payload: { ...MULTI_FAILURE_PAYLOAD, status: 'Ready' },
+          groupId: 'group-1',
         },
       })) as { content: Array<{ type: string; text?: string }> },
     );
@@ -205,9 +206,16 @@ describe('groom.precheck — parity with the stage-time check', () => {
     await precheckClient.close();
 
     expect(precheck.allowed).toBe(false);
-    expect(precheck.gateReasons).toEqual(annotation.reasons);
+    // A grouped Ready-flip defers gate/seed contribution enforcement to
+    // commit time (runStageTimeReadyChecks skips it unconditionally for any
+    // grouped task.setStatus->Ready — see stagedIntents.ts), so the real
+    // staged annotation's reasons are a subset of the read-only precheck's
+    // full potential-violation set rather than an exact match now that a
+    // Ready-path task.setStatus must always carry a groupId to stage at all.
+    const gateReasons = precheck.gateReasons as string[];
+    expect(annotation.reasons.every((r) => gateReasons.includes(r))).toBe(true);
 
-    const reasons = precheck.gateReasons as string[];
+    const reasons = gateReasons;
     expect(reasons.some((r) => r.includes('Files / paths'))).toBe(true);
     expect(reasons.some((r) => r.includes('type_check'))).toBe(true);
     expect(reasons.some((r) => r.includes('binding constraint'))).toBe(true);
@@ -255,6 +263,7 @@ describe('groom.precheck — server-derived existsInRepo parity (task 3ae22f91)'
         name: 'task.setStatus',
         arguments: {
           payload: { ...fabricatedPayload, status: 'Ready' },
+          groupId: 'group-fabricated',
         },
       })) as { content: Array<{ type: string; text?: string }> },
     );
@@ -265,7 +274,20 @@ describe('groom.precheck — server-derived existsInRepo parity (task 3ae22f91)'
       blocked: true;
       reasons: string[];
     };
-    expect(precheck.gateReasons).toEqual(annotation.reasons);
+    // A grouped Ready-flip defers gate/seed contribution enforcement to
+    // commit time (runStageTimeReadyChecks skips it unconditionally for any
+    // grouped task.setStatus->Ready — see stagedIntents.ts), so the real
+    // staged annotation's reasons are a subset of the read-only precheck's
+    // full potential-violation set rather than an exact match now that a
+    // Ready-path task.setStatus must always carry a groupId to stage at all.
+    expect(
+      annotation.reasons.every((r) =>
+        (precheck.gateReasons as string[]).includes(r),
+      ),
+    ).toBe(true);
+    expect(annotation.reasons.some((r) => r.includes('does not resolve'))).toBe(
+      true,
+    );
 
     const truthfulPayload = {
       taskId: 'notion:understated-exists',
@@ -441,6 +463,7 @@ describe('groom.precheck — a clean payload then stages without needs_revision'
         name: 'task.setStatus',
         arguments: {
           payload: { taskId, status: 'Ready', groomingGate: cleanGroomingGate },
+          groupId: 'group-1',
         },
       })) as { content: Array<{ type: string; text?: string }> },
     );

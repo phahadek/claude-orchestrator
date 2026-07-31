@@ -99,6 +99,7 @@ describe('POST /api/staged-intents — stage-time readiness-gate feedback', () =
           groomingGate: wellFormedGroomingGate(),
         },
         projectId: 'proj-1',
+        groupId: 'group-1',
       });
 
     expect(res.status).toBe(201);
@@ -126,6 +127,7 @@ describe('POST /api/staged-intents — stage-time readiness-gate feedback', () =
           groomingGate: wellFormedGroomingGate(),
         },
         projectId: 'proj-1',
+        groupId: 'group-1',
       });
 
     expect(res.status).toBe(201);
@@ -155,6 +157,7 @@ describe('POST /api/staged-intents — stage-time readiness-gate feedback', () =
           },
         },
         projectId: 'proj-1',
+        groupId: 'group-1',
       });
 
     expect(res.status).toBe(201);
