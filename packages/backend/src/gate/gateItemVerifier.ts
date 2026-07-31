@@ -167,7 +167,13 @@ function buildGateVerifyProcedure(item: GateItem): string {
       "runtime record (session_events/audit_log for a session you're verifying), " +
       'request the own-record read (see "Capabilities" above — ' +
       '`read:session-record:<target-session-id>`), not a Bash prefix like ' +
-      '`sqlite3` or a direct filesystem/DB path. This is a tool-set boundary, ' +
+      '`sqlite3` or a direct filesystem/DB path — once granted, call the ' +
+      `\`${orchestratorMcpToolName('session.getRecord')}\` tool with ` +
+      '`{"targetSessionId":"<target-session-id>"}` to read it. For a ' +
+      "project's broader audit_log (not scoped to one session), request " +
+      '`read:audit-log:<project-id>` instead, then call the ' +
+      `\`${orchestratorMcpToolName('auditLog.query')}\` tool with ` +
+      '`{"projectId":"<project-id>"}`. This is a tool-set boundary, ' +
       'not a location one: this session spawns with broad filesystem access ' +
       "(it can read the orchestrator checkout and the box's local files), but " +
       'it holds no allow-listed client for the live SQLite file and no device ' +

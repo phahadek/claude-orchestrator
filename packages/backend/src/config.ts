@@ -95,6 +95,21 @@ export const BASH_DEFAULT_TIMEOUT_MS = Number(
 process.env.BASH_MAX_OUTPUT_LENGTH = String(BASH_MAX_OUTPUT_LENGTH);
 process.env.BASH_DEFAULT_TIMEOUT_MS = String(BASH_DEFAULT_TIMEOUT_MS);
 
+// The Tier-B (capability-gated) read MCP tools — session.getRecord (own
+// runtime record by target session id, mcp/tools/sessionRecordReadTool.ts)
+// and auditLog.query (project-scoped audit_log, mcp/tools/auditLogReadTools.ts).
+// Registered unconditionally on every MCP connection (see
+// orchestratorMcpServer.ts) since the grant check happens per-call inside
+// each tool handler, not at connection time — but the CLI's own
+// --allowed-tools gate is a separate, prior boundary, so both tools must
+// also appear here (and in every planning workflow's *_MCP_TOOLS below) for
+// any session type to be able to call them at all once granted the
+// underlying capability.
+const TIER_B_READ_MCP_TOOLS = [
+  orchestratorMcpToolName('session.getRecord'),
+  orchestratorMcpToolName('auditLog.query'),
+];
+
 export const ALLOWED_TOOLS = [
   'Bash(git:*)',
   'Bash(npm:*)',
@@ -151,6 +166,7 @@ export const ALLOWED_TOOLS = [
   orchestratorMcpToolName('health'),
   orchestratorMcpToolName('review.disposition'),
   orchestratorMcpToolName('flaky.confirm'),
+  ...TIER_B_READ_MCP_TOOLS,
 ];
 
 // Read-only Bash subset shared by planning sessions (groom/design/ops) — no
@@ -236,6 +252,7 @@ const GROOM_MCP_TOOLS = [
   orchestratorMcpToolName('groom.precheck'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
   ...TASK_READ_MCP_TOOLS,
+  ...TIER_B_READ_MCP_TOOLS,
 ];
 
 // Plus completeness.disposition / completeness.traceCoverage — the /design
@@ -257,6 +274,7 @@ const DESIGN_MCP_TOOLS = [
   orchestratorMcpToolName('completeness.traceCoverage'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
   ...TASK_READ_MCP_TOOLS,
+  ...TIER_B_READ_MCP_TOOLS,
 ];
 
 // Plus gate.verify — a gate-item-verification session is sessionType 'ops'
@@ -272,6 +290,7 @@ const OPS_MCP_TOOLS = [
   orchestratorMcpToolName('gate.verify'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
   ...TASK_READ_MCP_TOOLS,
+  ...TIER_B_READ_MCP_TOOLS,
 ];
 
 /**
@@ -329,17 +348,16 @@ export const DESIGN_ALLOWED_TOOLS = [
  * audited MCP/read-endpoint tools merged in separately from
  * .claude-orchestrator.yml (see getSessionAllowedTools). No prod-mutating
  * tool is ever in this base; write capability is earned per-session via
- * grant-on-re-dispatch, not by widening this constant.
- * 'Bash(node ~/.claude/scripts/read-session-record.mjs:*)' is scoped to that
- * one vendored client — the granted-capability read it authenticates
- * (`read:session-record:<id>`) isn't tool-shaped so it never widens the CLI
- * allowlist itself (see orchestrator-config.ts#isToolShapedCapability); the
- * session still needs Bash access to invoke the script.
+ * grant-on-re-dispatch, not by widening this constant. The own-record and
+ * audit-log reads (`read:session-record:<id>` / `read:audit-log:<projectId>`)
+ * are granted-capability reads brokered by the `session.getRecord` /
+ * `auditLog.query` MCP tools, not tool-shaped (see
+ * orchestrator-config.ts#isToolShapedCapability), so they need no Bash
+ * allowlist entry here.
  */
 export const OPS_ALLOWED_TOOLS = [
   ...PLANNING_READONLY_BASH_TOOLS,
   ...OPS_MCP_TOOLS,
-  'Bash(node ~/.claude/scripts/read-session-record.mjs:*)',
   'Bash(git log:*)',
   'Bash(git diff:*)',
   'Bash(git show:*)',

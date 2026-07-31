@@ -8,6 +8,9 @@ import {
   isGrantable,
   sessionRecordReadCapability,
   parseSessionRecordReadCapability,
+  auditLogReadCapability,
+  parseAuditLogReadCapability,
+  isSanctionedAutoApproveCapability,
 } from '../orchestrator-config';
 import { NOTION_READ_MCP_TOOLS } from '../../config';
 import { NOTION_MCP_SERVER_NAME } from '../../mcp/toolNaming';
@@ -455,5 +458,69 @@ describe('sessionRecordReadCapability / parseSessionRecordReadCapability', () =>
       capability,
     ]);
     expect(merged).not.toContain(capability);
+  });
+});
+
+describe('auditLogReadCapability / parseAuditLogReadCapability', () => {
+  it('round-trips the target project id through the capability string', () => {
+    const capability = auditLogReadCapability('project-abc');
+    expect(capability).toBe('read:audit-log:project-abc');
+    expect(parseAuditLogReadCapability(capability)).toBe('project-abc');
+  });
+
+  it('returns null for a capability that is not an audit-log-read grant', () => {
+    expect(parseAuditLogReadCapability('Bash(psql:*)')).toBeNull();
+    expect(
+      parseAuditLogReadCapability(sessionRecordReadCapability('session-abc')),
+    ).toBeNull();
+  });
+
+  it("is never merged into the spawned session's CLI --allowed-tools", () => {
+    const capability = auditLogReadCapability('project-abc');
+    const merged = getSessionAllowedTools('ops', { allowed_tools: [] }, [
+      capability,
+    ]);
+    expect(merged).not.toContain(capability);
+  });
+});
+
+describe('isSanctionedAutoApproveCapability', () => {
+  it("auto-approves the audit-log capability for the requesting session's own project", () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        auditLogReadCapability('project-abc'),
+        'session-1',
+        'project-abc',
+      ),
+    ).toBe(true);
+  });
+
+  it("does not auto-approve the audit-log capability for a different project than the requester's own", () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        auditLogReadCapability('project-other'),
+        'session-1',
+        'project-abc',
+      ),
+    ).toBe(false);
+  });
+
+  it('does not auto-approve the audit-log capability when no requesting project id is supplied', () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        auditLogReadCapability('project-abc'),
+        'session-1',
+      ),
+    ).toBe(false);
+  });
+
+  it('still auto-approves the own-record-read capability for the requesting session', () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        sessionRecordReadCapability('session-1'),
+        'session-1',
+        'project-abc',
+      ),
+    ).toBe(true);
   });
 });

@@ -3,16 +3,17 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Grep-guard: the seven route-based cutover clients (ops/groom/design/gate/
-// seed/staged-intents + read-session-record) must agree on one host var name and
-// one port var name (ORCHESTRATOR_BACKEND_HOST / ORCHESTRATOR_BACKEND_PORT).
-// Token vars stay deliberately distinct — the five device-auth clients read
-// ORCHESTRATOR_DEVICE_TOKEN, the one remaining stage-token client
-// (read-session-record — task-write staging + verdict delivery now go
-// through the orchestrator MCP tool surface instead of a CLI client) reads
-// the separate, lesser-privileged ORCHESTRATOR_STAGE_TOKEN — so this only
-// asserts each client's token var is one of those two known names, not a
-// single name.
+// Grep-guard: the six route-based cutover clients (ops/groom/design/gate/
+// seed/staged-intents) must agree on one host var name and one port var name
+// (ORCHESTRATOR_BACKEND_HOST / ORCHESTRATOR_BACKEND_PORT). Token vars stay
+// deliberately distinct — the five device-auth clients read
+// ORCHESTRATOR_DEVICE_TOKEN; the former stage-token client
+// (read-session-record.mjs) is retired — task-write staging, verdict
+// delivery, and the own-record/audit-log reads it fronted now all go through
+// the orchestrator MCP tool surface instead of a CLI client. No
+// STAGE_TOKEN_CLIENTS remain, but the assertion stays parameterized (rather
+// than deleted outright) so a future stage-token CLI client is caught by the
+// same guard.
 
 const backendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const repoRoot = resolve(backendRoot, '../..');
@@ -25,9 +26,7 @@ const DEVICE_AUTH_CLIENTS = [
   resolve(backendRoot, 'scripts/seed-state-client.mjs'),
   resolve(backendRoot, 'scripts/staged-intents-client.mjs'),
 ];
-const STAGE_TOKEN_CLIENTS = [
-  resolve(backendRoot, 'scripts/read-session-record.mjs'),
-];
+const STAGE_TOKEN_CLIENTS: string[] = [];
 const ALL_CLIENTS = [...DEVICE_AUTH_CLIENTS, ...STAGE_TOKEN_CLIENTS];
 
 describe('route client env-var naming', () => {

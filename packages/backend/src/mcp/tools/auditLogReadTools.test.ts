@@ -1,0 +1,178 @@
+/**
+ * `auditLog.query` — the Tier-B project-scoped audit-log read tool, gated
+ * behind a durable `read:audit-log:<projectId>` grant.
+ */
+
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('../../db/db', async () => {
+  const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
+});
+
+import { db } from '../../db/db';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { registerAuditLogReadTools } from './auditLogReadTools';
+import { insertSession, addGrantedCapability } from '../../db/queries';
+import { recordEvent } from '../../audit/AuditLog';
+import { auditLogReadCapability } from '../../session/orchestrator-config';
+
+beforeEach(() => {
+  db.prepare('DELETE FROM sessions').run();
+  db.prepare('DELETE FROM audit_log').run();
+});
+
+async function connectedClient(sessionId: string) {
+  const server = new McpServer({ name: 'test', version: '1.0.0' });
+  registerAuditLogReadTools(server, { sessionId });
+  const [serverTransport, clientTransport] =
+    InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'test-client', version: '1.0.0' });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  return {
+    client,
+    close: async () => {
+      await client.close();
+      await server.close();
+    },
+  };
+}
+
+describe('auditLog.query', () => {
+  it('returns project-scoped audit_log rows once the exact capability is granted', async () => {
+    insertSession({
+      session_id: 'requester-1',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      status: 'running',
+      started_at: Date.now(),
+    });
+    recordEvent({
+      event_type: 'gate_verify_dispatched',
+      actor_type: 'session',
+      actor_id: 'some-session',
+      project_id: 'proj-1',
+      task_id: 'notion:abc',
+      payload: { note: 'dispatched' },
+    });
+    recordEvent({
+      event_type: 'gate_verify_dispatched',
+      actor_type: 'session',
+      actor_id: 'other-session',
+      project_id: 'proj-other',
+      task_id: 'notion:xyz',
+      payload: { note: 'different project' },
+    });
+    addGrantedCapability('requester-1', auditLogReadCapability('proj-1'));
+
+    const { client, close } = await connectedClient('requester-1');
+    try {
+      const result = await client.callTool({
+        name: 'auditLog.query',
+        arguments: { projectId: 'proj-1' },
+      });
+      expect(result.isError).toBeFalsy();
+      const text = (result.content as Array<{ type: string; text?: string }>)[0]
+        ?.text;
+      const body = JSON.parse(text ?? '{}') as { entries: unknown[] };
+      expect(body.entries).toHaveLength(1);
+      expect(body.entries[0]).toMatchObject({ projectId: 'proj-1' });
+    } finally {
+      await close();
+    }
+  });
+
+  it('narrows by taskId / eventType / since / until filters', async () => {
+    insertSession({
+      session_id: 'requester-2',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      status: 'running',
+      started_at: Date.now(),
+    });
+    recordEvent({
+      event_type: 'task_body_updated',
+      actor_type: 'session',
+      actor_id: 'sess-a',
+      project_id: 'proj-2',
+      task_id: 'notion:task-1',
+      payload: {},
+    });
+    recordEvent({
+      event_type: 'task_deps_updated',
+      actor_type: 'session',
+      actor_id: 'sess-a',
+      project_id: 'proj-2',
+      task_id: 'notion:task-2',
+      payload: {},
+    });
+    addGrantedCapability('requester-2', auditLogReadCapability('proj-2'));
+
+    const { client, close } = await connectedClient('requester-2');
+    try {
+      const result = await client.callTool({
+        name: 'auditLog.query',
+        arguments: { projectId: 'proj-2', taskId: 'notion:task-1' },
+      });
+      const text = (result.content as Array<{ type: string; text?: string }>)[0]
+        ?.text;
+      const body = JSON.parse(text ?? '{}') as { entries: unknown[] };
+      expect(body.entries).toHaveLength(1);
+      expect(body.entries[0]).toMatchObject({ taskId: 'notion:task-1' });
+    } finally {
+      await close();
+    }
+  });
+
+  it('returns a tool-level error when the capability is not granted', async () => {
+    insertSession({
+      session_id: 'requester-3',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      status: 'running',
+      started_at: Date.now(),
+    });
+
+    const { client, close } = await connectedClient('requester-3');
+    try {
+      const result = await client.callTool({
+        name: 'auditLog.query',
+        arguments: { projectId: 'proj-3' },
+      });
+      expect(result.isError).toBe(true);
+    } finally {
+      await close();
+    }
+  });
+
+  it('a grant for one project id does not authorize querying a different project', async () => {
+    insertSession({
+      session_id: 'requester-4',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      status: 'running',
+      started_at: Date.now(),
+    });
+    addGrantedCapability('requester-4', auditLogReadCapability('proj-4'));
+
+    const { client, close } = await connectedClient('requester-4');
+    try {
+      const result = await client.callTool({
+        name: 'auditLog.query',
+        arguments: { projectId: 'proj-other' },
+      });
+      expect(result.isError).toBe(true);
+    } finally {
+      await close();
+    }
+  });
+});

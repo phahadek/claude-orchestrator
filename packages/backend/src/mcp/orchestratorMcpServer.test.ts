@@ -149,6 +149,8 @@ describe('buildMcpServer — tool surface per session type', () => {
         'task.getById',
         'pullRequest.getByTaskId',
         'gateSeed.getState',
+        'session.getRecord',
+        'auditLog.query',
       ].sort(),
     );
   });
@@ -176,6 +178,8 @@ describe('buildMcpServer — tool surface per session type', () => {
         'task.getById',
         'pullRequest.getByTaskId',
         'gateSeed.getState',
+        'session.getRecord',
+        'auditLog.query',
       ].sort(),
     );
     expect(names).toContain('decision.pickOne');

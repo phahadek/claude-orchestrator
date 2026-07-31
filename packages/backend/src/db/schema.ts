@@ -139,6 +139,7 @@ export function runMigrations(target: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
     CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_project_task ON audit_log(project_id, task_id);
 
     CREATE TABLE IF NOT EXISTS devices (
       id          TEXT    PRIMARY KEY,
