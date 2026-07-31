@@ -26,15 +26,14 @@ export const PHASE_ORDER = [
 export type PhaseKey = (typeof PHASE_ORDER)[number];
 
 /** Per-phase ordered list of segment states to render, left to right. */
-export const PHASE_SEGMENT_ORDER: Record<PhaseKey, readonly SegmentState[]> =
-  {
-    design: ['pending', 'staged', 'done'],
-    grooming: ['blocked', 'inGrooming', 'untouched'],
-    code: ['pending', 'staged', 'done'],
-    investigation: ['pending', 'staged', 'done'],
-    ops: ['pending', 'staged', 'done'],
-    gate: ['pending'],
-  };
+export const PHASE_SEGMENT_ORDER: Record<PhaseKey, readonly SegmentState[]> = {
+  design: ['pending', 'staged', 'done'],
+  grooming: ['blocked', 'inGrooming', 'untouched'],
+  code: ['pending', 'staged', 'done'],
+  investigation: ['pending', 'staged', 'done'],
+  ops: ['pending', 'staged', 'done'],
+  gate: ['pending'],
+};
 
 /** The one PhaseKey that isn't a task filter — gate items are gate_item rows, not tasks (see isGatePhase). */
 const GATE_PHASE: PhaseKey = 'gate';
@@ -160,7 +159,9 @@ export function computePhaseBurndown(
   return result;
 }
 
-export function phaseTotal(counts: Partial<Record<SegmentState, number>>): number {
+export function phaseTotal(
+  counts: Partial<Record<SegmentState, number>>,
+): number {
   return Object.values(counts).reduce((sum, n) => sum + (n ?? 0), 0);
 }
 
