@@ -3,11 +3,15 @@
 #
 # The engine runs `shell`/`validation`/`confirm-gate` steps' command_or_prompt
 # (and validation's poll_until) verbatim as shell commands — it performs no
-# variable substitution (see DeployOrchestrator.executeStep). Since this
-# playbook is per-repo (loadPlaybook.ts reads it from THIS checkout only),
-# this host's concrete paths (checkout root, /srv/orchestrator/runtime/, the
-# orchestrator.service unit, the DEPLOYED_SHA marker location) are embedded
-# directly in the steps below rather than in context.md.
+# variable substitution of its own for those kinds; instead, host bindings
+# declared in config/projects/claude-orchestrator/deploy-bindings.yml (see
+# loadDeployBindings.ts) are injected as environment variables, so `bash -uc`
+# (nounset) expands them natively and aborts on an undefined one. Absolute
+# paths that vary per host — the runtime sync destination ($RUNTIME_DIR) and
+# the DEPLOYED_SHA marker location ($DEPLOYED_SHA_PATH) — live in that
+# bindings file rather than literally in the steps below. The orchestrator.service
+# unit name and the verify port are not paths and stay embedded directly, per
+# the migration's scope.
 #
 # `restart`'s identity_capture runs BEFORE its own command_or_prompt: the
 # engine reads the outgoing MainPID and persists it as a deploy_run_event, so
@@ -52,7 +56,7 @@ steps:
 
   - id: sync-runtime
     kind: shell
-    command_or_prompt: "rsync -a --delete --exclude='.git/' --exclude='.claude/' --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' --exclude='.env' ./ /srv/orchestrator/runtime/"
+    command_or_prompt: 'rsync -a --delete --exclude=''.git/'' --exclude=''.claude/'' --exclude=''*.db'' --exclude=''*.db-wal'' --exclude=''*.db-shm'' --exclude=''.env'' ./ "$RUNTIME_DIR/"'
     is_prod_mutating: true
     supports_dry_run: true
 
@@ -79,7 +83,7 @@ steps:
 
   - id: record-deployed-sha
     kind: shell
-    command_or_prompt: 'git rev-parse HEAD > /srv/orchestrator/projects/config/projects/claude-orchestrator/DEPLOYED_SHA'
+    command_or_prompt: 'git rev-parse HEAD > "$DEPLOYED_SHA_PATH"'
     # A post-success bookkeeping write (runs after verify already passed),
     # not a production mutation — a failure here means "the deploy
     # succeeded, but re-write the marker," never a rollback candidate.
@@ -124,7 +128,7 @@ failure_diagnoses:
 
   - symptom: 'record-deployed-sha fails to write the marker'
     cause: 'a filesystem permissions or disk-space issue on the marker path'
-    action: 'the deploy otherwise succeeded (verify already passed) — just re-write the marker file at /srv/orchestrator/projects/config/projects/claude-orchestrator/DEPLOYED_SHA with the deployed commit SHA'
+    action: 'the deploy otherwise succeeded (verify already passed) — just re-write the marker file at the DEPLOYED_SHA_PATH binding (see config/projects/claude-orchestrator/deploy-bindings.yml) with the deployed commit SHA'
     step: record-deployed-sha
 
 companions: []
