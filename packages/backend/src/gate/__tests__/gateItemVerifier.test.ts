@@ -788,15 +788,11 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     );
 
     // Abstain stays the default until the single closing action is identified.
-    expect(injectedProcedureContent).toMatch(
-      /abstain remains the default/i,
-    );
+    expect(injectedProcedureContent).toMatch(/abstain remains the default/i);
     expect(injectedProcedureContent).toMatch(
       /single closing action.*already\s+identified|already identified.*single closing action/i,
     );
-    expect(injectedProcedureContent).toMatch(
-      /genuine ambiguity.*needs-setup/i,
-    );
+    expect(injectedProcedureContent).toMatch(/genuine ambiguity.*needs-setup/i);
 
     // A worked session.requestCapability payload example for this write class.
     expect(injectedProcedureContent).toMatch(
