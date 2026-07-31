@@ -1,7 +1,8 @@
 import { Router } from 'express';
-import type { RequestHandler } from 'express';
+import type { RequestHandler, Request, Response, NextFunction } from 'express';
 import { execSync } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import {
   getOrchestratorConfig,
@@ -17,8 +18,43 @@ import { GitHubApiError } from '../github/types';
 import { probeNotionToken } from '../notion/NotionClient';
 import { NotionApiError } from '../notion/types';
 import { JiraClient, JiraApiError } from '../tasks/JiraClient';
+import { requireDeviceAuth, isLoopbackIp } from '../auth/DeviceAuth';
 
 const router = Router();
+
+// ── Access gate ──────────────────────────────────────────────────────────────
+
+/**
+ * Gates the setup routes on setup state and request origin.
+ *
+ * A fresh install with no credentials must be able to complete setup from
+ * the machine itself, before any device token exists — so while setup is
+ * genuinely pending, requests are restricted to loopback, mirroring the
+ * enrollment-bootstrap window's isLoopbackIp check. Once setup has
+ * completed, these are just another authenticated config-write surface —
+ * required so credentials can be rotated without hand-editing config.json —
+ * so they fall back to the normal device-auth check.
+ */
+export function requireSetupAccess(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  if (getOrchestratorConfig().setupComplete) {
+    requireDeviceAuth(req, res, next);
+    return;
+  }
+  const remoteAddr = req.socket.remoteAddress ?? '';
+  if (!isLoopbackIp(remoteAddr)) {
+    res
+      .status(403)
+      .json({ error: 'forbidden', code: 'setup_loopback_only' });
+    return;
+  }
+  next();
+}
+
+router.use(requireSetupAccess);
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
@@ -223,6 +259,39 @@ function parseEnvFile(content: string): Record<string, string> {
   return result;
 }
 
+function isUnder(root: string, resolved: string): boolean {
+  const rel = path.relative(path.resolve(root), resolved);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+// Test-only override — lets tests substitute a controlled root without
+// fighting Node's `os` module resolution (import os from 'os' resolves to a
+// different interop wrapper per module, so mocking os.homedir at runtime
+// doesn't reliably reach this module from a test file).
+let envImportRootsOverride: string[] | null = null;
+export function _setEnvImportRootsForTesting(roots: string[] | null): void {
+  envImportRootsOverride = roots;
+}
+
+function permittedEnvRoots(): string[] {
+  return envImportRootsOverride ?? [os.homedir(), getDataDir()];
+}
+
+/**
+ * Bounds the .env import endpoint to files literally named ".env" that live
+ * under the caller's home directory (where a legacy install's checkout
+ * would live) or under this app's own data directory (e.g. a copy staged
+ * there ahead of import). This is a caller-supplied filesystem path read
+ * back into an HTTP response, so it's a file-disclosure surface independent
+ * of who may call it — these are the widest bounds that still cover the
+ * genuine use case.
+ */
+function isPermittedEnvPath(candidate: string): boolean {
+  if (path.basename(candidate) !== '.env') return false;
+  const resolved = path.resolve(candidate);
+  return permittedEnvRoots().some((root) => isUnder(root, resolved));
+}
+
 router.post('/setup/import', (req, res) => {
   const { path: envPath } = req.body as { path?: string };
   if (typeof envPath !== 'string' || !envPath) {
@@ -230,14 +299,22 @@ router.post('/setup/import', (req, res) => {
     return;
   }
 
-  if (!fs.existsSync(envPath)) {
+  if (!isPermittedEnvPath(envPath)) {
+    res
+      .status(400)
+      .json({ error: 'path must be a .env file under your home directory' });
+    return;
+  }
+  const resolved = path.resolve(envPath);
+
+  if (!fs.existsSync(resolved)) {
     res.status(404).json({ error: `File not found: ${envPath}` });
     return;
   }
 
   let content: string;
   try {
-    content = fs.readFileSync(envPath, 'utf8');
+    content = fs.readFileSync(resolved, 'utf8');
   } catch (err) {
     res.status(500).json({ error: `Failed to read file: ${String(err)}` });
     return;
@@ -260,7 +337,7 @@ router.post('/setup/import', (req, res) => {
   }
 
   // Report if a sibling dashboard.db exists alongside the .env
-  const siblingDb = path.join(path.dirname(envPath), 'dashboard.db');
+  const siblingDb = path.join(path.dirname(resolved), 'dashboard.db');
   const dbFound = fs.existsSync(siblingDb);
 
   res.json({ imported, dbFound, dbPath: dbFound ? siblingDb : null });
