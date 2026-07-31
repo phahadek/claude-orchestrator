@@ -130,6 +130,78 @@ function broadcastIntentById(id: string): void {
 }
 
 /**
+ * The Ready-path member set: the staged-intent kinds that only ever belong to
+ * a single Ready-flip grooming decision — gate.accrete, seed.stage,
+ * task.setDependsOn, and task.setStatus when its target status is Ready —
+ * and so must always carry the same groupId as the rest of that decision.
+ * Single-sourced here so both the stage-time invariant (assertReadyPathGrouped
+ * below) and the existing per-task completeness guards
+ * (DependsOnCompletenessError, ManualVerificationStripCompletenessError) read
+ * the same set, rather than a future Ready-path kind being taught the rule in
+ * prose and slipping past enforcement — see isReadyPathKind, which resolves
+ * task.setStatus's conditional (target-status-Ready-only) membership.
+ */
+export const READY_PATH_KINDS: readonly string[] = [
+  'gate.accrete',
+  'seed.stage',
+  'task.setDependsOn',
+  'task.setStatus',
+];
+
+/**
+ * True when this staged-intent (kind, payload) pair is a live Ready-path
+ * member. task.setStatus is conditional on its target status — a Deferred (or
+ * any non-Ready) flip is a single standalone intent and never gated; every
+ * other kind in READY_PATH_KINDS is unconditionally a member.
+ */
+function isReadyPathKind(kind: string, payload: unknown): boolean {
+  if (kind === 'task.setStatus') {
+    return (payload as Partial<SetStatusPayload> | null)?.status === 'Ready';
+  }
+  return READY_PATH_KINDS.includes(kind);
+}
+
+/**
+ * The stage-time twin of DependsOnCompletenessError /
+ * ManualVerificationStripCompletenessError: those two run at commit time and
+ * check completeness *within* a group, so an intent staged with no group at
+ * all — group_id NULL — never reaches either check and silently lands outside
+ * the decision group it belongs to. This closes that gap by rejecting a
+ * Ready-path member the moment it is staged without a groupId, naming the
+ * member set so the staging session can self-correct in-turn.
+ */
+export class ReadyPathMissingGroupError extends Error {
+  constructor(kind: string) {
+    super(
+      `[stagedIntents] "${kind}" is a Ready-path member (${READY_PATH_KINDS.join(', ')}) staged with no ` +
+        'groupId. Every Ready-path intent — gate.accrete, seed.stage, task.setDependsOn, and ' +
+        'task.setStatus targeting Ready — must share the same groupId as one grooming decision. ' +
+        'Stage it again with a groupId.',
+    );
+    this.name = 'ReadyPathMissingGroupError';
+  }
+}
+
+/**
+ * Stage-time enforcement of the Ready-path grouping invariant (see
+ * ReadyPathMissingGroupError above): rejects a live Ready-path member staged
+ * with no groupId at all, before the row ever reaches `staged`. Kinds outside
+ * the Ready-path member set — decision.pickOne (which cannot belong to a
+ * group at all), planning.noOp (a standalone marker), and a Deferred-target
+ * task.setStatus — are untouched.
+ */
+function assertReadyPathGrouped(
+  kind: string,
+  payload: unknown,
+  groupId: string | null | undefined,
+): void {
+  if (groupId) return;
+  if (isReadyPathKind(kind, payload)) {
+    throw new ReadyPathMissingGroupError(kind);
+  }
+}
+
+/**
  * The durable replacement for groom-gate.mjs's self-reported hard_block_deps
  * array field: a task.setStatus->Ready apply is only allowed when its intent
  * group also carries a task.setDependsOn for the same task, forcing an
@@ -1992,6 +2064,7 @@ export function stageIntent(
       }
       return rowToApi(existing);
     }
+    assertReadyPathGrouped(kind, payload, groupId);
     const newRow: StagedIntentRow = {
       id: randomUUID(),
       kind,
@@ -2019,6 +2092,7 @@ export function stageIntent(
     return superseded;
   }
 
+  assertReadyPathGrouped(kind, payload, groupId);
   const row: StagedIntentRow = {
     id: randomUUID(),
     kind,
@@ -2177,13 +2251,13 @@ async function applyIntent(
     case 'task.setStatus': {
       const payload = intent.payload as SetStatusPayload;
       if (
-        payload.status === 'Ready' &&
+        isReadyPathKind('task.setStatus', payload) &&
         (!intent.groupId || !hasGroupDependsOn(intent.groupId, payload.taskId))
       ) {
         throw new DependsOnCompletenessError(payload.taskId);
       }
       if (
-        payload.status === 'Ready' &&
+        isReadyPathKind('task.setStatus', payload) &&
         payload.groomingGate?.hasManualVerificationSection &&
         (!intent.groupId ||
           !hasGroupManualVerificationStrip(intent.groupId, payload.taskId))
@@ -3716,18 +3790,27 @@ export function createStagedIntentsRouter(
       throw err;
     }
 
-    const intent = stageIntent(
-      kind,
-      normalizedPayload,
-      projectId,
-      groupId,
-      null,
-      decisionProposal,
-      groomProposal,
-      supersedes,
-      milestone,
-      investigation,
-    );
+    let intent: StagedIntent;
+    try {
+      intent = stageIntent(
+        kind,
+        normalizedPayload,
+        projectId,
+        groupId,
+        null,
+        decisionProposal,
+        groomProposal,
+        supersedes,
+        milestone,
+        investigation,
+      );
+    } catch (err) {
+      if (err instanceof ReadyPathMissingGroupError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
 
     const checked = await runStageTimeReadyChecks(intent);
     res.status(201).json(checked);

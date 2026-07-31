@@ -67,6 +67,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-1', dependsOn: [] },
       'proj-1',
+      'group-1',
     );
 
     const empty = await supertest(app)
@@ -88,6 +89,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-1', dependsOn: [] },
       'proj-1',
+      'group-1',
     );
 
     const res = await supertest(app)
@@ -108,7 +110,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-1', dependsOn: [] },
       'proj-1',
-      null,
+      'group-1',
       'planning-session-1',
     );
 
@@ -147,7 +149,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-1', dependsOn: [] },
       'proj-1',
-      null,
+      'group-1',
       'planning-session-1',
     );
 
@@ -177,7 +179,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-9', dependsOn: [] },
       'proj-1',
-      null,
+      'group-1',
       'planning-session-1',
     );
 
@@ -190,7 +192,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-9', dependsOn: ['t-other'] },
       'proj-1',
-      null,
+      'group-1',
       'planning-session-1',
       null,
       null,
@@ -207,7 +209,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-10', dependsOn: [] },
       'proj-1',
-      null,
+      'group-1',
       'planning-session-1',
     );
 
@@ -221,7 +223,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
         'task.setDependsOn',
         { taskId: 't-10', dependsOn: ['t-other'] },
         'proj-1',
-        null,
+        'group-1',
         'planning-session-1',
         null,
         null,
@@ -236,7 +238,7 @@ describe('POST /api/staged-intents/:id/reject', () => {
       'task.setDependsOn',
       { taskId: 't-1', dependsOn: [] },
       'proj-1',
-      null,
+      'group-1',
       'session-long-gone',
     );
 
@@ -355,12 +357,16 @@ describe('POST /api/staged-intents/:id/apply — group atomicity', () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
-      setDependsOn: vi.fn(),
+      setProperties: vi.fn(),
     });
     const app = makeApp();
+    // task.setProperties, not task.setDependsOn — task.setDependsOn is a
+    // Ready-path member and must always carry a groupId (see
+    // ReadyPathMissingGroupError), which would force it through the group
+    // commit route instead of standalone /apply.
     const intent = stageIntent(
-      'task.setDependsOn',
-      { taskId: 't-1', dependsOn: [] },
+      'task.setProperties',
+      { taskId: 't-1', patch: { title: 'Renamed' } },
       'proj-1',
     );
 

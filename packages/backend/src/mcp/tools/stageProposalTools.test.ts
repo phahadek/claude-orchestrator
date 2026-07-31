@@ -327,6 +327,7 @@ describe('stage-proposal MCP tools — schema validation', () => {
               },
             },
           },
+          groupId: 'group-1',
         },
       });
       expect((result as { isError?: boolean }).isError).toBeFalsy();
@@ -513,6 +514,7 @@ describe('stage-proposal MCP tools — envelope fields misplaced inside payload'
       arguments: {
         payload: { taskId: 't-1', status: 'Ready' },
         groomProposal: SAMPLE_GROOM_PROPOSAL,
+        groupId: 'group-1',
       },
     });
     const intent = parseIntentResult(

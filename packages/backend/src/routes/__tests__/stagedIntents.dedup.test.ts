@@ -77,16 +77,20 @@ describe('stageIntent — content-idempotent dedup', () => {
   });
 
   it('a re-stage with a groupId the matched intent lacks sets group_id on the existing row', () => {
+    // Backlog, not Ready — a Ready-targeting task.setStatus is a Ready-path
+    // member and must carry a groupId from its very first stage (see
+    // ReadyPathMissingGroupError); this exercises the group-merge mechanism
+    // on a kind/target the invariant doesn't gate.
     const first = stageIntent(
       'task.setStatus',
-      { taskId: 't-1', status: 'Ready' },
+      { taskId: 't-1', status: 'Backlog' },
       'proj-1',
     );
     expect(first.groupId).toBeFalsy();
 
     const second = stageIntent(
       'task.setStatus',
-      { taskId: 't-1', status: 'Ready' },
+      { taskId: 't-1', status: 'Backlog' },
       'proj-1',
       'group-1',
     );

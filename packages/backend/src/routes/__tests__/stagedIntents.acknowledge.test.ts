@@ -109,7 +109,7 @@ describe('planning.noOp acknowledge disposition', () => {
       'task.setStatus',
       { taskId: 'task-3', status: 'Ready' },
       'proj-1',
-      null,
+      'group-3',
       'sess-3',
     );
 

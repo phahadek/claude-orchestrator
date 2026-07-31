@@ -81,10 +81,15 @@ function seedPlanningSession(sessionId: string, taskId: string = 'task-1') {
   });
 }
 
-function stageDependsOnIntent(sessionId: string | null, taskId: string) {
+// task.setProperties — a standalone (ungrouped) Ready-path-agnostic kind —
+// exercises the /apply route's redrive logic; task.setDependsOn cannot be
+// used here since it is a Ready-path member and must always carry a
+// groupId (see ReadyPathMissingGroupError), which forces it through the
+// group commit route instead of standalone /apply.
+function stagePropertiesIntent(sessionId: string | null, taskId: string) {
   return stageIntent(
-    'task.setDependsOn',
-    { taskId, dependsOn: [] },
+    'task.setProperties',
+    { taskId, patch: { title: 'Renamed' } },
     'proj-1',
     null,
     sessionId,
@@ -102,7 +107,7 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
   it('enqueues a pushback to the originating session carrying the failure reason, and resumes it', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      setDependsOn: vi
+      setProperties: vi
         .fn()
         .mockRejectedValue(new Error('backend write failed')),
     });
@@ -110,7 +115,7 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
     const sm = makeSessionManager();
     const planningOrchestrator = new PlanningOrchestrator(sm as any);
     seedPlanningSession('session-1');
-    const intent = stageDependsOnIntent('session-1', 'notion:task-1');
+    const intent = stagePropertiesIntent('session-1', 'notion:task-1');
 
     const app = makeApp(planningOrchestrator);
     const res = await supertest(app)
@@ -133,7 +138,7 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
   it('an apply-time failure lands in needs_revision and can be superseded by the staging session', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      setDependsOn: vi
+      setProperties: vi
         .fn()
         .mockRejectedValue(new Error('backend write failed')),
     });
@@ -141,7 +146,7 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
     const sm = makeSessionManager();
     const planningOrchestrator = new PlanningOrchestrator(sm as any);
     seedPlanningSession('session-6', 'task-6');
-    const intent = stageDependsOnIntent('session-6', 'notion:task-6');
+    const intent = stagePropertiesIntent('session-6', 'notion:task-6');
 
     const app = makeApp(planningOrchestrator);
     await supertest(app)
@@ -151,8 +156,8 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
     expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
 
     const corrected = stageIntent(
-      'task.setDependsOn',
-      { taskId: 'notion:task-6', dependsOn: ['notion:task-other'] },
+      'task.setProperties',
+      { taskId: 'notion:task-6', patch: { title: 'Renamed again' } },
       'proj-1',
       null,
       'session-6',
@@ -166,22 +171,22 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
   });
 
   it('does not auto-retry the apply — the backend write is attempted exactly once, and the intent requires a fresh disposition', async () => {
-    const setDependsOn = vi
+    const setProperties = vi
       .fn()
       .mockRejectedValue(new Error('backend write failed'));
-    mockGetTaskBackend.mockReturnValue({ type: 'notion', setDependsOn });
+    mockGetTaskBackend.mockReturnValue({ type: 'notion', setProperties });
 
     const sm = makeSessionManager();
     const planningOrchestrator = new PlanningOrchestrator(sm as any);
     seedPlanningSession('session-2', 'task-2');
-    const intent = stageDependsOnIntent('session-2', 'notion:task-2');
+    const intent = stagePropertiesIntent('session-2', 'notion:task-2');
 
     const app = makeApp(planningOrchestrator);
     await supertest(app)
       .post(`/api/staged-intents/${intent.id}/apply`)
       .send({});
 
-    expect(setDependsOn).toHaveBeenCalledTimes(1);
+    expect(setProperties).toHaveBeenCalledTimes(1);
 
     // The intent is no longer live/appliable — a retry against the same id
     // 404s rather than re-invoking applyIntent.
@@ -189,7 +194,7 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
       .post(`/api/staged-intents/${intent.id}/apply`)
       .send({});
     expect(retry.status).toBe(404);
-    expect(setDependsOn).toHaveBeenCalledTimes(1);
+    expect(setProperties).toHaveBeenCalledTimes(1);
   });
 
   it('translates a Notion object_not_found into a message naming the unresolvable task id, not the raw sharing-permissions text', async () => {
@@ -201,13 +206,13 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
     );
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      setDependsOn: vi.fn().mockRejectedValue(notionError),
+      setProperties: vi.fn().mockRejectedValue(notionError),
     });
 
     const sm = makeSessionManager();
     const planningOrchestrator = new PlanningOrchestrator(sm as any);
     seedPlanningSession('session-3', '3a922f91-52f3-8151-9de8-e513f7b9de4d');
-    const intent = stageDependsOnIntent(
+    const intent = stagePropertiesIntent(
       'session-3',
       '3a922f91-52f3-8151-9de8-e513f7b9de4d',
     );
@@ -228,7 +233,7 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
   it('an apply-time failure whose originating session no longer exists surfaces to the operator instead of being dropped', async () => {
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
-      setDependsOn: vi
+      setProperties: vi
         .fn()
         .mockRejectedValue(new Error('backend write failed')),
     });
@@ -236,7 +241,7 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
     const sm = makeSessionManager();
     const planningOrchestrator = new PlanningOrchestrator(sm as any);
     // No seedPlanningSession call — 'session-dead' has no session row.
-    const intent = stageDependsOnIntent('session-dead', 'notion:task-4');
+    const intent = stagePropertiesIntent('session-dead', 'notion:task-4');
 
     const app = makeApp(planningOrchestrator);
     const res = await supertest(app)
@@ -251,13 +256,13 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
   });
 
   it('a successful apply is unaffected — no redrive on the happy path', async () => {
-    const setDependsOn = vi.fn().mockResolvedValue(undefined);
-    mockGetTaskBackend.mockReturnValue({ type: 'notion', setDependsOn });
+    const setProperties = vi.fn().mockResolvedValue(undefined);
+    mockGetTaskBackend.mockReturnValue({ type: 'notion', setProperties });
 
     const sm = makeSessionManager();
     const planningOrchestrator = new PlanningOrchestrator(sm as any);
     seedPlanningSession('session-5', 'task-5');
-    const intent = stageDependsOnIntent('session-5', 'notion:task-5');
+    const intent = stagePropertiesIntent('session-5', 'notion:task-5');
 
     const app = makeApp(planningOrchestrator);
     const res = await supertest(app)
@@ -265,7 +270,7 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
       .send({});
 
     expect(res.status).toBe(200);
-    expect(setDependsOn).toHaveBeenCalledTimes(1);
+    expect(setProperties).toHaveBeenCalledTimes(1);
     // The session may still get a coalesced approval acknowledgment, but
     // never a pushback — there was no failure to redrive.
     for (const call of sm.enqueueFeedback.mock.calls) {
