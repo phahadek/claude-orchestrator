@@ -336,9 +336,44 @@ async function git(
   }
 }
 
-async function listTrackedFiles(repoRoot: string): Promise<string[]> {
+/**
+ * Throws when `git ls-files` fails (bad repoRoot, git unavailable, etc.) —
+ * distinct from `listTrackedFiles` below, which swallows that failure for
+ * the loader's own best-effort use. Callers that must treat an unresolvable
+ * tracked-file set as a blocking condition (groomGate.ts's server-derived
+ * existsInRepo) use this instead.
+ */
+async function gitLsFilesOrThrow(repoRoot: string): Promise<string[]> {
   const r = await git(['ls-files'], repoRoot);
-  return r.status === 0 ? r.stdout.split('\n').filter(Boolean) : [];
+  if (r.status !== 0) {
+    throw new Error(
+      `groomLoad: git ls-files failed (status ${r.status}) in ${repoRoot}`,
+    );
+  }
+  return r.stdout.split('\n').filter(Boolean);
+}
+
+async function listTrackedFiles(repoRoot: string): Promise<string[]> {
+  try {
+    return await gitLsFilesOrThrow(repoRoot);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The tracked-file set for a project's repo, for server-side re-derivation
+ * of a Files/paths entry's `existsInRepo` at promotion time (groomGate.ts) —
+ * reuses the same git-backed source of truth this loader's own
+ * `parseFilesPathsEntries` validates against, instead of trusting whatever
+ * a session's staged payload asserts about itself. Throws (never silently
+ * returns an empty set) when the tracked-file set can't be resolved, so a
+ * caller can't mistake "git failed" for "genuinely empty repo".
+ */
+export async function resolveTrackedFileSet(
+  repoRoot: string,
+): Promise<Set<string>> {
+  return new Set(await gitLsFilesOrThrow(repoRoot));
 }
 
 /** Freshness of a repo-relative package path vs. the cached prior SHA. */
@@ -396,6 +431,20 @@ function extractPathToken(line: string): string | null {
 }
 
 /**
+ * Whether a Files/paths entry's raw text resolves to a tracked file — the
+ * single git-validated fact both this loader's `parseFilesPathsEntries` and
+ * groomGate.ts's promotion-time re-derivation compute from, so the two never
+ * drift on how a token is extracted from the raw line.
+ */
+export function filesPathsEntryExistsInRepo(
+  raw: string,
+  trackedFiles: Set<string>,
+): boolean {
+  const token = extractPathToken(raw);
+  return !!token && trackedFiles.has(token);
+}
+
+/**
  * FM2 — parse a task's `## Files / paths affected` section into one entry
  * per list item, git-validating each candidate path against `trackedFiles`.
  * groomGate.ts's resolve-in-artifact check re-derives the hedge-token scan
@@ -413,8 +462,7 @@ function parseFilesPathsEntries(
     const raw = m[1].trim();
     if (!raw) continue;
     const isNew = NEW_MARKER.test(raw);
-    const token = extractPathToken(raw);
-    const existsInRepo = !!token && trackedFiles.has(token);
+    const existsInRepo = filesPathsEntryExistsInRepo(raw, trackedFiles);
     entries.push({ raw, isNew, existsInRepo });
   }
   return entries;

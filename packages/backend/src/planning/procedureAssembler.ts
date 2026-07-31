@@ -838,9 +838,12 @@ function renderSkeleton(
           '`{"disposition": "complies"}` | `{"disposition": "n/a", "why": "..."}` | ' +
           '`{"disposition": "conflict_route", "routedTaskId": "<design-task-id>"}` — ' +
           "one entry per id in the digest's Binding constraints list), " +
-          '`filesPathsEntries` (one `{"raw": "<list item text>", "isNew": false, ' +
-          '"existsInRepo": true}` per `## Files / paths affected` line — `isNew: ' +
-          'true` for a `*(new)*`-marked not-yet-created path), and `dependsOnTasks` ' +
+          '`filesPathsEntries` (one `{"raw": "<list item text>", "isNew": false}` ' +
+          'per `## Files / paths affected` line — `isNew: true` for a ' +
+          '`*(new)*`-marked not-yet-created path; do NOT include `existsInRepo` — ' +
+          'whether the entry resolves to a tracked file is derived server-side ' +
+          'from the repo itself at promotion time, never taken from this payload), ' +
+          'and `dependsOnTasks` ' +
           '(one `{"id": "<task-id>", "type": "<type>", "status": "<status>"}` per ' +
           'declared Depends On edge — `[]` when there are none). A worked, ' +
           'field-complete example for a 💻 Code task with one binding constraint, ' +
@@ -852,7 +855,7 @@ function renderSkeleton(
           '"type":"💻 Code",' +
           '"regions":{"packages":["packages/backend"],"files":["packages/backend/src/foo.ts"]},' +
           '"constraintsDispositioned":{"constraint-a":{"disposition":"complies"}},' +
-          '"filesPathsEntries":[{"raw":"packages/backend/src/foo.ts","isNew":false,"existsInRepo":true}],' +
+          '"filesPathsEntries":[{"raw":"packages/backend/src/foo.ts","isNew":false}],' +
           '"dependsOnTasks":[]}}}` — omitting any one of these six `groomingGate` ' +
           'fields (even as an empty array/object where genuinely empty) is what ' +
           'blocks the Ready flip; fill every field from the digest above rather ' +

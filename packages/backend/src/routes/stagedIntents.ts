@@ -2824,7 +2824,7 @@ export async function runStageTimeReadyChecks(
   const resolvedType =
     getCachedType(payload.taskId) ?? payload.groomingGate?.type;
 
-  const gateResult = checkGroomingPromotionGate(
+  const gateResult = await checkGroomingPromotionGate(
     payload.groomingGate ?? {},
     payload.taskId,
     resolvedType,
@@ -2838,6 +2838,7 @@ export async function runStageTimeReadyChecks(
     intent.groupId
       ? { skipGateContributionCheck: true, skipSeedContributionCheck: true }
       : undefined,
+    intent.projectId,
   );
   if (!gateResult.allowed) {
     setStagedIntentAnnotation(
@@ -3207,7 +3208,7 @@ async function checkGroupArmingIntentCompleteness(
     }
   }
 
-  const gateResult = checkGroomingPromotionGate(
+  const gateResult = await checkGroomingPromotionGate(
     payload.groomingGate ?? {},
     payload.taskId,
     getCachedType(payload.taskId) ?? payload.groomingGate?.type,
@@ -3223,6 +3224,7 @@ async function checkGroupArmingIntentCompleteness(
         'seed.stage',
       ),
     },
+    row.project_id,
   );
   if (!gateResult.allowed) {
     return {
