@@ -89,6 +89,11 @@ function stageIntent(
   return row;
 }
 
+/** Flushes the microtask queue past the `await` in onSessionParked. */
+function flush() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 function crashCountFor(taskId: string): number {
   const row = db
     .prepare(
@@ -220,5 +225,53 @@ describe('PlanningOrchestrator.checkTerminal — terminal-no-decision backstop',
     orchestrator.checkTerminal(SESSION_ID);
 
     expect(crashCountFor(TASK_ID)).toBe(0);
+  });
+
+  it('regression: a groom session that parks idle with zero staged intents is detected purely via the session_ended(idle) wiring — not just a direct checkTerminal() call — for both the first-occurrence nudge and the second-occurrence pause', async () => {
+    // Exercises the actual production signal path (onMessage -> onSessionParked
+    // -> checkTerminal) end to end, rather than calling checkTerminal directly
+    // as the other tests in this file do. This is the path a dispatched groom
+    // session's clean-exit broadcast (AgentSession.handleCleanExit ->
+    // markSessionIdle -> session_ended status=idle) actually drives in
+    // production — a gap here (the check never running, or never being wired
+    // to a park) would reproduce a session sitting idle forever with nothing
+    // staged and no nudge/pause, indistinguishable from a crash.
+    seedSession();
+    const sessionManager = makeSessionManager();
+    new PlanningOrchestrator(sessionManager);
+
+    // First park: nothing staged at all.
+    sessionManager.emit('message', {
+      type: 'session_ended',
+      sessionId: SESSION_ID,
+      status: 'idle',
+    });
+    await flush();
+
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.any(String),
+      expect.stringContaining('stage your decision'),
+    );
+    expect(sessionManager.endSession).not.toHaveBeenCalled();
+    expect(getSession(SESSION_ID)?.status).toBe('running');
+    expect(getTaskPauseReason(TASK_ID)).toBeNull();
+
+    // Second park (the nudge's own re-turn): still nothing staged — reaches
+    // terminal status via the same event-driven path, not a direct call.
+    sessionManager.emit('message', {
+      type: 'session_ended',
+      sessionId: SESSION_ID,
+      status: 'idle',
+    });
+    await flush();
+
+    expect(sessionManager.endSession).toHaveBeenCalledWith(SESSION_ID);
+    // Still bounded to exactly one nudge across both parks.
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledTimes(1);
+    const paused = getTaskPauseReason(TASK_ID);
+    expect(paused?.reason).toBe('planning_terminal_no_decision');
+    expect(paused?.severity).toBe('needs_attention');
   });
 });
