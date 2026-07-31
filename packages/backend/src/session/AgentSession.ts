@@ -37,6 +37,7 @@ import {
   getGrantedCapabilities,
   setTaskPauseReason,
 } from '../db/queries';
+import { groomSessionConcludedWithDecision } from '../orchestration/planningDecisionKinds';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -2557,6 +2558,43 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // handled by PlanningOrchestrator.checkTerminal — the single authoritative
     // signal for this, on every park including the first, not just here.
     if (isPlanningSession(this.sessionType)) {
+      // A finished groom session must reach a terminal state directly rather
+      // than park idle and wait on PlanningOrchestrator's own (asynchronous,
+      // event-driven) checkTerminal to catch up — idle is reserved for a
+      // session genuinely still awaiting operator input, never a stand-in
+      // for "concluded but not yet promoted". Scoped to groom only: unlike
+      // groom, a design session's natural completion has the side effect of
+      // closing its target task (PlanningOrchestrator.markTerminal's
+      // completeDesignTask), which this fast path does not replicate — a
+      // design session's completion still goes through the async park path.
+      if (
+        this.sessionType === 'groom' &&
+        this.taskId &&
+        groomSessionConcludedWithDecision(this.sessionId)
+      ) {
+        markSessionDone(
+          this.sessionId,
+          endedAt,
+          null,
+          'planning_no_pending_dispositions',
+        );
+        resetTaskCrashCount(this.taskId);
+        recordEvent({
+          event_type: 'handle_clean_exit_session_marked_done',
+          actor_type: 'system',
+          actor_id: this.sessionId,
+          project_id: this.projectId ?? null,
+          task_id: this.taskId || null,
+          payload: { session_id: this.sessionId, pr_url: null },
+        });
+        this.broadcast({
+          type: 'session_ended',
+          sessionId: this.sessionId,
+          status: 'done',
+          ...(this.taskId && { taskId: this.taskId }),
+        });
+        return;
+      }
       markSessionIdle(this.sessionId, endedAt, null);
       if (this.taskId) resetTaskCrashCount(this.taskId);
       recordEvent({

@@ -1,6 +1,10 @@
 import { logger } from '../logger';
 import { getProjectById } from '../config';
-import { getSession, markSessionDone } from '../db/queries';
+import {
+  getSession,
+  markSessionDone,
+  TERMINAL_SESSION_STATUSES,
+} from '../db/queries';
 import type { SessionManager } from '../session/SessionManager';
 import type { GateVerifyDispositionPayload } from '../session/AgentSession';
 import {
@@ -14,8 +18,6 @@ import type {
   GateItemVerifier,
   GateVerificationResult,
 } from './gateReconciler';
-
-const TERMINAL_SESSION_STATUSES = new Set(['done', 'error', 'killed']);
 
 /**
  * Sessions with a live, un-settled gate-verify appeal in flight — added the

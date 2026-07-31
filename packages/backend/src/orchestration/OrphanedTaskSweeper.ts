@@ -180,8 +180,14 @@ export class OrphanedTaskSweeper {
       }
     }
 
-    // Skip if any non-terminal session exists for this task.
-    if (hasActiveSessionForTask(taskId)) return;
+    // Skip if any non-terminal session exists for this task — except when the
+    // latest session is idle past its grace window: idle is a live, resumable
+    // status (hasActiveSessionForTask reports it active), but this function has
+    // its own idle-specific handling below (the stalled-PR nudge) that must run
+    // rather than being short-circuited here.
+    if (latestSession?.status !== 'idle' && hasActiveSessionForTask(taskId)) {
+      return;
+    }
 
     // Planning sessions (groom/design) are legitimately idle awaiting operator
     // disposition (no abandonment timeout — see Q1-B) — never treat one as an

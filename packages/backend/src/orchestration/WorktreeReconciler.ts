@@ -5,7 +5,11 @@ import { promisify } from 'node:util';
 import { logger } from '../logger';
 import { getAllProjects, normalizePath } from '../config';
 import type { ProjectConfig } from '../config';
-import { getSession, getPRBySessionId } from '../db/queries';
+import {
+  getSession,
+  getPRBySessionId,
+  TERMINAL_SESSION_STATUSES,
+} from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { runWithConcurrency } from '../utils/concurrency';
 import type { Scheduler } from './Scheduler';
@@ -16,7 +20,9 @@ const execAsync = promisify(exec);
 // This guard is safe because a session's DB row is inserted (SessionManager.ts)
 // before its worktree is created (git worktree add). If a session ID is absent
 // from the DB, no live session owns that worktree and it is safe to prune.
-const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
+// Derived from the canonical TERMINAL_SESSION_STATUSES rather than
+// re-enumerated — idle must never appear here (it is a live, resumable status).
+const TERMINAL_STATUSES = TERMINAL_SESSION_STATUSES;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SWEEP_CONCURRENCY = 4;

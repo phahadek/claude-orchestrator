@@ -4,6 +4,7 @@ import { EventEmitter } from 'events';
 vi.mock('../../db/queries', () => ({
   getSession: vi.fn(),
   markSessionDone: vi.fn(),
+  TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
 }));
 
 vi.mock('../../config', () => ({

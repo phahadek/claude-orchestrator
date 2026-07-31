@@ -23,6 +23,7 @@ vi.mock('../../db/queries', () => ({
   resetTaskCrashCount: vi.fn(),
   getSession: vi.fn().mockReturnValue(null),
   hasActiveCapabilityRequestForSession: vi.fn().mockReturnValue(false),
+  listStagedIntentsBySession: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock('../../config', () => ({
@@ -78,8 +79,25 @@ import {
   markSessionDone,
   getEventsBySession,
   hasActiveCapabilityRequestForSession,
+  listStagedIntentsBySession,
 } from '../../db/queries';
 import { recoverSession } from '../sessionRecovery';
+
+function stagedIntent(
+  overrides: Partial<{ kind: string; state: string }> = {},
+) {
+  return {
+    id: 'intent-1',
+    session_id: 'test-session-id',
+    task_id: 'task-123',
+    group_id: null,
+    kind: 'task.setStatus',
+    state: 'approved',
+    payload: '{}',
+    created_at: 0,
+    ...overrides,
+  } as never;
+}
 
 function makeSession(
   sessionType: 'standard' | 'groom' | 'design' | 'ops',
@@ -107,7 +125,7 @@ describe('AgentSession.handleCleanExit — planning session gating', () => {
     vi.clearAllMocks();
   });
 
-  it('groom session parks into idle without scraping for a PR or calling recoverSession', async () => {
+  it('groom session with nothing staged yet parks into idle without scraping for a PR or calling recoverSession', async () => {
     const session = makeSession('groom');
     const messages: unknown[] = [];
     session.on('message', (m) => messages.push(m));
@@ -121,6 +139,7 @@ describe('AgentSession.handleCleanExit — planning session gating', () => {
       expect.any(Number),
       null,
     );
+    expect(markSessionDone).not.toHaveBeenCalled();
     expect(getEventsBySession).not.toHaveBeenCalled();
     expect(recoverSession).not.toHaveBeenCalled();
     expect(messages).toContainEqual(
@@ -130,6 +149,88 @@ describe('AgentSession.handleCleanExit — planning session gating', () => {
         status: 'idle',
       }),
     );
+  });
+
+  it('groom session with a fully-dispositioned decision-bearing intent reaches done directly instead of parking idle', async () => {
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      stagedIntent({ kind: 'task.setStatus', state: 'approved' }),
+    ]);
+    const session = makeSession('groom');
+    const messages: unknown[] = [];
+    session.on('message', (m) => messages.push(m));
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      null,
+      'planning_no_pending_dispositions',
+    );
+    expect(markSessionIdle).not.toHaveBeenCalled();
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: 'session_ended',
+        sessionId: 'test-session-id',
+        status: 'done',
+      }),
+    );
+  });
+
+  it('groom session with a still-pending (staged) intent parks idle rather than going done', async () => {
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      stagedIntent({ kind: 'task.setStatus', state: 'staged' }),
+    ]);
+    const session = makeSession('groom');
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(markSessionIdle).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      null,
+    );
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('groom session with a blocked (needs_revision) member parks idle rather than going done', async () => {
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      stagedIntent({ kind: 'task.setStatus', state: 'needs_revision' }),
+    ]);
+    const session = makeSession('groom');
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(markSessionIdle).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      null,
+    );
+    expect(markSessionDone).not.toHaveBeenCalled();
+  });
+
+  it('design session with a fully-dispositioned decision-bearing intent still parks idle (design completion goes through the async PlanningOrchestrator path, not this fast path)', async () => {
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      stagedIntent({ kind: 'task.setStatus', state: 'approved' }),
+    ]);
+    const session = makeSession('design');
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(markSessionIdle).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      null,
+    );
+    expect(markSessionDone).not.toHaveBeenCalled();
   });
 
   it('design session parks into idle without scraping for a PR or calling recoverSession', async () => {

@@ -74,8 +74,6 @@ import {
   getRunningSessionsWithMergedOrClosedPR,
   hasActiveSessionForTask,
   hasActivePlanningSessionForTask,
-  hasNonIdlePlanningSessionForTask,
-  hasUndispositionedStagedIntentForTask,
   getOtherRunningSessionsForTask,
   setSessionPauseReason,
   setSessionLastErrorDetail,
@@ -1197,18 +1195,20 @@ export class SessionManager extends EventEmitter {
     // planning-aware equivalent alongside them, mirroring the same
     // eligibility rule isGroomCandidate/isDesignCandidate/isOpsCandidate use
     // (planningCandidates.ts) so candidate-scan-time and dispatch-time
-    // dedup never disagree.
+    // dedup never disagree. idle is a live, non-terminal status (a session
+    // parked awaiting operator disposition can be resumed at any moment), so
+    // a single hasActivePlanningSessionForTask check — true for running OR
+    // idle — is the whole guard; there is no idle-specific carve-out.
     if (countsAgainstConcurrency(sessionType)) {
       const earlyTaskId =
         precomputedTaskId ??
         deriveTaskId(project.taskSource ?? 'notion', taskUrl);
       const duplicatePlanning =
-        sessionType === 'groom'
-          ? hasNonIdlePlanningSessionForTask(earlyTaskId, 'groom') ||
-            hasUndispositionedStagedIntentForTask(earlyTaskId)
-          : sessionType === 'design' || sessionType === 'ops'
-            ? hasActivePlanningSessionForTask(earlyTaskId, sessionType)
-            : false;
+        sessionType === 'groom' ||
+        sessionType === 'design' ||
+        sessionType === 'ops'
+          ? hasActivePlanningSessionForTask(earlyTaskId, sessionType)
+          : false;
       if (
         this.hasLiveSessionForTask(earlyTaskId) ||
         hasActiveSessionForTask(earlyTaskId) ||
