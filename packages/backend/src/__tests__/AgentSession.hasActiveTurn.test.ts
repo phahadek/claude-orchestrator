@@ -65,6 +65,7 @@ vi.mock('../db/queries', () => ({
   listUndeliveredInboxItems: vi.fn(() => []),
   markInboxItemsDelivered: vi.fn(),
   ackPendingComments: vi.fn(),
+  isSessionComplete: vi.fn(() => false),
 }));
 
 vi.mock('../config', async (importOriginal) => {
@@ -103,7 +104,9 @@ vi.mock('../session/sessionRecovery', () => ({
 }));
 
 import { AgentSession } from '../session/AgentSession';
+import { isSessionComplete } from '../db/queries';
 import type { TaskBackend } from '../tasks/TaskBackend';
+import type { ServerMessage } from '../ws/types';
 
 function fakeTaskBackend(): TaskBackend {
   return {
@@ -149,6 +152,61 @@ describe('AgentSession.hasActiveTurn()', () => {
 
     session.sendMessage('follow-up feedback');
     expect(session.hasActiveTurn()).toBe(true);
+
+    (
+      session as unknown as { isPausingForShutdown: boolean }
+    ).isPausingForShutdown = true;
+    mockProc.stdout.push(null);
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+  }, 8_000);
+
+  it('broadcasts session_turn_completed at the result event when isSessionComplete is true', async () => {
+    vi.mocked(isSessionComplete).mockReturnValue(true);
+    const session = makeSession('sess-turn-2');
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+    await new Promise((r) => setTimeout(r, 0));
+
+    mockProc.stdout.push(
+      JSON.stringify({ type: 'result', subtype: 'success', duration_ms: 1 }) +
+        '\n',
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(messages).toContainEqual({
+      type: 'session_turn_completed',
+      sessionId: 'sess-turn-2',
+    });
+
+    (
+      session as unknown as { isPausingForShutdown: boolean }
+    ).isPausingForShutdown = true;
+    mockProc.stdout.push(null);
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+  }, 8_000);
+
+  it('does not broadcast session_turn_completed when isSessionComplete is false', async () => {
+    vi.mocked(isSessionComplete).mockReturnValue(false);
+    const session = makeSession('sess-turn-3');
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+    await new Promise((r) => setTimeout(r, 0));
+
+    mockProc.stdout.push(
+      JSON.stringify({ type: 'result', subtype: 'success', duration_ms: 1 }) +
+        '\n',
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(
+      messages.some((m) => m.type === 'session_turn_completed'),
+    ).toBe(false);
 
     (
       session as unknown as { isPausingForShutdown: boolean }

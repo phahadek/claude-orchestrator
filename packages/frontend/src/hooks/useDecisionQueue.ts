@@ -7,7 +7,10 @@ import {
   stagedIntentsApi,
   UNATTRIBUTED_MILESTONE_BUCKET,
 } from '../api/stagedIntents';
-import { subscribeStagedIntentChange } from './stagedIntentBus';
+import {
+  subscribeStagedIntentChange,
+  subscribeSessionTurnCompleted,
+} from './stagedIntentBus';
 import { triageVerdict } from '../components/triageVerdict';
 
 /** Which lens the queue fetches through — the only thing that differs between the session DecisionPanel and MilestoneDecisionInbox. */
@@ -108,6 +111,25 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeKey]);
 
+  // Milestone scope only: a turn-end flips sessionComplete for every
+  // already-staged intent from that session, but no staged_intent row
+  // changes, so there is no per-intent broadcast to ride. Flip the field in
+  // place for cached intents matching the session — never remove-and-append,
+  // which would reorder the backend-ranked list (see module docstring).
+  useEffect(() => {
+    if (scope.type !== 'milestone') return;
+    return subscribeSessionTurnCompleted((sessionId) => {
+      setIntents((prev) =>
+        prev.map((intent) =>
+          intent.sessionId === sessionId
+            ? { ...intent, sessionComplete: true }
+            : intent,
+        ),
+      );
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey]);
+
   const upsert = useCallback((intent: StagedIntent) => {
     setIntents((prev) => {
       const idx = prev.findIndex((i) => i.id === intent.id);
@@ -125,11 +147,18 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
   // A session that hasn't signaled its proposal set complete for this turn
   // may still stage more intents — the milestone inbox (a ranked
   // act-on-this-now queue) suppresses those cards entirely until the owning
-  // session goes complete. The session-scoped DecisionPanel keeps them
-  // visible (read-only) instead, so it does not filter here.
+  // session goes complete. sessionComplete is fail-toward-incomplete (see
+  // isSessionComplete): `null` means "no owning session" and is always
+  // shown, `true` means the owning session has gone complete, and both
+  // `false` and missing/undefined suppress the card. The session-scoped
+  // DecisionPanel keeps them visible (read-only) instead, so it does not
+  // filter here.
   const visibleIntents =
     scope.type === 'milestone'
-      ? intents.filter((intent) => intent.sessionComplete !== false)
+      ? intents.filter(
+          (intent) =>
+            intent.sessionComplete === true || intent.sessionComplete === null,
+        )
       : intents;
 
   const groups = new Map<string, StagedIntent[]>();

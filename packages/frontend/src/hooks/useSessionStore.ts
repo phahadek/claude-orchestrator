@@ -6,7 +6,10 @@ import type {
 import type { ResolvedTask } from '@claude-orchestrator/backend/src/notion/types';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 import type { StagedIntent } from '../api/stagedIntents';
-import { publishStagedIntentChange } from './stagedIntentBus';
+import {
+  publishStagedIntentChange,
+  publishSessionTurnCompleted,
+} from './stagedIntentBus';
 
 const DISMISSED_DENIALS_KEY = 'permission_denials_dismissed';
 
@@ -473,6 +476,9 @@ export function useSessionStore() {
     if (msg.type === 'staged_intent_changed') {
       setLastStagedIntentChange(msg.intent);
       publishStagedIntentChange(msg.intent);
+    }
+    if (msg.type === 'session_turn_completed') {
+      publishSessionTurnCompleted(msg.sessionId);
     }
     if (msg.type === 'pr_merged') {
       setLastPrMergedEvent({

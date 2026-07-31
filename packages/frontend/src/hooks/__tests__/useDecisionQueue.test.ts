@@ -2,7 +2,10 @@ import { renderHook, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { useDecisionQueue } from '../useDecisionQueue';
 import { stagedIntentsApi } from '../../api/stagedIntents';
-import { publishStagedIntentChange } from '../stagedIntentBus';
+import {
+  publishStagedIntentChange,
+  publishSessionTurnCompleted,
+} from '../stagedIntentBus';
 import type { StagedIntent } from '../../api/stagedIntents';
 
 describe('useDecisionQueue', () => {
@@ -57,6 +60,7 @@ describe('useDecisionQueue', () => {
         sessionId: 'session-a',
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
       {
         id: 'ranked-second',
@@ -67,6 +71,7 @@ describe('useDecisionQueue', () => {
         sessionId: 'session-b',
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
     ];
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
@@ -124,6 +129,7 @@ describe('useDecisionQueue', () => {
       sessionId: 'session-y',
       milestone: 'M1',
       state: 'staged',
+      sessionComplete: true,
     };
 
     act(() => {
@@ -133,6 +139,138 @@ describe('useDecisionQueue', () => {
 
     await waitFor(() =>
       expect(result.current.intents.map((i) => i.id)).toEqual(['i-same']),
+    );
+  });
+
+  it('milestone scope suppresses an intent whose owning session turn is still in flight', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'incomplete',
+        kind: 'task.updateBody',
+        payload: {},
+        projectId: 'proj-1',
+        createdAt: 0,
+        sessionId: 'session-a',
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: false,
+      },
+      {
+        id: 'complete',
+        kind: 'task.updateBody',
+        payload: {},
+        projectId: 'proj-1',
+        createdAt: 1,
+        sessionId: 'session-b',
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: true,
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({
+        type: 'milestone',
+        projectId: 'proj-1',
+        milestone: 'M1',
+      }),
+    );
+
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    expect(result.current.intents.map((i) => i.id)).toEqual(['complete']);
+  });
+
+  it('milestone scope treats a missing/undefined sessionComplete as not-yet-complete', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'undefined-complete',
+        kind: 'task.updateBody',
+        payload: {},
+        projectId: 'proj-1',
+        createdAt: 0,
+        sessionId: 'session-a',
+        milestone: 'M1',
+        state: 'staged',
+        // sessionComplete deliberately omitted
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({
+        type: 'milestone',
+        projectId: 'proj-1',
+        milestone: 'M1',
+      }),
+    );
+
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    expect(result.current.intents).toEqual([]);
+  });
+
+  it('milestone scope reveals a session_turn_completed session\'s intents in place, without reordering', async () => {
+    const intents: StagedIntent[] = [
+      {
+        id: 'already-visible',
+        kind: 'task.updateBody',
+        payload: {},
+        projectId: 'proj-1',
+        createdAt: 0,
+        sessionId: 'session-a',
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: true,
+      },
+      {
+        id: 'reveals-later',
+        kind: 'task.updateBody',
+        payload: {},
+        projectId: 'proj-1',
+        createdAt: 1,
+        sessionId: 'session-b',
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: false,
+      },
+      {
+        id: 'stays-hidden',
+        kind: 'task.updateBody',
+        payload: {},
+        projectId: 'proj-1',
+        createdAt: 2,
+        sessionId: 'session-c',
+        milestone: 'M1',
+        state: 'staged',
+        sessionComplete: false,
+      },
+    ];
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({
+        type: 'milestone',
+        projectId: 'proj-1',
+        milestone: 'M1',
+      }),
+    );
+
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.intents.map((i) => i.id)).toEqual([
+      'already-visible',
+    ]);
+
+    act(() => {
+      publishSessionTurnCompleted('session-b');
+    });
+
+    await waitFor(() =>
+      expect(result.current.intents.map((i) => i.id)).toEqual([
+        'already-visible',
+        'reveals-later',
+      ]),
     );
   });
 
