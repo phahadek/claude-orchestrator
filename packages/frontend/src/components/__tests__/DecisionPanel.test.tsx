@@ -81,9 +81,7 @@ describe('DecisionPanel', () => {
     expect(screen.getByTestId('session-still-filing')).toBeTruthy();
     expect(screen.getByTestId('staged-intent-still-filing')).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: '✓ Commit' }).hasAttribute(
-        'disabled',
-      ),
+      screen.getByRole('button', { name: '✓ Commit' }).hasAttribute('disabled'),
     ).toBe(true);
   });
 

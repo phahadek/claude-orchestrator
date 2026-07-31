@@ -908,7 +908,9 @@ export function StagedIntentPanel({
               <button
                 type="button"
                 className={styles.approveButton}
-                disabled={inFlight !== null || disabled || !overrideReason.trim()}
+                disabled={
+                  inFlight !== null || disabled || !overrideReason.trim()
+                }
                 onClick={() => void handleApply({ reason: overrideReason })}
               >
                 {inFlight === 'override' ? 'Applying…' : 'Apply with override'}

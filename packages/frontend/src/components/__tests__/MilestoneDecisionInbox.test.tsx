@@ -61,7 +61,7 @@ describe('MilestoneDecisionInbox', () => {
     ).toBe('session-ops');
   });
 
-  it("excludes a card from both the list and the count while its owning session is incomplete", async () => {
+  it('excludes a card from both the list and the count while its owning session is incomplete', async () => {
     const intents: StagedIntent[] = [
       {
         id: 'complete-intent',
