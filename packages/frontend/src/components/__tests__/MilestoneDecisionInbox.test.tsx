@@ -444,9 +444,12 @@ describe('MilestoneDecisionInbox', () => {
     await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
 
     const card = screen.getByTestId(`milestone-decision-card-${groupId}`);
-    fireEvent.change(within(card).getByPlaceholderText(/pushback or decline/i), {
-      target: { value: 'No need' },
-    });
+    fireEvent.change(
+      within(card).getByPlaceholderText(/pushback or decline/i),
+      {
+        target: { value: 'No need' },
+      },
+    );
 
     expect(
       within(card)

@@ -309,7 +309,9 @@ export function GroupCard({
         <button
           type="button"
           className={panelStyles.denyButton}
-          disabled={inFlight || disabled || !draft.outcome || !draft.reason.trim()}
+          disabled={
+            inFlight || disabled || !draft.outcome || !draft.reason.trim()
+          }
           onClick={onRejectGroup}
         >
           {inFlight
