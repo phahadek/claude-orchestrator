@@ -568,7 +568,7 @@ function CreateHeadline({ intent }: { intent: StagedIntent }) {
         <p>Depends on: {payload.dependsOn.join(', ')}</p>
       )}
       {payload.body ? (
-        <pre className={styles.payload}>{payload.body}</pre>
+        <pre className={styles.bodyProse}>{payload.body}</pre>
       ) : (
         <p>No body supplied.</p>
       )}

@@ -530,4 +530,85 @@ describe('StagedIntentPanel', () => {
     expect(screen.queryByRole('button', { name: /approve/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /pushback/i })).toBeNull();
   });
+
+  describe('task.create body contrast', () => {
+    function hexToRgb(hex: string) {
+      const clean = hex.replace('#', '');
+      return [0, 2, 4].map((i) => parseInt(clean.slice(i, i + 2), 16));
+    }
+
+    function relativeLuminance([r, g, b]: number[]) {
+      const [rs, gs, bs] = [r, g, b].map((c) => {
+        const s = c / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
+    }
+
+    function contrastRatio(hexA: string, hexB: string) {
+      const lumA = relativeLuminance(hexToRgb(hexA));
+      const lumB = relativeLuminance(hexToRgb(hexB));
+      const [lighter, darker] = lumA > lumB ? [lumA, lumB] : [lumB, lumA];
+      return (lighter + 0.05) / (darker + 0.05);
+    }
+
+    // Token values sourced from src/styles/global.css — --text-primary (body
+    // copy) and --bg-secondary (the card background StagedIntentPanel renders
+    // on), not hard-coded independently of the design tokens.
+    const TEXT_PRIMARY_HEX = '#cdd6f4'; // --ctp-text, resolves --text-primary
+    const CARD_BG_HEX = '#181825'; // --ctp-mantle, resolves --bg-secondary
+
+    it('renders a task.create body as readable prose, not the faint payload style', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'task.create',
+            payload: {
+              title: 'New task',
+              body: 'Some long-form task body prose that must stay readable.',
+            },
+          })}
+        />,
+      );
+
+      const bodyEl = screen.getByText(
+        /Some long-form task body prose that must stay readable\./,
+      );
+      expect(bodyEl.className).not.toMatch(/payload/i);
+      const computed = getComputedStyle(bodyEl);
+      expect(computed.wordBreak).not.toBe('break-all');
+    });
+
+    it('meets the 4.5:1 contrast threshold for normal-size text against the card background', () => {
+      const ratio = contrastRatio(TEXT_PRIMARY_HEX, CARD_BG_HEX);
+      expect(ratio).toBeGreaterThanOrEqual(4.5);
+    });
+
+    it('keeps the raw-JSON fallback visually distinct from reviewed body copy', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'not-a-known-kind' as StagedIntent['kind'],
+            payload: { some: 'raw', json: 'value' },
+          })}
+        />,
+      );
+
+      const fallbackEl = screen.getByText(/"some": "raw"/);
+      expect(fallbackEl.className).toMatch(/payload/i);
+    });
+
+    it('still renders "No body supplied." for a task.create intent with no body', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'task.create',
+            payload: { title: 'New task' },
+          })}
+        />,
+      );
+
+      expect(screen.getByText('No body supplied.')).toBeTruthy();
+    });
+  });
 });
