@@ -1329,7 +1329,7 @@ export const SIZE_TYPE_CHECK = {
     'Code/Tooling tasks default to < 500 LoC estimated and < 20 files touched; ' +
     'exceeding either threshold nominates the task for a split — the threshold ' +
     'nominates, it does not force, and `unsplittable` with a recorded reason ' +
-    'remains a legitimate outcome above either one. Where a task\'s files cluster ' +
+    "remains a legitimate outcome above either one. Where a task's files cluster " +
     'into distinct root-causes, the file-count signal should read as a nomination ' +
     'to split along those clusters rather than a flat count. Design/Planning ' +
     'tasks are sized in open-question count instead, recorded as ' +
