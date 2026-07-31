@@ -98,6 +98,51 @@ describe('MilestoneDecisionStack', () => {
     });
   });
 
+  it('narrows to blocked tasks only when flaggedOnly is set, showing exactly the flagged items', async () => {
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([]);
+    const tasks: TaskView[] = [
+      makeTask({
+        taskId: 'code-blocked',
+        taskName: 'Code blocked',
+        blocked: true,
+      }),
+      makeTask({
+        taskId: 'code-open',
+        taskName: 'Code open',
+        blocked: false,
+      }),
+      makeTask({
+        taskId: 'code-blocked-done',
+        taskName: 'Code blocked done',
+        displayStatus: 'done',
+        notionStatus: '✅ Done',
+        blocked: true,
+      }),
+    ];
+
+    render(
+      <MilestoneDecisionStack
+        projectId="proj-1"
+        milestone="M1"
+        tasks={tasks}
+        phaseFilter="code"
+        flaggedOnly
+        selection={null}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('milestone-decision-stack')).toBeTruthy(),
+    );
+
+    expect(screen.getByTestId('milestone-task-row-code-blocked')).toBeTruthy();
+    expect(
+      screen.getByTestId('milestone-task-row-code-blocked-done'),
+    ).toBeTruthy();
+    expect(screen.queryByTestId('milestone-task-row-code-open')).toBeNull();
+  });
+
   it('drives selection from a pending intent card in the composed MilestoneDecisionInbox', async () => {
     const intents: StagedIntent[] = [
       {

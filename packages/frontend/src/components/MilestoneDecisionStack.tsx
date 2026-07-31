@@ -17,6 +17,8 @@ interface Props {
   tasks: TaskView[];
   /** The shared phase filter emitted by the burndown (left column) — a PhaseKey (see utils/phaseBurndown), matched against each task's derived phase. */
   phaseFilter: string | null;
+  /** True when phaseFilter was activated via a phase's ⚠ warning badge — narrows the phase's tasks down to the flagged (blocked) ones. */
+  flaggedOnly?: boolean;
   selection: MilestoneStackSelection | null;
   onSelect: (selection: MilestoneStackSelection) => void;
 }
@@ -31,10 +33,13 @@ export function MilestoneDecisionStack({
   milestone,
   tasks,
   phaseFilter,
+  flaggedOnly = false,
   selection,
   onSelect,
 }: Props) {
-  const filteredTasks = tasks.filter((t) => matchesPhase(t, phaseFilter));
+  const filteredTasks = tasks
+    .filter((t) => matchesPhase(t, phaseFilter))
+    .filter((t) => !flaggedOnly || t.blocked);
   const notLaunched = filteredTasks.filter(
     (t) => t.displayStatus !== 'done' && !t.codeSession,
   );
