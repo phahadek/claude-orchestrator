@@ -4,6 +4,7 @@ import { db } from './db';
 import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
 import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
+import { isCodeSession } from '../session/sessionPredicates';
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
@@ -291,26 +292,37 @@ export function markSessionSuperseded(
 }
 
 /**
- * Returns other standard (non-review) sessions in status='running' for the same
- * task_id, excluding the given session. Used by sendOrResume to reconcile zombie
- * rows before respawning.
+ * Returns other standard (non-review, non-planning) sessions in
+ * status='running' for the same task_id, excluding the given session. Used
+ * by sendOrResume to reconcile zombie rows before respawning.
+ *
+ * Only meaningful for a standard-session resume: a standard session's
+ * resume is a continuation of a prior standard session's work on the same
+ * task, so a stale running standard row is genuinely superseded. A
+ * planning-session (groom/design/ops/split) resume is not a continuation of
+ * a code session — e.g. resuming a groom session to deliver an operator
+ * disposition must never retire the task's live code session — so
+ * `resumingSessionType` gates the sweep to same-lineage resumes only; a
+ * non-standard resuming type returns no rows.
  */
 export function getOtherRunningSessionsForTask(
   taskId: string,
   excludeSessionId: string,
+  resumingSessionType: string | null | undefined,
 ): Session[] {
-  const norm = taskId.replace(/-/g, '');
-  return db
-    .prepare<{ task_id: string; session_id: string }>(
+  if (resumingSessionType && !isCodeSession(resumingSessionType)) return [];
+  const norm = normalizeBoardId(taskId);
+  const rows = db
+    .prepare<{ session_id: string }>(
       `
     SELECT * FROM sessions
-    WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
-      AND session_id != @session_id
+    WHERE session_id != @session_id
       AND status = 'running'
       AND (session_type = 'standard' OR session_type IS NULL)
   `,
     )
-    .all({ task_id: norm, session_id: excludeSessionId }) as Session[];
+    .all({ session_id: excludeSessionId }) as Session[];
+  return rows.filter((row) => normalizeBoardId(row.task_id ?? '') === norm);
 }
 
 /**
