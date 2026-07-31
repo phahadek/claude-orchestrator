@@ -29,12 +29,26 @@ vi.mock('../../db/queries', () =>
   }),
 );
 
+vi.mock('../../config/corporateMode', () => ({
+  getCorporateMode: vi.fn(() => ({
+    enabled: false,
+    envLocked: false,
+    gates: {
+      dockerMandatory: false,
+      requireHumanApproval: false,
+      requireZDR: false,
+      validatePRBody: false,
+    },
+  })),
+}));
+
 vi.mock('../../config', () => ({
   ALLOWED_TOOLS: [],
   GITHUB_REPO: 'owner/repo',
   BASH_MAX_OUTPUT_LENGTH: 30000,
   BASH_DEFAULT_TIMEOUT_MS: 300000,
   runtimeSettings: { corporate_mode_enabled: false },
+  getProjectById: vi.fn(() => undefined),
 }));
 
 vi.mock('../../tasks/TaskBackend', () => ({
@@ -76,6 +90,18 @@ vi.mock('child_process', () => ({
     if (cmd === 'git push -u origin feature/my-task') return '';
     throw new Error(`unexpected: ${cmd}`);
   }),
+  execFile: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
+  exec: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
 }));
 
 vi.mock('../CliSessionRunner', () => ({
@@ -103,6 +129,7 @@ import { validatePRBody } from '../../github/PRBodyValidator';
 import { recordEvent } from '../../audit/AuditLog';
 import { execSync } from 'child_process';
 import { runtimeSettings } from '../../config';
+import { getCorporateMode } from '../../config/corporateMode';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1192,6 +1219,16 @@ describe('live-detected PR — PR body validation', () => {
     (
       runtimeSettings as { corporate_mode_enabled: boolean }
     ).corporate_mode_enabled = false;
+    vi.mocked(getCorporateMode).mockReturnValue({
+      enabled: false,
+      envLocked: false,
+      gates: {
+        dockerMandatory: false,
+        requireHumanApproval: false,
+        requireZDR: false,
+        validatePRBody: false,
+      },
+    });
   });
 
   it('does NOT record pr_body_invalid_warning when fetched GitHub body is compliant (regression: PR #347)', async () => {
@@ -1295,6 +1332,16 @@ describe('live-detected PR — PR body validation', () => {
     (
       runtimeSettings as { corporate_mode_enabled: boolean }
     ).corporate_mode_enabled = true;
+    vi.mocked(getCorporateMode).mockReturnValue({
+      enabled: true,
+      envLocked: false,
+      gates: {
+        dockerMandatory: false,
+        requireHumanApproval: false,
+        requireZDR: false,
+        validatePRBody: true,
+      },
+    });
 
     const session = makeSession(ghClient);
     emitLiveDetectedPR(session);

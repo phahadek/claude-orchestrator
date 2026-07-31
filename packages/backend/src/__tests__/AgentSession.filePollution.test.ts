@@ -28,8 +28,19 @@ let mockProc: ReturnType<typeof createMockProc>;
 
 vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
-  execFile: vi.fn(),
+  execFile: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
   execSync: vi.fn(() => 'claude'),
+  exec: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
 }));
 
 vi.mock('../github/PRFileReverter', () => ({
@@ -55,6 +66,11 @@ vi.mock('../audit/AuditLog', () => ({
 vi.mock('../routes/tasks', () => ({
   emitTaskUpdated: vi.fn(),
 }));
+
+vi.mock('../config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config')>();
+  return { ...actual, getProjectById: vi.fn(() => undefined) };
+});
 
 vi.mock('../session/SessionAuditor', () => ({
   SessionAuditor: vi.fn().mockImplementation(() => ({

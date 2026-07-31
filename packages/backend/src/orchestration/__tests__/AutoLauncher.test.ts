@@ -770,121 +770,6 @@ describe('AutoLauncher — fetch timeouts', () => {
   });
 });
 
-// ── Stall detection tests ─────────────────────────────────────────────────────
-
-describe('AutoLauncher — stall detection', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
-    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
-    vi.mocked(getMergedPRForTask).mockReturnValue(null);
-    (
-      runtimeSettings as { auto_launch_concurrency: number }
-    ).auto_launch_concurrency = 2;
-    (
-      runtimeSettings as { auto_launch_poll_interval_ms: number }
-    ).auto_launch_poll_interval_ms = 60_000;
-  });
-
-  it('force-resets polling=false when pollLastStartedAt exceeds 2× interval', () => {
-    const sessionManager = makeSessionManager(0);
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [],
-      pollOnStart: false,
-    });
-
-    // Simulate a stuck poll (polling=true with old timestamp)
-    (launcher as unknown as Record<string, unknown>).polling = true;
-    (launcher as unknown as Record<string, unknown>).pollLastStartedAt =
-      Date.now() - 2 * 60_000 - 1;
-    (launcher as unknown as Record<string, unknown>).stopped = false;
-
-    (launcher as unknown as { scheduleNext: () => void }).scheduleNext();
-
-    expect((launcher as unknown as Record<string, unknown>).polling).toBe(
-      false,
-    );
-  });
-
-  it('emits STALL DETECTED warn log when force-resetting', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const sessionManager = makeSessionManager(0);
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [],
-      pollOnStart: false,
-    });
-
-    (launcher as unknown as Record<string, unknown>).polling = true;
-    (launcher as unknown as Record<string, unknown>).pollLastStartedAt =
-      Date.now() - 2 * 60_000 - 1;
-    (launcher as unknown as Record<string, unknown>).stopped = false;
-
-    (launcher as unknown as { scheduleNext: () => void }).scheduleNext();
-
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        '[AutoLauncher] poll STALL DETECTED — force-resetting',
-      ),
-    );
-
-    warnSpy.mockRestore();
-  });
-
-  it('does not reset polling when age is below 2× interval', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const sessionManager = makeSessionManager(0);
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [],
-      pollOnStart: false,
-    });
-
-    (launcher as unknown as Record<string, unknown>).polling = true;
-    // Only 1× interval old — not stale yet
-    (launcher as unknown as Record<string, unknown>).pollLastStartedAt =
-      Date.now() - 60_000 + 1_000;
-    (launcher as unknown as Record<string, unknown>).stopped = false;
-
-    (launcher as unknown as { scheduleNext: () => void }).scheduleNext();
-
-    expect((launcher as unknown as Record<string, unknown>).polling).toBe(true);
-    expect(warnSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining('STALL DETECTED'),
-    );
-
-    warnSpy.mockRestore();
-  });
-
-  it('subsequent pollOnce proceeds normally after stall reset', async () => {
-    const notionBackend = {
-      type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([]),
-    };
-    const resolveBackend = vi.fn().mockReturnValue(notionBackend);
-    const sessionManager = makeSessionManager(0);
-    const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend,
-      pollOnStart: false,
-    });
-
-    // Simulate stall state
-    (launcher as unknown as Record<string, unknown>).polling = true;
-    (launcher as unknown as Record<string, unknown>).pollLastStartedAt =
-      Date.now() - 2 * 60_000 - 1;
-    (launcher as unknown as Record<string, unknown>).stopped = false;
-
-    // scheduleNext detects stall and resets polling
-    (launcher as unknown as { scheduleNext: () => void }).scheduleNext();
-    expect((launcher as unknown as Record<string, unknown>).polling).toBe(
-      false,
-    );
-
-    // A subsequent pollOnce can now proceed (not skipped due to polling=true)
-    await launcher.pollOnce();
-    expect(notionBackend.fetchReadyTasks).toHaveBeenCalledOnce();
-  });
-});
-
 // ── Tick log tests ────────────────────────────────────────────────────────────
 
 describe('AutoLauncher — tick logs', () => {
@@ -993,11 +878,17 @@ describe('AutoLauncher — tick logs', () => {
     logSpy.mockRestore();
   });
 
-  it('tick logs fire across a forced stall reset', async () => {
+  it('does not run a poll cycle while one is already in progress', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let resolveFetch: (() => void) | undefined;
     const notionBackend = {
       type: 'notion' as const,
-      fetchReadyTasks: vi.fn().mockResolvedValue([]),
+      fetchReadyTasks: vi.fn(
+        () =>
+          new Promise<never[]>((res) => {
+            resolveFetch = () => res([]);
+          }),
+      ),
     };
     const resolveBackend = vi.fn().mockReturnValue(notionBackend);
     const sessionManager = makeSessionManager(0);
@@ -1007,24 +898,19 @@ describe('AutoLauncher — tick logs', () => {
       pollOnStart: false,
     });
 
-    // First normal cycle
-    await launcher.pollOnce();
+    const first = launcher.pollOnce();
+    await launcher.pollOnce(); // skipped — a cycle is already running
 
-    // Simulate stall then reset
-    (launcher as unknown as Record<string, unknown>).polling = true;
-    (launcher as unknown as Record<string, unknown>).pollLastStartedAt =
-      Date.now() - 2 * 60_000 - 1;
-    (launcher as unknown as Record<string, unknown>).stopped = false;
-    (launcher as unknown as { scheduleNext: () => void }).scheduleNext();
+    expect(notionBackend.fetchReadyTasks).toHaveBeenCalledTimes(1);
 
-    // Second cycle after stall reset
-    await launcher.pollOnce();
+    resolveFetch?.();
+    await first;
 
     const calls = logSpy.mock.calls.map((c) => String(c[0]));
     expect(calls.some((c) => c.includes('poll start cycle=1'))).toBe(true);
     expect(calls.some((c) => c.includes('poll complete cycle=1'))).toBe(true);
-    expect(calls.some((c) => c.includes('poll start cycle=2'))).toBe(true);
-    expect(calls.some((c) => c.includes('poll complete cycle=2'))).toBe(true);
+    // The skipped call never entered runPollCycle, so no cycle=2 appears.
+    expect(calls.some((c) => c.includes('poll start cycle=2'))).toBe(false);
 
     logSpy.mockRestore();
   });

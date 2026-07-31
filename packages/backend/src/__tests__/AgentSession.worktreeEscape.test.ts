@@ -27,7 +27,19 @@ let mockProc: ReturnType<typeof createMockProc>;
 
 vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
-  execFile: vi.fn(),
+  execFile: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
+  execSync: vi.fn(),
+  exec: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
 }));
 
 vi.mock('../db/queries', () =>
@@ -216,6 +228,13 @@ describe('AgentSession — in-flight worktree-escape detection', () => {
   });
 
   it('does NOT send a warning when Write is inside the worktree', async () => {
+    // WORKTREE is a Windows-style path; detectInFlightEscape's path
+    // normalization branches on process.platform (win32 vs posix). Force
+    // win32 for this test so backslash-separated paths resolve correctly
+    // regardless of the host OS actually running the suite.
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+
     const session = new AgentSession(
       'sess-inside',
       'https://notion.so/task',
@@ -240,6 +259,8 @@ describe('AgentSession — in-flight worktree-escape detection', () => {
       (c) => c.includes('⚠️') && c.includes('Worktree escape detected'),
     );
     expect(warns).toHaveLength(0);
+
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
 
     mockProc.stdout.push(null);
     await new Promise((r) => setTimeout(r, 0));

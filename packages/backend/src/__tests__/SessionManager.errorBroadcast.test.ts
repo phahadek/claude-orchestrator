@@ -39,11 +39,13 @@ vi.mock('fs', async () => {
       existsSync: vi.fn().mockReturnValue(false),
       readFileSync: vi.fn().mockReturnValue(''),
       statSync: vi.fn().mockReturnValue({ isFile: () => false }),
+      mkdirSync: vi.fn(),
     },
     writeFileSync: vi.fn(),
     existsSync: vi.fn().mockReturnValue(false),
     readFileSync: vi.fn().mockReturnValue(''),
     statSync: vi.fn().mockReturnValue({ isFile: () => false }),
+    mkdirSync: vi.fn(),
   };
 });
 
@@ -87,11 +89,18 @@ vi.mock('../tasks/TaskBackend', () => ({
 vi.mock('../session/orchestrator-config', () => ({
   loadOrchestratorConfig: vi.fn().mockReturnValue({
     mainBranch: 'main',
-    bootstrapScript: null,
+    bootstrap_script: null,
     prGate: null,
-    bashRules: null,
-    allowedTools: [],
+    bash_rules: [],
+    allowed_tools: [],
+    verify: [],
+    required_env: [],
+    required_files: [],
+    review_rules: [],
+    session_rules: [],
+    mcp_servers: undefined,
   }),
+  getSessionAllowedTools: vi.fn(() => []),
 }));
 
 vi.mock('../session/ContextBuilder', () => ({

@@ -207,6 +207,7 @@ function makeBackend(overrides: Partial<TaskBackend> = {}): TaskBackend {
     createTask: vi.fn().mockResolvedValue('notion:new'),
     setDependsOn: vi.fn().mockResolvedValue(undefined),
     updateBody: vi.fn().mockResolvedValue(undefined),
+    updateBodyRaw: vi.fn().mockResolvedValue(undefined),
     setType: vi.fn().mockResolvedValue(undefined),
     setProperties: vi.fn().mockResolvedValue(undefined),
     archive: vi.fn().mockResolvedValue(undefined),

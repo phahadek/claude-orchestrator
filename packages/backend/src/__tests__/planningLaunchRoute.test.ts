@@ -106,9 +106,11 @@ describe('POST /api/planning/launch', () => {
     expect(launchSelected).toHaveBeenCalledTimes(1);
     const call = launchSelected.mock.calls[0][0];
     expect(call.sessionType).toBe('groom');
+    // groom/design dispatch now normalizes (not strips) task ids — the
+    // source prefix is retained, see normalizeTaskId in routes/planningLaunch.ts.
     expect(call.tasks.map((t: { id: string }) => t.id)).toEqual([
-      'task-a',
-      'task-b',
+      'notion:task-a',
+      'notion:task-b',
     ]);
     expect(res.body.launched).toEqual(['task-a', 'task-b']);
     expect(mockLoadOpsContext).not.toHaveBeenCalled();

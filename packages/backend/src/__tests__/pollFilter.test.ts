@@ -1,28 +1,31 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-vi.mock('../db/queries.js', () => ({
-  getAllOpenPRs: vi.fn(),
-  getApprovedOpenPRs: vi.fn(),
-  getApprovedLocalBranches: vi.fn().mockReturnValue([]),
-  getOrphanMergeablePRs: vi.fn().mockReturnValue([]),
-  getStaleAutoMergeFailedPRs: vi.fn().mockReturnValue([]),
-  getRoutedCommentIds: vi.fn().mockReturnValue(new Set()),
-  markCommentsRouted: vi.fn(),
-  setPauseReason: vi.fn(),
-  getSession: vi.fn(),
-  getSetting: vi.fn().mockReturnValue(undefined),
-  getPRByNumber: vi.fn(),
-  setHeadSha: vi.fn(),
-  updatePRState: vi.fn(),
-  deleteAllAutofixShasForPR: vi.fn(),
-  clearTerminalPRFlags: vi.fn(),
-  markSessionDone: vi.fn(),
-  setCiRemediationAttemptedSha: vi.fn(),
-  updateMergeState: vi.fn(),
-  emitTaskUpdated: vi.fn(),
-}));
+vi.mock('../db/queries.js', () =>
+  mockDbQueries({
+    getAllOpenPRs: vi.fn(),
+    getApprovedOpenPRs: vi.fn(),
+    getApprovedLocalBranches: vi.fn().mockReturnValue([]),
+    getOrphanMergeablePRs: vi.fn().mockReturnValue([]),
+    getStaleAutoMergeFailedPRs: vi.fn().mockReturnValue([]),
+    getRoutedCommentIds: vi.fn().mockReturnValue(new Set()),
+    markCommentsRouted: vi.fn(),
+    setPauseReason: vi.fn(),
+    getSession: vi.fn(),
+    getSetting: vi.fn().mockReturnValue(undefined),
+    getPRByNumber: vi.fn(),
+    setHeadSha: vi.fn(),
+    updatePRState: vi.fn(),
+    deleteAllAutofixShasForPR: vi.fn(),
+    clearTerminalPRFlags: vi.fn(),
+    markSessionDone: vi.fn(),
+    setCiRemediationAttemptedSha: vi.fn(),
+    updateMergeState: vi.fn(),
+    emitTaskUpdated: vi.fn(),
+  }),
+);
 
 vi.mock('../tasks/TaskBackend.js', () => ({
   getTaskBackend: vi
@@ -196,7 +199,11 @@ describe('PRMergeWatcher terminal pause reason skip', () => {
   ] as const;
 
   for (const pauseReason of terminalReasons) {
-    it(`skips categorizeMergeability when pause_reason=${pauseReason}`, async () => {
+    it(`still refreshes observability (categorizeMergeability) but skips remediation when pause_reason=${pauseReason}`, async () => {
+      // Terminal-paused PRs still get merge_state/failing_checks refreshed for
+      // the UI (see runMergeabilityCheck's "observability columns" comment) —
+      // only the remediation side effects (autofix, conflict nudges, pause
+      // clearing) are skipped, since polling can't change a terminal outcome.
       const pr = makePR({ pause_reason: pauseReason });
       vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
       vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject() as never);
@@ -205,7 +212,6 @@ describe('PRMergeWatcher terminal pause reason skip', () => {
         getPRState: vi
           .fn()
           .mockResolvedValue({ state: 'open', headSha: 'abc123' }),
-        categorizeMergeability: vi.fn(),
       });
       const sessions = makeSessionManager();
       const watcher = new PRMergeWatcher(
@@ -217,7 +223,7 @@ describe('PRMergeWatcher terminal pause reason skip', () => {
 
       await watcher.poll();
 
-      expect(github.categorizeMergeability).not.toHaveBeenCalled();
+      expect(github.categorizeMergeability).toHaveBeenCalledOnce();
     });
   }
 
@@ -570,26 +576,10 @@ describe('PRMergeWatcher terminal-stale skip', () => {
 // ── ReviewerCommentsWatcher: terminal-stale skip ─────────────────────────────
 
 describe('ReviewerCommentsWatcher terminal-stale skip', () => {
-  it('skips a PR with verdict=incomplete and no new push', async () => {
-    const stalePR = makePR({
-      review_result: JSON.stringify({ verdict: 'incomplete' }),
-      head_sha: 'sha-abc',
-      last_reviewed_sha: 'sha-abc',
-    });
-    vi.mocked(getAllOpenPRs).mockReturnValue([stalePR]);
-    vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject() as never);
-
-    const github = makeGitHubClient();
-    const sessions = makeSessionManager();
-    const watcher = new ReviewerCommentsWatcher(
-      github as never,
-      sessions as never,
-    );
-
-    await watcher.pollAll();
-
-    expect(github.listPRReviews).not.toHaveBeenCalled();
-  });
+  // The "skips a PR with verdict=incomplete and no new push" case was removed:
+  // ReviewerCommentsWatcher.pollAll's `watchable` filter now only gates on
+  // pause_reason severity ('terminal') and project resolution, not on a
+  // stale-incomplete-verdict check — that skip no longer exists.
 
   it('does NOT skip a PR with verdict=incomplete when a new push arrived', async () => {
     const activePR = makePR({
@@ -910,7 +900,12 @@ describe('integration: only non-skipped PRs trigger API calls in one cycle', () 
     // Orphan and terminal-stale repos never trigger any individual GitHub calls
     expect(getPRState).not.toHaveBeenCalled();
 
-    // Only active PRs (pause_reason=null, not stale) trigger mergeability checks
-    expect(categorizeMergeability).toHaveBeenCalledTimes(15);
+    // The 15 active PRs plus the 2 terminally-paused ones (200, 201) all
+    // trigger a mergeability check — terminal pause reasons still refresh
+    // observability columns, only remediation side effects are skipped (see
+    // runMergeabilityCheck's "observability columns" comment). Only the
+    // stale-incomplete-verdict PR (202, never approved) and the 2 orphan-repo
+    // PRs (203, 204, no project mapping) are excluded.
+    expect(categorizeMergeability).toHaveBeenCalledTimes(17);
   });
 });

@@ -58,7 +58,9 @@ vi.mock('../config.js', () => ({
     session_notify_threshold_seconds: 3600,
     session_pause_threshold_seconds: 7200,
     session_hard_stop_window_seconds: 60,
+    auto_review_concurrency: 1,
   },
+  AUTO_REVIEW_ENABLED: true,
   getProjectByGithubRepo: vi.fn().mockReturnValue({
     id: 'proj-1',
     name: 'Test',
@@ -256,7 +258,6 @@ describe('ReviewOrchestrator — killed review session routes incomplete verdict
     const orchestrator = new ReviewOrchestrator(
       reviewService,
       sm as unknown as SessionManager,
-      1,
       true,
       github,
     );

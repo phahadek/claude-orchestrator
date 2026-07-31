@@ -5,6 +5,17 @@
 // `import '../db/db'` anywhere in the suite, since db.ts opens its database
 // connection at module load time.
 process.env.DB_PATH = ':memory:';
+// Likewise for config resolution: appConfig.ts's resolve() falls back to
+// DataDirConfigSource (a real on-disk config.json under the OS data dir —
+// see config/dataDir.ts) whenever one exists there, ignoring DB_PATH/
+// in-memory-DB isolation entirely. A host that has ever run the real app
+// (or a previous test worker that wrote real config via
+// writeOrchestratorConfig(), which always targets the real data dir — see
+// its doc comment in appConfig.ts) would otherwise leak production-looking
+// config into every test process. Point every worker at its own disposable,
+// process-scoped data dir instead. pid-scoped (not shared) so parallel
+// vitest worker processes can never race on the same config.json.
+process.env.XDG_DATA_HOME = `${process.cwd()}/.test-scratch-datadir-DO-NOT-COMMIT/pid-${process.pid}`;
 
 // Dynamic imports (not static ones) so this module's DB_PATH assignment above
 // runs before db.ts opens its connection — a static `import` would be

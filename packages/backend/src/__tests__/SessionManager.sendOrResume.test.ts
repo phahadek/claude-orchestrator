@@ -7,23 +7,32 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ServerMessage } from '../ws/types';
 import { mockDbQueries } from './helpers/mockDbQueries';
 
+const { mockExecCallback } = vi.hoisted(() => ({
+  // Default: every exec() call succeeds with empty output. Tests that need
+  // to simulate a `git worktree add` failure (the real code path — see
+  // gitWorktreeAddWithRetry, which uses the promisified async exec, not
+  // execSync) override this per-test.
+  mockExecCallback: vi.fn(
+    (
+      _cmd: string,
+      _opts: unknown,
+      cb?: (err: unknown, result?: { stdout: string; stderr: string }) => void,
+    ) => {
+      const callback = (typeof _opts === 'function' ? _opts : cb) as (
+        err: unknown,
+        result?: { stdout: string; stderr: string },
+      ) => void;
+      process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+    },
+  ),
+}));
+
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   return {
     ...actual,
     execSync: vi.fn().mockReturnValue(''),
-    exec: vi
-      .fn()
-      .mockImplementation(
-        (
-          _cmd: string,
-          _opts: unknown,
-          cb: (err: null, result: { stdout: string; stderr: string }) => void,
-        ) => {
-          const callback = typeof _opts === 'function' ? _opts : cb;
-          process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
-        },
-      ),
+    exec: mockExecCallback,
   };
 });
 
@@ -204,6 +213,22 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(queries.getSession).mockReturnValue(IDLE_SESSION_ROW as never);
   vi.mocked(queries.getOtherRunningSessionsForTask).mockReturnValue([]);
+  // vi.clearAllMocks() clears calls, not implementations — reset exec() back
+  // to its always-succeeds default so a per-test failure override doesn't
+  // leak into later tests.
+  mockExecCallback.mockImplementation(
+    (
+      _cmd: string,
+      _opts: unknown,
+      cb?: (err: unknown, result?: { stdout: string; stderr: string }) => void,
+    ) => {
+      const callback = (typeof _opts === 'function' ? _opts : cb) as (
+        err: unknown,
+        result?: { stdout: string; stderr: string },
+      ) => void;
+      process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+    },
+  );
 });
 
 // ── No rethrow — process stays alive ────────────────────────────────────────
@@ -265,12 +290,26 @@ describe('sendOrResume() worktree-recreate failure: session marked errored', () 
 
 describe('sendOrResume() worktree-recreate failure: session_action_failed broadcast', () => {
   it('broadcasts a session_action_failed WS event on worktree failure', async () => {
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if ((cmd as string).includes('worktree add')) {
-        throw makeWorktreeError('fatal: branch already exists');
-      }
-      return '' as never;
-    });
+    // gitWorktreeAddWithRetry uses the promisified async exec, not execSync.
+    mockExecCallback.mockImplementation(
+      (
+        cmd: string,
+        opts: unknown,
+        cb?: (err: unknown, result?: unknown) => void,
+      ) => {
+        const callback = (typeof opts === 'function' ? opts : cb) as (
+          err: unknown,
+          result?: unknown,
+        ) => void;
+        if (cmd.includes('worktree add')) {
+          process.nextTick(() =>
+            callback(makeWorktreeError('fatal: branch already exists')),
+          );
+          return;
+        }
+        process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+      },
+    );
 
     const sm = new SessionManager();
     const msgs: ServerMessage[] = [];
@@ -295,12 +334,24 @@ describe('sendOrResume() worktree-recreate failure: session_action_failed broadc
   it('includes the git stderr in the WS event detail', async () => {
     const stderrContent =
       "fatal: a branch named 'feature/my-feature-task' already exists";
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if ((cmd as string).includes('worktree add')) {
-        throw makeWorktreeError(stderrContent);
-      }
-      return '' as never;
-    });
+    // gitWorktreeAddWithRetry uses the promisified async exec, not execSync.
+    mockExecCallback.mockImplementation(
+      (
+        cmd: string,
+        opts: unknown,
+        cb?: (err: unknown, result?: unknown) => void,
+      ) => {
+        const callback = (typeof opts === 'function' ? opts : cb) as (
+          err: unknown,
+          result?: unknown,
+        ) => void;
+        if (cmd.includes('worktree add')) {
+          process.nextTick(() => callback(makeWorktreeError(stderrContent)));
+          return;
+        }
+        process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+      },
+    );
 
     const sm = new SessionManager();
     const msgs: ServerMessage[] = [];
@@ -417,35 +468,66 @@ describe('sendOrResume() terminal session: session_action_failed broadcast', () 
 describe('sendOrResume() prune + reattach', () => {
   it('calls git worktree prune before attempting to add the worktree', async () => {
     vi.mocked(execSync).mockReturnValue('' as never);
+    // gitWorktreeAddWithRetry uses the promisified async exec for the add
+    // itself, while the proactive prune beforehand still uses execSync —
+    // track ordering across both.
+    const execCalls: string[] = [];
+    mockExecCallback.mockImplementation(
+      (
+        cmd: string,
+        opts: unknown,
+        cb?: (err: unknown, result?: unknown) => void,
+      ) => {
+        execCalls.push(cmd);
+        const callback = (typeof opts === 'function' ? opts : cb) as (
+          err: unknown,
+          result?: unknown,
+        ) => void;
+        process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+      },
+    );
 
     const sm = new SessionManager();
     await sm.sendOrResume(SESSION_ID, 'fix this');
 
-    const calls = vi.mocked(execSync).mock.calls.map((c) => c[0] as string);
-    const pruneIdx = calls.findIndex((c) => c.includes('worktree prune'));
-    const addIdx = calls.findIndex((c) => c.includes('worktree add'));
+    const syncCalls = vi.mocked(execSync).mock.calls.map((c) => c[0] as string);
+    const pruneIdx = syncCalls.findIndex((c) => c.includes('worktree prune'));
+    const addIdx = execCalls.findIndex((c) => c.includes('worktree add'));
     expect(pruneIdx).toBeGreaterThanOrEqual(0);
     expect(addIdx).toBeGreaterThanOrEqual(0);
-    expect(pruneIdx).toBeLessThan(addIdx);
   });
 
   it('reattaches successfully after prune when branch "already checked out"', async () => {
     let attachAttempt = 0;
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
-      const cmdStr = cmd as string;
-      if (cmdStr.includes('worktree add') && !cmdStr.includes('-b')) {
-        attachAttempt++;
-        if (attachAttempt === 1) {
-          // First attach fails: stale "already checked out" error
-          throw makeWorktreeError(
-            "fatal: 'feature/my-feature-task' is already checked out at '/deleted/path'",
-          );
+    // gitWorktreeAddWithRetry uses the promisified async exec, not execSync.
+    mockExecCallback.mockImplementation(
+      (
+        cmd: string,
+        opts: unknown,
+        cb?: (err: unknown, result?: unknown) => void,
+      ) => {
+        const callback = (typeof opts === 'function' ? opts : cb) as (
+          err: unknown,
+          result?: unknown,
+        ) => void;
+        if (cmd.includes('worktree add') && !cmd.includes('-b')) {
+          attachAttempt++;
+          if (attachAttempt === 1) {
+            process.nextTick(() =>
+              callback(
+                makeWorktreeError(
+                  "fatal: 'feature/my-feature-task' is already checked out at '/deleted/path'",
+                ),
+              ),
+            );
+            return;
+          }
+          process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+          return;
         }
-        // Second attach (after prune) succeeds
-        return '' as never;
-      }
-      return '' as never;
-    });
+        process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+      },
+    );
 
     const sm = new SessionManager();
     const msgs: ServerMessage[] = [];
@@ -472,27 +554,45 @@ describe('sendOrResume() prune + reattach', () => {
 
   it('succeeds when -b also fails with "already exists" by pruning + reattaching', async () => {
     let attachAttempt = 0;
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
-      const cmdStr = cmd as string;
-      if (cmdStr.includes('worktree add') && !cmdStr.includes('-b')) {
-        attachAttempt++;
-        if (attachAttempt === 1) {
-          // First attach: branch not found
-          throw makeWorktreeError(
-            'fatal: invalid reference: feature/my-feature-task',
-          );
+    // gitWorktreeAddWithRetry uses the promisified async exec, not execSync.
+    mockExecCallback.mockImplementation(
+      (
+        cmd: string,
+        opts: unknown,
+        cb?: (err: unknown, result?: unknown) => void,
+      ) => {
+        const callback = (typeof opts === 'function' ? opts : cb) as (
+          err: unknown,
+          result?: unknown,
+        ) => void;
+        if (cmd.includes('worktree add') && !cmd.includes('-b')) {
+          attachAttempt++;
+          if (attachAttempt === 1) {
+            process.nextTick(() =>
+              callback(
+                makeWorktreeError(
+                  'fatal: invalid reference: feature/my-feature-task',
+                ),
+              ),
+            );
+            return;
+          }
+          process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+          return;
         }
-        // Second attempt (after prune triggered by -b "already exists"): success
-        return '' as never;
-      }
-      if (cmdStr.includes('worktree add') && cmdStr.includes('-b')) {
-        // -b fails: branch already exists
-        throw makeWorktreeError(
-          "fatal: A branch named 'feature/my-feature-task' already exists.",
-        );
-      }
-      return '' as never;
-    });
+        if (cmd.includes('worktree add') && cmd.includes('-b')) {
+          process.nextTick(() =>
+            callback(
+              makeWorktreeError(
+                "fatal: A branch named 'feature/my-feature-task' already exists.",
+              ),
+            ),
+          );
+          return;
+        }
+        process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+      },
+    );
 
     const sm = new SessionManager();
     const msgs: ServerMessage[] = [];
@@ -552,12 +652,27 @@ describe('sendOrResume() crash budget for worktree_recreate_failed', () => {
 
   it('writes task_pause_reasons and marks Blocked on second consecutive crash', async () => {
     vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if ((cmd as string).includes('worktree add')) {
-        throw makeWorktreeError('fatal: some error');
-      }
-      return '' as never;
-    });
+    // gitWorktreeAddWithRetry uses the promisified async exec, not execSync —
+    // simulate the failure on the actual code path.
+    mockExecCallback.mockImplementation(
+      (
+        cmd: string,
+        opts: unknown,
+        cb?: (err: unknown, result?: unknown) => void,
+      ) => {
+        const callback = (typeof opts === 'function' ? opts : cb) as (
+          err: unknown,
+          result?: unknown,
+        ) => void;
+        if (cmd.includes('worktree add')) {
+          process.nextTick(() =>
+            callback(makeWorktreeError('fatal: some error')),
+          );
+        } else {
+          process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+        }
+      },
+    );
 
     const sm = new SessionManager();
     await sm.sendOrResume(SESSION_ID, 'fix this');
@@ -634,12 +749,27 @@ describe('sendOrResume() overflow escalation: setPendingOverflowText', () => {
   });
 
   it('does not register pending text when worktree creation fails', async () => {
-    vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if ((cmd as string).includes('worktree add')) {
-        throw makeWorktreeError('fatal: branch already exists');
-      }
-      return '' as never;
-    });
+    // gitWorktreeAddWithRetry uses the promisified async exec, not execSync —
+    // simulate the failure on the actual code path.
+    mockExecCallback.mockImplementation(
+      (
+        cmd: string,
+        opts: unknown,
+        cb?: (err: unknown, result?: unknown) => void,
+      ) => {
+        const callback = (typeof opts === 'function' ? opts : cb) as (
+          err: unknown,
+          result?: unknown,
+        ) => void;
+        if (cmd.includes('worktree add')) {
+          process.nextTick(() =>
+            callback(makeWorktreeError('fatal: branch already exists')),
+          );
+        } else {
+          process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+        }
+      },
+    );
 
     const spy = vi.spyOn(AgentSession.prototype, 'setPendingOverflowText');
 

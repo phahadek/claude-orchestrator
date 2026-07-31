@@ -125,12 +125,16 @@ beforeEach(() => {
   // Default: board cache returns three task IDs
   vi.mocked(queries.getTaskCache).mockReturnValue({
     cache_key: 'board:board-1',
+    // annotateGroomDepBlocking requires every cached task to carry a real
+    // `status` string (NotionTask.status is non-optional) — these fixtures
+    // otherwise crash the route with "Cannot read properties of undefined
+    // (reading 'includes')".
     raw_json: JSON.stringify([
-      { id: 'task-ready' },
-      { id: 'task-done' },
-      { id: 'task-deferred' },
-      { id: 'task-backlog' },
-      { id: 'task-in-progress' },
+      { id: 'task-ready', status: '🗂️ Ready', dependsOn: [] },
+      { id: 'task-done', status: '✅ Done', dependsOn: [] },
+      { id: 'task-deferred', status: '⏸️ Deferred', dependsOn: [] },
+      { id: 'task-backlog', status: '🔲 Backlog', dependsOn: [] },
+      { id: 'task-in-progress', status: '🔄 In Progress', dependsOn: [] },
     ]),
     fetched_at: Date.now(),
   } as never);
@@ -153,7 +157,7 @@ describe('GET /api/tasks/active', () => {
       '/api/tasks/active?projectId=proj-1',
     );
     expect(res.status).toBe(200);
-    const ids = res.body.map((t: { taskId: string }) => t.taskId);
+    const ids = res.body.tasks.map((t: { taskId: string }) => t.taskId);
     expect(ids).not.toContain('task-deferred');
     expect(ids).toContain('task-ready');
   });
@@ -170,7 +174,7 @@ describe('GET /api/tasks/active', () => {
       '/api/tasks/active?projectId=proj-1',
     );
     expect(res.status).toBe(200);
-    const ids = res.body.map((t: { taskId: string }) => t.taskId);
+    const ids = res.body.tasks.map((t: { taskId: string }) => t.taskId);
     expect(ids).toContain('task-ready');
     expect(ids).toContain('task-in-progress');
     expect(ids).toContain('task-backlog');
@@ -212,8 +216,8 @@ describe('GET /api/tasks/active', () => {
       '/api/tasks/active?projectId=proj-1',
     );
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].taskId).toBe('notion:task-abc');
+    expect(res.body.tasks).toHaveLength(1);
+    expect(res.body.tasks[0].taskId).toBe('notion:task-abc');
   });
 
   it('returns task IDs in notion:<dashed-uuid> form — no notion:notion: double-prefix in response', async () => {
@@ -248,9 +252,9 @@ describe('GET /api/tasks/active', () => {
     expect(responseText).not.toContain('notion:notion:');
 
     // The single task must have a correctly-formed taskId.
-    expect(res.body).toHaveLength(1);
-    expect(res.body[0].taskId).toBe(PREFIXED_ID);
-    expect(res.body[0].taskId).toMatch(
+    expect(res.body.tasks).toHaveLength(1);
+    expect(res.body.tasks[0].taskId).toBe(PREFIXED_ID);
+    expect(res.body.tasks[0].taskId).toMatch(
       /^notion:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
   });
@@ -288,7 +292,7 @@ describe('GET /api/tasks/active', () => {
       '/api/tasks/active?projectId=proj-1',
     );
     expect(res.status).toBe(200);
-    const taskA = res.body.find(
+    const taskA = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'notion:task-a',
     );
     expect(taskA).toBeDefined();
@@ -339,10 +343,10 @@ describe('GET /api/tasks/active', () => {
     );
     expect(res.status).toBe(200);
 
-    const taskB = res.body.find(
+    const taskB = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'notion:task-b',
     );
-    const taskC = res.body.find(
+    const taskC = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'notion:task-c',
     );
 
@@ -398,10 +402,10 @@ describe('GET /api/tasks/active', () => {
     );
     expect(res.status).toBe(200);
 
-    const task2 = res.body.find(
+    const task2 = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'jira:PROJ-2',
     );
-    const task3 = res.body.find(
+    const task3 = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'jira:PROJ-3',
     );
 
@@ -457,10 +461,10 @@ describe('GET /api/tasks/active', () => {
     );
     expect(res.status).toBe(200);
 
-    const taskBeta = res.body.find(
+    const taskBeta = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'yaml:task-beta',
     );
-    const taskGamma = res.body.find(
+    const taskGamma = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'yaml:task-gamma',
     );
 
@@ -650,7 +654,7 @@ describe('buildTaskViewFromRow — totalTokens', () => {
       '/api/tasks/active?projectId=proj-1',
     );
     expect(res.status).toBe(200);
-    const task = res.body.find(
+    const task = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'task-tokens',
     );
     expect(task.totalTokens.input).toBe(500);
@@ -675,7 +679,7 @@ describe('buildTaskViewFromRow — totalTokens', () => {
       '/api/tasks/active?projectId=proj-1',
     );
     expect(res.status).toBe(200);
-    const task = res.body.find(
+    const task = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'task-code-only',
     );
     expect(task.totalTokens.input).toBe(300);
@@ -696,7 +700,7 @@ describe('buildTaskViewFromRow — totalTokens', () => {
       '/api/tasks/active?projectId=proj-1',
     );
     expect(res.status).toBe(200);
-    const task = res.body.find(
+    const task = res.body.tasks.find(
       (t: { taskId: string }) => t.taskId === 'task-review-tokens',
     );
     expect(task.review.inputTokens).toBe(80);
@@ -1006,7 +1010,9 @@ describe('TaskView recoveryDescriptor', () => {
     vi.clearAllMocks();
     vi.mocked(queries.getTaskCache).mockReturnValue({
       cache_key: 'board:board-1',
-      raw_json: JSON.stringify([{ id: 'task-1' }]),
+      raw_json: JSON.stringify([
+        { id: 'task-1', status: '⚠️ Needs Attention', dependsOn: [] },
+      ]),
       fetched_at: Date.now(),
     } as never);
   });

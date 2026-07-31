@@ -225,7 +225,19 @@ function makeApprovedResult(): PRReviewResult {
 
 function makeMockPRReviewService(): PRReviewService {
   return {
-    reviewPR: vi.fn().mockResolvedValue(makeApprovedResult()),
+    // Mirrors real PRReviewService.reviewPR, which persists the verdict via
+    // setPRReviewResult immediately after parse (before any side effects) —
+    // ReviewOrchestrator itself only writes setPRReviewResult on its own
+    // error path, not on success.
+    reviewPR: vi.fn().mockImplementation(async () => {
+      const result = makeApprovedResult();
+      queries.setPRReviewResult(
+        result.prNumber,
+        result.repo,
+        JSON.stringify(result),
+      );
+      return result;
+    }),
   } as unknown as PRReviewService;
 }
 

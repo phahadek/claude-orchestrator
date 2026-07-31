@@ -15,6 +15,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
+import { mockDbQueries } from './helpers/mockDbQueries';
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 // All vi.mock calls must appear before importing the code under test.
@@ -190,42 +191,44 @@ vi.mock('../tasks/TaskStatusEngine', () => ({
   deriveDisplayStatusFromDb: vi.fn(() => 'Running'),
 }));
 
-vi.mock('../db/queries', () => ({
-  getGrantedCapabilities: vi.fn(() => []),
-  getSessionsByStatus: vi.fn(() => []),
-  getSession: vi.fn(),
-  getEventsBySession: vi.fn(() => []),
-  getPRByNotionTaskId: vi.fn(() => null),
-  getPRByNumber: vi.fn(() => null),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  markSessionIdle: vi.fn(),
-  getStuckResultSessionRows: vi.fn(() => []),
-  getRunningSessionsWithMergedOrClosedPR: vi.fn(() => []),
-  insertSession: vi.fn(),
-  insertEvent: vi.fn(),
-  upsertSessionEvent: vi.fn(() => 1),
-  upsertPullRequest: vi.fn(),
-  insertPermissionDenial: vi.fn(),
-  incrementTokens: vi.fn(),
-  setContextOccupancy: vi.fn(),
-  insertSessionAudit: vi.fn(),
-  setSessionModel: vi.fn(),
-  getPRBySessionId: vi.fn(() => null),
-  setHeadSha: vi.fn(),
-  // Required by getCorporateMode() which is called unconditionally in resumeOrphanSessions().
-  // Returning null makes it fall through to the default personal-mode config (no dockerMandatory).
-  getSetting: vi.fn(() => null),
-  hasActiveSessionForTask: vi.fn(() => false),
-  setTaskPauseReason: vi.fn(),
-  setSessionLastErrorDetail: vi.fn(),
-  TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
-  getSessionsWithUnappliedPendingDone: vi.fn(() => []),
-  applyPendingDone: vi.fn(() => false),
-  updateSessionWorktreePath: vi.fn(),
-  listStagedIntentsBySession: vi.fn(() => []),
-  resetTaskCrashCount: vi.fn(),
-}));
+vi.mock('../db/queries', () =>
+  mockDbQueries({
+    getGrantedCapabilities: vi.fn(() => []),
+    getSessionsByStatus: vi.fn(() => []),
+    getSession: vi.fn(),
+    getEventsBySession: vi.fn(() => []),
+    getPRByNotionTaskId: vi.fn(() => null),
+    getPRByNumber: vi.fn(() => null),
+    updateSessionStatus: vi.fn(),
+    markSessionDone: vi.fn(),
+    markSessionIdle: vi.fn(),
+    getStuckResultSessionRows: vi.fn(() => []),
+    getRunningSessionsWithMergedOrClosedPR: vi.fn(() => []),
+    insertSession: vi.fn(),
+    insertEvent: vi.fn(),
+    upsertSessionEvent: vi.fn(() => 1),
+    upsertPullRequest: vi.fn(),
+    insertPermissionDenial: vi.fn(),
+    incrementTokens: vi.fn(),
+    setContextOccupancy: vi.fn(),
+    insertSessionAudit: vi.fn(),
+    setSessionModel: vi.fn(),
+    getPRBySessionId: vi.fn(() => null),
+    setHeadSha: vi.fn(),
+    // Required by getCorporateMode() which is called unconditionally in resumeOrphanSessions().
+    // Returning null makes it fall through to the default personal-mode config (no dockerMandatory).
+    getSetting: vi.fn(() => null),
+    hasActiveSessionForTask: vi.fn(() => false),
+    setTaskPauseReason: vi.fn(),
+    setSessionLastErrorDetail: vi.fn(),
+    TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
+    getSessionsWithUnappliedPendingDone: vi.fn(() => []),
+    applyPendingDone: vi.fn(() => false),
+    updateSessionWorktreePath: vi.fn(),
+    listStagedIntentsBySession: vi.fn(() => []),
+    resetTaskCrashCount: vi.fn(),
+  }),
+);
 
 vi.mock('../session/sessionRecovery', () => ({
   recoverSession: vi.fn(async () => {}),

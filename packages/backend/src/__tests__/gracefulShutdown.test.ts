@@ -47,6 +47,7 @@ vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
   execSync: vi.fn(() => ''),
   execFile: vi.fn(),
+  exec: vi.fn(),
 }));
 
 vi.mock('fs', async () => {
@@ -109,6 +110,7 @@ vi.mock('../session/orchestrator-config', () => ({
     bootstrapScript: '',
     bashRules: [],
   })),
+  getSessionAllowedTools: vi.fn(() => []),
 }));
 
 vi.mock('../session/orchestrator-claudemd', () => ({

@@ -144,6 +144,7 @@ describe('passesOpsDepGate', () => {
 describe('isOpsCandidate', () => {
   const baseDeps = {
     hasActiveSession: () => false,
+    hasActiveOpsSession: () => false,
     inCrashCooldown: () => false,
     projectId: PROJECT,
   };

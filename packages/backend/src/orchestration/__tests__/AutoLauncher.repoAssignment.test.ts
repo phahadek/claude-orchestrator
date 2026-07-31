@@ -40,6 +40,7 @@ vi.mock('../../db/queries.js', () => ({
   getTaskPauseReason: vi.fn().mockReturnValue(null),
   clearTaskPauseReason: vi.fn(),
   getTaskRepoAssignment: vi.fn().mockReturnValue(undefined),
+  getUsageDeferral: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('../../audit/AuditLog.js', () => ({

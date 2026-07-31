@@ -13,6 +13,18 @@ vi.mock('child_process', () => ({
     exitCode: null,
   }),
   execSync: vi.fn(),
+  execFile: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
+  exec: vi.fn((...args: unknown[]) => {
+    (args[args.length - 1] as (err: unknown, out: unknown) => void)(null, {
+      stdout: '',
+      stderr: '',
+    });
+  }),
 }));
 
 import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';

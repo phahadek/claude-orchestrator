@@ -357,6 +357,10 @@ describe('PlanningOrchestrator — design task completion', () => {
     vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
     const orch = new PlanningOrchestrator(sm as any);
 
+    // First call with no staged decisions sends the terminal-no-decision
+    // nudge and reports non-terminal; the second call (post-nudge, still
+    // nothing staged) reaches terminal — matching the groom-session test above.
+    orch.checkTerminal('design-session-1');
     const terminal = orch.checkTerminal('design-session-1');
     await flush();
 

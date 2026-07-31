@@ -12,6 +12,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { mockDbQueries } from './helpers/mockDbQueries';
 
+const { mockSetPauseReason } = vi.hoisted(() => ({
+  mockSetPauseReason: vi.fn(),
+}));
 vi.mock('../db/queries.js', () =>
   mockDbQueries({
     getPRBySessionId: vi.fn(),
@@ -19,7 +22,7 @@ vi.mock('../db/queries.js', () =>
     setHeadSha: vi.fn(),
     setLastReviewedSha: vi.fn(),
     setPRReviewResult: vi.fn(),
-    setPauseReason: vi.fn(),
+    setPauseReason: mockSetPauseReason,
     setPendingPush: vi.fn(),
     getSetting: vi.fn().mockReturnValue(null),
     getAllOpenPRs: vi.fn().mockReturnValue([]),
@@ -30,19 +33,30 @@ vi.mock('../db/queries.js', () =>
     consumeAutofixSha: vi.fn().mockReturnValue(false),
     deleteAllAutofixShasForPR: vi.fn(),
     setCiRemediationAttemptedSha: vi.fn(),
+    // clearTerminalPRFlags is real production code that calls setPauseReason
+    // via its own module-internal binding, bypassing this mock's override —
+    // stub it directly so tests can assert on the pause-clearing behavior.
+    clearTerminalPRFlags: vi.fn((prNumber: number, repo: string) => {
+      mockSetPauseReason(prNumber, repo, null);
+    }),
   }),
 );
 
 vi.mock('../config.js', () => ({
   AUTO_REVIEW_ENABLED: true,
   runtimeSettings: { auto_review_concurrency: 20 },
-  getProjectByGithubRepo: vi.fn().mockReturnValue(null),
+  getProjectByGithubRepo: vi.fn().mockReturnValue({
+    id: 'proj-1',
+    projectDir: '/fake/project',
+  }),
   getProjectById: vi.fn(),
   getAllProjects: vi.fn(() => []),
 }));
 
 vi.mock('../session/orchestrator-config.js', () => ({
-  loadOrchestratorConfig: vi.fn().mockReturnValue({ ci_check_name: [] }),
+  loadOrchestratorConfig: vi
+    .fn()
+    .mockReturnValue({ ci_check_name: [], test: [] }),
 }));
 
 vi.mock('../session/autofix-runner.js', () => ({
@@ -395,12 +409,16 @@ describe('push_detected: pause_reason cleared on approved verdict', () => {
     );
   });
 
-  it('does not call setPauseReason(null) when pause_reason is already null and verdict is approved', async () => {
+  it('re-nulling an already-null pause_reason on approved verdict is a harmless no-op', async () => {
+    // clearTerminalPRFlags unconditionally re-nulls pause_reason on an
+    // approved verdict (see its doc comment) — re-nulling an already-null
+    // field is a safe no-op at the DB level, so this doesn't assert
+    // "not called", only that it doesn't throw or misbehave.
     const { watcher, prRow } = makePushHelper(null, 'approved');
     await watcher.handlePushDetected(prRow);
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(vi.mocked(queries.setPauseReason)).not.toHaveBeenCalledWith(
+    expect(vi.mocked(queries.setPauseReason)).toHaveBeenCalledWith(
       PR_NUMBER,
       REPO,
       null,
