@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { StagedIntentPanel } from './StagedIntentPanel';
 import { DecisionPickOnePanel } from './DecisionPickOnePanel';
 import { TriageBatchPanel } from './TriageBatchPanel';
@@ -8,6 +8,20 @@ import styles from './DecisionPanel.module.css';
 
 interface Props {
   sessionId: string;
+}
+
+const DECISION_PANEL_WIDTH_KEY = 'decisionPanelWidth';
+const MIN_PANEL_WIDTH = 280;
+const MAX_PANEL_WIDTH = 640;
+const DEFAULT_PANEL_WIDTH = 320;
+
+function readStoredWidth(): number {
+  const saved = localStorage.getItem(DECISION_PANEL_WIDTH_KEY);
+  if (saved) {
+    const n = Number(saved);
+    if (n >= MIN_PANEL_WIDTH && n <= MAX_PANEL_WIDTH) return n;
+  }
+  return DEFAULT_PANEL_WIDTH;
 }
 
 /**
@@ -44,10 +58,39 @@ export function DecisionPanel({ sessionId }: Props) {
     remove,
   } = useDecisionQueue({ type: 'session', sessionId });
   const [collapsed, setCollapsed] = useState(false);
+  const [width, setWidth] = useState<number>(readStoredWidth);
+  const widthRef = useRef(width);
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setCollapsed(false);
   }, [sessionId]);
+
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const rect = panelRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const right = rect.right;
+
+    const onMove = (ev: MouseEvent) => {
+      const next = Math.min(
+        MAX_PANEL_WIDTH,
+        Math.max(MIN_PANEL_WIDTH, right - ev.clientX),
+      );
+      widthRef.current = next;
+      setWidth(next);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      localStorage.setItem(
+        DECISION_PANEL_WIDTH_KEY,
+        String(Math.round(widthRef.current)),
+      );
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
 
   if (!loaded || intents.length === 0) return null;
 
@@ -71,7 +114,17 @@ export function DecisionPanel({ sessionId }: Props) {
   }
 
   return (
-    <div className={styles.panel} data-testid="decision-panel">
+    <div
+      className={styles.panel}
+      data-testid="decision-panel"
+      ref={panelRef}
+      style={{ width }}
+    >
+      <div
+        className={styles.resizeHandle}
+        onMouseDown={handleResizeMouseDown}
+        data-testid="decision-panel-resize-handle"
+      />
       <div className={styles.headingRow}>
         <div className={styles.heading}>
           Proposals (

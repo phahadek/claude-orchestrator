@@ -1,4 +1,5 @@
 .panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -6,7 +7,24 @@
   overflow-y: auto;
   border-left: 1px solid var(--border);
   min-width: 280px;
-  max-width: 380px;
+  max-width: 640px;
+  flex-shrink: 0;
+}
+
+.resizeHandle {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+  z-index: 1;
+}
+
+.resizeHandle:hover {
+  background: var(--ctp-blue, #89b4fa);
 }
 
 .headingRow {
@@ -68,7 +86,7 @@
   .panel {
     min-width: 0;
     max-width: none;
-    width: 100%;
+    width: 100% !important;
     max-height: 45vh;
     border-left: none;
     border-top: 1px solid var(--border);
@@ -78,6 +96,10 @@
     width: 100%;
     border-left: none;
     border-top: 1px solid var(--border);
+  }
+
+  .resizeHandle {
+    display: none;
   }
 }
 
