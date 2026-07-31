@@ -53,7 +53,10 @@ async function stage(app: ReturnType<typeof buildApp>, body: unknown) {
  * real project (resolveMilestoneForProject -> ProjectService.getById) —
  * seed a project + milestone row so that lookup succeeds.
  */
-function insertProjectWithMilestone(projectId: string, milestone: string): void {
+function insertProjectWithMilestone(
+  projectId: string,
+  milestone: string,
+): void {
   const now = Date.now();
   db.prepare(
     `INSERT INTO projects (id, name, project_dir, task_source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -103,11 +106,13 @@ describe('POST /api/staged-intents/group/:groupId/commit — setDependsOn group-
   it('rejects staging a task.setStatus -> Ready intent with no groupId at all', async () => {
     const app = buildApp();
 
-    const res = await supertest(app).post('/api/staged-intents').send({
-      kind: 'task.setStatus',
-      payload: { taskId: 't-1', status: 'Ready' },
-      projectId: 'proj-1',
-    });
+    const res = await supertest(app)
+      .post('/api/staged-intents')
+      .send({
+        kind: 'task.setStatus',
+        payload: { taskId: 't-1', status: 'Ready' },
+        projectId: 'proj-1',
+      });
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/Ready-path member/);

@@ -213,9 +213,7 @@ describe('groom.precheck — parity with the stage-time check', () => {
     // full potential-violation set rather than an exact match now that a
     // Ready-path task.setStatus must always carry a groupId to stage at all.
     const gateReasons = precheck.gateReasons as string[];
-    expect(annotation.reasons.every((r) => gateReasons.includes(r))).toBe(
-      true,
-    );
+    expect(annotation.reasons.every((r) => gateReasons.includes(r))).toBe(true);
 
     const reasons = gateReasons;
     expect(reasons.some((r) => r.includes('Files / paths'))).toBe(true);
