@@ -5,6 +5,7 @@ import {
   passesGroomDepGate,
   isDesignCandidate,
   passesDesignDepGate,
+  isDesignEligibleType,
 } from '../planningCandidates';
 
 vi.mock('../../db/db.js', async () => {
@@ -477,5 +478,58 @@ describe('isGroomCandidate — post-write candidate suppression via the board-ca
       getTaskCache('board:m1')!.raw_json,
     ) as NotionTask[];
     expect(isGroomCandidate(after[0], baseDeps)).toBe(false);
+  });
+});
+
+describe('isDesignEligibleType — the shared predicate design-armed groom narrowing reuses', () => {
+  it('admits 📐 Design and 📋 Planning Types', () => {
+    expect(isDesignEligibleType('📐 Design')).toBe(true);
+    expect(isDesignEligibleType('📋 Planning')).toBe(true);
+  });
+
+  it('rejects 💻 Code and other non-design Types', () => {
+    expect(isDesignEligibleType('💻 Code')).toBe(false);
+    expect(isDesignEligibleType('🔧 Operational')).toBe(false);
+    expect(isDesignEligibleType('🔎 Investigation')).toBe(false);
+  });
+
+  it('is the exact predicate isDesignCandidate gates its Type check with', () => {
+    const baseDeps = {
+      tasksById: new Map<string, NotionTask>(),
+      hasActiveSession: () => false,
+      inCrashCooldown: () => false,
+      hasActiveDesignSession: () => false,
+      armed: true,
+    };
+    const readyTask = task({ status: '🗂️ Ready', type: '💻 Code' });
+    // isDesignEligibleType('💻 Code') is false, so isDesignCandidate must
+    // reject it too — same predicate, same verdict, by construction.
+    expect(isDesignEligibleType(readyTask.type)).toBe(false);
+    expect(isDesignCandidate(readyTask, baseDeps)).toBe(false);
+  });
+
+  it('a design-eligible task admitted by groom narrowing still needs its dep gate cleared', () => {
+    const t = task({
+      type: '📐 Design',
+      status: '🔲 Backlog',
+      dependsOn: ['code-dep'],
+    });
+    const stillBacklog = new Map([
+      [
+        'code-dep',
+        task({ id: 'code-dep', type: '💻 Code', status: '🔲 Backlog' }),
+      ],
+    ]);
+    expect(isDesignEligibleType(t.type)).toBe(true);
+    expect(passesGroomDepGate(t, stillBacklog)).toBe(false);
+
+    const baseDeps = {
+      tasksById: stillBacklog,
+      hasActiveSession: () => false,
+      hasActiveGroomSession: () => false,
+      inCrashCooldown: () => false,
+      isNoOpSuppressed: () => false,
+    };
+    expect(isGroomCandidate(t, baseDeps)).toBe(false);
   });
 });
