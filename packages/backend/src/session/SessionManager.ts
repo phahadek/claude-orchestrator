@@ -1802,66 +1802,83 @@ export class SessionManager extends EventEmitter {
     this.pendingStarts.delete(sessionId);
     this.sessions.set(sessionId, session);
 
-    // Look up the PR for review sessions so session_started carries prNumber.
-    const reviewPr =
-      sessionType === 'review' && sessionTaskId
-        ? (getPRByNotionTaskId(sessionTaskId) ?? undefined)
-        : undefined;
-    const reviewPrNumber = reviewPr?.pr_number;
-    const reviewCodeSessionId = reviewPr?.session_id ?? undefined;
+    // From here, this Map entry's slot is only released by session.run()'s
+    // own settle handlers (wireSession's .then/.catch → cleanupWorktree,
+    // SessionManager.ts:2664/:3938) — and those only run once wireSession()
+    // has been called without throwing, i.e. once the subprocess is actually
+    // spawning. A throw anywhere in this block (PR lookup, event emission,
+    // wireSession() itself) happens before that handoff, so nothing would
+    // ever reap the entry — it would hold its slot until a backend restart.
+    // spawnStarted tracks whether the handoff happened; the finally below
+    // releases the slot unconditionally whenever it didn't.
+    let spawnStarted = false;
+    try {
+      // Look up the PR for review sessions so session_started carries prNumber.
+      const reviewPr =
+        sessionType === 'review' && sessionTaskId
+          ? (getPRByNotionTaskId(sessionTaskId) ?? undefined)
+          : undefined;
+      const reviewPrNumber = reviewPr?.pr_number;
+      const reviewCodeSessionId = reviewPr?.session_id ?? undefined;
 
-    // Broadcast session_started BEFORE wireSession() — wireSession calls
-    // session.run(), which synchronously broadcasts a session_status
-    // ('running') message as its first statement. If session_started were
-    // emitted after wireSession(), that running update could reach clients
-    // before session_started, get dropped (unknown session), and leave the
-    // session stuck showing "starting" until a refresh re-reads the DB.
-    this.emit('message', {
-      type: 'session_started',
-      sessionId,
-      taskName: taskName ?? taskUrl,
-      notionTaskUrl: taskUrl,
-      ...(taskType != null && { taskType }),
-      ...(sessionType !== 'standard' && { sessionType }),
-      ...(reviewPrNumber != null && { prNumber: reviewPrNumber }),
-      ...(reviewCodeSessionId != null && {
-        codeSessionId: reviewCodeSessionId,
-      }),
-      started_at: startedAt,
-      project_id: projectId,
-      totalInputTokens: 0,
-      totalOutputTokens: 0,
-      grantedCapabilities: getGrantedCapabilities(sessionId),
-      ...(sessionTaskId && { taskId: sessionTaskId }),
-    } satisfies ServerMessage);
+      // Broadcast session_started BEFORE wireSession() — wireSession calls
+      // session.run(), which synchronously broadcasts a session_status
+      // ('running') message as its first statement. If session_started were
+      // emitted after wireSession(), that running update could reach clients
+      // before session_started, get dropped (unknown session), and leave the
+      // session stuck showing "starting" until a refresh re-reads the DB.
+      this.emit('message', {
+        type: 'session_started',
+        sessionId,
+        taskName: taskName ?? taskUrl,
+        notionTaskUrl: taskUrl,
+        ...(taskType != null && { taskType }),
+        ...(sessionType !== 'standard' && { sessionType }),
+        ...(reviewPrNumber != null && { prNumber: reviewPrNumber }),
+        ...(reviewCodeSessionId != null && {
+          codeSessionId: reviewCodeSessionId,
+        }),
+        started_at: startedAt,
+        project_id: projectId,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        grantedCapabilities: getGrantedCapabilities(sessionId),
+        ...(sessionTaskId && { taskId: sessionTaskId }),
+      } satisfies ServerMessage);
 
-    this.wireSession(sessionId, session, projectDir, worktreePath);
+      this.wireSession(sessionId, session, projectDir, worktreePath);
+      spawnStarted = true;
 
-    // Update task status to In Progress (fire-and-forget; failures logged, not thrown).
-    if (
-      movesTargetInProgress(sessionType) &&
-      !isGateVerifySession(sessionTaskId)
-    ) {
-      getTaskBackend(projectId)
-        .updateStatus(sessionTaskId, '🔄 In Progress', {
-          source: 'orchestrator',
-          sessionId,
-        })
-        .then(() => {
-          this.emit('message', {
-            type: 'task_status_changed',
-            notionTaskId: sessionTaskId,
-            newStatus: '🔄 In Progress',
-          } satisfies ServerMessage);
-          emitTaskUpdated(sessionTaskId);
-        })
-        .catch((e) => {
-          logger.error(`[SessionManager] failed to set In Progress: ${e}`);
-          this.emit('message', {
-            type: 'error',
-            message: `Failed to update task status to In Progress: ${e}`,
-          } satisfies ServerMessage);
-        });
+      // Update task status to In Progress (fire-and-forget; failures logged, not thrown).
+      if (
+        movesTargetInProgress(sessionType) &&
+        !isGateVerifySession(sessionTaskId)
+      ) {
+        getTaskBackend(projectId)
+          .updateStatus(sessionTaskId, '🔄 In Progress', {
+            source: 'orchestrator',
+            sessionId,
+          })
+          .then(() => {
+            this.emit('message', {
+              type: 'task_status_changed',
+              notionTaskId: sessionTaskId,
+              newStatus: '🔄 In Progress',
+            } satisfies ServerMessage);
+            emitTaskUpdated(sessionTaskId);
+          })
+          .catch((e) => {
+            logger.error(`[SessionManager] failed to set In Progress: ${e}`);
+            this.emit('message', {
+              type: 'error',
+              message: `Failed to update task status to In Progress: ${e}`,
+            } satisfies ServerMessage);
+          });
+      }
+    } finally {
+      if (!spawnStarted) {
+        this.sessions.delete(sessionId);
+      }
     }
   }
 
