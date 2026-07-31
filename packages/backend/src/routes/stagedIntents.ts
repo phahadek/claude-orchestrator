@@ -2504,6 +2504,20 @@ async function verifyGroup(
     if (detail) {
       errors.push(`${row.kind} (${row.task_id ?? row.id}): ${detail}`);
     }
+
+    if (isArmingReadyIntent(row)) {
+      const payload = JSON.parse(row.payload) as SetStatusPayload;
+      const failure = await checkGroupArmingIntentCompleteness(
+        groupId,
+        row,
+        payload,
+      );
+      if (failure) {
+        errors.push(
+          `${row.kind} (${row.task_id ?? row.id}): ${describeGroupCompletenessFailure(failure)}`,
+        );
+      }
+    }
   }
 
   if (errors.length === 0) {
@@ -2540,11 +2554,18 @@ async function verifyGroup(
  * Group-level verify gate run at turn-end (see
  * PlanningOrchestrator.onSessionParked, the "group submitted" signal): for
  * every proposal group the session staged something into this turn, re-runs
- * runStageTimeReadyChecks across the group's live members and gates the
- * whole group on the result — a clean group is (re)surfaced to the operator,
- * a blocked one is hidden (moved to `needs_revision`) so its errors can be
- * routed back to the session instead, bounded to MAX_AUTO_REVISE_ROUNDS
- * consecutive failures per group before escalating to the operator anyway.
+ * runStageTimeReadyChecks across the group's live members and, for every
+ * arming task.setStatus -> Ready member, also re-runs
+ * checkGroupArmingIntentCompleteness (the same mandatory-member check
+ * precheckGroupCommit enforces at commit time) — so a group missing its
+ * setDependsOn write, a required manual-verification strip, or a required
+ * gate/seed accretion is caught here, before it ever surfaces to the
+ * operator, rather than only 409ing at commit time. Both checks feed the
+ * same errors array and gate the whole group on the result — a clean group
+ * is (re)surfaced to the operator, a blocked one is hidden (moved to
+ * `needs_revision`) so its errors can be routed back to the session instead,
+ * bounded to MAX_AUTO_REVISE_ROUNDS consecutive failures per group before
+ * escalating to the operator anyway.
  */
 export async function verifyDispatchedGroupsForSession(
   sessionId: string,
@@ -2607,6 +2628,138 @@ function readinessOverrideWouldApply(
 }
 
 /**
+ * Result of checkGroupArmingIntentCompleteness: which mandatory-member check
+ * failed for a given arming task.setStatus -> Ready intent, carrying enough
+ * detail for each caller to build its own error/annotation shape.
+ */
+type GroupCompletenessFailure =
+  | { kind: 'dependsOn'; taskId: string }
+  | { kind: 'manualVerificationStrip'; taskId: string }
+  | { kind: 'gateContribution'; taskId: string; reasons: string[] }
+  | { kind: 'seedContribution'; taskId: string; reasons: string[] }
+  | { kind: 'groomingGate'; taskId: string; reasons: string[] };
+
+function describeGroupCompletenessFailure(
+  failure: GroupCompletenessFailure,
+): string {
+  switch (failure.kind) {
+    case 'dependsOn':
+      return new DependsOnCompletenessError(failure.taskId).message;
+    case 'manualVerificationStrip':
+      return new ManualVerificationStripCompletenessError(failure.taskId)
+        .message;
+    case 'gateContribution':
+    case 'seedContribution':
+    case 'groomingGate':
+      return new GroomingGateError(failure.reasons).message;
+  }
+}
+
+/**
+ * Per-arming-intent group-completeness check: re-derives, for a single
+ * task.setStatus -> Ready intent in a group, whether every mandatory sibling
+ * member it depends on has actually been staged — the setDependsOn write
+ * (hasGroupDependsOn), the manual-verification-strip (when the body carries
+ * one), the gate.accrete/seed.stage accretion content-match (when the body
+ * requires it), and finally the grooming promotion gate itself. Shared by
+ * precheckGroupCommit (commit time, the final authority) and verifyGroup
+ * (turn-end, so an incomplete group is caught before it ever surfaces to the
+ * operator) — a pure read with no side effects, so each caller controls its
+ * own annotation/broadcast/response shape.
+ */
+async function checkGroupArmingIntentCompleteness(
+  groupId: string,
+  row: StagedIntentRow,
+  payload: SetStatusPayload,
+): Promise<GroupCompletenessFailure | null> {
+  if (!hasGroupDependsOn(groupId, payload.taskId)) {
+    return { kind: 'dependsOn', taskId: payload.taskId };
+  }
+
+  if (
+    payload.groomingGate?.hasManualVerificationSection &&
+    !hasGroupManualVerificationStrip(groupId, payload.taskId)
+  ) {
+    return { kind: 'manualVerificationStrip', taskId: payload.taskId };
+  }
+
+  if (payload.groomingGate?.hasManualVerificationSection) {
+    const gatePayload = getGroupGateAccretePayload(groupId, payload.taskId);
+    if (
+      gatePayload &&
+      gatePayload.classification !== 'none' &&
+      gatePayload.classification !== 'n/a'
+    ) {
+      const backend = getTaskBackend(row.project_id);
+      const storedBody = (await backend.fetchTaskPage(payload.taskId)) ?? '';
+      const strippedItems = parseManualVerificationItems(storedBody);
+      const accretedItems = gatePayload.items.map((item) => item.text);
+      const match = checkAccretionContentMatch(
+        'gate_contribution',
+        strippedItems,
+        accretedItems,
+      );
+      if (!match.ok) {
+        return {
+          kind: 'gateContribution',
+          taskId: payload.taskId,
+          reasons: match.reasons,
+        };
+      }
+    }
+  }
+
+  if (payload.groomingGate?.seedContributionCandidates?.length) {
+    const seedPayload = getGroupSeedStagePayload(groupId, payload.taskId);
+    if (seedPayload && seedPayload.decision === 'seeds') {
+      const strippedItems = payload.groomingGate.seedContributionCandidates.map(
+        (c) => c.spec,
+      );
+      const accretedItems = seedPayload.seeds.map((s) => s.spec);
+      const match = checkAccretionContentMatch(
+        'seed_contribution',
+        strippedItems,
+        accretedItems,
+      );
+      if (!match.ok) {
+        return {
+          kind: 'seedContribution',
+          taskId: payload.taskId,
+          reasons: match.reasons,
+        };
+      }
+    }
+  }
+
+  const gateResult = checkGroomingPromotionGate(
+    payload.groomingGate ?? {},
+    payload.taskId,
+    getCachedType(payload.taskId) ?? payload.groomingGate?.type,
+    {
+      skipGateContributionCheck: hasGroupAccretionIntent(
+        groupId,
+        payload.taskId,
+        'gate.accrete',
+      ),
+      skipSeedContributionCheck: hasGroupAccretionIntent(
+        groupId,
+        payload.taskId,
+        'seed.stage',
+      ),
+    },
+  );
+  if (!gateResult.allowed) {
+    return {
+      kind: 'groomingGate',
+      taskId: payload.taskId,
+      reasons: gateResult.reasons,
+    };
+  }
+
+  return null;
+}
+
+/**
  * Whole-group pre-commit gate check: re-derives, for every arming
  * task.setStatus -> Ready intent in the group, the exact same gates
  * `applyIntent`'s task.setStatus case would hit (the DependsOn-completeness
@@ -2627,110 +2780,34 @@ async function precheckGroupCommit(
     if (!isArmingReadyIntent(row)) continue;
     const payload = JSON.parse(row.payload) as SetStatusPayload;
 
-    if (!hasGroupDependsOn(groupId, payload.taskId)) {
-      const err = new DependsOnCompletenessError(payload.taskId);
-      return { status: 409, body: { error: err.message, precheck: true } };
-    }
-
-    if (
-      payload.groomingGate?.hasManualVerificationSection &&
-      !hasGroupManualVerificationStrip(groupId, payload.taskId)
-    ) {
-      const err = new ManualVerificationStripCompletenessError(payload.taskId);
-      return { status: 409, body: { error: err.message, precheck: true } };
-    }
-
-    if (payload.groomingGate?.hasManualVerificationSection) {
-      const gatePayload = getGroupGateAccretePayload(groupId, payload.taskId);
-      if (
-        gatePayload &&
-        gatePayload.classification !== 'none' &&
-        gatePayload.classification !== 'n/a'
-      ) {
-        const backend = getTaskBackend(row.project_id);
-        const storedBody = (await backend.fetchTaskPage(payload.taskId)) ?? '';
-        const strippedItems = parseManualVerificationItems(storedBody);
-        const accretedItems = gatePayload.items.map((item) => item.text);
-        const match = checkAccretionContentMatch(
-          'gate_contribution',
-          strippedItems,
-          accretedItems,
-        );
-        if (!match.ok) {
-          setStagedIntentAnnotation(
-            row.id,
-            JSON.stringify({ blocked: true, reasons: match.reasons }),
-          );
-          broadcastIntentById(row.id);
-          return {
-            status: 409,
-            body: {
-              error: new GroomingGateError(match.reasons).message,
-              reasons: match.reasons,
-              precheck: true,
-            },
-          };
-        }
-      }
-    }
-
-    if (payload.groomingGate?.seedContributionCandidates?.length) {
-      const seedPayload = getGroupSeedStagePayload(groupId, payload.taskId);
-      if (seedPayload && seedPayload.decision === 'seeds') {
-        const strippedItems =
-          payload.groomingGate.seedContributionCandidates.map((c) => c.spec);
-        const accretedItems = seedPayload.seeds.map((s) => s.spec);
-        const match = checkAccretionContentMatch(
-          'seed_contribution',
-          strippedItems,
-          accretedItems,
-        );
-        if (!match.ok) {
-          setStagedIntentAnnotation(
-            row.id,
-            JSON.stringify({ blocked: true, reasons: match.reasons }),
-          );
-          broadcastIntentById(row.id);
-          return {
-            status: 409,
-            body: {
-              error: new GroomingGateError(match.reasons).message,
-              reasons: match.reasons,
-              precheck: true,
-            },
-          };
-        }
-      }
-    }
-
-    const gateResult = checkGroomingPromotionGate(
-      payload.groomingGate ?? {},
-      payload.taskId,
-      getCachedType(payload.taskId) ?? payload.groomingGate?.type,
-      {
-        skipGateContributionCheck: hasGroupAccretionIntent(
-          groupId,
-          payload.taskId,
-          'gate.accrete',
-        ),
-        skipSeedContributionCheck: hasGroupAccretionIntent(
-          groupId,
-          payload.taskId,
-          'seed.stage',
-        ),
-      },
+    const failure = await checkGroupArmingIntentCompleteness(
+      groupId,
+      row,
+      payload,
     );
-    if (!gateResult.allowed) {
+    if (failure) {
+      if (
+        failure.kind === 'dependsOn' ||
+        failure.kind === 'manualVerificationStrip'
+      ) {
+        return {
+          status: 409,
+          body: {
+            error: describeGroupCompletenessFailure(failure),
+            precheck: true,
+          },
+        };
+      }
       setStagedIntentAnnotation(
         row.id,
-        JSON.stringify({ blocked: true, reasons: gateResult.reasons }),
+        JSON.stringify({ blocked: true, reasons: failure.reasons }),
       );
       broadcastIntentById(row.id);
       return {
         status: 409,
         body: {
-          error: new GroomingGateError(gateResult.reasons).message,
-          reasons: gateResult.reasons,
+          error: describeGroupCompletenessFailure(failure),
+          reasons: failure.reasons,
           precheck: true,
         },
       };
