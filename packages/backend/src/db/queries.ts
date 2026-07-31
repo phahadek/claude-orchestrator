@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'crypto';
 import { db } from './db';
 import { logger } from '../logger';
 import { recordEvent, hasTaskEditSinceTimestamp } from '../audit/AuditLog';
-import { normalizeTaskId, normalizeBoardId } from '../tasks/taskId';
+import { normalizeTaskId, normalizeBoardId, toExternalId } from '../tasks/taskId';
 import { isCodeSession } from '../session/sessionPredicates';
 import {
   pauseReasonFromCanonical,
@@ -4381,13 +4381,28 @@ let _stmtListOpsJournalEntries: Database.Statement | null = null;
 let _stmtUpsertOpsJournalEntry: Database.Statement | null = null;
 let _stmtDeleteOpsJournalEntry: Database.Statement | null = null;
 
+/**
+ * ops_journal.task_id is stored bare (no `source:` prefix — see reconcileJournal),
+ * but callers may hold either form (e.g. OrphanedTaskSweeper holds the
+ * `notion:`-prefixed dispatch id). Strip the prefix via toExternalId so both
+ * forms resolve to the same row; a bare id (no colon) passes through
+ * unchanged since toExternalId/parseTaskId only understands prefixed ids.
+ */
+function toBareOpsJournalTaskId(taskId: string): string {
+  try {
+    return toExternalId(taskId);
+  } catch {
+    return taskId;
+  }
+}
+
 export function getOpsJournalEntry(taskId: string): OpsJournalRow | undefined {
   _stmtGetOpsJournalEntry ??= db.prepare<{ task_id: string }>(
     `SELECT * FROM ops_journal WHERE task_id = @task_id`,
   );
-  return _stmtGetOpsJournalEntry.get({ task_id: taskId }) as
-    | OpsJournalRow
-    | undefined;
+  return _stmtGetOpsJournalEntry.get({
+    task_id: toBareOpsJournalTaskId(taskId),
+  }) as OpsJournalRow | undefined;
 }
 
 export function listOpsJournalEntries(): OpsJournalRow[] {
@@ -4419,14 +4434,17 @@ export function upsertOpsJournalEntry(row: OpsJournalRow): void {
       resolution = @resolution,
       updated_at = @updated_at
   `);
-  _stmtUpsertOpsJournalEntry.run(row);
+  _stmtUpsertOpsJournalEntry.run({
+    ...row,
+    task_id: toBareOpsJournalTaskId(row.task_id),
+  });
 }
 
 export function deleteOpsJournalEntry(taskId: string): void {
   _stmtDeleteOpsJournalEntry ??= db.prepare<{ task_id: string }>(
     `DELETE FROM ops_journal WHERE task_id = @task_id`,
   );
-  _stmtDeleteOpsJournalEntry.run({ task_id: taskId });
+  _stmtDeleteOpsJournalEntry.run({ task_id: toBareOpsJournalTaskId(taskId) });
 }
 
 // ─── gate_item ────────────────────────────────────────────────────────────

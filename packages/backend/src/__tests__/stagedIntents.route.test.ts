@@ -695,7 +695,11 @@ describe('POST /api/staged-intents/:id/apply — gate.accrete / seed.stage / jou
   it('applies journal.setState by dispatching through the validated setEntryState', async () => {
     const { upsertOpsJournalEntry } = await import('../db/queries');
     upsertOpsJournalEntry({
-      task_id: 'notion:ghi',
+      // ops_journal.task_id is stored bare in production (see reconcileJournal);
+      // seed it that way here so the notion:-prefixed lookups below exercise
+      // getOpsJournalEntry's cross-id-form normalization instead of trivially
+      // matching on an identical literal.
+      task_id: 'ghi',
       project: 'proj-journal',
       milestone: 'M1',
       state: 'pending',
