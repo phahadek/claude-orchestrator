@@ -877,7 +877,10 @@ describe('DeployOrchestrator + real spawnShell: host-binding substitution', () =
     const loadResult: LoadPlaybookResult = { ok: true, playbook };
     const orchestrator = new DeployOrchestrator('proj', process.cwd(), {
       loadPlaybook: () => loadResult,
-      loadDeployBindings: () => ({ ok: true, bindings: { MY_BINDING: 'hello' } }),
+      loadDeployBindings: () => ({
+        ok: true,
+        bindings: { MY_BINDING: 'hello' },
+      }),
       spawnAgenticStep: vi.fn(),
       waitForConfirmGate: vi.fn(async () => true),
       getDiffPaths: vi.fn(async () => []),

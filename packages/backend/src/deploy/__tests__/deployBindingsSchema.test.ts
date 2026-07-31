@@ -3,12 +3,20 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { validateDeployBindings, substituteBindings } from '../deployBindingsSchema';
+import {
+  validateDeployBindings,
+  substituteBindings,
+} from '../deployBindingsSchema';
 
 describe('validateDeployBindings', () => {
   it('accepts a well-formed mapping of shell-identifier names to string values', () => {
-    const result = validateDeployBindings({ DB_HOST: 'db.internal', _foo: 'bar' });
-    expect(result).toEqual({ bindings: { DB_HOST: 'db.internal', _foo: 'bar' } });
+    const result = validateDeployBindings({
+      DB_HOST: 'db.internal',
+      _foo: 'bar',
+    });
+    expect(result).toEqual({
+      bindings: { DB_HOST: 'db.internal', _foo: 'bar' },
+    });
   });
 
   it('treats an absent/null document as an empty binding map', () => {
@@ -36,7 +44,9 @@ describe('validateDeployBindings', () => {
 
 describe('substituteBindings', () => {
   it('substitutes a braced reference', () => {
-    const result = substituteBindings('curl ${HOST}/health', { HOST: 'db.internal' });
+    const result = substituteBindings('curl ${HOST}/health', {
+      HOST: 'db.internal',
+    });
     expect(result).toEqual({ ok: true, value: 'curl db.internal/health' });
   });
 
