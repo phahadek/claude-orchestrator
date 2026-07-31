@@ -108,6 +108,40 @@ describe('MilestoneBurndown', () => {
     expect(screen.getByTestId('phase-blockers-code')).toBeDefined();
   });
 
+  it('renders each non-zero per-state count as text content, not only as a title attribute', () => {
+    render(
+      <MilestoneBurndown
+        tasks={tasks}
+        convergence={makeConvergence()}
+        activePhase={null}
+        onPhaseSelect={vi.fn()}
+      />,
+    );
+
+    const codeRow = screen.getByTestId('phase-segment-code');
+    expect(codeRow.textContent).toContain('Done: 1');
+    expect(codeRow.textContent).toContain('Pending: 1');
+
+    const fills = codeRow.querySelectorAll('[title]');
+    fills.forEach((fill) => fill.removeAttribute('title'));
+    expect(codeRow.textContent).toContain('Done: 1');
+    expect(codeRow.textContent).toContain('Pending: 1');
+  });
+
+  it('omits a zero-count state from the rendered per-state counts', () => {
+    render(
+      <MilestoneBurndown
+        tasks={tasks}
+        convergence={makeConvergence()}
+        activePhase={null}
+        onPhaseSelect={vi.fn()}
+      />,
+    );
+
+    const codeRow = screen.getByTestId('phase-segment-code');
+    expect(codeRow.textContent).not.toContain('Staged:');
+  });
+
   it('renders more than one fill in the Grooming bar for a mixed pre-Ready population', () => {
     render(
       <MilestoneBurndown
