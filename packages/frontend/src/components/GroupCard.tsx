@@ -4,6 +4,7 @@ import type {
   StagedIntentRejectOutcome,
 } from '../api/stagedIntents';
 import { StagedIntentPanel } from './StagedIntentPanel';
+import { CollapsibleField } from './CollapsibleField';
 import panelStyles from './DecisionPanel.module.css';
 import intentStyles from './StagedIntentPanel.module.css';
 import styles from './GroupCard.module.css';
@@ -159,19 +160,31 @@ export function GroupCard({
           data-testid="group-card-groom-proposal"
         >
           <dt>Achieves</dt>
-          <dd>{head.groomProposal.achieves}</dd>
+          <dd>
+            <CollapsibleField text={head.groomProposal.achieves} />
+          </dd>
           <dt>Open questions</dt>
-          <dd>{head.groomProposal.openQuestions}</dd>
+          <dd>
+            <CollapsibleField text={head.groomProposal.openQuestions} />
+          </dd>
           <dt>Automated tests</dt>
-          <dd>{head.groomProposal.automatedTests}</dd>
+          <dd>
+            <CollapsibleField text={head.groomProposal.automatedTests} />
+          </dd>
           <dt>Manual verification</dt>
-          <dd>{head.groomProposal.manualVerification}</dd>
+          <dd>
+            <CollapsibleField text={head.groomProposal.manualVerification} />
+          </dd>
           <dt>Operational seed</dt>
-          <dd>{head.groomProposal.operationalSeed}</dd>
+          <dd>
+            <CollapsibleField text={head.groomProposal.operationalSeed} />
+          </dd>
         </dl>
       ) : (
         head.decisionProposal && (
-          <p className={intentStyles.rationale}>{head.decisionProposal}</p>
+          <p className={intentStyles.rationale}>
+            <CollapsibleField text={head.decisionProposal} />
+          </p>
         )
       )}
 
