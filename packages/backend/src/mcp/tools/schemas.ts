@@ -84,32 +84,112 @@ const blockModelSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
+/** The /groom skill's structured Ready-flip proposal — see stagedIntents.ts's GroomProposalFields. */
+const groomProposalSchema = z.object({
+  achieves: z.string(),
+  openQuestions: z.string(),
+  automatedTests: z.string(),
+  manualVerification: z.string(),
+  operationalSeed: z.string(),
+});
+
+/** The intent envelope fields shared by every stage-proposal tool, alongside its kind-specific payload. */
+export const intentEnvelopeShape = {
+  groupId: z.string().optional(),
+  decisionProposal: z.string().optional(),
+  groomProposal: groomProposalSchema.optional(),
+  /**
+   * Explicitly retires a prior intent this one replaces — the only way to
+   * supersede a task.create/arch.createUnit draft whose title is also
+   * changing, since title-based dedup alone can't identify it.
+   */
+  supersedes: z.string().optional(),
+};
+
+const ENVELOPE_FIELD_NAMES = new Set(Object.keys(intentEnvelopeShape));
+
 /**
- * task.patchBodySection's payload — TaskBackend.ts's PatchBodySectionOperation
- * discriminated by `operation`, plus the targeted `section` heading text.
- * append carries `content`; replace carries `find`/`replaceWith`; remove
- * carries neither.
+ * Flags every key in `value` that isn't in `knownKeys` — a key matching one
+ * of the intent-envelope's own field names (groupId, decisionProposal,
+ * groomProposal, supersedes) gets a message naming it as the mistake this
+ * exists to catch: that field belongs alongside payload, as a sibling
+ * parameter, not nested inside it.
  */
-export const patchBodySectionPayloadSchema = z.discriminatedUnion('operation', [
-  z.object({
+function addUnknownPayloadKeyIssues(
+  value: Record<string, unknown>,
+  knownKeys: Set<string>,
+  ctx: z.RefinementCtx,
+): void {
+  for (const key of Object.keys(value)) {
+    if (knownKeys.has(key)) continue;
+    ctx.addIssue({
+      code: 'custom',
+      path: [key],
+      message: ENVELOPE_FIELD_NAMES.has(key)
+        ? `Unrecognized key "${key}" in payload — "${key}" is an envelope field and belongs alongside payload as a sibling parameter, not nested inside it.`
+        : `Unrecognized key "${key}" in payload.`,
+    });
+  }
+}
+
+/**
+ * Wraps a payload shape so any key it doesn't declare fails validation by
+ * name instead of Zod's default of silently stripping it — the fix for a
+ * misplaced envelope field (e.g. groomProposal nested inside payload)
+ * discarding itself with no error.
+ */
+export function rejectUnknownPayloadKeys<T extends z.ZodRawShape>(shape: T) {
+  const known = new Set(Object.keys(shape));
+  return z
+    .object(shape)
+    .loose()
+    .superRefine((value, ctx) =>
+      addUnknownPayloadKeyIssues(value as Record<string, unknown>, known, ctx),
+    );
+}
+
+const patchBodySectionShapesByOperation = {
+  append: {
     taskId: z.string(),
     section: z.string(),
     operation: z.literal('append'),
     content: z.string(),
-  }),
-  z.object({
+  },
+  replace: {
     taskId: z.string(),
     section: z.string(),
     operation: z.literal('replace'),
     find: z.string(),
     replaceWith: z.string(),
-  }),
-  z.object({
+  },
+  remove: {
     taskId: z.string(),
     section: z.string(),
     operation: z.literal('remove'),
-  }),
-]);
+  },
+} as const;
+
+/**
+ * task.patchBodySection's payload — TaskBackend.ts's PatchBodySectionOperation
+ * discriminated by `operation`, plus the targeted `section` heading text.
+ * append carries `content`; replace carries `find`/`replaceWith`; remove
+ * carries neither. Each variant rejects keys outside its own operation's
+ * shape (checked post-discrimination, since the variants don't share a
+ * field set to validate against up front).
+ */
+export const patchBodySectionPayloadSchema = z
+  .discriminatedUnion('operation', [
+    z.object(patchBodySectionShapesByOperation.append).loose(),
+    z.object(patchBodySectionShapesByOperation.replace).loose(),
+    z.object(patchBodySectionShapesByOperation.remove).loose(),
+  ])
+  .superRefine((value, ctx) =>
+    addUnknownPayloadKeyIssues(
+      value as unknown as Record<string, unknown>,
+      new Set(Object.keys(patchBodySectionShapesByOperation[value.operation])),
+      ctx,
+    ),
+  );
 
 /**
  * bodyRender.ts's TaskBodySections — the full required section set (Summary,
@@ -146,28 +226,6 @@ export const groomingGateEntrySchema = z
       .optional(),
   })
   .optional();
-
-/** The /groom skill's structured Ready-flip proposal — see stagedIntents.ts's GroomProposalFields. */
-const groomProposalSchema = z.object({
-  achieves: z.string(),
-  openQuestions: z.string(),
-  automatedTests: z.string(),
-  manualVerification: z.string(),
-  operationalSeed: z.string(),
-});
-
-/** The intent envelope fields shared by every stage-proposal tool, alongside its kind-specific payload. */
-export const intentEnvelopeShape = {
-  groupId: z.string().optional(),
-  decisionProposal: z.string().optional(),
-  groomProposal: groomProposalSchema.optional(),
-  /**
-   * Explicitly retires a prior intent this one replaces — the only way to
-   * supersede a task.create/arch.createUnit draft whose title is also
-   * changing, since title-based dedup alone can't identify it.
-   */
-  supersedes: z.string().optional(),
-};
 
 export const gateContributionSourceTaskSchema = z.object({
   id: z.string(),
