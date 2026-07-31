@@ -57,8 +57,13 @@ import {
   setStagedIntentAdvisory,
   insertStagedIntent,
   getStagedIntent,
+  insertSession,
 } from '../../db/queries';
-import { createStagedIntentsRouter } from '../stagedIntents';
+import {
+  createStagedIntentsRouter,
+  stageIntent,
+  TaskCreateMissingGroupError,
+} from '../stagedIntents';
 import { recordAccretionMarker } from '../../gate/gateStore';
 import { recordAccretionMarker as recordSeedAccretionMarker } from '../../seed/seedStore';
 
@@ -2109,5 +2114,171 @@ describe('group commit — a blocked member holds the whole group', () => {
 
     expect(commit.status).toBe(200);
     expect(commit.body.committed).toEqual([dependsOn.id, setStatus.id]);
+  });
+});
+
+describe('task.create staged while the session has an open decision group for its task', () => {
+  function seedSession(sessionId: string, taskId: string) {
+    insertSession({
+      session_id: sessionId,
+      task_id: taskId,
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'groom',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    });
+  }
+
+  it('rejects an ungrouped task.create when the session already has an open group for its own task', () => {
+    seedSession('groom-split-1', 't-split-original');
+    stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-split-original', dependsOn: [] },
+      'proj-split',
+      'g-split',
+      'groom-split-1',
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.create',
+        { title: 'Sibling split off the original', type: '💻 Code' },
+        'proj-split',
+        null,
+        'groom-split-1',
+      ),
+    ).toThrow(TaskCreateMissingGroupError);
+  });
+
+  it('accepts a task.create carrying the decision group and commits it atomically with the rest of the group', async () => {
+    seedSession('groom-split-2', 't-split-original-2');
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn: vi.fn(),
+      createTask: vi.fn().mockResolvedValue('notion:sibling-task-id'),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const create = stageIntent(
+      'task.create',
+      { title: 'Sibling split off the original', type: '💻 Code' },
+      'proj-split',
+      'g-split-2',
+      'groom-split-2',
+    );
+    expect(create.groupId).toBe('g-split-2');
+
+    const { dependsOn, setStatus } = await stageGroup(
+      agent,
+      'proj-split',
+      't-split-original-2',
+      'g-split-2',
+    );
+    await agent.post(`/api/staged-intents/${dependsOn.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${setStatus.id}/approve`).send({});
+    await agent.post(`/api/staged-intents/${create.id}/approve`).send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-split-2/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(commit.body.committed).toEqual(
+      expect.arrayContaining([dependsOn.id, setStatus.id, create.id]),
+    );
+  });
+
+  it('still accepts a standalone ungrouped task.create from a session with no open decision group for its task', () => {
+    seedSession('groom-standalone', 't-standalone');
+
+    const create = stageIntent(
+      'task.create',
+      { title: 'Genuinely unrelated follow-on', type: '💻 Code' },
+      'proj-standalone',
+      null,
+      'groom-standalone',
+    );
+    expect(create.groupId).toBeNull();
+  });
+
+  it('a grouped task.create referenced by a sibling task.setDependsOn via a symbolic reference still resolves at commit', async () => {
+    seedSession('groom-split-3', 't-split-original-3');
+    const setDependsOn = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      setDependsOn,
+      createTask: vi.fn().mockResolvedValue('notion:sibling-task-id-3'),
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const create = stageIntent(
+      'task.create',
+      { title: 'Sibling split off the original', type: '💻 Code' },
+      'proj-split',
+      'g-split-3',
+      'groom-split-3',
+    );
+
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-split',
+      groupId: 'g-split-3',
+      payload: {
+        taskId: 't-split-original-3',
+        dependsOn: [`staged-intent:${create.id}`],
+      },
+    });
+    expect(dependsOn.status).toBe(201);
+
+    const setStatus = await agent.post('/api/staged-intents').send({
+      kind: 'task.setStatus',
+      projectId: 'proj-split',
+      groupId: 'g-split-3',
+      payload: {
+        taskId: 't-split-original-3',
+        status: 'Ready',
+        groomingGate: {
+          size_check: { decision: 'n/a' },
+          type_check: { decision: 'none' },
+        },
+      },
+    });
+
+    await agent.post(`/api/staged-intents/${create.id}/approve`).send({});
+    await agent
+      .post(`/api/staged-intents/${dependsOn.body.id}/approve`)
+      .send({});
+    await agent
+      .post(`/api/staged-intents/${setStatus.body.id}/approve`)
+      .send({});
+
+    const commit = await agent
+      .post('/api/staged-intents/group/g-split-3/commit')
+      .send({});
+
+    expect(commit.status).toBe(200);
+    expect(setDependsOn).toHaveBeenCalledWith('t-split-original-3', [
+      'notion:sibling-task-id-3',
+    ]);
   });
 });

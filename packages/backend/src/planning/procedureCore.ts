@@ -1028,7 +1028,11 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'to exactly the retained scope (Summary, Context, acceptance criteria, ' +
         'and Files/paths all reduced to match), stage one `task.create` per ' +
         'excised piece (landing at 🔲 Backlog, each naming in its Context that ' +
-        'it was split off this task and which part it carries), stage ' +
+        'it was split off this task and which part it carries) under the ' +
+        'same shared `groupId` as the narrowing decision — a split/spin-off ' +
+        '`task.create` is never staged ungrouped; it is dispositioned atomically ' +
+        "with the narrowing it belongs to, exactly like the Ready path's other " +
+        'grouped members above. Stage ' +
         '`task.setDependsOn` where the cut creates a genuine ordering ' +
         'constraint between the narrowed original and a sibling, then take the ' +
         'Ready path for the narrowed original as normal — it has been groomed, ' +

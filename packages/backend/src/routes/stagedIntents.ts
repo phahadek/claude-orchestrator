@@ -374,6 +374,75 @@ function assertSessionTaskBinding(
 }
 
 /**
+ * Thrown at stage time when a `task.create` arrives with no groupId while its
+ * dispatching session already has an open decision group for the session's
+ * own bound task — a split or spin-off's new task must carry the same
+ * groupId as the decision that produced it (see hasGroupTaskCreateForSession
+ * for the mirror-image "create-then-wire" carve-out), so it is dispositioned
+ * atomically with that decision rather than surviving or vanishing on its own.
+ */
+export class TaskCreateMissingGroupError extends Error {
+  constructor(openGroupId: string) {
+    super(
+      `[stagedIntents] "task.create" was staged with no groupId, but this session already has an open ` +
+        `decision group ("${openGroupId}") for its own task — a task.create produced by a split or ` +
+        'spin-off must carry the same groupId as the decision it belongs to, so it is dispositioned ' +
+        'atomically with it.',
+    );
+    this.name = 'TaskCreateMissingGroupError';
+  }
+}
+
+/**
+ * True when this session already has a live (staged/approved/committed)
+ * group_id among its own staged intents targeting its bound task — i.e. a
+ * decision group is already open for the task this session was dispatched
+ * against. Keys on "this session has an open group for its own task", not on
+ * "task.create always needs a group": an investigation/design session with
+ * no open decision group for its task may still file a genuinely standalone
+ * task.create ungrouped.
+ */
+function findOpenGroupIdForSessionTask(
+  sessionId: string,
+  taskId: string,
+): string | null {
+  const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
+  const row = listStagedIntentsBySession(sessionId).find(
+    (r) =>
+      !!r.group_id &&
+      ACTIVE.includes(r.state) &&
+      !!r.task_id &&
+      normalizeTaskId(r.task_id) === taskId,
+  );
+  return row?.group_id ?? null;
+}
+
+/**
+ * Stage-time enforcement of the split/spin-off grouping rule: a `task.create`
+ * staged by a session that already has an open decision group for its own
+ * task must carry that same groupId. A session with no bound task, or no
+ * already-open group for that task, is not checked — the new task is
+ * legitimately standalone.
+ */
+function assertTaskCreateGrouped(
+  kind: string,
+  sessionId: string | null | undefined,
+  groupId: string | null | undefined,
+): void {
+  if (kind !== 'task.create' || groupId || !sessionId) return;
+  const session = getSession(sessionId);
+  if (!session?.task_id) return;
+
+  const openGroupId = findOpenGroupIdForSessionTask(
+    sessionId,
+    normalizeTaskId(session.task_id),
+  );
+  if (openGroupId) {
+    throw new TaskCreateMissingGroupError(openGroupId);
+  }
+}
+
+/**
  * The general staged-intent surface: a single chokepoint producers (Groom(N),
  * Ops(N), and future callers) stage generic { kind, payload } intents through,
  * and a human applies or rejects. Apply always dispatches through
@@ -1436,6 +1505,7 @@ export function stageIntent(
 
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
   assertCompletenessApproval(kind, sessionId);
+  assertTaskCreateGrouped(kind, sessionId, groupId);
 
   const taskId = extractTaskId(kind, payload);
   const titleKey = extractTitleKey(kind, payload);
