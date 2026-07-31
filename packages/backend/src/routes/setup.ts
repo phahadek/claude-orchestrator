@@ -46,9 +46,7 @@ export function requireSetupAccess(
   }
   const remoteAddr = req.socket.remoteAddress ?? '';
   if (!isLoopbackIp(remoteAddr)) {
-    res
-      .status(403)
-      .json({ error: 'forbidden', code: 'setup_loopback_only' });
+    res.status(403).json({ error: 'forbidden', code: 'setup_loopback_only' });
     return;
   }
   next();
