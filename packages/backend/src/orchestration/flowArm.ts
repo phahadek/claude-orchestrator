@@ -22,10 +22,18 @@ export function isFlowId(value: string): value is FlowId {
   return (FLOW_IDS as readonly string[]).includes(value);
 }
 
-/** Read-path default when no flow_arm row exists for (milestone, flow). */
+/**
+ * Read-path default when no flow_arm row exists for (milestone, flow).
+ *
+ * Every flow defaults to disarmed. Arming is an explicit per-milestone
+ * operator decision made via the FlowArmToggle UI, not something a new
+ * milestone inherits. (Reversed from the groom/gate-verify-armed-by-default
+ * shipped in the original per-flow arm model design; see that page's
+ * amended decision record.)
+ */
 export const DEFAULT_ARM: Record<FlowId, boolean> = {
-  groom: true,
-  'gate-verify': true,
+  groom: false,
+  'gate-verify': false,
   design: false,
   ops: false,
 };
