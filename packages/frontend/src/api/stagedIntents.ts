@@ -72,6 +72,14 @@ export interface StagedIntent {
   milestone?: string | null;
   /** The human-facing rationale/summary the decision surface renders beside the payload. */
   decisionProposal?: string | null;
+  /**
+   * The file:line / arch-page-section / API-result evidence
+   * `decisionProposal`'s recommendation rests on — rendered collapsed by
+   * default, distinct from `decisionProposal` which stays immediately
+   * readable. Null for kinds that don't carry one, and for rows predating
+   * this field.
+   */
+  investigation?: string | null;
   /** The /groom skill's structured proposal fields — see `GroomProposalFields`. */
   groomProposal?: GroomProposalFields | null;
   /**

@@ -5465,14 +5465,20 @@ export function insertStagedIntent(row: StagedIntentRow): void {
   _stmtInsertStagedIntent ??= db.prepare<StagedIntentRow>(`
     INSERT INTO staged_intent
       (id, kind, payload, payload_hash, task_id, project_id, session_id,
-       group_id, milestone, state, supersedes, annotation, decision_proposal, groom_proposal,
+       group_id, milestone, state, supersedes, annotation, decision_proposal, investigation, groom_proposal,
        advisory, disposition_reason, answer, created_at, updated_at)
     VALUES
       (@id, @kind, @payload, @payload_hash, @task_id, @project_id, @session_id,
-       @group_id, @milestone, @state, @supersedes, @annotation, @decision_proposal, @groom_proposal,
+       @group_id, @milestone, @state, @supersedes, @annotation, @decision_proposal, @investigation, @groom_proposal,
        @advisory, @disposition_reason, @answer, @created_at, @updated_at)
   `);
-  _stmtInsertStagedIntent.run(row);
+  // `row.investigation` defaults to null for callers built before this column
+  // existed (test fixtures, older call sites) — better-sqlite3's named-param
+  // binding otherwise throws on a key absent from the object.
+  _stmtInsertStagedIntent.run({
+    ...row,
+    investigation: row.investigation ?? null,
+  });
 }
 
 export function getStagedIntent(id: string): StagedIntentRow | undefined {

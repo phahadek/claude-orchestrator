@@ -553,12 +553,13 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'candidate plus its own trade-offs — DO NOT let it carry another option’s ' +
       'rationale, and DO NOT concatenate every candidate’s analysis into a single ' +
       'option’s field. DO carry evidence — file:line citations, arch-page section ' +
-      'names, API-result specifics — in `decisionProposal`’s investigation summary ' +
-      'rather than inside an option description; this evidence requirement still ' +
-      'applies, this only relocates where it is carried, since the payload has no ' +
-      'separate Investigation field. DO name the preferred solution and its ' +
-      'load-bearing reason explicitly in `decisionProposal`, alongside that ' +
-      'investigation summary. A single `options` entry stays valid — a confident ' +
+      'names, API-result specifics — in the payload’s separate `investigation` ' +
+      'field rather than inside an option description or `decisionProposal`; this ' +
+      'evidence requirement still applies, this only names where it is carried. DO ' +
+      'name the preferred solution and its load-bearing reason explicitly in ' +
+      '`decisionProposal`, kept to that recommendation and its reason — design ' +
+      'altitude — with the supporting investigation left to `investigation`. A ' +
+      'single `options` entry stays valid — a confident ' +
       'recommendation the operator accepts or pushes back on (see ‘One Open ' +
       'Question per turn’ above) — this shape governs how it, or each of several, ' +
       'is written, never whether more than one is required. See "Option framing" ' +
@@ -618,7 +619,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'design-option-framing',
     title:
-      'Option framing — architecture-level shape, evidence stays in decisionProposal, a contrast pair required',
+      'Option framing — architecture-level shape, evidence stays in investigation, a contrast pair required',
     appliesTo: ['design'],
     text:
       'Extends "decision.pickOne payload shape" above. An option’s `description` ' +
@@ -627,9 +628,9 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'live with — never an implementation-level restatement of the question ' +
       'itself (which function, which line, which config flag) in place of that ' +
       'architectural framing. DO NOT put evidence — file:line citations, arch-page ' +
-      'section names, API-result specifics — inside an option `description`; that ' +
-      'evidence belongs in `decisionProposal`’s investigation summary, and only ' +
-      'there. DO include an explicit rejected/accepted contrast pair among the ' +
+      'section names, API-result specifics — inside an option `description` or ' +
+      '`decisionProposal`; that evidence belongs in the `investigation` field, and ' +
+      'only there. DO include an explicit rejected/accepted contrast pair among the ' +
       'staged options — at least one option stated as genuinely considered and ' +
       'rejected, with the reason it lost, sitting alongside the accepted one — ' +
       'never only the winning option dressed up with a rationale and no real ' +
@@ -711,7 +712,13 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'disposition is provisional until the operator approves the staged ' +
       '`completeness.disposition` intent — a rejected intent is not a dead end: ' +
       're-call the tool with a revised disposition/reason to stage a fresh intent, ' +
-      'never a second critic pass, and never treating the first write as final.',
+      'never a second critic pass, and never treating the first write as final. DO ' +
+      'write each `reason` the same way `decisionProposal` is written — lead with ' +
+      'the named disposition and its load-bearing reason at design altitude, not ' +
+      'an anchor-dense audit paragraph; this kind carries no separate ' +
+      '`investigation` field, so cite supporting file:line/arch-section/API-result ' +
+      'evidence briefly, in service of that reason, rather than letting the ' +
+      'evidence become the reason.',
   },
   {
     id: 'design-closing-synthesis',

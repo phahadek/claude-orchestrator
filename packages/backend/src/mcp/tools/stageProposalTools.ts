@@ -74,6 +74,7 @@ async function stage(
   envelopeArgs: {
     groupId?: string;
     decisionProposal?: string;
+    investigation?: string;
     groomProposal?: z.infer<typeof intentEnvelopeShape.groomProposal>;
     supersedes?: string;
   },
@@ -94,6 +95,7 @@ async function stage(
     envelopeArgs.groomProposal ?? null,
     envelopeArgs.supersedes ?? null,
     ctx.milestone ?? null,
+    envelopeArgs.investigation ?? null,
   );
   const checked = await routeStageTimeBlock(intent, ctx.sessionManager);
   return { content: [{ type: 'text', text: JSON.stringify(checked) }] };
@@ -298,7 +300,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage an operator decision question',
       description:
-        'Stages a decision.pickOne question-intent — writes no task store, only a question the operator resolves via an answer. Requires a substantive decisionProposal and cannot belong to a group.',
+        'Stages a decision.pickOne question-intent — writes no task store, only a question the operator resolves via an answer. Requires a substantive decisionProposal and cannot belong to a group. decisionProposal names the recommended option and its load-bearing reason at design altitude; carry the file:line/arch-section/API-result evidence it rests on in the separate `investigation` field instead, rendered collapsed by default on the decision panel.',
       inputSchema: envelope({
         prompt: z.string(),
         options: z.array(decisionPickOneOptionSchema).min(1),

@@ -1196,6 +1196,15 @@ export function StagedIntentPanel({
         )
       )}
 
+      {intent.investigation && (
+        <p
+          className={styles.rationale}
+          data-testid="staged-intent-investigation"
+        >
+          <CollapsibleField text={intent.investigation} />
+        </p>
+      )}
+
       <div className={styles.body}>{renderHeadline(intent)}</div>
 
       {blocked && intent.annotation && 'violations' in intent.annotation && (

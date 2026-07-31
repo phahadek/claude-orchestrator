@@ -46,6 +46,32 @@ describe('DecisionPickOnePanel', () => {
     ).toBeTruthy();
   });
 
+  it('renders investigation via CollapsibleField, collapsed by default, alongside an immediately readable decisionProposal', () => {
+    const longInvestigation = Array.from(
+      { length: 20 },
+      (_, i) => `evidence line ${i}: reader.ts:${i}`,
+    ).join('\n');
+    const intent: StagedIntent = {
+      ...singleOptionIntent(),
+      investigation: longInvestigation,
+    };
+
+    render(<DecisionPickOnePanel intent={intent} />);
+
+    expect(
+      screen.getByText('A confident recommendation — the simplest safe bound.'),
+    ).toBeTruthy();
+    const investigation = screen.getByTestId('decision-investigation');
+    expect(investigation.textContent).toContain('evidence line 0');
+    expect(screen.getByText(/Show all \d+ lines/)).toBeTruthy();
+  });
+
+  it('omits the investigation block when the intent carries none', () => {
+    render(<DecisionPickOnePanel intent={singleOptionIntent()} />);
+
+    expect(screen.queryByTestId('decision-investigation')).toBeNull();
+  });
+
   it('accepts the single recommendation, optionally carrying free-form pushback text', async () => {
     const answer = vi
       .spyOn(stagedIntentsApi, 'answer')

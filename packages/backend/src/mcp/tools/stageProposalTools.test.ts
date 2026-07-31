@@ -194,6 +194,38 @@ describe('stage-proposal MCP tools — delegation', () => {
     expect((result as { isError?: boolean }).isError).toBe(true);
     await close();
   });
+
+  it('decision.pickOne threads investigation separately from decisionProposal', async () => {
+    const { client, close } = await connectedClient();
+    const result = await client.callTool({
+      name: 'decision.pickOne',
+      arguments: {
+        payload: {
+          prompt: 'Which approach?',
+          options: [
+            { label: 'A', description: 'first option' },
+            { label: 'B', description: 'second option' },
+          ],
+          allowFreeForm: false,
+        },
+        decisionProposal: 'Recommend A — it keeps memory flat under load.',
+        investigation: 'Evidence: reader.ts:12-40, queries.ts:88.',
+      },
+    });
+    const intent = parseIntentResult(
+      result as { content: Array<{ type: string; text?: string }> },
+    );
+    expect(intent.decisionProposal).toBe(
+      'Recommend A — it keeps memory flat under load.',
+    );
+    expect(intent.investigation).toBe(
+      'Evidence: reader.ts:12-40, queries.ts:88.',
+    );
+
+    const row = getStagedIntent(intent.id as string)!;
+    expect(row.investigation).toBe('Evidence: reader.ts:12-40, queries.ts:88.');
+    await close();
+  });
 });
 
 describe('stage-proposal MCP tools — schema validation', () => {
@@ -449,7 +481,7 @@ describe('stage-proposal MCP tools — envelope fields misplaced inside payload'
     await close();
   });
 
-  it.each(['decisionProposal', 'groupId', 'supersedes'])(
+  it.each(['decisionProposal', 'investigation', 'groupId', 'supersedes'])(
     'rejects %s nested inside payload the same way',
     async (envelopeField) => {
       const { client, close } = await connectedClient();

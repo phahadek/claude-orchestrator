@@ -217,6 +217,36 @@ describe('StagedIntentPanel', () => {
     expect(screen.getByText('Stand up off-box backups')).toBeTruthy();
   });
 
+  it('renders investigation via CollapsibleField, collapsed by default, alongside decisionProposal', () => {
+    const longInvestigation = Array.from(
+      { length: 20 },
+      (_, i) => `evidence line ${i}: reader.ts:${i}`,
+    ).join('\n');
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          decisionProposal: 'Stand up off-box backups',
+          investigation: longInvestigation,
+        })}
+      />,
+    );
+
+    expect(screen.getByText('Stand up off-box backups')).toBeTruthy();
+    const investigation = screen.getByTestId('staged-intent-investigation');
+    expect(investigation.textContent).toContain('evidence line 0');
+    expect(screen.getByText(/Show all \d+ lines/)).toBeTruthy();
+  });
+
+  it('omits the investigation block when the intent carries none — no regression for existing rows', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({ decisionProposal: 'Stand up off-box backups' })}
+      />,
+    );
+
+    expect(screen.queryByTestId('staged-intent-investigation')).toBeNull();
+  });
+
   it('Commit calls the general command-layer route, not a bespoke endpoint', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,

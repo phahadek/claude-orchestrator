@@ -97,6 +97,13 @@ const groomProposalSchema = z.object({
 export const intentEnvelopeShape = {
   groupId: z.string().optional(),
   decisionProposal: z.string().optional(),
+  /**
+   * The file:line / arch-page-section / API-result evidence a
+   * decision.pickOne's decisionProposal recommendation rests on — carried
+   * separately so decisionProposal itself stays at design altitude (the
+   * named recommendation and its load-bearing reason).
+   */
+  investigation: z.string().optional(),
   groomProposal: groomProposalSchema.optional(),
   /**
    * Explicitly retires a prior intent this one replaces — the only way to
@@ -111,9 +118,9 @@ const ENVELOPE_FIELD_NAMES = new Set(Object.keys(intentEnvelopeShape));
 /**
  * Flags every key in `value` that isn't in `knownKeys` — a key matching one
  * of the intent-envelope's own field names (groupId, decisionProposal,
- * groomProposal, supersedes) gets a message naming it as the mistake this
- * exists to catch: that field belongs alongside payload, as a sibling
- * parameter, not nested inside it.
+ * investigation, groomProposal, supersedes) gets a message naming it as the
+ * mistake this exists to catch: that field belongs alongside payload, as a
+ * sibling parameter, not nested inside it.
  */
 function addUnknownPayloadKeyIssues(
   value: Record<string, unknown>,

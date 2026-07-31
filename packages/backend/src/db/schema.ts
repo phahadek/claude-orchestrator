@@ -1265,6 +1265,17 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
 
+  // staged_intent.investigation: the file:line / arch-section / API-result
+  // evidence a decision.pickOne intent's recommendation rests on, carried
+  // separately from decision_proposal (which now stays at design altitude —
+  // the named recommendation and its load-bearing reason). Forward-only:
+  // existing rows get NULL and render exactly as before this column existed.
+  try {
+    target.exec(`ALTER TABLE staged_intent ADD COLUMN investigation TEXT`);
+  } catch {
+    /* already exists */
+  }
+
   // staged_intent.milestone: the milestone (canonical_short_id) the intent's
   // target task belongs to — populated at every stage path (dispatched
   // planning sessions, which know their milestone at dispatch, and the human

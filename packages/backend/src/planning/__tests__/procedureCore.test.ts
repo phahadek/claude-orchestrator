@@ -727,16 +727,16 @@ describe('procedureCore', () => {
       ).toMatch(/claims to re-derive, never\s+givens to resolve against/);
     });
 
-    it('states that evidence belongs in decisionProposal, never in an option description, and requires a rejected/accepted contrast pair', () => {
+    it('states that evidence belongs in the investigation field, never in an option description or decisionProposal, and requires a rejected/accepted contrast pair', () => {
       const optionFraming = renderPrinciple(
         CORE_PRINCIPLES.find((p) => p.id === 'design-option-framing')!,
         'design',
       );
       expect(optionFraming).toMatch(
-        /DO NOT put evidence.*inside an option `description`/,
+        /DO NOT put evidence.*inside an option `description` or\s+`decisionProposal`/,
       );
       expect(optionFraming).toMatch(
-        /that\s+evidence belongs in `decisionProposal`.s investigation summary, and only\s+there/,
+        /that\s+evidence belongs in the `investigation` field, and\s+only\s+there/,
       );
       expect(optionFraming).toMatch(
         /explicit rejected\/accepted contrast pair among the\s+staged options/,
