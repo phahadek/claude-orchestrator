@@ -7,6 +7,7 @@ import { getTaskCache, getVerifySessionsForGateItems } from '../db/queries';
 import type { GateItemListOrder, GateItemVerifySession } from '../db/queries';
 import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
 import { normalizeTaskId } from '../tasks/taskId';
+import { getCachedType, getCachedStatus } from '../tasks/TaskWriteCommands';
 
 /**
  * Recomputes whether a deploy contains a given commit. This is the git-ancestry
@@ -218,6 +219,28 @@ function minDeployedCommitAtLastFail(item: GateItem): string | null {
  * distinct from the operator-gated reopenGateItem: no operator involved,
  * gated purely on a fix actually landing.
  */
+/**
+ * Whether a single gate-item source is covered — i.e. its change is live.
+ * A 💻 Code source (or one whose Type can't be resolved from cache, which
+ * falls back to the strict test deliberately) requires a merged commit that
+ * has actually deployed. Any other Type — 📐 Design, 📋 Planning, 📝 Docs,
+ * 🎨 Assets, 🔧 Operational — produces no branch/PR, so "live" instead means
+ * the source task itself has reached ✅ Done.
+ */
+function isSourceCovered(
+  source: GateItem['sources'][number],
+  deploySha: string,
+  ancestry: DeployAncestrySource,
+): boolean {
+  const type = getCachedType(source.sourceTaskId);
+  if (type !== null && type !== '💻 Code') {
+    return getCachedStatus(source.sourceTaskId) === 'Done';
+  }
+  return (
+    !!source.mergeCommit && ancestry.isAncestor(source.mergeCommit, deploySha)
+  );
+}
+
 export function reconcileGateRunnability(
   deploySha: string,
   options: ReconcileOptions = {},
@@ -232,16 +255,13 @@ export function reconcileGateRunnability(
     : gateStore.listAll();
 
   for (const item of items) {
-    // Covered only once every source has merged AND its merge commit has
-    // deployed — a null merge_commit (source not merged yet) or an
-    // undeployed merge commit both keep the item open. An item with no
-    // sources at all has no code dependency, so it's trivially covered.
+    // Covered only once every source is live — see isSourceCovered for the
+    // per-source, Type-dependent test. An item with no sources at all has no
+    // dependency, so it's trivially covered.
     const covered =
       item.sources.length === 0 ||
-      item.sources.every(
-        (source) =>
-          source.mergeCommit &&
-          ancestry.isAncestor(source.mergeCommit, deploySha),
+      item.sources.every((source) =>
+        isSourceCovered(source, deploySha, ancestry),
       );
 
     if (item.state === 'pass') {

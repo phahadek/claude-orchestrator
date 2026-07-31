@@ -19,6 +19,7 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
+import { upsertTaskCache } from '../../db/queries.js';
 import {
   insertItem,
   setMinDeployedCommit,
@@ -47,6 +48,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM gate_item_source').run();
   db.prepare('DELETE FROM gate_item').run();
   db.prepare('DELETE FROM audit_log').run();
+  db.prepare('DELETE FROM task_cache').run();
 });
 
 function makeItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
@@ -387,6 +389,102 @@ describe('reconcileGateRunnability', () => {
 
     expect(getGateItem(item.id)?.state).toBe('open');
     expect(getGateItem(item.id)?.currentDisposition).toBe('needs-setup');
+  });
+
+  it('marks runnable a gate item sourced from a Done Design task with no merge commit', () => {
+    const item = makeItem({
+      sources: [{ sourceTaskId: 'notion:design-1', sourceTaskTitle: 'Lock the API shape' }],
+    });
+    upsertTaskCache(
+      'notion:design-1',
+      JSON.stringify({ type: '📐 Design', status: '✅ Done' }),
+    );
+
+    const result = reconcileGateRunnability('sha1', {
+      ancestrySource: orderedAncestry,
+    });
+    expect(result.markedRunnable).toEqual([item.id]);
+    expect(getGateItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('stays open while its Design source is still Ready', () => {
+    const item = makeItem({
+      sources: [{ sourceTaskId: 'notion:design-2', sourceTaskTitle: 'Lock the API shape' }],
+    });
+    upsertTaskCache(
+      'notion:design-2',
+      JSON.stringify({ type: '📐 Design', status: '🗂️ Ready' }),
+    );
+
+    const result = reconcileGateRunnability('sha1', {
+      ancestrySource: orderedAncestry,
+    });
+    expect(result.markedRunnable).toEqual([]);
+    expect(getGateItem(item.id)?.state).toBe('open');
+  });
+
+  it('stays open for a Code source with no merge commit, even when its cached type is Code', () => {
+    const item = makeItem({
+      sources: [{ sourceTaskId: 'notion:code-1', sourceTaskTitle: 'Add env var' }],
+    });
+    upsertTaskCache(
+      'notion:code-1',
+      JSON.stringify({ type: '💻 Code', status: '✅ Done' }),
+    );
+
+    const result = reconcileGateRunnability('sha1', {
+      ancestrySource: orderedAncestry,
+    });
+    expect(result.markedRunnable).toEqual([]);
+    expect(getGateItem(item.id)?.state).toBe('open');
+  });
+
+  it('marks runnable a Code source whose merge commit is an ancestor of the deployed sha', () => {
+    const item = makeItem({
+      sources: [{ sourceTaskId: 'notion:code-2', sourceTaskTitle: 'Add env var' }],
+    });
+    upsertTaskCache('notion:code-2', JSON.stringify({ type: '💻 Code' }));
+    mergeSource(item.id, 'sha3', new Date(1).toISOString(), 'notion:code-2');
+
+    const result = reconcileGateRunnability('sha3', {
+      ancestrySource: orderedAncestry,
+    });
+    expect(result.markedRunnable).toEqual([item.id]);
+    expect(getGateItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('falls back to the strict merge-commit test and stays open when the source Type cannot be resolved from cache', () => {
+    const item = makeItem({
+      sources: [{ sourceTaskId: 'notion:unknown-1', sourceTaskTitle: 'Uncached task' }],
+    });
+    // No task_cache row for notion:unknown-1 — getCachedType returns null.
+
+    const result = reconcileGateRunnability('sha1', {
+      ancestrySource: orderedAncestry,
+    });
+    expect(result.markedRunnable).toEqual([]);
+    expect(getGateItem(item.id)?.state).toBe('open');
+  });
+
+  it('stays open for a multi-source item mixing a Done non-Code source and an unmerged Code source', () => {
+    const item = makeItem({
+      sources: [
+        { sourceTaskId: 'notion:design-3', sourceTaskTitle: 'Lock the API shape' },
+        { sourceTaskId: 'notion:code-3', sourceTaskTitle: 'Add env var' },
+      ],
+    });
+    upsertTaskCache(
+      'notion:design-3',
+      JSON.stringify({ type: '📐 Design', status: '✅ Done' }),
+    );
+    upsertTaskCache('notion:code-3', JSON.stringify({ type: '💻 Code' }));
+    // notion:code-3 has no merge commit set.
+
+    const result = reconcileGateRunnability('sha1', {
+      ancestrySource: orderedAncestry,
+    });
+    expect(result.markedRunnable).toEqual([]);
+    expect(getGateItem(item.id)?.state).toBe('open');
   });
 });
 
