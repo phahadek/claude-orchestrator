@@ -6,11 +6,20 @@ import {
   PHASE_LABELS,
   PHASE_SEGMENT_ORDER,
   SEGMENT_STATE_LABELS,
+  GATE_PHASE,
   computePhaseBurndown,
   phaseTotal,
   type SegmentState,
 } from '../utils/phaseBurndown';
+import { useConvergenceHistory } from '../hooks/useConvergenceHistory';
+import { ConvergenceSparkline } from './ConvergenceSparkline';
 import styles from './MilestoneBurndown.module.css';
+
+const TASK_AXIS_LABELS: Record<'green' | 'blocked' | 'unavailable', string> = {
+  green: 'Green',
+  blocked: 'Blocked',
+  unavailable: 'Unavailable',
+};
 
 const SEGMENT_FILL_CLASS: Record<SegmentState, string> = {
   pending: styles.fillPending,
@@ -30,6 +39,9 @@ interface Props {
   onWarningSelect?: (phase: string) => void;
   /** The phase whose warning is currently the active selection, if any. */
   activeWarningPhase?: string | null;
+  /** Scopes the convergence-history fetch for the sparkline; null suppresses it. */
+  projectId?: string | null;
+  milestoneId?: string | null;
 }
 
 export function MilestoneBurndown({
@@ -39,14 +51,79 @@ export function MilestoneBurndown({
   onPhaseSelect,
   onWarningSelect,
   activeWarningPhase = null,
+  projectId = null,
+  milestoneId = null,
 }: Props) {
   const phases = useMemo(
     () => computePhaseBurndown(tasks, convergence),
     [tasks, convergence],
   );
+  const { history } = useConvergenceHistory(projectId, milestoneId);
 
   return (
     <div className={styles.container} data-testid="milestone-burndown">
+      {convergence && (
+        <div className={styles.convergenceHeader} data-testid="convergence-header">
+          <div className={styles.convergenceTop}>
+            <span
+              className={`${styles.statusDot} ${convergence.status === 'green' ? styles.statusGreen : styles.statusBlocked}`}
+              data-testid="convergence-status"
+              title={`Convergence: ${convergence.status}`}
+            />
+            <span className={styles.distanceFigure} data-testid="convergence-distance">
+              {convergence.distanceToGreen}
+            </span>
+            <span className={styles.distanceLabel}>
+              to green (tasks + gate + seed — ops tracked separately)
+            </span>
+          </div>
+
+          <div className={styles.axisChips} data-testid="convergence-axis-chips">
+            <span
+              className={`${styles.axisChip} ${styles[`axisChip_${convergence.axes.tasks.status}`]}`}
+              data-testid="convergence-chip-tasks"
+              title={`Tasks: ${TASK_AXIS_LABELS[convergence.axes.tasks.status]}`}
+            >
+              Tasks: {TASK_AXIS_LABELS[convergence.axes.tasks.status]} (
+              {convergence.axes.tasks.open})
+            </span>
+
+            <button
+              type="button"
+              className={`${styles.axisChip} ${styles.axisChipClickable} ${convergence.axes.gate.status === 'green' ? styles.axisChip_green : styles.axisChip_blocked}`}
+              data-testid="convergence-chip-gate"
+              onClick={() => onPhaseSelect(GATE_PHASE)}
+            >
+              Gate ({convergence.axes.gate.blockingCount})
+            </button>
+
+            <span
+              className={`${styles.axisChip} ${convergence.axes.seed.status === 'green' ? styles.axisChip_green : styles.axisChip_blocked}`}
+              data-testid="convergence-chip-seed"
+            >
+              Seed ({convergence.axes.seed.blockingCount})
+            </span>
+
+            <span
+              className={`${styles.axisChip} ${convergence.axes.ops.status === 'green' ? styles.axisChip_green : styles.axisChip_blocked}`}
+              data-testid="convergence-chip-ops"
+              title={
+                convergence.axes.ops.status === 'green'
+                  ? 'No unresolved touched ops work'
+                  : 'Ops work needs resolution'
+              }
+            >
+              Ops ({convergence.axes.ops.blockingCount})
+            </span>
+          </div>
+
+          {history.length > 0 && (
+            <div className={styles.sparklineWrap}>
+              <ConvergenceSparkline points={history} />
+            </div>
+          )}
+        </div>
+      )}
       {PHASE_ORDER.map((phase) => {
         const segment = phases[phase];
         const total = phaseTotal(segment.counts);

@@ -64,7 +64,29 @@ export function createConvergenceRouter(): Router {
       try {
         const row = resolveMilestoneRowForProject(project, milestone);
         const key = canonicalMilestoneKey(row);
-        res.json(listConvergenceSnapshotHistory(project, key));
+
+        const limitParam = req.query.limit;
+        const sinceParam = req.query.since;
+        const window: { limit?: number; sinceTs?: string } = {};
+        if (typeof limitParam === 'string' && limitParam.trim() !== '') {
+          const parsedLimit = Number(limitParam);
+          if (Number.isFinite(parsedLimit) && parsedLimit > 0) {
+            window.limit = Math.floor(parsedLimit);
+          }
+        }
+        if (typeof sinceParam === 'string' && sinceParam.trim() !== '') {
+          window.sinceTs = sinceParam;
+        }
+        const hasWindow =
+          window.limit !== undefined || window.sinceTs !== undefined;
+
+        res.json(
+          listConvergenceSnapshotHistory(
+            project,
+            key,
+            hasWindow ? window : undefined,
+          ),
+        );
       } catch (err) {
         if (err instanceof UnknownMilestoneError) {
           res.status(400).json({ error: err.message });

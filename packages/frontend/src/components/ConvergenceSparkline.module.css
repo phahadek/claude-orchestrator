@@ -1,0 +1,23 @@
+.sparkline {
+  width: 100%;
+  height: 32px;
+  display: block;
+}
+
+.line {
+  fill: none;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.seriesTasks {
+  stroke: var(--color-blue, #89b4fa);
+}
+
+.seriesGate {
+  stroke: var(--color-red, #f38ba8);
+}
+
+.seriesSeed {
+  stroke: var(--color-yellow, #f9e2af);
+}
