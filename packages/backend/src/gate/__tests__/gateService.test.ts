@@ -24,6 +24,7 @@ import {
   setMinDeployedCommit,
   setSourceMergeCommit,
   advanceState,
+  addSource,
 } from '../gateStore.js';
 import {
   getGateReadiness,
@@ -332,6 +333,45 @@ describe('reconcileGateRunnability', () => {
     });
     expect(advanced.reopened).toEqual([item.id]);
     expect(getGateItem(item.id)?.state).toBe('runnable');
+    // The runnable write must carry the 'reopened' disposition the earlier
+    // write in this same tick just set — not the stale pre-reopen 'fail'.
+    expect(getGateItem(item.id)?.currentDisposition).toBe('reopened');
+    expect(getGateItemDetail(item.id)?.events.at(-1)).toMatchObject({
+      disposition: 'reopened',
+      operator: 'gate-reconciler',
+    });
+  });
+
+  it("keeps an item's existing disposition when it flips open -> runnable without being reopened in the tick", () => {
+    const item = makeItem();
+    mergeSource(item.id, 'sha1', new Date(1).toISOString());
+    advanceState(item.id, 'open', 'needs-setup', new Date(1).toISOString());
+    expect(getGateItem(item.id)?.state).toBe('open');
+
+    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+
+    expect(getGateItem(item.id)?.state).toBe('runnable');
+    expect(getGateItem(item.id)?.currentDisposition).toBe('needs-setup');
+  });
+
+  it("keeps an item's existing disposition when it flips runnable -> open after becoming uncovered", () => {
+    const item = makeItem();
+    mergeSource(item.id, 'sha1', new Date(1).toISOString());
+    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+    advanceState(item.id, 'runnable', 'needs-setup', new Date(1).toISOString());
+    expect(getGateItem(item.id)?.state).toBe('runnable');
+
+    // A new, not-yet-merged source is attached, un-covering the item.
+    addSource(
+      item.id,
+      { sourceTaskId: 'notion:followup-x', sourceTaskTitle: 'Follow-up' },
+      new Date(2).toISOString(),
+    );
+
+    reconcileGateRunnability('sha1', { ancestrySource: orderedAncestry });
+
+    expect(getGateItem(item.id)?.state).toBe('open');
+    expect(getGateItem(item.id)?.currentDisposition).toBe('needs-setup');
   });
 });
 
