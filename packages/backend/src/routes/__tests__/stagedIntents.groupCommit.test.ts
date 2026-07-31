@@ -2017,6 +2017,7 @@ function insertUpdateBodyRow(opts: {
   groupId: string;
   taskId: string;
   state: 'staged' | 'approved' | 'needs_revision' | 'pending_verification';
+  dispositionReason?: string;
 }) {
   insertStagedIntent({
     id: opts.id,
@@ -2033,7 +2034,7 @@ function insertUpdateBodyRow(opts: {
     decision_proposal: null,
     groom_proposal: null,
     advisory: null,
-    disposition_reason: null,
+    disposition_reason: opts.dispositionReason ?? null,
     answer: null,
     milestone: null,
     created_at: 1000,
@@ -2069,6 +2070,7 @@ describe('group commit — a blocked member holds the whole group', () => {
       groupId,
       taskId,
       state: 'needs_revision',
+      dispositionReason: 'needs a rewrite',
     });
 
     const commit = await agent
@@ -2077,9 +2079,20 @@ describe('group commit — a blocked member holds the whole group', () => {
 
     expect(commit.status).toBe(409);
     expect(commit.body.blockingId).toBe('ub-nr');
+    expect(commit.body.blockedMembers).toEqual([
+      {
+        id: 'ub-nr',
+        kind: 'task.updateBody',
+        state: 'needs_revision',
+        reason: 'needs a rewrite',
+      },
+    ]);
     expect(setDependsOn).not.toHaveBeenCalled();
     expect(getStagedIntent(dependsOn.body.id)!.state).toBe('approved');
     expect(getStagedIntent('ub-nr')!.state).toBe('needs_revision');
+    expect(getStagedIntent('ub-nr')!.disposition_reason).toBe(
+      'needs a rewrite',
+    );
   });
 
   it('applies the same refusal to a pending_verification member', async () => {
@@ -2117,8 +2130,112 @@ describe('group commit — a blocked member holds the whole group', () => {
 
     expect(commit.status).toBe(409);
     expect(commit.body.blockingId).toBe('ub-pv');
+    expect(commit.body.blockedMembers).toEqual([
+      {
+        id: 'ub-pv',
+        kind: 'task.updateBody',
+        state: 'pending_verification',
+        reason: null,
+      },
+    ]);
     expect(setDependsOn).not.toHaveBeenCalled();
     expect(getStagedIntent(dependsOn.body.id)!.state).toBe('approved');
+  });
+
+  it('reports every blocked member in one 409, not only the first — and a single retry succeeds once all are resolved', async () => {
+    const setDependsOn = vi.fn();
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),
+      updateStatus: vi.fn(),
+      updateBody: vi.fn(),
+      setDependsOn,
+    });
+    const app = makeApp();
+    const agent = supertest(app);
+    const groupId = 'g-blocked-many';
+    const taskId = 't-blocked-many';
+
+    const dependsOn = await agent.post('/api/staged-intents').send({
+      kind: 'task.setDependsOn',
+      projectId: 'proj-blocked',
+      groupId,
+      payload: { taskId, dependsOn: [] },
+    });
+    await agent
+      .post(`/api/staged-intents/${dependsOn.body.id}/approve`)
+      .send({});
+    insertUpdateBodyRow({
+      id: 'ub-many-1',
+      groupId,
+      taskId,
+      state: 'needs_revision',
+      dispositionReason: 'first blocker',
+    });
+    insertUpdateBodyRow({
+      id: 'ub-many-2',
+      groupId,
+      taskId,
+      state: 'pending_verification',
+    });
+    insertUpdateBodyRow({
+      id: 'ub-many-3',
+      groupId,
+      taskId,
+      state: 'needs_revision',
+      dispositionReason: 'third blocker',
+    });
+
+    const commit = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(commit.status).toBe(409);
+    expect(commit.body.blockedMembers).toEqual([
+      {
+        id: 'ub-many-1',
+        kind: 'task.updateBody',
+        state: 'needs_revision',
+        reason: 'first blocker',
+      },
+      {
+        id: 'ub-many-2',
+        kind: 'task.updateBody',
+        state: 'pending_verification',
+        reason: null,
+      },
+      {
+        id: 'ub-many-3',
+        kind: 'task.updateBody',
+        state: 'needs_revision',
+        reason: 'third blocker',
+      },
+    ]);
+    expect(setDependsOn).not.toHaveBeenCalled();
+    expect(getStagedIntent('ub-many-1')!.disposition_reason).toBe(
+      'first blocker',
+    );
+    expect(getStagedIntent('ub-many-2')!.disposition_reason).toBeNull();
+    expect(getStagedIntent('ub-many-3')!.disposition_reason).toBe(
+      'third blocker',
+    );
+
+    // Resolve every blocked member back onto the active surface, then a
+    // single subsequent commit attempt must succeed with no further 409s.
+    for (const id of ['ub-many-1', 'ub-many-2', 'ub-many-3']) {
+      db.prepare(
+        'UPDATE staged_intent SET state = ?, session_id = NULL WHERE id = ?',
+      ).run('approved', id);
+    }
+
+    const retry = await agent
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+
+    expect(retry.status).toBe(200);
+    expect(getStagedIntent('ub-many-1')!.state).toBe('committed');
+    expect(getStagedIntent('ub-many-2')!.state).toBe('committed');
+    expect(getStagedIntent('ub-many-3')!.state).toBe('committed');
   });
 
   it('a group whose members are all active still commits atomically, unchanged', async () => {
