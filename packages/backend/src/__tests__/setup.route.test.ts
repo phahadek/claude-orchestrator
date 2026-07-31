@@ -20,6 +20,9 @@ vi.mock('../db/queries.js', () => ({
   upsertTaskCache: vi.fn(),
   getCacheAge: vi.fn().mockReturnValue(Infinity),
   getTaskCache: vi.fn().mockReturnValue(null),
+  getDeviceByToken: vi.fn().mockReturnValue(null),
+  updateDeviceLastSeen: vi.fn(),
+  getActiveDeviceCount: vi.fn().mockReturnValue(0),
 }));
 
 vi.mock('../config/dataDir.js', () => ({
@@ -31,8 +34,12 @@ vi.mock('../config/credentialsPath.js', () => ({
 }));
 
 // Static imports — Vitest resolves these through the mocks above
-import setupRouter, { isSetupRequired } from '../routes/setup.js';
-import { countProjects } from '../db/queries.js';
+import setupRouter, {
+  isSetupRequired,
+  requireSetupAccess,
+  _setEnvImportRootsForTesting,
+} from '../routes/setup.js';
+import { countProjects, getActiveDeviceCount } from '../db/queries.js';
 import { getDataDir } from '../config/dataDir.js';
 import { claudeCredentialsPath } from '../config/credentialsPath.js';
 import {
@@ -47,6 +54,9 @@ import {
 
 const mockedCountProjects = countProjects as MockedFunction<
   typeof countProjects
+>;
+const mockedGetActiveDeviceCount = getActiveDeviceCount as MockedFunction<
+  typeof getActiveDeviceCount
 >;
 const mockedGetDataDir = getDataDir as MockedFunction<typeof getDataDir>;
 const mockedClaudeCredentialsPath = claudeCredentialsPath as MockedFunction<
@@ -523,9 +533,13 @@ describe('POST /api/setup/import', () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-import-'));
     mockedGetDataDir.mockReturnValue(tmpDir);
+    // Treat tmpDir as the sole permitted root so existing fixtures (which
+    // live under os.tmpdir(), not the real home dir) stay under bounds.
+    _setEnvImportRootsForTesting([tmpDir]);
   });
 
   afterEach(() => {
+    _setEnvImportRootsForTesting(null);
     fs.rmSync(tmpDir, { recursive: true, force: true });
     vi.clearAllMocks();
   });
@@ -538,7 +552,7 @@ describe('POST /api/setup/import', () => {
   it('returns 404 when the .env file does not exist', async () => {
     const res = await supertest(buildApp())
       .post('/api/setup/import')
-      .send({ path: path.join(tmpDir, 'missing.env') });
+      .send({ path: path.join(tmpDir, 'nested', '.env') });
     expect(res.status).toBe(404);
   });
 
@@ -590,5 +604,178 @@ describe('POST /api/setup/import', () => {
     expect(res.status).toBe(200);
     expect(res.body.dbFound).toBe(true);
     expect(res.body.dbPath).toContain('dashboard.db');
+  });
+
+  it('rejects a path outside the permitted (home) directory', async () => {
+    // homedir() is mocked to tmpDir above — a file elsewhere on disk (e.g.
+    // under a sibling tmp dir) must be rejected, and the file must exist so
+    // this proves the rejection is the path bound, not the 404 branch.
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-outside-'));
+    const outsideFile = path.join(outsideDir, '.env');
+    fs.writeFileSync(outsideFile, 'GITHUB_TOKEN=ghp-outside\n', 'utf8');
+
+    try {
+      const res = await supertest(buildApp())
+        .post('/api/setup/import')
+        .send({ path: outsideFile });
+
+      expect(res.status).toBe(400);
+      // The response must not disclose the rejected file's contents.
+      expect(JSON.stringify(res.body)).not.toContain('ghp-outside');
+
+      const cfg = getOrchestratorConfig();
+      expect(cfg.github.token).not.toBe('ghp-outside');
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a file not literally named .env, even under the permitted root', async () => {
+    const disguisedFile = path.join(tmpDir, 'id_rsa');
+    fs.writeFileSync(disguisedFile, 'SECRET_KEY_MATERIAL\n', 'utf8');
+
+    const res = await supertest(buildApp())
+      .post('/api/setup/import')
+      .send({ path: disguisedFile });
+
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(res.body)).not.toContain('SECRET_KEY_MATERIAL');
+  });
+
+  it('rejects a path that escapes the permitted root via traversal', async () => {
+    const res = await supertest(buildApp())
+      .post('/api/setup/import')
+      .send({ path: path.join(tmpDir, '..', '.env') });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+// ── Setup write endpoints — auth required once setup is complete ──────────────
+
+describe('setup write endpoints reject unauthenticated requests once setup is complete', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-setup-complete-'));
+    mockedGetDataDir.mockReturnValue(tmpDir);
+    const src = new DataDirConfigSource(tmpDir);
+    src.write({
+      github: { token: 'ghp-existing', repo: '' },
+      notion: { apiKey: 'ntn-existing' },
+      setupComplete: true,
+    });
+    _setConfigSourceForTesting(src);
+    // A device is enrolled — requireDeviceAuth's own bootstrap fallback (for
+    // zero enrolled devices) must not be what's carrying this test.
+    mockedGetActiveDeviceCount.mockReturnValue(1);
+  });
+
+  afterEach(() => {
+    _resetAppConfigCache();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  it('rejects POST /setup/save-credentials without a device token and writes nothing', async () => {
+    const res = await supertest(buildApp())
+      .post('/api/setup/save-credentials')
+      .send({ githubToken: 'ghp-attacker', notionApiKey: 'ntn-attacker' });
+
+    expect(res.status).toBe(401);
+    const cfg = new DataDirConfigSource(tmpDir).read();
+    expect(cfg.github.token).toBe('ghp-existing');
+    expect(cfg.notion.apiKey).toBe('ntn-existing');
+  });
+
+  it('rejects POST /setup/complete without a device token', async () => {
+    const res = await supertest(buildApp()).post('/api/setup/complete');
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects POST /setup/import without a device token and writes nothing', async () => {
+    const envFile = path.join(tmpDir, '.env');
+    fs.writeFileSync(envFile, 'GITHUB_TOKEN=ghp-attacker\n', 'utf8');
+
+    const res = await supertest(buildApp())
+      .post('/api/setup/import')
+      .send({ path: envFile });
+
+    expect(res.status).toBe(401);
+    const cfg = new DataDirConfigSource(tmpDir).read();
+    expect(cfg.github.token).toBe('ghp-existing');
+  });
+});
+
+// ── requireSetupAccess — setup-state and origin gating ─────────────────────────
+
+describe('requireSetupAccess', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-setup-access-'));
+    _setConfigSourceForTesting(new DataDirConfigSource(tmpDir));
+    mockedGetActiveDeviceCount.mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    _resetAppConfigCache();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  function fakeReqRes(remoteAddress: string) {
+    const req = {
+      path: '/setup/save-credentials',
+      headers: {},
+      socket: { remoteAddress },
+    } as unknown as import('express').Request;
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    } as unknown as import('express').Response;
+    const next = vi.fn();
+    return { req, res, next };
+  }
+
+  it('allows a loopback request while setup is genuinely pending', () => {
+    const { req, res, next } = fakeReqRes('127.0.0.1');
+    requireSetupAccess(req, res, next);
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-loopback request while setup is genuinely pending', () => {
+    const { req, res, next } = fakeReqRes('192.168.1.50');
+    requireSetupAccess(req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'setup_loopback_only' }),
+    );
+  });
+
+  it('rejects an unauthenticated request once setup is complete, even from loopback', () => {
+    new DataDirConfigSource(tmpDir).write({ setupComplete: true });
+    mockedGetActiveDeviceCount.mockReturnValue(1);
+
+    const { req, res, next } = fakeReqRes('127.0.0.1');
+    requireSetupAccess(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it('allows an authenticated request once setup is complete (falls back to requireDeviceAuth)', () => {
+    new DataDirConfigSource(tmpDir).write({ setupComplete: true });
+    mockedGetActiveDeviceCount.mockReturnValue(0);
+
+    // No devices enrolled yet even though setup completed — requireDeviceAuth's
+    // own bootstrap window still applies (unchanged pre-existing behavior).
+    const { req, res, next } = fakeReqRes('127.0.0.1');
+    requireSetupAccess(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
   });
 });
