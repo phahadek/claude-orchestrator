@@ -237,6 +237,7 @@ export function runMigrations(target: Database.Database): void {
       min_deployed_commit    TEXT,
       state                  TEXT    NOT NULL,
       current_disposition    TEXT,
+      latest_disposition     TEXT,
       updated_at             TEXT    NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_gate_item_project_milestone ON gate_item(project, milestone);
@@ -1681,5 +1682,34 @@ export function runMigrations(target: Database.Database): void {
         END,
         updated_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
     WHERE group_id IS NOT NULL AND state IN ('needs_revision', 'pending_verification');
+  `);
+
+  // gate_item.latest_disposition: the disposition carried by an item's most
+  // recent event, regardless of whether that event advanced state. Before
+  // this column, a non-terminal disposition (needs-setup, noted) was a pure
+  // log entry — recorded in gate_item_event but invisible on the item's
+  // denormalized row, byte-identical to an item that was never dispatched
+  // for verification at all. Backfilled from each item's most recent event
+  // (ordered by id, i.e. insertion order) so pre-existing rows are
+  // trustworthy too, not just events appended after this migration.
+  try {
+    target.exec(`ALTER TABLE gate_item ADD COLUMN latest_disposition TEXT`);
+  } catch {
+    /* already exists */
+  }
+  target.exec(`
+    UPDATE gate_item
+    SET latest_disposition = (
+      SELECT e.disposition
+      FROM gate_item_event e
+      WHERE e.gate_item_id = gate_item.id AND e.disposition IS NOT NULL
+      ORDER BY e.id DESC
+      LIMIT 1
+    )
+    WHERE latest_disposition IS NULL
+      AND EXISTS (
+        SELECT 1 FROM gate_item_event e
+        WHERE e.gate_item_id = gate_item.id AND e.disposition IS NOT NULL
+      );
   `);
 }

@@ -152,6 +152,21 @@ describe('getGateReadiness', () => {
     });
   });
 
+  it('distinguishes an attempted-but-inconclusive item from an untouched one', () => {
+    const untouched = makeItem({ text: 'never attempted' });
+    const abstained = makeItem({ text: 'attempted, inconclusive' });
+    appendGateItemEvent(abstained.id, { disposition: 'needs-setup' });
+
+    const readiness = getGateReadiness('polimarket-analyser', 'M12');
+    expect(readiness.blocking).toHaveLength(2);
+    expect(readiness.nonResolvingItems.map((i) => i.id)).toEqual([
+      abstained.id,
+    ]);
+    expect(
+      readiness.blocking.find((i) => i.id === untouched.id)?.nonResolving,
+    ).toBeFalsy();
+  });
+
   it('returns per-state counts summing to the milestone item total', () => {
     const passed = makeItem({ text: 'a' });
     const deferred = makeItem({ text: 'b' });
@@ -831,6 +846,21 @@ describe('listGateItems', () => {
         .items.map((i) => i.id)
         .sort(),
     ).toEqual([b.id, c.id].sort());
+  });
+
+  it('filters to awaiting-setup items', () => {
+    const abstained = makeItem({ text: 'needs a fixture' });
+    const untouched = makeItem({ text: 'never attempted' });
+    appendGateItemEvent(abstained.id, { disposition: 'needs-setup' });
+
+    expect(
+      listGateItems({ awaitingSetup: true }).items.map((i) => i.id),
+    ).toEqual([abstained.id]);
+    expect(
+      listGateItems({ awaitingSetup: false })
+        .items.map((i) => i.id)
+        .sort(),
+    ).toEqual([untouched.id].sort());
   });
 
   it('paginates and never returns an unbounded load', () => {
