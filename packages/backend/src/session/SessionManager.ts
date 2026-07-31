@@ -3623,6 +3623,7 @@ export class SessionManager extends EventEmitter {
         const stale = getOtherRunningSessionsForTask(
           row.task_id,
           row.session_id,
+          row.session_type,
         );
         for (const s of stale) {
           logger.info(
@@ -3879,7 +3880,11 @@ export class SessionManager extends EventEmitter {
     // Reconcile zombie rows: mark any other running sessions for this task as
     // superseded before respawning, so no two live rows exist for the same task.
     if (row.task_id) {
-      const stale = getOtherRunningSessionsForTask(row.task_id, row.session_id);
+      const stale = getOtherRunningSessionsForTask(
+        row.task_id,
+        row.session_id,
+        row.session_type,
+      );
       for (const s of stale) {
         logger.info(
           `[SessionManager] sendOrResume: superseding stale session ${s.session_id.slice(0, 8)} for task ${row.task_id}`,

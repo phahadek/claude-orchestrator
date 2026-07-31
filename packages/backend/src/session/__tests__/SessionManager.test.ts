@@ -219,6 +219,8 @@ import {
   applyPendingDone,
   getSessionsWithUnappliedPendingDone,
   hasActivePlanningSessionForTask,
+  getOtherRunningSessionsForTask,
+  markSessionSuperseded,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
@@ -1631,6 +1633,30 @@ describe('sendOrResume — surviving worktree reuse (idle resume fast path)', ()
     await doResume();
     expect(vi.mocked(AgentSession).mock.calls[0][0]).toBe(SESSION_ID);
   });
+
+  it('passes the resuming (standard) session type through to getOtherRunningSessionsForTask', async () => {
+    await doResume();
+    expect(vi.mocked(getOtherRunningSessionsForTask)).toHaveBeenCalledWith(
+      'task-1',
+      SESSION_ID,
+      'standard',
+    );
+  });
+
+  it('planning-session resume (groom) passes its own type through — supersede sweep must not run', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(SESSION_ID),
+      session_type: 'groom',
+      worktree_path: null,
+    });
+    await doResume();
+    expect(vi.mocked(getOtherRunningSessionsForTask)).toHaveBeenCalledWith(
+      'task-1',
+      SESSION_ID,
+      'groom',
+    );
+    expect(vi.mocked(markSessionSuperseded)).not.toHaveBeenCalled();
+  });
 });
 
 describe('sendOrResume — missing worktree falls through to recreation', () => {
@@ -1669,6 +1695,24 @@ describe('sendOrResume — missing worktree falls through to recreation', () => 
         ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree add'),
       );
     expect(worktreeAdds.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('passes the resuming (standard) session type through to getOtherRunningSessionsForTask on the recreation path', async () => {
+    const p = sm.sendOrResume(SESSION_ID, 'hello');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    capturedSessions[0].emit('message', {
+      type: 'session_event' as const,
+      sessionId: SESSION_ID,
+      eventType: 'system' as const,
+      content: 'boot',
+    });
+    await p;
+
+    expect(vi.mocked(getOtherRunningSessionsForTask)).toHaveBeenCalledWith(
+      'task-1',
+      SESSION_ID,
+      'standard',
+    );
   });
 });
 
