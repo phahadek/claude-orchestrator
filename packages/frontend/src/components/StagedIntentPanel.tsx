@@ -146,8 +146,8 @@ function BodySectionDiff({ intent }: { intent: StagedIntent }) {
   return (
     <div data-testid="staged-intent-body-diff" className={styles.bodyDiff}>
       <p className={styles.text} data-testid="staged-intent-body-diff-count">
-        {changedSections.length} section{changedSections.length === 1 ? '' : 's'}{' '}
-        changed
+        {changedSections.length} section
+        {changedSections.length === 1 ? '' : 's'} changed
       </p>
       {changedSections.map((section) => (
         <div key={section.name} className={styles.diffSection}>
