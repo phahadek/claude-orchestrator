@@ -1162,6 +1162,14 @@ describe('AutoLauncher — launch failure tracking', () => {
     ).onSessionLaunchFailed(taskId);
   }
 
+  function fireSessionStarted(launcher: AutoLauncher, taskId: string): void {
+    (
+      launcher as unknown as {
+        onSessionStarted: (id: string) => void;
+      }
+    ).onSessionStarted(taskId);
+  }
+
   it('task is skipped during cooldown after launch_failed', async () => {
     const task = makeResolvedTask({ id: 'task-cooldown' });
     const backend = makeFailingBackend(task);
@@ -1183,7 +1191,7 @@ describe('AutoLauncher — launch failure tracking', () => {
     expect(sessionManager.start).not.toHaveBeenCalled();
   });
 
-  it('first launch_failed applies 30s cooldown', async () => {
+  it('first launch_failed applies a cooldown longer than the poll interval', async () => {
     const task = makeResolvedTask({ id: 'task-backoff1' });
     const backend = makeFailingBackend(task);
     const sessionManager = makeSessionManager(0);
@@ -1197,12 +1205,33 @@ describe('AutoLauncher — launch failure tracking', () => {
 
     const budget = getCrashBudget(launcher);
     expect(budget.inCooldown('task-backoff1')).toBe(true);
-    // Still in cooldown just before 30s.
-    await vi.advanceTimersByTimeAsync(29_999);
+    // Still in cooldown just before 90s.
+    await vi.advanceTimersByTimeAsync(89_999);
     expect(budget.inCooldown('task-backoff1')).toBe(true);
-    // Cooldown clears once the 30s window elapses.
+    // Cooldown clears once the 90s window elapses.
     await vi.advanceTimersByTimeAsync(2);
     expect(budget.inCooldown('task-backoff1')).toBe(false);
+  });
+
+  it('first-tier cooldown outlasts the configured auto-launch poll interval', () => {
+    // Regression guard for the observed 95-session loop: a first-tier cooldown
+    // shorter than the poll interval gates nothing, since the next poll always
+    // arrives before the cooldown expires. Assert the relationship directly
+    // rather than assuming the two independently-tuned constants stay aligned.
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      { listProjects: () => [], pollOnStart: false },
+    );
+    const firstTierCooldownMs = (
+      launcher as unknown as {
+        crashBudget: { recordEvent(id: string): { cooldownMs: number } };
+      }
+    ).crashBudget.recordEvent('task-poll-interval-check').cooldownMs;
+
+    expect(firstTierCooldownMs).toBeGreaterThan(
+      runtimeSettings.auto_launch_poll_interval_ms,
+    );
   });
 
   it('second launch_failed applies 2m cooldown', async () => {
@@ -1244,12 +1273,40 @@ describe('AutoLauncher — launch failure tracking', () => {
     await launcher.pollOnce();
     expect(sessionManager.start).not.toHaveBeenCalled();
 
-    // Advance past the 30s cooldown
-    await vi.advanceTimersByTimeAsync(30_001);
+    // Advance past the 90s cooldown
+    await vi.advanceTimersByTimeAsync(90_001);
 
     // Now should launch
     await launcher.pollOnce();
     expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+
+  it('three consecutive launch failures produce counts 1, 2, 3 with escalating cooldowns and escalated:true on the third', () => {
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      { listProjects: () => [], pollOnStart: false },
+    );
+    const budget = (
+      launcher as unknown as {
+        crashBudget: {
+          recordEvent(id: string): {
+            count: number;
+            escalated: boolean;
+            cooldownMs: number;
+          };
+        };
+      }
+    ).crashBudget;
+
+    const first = budget.recordEvent('task-escalate-counts');
+    expect(first).toMatchObject({ count: 1, escalated: false });
+    const second = budget.recordEvent('task-escalate-counts');
+    expect(second).toMatchObject({ count: 2, escalated: false });
+    expect(second.cooldownMs).toBeGreaterThan(first.cooldownMs);
+    const third = budget.recordEvent('task-escalate-counts');
+    expect(third).toMatchObject({ count: 3, escalated: true });
+    expect(third.cooldownMs).toBeGreaterThan(second.cooldownMs);
   });
 
   it('after 3 consecutive launch_failed, escalates to needs_attention via setTaskPauseReason', () => {
@@ -1271,6 +1328,47 @@ describe('AutoLauncher — launch failure tracking', () => {
       'launch_failed',
       'launch_failed_escalated',
     );
+  });
+
+  it('deterministic repeatable launch failures produce at most escalateAfter sessions (regression for the 95-session loop)', async () => {
+    // Mirrors the observed bug: dispatch succeeds synchronously (start()
+    // resolves — the worktree-add failure only surfaces later, in the
+    // fire-and-forget chain, as an async session_launch_failed message) but
+    // the launch never actually succeeds, so session_started never fires and
+    // the crash budget is never cleared. Each poll cycle that finds the task
+    // still eligible re-dispatches and re-fails identically, at the observed
+    // ~poll-interval cadence.
+    const task = makeResolvedTask({ id: 'task-loop-guard' });
+    const backend = makeFailingBackend(task);
+    const sessionManager = makeSessionManager(0);
+    sessionManager.start.mockResolvedValue('session-id-abc123');
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    for (let i = 0; i < 20; i++) {
+      backend.fetchReadyTasks.mockResolvedValue([task]);
+      await launcher.pollOnce();
+      // The launch never confirms success — simulate the async
+      // session_launch_failed notification that follows every dispatch.
+      fireLaunchFailed(launcher, 'task-loop-guard');
+      // isLaunchCandidate must observe the escalated pause reason once set.
+      if (vi.mocked(setTaskPauseReason).mock.calls.length > 0) {
+        vi.mocked(getTaskPauseReason).mockImplementation((id) =>
+          id === 'task-loop-guard' ? 'needs_attention' : null,
+        );
+      }
+      await vi.advanceTimersByTimeAsync(
+        runtimeSettings.auto_launch_poll_interval_ms,
+      );
+    }
+
+    expect(sessionManager.start.mock.calls.length).toBeLessThanOrEqual(3);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    vi.mocked(setTaskPauseReason).mockClear();
   });
 
   it('escalated task is skipped by isLaunchCandidate via getTaskPauseReason gate', async () => {
@@ -1296,8 +1394,8 @@ describe('AutoLauncher — launch failure tracking', () => {
     vi.mocked(getTaskPauseReason).mockReturnValue(null);
   });
 
-  it('successful launch clears both task_pause_reasons DB entry and in-memory cooldown', async () => {
-    const task = makeResolvedTask({ id: 'task-reset' });
+  it('dispatching a launch (start() resolving) does NOT clear the crash budget on its own', async () => {
+    const task = makeResolvedTask({ id: 'task-dispatch-only' });
     const backend = makeFailingBackend(task);
     const sessionManager = makeSessionManager(0);
     sessionManager.start.mockResolvedValue('session-ok');
@@ -1309,17 +1407,60 @@ describe('AutoLauncher — launch failure tracking', () => {
     });
 
     // Simulate a prior launch_failed
-    fireLaunchFailed(launcher, 'task-reset');
-    expect(getCrashBudget(launcher).inCooldown('task-reset')).toBe(true);
+    fireLaunchFailed(launcher, 'task-dispatch-only');
+    expect(getCrashBudget(launcher).inCooldown('task-dispatch-only')).toBe(
+      true,
+    );
 
-    // Advance past cooldown so task is eligible
-    await vi.advanceTimersByTimeAsync(30_001);
-
+    // Advance past cooldown so the task is eligible again, then dispatch.
+    await vi.advanceTimersByTimeAsync(90_001);
     backend.fetchReadyTasks.mockResolvedValue([task]);
     await launcher.pollOnce();
 
-    expect(clearTaskPauseReason).toHaveBeenCalledWith('task-reset');
-    expect(getCrashBudget(launcher).inCooldown('task-reset')).toBe(false);
+    expect(sessionManager.start).toHaveBeenCalledOnce();
+    // Dispatch alone (start() resolving) must NOT clear the record of the
+    // prior failure — only a confirmed session_started does. Clearing here
+    // is exactly the bug: it wipes the failure history before the outcome
+    // of this launch is known.
+    expect(clearTaskPauseReason).not.toHaveBeenCalledWith(
+      'task-dispatch-only',
+    );
+  });
+
+  it('successful launch (confirmed via session_started) resets the count to zero and clears the persisted pause reason', async () => {
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      { listProjects: () => [], pollOnStart: false },
+    );
+
+    // Simulate a prior failure.
+    fireLaunchFailed(launcher, 'task-confirmed-success');
+    expect(
+      getCrashBudget(launcher).inCooldown('task-confirmed-success'),
+    ).toBe(true);
+
+    // The launch is later confirmed successful via session_started.
+    fireSessionStarted(launcher, 'task-confirmed-success');
+
+    expect(clearTaskPauseReason).toHaveBeenCalledWith(
+      'task-confirmed-success',
+    );
+    expect(
+      getCrashBudget(launcher).inCooldown('task-confirmed-success'),
+    ).toBe(false);
+
+    // The count is truly reset to zero, not just out of cooldown: a
+    // subsequent failure is treated as attempt 1 again with the first-tier
+    // cooldown, not a continuation of the prior streak.
+    const outcome = (
+      launcher as unknown as {
+        crashBudget: {
+          recordEvent(id: string): { count: number; cooldownMs: number };
+        };
+      }
+    ).crashBudget.recordEvent('task-confirmed-success');
+    expect(outcome.count).toBe(1);
   });
 
   it('task is not retried when getTaskPauseReason returns non-null (needs_attention persisted)', async () => {
