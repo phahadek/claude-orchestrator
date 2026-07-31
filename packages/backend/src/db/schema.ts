@@ -333,7 +333,8 @@ export function runMigrations(target: Database.Database): void {
       hard_stop_armed        INTEGER NOT NULL DEFAULT 0,
       notify_remaining_ms    INTEGER,
       pause_remaining_ms     INTEGER,
-      hard_stop_remaining_ms INTEGER
+      hard_stop_remaining_ms INTEGER,
+      suspended              INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS active_merges (
@@ -1624,6 +1625,18 @@ export function runMigrations(target: Database.Database): void {
   // non-Done scope rule.
   try {
     target.exec(`ALTER TABLE milestones ADD COLUMN wrapped_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+
+  // stuck_session_timers.suspended: true while notify/pause are cancelled
+  // for a code session's PR review (pr_created / push_detected), so that
+  // an activity-based reset (session_event) does not re-arm timers a
+  // review verdict hasn't yet asked to resume.
+  try {
+    target.exec(
+      `ALTER TABLE stuck_session_timers ADD COLUMN suspended INTEGER NOT NULL DEFAULT 0`,
+    );
   } catch {
     /* already exists */
   }
