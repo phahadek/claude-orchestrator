@@ -213,10 +213,7 @@ describe('DispatchTriggerEvaluator — board blob memoisation', () => {
     for (const flow of ['groom', 'ops', 'design'] as const) {
       upsertArm(MILESTONE, flow, true, Date.now());
     }
-    upsertTaskCache(
-      `board:${MILESTONE}`,
-      JSON.stringify([makeTask('task-1')]),
-    );
+    upsertTaskCache(`board:${MILESTONE}`, JSON.stringify([makeTask('task-1')]));
   });
 
   function makeEvaluator(): DispatchTriggerEvaluator {
@@ -225,15 +222,11 @@ describe('DispatchTriggerEvaluator — board blob memoisation', () => {
 
   it('reuses the same parsed task objects across scans in one tick and across ticks when unchanged', async () => {
     const evaluator = makeEvaluator();
-    const first = await (evaluator as any).scanProjectGroomCandidates(
-      PROJECT,
-    );
+    const first = await (evaluator as any).scanProjectGroomCandidates(PROJECT);
     const second = await (evaluator as any).scanProjectDesignCandidates(
       PROJECT,
     );
-    const third = await (evaluator as any).scanProjectGroomCandidates(
-      PROJECT,
-    );
+    const third = await (evaluator as any).scanProjectGroomCandidates(PROJECT);
 
     expect(first[0].task).toBe(second[0].task);
     expect(first[0].task).toBe(third[0].task);
@@ -241,37 +234,28 @@ describe('DispatchTriggerEvaluator — board blob memoisation', () => {
 
   it('re-parses after upsertTaskCache changes raw_json content', async () => {
     const evaluator = makeEvaluator();
-    const before = await (evaluator as any).scanProjectGroomCandidates(
-      PROJECT,
-    );
+    const before = await (evaluator as any).scanProjectGroomCandidates(PROJECT);
 
     upsertTaskCache(
       `board:${MILESTONE}`,
       JSON.stringify([makeTask('task-1'), makeTask('task-2')]),
     );
 
-    const after = await (evaluator as any).scanProjectGroomCandidates(
-      PROJECT,
-    );
+    const after = await (evaluator as any).scanProjectGroomCandidates(PROJECT);
     expect(before[0].task).not.toBe(after[0].task);
     expect(after.map((c: any) => c.task.id)).toEqual(['task-1', 'task-2']);
   });
 
   it('re-parses after a status write-through rewrites raw_json while reusing fetched_at', async () => {
-    const { updateTaskStatusInBoardCaches } = await import(
-      '../../db/queries.js'
-    );
+    const { updateTaskStatusInBoardCaches } =
+      await import('../../db/queries.js');
     const evaluator = makeEvaluator();
-    const before = await (evaluator as any).scanProjectGroomCandidates(
-      PROJECT,
-    );
+    const before = await (evaluator as any).scanProjectGroomCandidates(PROJECT);
     expect(before[0].task.status).toBe('🔲 Backlog');
 
     updateTaskStatusInBoardCaches('task-1', '🗂️ Ready');
 
-    const after = await (evaluator as any).scanProjectGroomCandidates(
-      PROJECT,
-    );
+    const after = await (evaluator as any).scanProjectGroomCandidates(PROJECT);
     expect(before[0].task).not.toBe(after[0].task);
     expect(after[0].task.status).toBe('🗂️ Ready');
   });

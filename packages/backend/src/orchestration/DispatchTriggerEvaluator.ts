@@ -147,9 +147,7 @@ export class DispatchTriggerEvaluator {
       if (dispatched >= available) break;
       await yieldToEventLoop();
 
-      const groomCandidates = await this.scanProjectGroomCandidates(
-        project.id,
-      );
+      const groomCandidates = await this.scanProjectGroomCandidates(project.id);
       dispatched += await this.dispatchUpTo(
         groomCandidates,
         available - dispatched,
