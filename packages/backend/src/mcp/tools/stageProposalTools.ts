@@ -28,6 +28,7 @@ import {
   archUnitMetadataSchema,
   archCreateUnitPayloadSchema,
   decisionPickOneOptionSchema,
+  rejectUnknownPayloadKeys,
 } from './schemas';
 import { GATE_ITEM_TIER_SELECTION_GUIDANCE } from '../../gate/gateItemClassificationGuidance';
 
@@ -53,10 +54,15 @@ export interface StageProposalToolContext {
   milestone?: string | null;
 }
 
-/** Shape of the { payload, groupId?, decisionProposal?, groomProposal? } envelope every tool accepts. */
+/**
+ * Shape of the { payload, groupId?, decisionProposal?, groomProposal? }
+ * envelope every tool accepts. The payload object rejects any key it doesn't
+ * declare — including a misplaced envelope field like groomProposal, which
+ * would otherwise be silently stripped and discarded rather than staged.
+ */
 function envelope<T extends z.ZodRawShape>(payloadShape: T) {
   return {
-    payload: z.object(payloadShape),
+    payload: rejectUnknownPayloadKeys(payloadShape),
     ...intentEnvelopeShape,
   };
 }
