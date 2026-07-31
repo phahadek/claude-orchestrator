@@ -517,10 +517,12 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       );
     }
     if (status === 'Ready') {
-      const gateResult = checkGroomingPromotionGate(
+      const gateResult = await checkGroomingPromotionGate(
         options?.groomingGate ?? {},
         taskId,
         getCachedType(taskId) ?? undefined,
+        undefined,
+        this.projectId,
       );
       if (!gateResult.allowed) {
         throw new GroomingGateError(gateResult.reasons);

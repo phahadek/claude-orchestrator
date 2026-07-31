@@ -103,8 +103,8 @@ describe('a staged task.updateBody intent from a groom session', () => {
 });
 
 describe('Ready-path promotion gate — unaffected by task.updateBody availability', () => {
-  it('a promotion staging no task.updateBody still passes the gate', () => {
-    const result = checkGroomingPromotionGate(
+  it('a promotion staging no task.updateBody still passes the gate', async () => {
+    const result = await checkGroomingPromotionGate(
       {
         size_check: { decision: 'n/a' },
         type_check: { decision: 'none' },
