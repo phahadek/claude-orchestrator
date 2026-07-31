@@ -3833,6 +3833,7 @@ export interface StuckSessionTimerRow {
   notify_remaining_ms: number | null;
   pause_remaining_ms: number | null;
   hard_stop_remaining_ms: number | null;
+  suspended: number;
 }
 
 export function upsertStuckSessionTimer(
@@ -3845,6 +3846,7 @@ export function upsertStuckSessionTimer(
   notifyRemainingMs: number | null,
   pauseRemainingMs: number | null,
   hardStopRemainingMs: number | null,
+  suspended: boolean,
 ): void {
   db.prepare<{
     session_id: string;
@@ -3856,14 +3858,15 @@ export function upsertStuckSessionTimer(
     notify_remaining_ms: number | null;
     pause_remaining_ms: number | null;
     hard_stop_remaining_ms: number | null;
+    suspended: number;
   }>(
     `
     INSERT INTO stuck_session_timers
       (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
-       hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+       hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms, suspended)
     VALUES
       (@session_id, @task_name, @notify_deadline, @pause_deadline, @hard_stop_deadline,
-       @hard_stop_armed, @notify_remaining_ms, @pause_remaining_ms, @hard_stop_remaining_ms)
+       @hard_stop_armed, @notify_remaining_ms, @pause_remaining_ms, @hard_stop_remaining_ms, @suspended)
     ON CONFLICT(session_id) DO UPDATE SET
       task_name              = excluded.task_name,
       notify_deadline        = excluded.notify_deadline,
@@ -3872,7 +3875,8 @@ export function upsertStuckSessionTimer(
       hard_stop_armed        = excluded.hard_stop_armed,
       notify_remaining_ms    = excluded.notify_remaining_ms,
       pause_remaining_ms     = excluded.pause_remaining_ms,
-      hard_stop_remaining_ms = excluded.hard_stop_remaining_ms
+      hard_stop_remaining_ms = excluded.hard_stop_remaining_ms,
+      suspended              = excluded.suspended
   `,
   ).run({
     session_id: sessionId,
@@ -3884,6 +3888,7 @@ export function upsertStuckSessionTimer(
     notify_remaining_ms: notifyRemainingMs,
     pause_remaining_ms: pauseRemainingMs,
     hard_stop_remaining_ms: hardStopRemainingMs,
+    suspended: suspended ? 1 : 0,
   });
 }
 
