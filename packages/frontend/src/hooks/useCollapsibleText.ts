@@ -6,7 +6,7 @@ import { useCallback, useMemo, useState } from 'react';
  * the per-block expand/collapse idiom EventTranscript.tsx established for
  * long tool-result output.
  */
-export const DEFAULT_COLLAPSE_LINES = 12;
+const DEFAULT_COLLAPSE_LINES = 12;
 
 export interface CollapsibleText {
   /** Whether the text exceeds the threshold and needs a toggle at all. */
