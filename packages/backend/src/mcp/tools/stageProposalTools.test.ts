@@ -435,7 +435,10 @@ describe('stage-proposal MCP tools — envelope fields misplaced inside payload'
           groomProposal: SAMPLE_GROOM_PROPOSAL,
         },
       },
-    })) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+    })) as {
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
     expect(result.isError).toBe(true);
     const text = result.content[0]?.text ?? '';
     expect(text).toMatch(/groomProposal/);
@@ -504,8 +507,8 @@ describe('stage-proposal MCP tools — envelope fields misplaced inside payload'
     });
     expect((result as { isError?: boolean }).isError).toBe(true);
     const text =
-      (result as { content: Array<{ type: string; text?: string }> })
-        .content[0]?.text ?? '';
+      (result as { content: Array<{ type: string; text?: string }> }).content[0]
+        ?.text ?? '';
     expect(text).toMatch(/sourceTask/);
     await close();
   });
@@ -517,7 +520,10 @@ describe('stage-proposal MCP tools — envelope fields misplaced inside payload'
       arguments: {
         payload: { taskId: 't-1', dependsOn: [], triage: 'clean' },
       },
-    })) as { isError?: boolean; content: Array<{ type: string; text?: string }> };
+    })) as {
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+    };
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text ?? '').toMatch(/triage/);
     await close();
@@ -587,9 +593,10 @@ describe('stage-proposal MCP tools — envelope fields misplaced inside payload'
         isError?: boolean;
         content: Array<{ type: string; text?: string }>;
       };
-      expect(result.isError, `${name} should reject an unknown payload key`).toBe(
-        true,
-      );
+      expect(
+        result.isError,
+        `${name} should reject an unknown payload key`,
+      ).toBe(true);
       expect(result.content[0]?.text ?? '').toMatch(/bogusExtraKey/);
     }
     await close();
