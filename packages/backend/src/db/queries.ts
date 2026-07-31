@@ -5476,7 +5476,7 @@ let _stmtGetLatestNoOpForTask: Database.Statement | null = null;
  * state/updated_at to decide whether the deliberate "leave it at Backlog"
  * decision it recorded still stands.
  */
-export function getLatestNoOpForTask(
+function getLatestNoOpForTask(
   taskId: string,
 ): StagedIntentRow | undefined {
   _stmtGetLatestNoOpForTask ??= db.prepare<{ task_id: string }>(
