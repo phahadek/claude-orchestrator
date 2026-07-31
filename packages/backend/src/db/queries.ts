@@ -5487,6 +5487,25 @@ export function hasActiveCapabilityRequestForSession(
   );
 }
 
+/**
+ * True when an `idle` session is idling specifically because it is parked
+ * awaiting a capability disposition — a named, expected state distinct from
+ * a generic idle. This is always a legitimate park: the session asked for a
+ * capability and is waiting for an answer only the operator can give, never
+ * a stalled or abandoned session. Consumers that treat generic idle as a
+ * candidate for staleness handling (orphan sweep, nudge, revert-to-Ready,
+ * crash-budget accounting) must check this first and skip if true, rather
+ * than re-deriving "awaiting a capability" from intent state themselves.
+ */
+export function isSessionAwaitingCapabilityDisposition(
+  session: Pick<Session, 'status' | 'session_id'>,
+): boolean {
+  return (
+    session.status === 'idle' &&
+    hasActiveCapabilityRequestForSession(session.session_id)
+  );
+}
+
 /** Active (non-terminal-tombstone) intents for a project — superseded rows are always hidden. */
 export function listStagedIntentsByProject(
   projectId: string,

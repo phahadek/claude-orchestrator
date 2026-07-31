@@ -183,6 +183,28 @@ function assertOwningSessionComplete(
   }
 }
 
+/**
+ * A `session.requestCapability` intent reaches the decision surface only
+ * once its staging session has parked awaiting the disposition — i.e. once
+ * isSessionComplete is true for it, the same per-session turn-completeness
+ * signal assertOwningSessionComplete gates disposition on. This makes the
+ * premise "a capability request is only ever visible after the session has
+ * stopped" true by construction: while the session's turn is still in
+ * flight, staging the request writes the row immediately (never delayed),
+ * but every decision-surface lens filters it out until the session parks.
+ * Every other intent kind is unaffected — visibility for those is unchanged.
+ */
+function isVisibleOnDecisionSurface(
+  row: StagedIntentRow,
+  sessionManager: SessionManager | undefined,
+): boolean {
+  if (row.kind !== 'session.requestCapability') return true;
+  if (!row.session_id) return true;
+  const turnInFlight =
+    sessionManager?.getLiveSession?.(row.session_id)?.hasActiveTurn() ?? false;
+  return isSessionComplete(row.session_id, turnInFlight);
+}
+
 function hasGroupDependsOn(groupId: string, taskId: string): boolean {
   const ACTIVE: StagedIntentState[] = ['staged', 'approved', 'committed'];
   return listStagedIntentsByGroup(groupId).some((row) => {
@@ -3569,7 +3591,9 @@ export function createStagedIntentsRouter(
           .json({ error: 'projectId is required when milestone is set' });
         return;
       }
-      const rows = listStagedIntentsByMilestone(projectId, milestone);
+      const rows = listStagedIntentsByMilestone(projectId, milestone).filter(
+        (r) => isVisibleOnDecisionSurface(r, sessionManager),
+      );
       let convergence = null;
       if (milestone !== UNATTRIBUTED_MILESTONE_BUCKET) {
         try {
@@ -3583,13 +3607,15 @@ export function createStagedIntentsRouter(
       return;
     }
 
-    const rows = sessionId
-      ? listStagedIntentsBySession(sessionId).filter((r) =>
-          VISIBLE_STATES.includes(r.state),
-        )
-      : projectId
-        ? listStagedIntentsByProject(projectId)
-        : listAllActiveStagedIntents();
+    const rows = (
+      sessionId
+        ? listStagedIntentsBySession(sessionId).filter((r) =>
+            VISIBLE_STATES.includes(r.state),
+          )
+        : projectId
+          ? listStagedIntentsByProject(projectId)
+          : listAllActiveStagedIntents()
+    ).filter((r) => isVisibleOnDecisionSurface(r, sessionManager));
     res.json({ intents: rows.map(rowToApi) });
   });
 

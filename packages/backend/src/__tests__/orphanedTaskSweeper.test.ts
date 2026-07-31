@@ -29,6 +29,7 @@ vi.mock('../db/queries.js', () => ({
   getLatestCodeSessionByNotionTaskId: vi.fn(),
   hasActiveSessionForTask: vi.fn(),
   hasNonTerminalPlanningSessionForTask: vi.fn(() => false),
+  isSessionAwaitingCapabilityDisposition: vi.fn(() => false),
   getPRBySessionId: vi.fn(() => null),
   getLocalBranchBySession: vi.fn(() => undefined),
   setSessionPauseReason: vi.fn(),
@@ -56,6 +57,7 @@ import {
   getLatestCodeSessionByNotionTaskId,
   hasActiveSessionForTask,
   hasNonTerminalPlanningSessionForTask,
+  isSessionAwaitingCapabilityDisposition,
   getPRBySessionId,
   getLocalBranchBySession,
   setSessionPauseReason,
@@ -139,6 +141,7 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(hasNonTerminalPlanningSessionForTask).mockReturnValue(false);
+    vi.mocked(isSessionAwaitingCapabilityDisposition).mockReturnValue(false);
     vi.mocked(getPRBySessionId).mockReturnValue(null);
     vi.mocked(getLocalBranchBySession).mockReturnValue(undefined);
     vi.mocked(setSessionPauseReason).mockClear();
@@ -543,6 +546,33 @@ describe('OrphanedTaskSweeper', () => {
         task_id: 'notion:abc',
       }),
     );
+  });
+
+  it('never nudges or reverts an idle session parked awaiting a capability disposition', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000; // ended 10 min ago (past grace)
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 30 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(isSessionAwaitingCapabilityDisposition).mockReturnValue(true);
+    const enqueueFeedback = vi.fn().mockResolvedValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      enqueueFeedback,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(enqueueFeedback).not.toHaveBeenCalled();
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(setSessionPauseReason).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('surfaces to operator after nudge limit is reached (no revert)', async () => {
