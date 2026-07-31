@@ -221,7 +221,8 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
       } catch (err) {
         setGroupErrors((prev) => ({
           ...prev,
-          [groupId]: err instanceof Error ? err.message : 'Failed to approve group',
+          [groupId]:
+            err instanceof Error ? err.message : 'Failed to approve group',
         }));
       } finally {
         setGroupInFlight(null);
@@ -246,7 +247,8 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
       } catch (err) {
         setGroupErrors((prev) => ({
           ...prev,
-          [groupId]: err instanceof Error ? err.message : 'Failed to reject group',
+          [groupId]:
+            err instanceof Error ? err.message : 'Failed to reject group',
         }));
       } finally {
         setGroupInFlight(null);

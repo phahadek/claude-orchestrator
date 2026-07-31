@@ -132,7 +132,9 @@ export function GroupCard({
     >
       <div className={panelStyles.groupHeader}>
         <span className={styles.cardTitleGroup}>
-          <span className={styles.cardTitle}>{title ?? `Group ${groupId}`}</span>
+          <span className={styles.cardTitle}>
+            {title ?? `Group ${groupId}`}
+          </span>
           {title && (
             <span className={styles.cardTitleDetail}>Group {groupId}</span>
           )}

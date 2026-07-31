@@ -494,9 +494,9 @@ describe('MilestoneDecisionInbox', () => {
     const card = screen.getByTestId('milestone-decision-card-ungrouped-1');
     expect(card.textContent).toContain('Groom the wire-analyst MCP guide');
     expect(card.textContent).toContain('📐');
-    expect(
-      screen.getByTestId('provenance-badge-ungrouped-1').textContent,
-    ).toBe('0067bf6b-9ff8-4782-bd94-d1d9579b68d1');
+    expect(screen.getByTestId('provenance-badge-ungrouped-1').textContent).toBe(
+      '0067bf6b-9ff8-4782-bd94-d1d9579b68d1',
+    );
   });
 
   it('falls back to a defined label, without crashing, for an intent with no resolvable task ref', async () => {
