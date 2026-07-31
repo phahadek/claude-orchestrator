@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getRecentPermissionDenials, clearPermissionDenials } from '../db/queries';
+import {
+  getRecentPermissionDenials,
+  clearPermissionDenials,
+} from '../db/queries';
 
 // ─── Permission denials router ───────────────────────────────────────────────
 
