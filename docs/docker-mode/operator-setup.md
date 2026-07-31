@@ -64,7 +64,7 @@ Add per-project hosts via `DOCKER_EGRESS_EXTRA_HOSTS` (comma-separated). For
 Jira-backed projects, add the Jira instance hostname.
 
 This proxy is a network-level control: it allowlists destination hosts for
-*all* outbound traffic from the session container, regardless of which tool
+_all_ outbound traffic from the session container, regardless of which tool
 made the request, and it only runs when Docker mode is active
 (`ORCHESTRATOR_MODE=corporate` / `dockerMandatory`) — it is off by default in
 personal mode. It is separate from and coarser than the CLI-level

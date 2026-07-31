@@ -53,16 +53,16 @@ bootstrap_script: ''
 
 ## Fields
 
-| Field              | Type       | Default | Description                                                                                                              |
-| ------------------ | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `autofix`          | `string[]` | `[]`    | Commands run by the orchestrator before the PR is opened. Failures are logged but do not block.                          |
-| `verify`           | `string[]` | `[]`    | Commands injected into the CLAUDE.md Pre-PR Gate section. The session is instructed to run these before opening a PR.    |
-| `ci_check_name`    | `string[]` | `[]`    | GitHub check-run names the orchestrator treats as authoritative. Empty = all checks count.                               |
+| Field              | Type       | Default | Description                                                                                                                                                                                            |
+| ------------------ | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `autofix`          | `string[]` | `[]`    | Commands run by the orchestrator before the PR is opened. Failures are logged but do not block.                                                                                                        |
+| `verify`           | `string[]` | `[]`    | Commands injected into the CLAUDE.md Pre-PR Gate section. The session is instructed to run these before opening a PR.                                                                                  |
+| `ci_check_name`    | `string[]` | `[]`    | GitHub check-run names the orchestrator treats as authoritative. Empty = all checks count.                                                                                                             |
 | `allowed_tools`    | `string[]` | `[]`    | Extra `claude` CLI tool-permission patterns (e.g. `Bash(dotnet:*)`, `WebFetch(domain:example.com)`) added on top of the base set. Accepts any pattern shape the CLI understands, not just `Bash(...)`. |
-| `bash_rules`       | `string[]` | `[]`    | Replacement Bash rules (Rule 5+) injected into CLAUDE.md. Each string's first line is the heading.                       |
-| `session_rules`    | `string[]` | `[]`    | Per-project coding-session guidance, rendered as a "## Project Rules" section (distinct from `bash_rules`).              |
-| `review_rules`     | `string[]` | `[]`    | Per-project review-session enforcement criteria, rendered into the review-session prompt. Can drive `escalate` verdicts. |
-| `bootstrap_script` | `string`   | `""`    | Relative path to a script executed after worktree creation. Receives the worktree path as `$1`.                          |
+| `bash_rules`       | `string[]` | `[]`    | Replacement Bash rules (Rule 5+) injected into CLAUDE.md. Each string's first line is the heading.                                                                                                     |
+| `session_rules`    | `string[]` | `[]`    | Per-project coding-session guidance, rendered as a "## Project Rules" section (distinct from `bash_rules`).                                                                                            |
+| `review_rules`     | `string[]` | `[]`    | Per-project review-session enforcement criteria, rendered into the review-session prompt. Can drive `escalate` verdicts.                                                                               |
+| `bootstrap_script` | `string`   | `""`    | Relative path to a script executed after worktree creation. Receives the worktree path as `$1`.                                                                                                        |
 
 All fields are optional. Missing fields fall back to their defaults — a partial config is valid.
 
@@ -86,7 +86,7 @@ mid-session.
 This is a CLI-level, per-tool-call control and is distinct from the network-level
 egress allowlist enforced by the Docker-mode Squid proxy (see
 [`docs/docker-mode/operator-setup.md`](./docker-mode/operator-setup.md)). The
-Squid proxy allowlists destination hosts for *all* outbound traffic from the
+Squid proxy allowlists destination hosts for _all_ outbound traffic from the
 session container regardless of which tool made the request, and only runs
 under `ORCHESTRATOR_MODE=corporate` / `dockerMandatory` — it is off by default
 in personal mode, where `allowed_tools` is the only enforced boundary.
