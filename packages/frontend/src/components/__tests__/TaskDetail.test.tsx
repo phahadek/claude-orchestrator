@@ -499,6 +499,94 @@ describe('TaskDetail', () => {
     expect(screen.getByText(/Transcript not available/)).toBeTruthy();
   });
 
+  it.each(['done', 'error', 'killed'])(
+    'starts collapsed for a groom session in %s state',
+    (status) => {
+      const planningSession = makePlanningSession({
+        sessionType: 'groom',
+        status,
+      });
+      render(
+        <TaskDetail
+          task={makeTask({ planningSession })}
+          send={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+      const header = screen.getByTestId('planning-session-header');
+      const section = screen.getByTestId('planning-session-section');
+      expect(header.getAttribute('aria-expanded')).toBe('false');
+      expect(section.getAttribute('data-expanded')).toBe('false');
+    },
+  );
+
+  it.each(['running', 'idle'])(
+    'starts expanded for a groom session in %s state',
+    (status) => {
+      const planningSession = makePlanningSession({
+        sessionType: 'groom',
+        status,
+      });
+      render(
+        <TaskDetail
+          task={makeTask({ planningSession })}
+          send={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+      const header = screen.getByTestId('planning-session-header');
+      const section = screen.getByTestId('planning-session-section');
+      expect(header.getAttribute('aria-expanded')).toBe('true');
+      expect(section.getAttribute('data-expanded')).toBe('true');
+    },
+  );
+
+  it.each(['design', 'ops'])(
+    'starts expanded for a %s session regardless of status',
+    (sessionType) => {
+      const planningSession = makePlanningSession({
+        sessionType,
+        status: 'done',
+      });
+      render(
+        <TaskDetail
+          task={makeTask({ planningSession })}
+          send={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+      const header = screen.getByTestId('planning-session-header');
+      const section = screen.getByTestId('planning-session-section');
+      expect(header.getAttribute('aria-expanded')).toBe('true');
+      expect(section.getAttribute('data-expanded')).toBe('true');
+    },
+  );
+
+  it('keeps a collapsed done-grooming panel open after toggling and re-rendering', () => {
+    const planningSession = makePlanningSession({
+      sessionType: 'groom',
+      status: 'done',
+    });
+    const task = makeTask({ planningSession });
+    const { rerender } = render(
+      <TaskDetail task={task} send={vi.fn()} onClose={vi.fn()} />,
+    );
+    const header = screen.getByTestId('planning-session-header');
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+
+    rerender(
+      <TaskDetail task={{ ...task }} send={vi.fn()} onClose={vi.fn()} />,
+    );
+    expect(
+      screen
+        .getByTestId('planning-session-header')
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
+  });
+
   it('has no Overview tab at task level', () => {
     const pr = makePr();
     render(

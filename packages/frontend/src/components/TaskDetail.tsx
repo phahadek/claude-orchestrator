@@ -191,6 +191,17 @@ interface Props {
   setSessionFavorited?: (sessionId: string, favorited: boolean) => void;
 }
 
+// A concluded grooming session is historical reference; collapse it by default.
+// Design/Ops sessions are the task's primary content and always start expanded.
+function defaultShowPlanningSection(
+  planningSession: TaskView['planningSession'],
+): boolean {
+  return !(
+    planningSession?.sessionType === 'groom' &&
+    ['done', 'error', 'killed'].includes(planningSession.status)
+  );
+}
+
 // ── TaskDetail ────────────────────────────────────────────────────
 
 export function TaskDetail({
@@ -209,7 +220,9 @@ export function TaskDetail({
 }: Props) {
   const isMobile = useIsMobile();
   const [showReviewSection, setShowReviewSection] = useState(true);
-  const [showPlanningSection, setShowPlanningSection] = useState(true);
+  const [showPlanningSection, setShowPlanningSection] = useState(() =>
+    defaultShowPlanningSection(task.planningSession),
+  );
   const [showSpec, setShowSpec] = useState(!task.codeSession);
   const [mobileOpenSection, setMobileOpenSection] = useState<
     'review' | 'pr' | null
@@ -238,7 +251,7 @@ export function TaskDetail({
   // Reset state when task changes
   useEffect(() => {
     setShowReviewSection(true);
-    setShowPlanningSection(true);
+    setShowPlanningSection(defaultShowPlanningSection(task.planningSession));
     setMobileOpenSection('review');
     setReviewError(null);
     setFixConflictsInFlight(false);
