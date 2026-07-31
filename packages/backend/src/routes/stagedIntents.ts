@@ -170,7 +170,7 @@ function isReadyPathKind(kind: string, payload: unknown): boolean {
  * Ready-path member the moment it is staged without a groupId, naming the
  * member set so the staging session can self-correct in-turn.
  */
-export class ReadyPathMissingGroupError extends Error {
+class ReadyPathMissingGroupError extends Error {
   constructor(kind: string) {
     super(
       `[stagedIntents] "${kind}" is a Ready-path member (${READY_PATH_KINDS.join(', ')}) staged with no ` +
