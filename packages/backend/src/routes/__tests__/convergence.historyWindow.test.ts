@@ -36,7 +36,10 @@ function makeApp() {
   return app;
 }
 
-function snapshot(ts: string, overrides: Partial<Record<string, unknown>> = {}) {
+function snapshot(
+  ts: string,
+  overrides: Partial<Record<string, unknown>> = {},
+) {
   return {
     project: 'proj-1',
     milestone: 'M1',

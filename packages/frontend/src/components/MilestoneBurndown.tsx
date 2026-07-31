@@ -63,14 +63,20 @@ export function MilestoneBurndown({
   return (
     <div className={styles.container} data-testid="milestone-burndown">
       {convergence && (
-        <div className={styles.convergenceHeader} data-testid="convergence-header">
+        <div
+          className={styles.convergenceHeader}
+          data-testid="convergence-header"
+        >
           <div className={styles.convergenceTop}>
             <span
               className={`${styles.statusDot} ${convergence.status === 'green' ? styles.statusGreen : styles.statusBlocked}`}
               data-testid="convergence-status"
               title={`Convergence: ${convergence.status}`}
             />
-            <span className={styles.distanceFigure} data-testid="convergence-distance">
+            <span
+              className={styles.distanceFigure}
+              data-testid="convergence-distance"
+            >
               {convergence.distanceToGreen}
             </span>
             <span className={styles.distanceLabel}>
@@ -78,7 +84,10 @@ export function MilestoneBurndown({
             </span>
           </div>
 
-          <div className={styles.axisChips} data-testid="convergence-axis-chips">
+          <div
+            className={styles.axisChips}
+            data-testid="convergence-axis-chips"
+          >
             <span
               className={`${styles.axisChip} ${styles[`axisChip_${convergence.axes.tasks.status}`]}`}
               data-testid="convergence-chip-tasks"

@@ -255,7 +255,12 @@ describe('MilestoneBurndown convergence header', () => {
         convergence={makeConvergence({
           axes: {
             tasks: { status: 'unavailable', open: 0, closed: 0, blocking: [] },
-            gate: { status: 'green', blockingCount: 0, bespokeCount: 0, blocking: [] },
+            gate: {
+              status: 'green',
+              blockingCount: 0,
+              bespokeCount: 0,
+              blocking: [],
+            },
             seed: { status: 'green', blockingCount: 0, blocking: [] },
             ops: { status: 'green', blockingCount: 0, blocking: [] },
           },
