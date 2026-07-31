@@ -1303,6 +1303,73 @@ export function deleteTaskCacheRow(taskId: string): void {
   db.prepare(`DELETE FROM task_cache WHERE task_id = ?`).run(taskId);
 }
 
+const stmtGetBoardCacheRows = db.prepare(
+  `SELECT task_id, fetched_at, raw_json FROM task_cache WHERE task_id LIKE 'board:%'`,
+);
+
+/**
+ * Write-through for a status change: patches the `status` field of the
+ * given task in place inside every cached `board:*` blob that contains it
+ * (a task can appear in several board rows at once — per-milestone,
+ * hyphenless-id, and project-prefixed keys all coexist). Does not delete
+ * rows or trigger a project re-warm, so it stays off the Notion API; the
+ * periodic TaskCacheRefresher remains the source of truth and will later
+ * overwrite these rows with authoritative data.
+ *
+ * Ids are matched via normalizeTaskId, which canonicalizes both the
+ * `notion:` source prefix and hyphenation — board blobs carry bare ids
+ * while callers may pass any prefixed/hyphenless variant. Best-effort and
+ * non-fatal throughout: a missing, empty, or unparseable board row is
+ * skipped rather than allowed to fail the status write.
+ */
+export function updateTaskStatusInBoardCaches(
+  taskId: string,
+  status: string,
+): void {
+  const normalized = normalizeTaskId(taskId);
+  let rows: Array<{ task_id: string; fetched_at: number; raw_json: string }>;
+  try {
+    rows = stmtGetBoardCacheRows.all() as Array<{
+      task_id: string;
+      fetched_at: number;
+      raw_json: string;
+    }>;
+  } catch {
+    return;
+  }
+  for (const row of rows) {
+    let tasks: unknown;
+    try {
+      tasks = JSON.parse(row.raw_json);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(tasks)) continue;
+    let changed = false;
+    for (const entry of tasks) {
+      if (
+        entry &&
+        typeof entry === 'object' &&
+        typeof (entry as { id?: unknown }).id === 'string' &&
+        normalizeTaskId((entry as { id: string }).id) === normalized
+      ) {
+        (entry as { status: string }).status = status;
+        changed = true;
+      }
+    }
+    if (!changed) continue;
+    try {
+      stmtUpsertTaskCache.run({
+        task_id: row.task_id,
+        fetched_at: row.fetched_at,
+        raw_json: JSON.stringify(tasks),
+      });
+    } catch {
+      // Non-fatal: leave the row as-is rather than failing the status write.
+    }
+  }
+}
+
 export function incrementTokens(
   sessionId: string,
   inputTokens: number,

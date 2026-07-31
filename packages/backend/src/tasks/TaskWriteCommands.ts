@@ -10,6 +10,7 @@ import {
   getTaskCache,
   deleteTaskCacheRow,
   getMergeCommitForTask,
+  updateTaskStatusInBoardCaches,
 } from '../db/queries';
 import {
   checkReadiness,
@@ -548,6 +549,7 @@ export class BackendTaskWriteCommands implements TaskWriteCommands {
       }
     }
     await this.backend.updateStatus(taskId, STATUS_DISPLAY[status], options);
+    updateTaskStatusInBoardCaches(taskId, STATUS_DISPLAY[status]);
   }
 
   async setDependsOn(

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockGetTaskCache = vi.fn();
 const mockGetMergeCommitForTask = vi.fn();
 const mockDeleteTaskCacheRow = vi.fn();
+const mockUpdateTaskStatusInBoardCaches = vi.fn();
 const mockRecordEvent = vi.fn();
 const mockInsertItem = vi.fn();
 const mockRecordAccretionMarker = vi.fn();
@@ -18,6 +19,8 @@ vi.mock('../../db/queries', () => ({
   getMergeCommitForTask: (...args: unknown[]) =>
     mockGetMergeCommitForTask(...args),
   deleteTaskCacheRow: (...args: unknown[]) => mockDeleteTaskCacheRow(...args),
+  updateTaskStatusInBoardCaches: (...args: unknown[]) =>
+    mockUpdateTaskStatusInBoardCaches(...args),
 }));
 
 vi.mock('../../audit/AuditLog', () => ({
@@ -112,6 +115,7 @@ beforeEach(() => {
   mockGetMergeCommitForTask.mockReset();
   mockGetMergeCommitForTask.mockReturnValue(null);
   mockDeleteTaskCacheRow.mockReset();
+  mockUpdateTaskStatusInBoardCaches.mockReset();
   mockRecordEvent.mockReset();
   mockInsertItem.mockReset();
   mockRecordAccretionMarker.mockReset();
@@ -227,6 +231,57 @@ describe('TaskWriteCommands.setStatus — state machine', () => {
         },
       },
     );
+  });
+
+  it('patches the board cache in place with the display-format status after a successful write', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:abc', 'Ready', {
+      groomingGate: {
+        size_check: { decision: 'no_split' },
+        type_check: { decision: 'none' },
+      },
+    });
+
+    expect(mockUpdateTaskStatusInBoardCaches).toHaveBeenCalledWith(
+      'notion:abc',
+      '🗂️ Ready',
+    );
+  });
+
+  it('does not delete any board cache row or trigger a project re-warm on a status write', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await commands.setStatus('notion:abc', 'Ready', {
+      groomingGate: {
+        size_check: { decision: 'no_split' },
+        type_check: { decision: 'none' },
+      },
+    });
+
+    expect(mockDeleteTaskCacheRow).not.toHaveBeenCalled();
+  });
+
+  it('does not patch the board cache when the transition is rejected', async () => {
+    mockGetTaskCache.mockReturnValue(
+      cacheRowWithStatus(STATUS_DISPLAY.Backlog),
+    );
+    const backend = makeBackend();
+    const commands = new BackendTaskWriteCommands(backend);
+
+    await expect(commands.setStatus('notion:abc', 'Done')).rejects.toThrow(
+      /invalid status transition/i,
+    );
+
+    expect(mockUpdateTaskStatusInBoardCaches).not.toHaveBeenCalled();
   });
 });
 
