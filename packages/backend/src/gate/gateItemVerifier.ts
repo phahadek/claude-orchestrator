@@ -123,12 +123,42 @@ function buildGateVerifyProcedure(item: GateItem): string {
       'substitute a precondition or source reading for it.',
     '',
     'This is a bounded best-effort read: settle within your time/turn ' +
-      'budget, or abstain. Never stage, commit, or mutate anything, and ' +
-      'never call a gate-write API — you have no gate-write authority; the ' +
-      'backend is the only writer of gate state, and treats this report as ' +
-      'evidence, not a command. Auto-pass only on clear, direct evidence; ' +
-      'if you cannot conclusively determine pass or fail, report ' +
-      'needs-setup — abstain rather than guess.',
+      'budget, or abstain. You hold no general write authority — no ' +
+      'staging, no commits, no multi-step operational change of any kind ' +
+      '(the one narrow exception below aside) — and never call a ' +
+      'gate-write API: you have no gate-write authority; the backend is ' +
+      'the only writer of gate state, and treats this report as evidence, ' +
+      'not a command. Auto-pass only on clear, direct evidence; if you ' +
+      'cannot conclusively determine pass or fail, report needs-setup — ' +
+      'abstain rather than guess.',
+    '',
+    '**The one narrow write exception.** If settling this item requires ' +
+      'an operational trace that does not exist yet — the described ' +
+      'behavior has never run, so there is nothing in audit_log/' +
+      'session_events/live DB-API state to cite — you may request exactly ' +
+      'one atomic, instrumental write strictly to produce the trace the ' +
+      "item's described behavior would leave (e.g. seeding one row, " +
+      'triggering one event) — never a multi-step or open-ended action. ' +
+      'It is a single Bash ' +
+      'command prefix or one named MCP write verb, requested the same way ' +
+      'as any other capability (see "Capabilities" above): call ' +
+      `\`${orchestratorMcpToolName('session.requestCapability')}\` with ` +
+      '`{"payload":{"capability":"<one Bash command prefix or one named ' +
+      'MCP write verb>","plan":"seed/trigger exactly this one row/event, ' +
+      'then re-read the resulting trace and report gate.verify",' +
+      '"evidence":"<why no existing trace covers this item>"}}`. Out of ' +
+      'scope for this exception, with no exceptions of their own: ' +
+      'reconcile-and-capture, any `ops_journal` transition, any other ' +
+      'multi-step operational change, and any gate-write call — the write ' +
+      'must be one atomic action that produces the closing trace ' +
+      'directly, never the start of a longer procedure. The write is ' +
+      'instrumental only and never itself the verdict — the same ' +
+      '`gate.verify` pass/fail/needs-setup report is the only gate-facing ' +
+      'output, and the backend remains the sole writer of gate state. ' +
+      'Abstain remains the default: request this write only once the ' +
+      'single closing action that would produce the trace is already ' +
+      'identified — genuine ambiguity, or a need for more than one step, ' +
+      'still routes to `needs-setup` rather than a speculative request.',
     '',
     'This session is responsible for asking for what it needs: nothing beyond ' +
       'its base read/stage profile is ever speculatively handed to it. If ' +
