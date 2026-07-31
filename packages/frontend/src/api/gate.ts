@@ -130,6 +130,11 @@ export interface ApproveGateItemInput {
   operator?: string;
 }
 
+export interface ReclassifyGateItemInput {
+  classification: GateItemClassification;
+  operator?: string;
+}
+
 export interface GateItemVerifySession {
   itemId: string;
   sessionId: string;
@@ -219,6 +224,21 @@ export const gateApi = {
   approveItem(id: string, input: ApproveGateItemInput = {}): Promise<GateItem> {
     return apiRequest<GateItem>(
       `/api/gate/items/${encodeURIComponent(id)}/approve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    );
+  },
+
+  /** Changes a gate item's classification tier. */
+  reclassifyItem(
+    id: string,
+    input: ReclassifyGateItemInput,
+  ): Promise<GateItem> {
+    return apiRequest<GateItem>(
+      `/api/gate/items/${encodeURIComponent(id)}/classification`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
