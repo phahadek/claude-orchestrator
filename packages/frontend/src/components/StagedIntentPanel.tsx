@@ -1197,7 +1197,10 @@ export function StagedIntentPanel({
       )}
 
       {intent.investigation && (
-        <p className={styles.rationale} data-testid="staged-intent-investigation">
+        <p
+          className={styles.rationale}
+          data-testid="staged-intent-investigation"
+        >
           <CollapsibleField text={intent.investigation} />
         </p>
       )}

@@ -5475,7 +5475,10 @@ export function insertStagedIntent(row: StagedIntentRow): void {
   // `row.investigation` defaults to null for callers built before this column
   // existed (test fixtures, older call sites) — better-sqlite3's named-param
   // binding otherwise throws on a key absent from the object.
-  _stmtInsertStagedIntent.run({ ...row, investigation: row.investigation ?? null });
+  _stmtInsertStagedIntent.run({
+    ...row,
+    investigation: row.investigation ?? null,
+  });
 }
 
 export function getStagedIntent(id: string): StagedIntentRow | undefined {
