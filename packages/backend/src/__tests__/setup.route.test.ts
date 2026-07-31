@@ -36,7 +36,6 @@ import setupRouter, {
   _setEnvImportRootsForTesting,
 } from '../routes/setup.js';
 import { countProjects, getActiveDeviceCount } from '../db/queries.js';
-import { getDataDir } from '../config/dataDir.js';
 import { claudeCredentialsPath } from '../config/credentialsPath.js';
 import {
   DataDirConfigSource,
@@ -54,7 +53,6 @@ const mockedCountProjects = countProjects as MockedFunction<
 const mockedGetActiveDeviceCount = getActiveDeviceCount as MockedFunction<
   typeof getActiveDeviceCount
 >;
-const mockedGetDataDir = getDataDir as MockedFunction<typeof getDataDir>;
 const mockedClaudeCredentialsPath = claudeCredentialsPath as MockedFunction<
   typeof claudeCredentialsPath
 >;
@@ -154,6 +152,9 @@ describe('setup writes bust the config cache', () => {
     // resolve(), not a tmpDir-literal override that the writes never reach.
     prevXdgDataHome = process.env.XDG_DATA_HOME;
     process.env.XDG_DATA_HOME = tmpDir;
+    // POST /setup/import (tested below) writes its .env fixture under
+    // tmpDir, outside the default permitted import roots — allow it.
+    _setEnvImportRootsForTesting([tmpDir]);
     for (const key of ENV_KEYS) {
       prevEnv[key] = process.env[key];
       delete process.env[key];
@@ -161,6 +162,7 @@ describe('setup writes bust the config cache', () => {
   });
 
   afterEach(() => {
+    _setEnvImportRootsForTesting(null);
     _resetAppConfigCache();
     if (prevXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = prevXdgDataHome;
@@ -238,21 +240,34 @@ describe('setup writes bust the config cache', () => {
 
 describe('POST /setup/complete validation', () => {
   let tmpDir: string;
+  let prevXdgDataHome: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-setup-complete-'));
-    mockedGetDataDir.mockReturnValue(tmpDir);
-    _setConfigSourceForTesting(new DataDirConfigSource(tmpDir));
+    // The getDataDir mock never actually reaches writeOrchestratorConfig()
+    // (see the other describe blocks in this file) — point the real data
+    // dir at this tmp dir so the real write path stays isolated too.
+    prevXdgDataHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = tmpDir;
+    // No _setConfigSourceForTesting override: /setup/complete's write
+    // (writeOrchestratorConfig) and its own db.path writability check
+    // (getDataDir()) both always target the real (XDG_DATA_HOME-derived)
+    // data dir — a tmpDir-literal override would desync reads from writes.
+    // Constructing a real DataDirConfigSource() creates that dir as a
+    // side effect, which the writability check needs to already exist.
+    new DataDirConfigSource();
   });
 
   afterEach(() => {
     _resetAppConfigCache();
+    if (prevXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = prevXdgDataHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
     vi.clearAllMocks();
   });
 
   it('rejects a placeholder-shaped github.repo', async () => {
-    const src = new DataDirConfigSource(tmpDir);
+    const src = new DataDirConfigSource();
     src.write({
       github: { token: 'ghp-real-1234567890', repo: 'owner/repo' },
     });
@@ -266,7 +281,7 @@ describe('POST /setup/complete validation', () => {
   });
 
   it('rejects an obviously-too-short github.token', async () => {
-    const src = new DataDirConfigSource(tmpDir);
+    const src = new DataDirConfigSource();
     src.write({ github: { token: 'ghp-x', repo: 'real-owner/real-repo' } });
 
     const res = await supertest(buildApp()).post('/api/setup/complete');
@@ -275,7 +290,7 @@ describe('POST /setup/complete validation', () => {
   });
 
   it('rejects an obviously-too-short notion.apiKey', async () => {
-    const src = new DataDirConfigSource(tmpDir);
+    const src = new DataDirConfigSource();
     src.write({
       github: { token: 'ghp-real-1234567890', repo: 'real-owner/real-repo' },
       notion: { apiKey: 'ntn-1' },
@@ -287,7 +302,7 @@ describe('POST /setup/complete validation', () => {
   });
 
   it('rejects a db.path whose directory is not writable', async () => {
-    const src = new DataDirConfigSource(tmpDir);
+    const src = new DataDirConfigSource();
     src.write({
       github: { token: 'ghp-real-1234567890', repo: 'real-owner/real-repo' },
       db: { path: '/nonexistent-dir-xyz/dashboard.db' },
@@ -299,7 +314,7 @@ describe('POST /setup/complete validation', () => {
   });
 
   it('genuine first-run (real-looking credentials, writable db path) completes successfully', async () => {
-    const src = new DataDirConfigSource(tmpDir);
+    const src = new DataDirConfigSource();
     src.write({
       github: { token: 'ghp-real-1234567890', repo: 'real-owner/real-repo' },
     });
@@ -311,7 +326,7 @@ describe('POST /setup/complete validation', () => {
   });
 
   it('does not block first-run when notion.apiKey and db.path are left unset', async () => {
-    const src = new DataDirConfigSource(tmpDir);
+    const src = new DataDirConfigSource();
     src.write({
       github: { token: 'ghp-real-1234567890', repo: 'real-owner/real-repo' },
     });
@@ -562,7 +577,6 @@ describe('POST /api/setup/import', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-import-'));
-    mockedGetDataDir.mockReturnValue(tmpDir);
     // Treat tmpDir as the sole permitted root so existing fixtures (which
     // live under os.tmpdir(), not the real home dir) stay under bounds.
     _setEnvImportRootsForTesting([tmpDir]);
@@ -702,7 +716,6 @@ describe('setup write endpoints reject unauthenticated requests once setup is co
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-setup-complete-'));
-    mockedGetDataDir.mockReturnValue(tmpDir);
     const src = new DataDirConfigSource(tmpDir);
     src.write({
       github: { token: 'ghp-existing', repo: '' },

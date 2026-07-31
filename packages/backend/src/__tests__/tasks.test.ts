@@ -125,12 +125,16 @@ beforeEach(() => {
   // Default: board cache returns three task IDs
   vi.mocked(queries.getTaskCache).mockReturnValue({
     cache_key: 'board:board-1',
+    // annotateGroomDepBlocking requires every cached task to carry a real
+    // `status` string (NotionTask.status is non-optional) — these fixtures
+    // otherwise crash the route with "Cannot read properties of undefined
+    // (reading 'includes')".
     raw_json: JSON.stringify([
-      { id: 'task-ready' },
-      { id: 'task-done' },
-      { id: 'task-deferred' },
-      { id: 'task-backlog' },
-      { id: 'task-in-progress' },
+      { id: 'task-ready', status: '🗂️ Ready', dependsOn: [] },
+      { id: 'task-done', status: '✅ Done', dependsOn: [] },
+      { id: 'task-deferred', status: '⏸️ Deferred', dependsOn: [] },
+      { id: 'task-backlog', status: '🔲 Backlog', dependsOn: [] },
+      { id: 'task-in-progress', status: '🔄 In Progress', dependsOn: [] },
     ]),
     fetched_at: Date.now(),
   } as never);
@@ -1006,7 +1010,9 @@ describe('TaskView recoveryDescriptor', () => {
     vi.clearAllMocks();
     vi.mocked(queries.getTaskCache).mockReturnValue({
       cache_key: 'board:board-1',
-      raw_json: JSON.stringify([{ id: 'task-1' }]),
+      raw_json: JSON.stringify([
+        { id: 'task-1', status: '⚠️ Needs Attention', dependsOn: [] },
+      ]),
       fetched_at: Date.now(),
     } as never);
   });

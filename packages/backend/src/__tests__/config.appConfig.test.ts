@@ -138,8 +138,17 @@ describe('DataDirConfigSource', () => {
 
   describe('readWithExplicitFields', () => {
     it('reports only the fields explicitly present in config.json', () => {
+      // write() always merges onto a full CONFIG_DEFAULTS clone and persists
+      // every field (including untouched ones at their default value) — so
+      // every key ends up "present" in the file. To exercise explicit-field
+      // detection (present vs filled-from-defaults), write a sparse raw file
+      // directly, bypassing write()'s full-merge behavior.
+      fs.writeFileSync(
+        path.join(tmpDir, 'config.json'),
+        JSON.stringify({ notion: { apiKey: 'ntn-explicit' } }),
+        'utf8',
+      );
       const src = new DataDirConfigSource(tmpDir);
-      src.write({ notion: { apiKey: 'ntn-explicit' } });
       const { explicitFields } = src.readWithExplicitFields();
       expect(explicitFields.has('notion.apiKey')).toBe(true);
       expect(explicitFields.has('github.token')).toBe(false);
@@ -301,6 +310,7 @@ describe('writeOrchestratorConfig', () => {
 
 describe('getOrchestratorConfig .env fallback merge', () => {
   let tmpDir: string;
+  let prevXdgDataHome: string | undefined;
   const envKeys = [
     'NOTION_API_KEY',
     'GITHUB_TOKEN',
@@ -315,6 +325,15 @@ describe('getOrchestratorConfig .env fallback merge', () => {
     _resetAppConfigCache();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-fallback-'));
     vi.mocked(getDataDir).mockReturnValue(tmpDir);
+    // The getDataDir mock above never actually reaches getOrchestratorConfig()'s
+    // own resolve() (its default `new DataDirConfigSource()` — no override —
+    // calls the real, unmocked getDataDir() due to Vitest's setupFile-ordering
+    // pitfall; see setup.route.test.ts for the same issue). Without also
+    // pointing the real XDG_DATA_HOME at tmpDir, every test in this block
+    // shares the one real data dir the global testSetupDb.ts setupFile
+    // pointed at, leaking config.json state across tests.
+    prevXdgDataHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = tmpDir;
     for (const k of envKeys) {
       saved[k] = process.env[k];
       delete process.env[k];
@@ -323,6 +342,8 @@ describe('getOrchestratorConfig .env fallback merge', () => {
 
   afterEach(() => {
     _resetAppConfigCache();
+    if (prevXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = prevXdgDataHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
     for (const k of envKeys) {
       if (saved[k] !== undefined) process.env[k] = saved[k];
@@ -333,7 +354,7 @@ describe('getOrchestratorConfig .env fallback merge', () => {
 
   it('falls back to a populated .env value when config.json omits the field', () => {
     process.env.GITHUB_TOKEN = 'ghp-from-env-1234567890';
-    const src = new DataDirConfigSource(tmpDir);
+    const src = new DataDirConfigSource();
     src.write({ notion: { apiKey: 'ntn-from-json' } });
 
     const cfg = getOrchestratorConfig();
@@ -343,7 +364,7 @@ describe('getOrchestratorConfig .env fallback merge', () => {
 
   it('falls back to .env when config.json holds an explicit empty string', () => {
     process.env.GITHUB_REPO = 'real-owner/real-repo';
-    const src = new DataDirConfigSource(tmpDir);
+    const src = new DataDirConfigSource();
     src.write({ github: { repo: '' } });
 
     const cfg = getOrchestratorConfig();
@@ -352,7 +373,7 @@ describe('getOrchestratorConfig .env fallback merge', () => {
 
   it('prefers config.json over .env when both are set (migration path intact)', () => {
     process.env.GITHUB_TOKEN = 'ghp-env-1234567890';
-    const src = new DataDirConfigSource(tmpDir);
+    const src = new DataDirConfigSource();
     src.write({ github: { token: 'ghp-json-1234567890' } });
 
     const cfg = getOrchestratorConfig();
@@ -363,7 +384,7 @@ describe('getOrchestratorConfig .env fallback merge', () => {
     process.env.NOTION_API_KEY = 'ntn-env';
     process.env.GITHUB_TOKEN = 'ghp-env-1234567890';
     process.env.GITHUB_REPO = 'env-owner/env-repo';
-    const src = new DataDirConfigSource(tmpDir);
+    const src = new DataDirConfigSource();
     src.write({
       notion: { apiKey: 'ntn-json' },
       github: { token: 'ghp-json-1234567890', repo: 'json-owner/json-repo' },
