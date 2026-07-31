@@ -132,7 +132,18 @@ export const DESIGN_TERMINAL_ARTIFACTS_ORDERING =
   'above), never several at once. EXEMPT: a file-sibling ' +
   "`task.create` (the Split-don't-trim overflow disposition) scopes the " +
   'work rather than following from a locked decision, and may be staged ' +
-  'before Open Questions resolve.';
+  'before Open Questions resolve. Once the completeness approval clears, ' +
+  'every remaining terminal artifact — the arch.createUnit/arch.updateUnit/' +
+  'arch.supersedeUnit writes, the closing-synthesis task.updateBody, and the ' +
+  'follow-on task.create set — is staged together under the same shared ' +
+  '`groupId` as one design decision, never individually or ungrouped: the ' +
+  "operator disposes the design's closing set as a single group-level " +
+  'approve/reject, not a scatter of unrelated-looking cards. The ' +
+  '`completeness.disposition` intent itself stays outside that group — it ' +
+  "is the gate the group's members are refused behind, staged and approved " +
+  'on its own before the group exists — and each `decision.pickOne` stays ' +
+  'individually staged and ungrouped, one per turn, exactly as "One Open ' +
+  'Question per turn" above already requires.';
 
 export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {

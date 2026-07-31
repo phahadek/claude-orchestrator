@@ -33,7 +33,11 @@ import {
   stageIntent,
   sessionOwesGatedDesignArtifacts,
 } from '../stagedIntents';
-import { insertSession, listCompletenessDispositions } from '../../db/queries';
+import {
+  insertSession,
+  listCompletenessDispositions,
+  listStagedIntentsByGroup,
+} from '../../db/queries';
 
 function makeApp() {
   const app = express();
@@ -761,5 +765,152 @@ describe('sessionOwesGatedDesignArtifacts', () => {
     expect(sessionOwesGatedDesignArtifacts('design-session-no-task')).toBe(
       false,
     );
+  });
+});
+
+// ── Post-approval terminal-artifact grouping (task 3ae22f9152f3813db60dc06533b8080c):
+// the arch writes, the closing-synthesis body update, and the follow-on
+// task.create set are staged under one shared groupId once the completeness
+// disposition clears, so the operator disposes them as a single group-level
+// decision. The disposition itself and any decision.pickOne intents stay
+// outside that group. ────────────────────────────────────────────────────
+describe('post-approval terminal-artifact grouping', () => {
+  const GROUP_ID = 'design-terminal-group-1';
+
+  async function approveDisposition(): Promise<string> {
+    const intent = stageDisposition();
+    const app = makeApp();
+    const agent = supertest(app);
+    await agent.post(`/api/staged-intents/${intent.id}/approve`).send({});
+    return intent.id;
+  }
+
+  it('lands the arch write, the closing synthesis, and the follow-on task.create in the same group when staged with a shared groupId', async () => {
+    await approveDisposition();
+
+    stageIntent(
+      'arch.createUnit',
+      {
+        title: 'A new unit',
+        metadata: { kind: 'invariant', topic: 't', regions: ['r'] },
+        body: 'body',
+      },
+      PROJECT_ID,
+      GROUP_ID,
+      SESSION_ID,
+    );
+    stageIntent(
+      'task.create',
+      { databaseId: 'db-1', title: 'Follow-on task', type: '💻 Code' },
+      PROJECT_ID,
+      GROUP_ID,
+      SESSION_ID,
+    );
+    stageIntent(
+      'task.updateBody',
+      { taskId: TASK_ID, sections: { summary: 'x' } },
+      PROJECT_ID,
+      GROUP_ID,
+      SESSION_ID,
+    );
+
+    const members = listStagedIntentsByGroup(GROUP_ID);
+    expect(members).toHaveLength(3);
+    expect(new Set(members.map((m) => m.kind))).toEqual(
+      new Set(['arch.createUnit', 'task.create', 'task.updateBody']),
+    );
+    expect(members.every((m) => m.group_id === GROUP_ID)).toBe(true);
+  });
+
+  it('does not put the completeness.disposition intent in the terminal-artifact group — it stays staged and approved on its own', async () => {
+    const dispositionId = await approveDisposition();
+
+    stageIntent(
+      'arch.createUnit',
+      {
+        title: 'A new unit',
+        metadata: { kind: 'invariant', topic: 't', regions: ['r'] },
+        body: 'body',
+      },
+      PROJECT_ID,
+      GROUP_ID,
+      SESSION_ID,
+    );
+
+    const members = listStagedIntentsByGroup(GROUP_ID);
+    expect(members.map((m) => m.id)).not.toContain(dispositionId);
+    expect(members.every((m) => m.kind !== 'completeness.disposition')).toBe(
+      true,
+    );
+  });
+
+  it('leaves decision.pickOne ungrouped and individually staged, one per turn, even during an otherwise-grouped design session', () => {
+    const decision = stageIntent(
+      'decision.pickOne',
+      {
+        taskId: TASK_ID,
+        prompt: 'Which approach?',
+        options: [{ label: 'A', description: 'Option A' }],
+        allowFreeForm: false,
+      },
+      PROJECT_ID,
+      null,
+      SESSION_ID,
+      'Recommend option A.',
+    );
+
+    expect(decision.groupId).toBeFalsy();
+  });
+
+  it('leaves the completeness stage-time gate unchanged: arch writes and the closing synthesis are still refused until the disposition is approved, group or no group', () => {
+    stageDisposition();
+
+    expect(() =>
+      stageIntent(
+        'arch.createUnit',
+        {
+          title: 'A new unit',
+          metadata: { kind: 'invariant', topic: 't', regions: ['r'] },
+          body: 'body',
+        },
+        PROJECT_ID,
+        GROUP_ID,
+        SESSION_ID,
+      ),
+    ).toThrow(/completeness critic's dispositions.*have not been approved/);
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: TASK_ID, sections: { summary: 'x' } },
+        PROJECT_ID,
+        GROUP_ID,
+        SESSION_ID,
+      ),
+    ).toThrow(/completeness critic's dispositions.*have not been approved/);
+  });
+
+  it('does not require grouping for a non-design (e.g. groom) session — grouping is design-specific', async () => {
+    db.prepare('DELETE FROM sessions').run();
+    insertSession({
+      session_id: 'groom-session-grouping-1',
+      task_id: TASK_ID,
+      task_url: null,
+      project_context_url: null,
+      project_id: PROJECT_ID,
+      status: 'running',
+      started_at: 1,
+      session_type: 'groom',
+    });
+
+    expect(() =>
+      stageIntent(
+        'task.updateBody',
+        { taskId: TASK_ID, sections: { summary: 'x' } },
+        PROJECT_ID,
+        null,
+        'groom-session-grouping-1',
+      ),
+    ).not.toThrow();
   });
 });
