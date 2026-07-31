@@ -128,6 +128,7 @@ export function buildMcpServer(
       sessionId,
       workflow,
       projectId: session.project_id,
+      milestone,
     });
   } else {
     registerCompletenessTools(server, { sessionId, workflow });

@@ -44,6 +44,14 @@ export interface CompletenessToolContext {
   workflow: PlanningWorkflow | null;
   /** Undefined when the session resolves to no project — the intent-staging half is then skipped (nothing to stage against). */
   projectId?: string | null;
+  /**
+   * The milestone this connecting session's task belongs to, known at
+   * dispatch (see orchestratorMcpServer.ts's buildMcpServer) — carried onto
+   * every intent this session stages, for the milestone decision-inbox
+   * attribution. Null for a session whose task couldn't be resolved to a
+   * milestone (falls to the "unattributed" bucket).
+   */
+  milestone?: string | null;
 }
 
 function ok(body: unknown): { content: { type: 'text'; text: string }[] } {
@@ -158,7 +166,7 @@ export function registerCompletenessTools(
           null,
           null,
           null,
-          row.milestone,
+          ctx.milestone ?? null,
         );
       }
 
