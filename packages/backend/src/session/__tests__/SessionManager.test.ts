@@ -1660,6 +1660,89 @@ describe('sendOrResume — surviving worktree reuse (idle resume fast path)', ()
   });
 });
 
+describe('sendOrResume — usage admission gate', () => {
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    vi.mocked(fsModule.existsSync).mockImplementation(() => true);
+    vi.mocked((fsModule as any).default.existsSync).mockImplementation(
+      () => true,
+    );
+    const { clearUsageDeferral } = await import('../../db/queries.js');
+    clearUsageDeferral('five_hour');
+    clearUsageDeferral('seven_day');
+  });
+
+  it('does not spawn a process when usage is exhausted, and records a deferral carrying the window resets_at', async () => {
+    const { registerUsagePoller } = await import(
+      '../../orchestration/usageAdmission.js'
+    );
+    const { getUsageDeferral } = await import('../../db/queries.js');
+    const resetsAt = new Date(Date.now() + 60_000).toISOString();
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: { percent: 100, resetsAt, severity: 'exceeded' },
+      }),
+    });
+
+    const result = await sm.sendOrResume(SESSION_ID, 'hello');
+
+    expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+    expect(getUsageDeferral('five_hour')).toBe(Date.parse(resetsAt));
+  });
+
+  it('a deferred respawn leaves the session row unchanged — no status rewrite, no task-status revert — and does not kill the session', async () => {
+    const { registerUsagePoller } = await import(
+      '../../orchestration/usageAdmission.js'
+    );
+    const resetsAt = new Date(Date.now() + 60_000).toISOString();
+    registerUsagePoller({
+      getCache: () => ({
+        available: true,
+        fiveHour: { percent: 100, resetsAt, severity: 'exceeded' },
+      }),
+    });
+
+    await sm.sendOrResume(SESSION_ID, 'hello');
+
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalled();
+    // The task is tagged as deferred (visibility), never reverted off its
+    // current status the way a hard failure would.
+    expect(vi.mocked(setTaskPauseReason)).toHaveBeenCalledWith(
+      'task-1',
+      'usage_limit_deferred',
+      'five_hour',
+    );
+  });
+
+  it('resumes normally once usage is available (existing sendOrResume behavior unaffected)', async () => {
+    const { registerUsagePoller } = await import(
+      '../../orchestration/usageAdmission.js'
+    );
+    registerUsagePoller({ getCache: () => ({ available: false }) });
+
+    const p = sm.sendOrResume(SESSION_ID, 'hello');
+    await vi.waitFor(() => expect(capturedSessions.length).toBeGreaterThan(0));
+    const sess = capturedSessions[0];
+    sess.emit('message', {
+      type: 'session_event' as const,
+      sessionId: SESSION_ID,
+      eventType: 'system' as const,
+      content: 'boot',
+    });
+    await p;
+
+    expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
+  });
+});
+
 describe('sendOrResume — missing worktree falls through to recreation', () => {
   let sm: SessionManager;
 

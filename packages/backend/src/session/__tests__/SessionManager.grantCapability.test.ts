@@ -144,6 +144,7 @@ vi.mock('../../db/queries', () => ({
   setSessionLastErrorDetail: vi.fn(),
   setTaskPauseReason: vi.fn(),
   TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
+  getUsageDeferral: vi.fn().mockReturnValue(null),
   getGrantedCapabilities: vi.fn(
     (sessionId: string) =>
       grantedCapabilitiesStore.get(sessionId)?.slice() ?? [],

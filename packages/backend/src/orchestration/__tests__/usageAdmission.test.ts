@@ -3,6 +3,7 @@ import {
   checkUsageAdmission,
   registerUsagePoller,
   isUsageAdmitted,
+  recordObservedUsageLimit,
 } from '../usageAdmission';
 import {
   getUsageDeferral,
@@ -177,6 +178,45 @@ describe('isUsageAdmitted (registered-poller singleton)', () => {
       getCache: () =>
         usage({ fiveHour: { percent: 100, resetsAt, severity: 'exceeded' } }),
     });
+    expect(isUsageAdmitted().allowed).toBe(false);
+  });
+});
+
+describe('recordObservedUsageLimit', () => {
+  beforeEach(() => {
+    clearUsageDeferral('five_hour');
+    clearUsageDeferral('seven_day');
+  });
+
+  it('persists a deferral so it survives a restart even without a poller snapshot', () => {
+    const result = recordObservedUsageLimit(
+      "You've hit your session limit · resets 11:59pm (UTC)",
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.window).toBe('five_hour');
+    expect(getUsageDeferral('five_hour')).toBe(result.deferredUntil);
+  });
+
+  it('falls back to a bounded deferral when no message (or no parseable reset time) is given', () => {
+    const before = Date.now();
+    const result = recordObservedUsageLimit();
+    expect(result.allowed).toBe(false);
+    expect(result.window).toBe('five_hour');
+    expect(result.deferredUntil).toBeGreaterThan(before);
+    expect(result.deferredUntil).toBeLessThanOrEqual(before + 5 * 60_000 + 5);
+    expect(getUsageDeferral('five_hour')).toBe(result.deferredUntil);
+  });
+
+  it('infers the seven_day window when the message names the weekly limit', () => {
+    const result = recordObservedUsageLimit(
+      "You've hit your weekly limit · resets 11:59pm (UTC)",
+    );
+    expect(result.window).toBe('seven_day');
+    expect(getUsageDeferral('seven_day')).toBe(result.deferredUntil);
+  });
+
+  it('causes a subsequent admission check to block until the recorded instant', () => {
+    recordObservedUsageLimit("You've hit your session limit · resets 11:59pm (UTC)");
     expect(isUsageAdmitted().allowed).toBe(false);
   });
 });
