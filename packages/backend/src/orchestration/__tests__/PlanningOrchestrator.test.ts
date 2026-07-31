@@ -319,6 +319,92 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     expect(markSessionDone).not.toHaveBeenCalled();
   });
 
+  it('does not mark terminal when the deferred approve-terminal drains but new intents were staged during the deferral window', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    const liveSession = makeLiveSession(true);
+    sm.getLiveSession.mockReturnValue(liveSession);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'committed',
+    });
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+    expect(markSessionDone).not.toHaveBeenCalled();
+
+    // While the turn was still in flight, the session staged new intents —
+    // the deferral window is exactly the interval in which this can happen.
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      makeIntent({ id: 'new-intent-1', state: 'staged' }),
+      makeIntent({ id: 'new-intent-2', state: 'staged' }),
+    ]);
+    (liveSession as any).hasActiveTurn = () => false;
+    sm.emit('message', {
+      type: 'session_event',
+      sessionId: 'planning-session-1',
+      eventType: 'result',
+      content: '{}',
+    });
+    await flush();
+
+    expect(markSessionDone).not.toHaveBeenCalled();
+    expect(sm.endSession).not.toHaveBeenCalled();
+    // The stale deferred marker is still cleared — it has been drained,
+    // whether or not it ultimately went terminal.
+    expect(clearPendingApproveTerminal).toHaveBeenCalledWith(
+      'planning-session-1',
+    );
+  });
+
+  it('once the newly staged intents are dispositioned, the session still reaches terminal — the drain re-check does not make it immortal', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+    const liveSession = makeLiveSession(true);
+    sm.getLiveSession.mockReturnValue(liveSession);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'committed',
+    });
+    await orch.handleDisposition({ intent, disposition: 'approve' });
+
+    const newIntent = makeIntent({ id: 'new-intent-1', state: 'staged' });
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([newIntent]);
+    (liveSession as any).hasActiveTurn = () => false;
+    sm.emit('message', {
+      type: 'session_event',
+      sessionId: 'planning-session-1',
+      eventType: 'result',
+      content: '{}',
+    });
+    await flush();
+    expect(markSessionDone).not.toHaveBeenCalled();
+
+    // checkTerminal now sees the new intent still staged: not terminal, and
+    // it seeds the staged-count snapshot to 1.
+    expect(orch.checkTerminal('planning-session-1')).toBe(false);
+
+    // The operator dispositions it (settles to 'committed'); nothing staged
+    // remains and the resumed turn (this same call) staged nothing new
+    // (count still 1 <= snapshot of 1), so the normal checkTerminal path
+    // drives the session terminal exactly as it would without the drain
+    // ever having deferred anything.
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      { ...newIntent, state: 'committed' },
+    ]);
+    expect(orch.checkTerminal('planning-session-1')).toBe(true);
+    expect(markSessionDone).toHaveBeenCalledWith(
+      'planning-session-1',
+      expect.any(Number),
+      null,
+      expect.any(String),
+    );
+  });
+
   it('also applies a deferred terminal transition on session_ended, as a safety net for a session that does exit', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));

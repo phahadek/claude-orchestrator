@@ -139,6 +139,25 @@ export class PlanningOrchestrator {
     if (!this.pendingApproveTerminal.has(sessionId)) return false;
     this.pendingApproveTerminal.delete(sessionId);
     clearPendingApproveTerminal(sessionId);
+
+    // The approval that justified this deferral was evaluated once, at defer
+    // time — the deferral window itself (the turn staying live) is exactly
+    // the interval in which the session can stage new terminal artifacts.
+    // Re-check the precondition now rather than trusting the stale verdict:
+    // if un-dispositioned intents exist, this session's approval is no
+    // longer complete, so fall through to the normal park path (the caller's
+    // session_ended handling, or the next park) instead of going terminal —
+    // it needs to stay alive awaiting disposition of what it just staged.
+    const stillPending = listStagedIntentsBySession(sessionId).some(
+      (i) => i.kind !== NO_OP_INTENT_KIND && i.state === 'staged',
+    );
+    if (stillPending) {
+      logger.info(
+        `[PlanningOrchestrator] ${sessionId.slice(0, 8)} deferred approve-terminal drained but new intents were staged during the deferral window — not marking terminal`,
+      );
+      return false;
+    }
+
     // The turn that was in flight when this was deferred has now ended (this
     // is only reached from the turn-boundary result event or session_ended),
     // so skipInFlightGuard is safe even though the session's DB status may
