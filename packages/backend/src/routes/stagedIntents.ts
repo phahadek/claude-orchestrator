@@ -3678,6 +3678,24 @@ export function createStagedIntentsRouter(
   const router = Router();
   stagedIntentSessionManager = sessionManager;
 
+  // A session's turn ending flips its already-staged intents' sessionComplete
+  // from false to true (see isSessionComplete), but no staged_intent row
+  // changes when that happens — so the milestone inbox's cached copies would
+  // stay suppressed until a refetch with no notification otherwise. Ride the
+  // existing session_event/'result' signal already on the SessionManager
+  // 'message' stream (the same channel server.ts forwards to WS clients) and
+  // re-broadcast each of that session's still-active staged intents via the
+  // existing per-intent broadcastIntentById — recomputing sessionComplete
+  // through rowToApi/isSessionComplete exactly as any other read, rather
+  // than deriving it a second way.
+  sessionManager?.on?.('message', (msg: ServerMessage) => {
+    if (msg.type !== 'session_event' || msg.eventType !== 'result') return;
+    const active = listStagedIntentsBySession(msg.sessionId).filter((row) =>
+      (['staged', 'approved'] as StagedIntentState[]).includes(row.state),
+    );
+    for (const row of active) broadcastIntentById(row.id);
+  });
+
   // ── GET /api/staged-intents ─────────────────────────────────────────────
   // ?sessionId=<id> is the SessionPanel decision-panel lens: correlates
   // proposals back to the session that produced them, active states only.
