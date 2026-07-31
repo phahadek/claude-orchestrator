@@ -423,7 +423,7 @@ export function renderOpsCapabilities(): string[] {
       'this capability. The same pattern applies to `read:audit-log:<projectId>`: once ' +
       `granted, call the \`${orchestratorMcpToolName('auditLog.query')}\` tool with ` +
       '`{"projectId":"<project-id>"}` (optionally narrowed by `taskId` / `eventType` / ' +
-      '`since` / `until`) to read this project\'s audit_log rows.',
+      "`since` / `until`) to read this project's audit_log rows.",
     '',
     'Some things are never grantable this way, no matter what an operator approves: ' +
       'anything that reaches the resolved / ✅ Done / task-intent-apply transition ' +

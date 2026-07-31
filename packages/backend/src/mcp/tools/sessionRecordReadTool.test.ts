@@ -17,7 +17,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerSessionRecordReadTool } from './sessionRecordReadTool';
-import { insertSession, insertEvent, addGrantedCapability } from '../../db/queries';
+import {
+  insertSession,
+  insertEvent,
+  addGrantedCapability,
+} from '../../db/queries';
 import { recordEvent } from '../../audit/AuditLog';
 import { sessionRecordReadCapability } from '../../session/orchestrator-config';
 
@@ -78,7 +82,10 @@ describe('session.getRecord', () => {
       task_id: 'notion:abc',
       payload: { note: 'dispatched' },
     });
-    addGrantedCapability('requester-1', sessionRecordReadCapability('target-1'));
+    addGrantedCapability(
+      'requester-1',
+      sessionRecordReadCapability('target-1'),
+    );
 
     const { client, close } = await connectedClient('requester-1');
     try {
@@ -129,7 +136,7 @@ describe('session.getRecord', () => {
     }
   });
 
-  it("a grant for one target session id does not authorize reading a different session", async () => {
+  it('a grant for one target session id does not authorize reading a different session', async () => {
     insertSession({
       session_id: 'requester-3',
       task_id: null,
@@ -154,7 +161,10 @@ describe('session.getRecord', () => {
       status: 'done',
       started_at: Date.now(),
     });
-    addGrantedCapability('requester-3', sessionRecordReadCapability('target-3'));
+    addGrantedCapability(
+      'requester-3',
+      sessionRecordReadCapability('target-3'),
+    );
 
     const { client, close } = await connectedClient('requester-3');
     try {

@@ -107,7 +107,7 @@ describe('session.requestCapability decision-surface kind', () => {
     );
   });
 
-  it("grants the audit-log read capability (audit_log by project id) through the same approve -> grant -> re-dispatch loop", async () => {
+  it('grants the audit-log read capability (audit_log by project id) through the same approve -> grant -> re-dispatch loop', async () => {
     const sessionManager = makeSessionManager();
     const app = makeApp(sessionManager);
 

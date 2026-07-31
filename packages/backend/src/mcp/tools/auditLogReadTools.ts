@@ -38,7 +38,7 @@ export function registerAuditLogReadTools(
     {
       title: "Query one project's audit log",
       description:
-        "Read-only: returns audit_log rows for `projectId`, optionally narrowed by " +
+        'Read-only: returns audit_log rows for `projectId`, optionally narrowed by ' +
         '`taskId` / `eventType` / a `[since, until]` ts window (epoch ms, inclusive). ' +
         'Requires a durable grant naming this exact project id — request it via ' +
         '`session.requestCapability` with capability `read:audit-log:<projectId>` ' +
