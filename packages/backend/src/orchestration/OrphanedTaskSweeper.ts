@@ -17,6 +17,7 @@ import {
   setSessionPauseReason,
   getSessionLastActivityMs,
   upsertPullRequest,
+  getOpsJournalEntry,
 } from '../db/queries';
 import {
   recordEvent,
@@ -142,7 +143,12 @@ export class OrphanedTaskSweeper {
         if (!SWEEPABLE_TYPES.has(resolved.task.type)) continue;
 
         try {
-          await this.maybeRevertTask(taskId, project.id, backend);
+          await this.maybeRevertTask(
+            taskId,
+            project.id,
+            resolved.task.type,
+            backend,
+          );
         } catch (err) {
           logger.warn(
             `[OrphanedTaskSweeper] revert check failed for ${taskId}: ${(err as Error).message}`,
@@ -155,6 +161,7 @@ export class OrphanedTaskSweeper {
   private async maybeRevertTask(
     taskId: string,
     projectId: string,
+    taskType: string,
     backend: TaskBackend,
   ): Promise<void> {
     const latestSession = getLatestCodeSessionByNotionTaskId(taskId);
@@ -284,6 +291,24 @@ export class OrphanedTaskSweeper {
         NO_PR_NUDGE_MESSAGE,
       );
       return;
+    }
+
+    // Ops/Investigation sessions never open a PR, and once they exit cleanly
+    // their session status is terminal ('done') rather than idle — so they
+    // fall through every PR/idle exemption above and land here alongside a
+    // genuinely abandoned task. Their session_type ('ops') is also invisible
+    // to getLatestCodeSessionByNotionTaskId/hasActiveSessionForTask (standard-
+    // session-only), so latestSession is typically undefined too. The one
+    // artifact that distinguishes "finished, awaiting operator disposition"
+    // from "abandoned" is the ops_journal entry: if it has advanced beyond
+    // 'pending', the session did its job — leave the task In Progress rather
+    // than silently returning it to the dispatch pool. A journal still stuck
+    // at 'pending' (or missing entirely) is still a genuine orphan.
+    if (taskType !== '💻 Code') {
+      const journalEntry = getOpsJournalEntry(taskId);
+      if (journalEntry && journalEntry.state !== 'pending') {
+        return;
+      }
     }
 
     // Genuine orphan (non-idle, no PR, no active session) — revert to Ready.
