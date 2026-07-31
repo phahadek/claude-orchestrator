@@ -794,6 +794,37 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   },
 ] as const;
 
+/**
+ * States the dispatched session's checkout path explicitly, so a session
+ * never has to search the filesystem to find it. The registry id the
+ * session knows itself by (e.g. `claude-dashboard`) is NOT the checkout
+ * directory's name — the checkout is named after the project's config-dir
+ * key instead (see `resolveConfigDir` in `groom/groomLoad.ts`), so a
+ * `find` / `ls` search for the registry id as a path fragment matches
+ * nothing and escalates into a filesystem-wide walk from `/`. This
+ * generalizes across every managed project, not just the self-hosted one —
+ * the divergence between registry id and directory name is a property of
+ * the project registry, not a one-off.
+ *
+ * `checkoutDir` must be the literal, resolved project directory — never a
+ * placeholder or a "see context.md" pointer, per
+ * `INJECTED_PROCEDURE_STYLE.md`'s inline-constraint rule for a dispatched
+ * session's own surface. `procedureAssembler.ts` is the only caller with
+ * access to the project record, and resolves it the same way the launcher
+ * resolves the spawned session's `cwd`.
+ */
+export function renderCheckoutPathStatement(checkoutDir: string): string {
+  return (
+    "This session's working directory is already the project checkout: " +
+    `\`${checkoutDir}\`. The \`PROJECT_DIR\` environment variable names the ` +
+    "same path. The checkout directory is NOT named after this project's " +
+    'registry id (the project name this session knows itself by) — do not ' +
+    '`find` / `ls` / grep the filesystem searching for the registry id as a ' +
+    'path fragment, it will not match anything. The path above is already ' +
+    'correct; use it directly instead of searching for it.'
+  );
+}
+
 /** Resolve `{skillLabel}` against the given skill and return the finished prose. */
 export function renderPrinciple(p: ProcedurePrinciple, skill: SkillId): string {
   const text = p.textOverrides?.[skill] ?? p.text;
