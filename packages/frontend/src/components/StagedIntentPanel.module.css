@@ -188,6 +188,16 @@
   white-space: pre-wrap;
 }
 
+.expandDetail {
+  margin-top: 4px;
+}
+
+.expandSummary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
 .blockingRegister {
   border: 1px solid rgba(243, 139, 168, 0.4);
   background: rgba(243, 139, 168, 0.1);
