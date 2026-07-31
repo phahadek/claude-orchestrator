@@ -1937,7 +1937,15 @@ function transitionRejectedIntent(
   // it stays in rejected, which EXPLICIT_SUPERSEDES_ALLOWED_STATES excludes.
   const targetState: StagedIntentState =
     outcome === 'pushback' ? 'needs_revision' : 'rejected';
-  const rejected = transitionStagedIntent(row.id, targetState, {
+  // pending_verification has no direct edge to `rejected` (only to `staged`
+  // or `needs_revision` — see STAGED_INTENT_TRANSITIONS) — hop through
+  // needs_revision first so a member blocked in pending_verification can
+  // still be declined via the same per-member exit as a needs_revision one.
+  const current =
+    row.state === 'pending_verification' && targetState === 'rejected'
+      ? transitionStagedIntent(row.id, 'needs_revision')
+      : row;
+  const rejected = transitionStagedIntent(current.id, targetState, {
     dispositionReason: reason,
   });
   const rejectedIntent = rowToApi(rejected);
@@ -2193,9 +2201,45 @@ async function routeApplyTimeFailure(
 /** Active surface = staged | approved. Terminal states (committed/rejected) and the superseded tombstone are hidden, matching the old delete-on-resolve Map semantics. */
 const ACTIVE_STATES: StagedIntentState[] = ['staged', 'approved'];
 
+/** Blocked = stuck off the active surface pending operator recovery — the state the commit guard refuses on and the one this task adds a resolvable exit for. */
+const BLOCKED_STATES: StagedIntentState[] = [
+  'needs_revision',
+  'pending_verification',
+];
+
+/** Active + blocked — the decision-inbox visibility surface: a blocked member must stay visible so the operator can decline it, not vanish the instant it falls out of ACTIVE_STATES. */
+const VISIBLE_STATES: StagedIntentState[] = [...ACTIVE_STATES, ...BLOCKED_STATES];
+
 function getActiveStagedIntent(id: string): StagedIntentRow | undefined {
   const row = getStagedIntentRow(id);
   return row && ACTIVE_STATES.includes(row.state) ? row : undefined;
+}
+
+/** The operator-resolvable-exit surface: a member stuck in needs_revision/pending_verification, reachable so it can be individually declined off the commit guard's predicate. */
+function getBlockedStagedIntent(id: string): StagedIntentRow | undefined {
+  const row = getStagedIntentRow(id);
+  return row && BLOCKED_STATES.includes(row.state) ? row : undefined;
+}
+
+/**
+ * Substrings unique to this module's own auto-generated commit/precheck
+ * refusal messages (commitGroupIntents' blocked-member guard, its
+ * no-live-intents 404, precheckGroupCommit's completeness/readiness 409s).
+ * Guards the reject routes against the exact failure mode that wedged the
+ * existing population: an operator (or a script) copying a failed commit's
+ * `error` text back in as the `reason` for a pushback/decline, which
+ * destroys the record of why the member was actually blocked. A refusal is
+ * never a disposition reason, so it is refused here rather than persisted.
+ */
+const SYSTEM_REFUSAL_REASON_MARKERS = [
+  'it must be recovered or resolved before this group can commit',
+  'no live staged intents found for group',
+];
+
+function looksLikeSystemRefusalReason(reason: string): boolean {
+  return SYSTEM_REFUSAL_REASON_MARKERS.some((marker) =>
+    reason.includes(marker),
+  );
 }
 
 /** A task.setStatus -> Ready intent — the single arming write that must commit LAST within a group. */
@@ -3134,7 +3178,7 @@ export function createStagedIntentsRouter(
 
     const rows = sessionId
       ? listStagedIntentsBySession(sessionId).filter((r) =>
-          ACTIVE_STATES.includes(r.state),
+          VISIBLE_STATES.includes(r.state),
         )
       : projectId
         ? listStagedIntentsByProject(projectId)
@@ -3588,11 +3632,25 @@ export function createStagedIntentsRouter(
 
   // ── POST /api/staged-intents/group/:groupId/reject ───────────────────────
   // The group-level twin of `/group/:groupId/approve`: pushback | decline the
-  // whole grooming decision as one unit — every live intent in the group is
-  // rejected with the same outcome + reason, none of them committed. This is
-  // the group-disposition layer above the unchanged per-item reject-form
-  // surface (`/:id/reject`), which stays available for standalone intents
-  // (e.g. a decision.pickOne) that were never grouped in the first place.
+  // whole grooming decision as one unit. This is the group-disposition layer
+  // above the unchanged per-item reject-form surface (`/:id/reject`), which
+  // stays available for standalone intents (e.g. a decision.pickOne) that
+  // were never grouped in the first place.
+  //
+  // `decline` operates on live (staged/approved) AND blocked
+  // (needs_revision/pending_verification) members alike — a group whose only
+  // members are blocked (60 of the 64 wedged groups measured live had no
+  // live member at all) used to 404 here with nothing else able to
+  // disposition it. Declining a blocked member never touches a live sibling
+  // (it is by definition not live), so this never disturbs in-flight work.
+  //
+  // `pushback` only ever touches live members — needs_revision ->
+  // needs_revision isn't a legal transition — and is refused outright when
+  // the group already has a blocked member: pushing back every live sibling
+  // would leave zero live members and the group permanently uncommittable
+  // (the exact amplifier that produced the wedged population), so the
+  // operator is routed to decline the blocked member(s) first, or decline
+  // the whole group instead.
   router.post(
     '/staged-intents/group/:groupId/reject',
     async (req: Request, res: Response) => {
@@ -3613,20 +3671,52 @@ export function createStagedIntentsRouter(
         res.status(400).json({ error: 'reason is required' });
         return;
       }
-
-      const live = listStagedIntentsByGroup(groupId).filter((r) =>
-        ACTIVE_STATES.includes(r.state),
-      );
-      if (live.length === 0) {
-        res.status(404).json({
-          error: `no live staged intents found for group "${groupId}"`,
+      if (looksLikeSystemRefusalReason(reason)) {
+        res.status(400).json({
+          error:
+            'reason looks like a copied system refusal/error message, not an ' +
+            'operator explanation — describe why this is being dispositioned instead',
         });
         return;
       }
 
+      const members = listStagedIntentsByGroup(groupId);
+      const live = members.filter((r) => ACTIVE_STATES.includes(r.state));
+      const blocked = members.filter((r) => BLOCKED_STATES.includes(r.state));
+      if (live.length === 0 && blocked.length === 0) {
+        res.status(404).json({
+          error: `no live or blocked staged intents found for group "${groupId}"`,
+        });
+        return;
+      }
+
+      let target: StagedIntentRow[];
+      if (outcome === 'pushback') {
+        if (blocked.length > 0) {
+          res.status(409).json({
+            error:
+              `group "${groupId}" already has ${blocked.length} blocked member(s) — ` +
+              'pushing back its live members would leave the group with no live ' +
+              'members and permanently uncommittable; decline the blocked member(s) ' +
+              'individually (POST /staged-intents/:id/reject) or decline the whole group instead',
+            blockedIds: blocked.map((r) => r.id),
+          });
+          return;
+        }
+        if (live.length === 0) {
+          res.status(404).json({
+            error: `no live staged intents found for group "${groupId}"`,
+          });
+          return;
+        }
+        target = live;
+      } else {
+        target = [...live, ...blocked];
+      }
+
       const rejected: string[] = [];
       const forGroupDisposition: StagedIntentRow[] = [];
-      for (const row of live) {
+      for (const row of target) {
         const { intent: rejectedIntent, row: rejectedRow } =
           transitionRejectedIntent(row, outcome, reason);
         rejected.push(rejectedIntent.id);
@@ -3741,14 +3831,24 @@ export function createStagedIntentsRouter(
   // intent (disposition_reason) and recorded in audit_log regardless of
   // whether the originating session still exists — a disposition on an
   // intent whose session has already ended is still durably recorded.
+  //
+  // Also the operator-usable exit for a blocked member (needs_revision |
+  // pending_verification): getActiveStagedIntent only finds staged/approved
+  // rows, so a blocked row falls back to getBlockedStagedIntent. Only
+  // `decline` is legal on a blocked row — needs_revision -> needs_revision
+  // isn't a transition (STAGED_INTENT_TRANSITIONS), so a pushback would just
+  // throw; the operator-facing recovery for "revise this" is the group
+  // recover route instead, which re-surfaces it to staged first.
   router.post(
     '/staged-intents/:id/reject',
     async (req: Request, res: Response) => {
-      const row = getActiveStagedIntent(String(req.params.id));
+      const id = String(req.params.id);
+      const row = getActiveStagedIntent(id) ?? getBlockedStagedIntent(id);
       if (!row) {
         res.status(404).json({ error: 'staged intent not found' });
         return;
       }
+      const isBlocked = BLOCKED_STATES.includes(row.state);
       const body = req.body as { outcome?: unknown; reason?: unknown };
       const outcome: StagedIntentRejectOutcome | null =
         body?.outcome === 'pushback' || body?.outcome === 'decline'
@@ -3761,8 +3861,25 @@ export function createStagedIntentsRouter(
           .json({ error: 'outcome must be "pushback" or "decline"' });
         return;
       }
+      if (isBlocked && outcome === 'pushback') {
+        res.status(400).json({
+          error:
+            `staged intent "${id}" is already blocked (state "${row.state}") — ` +
+            'it can only be declined, not pushed back; use POST ' +
+            '/staged-intents/group/:groupId/recover to re-surface it for revision first',
+        });
+        return;
+      }
       if (!reason) {
         res.status(400).json({ error: 'reason is required' });
+        return;
+      }
+      if (looksLikeSystemRefusalReason(reason)) {
+        res.status(400).json({
+          error:
+            'reason looks like a copied system refusal/error message, not an ' +
+            'operator explanation — describe why this is being dispositioned instead',
+        });
         return;
       }
 

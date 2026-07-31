@@ -315,6 +315,53 @@ describe('StagedIntentPanel', () => {
     expect(screen.getByText('task.setStatus')).toBeTruthy();
   });
 
+  it('a blocked (needs_revision) grouped member only offers Decline — no Pushback radio, no Approve button', () => {
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({ groupId: 'group-1', state: 'needs_revision' })}
+      />,
+    );
+
+    expect(screen.queryByRole('radio', { name: /pushback/i })).toBeNull();
+    expect(screen.getByRole('radio', { name: /decline/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^approve$/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /decline/i })).toBeTruthy();
+  });
+
+  it('declining a blocked (pending_verification) member posts { outcome: "decline" } via the reject route', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true }),
+    } as Response);
+    const onRejected = vi.fn();
+
+    render(
+      <StagedIntentPanel
+        intent={makeIntent({
+          groupId: 'group-1',
+          state: 'pending_verification',
+        })}
+        onRejected={onRejected}
+      />,
+    );
+    fireEvent.change(screen.getByPlaceholderText(/why is this being declined/i), {
+      target: { value: 'superseded' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /decline/i }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/staged-intents/intent-1/reject',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ outcome: 'decline', reason: 'superseded' }),
+        }),
+      );
+    });
+    await waitFor(() => expect(onRejected).toHaveBeenCalled());
+  });
+
   it("renders the /groom skill's structured proposal fields instead of decisionProposal prose", () => {
     render(
       <StagedIntentPanel
