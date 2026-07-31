@@ -32,7 +32,11 @@ describe('updateTaskStatusInBoardCaches', () => {
   it('patches the status field of the matching entry, leaving other entries byte-identical', () => {
     const other = { id: 'other-uuid', title: 'Other', status: '🔲 Backlog' };
     seedBoard('board:milestone-1', [
-      { id: 'abc12345-0000-0000-0000-000000000000', title: 'T', status: '🔲 Backlog' },
+      {
+        id: 'abc12345-0000-0000-0000-000000000000',
+        title: 'T',
+        status: '🔲 Backlog',
+      },
       other,
     ]);
 
@@ -64,7 +68,11 @@ describe('updateTaskStatusInBoardCaches', () => {
 
     updateTaskStatusInBoardCaches(`notion:${hyphenated}`, '🗂️ Ready');
 
-    for (const key of ['board:m1', 'board:m1hyphenless', 'board:proj1:boardA']) {
+    for (const key of [
+      'board:m1',
+      'board:m1hyphenless',
+      'board:proj1:boardA',
+    ]) {
       const parsed = JSON.parse(getTaskCache(key)!.raw_json) as Array<{
         status: string;
       }>;

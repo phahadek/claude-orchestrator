@@ -8,9 +8,7 @@ import {
 } from '../planningCandidates';
 
 vi.mock('../../db/db.js', async () => {
-  const { setupTestDb } = await import(
-    '../../../test/helpers/setupTestDb.js'
-  );
+  const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
   return { db: setupTestDb() };
 });
 
