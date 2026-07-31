@@ -545,7 +545,9 @@ export function TaskList({
   const backlogNonCodeTasks = nonCodeNotDone.filter(
     (t) => t.displayStatus === 'backlog',
   );
-  const groomableTasks = [...backlogCodeTasks, ...backlogNonCodeTasks];
+  const groomableTasks = [...backlogCodeTasks, ...backlogNonCodeTasks].filter(
+    (t) => !t.groomDepBlocked,
+  );
   const groomSelectedCount = groomableTasks.filter((t) =>
     groomCheckedIds.has(t.taskId),
   ).length;

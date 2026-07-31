@@ -1299,6 +1299,77 @@ describe('TaskList', () => {
       expect(groomBtn.textContent).toContain('Groom (1)');
     });
 
+    it('excludes a groom-dep-blocked Backlog non-code task from the Groom checkbox and shows its blocker reason', () => {
+      renderList(
+        [
+          makeTask({
+            taskId: 'bn-blocked',
+            taskName: 'Blocked Backlog Investigation Task',
+            displayStatus: 'backlog',
+            taskType: '🔎 Investigation',
+            groomDepBlocked: true,
+            groomDepBlockedReason: 'waiting on Design Task',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      const nonCodeSection = screen.getByTestId('non-code-section');
+      fireEvent.click(
+        within(nonCodeSection).getByTestId('type-card-header-investigation'),
+      );
+      const typeCard = within(nonCodeSection).getByTestId(
+        'type-card-investigation',
+      );
+      expect(
+        typeCard.querySelector('input[type="checkbox"]'),
+      ).toBeNull();
+      expect(
+        within(typeCard).getByTestId('ops-dep-blocked-reason').textContent,
+      ).toContain('waiting on Design Task');
+    });
+
+    it('excludes a groom-dep-blocked Backlog Code task from Select All / the Groom(N) count and shows its blocker reason', () => {
+      renderList(
+        [
+          makeTask({
+            taskId: 'bc-blocked',
+            taskName: 'Blocked Backlog Code Task',
+            displayStatus: 'backlog',
+            taskType: '💻 Code',
+            groomDepBlocked: true,
+            groomDepBlockedReason: 'waiting on Investigation Task',
+          }),
+          makeTask({
+            taskId: 'bc-ready',
+            taskName: 'Groomable Backlog Code Task',
+            displayStatus: 'backlog',
+            taskType: '💻 Code',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      const backlogSection = screen.getByTestId('backlog-section');
+      fireEvent.click(
+        within(backlogSection).getByTestId('group-header-backlog'),
+      );
+
+      const checkboxes = within(backlogSection).queryAllByRole('checkbox');
+      // Only the eligible task renders a checkbox — the dep-blocked task renders none.
+      expect(checkboxes).toHaveLength(1);
+      expect(
+        within(backlogSection).getByTestId('ops-dep-blocked-reason')
+          .textContent,
+      ).toContain('waiting on Investigation Task');
+
+      fireEvent.click(within(backlogSection).getByTestId('groom-select-all-btn'));
+      const groomBtn = within(backlogSection).getByTestId(
+        'groom-btn',
+      ) as HTMLButtonElement;
+      expect(groomBtn.textContent).toContain('Groom (1)');
+    });
+
     it('clicking Groom(N) without a selected board is a no-op (no network write, no panel)', () => {
       (global.fetch as ReturnType<typeof vi.fn>).mockClear();
       renderList([

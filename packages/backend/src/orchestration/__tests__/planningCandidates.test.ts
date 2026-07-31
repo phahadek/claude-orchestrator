@@ -58,6 +58,56 @@ describe('passesGroomDepGate', () => {
     expect(passesGroomDepGate(t, groomed)).toBe(true);
   });
 
+  it('requires a 🔎 Investigation dep to be ✅ Done, like Design/Planning', () => {
+    const t = task({ dependsOn: ['investigation-dep'] });
+    const ready = new Map([
+      [
+        'investigation-dep',
+        task({
+          id: 'investigation-dep',
+          type: '🔎 Investigation',
+          status: '🗂️ Ready',
+        }),
+      ],
+    ]);
+    expect(passesGroomDepGate(t, ready)).toBe(false);
+
+    const inProgress = new Map([
+      [
+        'investigation-dep',
+        task({
+          id: 'investigation-dep',
+          type: '🔎 Investigation',
+          status: '🔄 In Progress',
+        }),
+      ],
+    ]);
+    expect(passesGroomDepGate(t, inProgress)).toBe(false);
+
+    const done = new Map([
+      [
+        'investigation-dep',
+        task({
+          id: 'investigation-dep',
+          type: '🔎 Investigation',
+          status: '✅ Done',
+        }),
+      ],
+    ]);
+    expect(passesGroomDepGate(t, done)).toBe(true);
+  });
+
+  it('blocks on a ⏭️ Deferred dep of any Type, including non-decision types', () => {
+    const t = task({ dependsOn: ['code-dep'] });
+    const deferred = new Map([
+      [
+        'code-dep',
+        task({ id: 'code-dep', type: '💻 Code', status: '⏭️ Deferred' }),
+      ],
+    ]);
+    expect(passesGroomDepGate(t, deferred)).toBe(false);
+  });
+
   it('fails closed when a dep is missing from the board cache', () => {
     const t = task({ dependsOn: ['missing-dep'] });
     expect(passesGroomDepGate(t, new Map())).toBe(false);
