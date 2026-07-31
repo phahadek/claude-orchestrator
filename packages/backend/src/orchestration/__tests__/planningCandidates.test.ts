@@ -17,7 +17,11 @@ import {
   updateTaskStatusInBoardCaches,
   getTaskCache,
   hasActivePlanningSessionForTask,
+  isGroomNoOpSuppressed,
+  insertStagedIntent,
 } from '../../db/queries';
+import { recordEvent } from '../../audit/AuditLog';
+import type { StagedIntentRow, StagedIntentState } from '../../db/types';
 
 function task(overrides: Partial<NotionTask> = {}): NotionTask {
   return {
@@ -136,6 +140,7 @@ describe('isGroomCandidate', () => {
     hasActiveSession: () => false,
     hasActiveGroomSession: () => false,
     inCrashCooldown: () => false,
+    isNoOpSuppressed: () => false,
   };
 
   it('rejects a task that is not still 🔲 Backlog', () => {
@@ -212,6 +217,123 @@ describe('isGroomCandidate', () => {
           hasActivePlanningSessionForTask(taskId, 'groom'),
       }),
     ).toBe(false);
+  });
+
+  it('skips a task whose most recent planning.noOp still suppresses it', () => {
+    const t = task();
+    expect(
+      isGroomCandidate(t, { ...baseDeps, isNoOpSuppressed: () => true }),
+    ).toBe(false);
+  });
+});
+
+function insertNoOp(overrides: Partial<StagedIntentRow> = {}): void {
+  const now = Date.now();
+  const row: StagedIntentRow = {
+    id: `noop-${Math.random()}`,
+    kind: 'planning.noOp',
+    payload: JSON.stringify({ taskId: 'task-1', reason: 'nothing to decide' }),
+    payload_hash: `hash-${Math.random()}`,
+    task_id: 'task-1',
+    project_id: 'proj-1',
+    session_id: 'sess-noop',
+    group_id: null,
+    milestone: null,
+    state: 'committed' as StagedIntentState,
+    supersedes: null,
+    annotation: null,
+    decision_proposal: null,
+    groom_proposal: null,
+    advisory: null,
+    disposition_reason: null,
+    answer: null,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+  insertStagedIntent(row);
+}
+
+describe('isGroomNoOpSuppressed', () => {
+  beforeEach(() => {
+    db.prepare('DELETE FROM staged_intent').run();
+    db.prepare('DELETE FROM audit_log').run();
+  });
+
+  it('suppresses while the most recent planning.noOp for the task is committed', () => {
+    insertNoOp();
+    expect(isGroomNoOpSuppressed('task-1')).toBe(true);
+  });
+
+  it('does not suppress when the task has no planning.noOp', () => {
+    expect(isGroomNoOpSuppressed('task-1')).toBe(false);
+  });
+
+  it.each(['rejected', 'superseded', 'staged'] as StagedIntentState[])(
+    'does not suppress when the most recent no-op is %s',
+    (state) => {
+      insertNoOp({ state });
+      expect(isGroomNoOpSuppressed('task-1')).toBe(false);
+    },
+  );
+
+  it('reads only the most recent no-op, not an earlier committed one', () => {
+    insertNoOp({ state: 'committed', created_at: 1000, updated_at: 1000 });
+    insertNoOp({ state: 'rejected', created_at: 2000, updated_at: 2000 });
+    expect(isGroomNoOpSuppressed('task-1')).toBe(false);
+  });
+
+  it('retires the suppression once a task_body_updated event lands after the commit', () => {
+    insertNoOp({ created_at: 1000, updated_at: 1000 });
+    expect(isGroomNoOpSuppressed('task-1')).toBe(true);
+
+    recordEvent({
+      event_type: 'task_body_updated',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: 'proj-1',
+      task_id: 'task-1',
+      payload: {},
+    });
+    expect(isGroomNoOpSuppressed('task-1')).toBe(false);
+  });
+
+  it('retires the suppression once a task_deps_updated event lands after the commit', () => {
+    insertNoOp({ created_at: 1000, updated_at: 1000 });
+    recordEvent({
+      event_type: 'task_deps_updated',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: 'proj-1',
+      task_id: 'task-1',
+      payload: {},
+    });
+    expect(isGroomNoOpSuppressed('task-1')).toBe(false);
+  });
+
+  it('does not retire on an edit event for a different task', () => {
+    insertNoOp({ created_at: 1000, updated_at: 1000 });
+    recordEvent({
+      event_type: 'task_body_updated',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: 'proj-1',
+      task_id: 'task-2',
+      payload: {},
+    });
+    expect(isGroomNoOpSuppressed('task-1')).toBe(true);
+  });
+
+  it('still suppresses after the staging session goes terminal — derived from the committed intent, not the session', () => {
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
+         status, started_at, ended_at, session_type, archived)
+       VALUES ('sess-noop', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
+         'done', ?, ?, 'groom', 0)`,
+    ).run(Date.now() - 10 * 60 * 1000, Date.now());
+    insertNoOp();
+    expect(isGroomNoOpSuppressed('task-1')).toBe(true);
   });
 });
 
@@ -331,6 +453,7 @@ describe('isGroomCandidate — post-write candidate suppression via the board-ca
     hasActiveSession: () => false,
     hasActiveGroomSession: () => false,
     inCrashCooldown: () => false,
+    isNoOpSuppressed: () => false,
   };
 
   it('a task read back after updateTaskStatusInBoardCaches(Backlog -> Ready) is no longer a groom candidate', () => {

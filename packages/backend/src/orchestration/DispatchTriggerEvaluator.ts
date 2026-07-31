@@ -13,6 +13,7 @@ import {
   getTaskCache,
   hasActivePlanningSessionForTask,
   hasActiveSessionForTask,
+  isGroomNoOpSuppressed,
   listMilestonesByProject,
   setTaskPauseReason,
 } from '../db/queries';
@@ -212,6 +213,7 @@ export class DispatchTriggerEvaluator {
             hasActiveGroomSession: (taskId) =>
               hasActivePlanningSessionForTask(taskId, 'groom'),
             inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
+            isNoOpSuppressed: isGroomNoOpSuppressed,
           })
         ) {
           candidates.push({ projectId, milestone, task });

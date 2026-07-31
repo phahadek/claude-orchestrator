@@ -100,14 +100,26 @@ export interface GroomCandidateDeps {
    * the same as a running one; there is no idle-specific carve-out.
    */
   hasActiveGroomSession: (taskId: string) => boolean;
+  /**
+   * True while the task's most recent planning.noOp is a still-standing
+   * committed decision ("nothing about this task needs a decision right
+   * now") — a deliberate choice to leave the task at Backlog, not an
+   * oversight, so auto-dispatch must not immediately override it. Derived
+   * from the committed intent, not the staging session's status: it holds
+   * after that session goes terminal. An operator-initiated groom launch
+   * doesn't go through isGroomCandidate at all, so it's never blocked by
+   * this. See isGroomNoOpSuppressed in db/queries.ts.
+   */
+  isNoOpSuppressed: (taskId: string) => boolean;
 }
 
 /**
  * A task is a groom candidate when it's still 🔲 Backlog (any Type), no
  * non-terminal standard session is already handling it, no non-terminal
  * (running or parked idle) groom session already handles it, it isn't
- * within its crash-budget cooldown, and every Depends-On clears the groom
- * dep-gate.
+ * within its crash-budget cooldown, its most recent planning.noOp (if any)
+ * isn't a still-standing committed suppression, and every Depends-On clears
+ * the groom dep-gate.
  */
 export function isGroomCandidate(
   task: NotionTask,
@@ -117,6 +129,7 @@ export function isGroomCandidate(
   if (deps.hasActiveSession(task.id)) return false;
   if (deps.hasActiveGroomSession(task.id)) return false;
   if (deps.inCrashCooldown(task.id)) return false;
+  if (deps.isNoOpSuppressed(task.id)) return false;
   return passesGroomDepGate(task, deps.tasksById);
 }
 
