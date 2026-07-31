@@ -110,7 +110,10 @@ describe('StuckSessionMonitor activity-based deadlines', () => {
     vi.advanceTimersByTime(NOTIFY_MS + 1000);
 
     expect(broadcast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'stuck_session_notified', sessionId: 'sess-1' }),
+      expect.objectContaining({
+        type: 'stuck_session_notified',
+        sessionId: 'sess-1',
+      }),
     );
   });
 
@@ -140,7 +143,10 @@ describe('StuckSessionMonitor activity-based deadlines', () => {
     // But an inert session still pauses at the full threshold.
     vi.advanceTimersByTime(PAUSE_MS + 1000);
     expect(broadcast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'stuck_session_paused', sessionId: 'sess-1' }),
+      expect.objectContaining({
+        type: 'stuck_session_paused',
+        sessionId: 'sess-1',
+      }),
     );
   });
 
@@ -173,7 +179,10 @@ describe('StuckSessionMonitor activity-based deadlines', () => {
       taskName: 'Code task',
     });
 
-    sessionManager.emit('message', { type: 'pr_created', sessionId: 'sess-code' });
+    sessionManager.emit('message', {
+      type: 'pr_created',
+      sessionId: 'sess-code',
+    });
 
     // Even far past both thresholds, nothing fires because the timers are
     // suspended for review.
@@ -194,7 +203,10 @@ describe('StuckSessionMonitor activity-based deadlines', () => {
       sessionId: 'sess-code',
       taskName: 'Code task',
     });
-    sessionManager.emit('message', { type: 'pr_created', sessionId: 'sess-code' });
+    sessionManager.emit('message', {
+      type: 'pr_created',
+      sessionId: 'sess-code',
+    });
 
     // Activity after suspension (e.g. a late system event) must not re-arm.
     emitSessionEvent(sessionManager, 'sess-code', 'other');
