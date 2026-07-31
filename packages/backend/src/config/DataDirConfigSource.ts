@@ -22,6 +22,7 @@ export const CONFIG_DEFAULTS: OrchestratorConfig = {
   notion: { apiKey: '' },
   github: { token: '', repo: '' },
   server: { port: 3000 },
+  // Resolved against the data directory (see resolveDbPath), never process.cwd().
   db: { path: './dashboard.db' },
   sessions: { dir: '' },
   autoReview: { enabled: true, concurrency: 1 },

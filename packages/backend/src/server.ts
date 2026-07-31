@@ -61,7 +61,11 @@ import { AutoMerger } from './github/AutoMerger';
 import { ReviewerCommentsWatcher } from './github/ReviewerCommentsWatcher';
 import { AUTO_REVIEW_ENABLED, GITHUB_TOKEN } from './config';
 import { getCorporateMode } from './config/corporateMode';
-import { getOrchestratorConfig } from './config/appConfig';
+import {
+  getOrchestratorConfig,
+  logConfigProvenanceSummary,
+} from './config/appConfig';
+import { createConfigStatusRouter } from './routes/configStatus';
 import { AutoLauncher } from './orchestration/AutoLauncher';
 import { DispatchTriggerEvaluator } from './orchestration/DispatchTriggerEvaluator';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
@@ -199,6 +203,7 @@ setSettingsReviewOrchestrator(reviewOrchestrator);
 const planningOrchestrator = new PlanningOrchestrator(sessionManager);
 
 const PORT = getOrchestratorConfig().server.port;
+logConfigProvenanceSummary();
 
 const app = express();
 app.use(express.json());
@@ -293,6 +298,7 @@ app.use('/api', createTasksRouter(sessionManager, reviewOrchestrator));
 app.use('/api/analytics', analyticsRouter);
 app.use('/api', projectsRouter);
 app.use('/api', configRouter);
+app.use('/api', createConfigStatusRouter());
 app.use('/api', updateRouter);
 app.use('/api/diagnostics', createDiagnosticsRouter());
 app.use('/api', createPlanUsageRouter());

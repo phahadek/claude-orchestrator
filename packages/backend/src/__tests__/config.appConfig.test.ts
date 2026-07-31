@@ -16,6 +16,7 @@ import { ConfigValidationError } from '../config/types.js';
 import { getDataDir } from '../config/dataDir.js';
 import {
   getOrchestratorConfig,
+  getConfigProvenance,
   writeOrchestratorConfig as _writeOrchestratorConfig,
   _setConfigSourceForTesting,
   _resetAppConfigCache,
@@ -394,5 +395,111 @@ describe('getOrchestratorConfig .env fallback merge', () => {
     expect(cfg.notion.apiKey).toBe('ntn-json');
     expect(cfg.github.token).toBe('ghp-json-1234567890');
     expect(cfg.github.repo).toBe('json-owner/json-repo');
+  });
+});
+
+// ── Provenance tracking ────────────────────────────────────────────────────
+// Each effective-config field must report where its value actually came
+// from: config.json, .env fallback, or the shipped default. This is the
+// diagnostic surface the 2026-07-30 outage lacked.
+
+describe('getConfigProvenance', () => {
+  let tmpDir: string;
+  let prevXdgDataHome: string | undefined;
+  const envKeys = [
+    'NOTION_API_KEY',
+    'GITHUB_TOKEN',
+    'GITHUB_REPO',
+    'PORT',
+    'DB_PATH',
+    'SESSIONS_DIR',
+    'AUTO_REVIEW',
+  ] as const;
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    _resetAppConfigCache();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-provenance-'));
+    vi.mocked(getDataDir).mockReturnValue(tmpDir);
+    prevXdgDataHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = tmpDir;
+    for (const k of envKeys) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+
+  afterEach(() => {
+    _resetAppConfigCache();
+    if (prevXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = prevXdgDataHome;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    for (const k of envKeys) {
+      if (saved[k] !== undefined) process.env[k] = saved[k];
+      else delete process.env[k];
+    }
+    vi.restoreAllMocks();
+  });
+
+  it('reports "config.json" for a field explicitly set in config.json', () => {
+    const src = new DataDirConfigSource();
+    src.write({ github: { repo: 'real-owner/real-repo' } });
+
+    const provenance = getConfigProvenance();
+    expect(provenance['github.repo']).toBe('config.json');
+  });
+
+  it('reports ".env fallback" (env) for a field empty in config.json but set in .env', () => {
+    process.env.GITHUB_REPO = 'env-owner/env-repo';
+    const src = new DataDirConfigSource();
+    src.write({ github: { repo: '' } });
+
+    const provenance = getConfigProvenance();
+    expect(provenance['github.repo']).toBe('env');
+  });
+
+  it('reports "default" for a field unset in both config.json and .env', () => {
+    const src = new DataDirConfigSource();
+    src.write({ notion: { apiKey: 'ntn-set' } });
+
+    const provenance = getConfigProvenance();
+    expect(provenance['github.repo']).toBe('default');
+  });
+
+  it('reports "default" for every field on a fresh install with neither source', () => {
+    // No config.json written, no relevant env vars set.
+    const provenance = getConfigProvenance();
+    for (const key of Object.keys(provenance)) {
+      expect(provenance[key]).toBe('default');
+    }
+  });
+
+  it('reports "env" in legacy mode (no config.json) when the env var is set', () => {
+    process.env.NOTION_API_KEY = 'ntn-legacy';
+    // No config.json written — legacy .env-only mode.
+    const provenance = getConfigProvenance();
+    expect(provenance['notion.apiKey']).toBe('env');
+    expect(provenance['github.repo']).toBe('default');
+  });
+
+  it('reports "config.json" for a non-fallback field (server.port) when set', () => {
+    const src = new DataDirConfigSource();
+    src.write({ server: { port: 4321 } });
+
+    const provenance = getConfigProvenance();
+    expect(provenance['server.port']).toBe('config.json');
+  });
+
+  it('is cached alongside the resolved config and invalidated together', () => {
+    const src = new DataDirConfigSource();
+    src.write({ github: { repo: 'first/repo' } });
+    getOrchestratorConfig();
+    const first = getConfigProvenance();
+
+    src.write({ github: { repo: 'second/repo' } });
+    const second = getConfigProvenance();
+    // Cache wasn't invalidated by writing directly via the source, so it's
+    // the same reference — mirrors getOrchestratorConfig()'s own caching.
+    expect(second).toBe(first);
   });
 });
