@@ -892,9 +892,9 @@ describe('checkGroomingPromotionGate — server-derived existsInRepo (task 3ae22
       'notion:derived-task',
     );
     expect(result.allowed).toBe(false);
-    expect(
-      result.reasons.some((r) => r.includes('does not parse as a')),
-    ).toBe(true);
+    expect(result.reasons.some((r) => r.includes('does not parse as a'))).toBe(
+      true,
+    );
   });
 
   it('reports FM2 resolve-in-artifact and the non-repo-path check as two separate, unmerged reasons for the same unresolvable entry', async () => {
@@ -917,9 +917,9 @@ describe('checkGroomingPromotionGate — server-derived existsInRepo (task 3ae22
         (r) => r.includes('does not resolve') && r.includes('*(new)*'),
       ),
     ).toBe(true);
-    expect(
-      result.reasons.some((r) => r.includes('does not parse as a')),
-    ).toBe(true);
+    expect(result.reasons.some((r) => r.includes('does not parse as a'))).toBe(
+      true,
+    );
     expect(result.reasons.length).toBeGreaterThanOrEqual(2);
   });
 
@@ -969,9 +969,7 @@ describe('checkGroomingPromotionGate — server-derived existsInRepo (task 3ae22
       undefined,
     );
     expect(result.allowed).toBe(false);
-    expect(
-      result.reasons.some((r) => r.includes('Files / paths')),
-    ).toBe(true);
+    expect(result.reasons.some((r) => r.includes('Files / paths'))).toBe(true);
   });
 });
 

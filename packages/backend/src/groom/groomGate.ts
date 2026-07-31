@@ -432,9 +432,8 @@ async function resolveFilesPathsEntriesServerSide(
         `project "${projectId ?? 'unknown'}"; the tracked-file set this check requires is unavailable.`,
     };
   }
-  const { resolveTrackedFileSet, filesPathsEntryExistsInRepo } = await import(
-    './groomLoad'
-  );
+  const { resolveTrackedFileSet, filesPathsEntryExistsInRepo } =
+    await import('./groomLoad');
   let trackedFiles: Set<string>;
   try {
     trackedFiles = await resolveTrackedFileSet(repoRoot);
