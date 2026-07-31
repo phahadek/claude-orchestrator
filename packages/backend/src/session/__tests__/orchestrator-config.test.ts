@@ -285,6 +285,19 @@ describe('getSessionAllowedTools', () => {
     expect(groom).not.toContain('mcp__orchestrator__gate_verify');
   });
 
+  it('ops (gate-verify) session resolved allow-list includes gateSeed_getState without an operator grant, but never a mutating gate/seed tool', () => {
+    const ops = getSessionAllowedTools('ops', { allowed_tools: [] });
+    const groom = getSessionAllowedTools('groom', { allowed_tools: [] });
+    const design = getSessionAllowedTools('design', { allowed_tools: [] });
+    const standard = getSessionAllowedTools('standard', { allowed_tools: [] });
+    expect(ops).toContain('mcp__orchestrator__gateSeed_getState');
+    expect(groom).not.toContain('mcp__orchestrator__gateSeed_getState');
+    expect(design).not.toContain('mcp__orchestrator__gateSeed_getState');
+    expect(standard).not.toContain('mcp__orchestrator__gateSeed_getState');
+    expect(ops).not.toContain('mcp__orchestrator__gate_accrete');
+    expect(ops).not.toContain('mcp__orchestrator__seed_stage');
+  });
+
   describe('docs tool set', () => {
     it('returns DOCS_ALLOWED_TOOLS including Write/Edit, git-write, and the PR-open exception', () => {
       const tools = getSessionAllowedTools('docs', { allowed_tools: [] });

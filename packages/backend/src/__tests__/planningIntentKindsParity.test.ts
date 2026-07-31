@@ -25,6 +25,12 @@ const HEALTH_TOOL = orchestratorMcpToolName('health');
 // in PLANNING_INTENT_KINDS.ops, so the ops guard below excludes it too (see
 // config.ts's OPS_MCP_TOOLS comment).
 const GATE_VERIFY_TOOL = orchestratorMcpToolName('gate.verify');
+// gateSeed.getState is the read-only gate_item/seed_item state lookup a
+// gate-verify (ops) session needs to gather evidence for the same item it
+// verifies via gate.verify above — also a direct read, not a staged-intent
+// kind, so it isn't in PLANNING_INTENT_KINDS.ops (see config.ts's
+// OPS_MCP_TOOLS comment).
+const GATESEED_GETSTATE_TOOL = orchestratorMcpToolName('gateSeed.getState');
 // completeness.disposition / completeness.traceCoverage are direct
 // write/read calls, not staged-intent kinds — they aren't in
 // PLANNING_INTENT_KINDS.design, so the design guard below excludes them too
@@ -89,6 +95,7 @@ const WORKFLOWS: {
     allowedTools: OPS_ALLOWED_TOOLS,
     extraNonStagedTools: [
       GATE_VERIFY_TOOL,
+      GATESEED_GETSTATE_TOOL,
       ...ARCHITECTURE_READ_TOOLS,
       ...TASK_READ_TOOLS,
       ...TIER_B_READ_TOOLS,
