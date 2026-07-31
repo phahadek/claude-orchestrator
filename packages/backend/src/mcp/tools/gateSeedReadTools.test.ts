@@ -16,8 +16,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerGateSeedReadTools } from './gateSeedReadTools';
-import { insertItem as insertGateItem, appendEvent as appendGateEvent } from '../../gate/gateStore';
-import { insertItem as insertSeedItem, appendEvent as appendSeedEvent } from '../../seed/seedStore';
+import {
+  insertItem as insertGateItem,
+  appendEvent as appendGateEvent,
+} from '../../gate/gateStore';
+import {
+  insertItem as insertSeedItem,
+  appendEvent as appendSeedEvent,
+} from '../../seed/seedStore';
 
 const PROJECT_ID = 'proj-1';
 const MILESTONE = 'M1';
