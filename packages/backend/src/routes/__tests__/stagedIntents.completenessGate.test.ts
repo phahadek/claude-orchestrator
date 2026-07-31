@@ -453,9 +453,7 @@ describe('sessionOwesGatedDesignArtifacts', () => {
     const agent = supertest(app);
     await agent.post(`/api/staged-intents/${intent.id}/approve`).send({});
 
-    expect(sessionOwesGatedDesignArtifacts('groom-session-owed-1')).toBe(
-      false,
-    );
+    expect(sessionOwesGatedDesignArtifacts('groom-session-owed-1')).toBe(false);
   });
 
   it('is false when the session has no bound task', () => {
