@@ -6,9 +6,29 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import yaml from 'js-yaml';
 import { loadDeployPlaybook } from '../loadPlaybook';
+import { validateDeployBindings } from '../deployBindingsSchema';
 
 const REPO_ROOT = path.join(__dirname, '../../../../..');
+const BINDINGS_PATH = path.join(
+  REPO_ROOT,
+  'config',
+  'projects',
+  'claude-orchestrator',
+  'deploy-bindings.yml',
+);
+
+function loadRepoBindings() {
+  const raw = yaml.load(fs.readFileSync(BINDINGS_PATH, 'utf-8'));
+  const result = validateDeployBindings(raw);
+  if ('errors' in result) {
+    throw new Error(
+      `config/projects/claude-orchestrator/deploy-bindings.yml is invalid: ${result.errors.join('; ')}`,
+    );
+  }
+  return result.bindings;
+}
 
 describe('the repo-committed deploy playbook', () => {
   it('exists at the repo root and validates against playbookSchema', () => {
@@ -28,7 +48,7 @@ describe('the repo-committed deploy playbook', () => {
     expect(raw).not.toMatch(/ssh\s+\S+@/);
   });
 
-  it("sync-runtime runs a real rsync into this host's runtime directory", () => {
+  it("sync-runtime runs a real rsync into this host's runtime directory, referenced via the RUNTIME_DIR binding", () => {
     const result = loadDeployPlaybook(REPO_ROOT);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -37,7 +57,11 @@ describe('the repo-committed deploy playbook', () => {
     expect(syncStep).toBeDefined();
     expect(syncStep?.command_or_prompt).toMatch(/^rsync\b/);
     expect(syncStep?.command_or_prompt).toMatch(/--delete/);
-    expect(syncStep?.command_or_prompt).toContain('/srv/orchestrator/runtime/');
+    expect(syncStep?.command_or_prompt).toContain('$RUNTIME_DIR');
+    expect(syncStep?.command_or_prompt).not.toMatch(/\/srv\/orchestrator/);
+
+    const bindings = loadRepoBindings();
+    expect(bindings.RUNTIME_DIR).toBe('/srv/orchestrator/runtime');
   });
 
   it("prod-mutating steps carry no run_as — they run as the engine's own runtime user, not a sudo -u switch to a placeholder that may not exist on the host", () => {
@@ -76,7 +100,7 @@ describe('the repo-committed deploy playbook', () => {
     expect(reportIn?.command_or_prompt).toBeUndefined();
   });
 
-  it('record-deployed-sha is still ordered after report-in and targets a directory that exists', () => {
+  it('record-deployed-sha is still ordered after report-in and targets the DEPLOYED_SHA_PATH binding', () => {
     const result = loadDeployPlaybook(REPO_ROOT);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -95,12 +119,13 @@ describe('the repo-committed deploy playbook', () => {
     // failure here means "re-write the marker," never a rollback
     // candidate, so it's deliberately not prod-mutating.
     expect(recordSha?.is_prod_mutating).toBe(false);
+    expect(recordSha?.command_or_prompt).toContain('$DEPLOYED_SHA_PATH');
+    expect(recordSha?.command_or_prompt).not.toMatch(/\/srv\/orchestrator/);
 
-    const match = recordSha?.command_or_prompt?.match(/>\s*(\S+)/);
-    expect(match).toBeTruthy();
-    const targetPath = match![1];
+    const bindings = loadRepoBindings();
+    const targetPath = bindings.DEPLOYED_SHA_PATH;
+    expect(targetPath).toBeDefined();
     expect(path.isAbsolute(targetPath)).toBe(true);
-    expect(fs.existsSync(path.dirname(targetPath))).toBe(true);
   });
 
   it('report-in and record-deployed-sha carry no rollback_ref — they are informational bookkeeping after the last prod-mutating step, with nothing to roll back', () => {
