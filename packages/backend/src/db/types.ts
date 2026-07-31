@@ -112,37 +112,6 @@ export interface SessionEvent {
 
 export type NewSessionEvent = Omit<SessionEvent, 'id'>;
 
-// ─── permission_events ─────────────────────────────────────────────────────
-
-type PermissionDecision = 'auto_allow' | 'auto_deny' | 'approved' | 'denied';
-
-export interface PermissionEvent {
-  id: number;
-  session_id: string;
-  tool_name: string;
-  proposed_action: string | null;
-  decision: PermissionDecision;
-  rule_matched: string | null;
-  decided_at: number;
-}
-
-export type NewPermissionEvent = Omit<PermissionEvent, 'id'>;
-
-// ─── permission_rules ──────────────────────────────────────────────────────
-
-type MatchType = 'glob' | 'regex';
-type RuleDecision = 'allow' | 'deny';
-
-export interface PermissionRule {
-  id: number;
-  order_index: number;
-  pattern: string;
-  match_type: MatchType;
-  decision: RuleDecision;
-  label: string | null;
-  enabled: number; // 0 | 1 (SQLite boolean)
-}
-
 // ─── permission_denials ─────────────────────────────────────────────────────
 
 export interface PermissionDenialRow {

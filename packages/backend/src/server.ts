@@ -12,10 +12,7 @@ import { setTaskWriteRefreshFn } from './tasks/TaskWriteCommands';
 import { sendInitialStateBurst } from './ws/initialStateBurst';
 import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
-import {
-  permissionEventsRouter,
-  permissionDenialsRouter,
-} from './routes/rules';
+import { permissionDenialsRouter } from './routes/rules';
 import configRouter from './routes/config';
 import settingsRouter, {
   loadRuntimeSettingsFromDb,
@@ -240,7 +237,6 @@ app.use('/api', createSetupModeGuard());
 app.use('/api', requireDeviceAuth);
 // Auth-gated enrollment routes (approve, devices) — valid enrolled-device token required
 app.use('/api/enrollment', createGatedEnrollmentRouter());
-app.use('/api/permission-events', permissionEventsRouter);
 app.use('/api/permission-denials', permissionDenialsRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/sessions', sessionsRouter);

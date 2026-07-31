@@ -75,25 +75,6 @@ db.exec(`
     timestamp   INTEGER NOT NULL,
     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
   );
-  CREATE TABLE IF NOT EXISTS permission_events (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id      TEXT    NOT NULL,
-    tool_name       TEXT    NOT NULL,
-    proposed_action TEXT,
-    decision        TEXT    NOT NULL,
-    rule_matched    TEXT,
-    decided_at      INTEGER NOT NULL,
-    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-  );
-  CREATE TABLE IF NOT EXISTS permission_rules (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    order_index INTEGER NOT NULL,
-    pattern     TEXT    NOT NULL,
-    match_type  TEXT    NOT NULL,
-    decision    TEXT    NOT NULL,
-    label       TEXT,
-    enabled     INTEGER NOT NULL DEFAULT 1
-  );
   CREATE TABLE IF NOT EXISTS task_cache (
     task_id    TEXT    PRIMARY KEY,
     fetched_at INTEGER NOT NULL,

@@ -24,17 +24,6 @@ function makeDb(): InstanceType<typeof Database> {
       FOREIGN KEY (session_id) REFERENCES sessions(session_id)
     );
 
-    CREATE TABLE permission_events (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id      TEXT    NOT NULL,
-      tool_name       TEXT    NOT NULL DEFAULT 'bash',
-      proposed_action TEXT,
-      decision        TEXT    NOT NULL DEFAULT 'allow',
-      rule_matched    TEXT,
-      decided_at      INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-    );
-
     CREATE TABLE permission_denials (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       session_id  TEXT    NOT NULL,
@@ -108,30 +97,6 @@ function runCascadeMigration(db: InstanceType<typeof Database>): void {
         WHERE session_id IN (SELECT session_id FROM sessions);
       DROP TABLE session_events;
       ALTER TABLE session_events__new RENAME TO session_events;
-      COMMIT;
-    `);
-  }
-
-  if (!getTableSql('permission_events').includes('ON DELETE CASCADE')) {
-    db.exec(`
-      BEGIN TRANSACTION;
-      DROP TABLE IF EXISTS permission_events__new;
-      CREATE TABLE permission_events__new (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id      TEXT    NOT NULL,
-        tool_name       TEXT    NOT NULL,
-        proposed_action TEXT,
-        decision        TEXT    NOT NULL,
-        rule_matched    TEXT,
-        decided_at      INTEGER NOT NULL,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-      );
-      INSERT INTO permission_events__new (id, session_id, tool_name, proposed_action, decision, rule_matched, decided_at)
-        SELECT id, session_id, tool_name, proposed_action, decision, rule_matched, decided_at
-        FROM permission_events
-        WHERE session_id IN (SELECT session_id FROM sessions);
-      DROP TABLE permission_events;
-      ALTER TABLE permission_events__new RENAME TO permission_events;
       COMMIT;
     `);
   }
@@ -337,17 +302,6 @@ describe('CASCADE migration — cascade behavior after migration', () => {
     db.prepare('DELETE FROM sessions WHERE session_id = ?').run('s1');
 
     expect(count(db, 'session_events', 's1')).toBe(0);
-  });
-
-  it('deleting a session cascades to permission_events', () => {
-    insertSession(db, 's1');
-    db.prepare(
-      "INSERT INTO permission_events (session_id, tool_name, decision, decided_at) VALUES (?, 'bash', 'allow', 0)",
-    ).run('s1');
-
-    db.prepare('DELETE FROM sessions WHERE session_id = ?').run('s1');
-
-    expect(count(db, 'permission_events', 's1')).toBe(0);
   });
 
   it('deleting a session cascades to permission_denials', () => {
