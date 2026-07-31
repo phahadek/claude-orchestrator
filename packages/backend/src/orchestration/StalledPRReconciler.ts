@@ -22,7 +22,10 @@ import {
 import { parsePauseReason } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
 import { typedGetSetting } from '../config/settings';
-import { recordEvent, hasPrBodyMarkerUpdateSinceTimestamp } from '../audit/AuditLog';
+import {
+  recordEvent,
+  hasPrBodyMarkerUpdateSinceTimestamp,
+} from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
 import { classifyStalledPR, parseVerdict } from '../github/pollUtils';
@@ -425,9 +428,7 @@ export class StalledPRReconciler {
    * should fall through to the existing nudge), or a boolean when this
    * method fully handled the PR.
    */
-  private tryForceReReviewForAppliedRemedy(
-    pr: PullRequestRow,
-  ): boolean | null {
+  private tryForceReReviewForAppliedRemedy(pr: PullRequestRow): boolean | null {
     const { pr_number: prNumber, repo } = pr;
 
     if (!this.reviewOrchestrator || !pr.task_id || !pr.review_at) return null;
