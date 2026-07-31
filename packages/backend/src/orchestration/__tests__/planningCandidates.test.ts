@@ -13,7 +13,11 @@ vi.mock('../../db/db.js', async () => {
 });
 
 import { db } from '../../db/db.js';
-import { updateTaskStatusInBoardCaches, getTaskCache } from '../../db/queries';
+import {
+  updateTaskStatusInBoardCaches,
+  getTaskCache,
+  hasActivePlanningSessionForTask,
+} from '../../db/queries';
 
 function task(overrides: Partial<NotionTask> = {}): NotionTask {
   return {
@@ -169,6 +173,44 @@ describe('isGroomCandidate', () => {
     const t = task();
     expect(
       isGroomCandidate(t, { ...baseDeps, hasActiveGroomSession: () => true }),
+    ).toBe(false);
+  });
+
+  it('admits a task whose only groom session is archived and idle, wired through the real DB-backed predicate', () => {
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
+         status, started_at, session_type, archived)
+       VALUES ('sess-archived-idle', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
+         'idle', ?, 'groom', 1)`,
+    ).run(Date.now() - 10 * 60 * 1000);
+
+    const t = task();
+    expect(
+      isGroomCandidate(t, {
+        ...baseDeps,
+        hasActiveGroomSession: (taskId) =>
+          hasActivePlanningSessionForTask(taskId, 'groom'),
+      }),
+    ).toBe(true);
+  });
+
+  it('still excludes a task with a live running groom session, wired through the real DB-backed predicate', () => {
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
+         status, started_at, session_type, archived)
+       VALUES ('sess-running', 'task-1', 'https://notion.so/task', 'https://notion.so/ctx',
+         'running', ?, 'groom', 0)`,
+    ).run(Date.now() - 10 * 60 * 1000);
+
+    const t = task();
+    expect(
+      isGroomCandidate(t, {
+        ...baseDeps,
+        hasActiveGroomSession: (taskId) =>
+          hasActivePlanningSessionForTask(taskId, 'groom'),
+      }),
     ).toBe(false);
   });
 });

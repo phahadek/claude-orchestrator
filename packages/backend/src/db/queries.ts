@@ -796,6 +796,10 @@ export function getGateItemsWithPendingCapabilityRequest(): GateItemPendingCapab
  * including one parked idle awaiting operator disposition. Per the no-timeout
  * decision for planning sessions, an idle groom/design/ops session is never
  * an orphan: OrphanedTaskSweeper must skip revert/nudge for such a task.
+ * Excludes archived sessions: archiving is only reachable via
+ * archiveAndEndSession, which reaps any live subprocess first, so an
+ * archived row is never a running one — it's the operator's explicit
+ * "this session is done" signal, and must not keep suppressing dispatch.
  */
 export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
   const norm = normalizeBoardId(taskId);
@@ -805,6 +809,7 @@ export function hasNonTerminalPlanningSessionForTask(taskId: string): boolean {
     SELECT task_id FROM sessions
     WHERE status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND session_type IN ('groom', 'design', 'ops')
+      AND archived = 0
   `,
     )
     .all();
@@ -833,6 +838,7 @@ export function hasActivePlanningSessionForTask(
     SELECT task_id FROM sessions
     WHERE status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND session_type = @flow
+      AND archived = 0
   `,
     )
     .all({ flow });
@@ -848,6 +854,7 @@ export function hasActiveSessionForTask(taskId: string): boolean {
     WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
       AND status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND (session_type = 'standard' OR session_type IS NULL)
+      AND archived = 0
     LIMIT 1
   `,
     )

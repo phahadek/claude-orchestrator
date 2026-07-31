@@ -14,18 +14,20 @@ function insertSession(opts: {
   taskId: string | null;
   status: string;
   sessionType: string;
+  archived?: boolean;
 }): void {
   sessionCounter += 1;
   db.prepare(
     `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
-       status, started_at, session_type)
-     VALUES (?, ?, 'https://notion.so/task', 'https://notion.so/ctx', ?, ?, ?)`,
+       status, started_at, session_type, archived)
+     VALUES (?, ?, 'https://notion.so/task', 'https://notion.so/ctx', ?, ?, ?, ?)`,
   ).run(
     `sess-${sessionCounter}`,
     opts.taskId,
     opts.status,
     Date.now() - 10 * 60 * 1000,
     opts.sessionType,
+    opts.archived ? 1 : 0,
   );
 }
 
@@ -91,5 +93,33 @@ describe('hasNonTerminalPlanningSessionForTask', () => {
         'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
       ),
     ).toBe(false);
+  });
+
+  it('returns false for an archived, idle (non-terminal) planning session — the operator archive signal', () => {
+    insertSession({
+      taskId: 'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+      status: 'idle',
+      sessionType: 'groom',
+      archived: true,
+    });
+    expect(
+      hasNonTerminalPlanningSessionForTask(
+        'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+      ),
+    ).toBe(false);
+  });
+
+  it('returns true for a non-archived idle planning session — still blocks a second launch', () => {
+    insertSession({
+      taskId: 'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+      status: 'idle',
+      sessionType: 'groom',
+      archived: false,
+    });
+    expect(
+      hasNonTerminalPlanningSessionForTask(
+        'notion:3aa22f91-52f3-81d0-8a7d-c5cfe6b21df7',
+      ),
+    ).toBe(true);
   });
 });
