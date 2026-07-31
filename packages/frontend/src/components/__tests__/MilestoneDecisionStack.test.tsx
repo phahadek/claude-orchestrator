@@ -84,9 +84,15 @@ describe('MilestoneDecisionStack', () => {
     );
 
     expect(screen.getByTestId('milestone-task-row-code-open')).toBeTruthy();
-    expect(screen.getByTestId('milestone-task-row-code-done')).toBeTruthy();
+    // Done is collapsed by default, so its rows are not rendered yet.
+    expect(screen.queryByTestId('milestone-task-row-code-done')).toBeNull();
     expect(screen.queryByTestId('milestone-task-row-code-launched')).toBeNull();
     expect(screen.queryByTestId('milestone-task-row-design-open')).toBeNull();
+
+    expect(screen.getByText(/Done \(1\)/)).toBeTruthy();
+
+    fireEvent.click(screen.getByText(/Done \(1\)/));
+    expect(screen.getByTestId('milestone-task-row-code-done')).toBeTruthy();
 
     // Renders through the shared CompactTaskCard, not bespoke row markup.
     expect(screen.getAllByTestId('compact-task-card')).toHaveLength(2);
@@ -95,6 +101,12 @@ describe('MilestoneDecisionStack', () => {
     expect(onSelect).toHaveBeenCalledWith({
       type: 'task',
       task: tasks[0],
+    });
+
+    fireEvent.click(screen.getByText('Code done'));
+    expect(onSelect).toHaveBeenCalledWith({
+      type: 'task',
+      task: tasks[2],
     });
   });
 
@@ -137,6 +149,11 @@ describe('MilestoneDecisionStack', () => {
     );
 
     expect(screen.getByTestId('milestone-task-row-code-blocked')).toBeTruthy();
+    expect(
+      screen.queryByTestId('milestone-task-row-code-blocked-done'),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByText(/Done \(1\)/));
     expect(
       screen.getByTestId('milestone-task-row-code-blocked-done'),
     ).toBeTruthy();

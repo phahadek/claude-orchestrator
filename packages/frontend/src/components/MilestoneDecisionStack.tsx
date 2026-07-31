@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TaskView } from '../types/taskView';
 import type { StagedIntent } from '../api/stagedIntents';
 import { phaseForTask } from '../utils/phaseBurndown';
@@ -160,6 +160,7 @@ export function MilestoneDecisionStack({
         selectedTaskId={selectedTaskId}
         onSelectTask={(task) => handleSelect({ type: 'task', task })}
         onRowRef={registerTaskTarget}
+        defaultCollapsed
       />
     </div>
   );
@@ -171,39 +172,54 @@ function TaskSection({
   selectedTaskId,
   onSelectTask,
   onRowRef,
+  defaultCollapsed = false,
 }: {
   title: string;
   tasks: TaskView[];
   selectedTaskId: string | null;
   onSelectTask: (task: TaskView) => void;
   onRowRef?: (task: TaskView, el: HTMLElement | null) => void;
+  defaultCollapsed?: boolean;
 }) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+
   if (tasks.length === 0) return null;
 
   return (
     <div className={styles.section}>
-      <div className={styles.sectionHeading}>
+      <button
+        type="button"
+        className={styles.sectionHeading}
+        onClick={() => setCollapsed((c) => !c)}
+        aria-expanded={!collapsed}
+      >
+        <span className={styles.sectionHeadingChevron}>
+          {collapsed ? '▶' : '▼'}
+        </span>
         {title} ({tasks.length})
-      </div>
-      {tasks.map((task) => (
-        <div
-          key={task.taskId}
-          ref={(el) => onRowRef?.(task, el)}
-          className={
-            selectedTaskId === task.taskId ? styles.taskRowSelected : undefined
-          }
-          data-testid={`milestone-task-row-${task.taskId}`}
-        >
-          <CompactTaskCard
-            task={task}
-            showCheckbox={false}
-            checked={false}
-            onCheckChange={() => {}}
-            onClick={() => onSelectTask(task)}
-            showStatus
-          />
-        </div>
-      ))}
+      </button>
+      {!collapsed &&
+        tasks.map((task) => (
+          <div
+            key={task.taskId}
+            ref={(el) => onRowRef?.(task, el)}
+            className={
+              selectedTaskId === task.taskId
+                ? styles.taskRowSelected
+                : undefined
+            }
+            data-testid={`milestone-task-row-${task.taskId}`}
+          >
+            <CompactTaskCard
+              task={task}
+              showCheckbox={false}
+              checked={false}
+              onCheckChange={() => {}}
+              onClick={() => onSelectTask(task)}
+              showStatus
+            />
+          </div>
+        ))}
     </div>
   );
 }
