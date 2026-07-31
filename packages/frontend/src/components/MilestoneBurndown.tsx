@@ -193,6 +193,22 @@ export function MilestoneBurndown({
                 })
               )}
             </div>
+            {total > 0 && (
+              <div className={styles.phaseCounts}>
+                {PHASE_SEGMENT_ORDER[phase].map((state) => {
+                  const count = segment.counts[state] ?? 0;
+                  if (count === 0) return null;
+                  return (
+                    <span key={state} className={styles.phaseCountItem}>
+                      <span
+                        className={`${styles.phaseCountDot} ${SEGMENT_FILL_CLASS[state]}`}
+                      />
+                      {SEGMENT_STATE_LABELS[state]}: {count}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
           </button>
         );
       })}
