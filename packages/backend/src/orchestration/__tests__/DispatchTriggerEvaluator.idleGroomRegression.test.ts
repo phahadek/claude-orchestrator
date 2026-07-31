@@ -85,13 +85,17 @@ describe('DispatchTriggerEvaluator — parked-idle groom session blocks re-dispa
     return new DispatchTriggerEvaluator({} as never, {} as never);
   }
 
-  it('excludes the task from groom candidates across two successive scans', () => {
+  it('excludes the task from groom candidates across two successive scans', async () => {
     const evaluator = makeEvaluator();
 
-    const firstTick = (evaluator as any).scanProjectGroomCandidates(PROJECT);
+    const firstTick = await (evaluator as any).scanProjectGroomCandidates(
+      PROJECT,
+    );
     expect(firstTick).toEqual([]);
 
-    const secondTick = (evaluator as any).scanProjectGroomCandidates(PROJECT);
+    const secondTick = await (evaluator as any).scanProjectGroomCandidates(
+      PROJECT,
+    );
     expect(secondTick).toEqual([]);
   });
 });
