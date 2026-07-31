@@ -118,7 +118,8 @@ export function MilestoneDecisionStack({
       const containerTop = container.getBoundingClientRect().top;
       let chosen = targets[0];
       for (const target of targets) {
-        const relativeTop = target.el.getBoundingClientRect().top - containerTop;
+        const relativeTop =
+          target.el.getBoundingClientRect().top - containerTop;
         if (relativeTop <= TOP_THRESHOLD_PX) {
           chosen = target;
         } else {

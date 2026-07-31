@@ -60,13 +60,13 @@ describe('MilestoneDrilldown', () => {
     );
 
     await waitFor(() =>
-      expect(
-        screen.getByTestId('milestone-task-reader').textContent,
-      ).toContain('Do the thing'),
+      expect(screen.getByTestId('milestone-task-reader').textContent).toContain(
+        'Do the thing',
+      ),
     );
-    expect(
-      screen.getByTestId('milestone-task-reader').textContent,
-    ).toContain('💻 Code');
+    expect(screen.getByTestId('milestone-task-reader').textContent).toContain(
+      '💻 Code',
+    );
   });
 
   it('renders a defined, non-"Task" fallback when no task resolves', () => {

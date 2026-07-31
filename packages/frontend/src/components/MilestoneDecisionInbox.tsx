@@ -332,68 +332,70 @@ export function MilestoneDecisionInbox({
               )
             }
           >
-          <GroupCard
-            groupId={groupId}
-            members={members}
-            onApplied={remove}
-            onRejected={remove}
-            onDismiss={remove}
-            onApproved={upsert}
-            isClean={isClean}
-            batchExcluded={!!batchExcluded[groupId]}
-            onToggleBatchExcluded={() => toggleBatchExcluded(groupId)}
-            cleanBatchLabel={taskIdFor(groupIntents) ?? groupId}
-            batchException={batchExceptions[groupId]}
-            groupError={
-              groupInFlight === groupId ? null : (groupErrors[groupId] ?? null)
-            }
-            title={
-              groupLabel ? (
+            <GroupCard
+              groupId={groupId}
+              members={members}
+              onApplied={remove}
+              onRejected={remove}
+              onDismiss={remove}
+              onApproved={upsert}
+              isClean={isClean}
+              batchExcluded={!!batchExcluded[groupId]}
+              onToggleBatchExcluded={() => toggleBatchExcluded(groupId)}
+              cleanBatchLabel={taskIdFor(groupIntents) ?? groupId}
+              batchException={batchExceptions[groupId]}
+              groupError={
+                groupInFlight === groupId
+                  ? null
+                  : (groupErrors[groupId] ?? null)
+              }
+              title={
+                groupLabel ? (
+                  <>
+                    <span aria-hidden="true">{groupLabel.icon}</span>{' '}
+                    {groupLabel.name}
+                  </>
+                ) : undefined
+              }
+              inFlight={inFlight}
+              draft={draft}
+              onSetDraft={(patch) => setDraft(groupId, patch)}
+              onApproveGroup={() => void handleApproveGroup(groupId)}
+              onRejectGroup={() => void handleRejectGroup(groupId)}
+              selected={selectedCardId === groupId}
+              className={
+                selectedCardId === groupId ? styles.selectedCard : undefined
+              }
+              onClick={
+                onSelectIntent && groupIntents[0]
+                  ? () => onSelectIntent(groupIntents[0])
+                  : undefined
+              }
+              data-testid={`milestone-decision-card-${groupId}`}
+              headerExtra={
                 <>
-                  <span aria-hidden="true">{groupLabel.icon}</span>{' '}
-                  {groupLabel.name}
-                </>
-              ) : undefined
-            }
-            inFlight={inFlight}
-            draft={draft}
-            onSetDraft={(patch) => setDraft(groupId, patch)}
-            onApproveGroup={() => void handleApproveGroup(groupId)}
-            onRejectGroup={() => void handleRejectGroup(groupId)}
-            selected={selectedCardId === groupId}
-            className={
-              selectedCardId === groupId ? styles.selectedCard : undefined
-            }
-            onClick={
-              onSelectIntent && groupIntents[0]
-                ? () => onSelectIntent(groupIntents[0])
-                : undefined
-            }
-            data-testid={`milestone-decision-card-${groupId}`}
-            headerExtra={
-              <>
-                <span
-                  className={styles.provenanceBadge}
-                  data-testid={`provenance-badge-${groupId}`}
-                >
-                  {provenance}
-                </span>
-                {groupIntents[0]?.sessionId && (
-                  <button
-                    type="button"
-                    className={styles.sessionJumpButton}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSelectIntent?.(groupIntents[0]);
-                    }}
-                    data-testid={`session-jump-${groupId}`}
+                  <span
+                    className={styles.provenanceBadge}
+                    data-testid={`provenance-badge-${groupId}`}
                   >
-                    View session
-                  </button>
-                )}
-              </>
-            }
-          />
+                    {provenance}
+                  </span>
+                  {groupIntents[0]?.sessionId && (
+                    <button
+                      type="button"
+                      className={styles.sessionJumpButton}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectIntent?.(groupIntents[0]);
+                      }}
+                      data-testid={`session-jump-${groupId}`}
+                    >
+                      View session
+                    </button>
+                  )}
+                </>
+              }
+            />
           </div>
         );
       })}
