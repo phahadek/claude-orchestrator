@@ -310,7 +310,7 @@ app.use(
 app.use('/api', createGateStateRouter());
 app.use('/api', createDeployRouter());
 app.use('/api', createSeedStateRouter());
-app.use('/api', createConvergenceRouter());
+app.use('/api', createConvergenceRouter(sessionManager));
 app.use('/api', createArchitectureRouter());
 app.use('/api', createDesignRouter());
 app.use('/api', createDesignContextRouter());

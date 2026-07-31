@@ -22,6 +22,23 @@ describe('useMilestoneAttention', () => {
     expect(result.current.lastTier2Batch).toBeNull();
   });
 
+  it('renders pendingCount exactly as returned — the backend, not this hook, excludes intents whose owning session is still turning', async () => {
+    // The backend's /attention response already reflects the same
+    // actionability filter the decision inbox applies (see
+    // computeMilestoneAttentionSignals), so this hook must not re-derive or
+    // re-filter anything client-side.
+    vi.spyOn(projectsApi, 'apiRequest').mockResolvedValue({
+      pendingCount: 0,
+      tier2: [],
+    });
+
+    const { result } = renderHook(() =>
+      useMilestoneAttention({ projectId: 'proj-1', milestoneId: 'M12' }),
+    );
+
+    await waitFor(() => expect(result.current.pendingCount).toBe(0));
+  });
+
   it('fires a tier-2 batch for a newly-seen signal key', async () => {
     vi.spyOn(projectsApi, 'apiRequest').mockResolvedValue({
       pendingCount: 1,

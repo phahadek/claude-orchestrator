@@ -2,11 +2,13 @@ import {
   listStagedIntentsByMilestone,
   listConvergenceSnapshotHistory,
   listTaskPauseReasons,
+  isSessionComplete,
 } from '../db/queries';
 import { parsePauseReason, type PauseReasonStruct } from '../db/pauseReason';
 import { resolveMilestoneForTaskId } from '../projects/milestoneResolver';
 import { runtimeSettings } from '../config';
-import type { ConvergenceSnapshotRow } from '../db/types';
+import type { ConvergenceSnapshotRow, StagedIntentRow } from '../db/types';
+import type { SessionManager } from '../session/SessionManager';
 
 /**
  * The Milestone view's two-tier operator-attention read-surface (Product
@@ -29,6 +31,42 @@ export interface AttentionTier2Signal {
 export interface MilestoneAttentionSignals {
   pendingCount: number;
   tier2: AttentionTier2Signal[];
+}
+
+/**
+ * The single definition of "is this staged intent's owning session done
+ * turning" for display purposes (see isSessionComplete in db/queries.ts —
+ * true once the session has staged something since its last stop and its
+ * turn has ended). Turn-in-flight is read off the live AgentSession
+ * instance when one exists in this process; absent that, the session is
+ * presumed not mid-turn (no live handle to prove otherwise), matching
+ * rowToApi's existing fallback. Both the milestone nav badge
+ * (computeMilestoneAttentionSignals below) and the decision-inbox's
+ * per-intent `sessionComplete` field (routes/stagedIntents.ts rowToApi)
+ * derive from this one function so they can't independently drift on what
+ * "complete" means.
+ */
+export function resolveSessionCompleteForDisplay(
+  sessionId: string,
+  sessionManager: SessionManager | undefined,
+): boolean {
+  const turnInFlight =
+    sessionManager?.getLiveSession?.(sessionId)?.hasActiveTurn() ?? false;
+  return isSessionComplete(sessionId, turnInFlight);
+}
+
+/**
+ * Whether a staged intent belongs on the milestone-scoped actionable
+ * surfaces (nav badge count, decision inbox): true for human-staged intents
+ * (no owning session) and for intents whose owning session has gone
+ * complete; false while the owning session's turn is still in flight.
+ */
+export function isMilestoneActionable(
+  row: Pick<StagedIntentRow, 'session_id'>,
+  sessionManager: SessionManager | undefined,
+): boolean {
+  if (!row.session_id) return true;
+  return resolveSessionCompleteForDisplay(row.session_id, sessionManager);
 }
 
 function agingThresholdMs(): number {
@@ -119,9 +157,16 @@ export function detectFlatSignal(
 export function computeMilestoneAttentionSignals(
   projectId: string,
   milestone: string,
+  sessionManager: SessionManager | undefined,
   now: number = Date.now(),
 ): MilestoneAttentionSignals {
-  const pending = listStagedIntentsByMilestone(projectId, milestone);
+  // Only intents the decision inbox would actually render count toward the
+  // badge — an intent whose owning session is still mid-turn is excluded
+  // from both the count and the tier-2 signals derived from it (see
+  // isMilestoneActionable above).
+  const pending = listStagedIntentsByMilestone(projectId, milestone).filter(
+    (row) => isMilestoneActionable(row, sessionManager),
+  );
 
   const blockedRows = listTaskPauseReasons()
     .filter(
