@@ -345,9 +345,12 @@ describe('StagedIntentPanel', () => {
         onRejected={onRejected}
       />,
     );
-    fireEvent.change(screen.getByPlaceholderText(/why is this being declined/i), {
-      target: { value: 'superseded' },
-    });
+    fireEvent.change(
+      screen.getByPlaceholderText(/why is this being declined/i),
+      {
+        target: { value: 'superseded' },
+      },
+    );
     fireEvent.click(screen.getByRole('button', { name: /decline/i }));
 
     await waitFor(() => {

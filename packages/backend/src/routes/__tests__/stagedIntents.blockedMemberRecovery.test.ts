@@ -132,7 +132,12 @@ describe('per-member decline of a blocked staged intent', () => {
   it('declines a needs_revision member straight to rejected via POST /:id/reject', async () => {
     const app = makeApp();
     const agent = supertest(app);
-    insertRow({ id: 'nr-1', groupId: 'g-decline-1', taskId: 't-1', state: 'needs_revision' });
+    insertRow({
+      id: 'nr-1',
+      groupId: 'g-decline-1',
+      taskId: 't-1',
+      state: 'needs_revision',
+    });
 
     const reject = await agent
       .post('/api/staged-intents/nr-1/reject')
@@ -145,7 +150,12 @@ describe('per-member decline of a blocked staged intent', () => {
   it('declines a pending_verification member by hopping through needs_revision', async () => {
     const app = makeApp();
     const agent = supertest(app);
-    insertRow({ id: 'pv-1', groupId: 'g-decline-2', taskId: 't-2', state: 'pending_verification' });
+    insertRow({
+      id: 'pv-1',
+      groupId: 'g-decline-2',
+      taskId: 't-2',
+      state: 'pending_verification',
+    });
 
     const reject = await agent
       .post('/api/staged-intents/pv-1/reject')
@@ -158,7 +168,12 @@ describe('per-member decline of a blocked staged intent', () => {
   it('refuses a pushback on a blocked member — needs_revision -> needs_revision is not a legal transition', async () => {
     const app = makeApp();
     const agent = supertest(app);
-    insertRow({ id: 'nr-2', groupId: 'g-decline-3', taskId: 't-3', state: 'needs_revision' });
+    insertRow({
+      id: 'nr-2',
+      groupId: 'g-decline-3',
+      taskId: 't-3',
+      state: 'needs_revision',
+    });
 
     const reject = await agent
       .post('/api/staged-intents/nr-2/reject')
@@ -185,7 +200,9 @@ describe('per-member decline of a blocked staged intent', () => {
       groupId,
       payload: { taskId: 't-unblock', dependsOn: [] },
     });
-    await agent.post(`/api/staged-intents/${dependsOn.body.id}/approve`).send({});
+    await agent
+      .post(`/api/staged-intents/${dependsOn.body.id}/approve`)
+      .send({});
     insertRow({
       id: 'nr-unblock',
       groupId,
@@ -217,8 +234,18 @@ describe('POST /group/:groupId/reject on a group with a blocked member', () => {
     const app = makeApp();
     const agent = supertest(app);
     const groupId = 'g-all-blocked';
-    insertRow({ id: 'ab-1', groupId, taskId: 't-ab-1', state: 'needs_revision' });
-    insertRow({ id: 'ab-2', groupId, taskId: 't-ab-2', state: 'pending_verification' });
+    insertRow({
+      id: 'ab-1',
+      groupId,
+      taskId: 't-ab-1',
+      state: 'needs_revision',
+    });
+    insertRow({
+      id: 'ab-2',
+      groupId,
+      taskId: 't-ab-2',
+      state: 'pending_verification',
+    });
 
     const reject = await agent
       .post(`/api/staged-intents/group/${groupId}/reject`)
@@ -308,7 +335,12 @@ describe('a commit refusal is never persisted as a disposition reason', () => {
   it('refuses a per-item decline whose reason is the commit-refusal message copied verbatim', async () => {
     const app = makeApp();
     const agent = supertest(app);
-    insertRow({ id: 'copy-1', groupId: 'g-copy-1', taskId: 't-copy-1', state: 'needs_revision' });
+    insertRow({
+      id: 'copy-1',
+      groupId: 'g-copy-1',
+      taskId: 't-copy-1',
+      state: 'needs_revision',
+    });
 
     const reject = await agent.post('/api/staged-intents/copy-1/reject').send({
       outcome: 'decline',
@@ -348,7 +380,9 @@ describe('apply-time failure still records the underlying failure as the reason'
   it('records the thrown error message, not a commit-refusal message, when a member fails mid-commit', async () => {
     const setDependsOn = vi
       .fn()
-      .mockRejectedValue(new Error('invalid status transition for t-fail: Done -> Ready'));
+      .mockRejectedValue(
+        new Error('invalid status transition for t-fail: Done -> Ready'),
+      );
     mockGetTaskBackend.mockReturnValue({
       type: 'notion',
       fetchTaskPage: vi.fn().mockResolvedValue('## Summary\nClean.'),

@@ -35,14 +35,7 @@ function seedStagedIntent(
        group_id, state, disposition_reason, created_at, updated_at)
      VALUES (?, 'task.updateBody', '{}', 'hash', 'task-1', 'proj-1', NULL,
        ?, ?, ?, ?, ?)`,
-  ).run(
-    opts.id,
-    opts.groupId,
-    opts.state,
-    opts.dispositionReason,
-    now,
-    now,
-  );
+  ).run(opts.id, opts.groupId, opts.state, opts.dispositionReason, now, now);
 }
 
 describe('wedged-group-recovery backfill', () => {
@@ -58,7 +51,9 @@ describe('wedged-group-recovery backfill', () => {
     runMigrations(db);
 
     const row = db
-      .prepare('SELECT state, disposition_reason FROM staged_intent WHERE id = ?')
+      .prepare(
+        'SELECT state, disposition_reason FROM staged_intent WHERE id = ?',
+      )
       .get('wedged-1') as { state: string; disposition_reason: string };
     expect(row.state).toBe('rejected');
     expect(row.disposition_reason).toContain('Auto-resolved');

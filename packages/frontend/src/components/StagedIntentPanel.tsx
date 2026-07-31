@@ -940,19 +940,19 @@ export function StagedIntentPanel({
             {(isGrouped || skipsApply) &&
               intent.state !== 'approved' &&
               !isBlockedState && (
-              <button
-                type="button"
-                className={styles.approveButton}
-                disabled={inFlight !== null}
-                onClick={() => void handleApprove()}
-              >
-                {inFlight === 'approve'
-                  ? 'Approving...'
-                  : isCapabilityRequest
-                    ? '✓ Grant'
-                    : 'Approve'}
-              </button>
-            )}
+                <button
+                  type="button"
+                  className={styles.approveButton}
+                  disabled={inFlight !== null}
+                  onClick={() => void handleApprove()}
+                >
+                  {inFlight === 'approve'
+                    ? 'Approving...'
+                    : isCapabilityRequest
+                      ? '✓ Grant'
+                      : 'Approve'}
+                </button>
+              )}
             <button
               type="button"
               className={styles.denyButton}

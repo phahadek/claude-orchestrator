@@ -2208,7 +2208,10 @@ const BLOCKED_STATES: StagedIntentState[] = [
 ];
 
 /** Active + blocked — the decision-inbox visibility surface: a blocked member must stay visible so the operator can decline it, not vanish the instant it falls out of ACTIVE_STATES. */
-const VISIBLE_STATES: StagedIntentState[] = [...ACTIVE_STATES, ...BLOCKED_STATES];
+const VISIBLE_STATES: StagedIntentState[] = [
+  ...ACTIVE_STATES,
+  ...BLOCKED_STATES,
+];
 
 function getActiveStagedIntent(id: string): StagedIntentRow | undefined {
   const row = getStagedIntentRow(id);
