@@ -359,7 +359,7 @@ export function registerStageProposalTools(
     {
       title: 'Stage a Notion source-page edit',
       description:
-        'Stages a notion.pageEdit intent — the Notion source-of-truth-page twin of task.updateBody/task.patchBodySection, for a Docs task whose Target surface is a Notion page rather than a repo file. Each content_updates entry is a find/replace pair (old_str/new_str) applied against the page\'s current full body at apply time; old_str must match the live page body exactly at apply time or the intent is rejected as stale.',
+        "Stages a notion.pageEdit intent — the Notion source-of-truth-page twin of task.updateBody/task.patchBodySection, for a Docs task whose Target surface is a Notion page rather than a repo file. Each content_updates entry is a find/replace pair (old_str/new_str) applied against the page's current full body at apply time; old_str must match the live page body exactly at apply time or the intent is rejected as stale.",
       inputSchema: envelope({
         page_id: z.string(),
         content_updates: z.array(
