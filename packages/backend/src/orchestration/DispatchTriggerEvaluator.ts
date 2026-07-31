@@ -28,6 +28,7 @@ import {
   isOpsCandidate,
   isDesignCandidate,
   isDesignEligibleType,
+  isDocsCandidate,
 } from './planningCandidates';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
@@ -67,8 +68,8 @@ interface FlowCandidate {
 /**
  * Auto-dispatch trigger evaluator — a Scheduler job (sibling to AutoLauncher)
  * that scans armed flows across projects/milestones and dispatches planning
- * sessions. Groom/design dispatch via the shared dispatchPlanningFlow helper;
- * ops dispatches directly via OpsSessionLauncher.launchSelected, using the
+ * sessions. Groom/design/docs dispatch via the shared dispatchPlanningFlow
+ * helper; ops dispatches directly via OpsSessionLauncher.launchSelected, using the
  * richer OpsTaskEntry/loadOpsContext data dispatchPlanningFlow's manual
  * PlanningTaskEntry path doesn't carry (see planningCandidates.ts).
  *
@@ -76,7 +77,8 @@ interface FlowCandidate {
  * armed flows — not restricted to a project's autoLaunchMilestoneId.
  * Backpressure is capacity-checked once per tick (skip-till-next-tick, no
  * throttling loop): at most `cap - humanReserve - activePlanning` sessions
- * are dispatched, spent groom-first, then ops, then design within a project.
+ * are dispatched, spent groom-first, then ops, then design, then docs within
+ * a project.
  * Fairness rotates the starting project each tick and walks candidates
  * FIFO-by-age (board list order, the closest proxy available — NotionTask
  * carries no created_at) within a project.
@@ -173,6 +175,14 @@ export class DispatchTriggerEvaluator {
         designCandidates,
         available - dispatched,
         (c) => this.dispatchPlanningCandidate(c, 'design'),
+      );
+      if (dispatched >= available) continue;
+
+      const docsCandidates = await this.scanProjectDocsCandidates(project.id);
+      dispatched += await this.dispatchUpTo(
+        docsCandidates,
+        available - dispatched,
+        (c) => this.dispatchPlanningCandidate(c, 'docs'),
       );
     }
     return dispatched;
@@ -298,6 +308,37 @@ export class DispatchTriggerEvaluator {
     return candidates;
   }
 
+  /** All docs-armed, dependency-cleared (Done + deployed), un-dispatched Ready 📝 Docs tasks (never 🎨 Assets) across a project's non-Done milestones, in board order. */
+  private async scanProjectDocsCandidates(
+    projectId: string,
+  ): Promise<FlowCandidate[]> {
+    const candidates: FlowCandidate[] = [];
+    const milestones = listMilestonesByProject(projectId).filter(
+      (m) => m.wrapped_at == null,
+    );
+    for (const milestone of milestones) {
+      await yieldToEventLoop();
+      const armed = getArm(milestone.id, 'docs');
+      if (!armed) continue;
+      const tasks = this.loadBoardTasks(milestone.id);
+      if (tasks.length === 0) continue;
+      const tasksById = new Map(tasks.map((t) => [normalizeBoardId(t.id), t]));
+      for (const task of tasks) {
+        const candidate = await isDocsCandidate(task, {
+          tasksById,
+          hasActiveSession: hasActiveSessionForTask,
+          hasActiveDocsSession: (taskId) =>
+            hasActivePlanningSessionForTask(taskId, 'docs'),
+          inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
+          projectId,
+          armed,
+        });
+        if (candidate) candidates.push({ projectId, milestone, task });
+      }
+    }
+    return candidates;
+  }
+
   private loadBoardTasks(milestoneId: string): NotionTask[] {
     const key = `board:${milestoneId}`;
     const row = getTaskCache(key);
@@ -314,10 +355,10 @@ export class DispatchTriggerEvaluator {
     return parsed;
   }
 
-  /** Shared groom/design dispatch via dispatchPlanningFlow's manual-PlanningTaskEntry path. */
+  /** Shared groom/design/docs dispatch via dispatchPlanningFlow's manual-PlanningTaskEntry path. */
   private async dispatchPlanningCandidate(
     candidate: FlowCandidate,
-    flow: 'groom' | 'design',
+    flow: 'groom' | 'design' | 'docs',
   ): Promise<boolean> {
     const project = getProjectRowById(candidate.projectId);
     const milestone = getMilestoneById(candidate.milestone.id);

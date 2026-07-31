@@ -9,13 +9,14 @@
  * 'split', which is not a flow and must not be added to FlowId — 'split' is
  * routed by groomFlip.ts, not by an arm.
  */
-export type FlowId = 'groom' | 'gate-verify' | 'design' | 'ops';
+export type FlowId = 'groom' | 'gate-verify' | 'design' | 'ops' | 'docs';
 
 export const FLOW_IDS: readonly FlowId[] = [
   'groom',
   'gate-verify',
   'design',
   'ops',
+  'docs',
 ];
 
 export function isFlowId(value: string): value is FlowId {
@@ -36,6 +37,7 @@ export const DEFAULT_ARM: Record<FlowId, boolean> = {
   'gate-verify': false,
   design: false,
   ops: false,
+  docs: false,
 };
 
 /**
@@ -45,12 +47,13 @@ export const DEFAULT_ARM: Record<FlowId, boolean> = {
  * scheduled tick, or the operator-triggered route in routes/gateState.ts).
  */
 export type FlowDispatch =
-  | { kind: 'session'; sessionType: 'groom' | 'design' | 'ops' }
+  | { kind: 'session'; sessionType: 'groom' | 'design' | 'ops' | 'docs' }
   | { kind: 'gate-verify' };
 
 export const FLOW_DISPATCH: Record<FlowId, FlowDispatch> = {
   groom: { kind: 'session', sessionType: 'groom' },
   design: { kind: 'session', sessionType: 'design' },
   ops: { kind: 'session', sessionType: 'ops' },
+  docs: { kind: 'session', sessionType: 'docs' },
   'gate-verify': { kind: 'gate-verify' },
 };

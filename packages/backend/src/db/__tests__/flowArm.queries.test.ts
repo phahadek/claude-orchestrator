@@ -26,6 +26,7 @@ describe('DEFAULT_ARM', () => {
       'gate-verify': false,
       design: false,
       ops: false,
+      docs: false,
     });
   });
 });

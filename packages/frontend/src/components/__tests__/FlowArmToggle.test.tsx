@@ -20,6 +20,7 @@ function makeState(overrides: Partial<FlowArmState> = {}): FlowArmState {
     'gate-verify': { armed: false, source: 'default' },
     design: { armed: false, source: 'default' },
     ops: { armed: false, source: 'default' },
+    docs: { armed: false, source: 'default' },
     ...overrides,
   };
 }
