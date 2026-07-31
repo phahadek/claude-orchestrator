@@ -8,7 +8,10 @@ import type { SessionState } from '../hooks/useSessionStore';
 import { sessionsApi } from '../api/projects';
 import { useTaskPage } from '../hooks/useTaskPage';
 import { SessionPanel } from './SessionPanel';
-import { taskIdFromIntent, taskIdForIntentDisplay } from '../utils/milestoneStack';
+import {
+  taskIdFromIntent,
+  taskIdForIntentDisplay,
+} from '../utils/milestoneStack';
 import type { MilestoneStackSelection } from './MilestoneDecisionStack';
 import styles from './MilestoneDrilldown.module.css';
 
@@ -102,9 +105,10 @@ function useResolvedSession(
  * session store since SessionState doesn't carry task_id.
  */
 function useSessionTaskId(sessionId: string | null): string | null {
-  const [result, setResult] = useState<{ id: string; taskId: string | null } | null>(
-    null,
-  );
+  const [result, setResult] = useState<{
+    id: string;
+    taskId: string | null;
+  } | null>(null);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -144,7 +148,9 @@ export function MilestoneDrilldown({
     selection?.type === 'intent' ? (selection.intent.sessionId ?? null) : null;
   // Only resolved when needed — a payload taskId or a task selection never triggers this fetch.
   const fallbackSessionTaskId = useSessionTaskId(
-    selection?.type === 'intent' && !intentPayloadTaskId ? intentSessionId : null,
+    selection?.type === 'intent' && !intentPayloadTaskId
+      ? intentSessionId
+      : null,
   );
 
   const taskId =

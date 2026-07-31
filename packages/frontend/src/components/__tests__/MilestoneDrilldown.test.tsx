@@ -134,7 +134,10 @@ describe('MilestoneDrilldown', () => {
 
   it('resolves a decision.pickOne intent (no payload.taskId) via its originating session', async () => {
     vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
-    const originalPayload = { question: 'Which approach?', options: ['a', 'b'] };
+    const originalPayload = {
+      question: 'Which approach?',
+      options: ['a', 'b'],
+    };
     const intent: StagedIntent = {
       id: 'intent-decision',
       kind: 'decision.pickOne',
@@ -179,7 +182,11 @@ describe('MilestoneDrilldown', () => {
             json: async () => ({ markdown: '# Fallback spec body' }),
           });
         }
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({}),
+        });
       }),
     );
 
