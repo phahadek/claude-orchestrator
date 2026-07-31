@@ -63,6 +63,17 @@ default:
 Add per-project hosts via `DOCKER_EGRESS_EXTRA_HOSTS` (comma-separated). For
 Jira-backed projects, add the Jira instance hostname.
 
+This proxy is a network-level control: it allowlists destination hosts for
+_all_ outbound traffic from the session container, regardless of which tool
+made the request, and it only runs when Docker mode is active
+(`ORCHESTRATOR_MODE=corporate` / `dockerMandatory`) — it is off by default in
+personal mode. It is separate from and coarser than the CLI-level
+`allowed_tools` tool-permission patterns (e.g. `WebFetch(domain:...)`)
+described in
+[`docs/orchestrator-config.md`](../orchestrator-config.md#how-allowed_tools-is-enforced),
+which are enforced per-tool-call by the `claude` CLI itself and apply in every
+mode, including personal mode.
+
 ## 5. Per-project bootstrap
 
 Add a `bootstrap` key to `.claude-orchestrator.yml` in the project repo to run
