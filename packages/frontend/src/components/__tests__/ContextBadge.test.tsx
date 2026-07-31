@@ -45,7 +45,8 @@ describe('ContextBadge', () => {
     render(
       <ContextBadge contextOccupancyTokens={250_000} compactionCount={0} />,
     );
-    expect(screen.getByText('125% ctx')).toBeDefined();
+    expect(screen.getByText('100% ctx')).toBeDefined();
+    expect(screen.queryByText('125% ctx')).toBeNull();
   });
 
   it('renders correct title attribute with token count', () => {

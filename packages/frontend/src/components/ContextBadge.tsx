@@ -38,7 +38,9 @@ export function ContextBadge({
             style={{ width: `${Math.min(ctxPct, 100)}%` }}
             aria-hidden="true"
           />
-          <span className={styles.contextText}>{ctxPct}% ctx</span>
+          <span className={styles.contextText}>
+            {Math.min(ctxPct, 100)}% ctx
+          </span>
         </span>
       )}
     </>
