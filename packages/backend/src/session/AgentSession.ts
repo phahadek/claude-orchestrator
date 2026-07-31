@@ -71,7 +71,8 @@ import {
   SILENT_SKIP_TYPES,
   toEventType,
 } from './eventTypes';
-import { eventKind } from './eventKind';
+import { eventKind, isUsageLimitResult } from './eventKind';
+import { recordObservedUsageLimit } from '../orchestration/usageAdmission';
 import { isContextOverflow } from './contextOverflow';
 import { logger } from '../logger';
 import {
@@ -845,6 +846,9 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
       if (exitCode === 0) {
         this.retryCount = 0;
+        if (this.isUsageLimitTermination()) {
+          this.recordUsageLimitTermination();
+        }
         await this.handleCleanExit();
         return;
       }
@@ -955,6 +959,55 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Return true if the session's last DB event is a terminating 'result'
+   * event carrying api_error_status: 429 — the CLI's own usage-limit signal.
+   * The CLI exits 0 on this path, so isTransientApiError (which only fires
+   * on 'error' events) never catches it; without this check the death is
+   * indistinguishable from a normal clean park.
+   */
+  private isUsageLimitTermination(): boolean {
+    try {
+      const events = getEventsBySession(this.sessionId);
+      if (events.length === 0) return false;
+      return isUsageLimitResult(events[events.length - 1]);
+    } catch {
+      // A DB read failure here must not block the clean-exit path — worst
+      // case a usage-limit death goes unrecorded this once; handleCleanExit
+      // has its own (also best-effort) event read right after this.
+      return false;
+    }
+  }
+
+  /**
+   * Records the distinct session-scoped usage_limit_deferred pause reason
+   * and an observed-limit deferral before the normal clean-exit park runs,
+   * so a usage-limit death is visible in session_pause_intervals rather than
+   * left as an unmarked idle park indistinguishable from stalled_idle. Does
+   * not alter the clean-exit park itself (still idle, not error/killed) —
+   * this is a clean park, not a crash.
+   */
+  private recordUsageLimitTermination(): void {
+    insertPauseInterval(this.sessionId, 'usage_limit_deferred');
+    let resultMessage: string | undefined;
+    const events = getEventsBySession(this.sessionId);
+    const lastEvent = events[events.length - 1];
+    if (lastEvent) {
+      try {
+        const parsed = JSON.parse(lastEvent.payload) as Record<string, unknown>;
+        if (typeof parsed.result === 'string') resultMessage = parsed.result;
+      } catch {
+        // Fall through with resultMessage undefined — recordObservedUsageLimit
+        // falls back to a bounded deferral interval in that case.
+      }
+    }
+    recordObservedUsageLimit(resultMessage);
+    sessionLog(
+      this.sessionId,
+      'usage-limit termination detected on clean exit — recorded usage_limit_deferred',
+    );
   }
 
   /**

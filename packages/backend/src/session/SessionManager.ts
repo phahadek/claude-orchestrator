@@ -2188,8 +2188,20 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * Shared respawn helper used by both resumeSession (boot recovery) and
-   * sendOrResume (verdict/feedback routing to a dead session).
+   * Shared respawn helper used by every caller that revives a dead/orphaned
+   * session — resumeSession (boot recovery), sendOrResume (verdict/feedback
+   * routing to a dead session), and respawnForCapabilityGrant.
+   *
+   * The usage-admission check is applied here rather than in each caller so
+   * that every current and future respawn path is covered without having to
+   * remember to wire the check in individually — see isUsageAdmitted's callers
+   * elsewhere (AutoLauncher, DispatchTriggerEvaluator) for the launch-side
+   * half of this gate. A deferral is not a failure: nothing is spawned and the
+   * session row is left exactly as-is (whatever status it already had) so a
+   * later pass (poller recovery, operator retry, resumeOrphanSessions on next
+   * boot) can respawn once the deferral (persisted in usage_deferral) expires.
+   * Returns null when deferred; callers must not touch the DB row or kill the
+   * session in that case.
    *
    * Creates an AgentSession reusing the original session ID, registers it in
    * the sessions map, updates the DB row to 'running', and emits session_status.
@@ -2204,7 +2216,22 @@ export class SessionManager extends EventEmitter {
     mcpConfigPath: string | undefined,
     systemPromptFilePath?: string,
     opts: { allowReopenTerminal?: boolean } = {},
-  ): AgentSession {
+  ): AgentSession | null {
+    const usageAdmission = isUsageAdmitted();
+    if (!usageAdmission.allowed) {
+      logger.warn(
+        `[SessionManager] respawnSession: deferring ${row.session_id.slice(0, 8)} — plan usage (${usageAdmission.window}) exhausted until ${usageAdmission.deferredUntil ? new Date(usageAdmission.deferredUntil).toISOString() : 'unknown'}`,
+      );
+      if (row.task_id) {
+        setTaskPauseReason(
+          row.task_id,
+          'usage_limit_deferred',
+          usageAdmission.window ?? 'unknown',
+        );
+      }
+      return null;
+    }
+
     const session = new AgentSession(
       row.session_id,
       row.task_url ?? '',
@@ -2497,6 +2524,10 @@ export class SessionManager extends EventEmitter {
       resumeMcpConfigPath,
       resumeSystemPromptFilePath,
     );
+    // The pre-check above already defers before reaching here in the normal
+    // case; this guard only protects against a race where usage exhausts
+    // between the two checks — same deferral handling, nothing left to do.
+    if (!session) return;
 
     // Detect mid-turn state: last event was a tool_result or tool_use with no
     // subsequent assistant/result response. Log a warning to aid diagnosis.
@@ -3244,6 +3275,17 @@ export class SessionManager extends EventEmitter {
       mcpConfigPath,
       systemPromptFilePath,
     );
+    if (!session) {
+      // The live session was already killed above for the grant to take
+      // effect. Deferred admission means nothing gets respawned in its
+      // place right now — same as the worktree-missing case above, the
+      // grant takes effect on the next resume (resumeOrphanSessions on
+      // this row once the deferral clears) instead.
+      logger.warn(
+        `[SessionManager] respawnForCapabilityGrant: usage-admission deferred for ${sessionId.slice(0, 8)} — grant will take effect on next resume instead`,
+      );
+      return false;
+    }
     this.wireSession(sessionId, session, projectDir, recordedPath);
     return true;
   }
@@ -3747,6 +3789,18 @@ export class SessionManager extends EventEmitter {
         fastPathSystemPromptPath,
         { allowReopenTerminal: opts.allowTerminal },
       );
+      if (!session) {
+        // Deferred — nothing spawned, session row untouched. Signal to the
+        // caller/UI that this was a deliberate defer, not a hard failure.
+        this.emit('message', {
+          type: 'session_action_failed',
+          sessionId,
+          action: 'send_message',
+          reason: 'usage_limit_deferred',
+          detail: 'Plan usage window exhausted — deferring resume.',
+        } satisfies ServerMessage);
+        return null;
+      }
 
       // Proactive ceiling-escalation: if the session's persisted context occupancy
       // is at/over the HWM, spawn directly on large_task_model and deliver the
@@ -4024,6 +4078,18 @@ export class SessionManager extends EventEmitter {
       slowPathSystemPromptPath,
       { allowReopenTerminal: opts.allowTerminal },
     );
+    if (!session) {
+      // Deferred — nothing spawned, session row untouched. Signal to the
+      // caller/UI that this was a deliberate defer, not a hard failure.
+      this.emit('message', {
+        type: 'session_action_failed',
+        sessionId,
+        action: 'send_message',
+        reason: 'usage_limit_deferred',
+        detail: 'Plan usage window exhausted — deferring resume.',
+      } satisfies ServerMessage);
+      return null;
+    }
 
     // Register the pending text on the session so that if the resumed context
     // overflows, the escalated spawn re-delivers the original message rather

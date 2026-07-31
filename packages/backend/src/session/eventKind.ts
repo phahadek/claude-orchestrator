@@ -43,3 +43,23 @@ export function eventKind(
       return 'other';
   }
 }
+
+/**
+ * A usage-limit termination surfaces as a terminating 'result' event (the
+ * CLI exits 0), not an 'error' event — eventKind's result/error split masks
+ * it, since result payloads carrying api_error_status: 429 never reach the
+ * 'error' branch above. Callers that need to distinguish a clean turn
+ * completion from a limit-driven death must check this in addition to
+ * eventKind.
+ */
+export function isUsageLimitResult(
+  row: Pick<SessionEvent, 'event_type' | 'payload'>,
+): boolean {
+  if (eventKind(row) !== 'result') return false;
+  try {
+    const parsed = JSON.parse(row.payload) as Record<string, unknown>;
+    return parsed.api_error_status === 429;
+  } catch {
+    return false;
+  }
+}

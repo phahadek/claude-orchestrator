@@ -89,3 +89,54 @@ export function isUsageAdmitted(): UsageAdmissionResult {
   const usage = _poller?.getCache() ?? { available: false };
   return checkUsageAdmission(usage);
 }
+
+// Matches the CLI's own limit-result message, e.g.
+// "You've hit your session limit · resets 6:10pm (UTC)". No date is given,
+// only a time-of-day — the nearest future occurrence of that UTC clock time
+// is the best available estimate of resets_at.
+const CLI_RESET_TIME_REGEX = /resets?\s+(\d{1,2}):(\d{2})\s*(am|pm)\s*\(UTC\)/i;
+
+function parseCliResetTime(message: string): number | undefined {
+  const match = message.match(CLI_RESET_TIME_REGEX);
+  if (!match) return undefined;
+  const meridiem = match[3].toLowerCase();
+  let hour = parseInt(match[1], 10) % 12;
+  if (meridiem === 'pm') hour += 12;
+  const minute = parseInt(match[2], 10);
+  const now = new Date();
+  let candidate = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+    hour,
+    minute,
+    0,
+    0,
+  );
+  if (candidate <= Date.now()) candidate += 24 * 60 * 60 * 1000;
+  return candidate;
+}
+
+/** The CLI's own limit message names "session limit" for the 5h window; anything else is treated as the weekly window. */
+function inferWindowFromMessage(message: string): UsageDeferralWindow {
+  return /weekly/i.test(message) ? 'seven_day' : 'five_hour';
+}
+
+/**
+ * Records a deferral observed directly from a terminating CLI event
+ * (api_error_status: 429), rather than from the periodic plan-usage poller
+ * snapshot. The poller may not have caught up yet by the time the CLI
+ * itself reports the limit — this is ground truth and should gate
+ * admission immediately, independent of checkUsageAdmission's snapshot path.
+ */
+export function recordObservedUsageLimit(
+  resultMessage?: string,
+): UsageAdmissionResult {
+  const window = resultMessage
+    ? inferWindowFromMessage(resultMessage)
+    : 'five_hour';
+  const parsed = resultMessage ? parseCliResetTime(resultMessage) : undefined;
+  const deferredUntil = parsed ?? fallbackDeferralMs();
+  setUsageDeferral(window, deferredUntil);
+  return { allowed: false, deferredUntil, window };
+}
