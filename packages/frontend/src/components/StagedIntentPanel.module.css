@@ -51,6 +51,14 @@
   overflow-x: auto;
 }
 
+.bodyProse {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  font-family: inherit;
+}
+
 .error {
   font-size: 0.8rem;
   color: var(--ctp-red);
