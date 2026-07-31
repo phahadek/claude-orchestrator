@@ -5,6 +5,7 @@ import path from 'path';
 
 // Must mock before importing the modules under test
 vi.mock('../db/queries.js', () => ({}));
+vi.mock('../config/dataDir.js', () => ({ getDataDir: vi.fn() }));
 
 import {
   DataDirConfigSource,
@@ -12,6 +13,7 @@ import {
 } from '../config/DataDirConfigSource.js';
 import { EnvFileConfigSource } from '../config/EnvFileConfigSource.js';
 import { ConfigValidationError } from '../config/types.js';
+import { getDataDir } from '../config/dataDir.js';
 import {
   getOrchestratorConfig,
   writeOrchestratorConfig as _writeOrchestratorConfig,
@@ -131,6 +133,22 @@ describe('DataDirConfigSource', () => {
       const cfg = src.read();
       expect(cfg.notion.apiKey).toBe('ntn-ok');
       expect(cfg.server.port).toBe(3000);
+    });
+  });
+
+  describe('readWithExplicitFields', () => {
+    it('reports only the fields explicitly present in config.json', () => {
+      const src = new DataDirConfigSource(tmpDir);
+      src.write({ notion: { apiKey: 'ntn-explicit' } });
+      const { explicitFields } = src.readWithExplicitFields();
+      expect(explicitFields.has('notion.apiKey')).toBe(true);
+      expect(explicitFields.has('github.token')).toBe(false);
+    });
+
+    it('reports an empty set when config.json is absent', () => {
+      const src = new DataDirConfigSource(tmpDir);
+      const { explicitFields } = src.readWithExplicitFields();
+      expect(explicitFields.size).toBe(0);
     });
   });
 });
@@ -273,5 +291,87 @@ describe('writeOrchestratorConfig', () => {
     _setConfigSourceForTesting(src);
     const cfg = getOrchestratorConfig();
     expect(cfg.github.token).toBe('ghp-new');
+  });
+});
+
+// ── .env fallback merge (2026-07-30 outage regression) ────────────────────────
+// A config.json's mere existence used to disable .env for every field, with
+// no fallback and no warning — one real field and six placeholders overrode a
+// fully-populated .env wholesale. Per-field fallback closes that gap.
+
+describe('getOrchestratorConfig .env fallback merge', () => {
+  let tmpDir: string;
+  const envKeys = [
+    'NOTION_API_KEY',
+    'GITHUB_TOKEN',
+    'GITHUB_REPO',
+    'PORT',
+    'DB_PATH',
+    'SESSIONS_DIR',
+  ] as const;
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    _resetAppConfigCache();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-fallback-'));
+    vi.mocked(getDataDir).mockReturnValue(tmpDir);
+    for (const k of envKeys) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+
+  afterEach(() => {
+    _resetAppConfigCache();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    for (const k of envKeys) {
+      if (saved[k] !== undefined) process.env[k] = saved[k];
+      else delete process.env[k];
+    }
+    vi.restoreAllMocks();
+  });
+
+  it('falls back to a populated .env value when config.json omits the field', () => {
+    process.env.GITHUB_TOKEN = 'ghp-from-env-1234567890';
+    const src = new DataDirConfigSource(tmpDir);
+    src.write({ notion: { apiKey: 'ntn-from-json' } });
+
+    const cfg = getOrchestratorConfig();
+    expect(cfg.notion.apiKey).toBe('ntn-from-json');
+    expect(cfg.github.token).toBe('ghp-from-env-1234567890');
+  });
+
+  it('falls back to .env when config.json holds an explicit empty string', () => {
+    process.env.GITHUB_REPO = 'real-owner/real-repo';
+    const src = new DataDirConfigSource(tmpDir);
+    src.write({ github: { repo: '' } });
+
+    const cfg = getOrchestratorConfig();
+    expect(cfg.github.repo).toBe('real-owner/real-repo');
+  });
+
+  it('prefers config.json over .env when both are set (migration path intact)', () => {
+    process.env.GITHUB_TOKEN = 'ghp-env-1234567890';
+    const src = new DataDirConfigSource(tmpDir);
+    src.write({ github: { token: 'ghp-json-1234567890' } });
+
+    const cfg = getOrchestratorConfig();
+    expect(cfg.github.token).toBe('ghp-json-1234567890');
+  });
+
+  it('a fully-populated config.json is read in preference to .env for every field', () => {
+    process.env.NOTION_API_KEY = 'ntn-env';
+    process.env.GITHUB_TOKEN = 'ghp-env-1234567890';
+    process.env.GITHUB_REPO = 'env-owner/env-repo';
+    const src = new DataDirConfigSource(tmpDir);
+    src.write({
+      notion: { apiKey: 'ntn-json' },
+      github: { token: 'ghp-json-1234567890', repo: 'json-owner/json-repo' },
+    });
+
+    const cfg = getOrchestratorConfig();
+    expect(cfg.notion.apiKey).toBe('ntn-json');
+    expect(cfg.github.token).toBe('ghp-json-1234567890');
+    expect(cfg.github.repo).toBe('json-owner/json-repo');
   });
 });

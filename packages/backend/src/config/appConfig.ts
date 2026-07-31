@@ -13,6 +13,91 @@ import {
 let cached: OrchestratorConfig | null = null;
 let sourceOverride: ConfigSource | null = null;
 
+// Fields for which an absent-or-empty config.json value falls back to the
+// legacy .env value, rather than config.json's mere existence silently
+// disabling a fully-populated .env for every field (the cause of the
+// 2026-07-30 outage: a config.json with one real field and six placeholders
+// overrode a working .env in every field, with no warning).
+const ENV_FALLBACK_FIELDS: Array<{
+  key: string;
+  get: (c: OrchestratorConfig) => string;
+  set: (c: OrchestratorConfig, v: string) => void;
+}> = [
+  {
+    key: 'notion.apiKey',
+    get: (c) => c.notion.apiKey,
+    set: (c, v) => {
+      c.notion.apiKey = v;
+    },
+  },
+  {
+    key: 'github.token',
+    get: (c) => c.github.token,
+    set: (c, v) => {
+      c.github.token = v;
+    },
+  },
+  {
+    key: 'github.repo',
+    get: (c) => c.github.repo,
+    set: (c, v) => {
+      c.github.repo = v;
+    },
+  },
+  {
+    key: 'db.path',
+    get: (c) => c.db.path,
+    set: (c, v) => {
+      c.db.path = v;
+    },
+  },
+  {
+    key: 'sessions.dir',
+    get: (c) => c.sessions.dir,
+    set: (c, v) => {
+      c.sessions.dir = v;
+    },
+  },
+];
+
+function applyEnvFallback(
+  config: OrchestratorConfig,
+  explicitFields: Set<string>,
+): OrchestratorConfig {
+  const envConfig = new EnvFileConfigSource().read();
+  const filledFromEnv: string[] = [];
+  const overriddenFromEnv: string[] = [];
+
+  for (const field of ENV_FALLBACK_FIELDS) {
+    const envValue = field.get(envConfig);
+    const explicitlySet =
+      explicitFields.has(field.key) && field.get(config) !== '';
+    if (!explicitlySet) {
+      if (envValue) {
+        field.set(config, envValue);
+        filledFromEnv.push(field.key);
+      }
+    } else if (envValue && envValue !== field.get(config)) {
+      overriddenFromEnv.push(field.key);
+    }
+  }
+
+  if (filledFromEnv.length > 0) {
+    logger.info(
+      `[config] config.json is missing/empty for ${filledFromEnv.join(', ')} — filled in from .env.`,
+    );
+  }
+  if (overriddenFromEnv.length > 0) {
+    logger.warn(
+      `[config] config.json overrides a populated .env value for: ${overriddenFromEnv.join(', ')}. ` +
+        `The .env value(s) are being ignored in favor of config.json. Remove them from .env, or update ` +
+        `config.json, if this is unintended.`,
+    );
+  }
+
+  return config;
+}
+
 function resolve(): OrchestratorConfig {
   if (sourceOverride) return sourceOverride.read();
 
@@ -20,7 +105,8 @@ function resolve(): OrchestratorConfig {
 
   if (dataDirSource.exists()) {
     try {
-      return dataDirSource.read();
+      const { config, explicitFields } = dataDirSource.readWithExplicitFields();
+      return applyEnvFallback(config, explicitFields);
     } catch (err) {
       if (err instanceof ConfigValidationError) {
         logger.error(err.message);
