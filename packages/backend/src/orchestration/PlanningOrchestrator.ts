@@ -397,10 +397,7 @@ export class PlanningOrchestrator {
     // docs session opens a PR, opensPr('docs') routes the target task's
     // closure through the existing merge-driven path instead, same as a
     // standard code session.
-    if (
-      row.session_type === 'docs' &&
-      DESIGN_COMPLETING_REASONS.has(reason)
-    ) {
+    if (row.session_type === 'docs' && DESIGN_COMPLETING_REASONS.has(reason)) {
       this.completeDocsTask(sessionId, row);
     }
   }
