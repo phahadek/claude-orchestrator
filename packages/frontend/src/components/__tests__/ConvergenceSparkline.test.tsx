@@ -4,7 +4,9 @@ import { ConvergenceSparkline } from '../ConvergenceSparkline';
 import styles from '../ConvergenceSparkline.module.css';
 import type { ConvergenceSnapshotRow } from '@claude-orchestrator/backend/src/db/types';
 
-function makePoint(overrides: Partial<ConvergenceSnapshotRow> = {}): ConvergenceSnapshotRow {
+function makePoint(
+  overrides: Partial<ConvergenceSnapshotRow> = {},
+): ConvergenceSnapshotRow {
   return {
     id: 'x',
     project: 'p',
@@ -53,38 +55,46 @@ describe('ConvergenceSparkline', () => {
 
   it('renders each series actual value range as text, not only a title tooltip', () => {
     render(<ConvergenceSparkline points={points} />);
-    expect(screen.getByTestId('convergence-sparkline-range-tasks_open').textContent).toBe(
-      '20 → 6 (-14)',
-    );
-    expect(screen.getByTestId('convergence-sparkline-range-gate_open').textContent).toBe(
-      '154 → 190 (+36)',
-    );
+    expect(
+      screen.getByTestId('convergence-sparkline-range-tasks_open').textContent,
+    ).toBe('20 → 6 (-14)');
+    expect(
+      screen.getByTestId('convergence-sparkline-range-gate_open').textContent,
+    ).toBe('154 → 190 (+36)');
   });
 
   it('renders a constant series visually distinct from a mid-range series', () => {
     render(<ConvergenceSparkline points={points} />);
-    const seedPath = screen.getByTestId('convergence-sparkline-series-seed_open');
-    expect(seedPath.classList.contains(styles.lineFlat)).toBe(true);
-    expect(screen.getByTestId('convergence-sparkline-range-seed_open').textContent).toBe(
-      '7 (no change)',
+    const seedPath = screen.getByTestId(
+      'convergence-sparkline-series-seed_open',
     );
+    expect(seedPath.classList.contains(styles.lineFlat)).toBe(true);
+    expect(
+      screen.getByTestId('convergence-sparkline-range-seed_open').textContent,
+    ).toBe('7 (no change)');
 
-    const tasksPath = screen.getByTestId('convergence-sparkline-series-tasks_open');
+    const tasksPath = screen.getByTestId(
+      'convergence-sparkline-series-tasks_open',
+    );
     expect(tasksPath.classList.contains(styles.lineFlat)).toBe(false);
   });
 
   it('keeps per-series normalization so a small-range series still spans the full plot height', () => {
     render(<ConvergenceSparkline points={points} />);
-    const tasksPath = screen.getByTestId('convergence-sparkline-series-tasks_open');
-    const gatePath = screen.getByTestId('convergence-sparkline-series-gate_open');
+    const tasksPath = screen.getByTestId(
+      'convergence-sparkline-series-tasks_open',
+    );
+    const gatePath = screen.getByTestId(
+      'convergence-sparkline-series-gate_open',
+    );
 
     // tasks_open ranges 6..20 (span 14), gate_open ranges 154..190 (span 36) —
     // despite the smaller absolute span, both paths must use the full [0, HEIGHT]
     // extent because each is normalized against its own min/max independently.
     const heightOf = (d: string) => {
-      const ys = Array.from(d.matchAll(/[ML]-?\d+(?:\.\d+)?,(-?\d+(?:\.\d+)?)/g)).map((m) =>
-        Number(m[1]),
-      );
+      const ys = Array.from(
+        d.matchAll(/[ML]-?\d+(?:\.\d+)?,(-?\d+(?:\.\d+)?)/g),
+      ).map((m) => Number(m[1]));
       return Math.max(...ys) - Math.min(...ys);
     };
 

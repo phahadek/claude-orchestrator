@@ -91,7 +91,10 @@ export function ConvergenceSparkline({ points }: Props) {
       <ul className={styles.legend} data-testid="convergence-sparkline-legend">
         {series.map(({ key, label, className, first, last, range }) => (
           <li key={key} className={styles.legendItem}>
-            <span className={`${styles.swatch} ${className}`} aria-hidden="true" />
+            <span
+              className={`${styles.swatch} ${className}`}
+              aria-hidden="true"
+            />
             <span className={styles.legendLabel}>{label}</span>
             <span
               className={styles.legendRange}
