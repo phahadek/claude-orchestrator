@@ -240,6 +240,7 @@ export function reconcileGateRunnability(
     }
 
     let state = item.state;
+    let currentDisposition = item.currentDisposition;
 
     if (state === 'fail') {
       const failedAtCommit = minDeployedCommitAtLastFail(item);
@@ -254,17 +255,18 @@ export function reconcileGateRunnability(
         gateStore.advanceState(item.id, 'open', 'reopened', now);
         reopened.push(item.id);
         state = 'open';
+        currentDisposition = 'reopened';
       }
     }
 
     if (state === 'open' && covered) {
-      gateStore.advanceState(item.id, 'runnable', item.currentDisposition, now);
+      gateStore.advanceState(item.id, 'runnable', currentDisposition, now);
       markedRunnable.push(item.id);
       continue;
     }
 
     if (state === 'runnable' && !covered) {
-      gateStore.advanceState(item.id, 'open', item.currentDisposition, now);
+      gateStore.advanceState(item.id, 'open', currentDisposition, now);
     }
   }
 
