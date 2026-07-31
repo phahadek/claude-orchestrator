@@ -5,13 +5,33 @@
  * AC: aging past threshold, flat convergence over the window, and a
  * blocked/stalled task each produce a tier-2 signal; each signal's `key`
  * is stable for the same underlying condition (the frontend dedups on it).
+ * Also covers the actionability filter: the nav badge's pendingCount (and
+ * the tier-2 signals derived from it) must only ever count staged intents
+ * the milestone decision inbox would actually render — see
+ * isMilestoneActionable/resolveSessionCompleteForDisplay.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('../../db/db.js', async () => {
+  const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
+});
+
+import { db } from '../../db/db.js';
+import {
+  insertStagedIntent,
+  insertSession,
+  hashIntentPayload,
+} from '../../db/queries.js';
+import type { StagedIntentRow } from '../../db/types.js';
 import {
   detectAgingSignals,
   detectBlockedSignals,
   detectFlatSignal,
+  computeMilestoneAttentionSignals,
+  isMilestoneActionable,
+  resolveSessionCompleteForDisplay,
 } from '../attentionSignals';
 import type { ConvergenceSnapshotRow } from '../../db/types';
 import type { PauseReasonStruct } from '../../db/pauseReason';
@@ -178,5 +198,174 @@ describe('detectFlatSignal', () => {
       'proj-1:M12',
     );
     expect(first[0].key).toBe(second[0].key);
+  });
+});
+
+describe('computeMilestoneAttentionSignals actionability filter', () => {
+  const PROJECT_ID = 'proj-attn';
+  const MILESTONE = 'M-attn';
+
+  function makeSessionManager(hasActiveTurn: boolean) {
+    return {
+      getLiveSession: vi.fn().mockReturnValue({
+        hasActiveTurn: vi.fn(() => hasActiveTurn),
+      }),
+    } as never;
+  }
+
+  function seedSession(sessionId: string): void {
+    insertSession({
+      session_id: sessionId,
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      status: 'running',
+      started_at: 0,
+      session_type: 'standard',
+      note: null,
+      tags: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      compaction_count: 0,
+      context_occupancy_tokens: 0,
+      task_name: null,
+      metadata: null,
+      review_result: null,
+      pause_reason: null,
+      last_error_detail: null,
+      events_pruned_at: null,
+      granted_capabilities: '[]',
+    } as never);
+  }
+
+  function stageRow(overrides: Partial<StagedIntentRow> = {}): StagedIntentRow {
+    const payload = overrides.payload ?? JSON.stringify({ taskId: 't-1' });
+    const row: StagedIntentRow = {
+      id: overrides.id ?? 'intent-1',
+      kind: 'task.setStatus',
+      payload,
+      payload_hash: hashIntentPayload(JSON.parse(payload)),
+      task_id: 't-1',
+      project_id: PROJECT_ID,
+      session_id: null,
+      group_id: null,
+      milestone: MILESTONE,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      investigation: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      ...overrides,
+    };
+    insertStagedIntent(row);
+    return row;
+  }
+
+  beforeEach(() => {
+    db.prepare('DELETE FROM staged_intent').run();
+    db.prepare('DELETE FROM staged_intent_group').run();
+    db.prepare('DELETE FROM sessions').run();
+  });
+
+  it('excludes an intent whose owning session turn is still in flight', () => {
+    seedSession('sess-1');
+    stageRow({ id: 'intent-1', session_id: 'sess-1' });
+    const sessionManager = makeSessionManager(true);
+
+    const result = computeMilestoneAttentionSignals(
+      PROJECT_ID,
+      MILESTONE,
+      sessionManager,
+    );
+    expect(result.pendingCount).toBe(0);
+  });
+
+  it('includes the intent once the owning session turn ends', () => {
+    seedSession('sess-1');
+    stageRow({ id: 'intent-1', session_id: 'sess-1' });
+    const sessionManager = makeSessionManager(false);
+
+    const result = computeMilestoneAttentionSignals(
+      PROJECT_ID,
+      MILESTONE,
+      sessionManager,
+    );
+    expect(result.pendingCount).toBe(1);
+  });
+
+  it('always includes human-staged intents (no owning session)', () => {
+    stageRow({ id: 'intent-1', session_id: null });
+    const sessionManager = makeSessionManager(true);
+
+    const result = computeMilestoneAttentionSignals(
+      PROJECT_ID,
+      MILESTONE,
+      sessionManager,
+    );
+    expect(result.pendingCount).toBe(1);
+  });
+
+  it('derives tier-2 aging signals from the same filtered population as the count', () => {
+    seedSession('sess-1');
+    stageRow({
+      id: 'intent-aging',
+      session_id: 'sess-1',
+      created_at: Date.now() - 999 * HOUR,
+    });
+    const sessionManager = makeSessionManager(true);
+
+    const result = computeMilestoneAttentionSignals(
+      PROJECT_ID,
+      MILESTONE,
+      sessionManager,
+    );
+    expect(result.pendingCount).toBe(0);
+    expect(result.tier2.filter((s) => s.type === 'aging')).toHaveLength(0);
+  });
+
+  it('cannot drift from the decision-inbox visibility rule: pendingCount equals the count of rows the shared predicate marks actionable', () => {
+    seedSession('sess-in-flight');
+    seedSession('sess-complete');
+    stageRow({ id: 'intent-in-flight', session_id: 'sess-in-flight' });
+    stageRow({ id: 'intent-complete', session_id: 'sess-complete' });
+    stageRow({ id: 'intent-human', session_id: null });
+
+    const sessionManager = {
+      getLiveSession: vi.fn((sessionId: string) => ({
+        hasActiveTurn: () => sessionId === 'sess-in-flight',
+      })),
+    } as never;
+
+    const rows = [
+      { session_id: 'sess-in-flight' },
+      { session_id: 'sess-complete' },
+      { session_id: null },
+    ];
+    // The exact rule the milestone decision inbox's rowToApi `sessionComplete`
+    // field is interpreted through on the frontend (sessionComplete === true
+    // || sessionComplete === null) — reconstructed here from the same
+    // resolveSessionCompleteForDisplay the badge and rowToApi both call, so
+    // this test would fail the moment either surface's derivation diverges.
+    const inboxVisibleCount = rows.filter((row) =>
+      row.session_id === null
+        ? true
+        : resolveSessionCompleteForDisplay(row.session_id, sessionManager),
+    ).length;
+    expect(
+      rows.filter((row) => isMilestoneActionable(row, sessionManager)).length,
+    ).toBe(inboxVisibleCount);
+
+    const result = computeMilestoneAttentionSignals(
+      PROJECT_ID,
+      MILESTONE,
+      sessionManager,
+    );
+    expect(result.pendingCount).toBe(inboxVisibleCount);
   });
 });

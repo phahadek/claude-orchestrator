@@ -100,6 +100,7 @@ import { logger } from '../logger';
 import { getMilestoneConvergence } from '../convergence/convergenceService';
 import { UnknownMilestoneError } from '../projects/milestoneResolver';
 import { rankDecisions } from '../convergence/decisionRanking';
+import { resolveSessionCompleteForDisplay } from '../convergence/attentionSignals';
 import {
   isToolShapedCapability,
   parseSessionRecordReadCapability,
@@ -695,11 +696,9 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
     dispositionReason: row.disposition_reason,
     answer: row.answer ? (JSON.parse(row.answer) as StagedIntentAnswer) : null,
     sessionComplete: row.session_id
-      ? isSessionComplete(
+      ? resolveSessionCompleteForDisplay(
           row.session_id,
-          stagedIntentSessionManager
-            ?.getLiveSession?.(row.session_id)
-            ?.hasActiveTurn() ?? false,
+          stagedIntentSessionManager,
         )
       : null,
   };

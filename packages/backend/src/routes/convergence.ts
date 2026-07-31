@@ -11,13 +11,16 @@ import {
 } from '../projects/milestoneResolver';
 import { listConvergenceSnapshotHistory } from '../db/queries';
 import { computeMilestoneAttentionSignals } from '../convergence/attentionSignals';
+import type { SessionManager } from '../session/SessionManager';
 
 /**
  * The milestone convergence read-surface: composes the four readiness axes
  * (Notion tasks, gate, seed, ops) at request time. Consumed by the M13
  * Milestone view, the decision inbox, and the trigger evaluator.
  */
-export function createConvergenceRouter(): Router {
+export function createConvergenceRouter(
+  sessionManager?: SessionManager,
+): Router {
   const router = Router();
 
   // GET /api/milestones/:project/:milestone/convergence
@@ -106,7 +109,9 @@ export function createConvergenceRouter(): Router {
       try {
         const row = resolveMilestoneRowForProject(project, milestone);
         const key = canonicalMilestoneKey(row);
-        res.json(computeMilestoneAttentionSignals(project, key));
+        res.json(
+          computeMilestoneAttentionSignals(project, key, sessionManager),
+        );
       } catch (err) {
         if (err instanceof UnknownMilestoneError) {
           res.status(400).json({ error: err.message });
