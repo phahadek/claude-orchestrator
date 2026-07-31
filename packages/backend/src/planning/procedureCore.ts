@@ -1040,6 +1040,28 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'staged no-op is an auditable, deliberate signal the operator can ' +
         'see and judge. Reach for Deferred whenever there is a real gap to ' +
         'name; reach for `planning.noOp` only when there genuinely is none. ' +
+        'The promotion rule (distinct from the dispatch-satisfaction rule ' +
+        'below) — this is what decides whether a dependency blocks the Ready ' +
+        "path, and it is the dep gate's own behavior " +
+        '(`orchestration/planningCandidates.ts` `passesGroomDepGate`), stated ' +
+        'here so a groom session applies it rather than reasoning about ' +
+        'dependencies from first principles: a Depends-On of a ' +
+        'decision-producing Type — 📐 Design / 📋 Planning / 🔎 Investigation — ' +
+        'blocks promotion to Ready for as long as it is not ✅ Done. A ' +
+        'Depends-On of any other Type, including 💻 Code, blocks promotion ' +
+        'only while it sits at 🔲 Backlog or ⏭️ Deferred — once it has been ' +
+        'groomed to 🗂️ Ready, or picked up (🔄 In Progress, 👀 In Review), it ' +
+        'no longer blocks promotion. Promotion is not dispatch: staging the ' +
+        'Ready path for a task with such a dependency does not skip ahead of ' +
+        'it — the auto-dispatcher independently holds every Ready task until ' +
+        'all of its dependencies reach ✅ Done, regardless of what this dep ' +
+        'gate allowed at grooming time. A groom session must not withhold a ' +
+        'promotion the dep gate would allow in order to additionally enforce ' +
+        'that later, dispatch-time sequencing itself — that duplicates a rule ' +
+        'the dispatcher already owns and leaves a groomable task stranded at ' +
+        'Backlog. (This is separate from the Deferred-path warning below, ' +
+        "which is about what a split leaves for a task's own dependents to " +
+        "satisfy — not about what blocks this task's own promotion.) " +
         'When investigation concludes the task is simply too large — a coherent ' +
         'subset should be retained and the rest carved off — that is still the ' +
         'Ready path, not Deferred: stage a `task.updateBody` (or targeted ' +
