@@ -8,7 +8,9 @@ vi.mock('../db/db.js', async () => {
 });
 
 const mockUpdateStatus = vi.fn(async () => {});
-const mockFetchTaskSummary = vi.fn(async () => null as { status: string } | null);
+const mockFetchTaskSummary = vi.fn(
+  async () => null as { status: string } | null,
+);
 
 vi.mock('../tasks/TaskBackend', () => ({
   getTaskBackend: vi.fn(() => ({
