@@ -1667,4 +1667,20 @@ export function runMigrations(target: Database.Database): void {
         WHERE e.gate_item_id = gate_item.id AND e.disposition IS NOT NULL
       );
   `);
+
+  // sessions.terminal_completion_reason: durable copy of the `reason` string
+  // PlanningOrchestrator.markTerminal already threads through to
+  // markSessionDone's `callSite` argument (previously log/audit-only). Read
+  // by the ops-journal route's deferred close: the operator-confirmed
+  // applied-pending-confirm -> resolved transition happens well after the
+  // session has gone terminal, so completeOpsTask's synchronous check
+  // misses it — the route needs a durable, queryable record of *why* the
+  // session ended to decide whether to close the task itself.
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN terminal_completion_reason TEXT`,
+    );
+  } catch {
+    /* already exists */
+  }
 }
