@@ -105,6 +105,7 @@ import {
 import { createOrchestratorMcpRouter } from './mcp/orchestratorMcpServer';
 import { createSessionRecordReadRouter } from './routes/sessionRecordRead';
 import { createOpsJournalRouter } from './routes/opsJournal';
+import { createTaskAbortRouter } from './routes/taskAbort';
 import { createGateStateRouter } from './routes/gateState';
 import { createSeedStateRouter } from './routes/seedState';
 import { createConvergenceRouter } from './routes/convergence';
@@ -226,6 +227,9 @@ app.use('/api', createSessionRecordReadRouter());
 // been retired in favor of staging journal.setState through the MCP tool
 // surface above.
 app.use('/api', createOpsJournalRouter());
+// Device-authed-only abort route for a mis-filed Backlog task — flips it to
+// Deferred and kills its bound groom session, if any (see routes/taskAbort.ts).
+app.use('/api', createTaskAbortRouter(sessionManager));
 // Setup endpoints are public — wizard UI uses them before credentials exist
 app.use('/api', setupRouter);
 // Gate all other /api routes when setup has not been completed
