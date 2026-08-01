@@ -243,7 +243,12 @@ describe('PlanningOrchestrator — ops task completion', () => {
     expect(updateStatus).not.toHaveBeenCalled();
   });
 
-  it.each(['pending', 'candidate', 'staged-proposal', 'applied-pending-confirm'] as const)(
+  it.each([
+    'pending',
+    'candidate',
+    'staged-proposal',
+    'applied-pending-confirm',
+  ] as const)(
     'leaves the task status unchanged when the ops_journal entry is at %s',
     async (state) => {
       const sm = makeSessionManager();
