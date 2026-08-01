@@ -17,7 +17,7 @@ import {
   stepTitleFor,
   type SkillId,
 } from '../procedureCore';
-import { ALLOWED_TRANSITIONS } from '../../ops/opsJournal';
+import { ALLOWED_TRANSITIONS, isValidOpsTransition } from '../../ops/opsJournal';
 import { passesGroomDepGate } from '../../orchestration/planningCandidates';
 import type { NotionTask } from '../../notion/types';
 
@@ -923,6 +923,73 @@ describe('procedureCore', () => {
         .join('\n');
       expect(assembled).toMatch(/IS write-capable/);
       expect(assembled).toMatch(/request → grant → apply → reconcile loop/);
+    });
+  });
+
+  describe('the no-change terminal for a decided-no-change Investigation', () => {
+    it('names an explicit no-change terminal in the rendered directive, distinct from applied-pending-confirm', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/NO-CHANGE TERMINAL/);
+      expect(rendered).toMatch(
+        /has no legal meaning for an Investigation whose conclusion is that no change is needed/,
+      );
+    });
+
+    it('no longer forbids parking at staged-proposal unconditionally — the title and body both carve out the no-change terminal', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      expect(principle.title).not.toMatch(
+        /never park a staged proposal$/,
+      );
+      expect(principle.title).toMatch(/stage the no-change terminal/);
+
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(
+        /staging it is not the parking this rule forbids/,
+      );
+    });
+
+    it('instructs staging the closing set (journal.setState to resolved + task.setStatus to Done under a shared groupId) as the no-change terminal, staged never applied by the session', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/journal\.setState.*→.*`resolved`/);
+      expect(rendered).toMatch(/task\.setStatus.*→.*✅ Done/);
+      expect(rendered).toMatch(/shared `groupId`/);
+      expect(rendered).toMatch(/DO NOT apply that group yourself/);
+    });
+
+    it('the transition the no-change terminal requires — staged-proposal to resolved — is legal per isValidOpsTransition', () => {
+      expect(isValidOpsTransition('staged-proposal', 'resolved')).toBe(true);
+    });
+
+    it('the blocked terminal for a genuine external blocker still renders and is still legal from staged-proposal', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'dispatched-ops-write-capable',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/genuine external blocker/);
+      expect(rendered).toMatch(
+        /terminates as `blocked` \/ `needs-setup`, naming the blocker explicitly/,
+      );
+      expect(isValidOpsTransition('staged-proposal', 'blocked')).toBe(true);
+    });
+
+    it('the granted-writes-idempotent-resumable principle reconciles staging the no-change closing set with never reaching resolved itself', () => {
+      const principle = CORE_PRINCIPLES.find(
+        (p) => p.id === 'granted-writes-idempotent-resumable',
+      )!;
+      const rendered = renderPrinciple(principle, 'ops');
+      expect(rendered).toMatch(/never reaches resolved/);
+      expect(rendered).toMatch(/no-change terminal/);
+      expect(rendered).toMatch(
+        /the session stages the `journal\.setState` → `resolved` closing set, it never applies it/,
+      );
     });
   });
 });

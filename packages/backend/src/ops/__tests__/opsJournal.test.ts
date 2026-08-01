@@ -127,6 +127,10 @@ describe('isValidOpsTransition', () => {
     expect(isValidOpsTransition('candidate', 'resolved')).toBe(true);
   });
 
+  it('allows staged-proposal -> resolved directly (the no-change terminal — a proposal that concludes no change is needed)', () => {
+    expect(isValidOpsTransition('staged-proposal', 'resolved')).toBe(true);
+  });
+
   it('still rejects pending -> resolved (an entry never worked cannot be closed)', () => {
     expect(isValidOpsTransition('pending', 'resolved')).toBe(false);
   });

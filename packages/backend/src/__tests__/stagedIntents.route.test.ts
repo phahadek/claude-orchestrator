@@ -842,6 +842,41 @@ describe('the ops-terminal closing set is mandated under one shared groupId', ()
     ).toThrow(/ops-terminal member/);
   });
 
+  it('accepts the no-change terminal — journal.setState staged-proposal -> resolved staged with a shared groupId — and rejects it without one', async () => {
+    const { upsertOpsJournalEntry } = await import('../db/queries');
+    upsertOpsJournalEntry({
+      task_id: 'notion:ops-no-change',
+      project: 'proj-ops',
+      milestone: 'M1',
+      state: 'staged-proposal',
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: new Date().toISOString(),
+    });
+
+    expect(() =>
+      stageIntent(
+        'journal.setState',
+        { taskId: 'notion:ops-no-change', state: 'resolved' },
+        'proj-ops',
+      ),
+    ).toThrow(/ops-terminal member/);
+
+    const intent = stageIntent(
+      'journal.setState',
+      { taskId: 'notion:ops-no-change', state: 'resolved' },
+      'proj-ops',
+      'group-no-change-1',
+    );
+    expect(intent.groupId).toBe('group-no-change-1');
+  });
+
   it('an incidental mid-run journal.setState (not targeting resolved) may still be staged standalone', async () => {
     const { upsertOpsJournalEntry } = await import('../db/queries');
     upsertOpsJournalEntry({

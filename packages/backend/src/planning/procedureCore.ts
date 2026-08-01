@@ -209,24 +209,39 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
   {
     id: 'dispatched-ops-write-capable',
     title:
-      'A dispatched ops run is write-capable — drive to applied-pending-confirm, never park a staged proposal',
+      'A dispatched ops run is write-capable — drive to applied-pending-confirm or stage the no-change terminal, never park a staged proposal without one',
     appliesTo: ['ops'],
     text:
       'A dispatched {skillLabel} run IS write-capable: it earns capabilities on ' +
       'request and drives the ops_journal to `applied-pending-confirm` (the change ' +
       'actually applied, reconciled, evidence captured) through the ' +
-      'request → grant → apply → reconcile loop. IS NOT: a session limited to ' +
-      'staging a proposal and parking it for someone else to execute — that is ' +
-      'not the target terminal for work this session can perform, or can become ' +
-      'equipped to perform. DO keep driving the journal — stage the next legal ' +
-      'transition, apply once a capability is granted or a proposal is approved, ' +
-      'reconcile and capture evidence, repeat — until it reaches ' +
-      '`applied-pending-confirm`, rather than stopping at `staged-proposal` (or ' +
-      'any other non-terminal state) merely because every prerequisite for that ' +
+      'request → grant → apply → reconcile loop, for a decision that changes ' +
+      'something. IS NOT: a session limited to staging a proposal and parking it ' +
+      'for someone else to execute — that is not the target terminal for work ' +
+      'this session can perform, or can become equipped to perform. DO keep ' +
+      'driving the journal — stage the next legal transition, apply once a ' +
+      'capability is granted or a proposal is approved, reconcile and capture ' +
+      'evidence, repeat — until it reaches `applied-pending-confirm`, rather than ' +
+      'stopping at `staged-proposal` merely because every prerequisite for that ' +
       'state is satisfied. DO NOT treat "the proposal is ready to stage" as a ' +
       'stopping point when the session already holds, or could earn by request, ' +
-      'the tool needed to carry it further. A missing write tool IS a capability ' +
-      'request, never a blocker: DO call ' +
+      'the tool needed to carry it further. `applied-pending-confirm` names a ' +
+      'change actually applied — it has no legal meaning for an Investigation ' +
+      'whose conclusion is that no change is needed, so THE NO-CHANGE TERMINAL ' +
+      'exists for exactly that outcome, and staging it is not the parking this ' +
+      'rule forbids. Once a decided-no-change conclusion is reached, DO stage ' +
+      'the closing set directly — `journal.setState` → `resolved` alongside ' +
+      '`task.setStatus` → ✅ Done, under one shared `groupId` (see the closing-set ' +
+      'directive in the Present-for-sign-off step) — from whichever state the ' +
+      'decision was reached in, `candidate` or `staged-proposal`; `staged-proposal` → ' +
+      '`resolved` is a legal `journal.setState` target exactly for this case ' +
+      '(see "ops_journal state machine" above). That stage IS the terminal ' +
+      'action a no-change investigation takes, and ends the turn. DO NOT apply ' +
+      'that group yourself — the session stages the closing set, it never makes ' +
+      'the `resolved` transition happen; the operator approving the group is ' +
+      'the device-auth step that actually performs it, which is what "a ' +
+      'dispatched session never reaches resolved itself" (below) means. A ' +
+      'missing write tool IS a capability request, never a blocker: DO call ' +
       `\`${orchestratorMcpToolName('session.requestCapability')}\` the moment a ` +
       "write the task needs is outside this session's tools, with " +
       '`{"payload":{"capability":"<the exact tool or capability>","plan":"<what ' +
@@ -271,7 +286,11 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'A capability grant issued to a dispatched {skillLabel} session must be safe to redrive: ' +
       'a retried/resumed turn re-runs the same write without duplicating its effect. A ' +
       'dispatched {skillLabel} session never reaches resolved / ✅ Done / task-apply itself — ' +
-      'that transition is device-auth/operator-only.',
+      'that transition is device-auth/operator-only. This holds even for the no-change ' +
+      'terminal (see "drive to applied-pending-confirm or stage the no-change terminal" ' +
+      'above): the session stages the `journal.setState` → `resolved` closing set, it ' +
+      "never applies it — the operator's approval of that staged group is the " +
+      'device-auth action that performs the transition.',
   },
   {
     id: 'ask-permission-not-speculative',
@@ -1390,8 +1409,14 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'at a time, until the journal reaches `applied-pending-confirm`, or park ' +
         'because you are genuinely blocked on the next operator decision (a ' +
         'pending capability grant, or a step only a human can perform, like ' +
-        'secret provisioning). The one transition this session never makes ' +
-        'itself is `applied-pending-confirm` → `resolved` — that confirmation is ' +
+        'secret provisioning). For a decided-no-change Investigation there is no ' +
+        'change to apply, reconcile, or capture evidence for, so this loop never ' +
+        'starts — instead stage the no-change terminal\'s closing set (see ' +
+        '"drive to applied-pending-confirm or stage the no-change terminal" ' +
+        'above) and end the turn. The one transition this session never makes ' +
+        'itself, on either path, is the `resolved` transition — whether reached ' +
+        'via `applied-pending-confirm` → `resolved` or staged directly as the ' +
+        'no-change terminal\'s closing set — that confirmation is ' +
         'device-auth/operator-only, always.',
       design:
         'A dispatched design session never applies a write itself — it only ' +
