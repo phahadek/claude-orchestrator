@@ -579,10 +579,7 @@ export function buildPlanningResumeMessage(row: Session): string {
     if (intent.state !== 'rejected' && intent.state !== 'needs_revision') {
       continue;
     }
-    if (
-      !mostRecentReject ||
-      intent.updated_at >= mostRecentReject.updated_at
-    ) {
+    if (!mostRecentReject || intent.updated_at >= mostRecentReject.updated_at) {
       mostRecentReject = intent;
     }
   }
