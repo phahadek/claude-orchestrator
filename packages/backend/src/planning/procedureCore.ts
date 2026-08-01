@@ -418,13 +418,13 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
     appliesTo: ['groom', 'design', 'ops', 'split'],
     text:
       'DO, when a staged intent fails stage-time validation and comes back to you as ' +
-      '`needs_revision` (the feedback names the blocked intent\'s own id and the ' +
+      "`needs_revision` (the feedback names the blocked intent's own id and the " +
       'validation failure), stage the corrected intent with `supersedes` set to that ' +
       "blocked intent's id — never a bare unlinked re-stage. A `needs_revision` intent " +
       'stays in its group until something explicitly supersedes it; an unlinked ' +
-      'correction leaves it in place and wedges the whole group\'s commit. DO NOT ' +
+      "correction leaves it in place and wedges the whole group's commit. DO NOT " +
       'withdraw a `needs_revision` intent instead — that is the self-caught-mistake path ' +
-      'above, and withdrawing does not retire it into the corrected one\'s slot the way ' +
+      "above, and withdrawing does not retire it into the corrected one's slot the way " +
       'an explicit `supersedes` does. This is the same `supersedes` field the platform ' +
       'already requires the corrected payload to carry — no separate call, no auto-' +
       'supersede: only a caller that names the blocked id explicitly may retire it.',
