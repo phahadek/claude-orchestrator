@@ -1222,7 +1222,7 @@ describe('runGateReconcilerTick — verify concurrency budgeting', () => {
       sessionType: 'ops',
     });
 
-    const item = makeRunnableItem({ classification: 'Read-Only' });
+    makeRunnableItem({ classification: 'Read-Only' });
     const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
     const result = await runGateReconcilerTick({
       deployAdvanceTrigger: fixedTrigger('sha1'),
