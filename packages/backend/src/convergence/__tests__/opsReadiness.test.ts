@@ -145,7 +145,11 @@ describe('listOpsMilestoneReadiness', () => {
   });
 
   it('emits the milestone display name, not the UUID ops_journal stores, matching the gate/seed rollups', () => {
-    ProjectService.create({ id: 'p1', name: 'Project One', projectDir: '/tmp/p1' });
+    ProjectService.create({
+      id: 'p1',
+      name: 'Project One',
+      projectDir: '/tmp/p1',
+    });
     const milestone = ProjectService.createMilestone({
       id: 'ms-uuid-99',
       projectId: 'p1',
