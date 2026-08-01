@@ -408,7 +408,26 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'terminal state no apply can ever reach — it requires no operator action and is ' +
       'not a disposition for the operator to make. DO NOT re-stage a corrected version ' +
       'under the same intent id — withdraw the wrong one, then stage the correction as ' +
-      'a new intent.',
+      'a new intent. This is for a mistake you catch yourself, before anything blocks it ' +
+      '— it is NOT the needs_revision case below, where the intent has already been sent ' +
+      'back and withdrawing it would only strand its group; supersede it instead.',
+  },
+  {
+    id: 'supersede-on-stage-time-block',
+    title: 'Supersede, not withdraw, an intent stage-time validation sent back',
+    appliesTo: ['groom', 'design', 'ops', 'split'],
+    text:
+      'DO, when a staged intent fails stage-time validation and comes back to you as ' +
+      "`needs_revision` (the feedback names the blocked intent's own id and the " +
+      'validation failure), stage the corrected intent with `supersedes` set to that ' +
+      "blocked intent's id — never a bare unlinked re-stage. A `needs_revision` intent " +
+      'stays in its group until something explicitly supersedes it; an unlinked ' +
+      "correction leaves it in place and wedges the whole group's commit. DO NOT " +
+      'withdraw a `needs_revision` intent instead — that is the self-caught-mistake path ' +
+      "above, and withdrawing does not retire it into the corrected one's slot the way " +
+      'an explicit `supersedes` does. This is the same `supersedes` field the platform ' +
+      'already requires the corrected payload to carry — no separate call, no auto-' +
+      'supersede: only a caller that names the blocked id explicitly may retire it.',
   },
   {
     id: 'incidental-tooling-gap-not-a-blocker',

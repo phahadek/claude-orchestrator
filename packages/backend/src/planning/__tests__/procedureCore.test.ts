@@ -220,6 +220,41 @@ describe('procedureCore', () => {
     }
   });
 
+  it('teaches supersede-on-stage-time-block: a needs_revision correction must carry supersedes naming the blocked id', () => {
+    const skills: SkillId[] = ['groom', 'design', 'ops', 'split'];
+    for (const skill of skills) {
+      const principle = principlesFor(skill).find(
+        (p) => p.id === 'supersede-on-stage-time-block',
+      );
+      expect(principle, `${skill}`).toBeDefined();
+      const rendered = renderPrinciple(principle!, skill);
+      expect(rendered).toMatch(/needs_revision/);
+      expect(rendered).toContain('supersedes');
+      expect(rendered).toMatch(/DO NOT withdraw/);
+    }
+  });
+
+  it('keeps the self-caught-mistake withdraw directive rendering, and distinguishes it from the needs_revision supersede case rather than contradicting it', () => {
+    const withdraw = CORE_PRINCIPLES.find(
+      (p) => p.id === 'withdraw-self-caught-mistake',
+    )!;
+    const rendered = renderPrinciple(withdraw, 'groom');
+    expect(rendered).toMatch(/^DO withdraw/);
+    expect(rendered).toContain(
+      'DO NOT re-stage a corrected version under the same intent id',
+    );
+    // The self-caught directive now points at the needs_revision case instead
+    // of silently overlapping with it — both directives must agree on which
+    // path governs a needs_revision intent.
+    expect(rendered).toMatch(/needs_revision case below/);
+
+    const supersede = CORE_PRINCIPLES.find(
+      (p) => p.id === 'supersede-on-stage-time-block',
+    )!;
+    const supersedeRendered = renderPrinciple(supersede, 'groom');
+    expect(supersedeRendered).toMatch(/self-caught-mistake path/);
+  });
+
   it('states the ops capability-request path as a concrete imperative directive, not just the grant model', () => {
     const principle = CORE_PRINCIPLES.find(
       (p) => p.id === 'ask-permission-not-speculative',

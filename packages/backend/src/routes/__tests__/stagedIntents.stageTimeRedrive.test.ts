@@ -135,6 +135,11 @@ describe('routeStageTimeBlock — stage-time redrive', () => {
     expect(sessionId).toBe('session-1');
     expect(source).toBe('verification-error');
     expect(message).toContain('Open Questions');
+    // The remedy must be spelled out inline, naming the exact field and
+    // quoting the blocked intent's own id, so the session does not have to
+    // look it up before re-staging a linked correction.
+    expect(message).toContain('supersedes');
+    expect(message).toContain(checked.id);
   });
 
   it('hides a blocked intent from the operator (needs_revision) while within the auto-revise budget, then surfaces it once escalated', async () => {
