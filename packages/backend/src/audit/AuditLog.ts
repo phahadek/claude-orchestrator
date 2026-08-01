@@ -169,6 +169,36 @@ export function countPushFailureEvents(sessionId: string): number {
   }).length;
 }
 
+/**
+ * True when a task_ops_stranded_surfaced event has already been recorded for
+ * this task at this exact ops_journal.updated_at value — the sweep-cycle
+ * dedup for StrandedOpsTaskMonitor. The journal's updated_at cannot change
+ * while the task is genuinely stranded (nothing can advance it), so this
+ * suppresses a duplicate event every cycle while still allowing a fresh
+ * event if the journal is later touched and lands stranded again.
+ */
+export function hasStrandedOpsSurfacedEvent(
+  taskId: string,
+  journalUpdatedAt: string,
+): boolean {
+  const rows = db
+    .prepare<[string], { payload: string }>(
+      `SELECT payload FROM audit_log
+       WHERE task_id = ? AND event_type = 'task_ops_stranded_surfaced'`,
+    )
+    .all(taskId);
+  return rows.some((r) => {
+    try {
+      return (
+        (JSON.parse(r.payload) as { journalUpdatedAt?: string })
+          .journalUpdatedAt === journalUpdatedAt
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
 /** Returns the most recent audit_log row of the given event type, or undefined. */
 export function getLatestEventByType(eventType: string): AuditRow | undefined {
   return db

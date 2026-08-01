@@ -5481,6 +5481,7 @@ let _stmtFindActiveStagedIntentForTask: Database.Statement | null = null;
 let _stmtUpdateStagedIntentState: Database.Statement | null = null;
 let _stmtHasStagedIntentForTask: Database.Statement | null = null;
 let _stmtHasActiveCapabilityRequestForSession: Database.Statement | null = null;
+let _stmtHasPendingDecisionForTask: Database.Statement | null = null;
 
 export function insertStagedIntent(row: StagedIntentRow): void {
   _stmtInsertStagedIntent ??= db.prepare<StagedIntentRow>(`
@@ -5521,6 +5522,23 @@ export function hasStagedIntentForTask(taskId: string): boolean {
     `SELECT 1 FROM staged_intent WHERE task_id = @task_id LIMIT 1`,
   );
   return _stmtHasStagedIntentForTask.get({ task_id: taskId }) !== undefined;
+}
+
+/**
+ * True if this task has a staged_intent outstanding in a state the operator
+ * still owns a disposition for — staged/needs_revision/pending_verification.
+ * Used by StrandedOpsTaskMonitor to distinguish "legitimately waiting on the
+ * operator" (never reported, however old) from "nothing exists that can
+ * move this" (reported once stale).
+ */
+export function hasPendingDecisionForTask(taskId: string): boolean {
+  _stmtHasPendingDecisionForTask ??= db.prepare<{ task_id: string }>(
+    `SELECT 1 FROM staged_intent
+     WHERE task_id = @task_id
+       AND state IN ('staged', 'needs_revision', 'pending_verification')
+     LIMIT 1`,
+  );
+  return _stmtHasPendingDecisionForTask.get({ task_id: taskId }) !== undefined;
 }
 
 let _stmtGetLatestNoOpForTask: Database.Statement | null = null;
