@@ -560,23 +560,38 @@ function describeStagedIntentForNudge(intent: {
 
 /**
  * Build the resume nudge for a planning/ops session: name the most recently
- * rejected staged intent and its disposition reason so the session can
- * revise it, rather than a generic instruction it can misinterpret as
+ * updated staged intent that landed in a reject state and branch the message
+ * on which reject state it's in. `rejected` means the operator declined the
+ * intent outright — terminal, so the message must not instruct the session
+ * to revise, re-stage, supersede, or withdraw it. `needs_revision` means
+ * pushback — revisable, so the message instructs the session to revise it
+ * (see transitionRejectedIntent in stagedIntents.ts for the state contract).
+ * Falls back to PLANNING_RESUME_FALLBACK_MESSAGE when neither state is
+ * present, rather than a generic instruction it can misinterpret as
  * "nothing to do here" (see PLANNING_RESUME_FALLBACK_MESSAGE doc-comment for
  * why silence is not an acceptable fallback). Exported so tests can verify
  * the exact message without hardcoding it.
  */
 export function buildPlanningResumeMessage(row: Session): string {
   const intents = listStagedIntentsBySession(row.session_id);
-  let mostRecentRejected: (typeof intents)[number] | undefined;
+  let mostRecentReject: (typeof intents)[number] | undefined;
   for (const intent of intents) {
-    if (intent.state === 'rejected') mostRecentRejected = intent;
+    if (intent.state !== 'rejected' && intent.state !== 'needs_revision') {
+      continue;
+    }
+    if (!mostRecentReject || intent.updated_at >= mostRecentReject.updated_at) {
+      mostRecentReject = intent;
+    }
   }
-  if (!mostRecentRejected) return PLANNING_RESUME_FALLBACK_MESSAGE;
+  if (!mostRecentReject) return PLANNING_RESUME_FALLBACK_MESSAGE;
 
-  const label = describeStagedIntentForNudge(mostRecentRejected);
+  const label = describeStagedIntentForNudge(mostRecentReject);
   const reason =
-    mostRecentRejected.disposition_reason?.trim() || 'no reason given';
+    mostRecentReject.disposition_reason?.trim() || 'no reason given';
+
+  if (mostRecentReject.state === 'rejected') {
+    return `Your staged intent ${label} was declined: ${reason}. This decision is final; move on to other work.`;
+  }
   return `Your staged intent ${label} was sent back: ${reason}. Re-read this feedback and revise your staged intent accordingly.`;
 }
 
