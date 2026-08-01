@@ -2008,7 +2008,9 @@ describe('AutoLauncher — memory admission gate', () => {
       expect.objectContaining({ event_type: 'memory_admission_deferred' }),
     );
     expect(infoSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining('deferring dispatch — projected free host memory'),
+      expect.stringContaining(
+        'deferring dispatch — projected free host memory',
+      ),
     );
   });
 });

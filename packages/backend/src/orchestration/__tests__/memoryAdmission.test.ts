@@ -84,7 +84,9 @@ describe('hasMemoryHeadroom', () => {
     // The projected value must equal what evaluateMemoryHeadroom actually
     // branches on — guards against the audited/logged value drifting from
     // the real decision.
-    expect(result.projectedFreeMB).toBe(result.freeMemMB - result.perSessionReserveMB);
+    expect(result.projectedFreeMB).toBe(
+      result.freeMemMB - result.perSessionReserveMB,
+    );
     expect(
       evaluateMemoryHeadroom({
         freeMemMB: result.freeMemMB,
