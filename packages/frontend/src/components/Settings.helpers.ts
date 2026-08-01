@@ -1,6 +1,7 @@
 export interface SettingsValues {
   max_concurrent_code_sessions: string;
   max_concurrent_planning_sessions: string;
+  max_concurrent_verify_sessions: string;
   auto_review_concurrency: string;
   auto_review: string;
   card_preview_lines: string;
@@ -79,6 +80,8 @@ export function validateField(
   if (!Number.isInteger(num) || isNaN(num)) return 'Must be a whole number';
   if (key === 'auto_launch_concurrency' && num < 1) return 'Minimum is 1';
   if (key === 'max_review_iterations' && num < 1) return 'Minimum is 1';
+  if (key === 'max_concurrent_verify_sessions' && num < 1)
+    return 'Minimum is 1';
   if (key === 'auto_launch_poll_interval_ms' && num < MIN_POLL_INTERVAL_MS)
     return `Minimum is ${MIN_POLL_INTERVAL_MS} ms`;
   return null;

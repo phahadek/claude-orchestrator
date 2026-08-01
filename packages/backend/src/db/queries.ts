@@ -8,7 +8,7 @@ import {
   normalizeBoardId,
   toExternalId,
 } from '../tasks/taskId';
-import { isCodeSession } from '../session/sessionPredicates';
+import { isCodeSession, isPlanningSession } from '../session/sessionPredicates';
 import {
   pauseReasonFromCanonical,
   serializePauseReason,
@@ -762,6 +762,40 @@ export function hasLiveVerifySessionForGateItem(itemId: string): boolean {
     )
     .get({ taskId });
   return (row?.c ?? 0) > 0;
+}
+
+/**
+ * Count of live (non-terminal) gate-verify sessions — task_id
+ * `gate-item:<id>`, the same convention hasLiveVerifySessionForGateItem
+ * keys on. Discriminates on task_id rather than session_type='ops' so an
+ * ordinary ops session (also session_type='ops') is never counted against
+ * the verify-specific cap (see isGateVerifySession).
+ */
+export function countLiveVerifySessions(): number {
+  const row = db
+    .prepare<[], { c: number }>(
+      `SELECT COUNT(*) as c FROM sessions
+       WHERE task_id LIKE '${GATE_ITEM_TASK_PREFIX}%'
+         AND status NOT IN ('done', 'error', 'killed', 'superseded')`,
+    )
+    .get();
+  return row?.c ?? 0;
+}
+
+/**
+ * Count of live (non-terminal) sessions in the shared planning pool
+ * (groom/design/ops/split/docs — see isPlanningSession), DB-backed so the
+ * gate reconciler can budget against it without a SessionManager instance,
+ * mirroring SessionManager.getLivePlanningSessionCount's predicate.
+ */
+export function countLivePlanningSessions(): number {
+  const rows = db
+    .prepare(
+      `SELECT session_type FROM sessions
+       WHERE status NOT IN ('done', 'error', 'killed', 'superseded')`,
+    )
+    .all() as { session_type: string | null }[];
+  return rows.filter((r) => isPlanningSession(r.session_type ?? '')).length;
 }
 
 export interface GateItemPendingCapabilitySession {

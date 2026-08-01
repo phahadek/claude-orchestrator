@@ -18,6 +18,7 @@ vi.mock('../../hooks/useWebSocket', () => ({
 const defaultSettings = {
   max_concurrent_code_sessions: '4',
   max_concurrent_planning_sessions: '6',
+  max_concurrent_verify_sessions: '11',
   auto_review_concurrency: '2',
   auto_review: 'false',
   card_preview_lines: '5',
@@ -301,6 +302,59 @@ describe('Settings — max_concurrent_planning_sessions', () => {
           opts &&
           opts.method === 'PATCH' &&
           JSON.parse(opts.body as string).max_concurrent_code_sessions === '7',
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
+});
+
+describe('Settings — max_concurrent_verify_sessions', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', makeFetch());
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn().mockReturnValue(null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+  });
+
+  it('returns "Must be a whole number" for a non-integer', () => {
+    expect(validateField('max_concurrent_verify_sessions', 'abc')).toBe(
+      'Must be a whole number',
+    );
+  });
+
+  it('rejects values below 1', () => {
+    expect(validateField('max_concurrent_verify_sessions', '0')).toBe(
+      'Minimum is 1',
+    );
+  });
+
+  it('renders the input with the value from the API', async () => {
+    render(<Settings />);
+    const input = await screen.findByDisplayValue('11');
+    expect(input).toBeDefined();
+  });
+
+  it('fires PATCH with max_concurrent_verify_sessions when a valid value is entered', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+    await screen.findByDisplayValue('11');
+
+    const inputs = screen.getAllByRole('spinbutton');
+    const verifyInput = inputs.find(
+      (el) => (el as HTMLInputElement).value === '11',
+    )!;
+    fireEvent.change(verifyInput, { target: { value: '9' } });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).max_concurrent_verify_sessions ===
+            '9',
       );
       expect(patchCall).toBeDefined();
     });

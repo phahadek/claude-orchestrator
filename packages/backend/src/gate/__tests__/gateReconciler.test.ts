@@ -24,6 +24,7 @@ vi.mock('../../deploy/deployService.js', () => deployServiceMock);
 
 import { db } from '../../db/db.js';
 import { upsertTaskCache, upsertArm } from '../../db/queries.js';
+import { typedSetSetting } from '../../config/settings.js';
 import { ProjectService } from '../../projects/ProjectService.js';
 import { logger } from '../../logger.js';
 import {
@@ -1021,6 +1022,142 @@ describe('runGateReconcilerTick', () => {
       deployAdvanceTrigger: fixedTrigger(null),
     });
     expect(result.readiness['polimarket-analyser::M20'].status).toBe('blocked');
+  });
+});
+
+describe('runGateReconcilerTick — verify concurrency budgeting', () => {
+  /** Seeds a live (non-terminal) session row directly — bypasses SessionManager, for exercising the DB-backed count the reconciler budgets against. */
+  function insertLiveSession(opts: {
+    sessionId: string;
+    taskId: string;
+    sessionType?: string;
+  }) {
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, session_type, status, started_at)
+       VALUES (@sessionId, @taskId, @sessionType, 'running', 0)`,
+    ).run({
+      sessionId: opts.sessionId,
+      taskId: opts.taskId,
+      sessionType: opts.sessionType ?? 'ops',
+    });
+  }
+
+  it('dispatches no further verify sessions once live verify sessions already fill the cap', async () => {
+    typedSetSetting('max_concurrent_verify_sessions', 2);
+    insertLiveSession({
+      sessionId: 'live-verify-1',
+      taskId: 'gate-item:already-1',
+    });
+    insertLiveSession({
+      sessionId: 'live-verify-2',
+      taskId: 'gate-item:already-2',
+    });
+
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('dispatches up to the remaining verify capacity and no more when the cap exceeds live sessions', async () => {
+    typedSetSetting('max_concurrent_verify_sessions', 3);
+    insertLiveSession({
+      sessionId: 'live-verify-1',
+      taskId: 'gate-item:already-1',
+    });
+
+    const items = [
+      makeRunnableItem({ text: 'item a', classification: 'Read-Only' }),
+      makeRunnableItem({ text: 'item b', classification: 'Read-Only' }),
+      makeRunnableItem({ text: 'item c', classification: 'Read-Only' }),
+    ];
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    // cap(3) - live(1) = 2 remaining slots — exactly 2 of the 3 items dispatch.
+    expect(verify).toHaveBeenCalledTimes(2);
+    expect(result.processed).toHaveLength(2);
+    const dispatchedIds = result.processed.map((p) => p.itemId);
+    const skipped = items.filter((i) => !dispatchedIds.includes(i.id));
+    expect(skipped).toHaveLength(1);
+    expect(getItem(skipped[0].id)?.state).toBe('runnable');
+  });
+
+  it('stops dispatching while free planning capacity is down to the human reserve', async () => {
+    typedSetSetting('max_concurrent_planning_sessions', 2);
+    typedSetSetting('human_reserve', 1);
+    typedSetSetting('max_concurrent_verify_sessions', 10);
+    // One live planning (non-verify) session already occupies the pool —
+    // available = 2 - humanReserve(1) - active(1) = 0.
+    insertLiveSession({ sessionId: 'live-ops-1', taskId: 'some-ops-task' });
+
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('does not count a non-gate ops session against the verify cap', async () => {
+    typedSetSetting('max_concurrent_verify_sessions', 1);
+    typedSetSetting('max_concurrent_planning_sessions', 5);
+    typedSetSetting('human_reserve', 0);
+    // session_type='ops' but task_id has no gate-item: prefix — must not be
+    // counted as a live verify session.
+    insertLiveSession({ sessionId: 'ordinary-ops-1', taskId: 'some-ops-task' });
+
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(result.processed).toEqual([
+      { itemId: item.id, classification: 'Read-Only', disposition: 'pass' },
+    ]);
+  });
+
+  it('a dispatch that still fails on the hard cap continues to return dispatchFailed:true without touching latest_disposition or crashCounts', async () => {
+    // Budgeting leaves headroom, but the injected verifier simulates
+    // SessionManager.start throwing anyway (e.g. a race with another
+    // dispatcher) — the dispatchFailed backstop must still apply.
+    typedSetSetting('max_concurrent_verify_sessions', 5);
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({
+      disposition: 'needs-setup' as const,
+      dispatchFailed: true,
+      evidence: { reason: 'failed to dispatch verification session' },
+    }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(result.processed).toEqual([
+      {
+        itemId: item.id,
+        classification: 'Read-Only',
+        disposition: 'needs-setup',
+      },
+    ]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+    expect(getItem(item.id)?.latestDisposition).toBeUndefined();
   });
 });
 
