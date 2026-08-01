@@ -225,7 +225,6 @@ import {
   hasActivePlanningSessionForTask,
   getOtherRunningSessionsForTask,
   markSessionSuperseded,
-  enqueueFeedbackItem,
   listUndeliveredInboxItems,
   markInboxItemsDelivered,
   setSessionPauseReason,
