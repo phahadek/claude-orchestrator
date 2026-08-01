@@ -119,6 +119,15 @@ export interface GroomCandidateDeps {
    * this. See isGroomNoOpSuppressed in db/queries.ts.
    */
   isNoOpSuppressed: (taskId: string) => boolean;
+  /**
+   * True while the task's most recent groom session was ended by an explicit
+   * operator kill (reason `user_kill`) and no task edit has landed since —
+   * see isPlanningKillSuppressed in db/queries.ts. A kill is deliberately
+   * excluded from the crash budget, so without this gate the task stays
+   * fully candidate-eligible and re-dispatches on the very next scan tick
+   * despite the operator's explicit stop.
+   */
+  isKillSuppressed: (taskId: string) => boolean;
 }
 
 /**
@@ -126,8 +135,9 @@ export interface GroomCandidateDeps {
  * non-terminal standard session is already handling it, no non-terminal
  * (running or parked idle) groom session already handles it, it isn't
  * within its crash-budget cooldown, its most recent planning.noOp (if any)
- * isn't a still-standing committed suppression, and every Depends-On clears
- * the groom dep-gate.
+ * isn't a still-standing committed suppression, its most recent groom
+ * session (if any) wasn't ended by an unresolved operator kill, and every
+ * Depends-On clears the groom dep-gate.
  */
 export function isGroomCandidate(
   task: NotionTask,
@@ -138,6 +148,7 @@ export function isGroomCandidate(
   if (deps.hasActiveGroomSession(task.id)) return false;
   if (deps.inCrashCooldown(task.id)) return false;
   if (deps.isNoOpSuppressed(task.id)) return false;
+  if (deps.isKillSuppressed(task.id)) return false;
   return passesGroomDepGate(task, deps.tasksById);
 }
 
@@ -157,6 +168,12 @@ export interface OpsCandidateDeps {
   hasActiveOpsSession: (taskId: string) => boolean;
   /** Project id the dep-gate's deploy check runs against (getProjectDeployedSha). */
   projectId: string;
+  /**
+   * True while the task's most recent ops session was ended by an explicit
+   * operator kill (reason `user_kill`) and no task edit has landed since —
+   * see isPlanningKillSuppressed in db/queries.ts.
+   */
+  isKillSuppressed: (taskId: string) => boolean;
 }
 
 /**
@@ -192,8 +209,9 @@ export async function passesOpsDepGate(
  * A task is an ops candidate when it's 🗂️ Ready and a 🔧 Operational /
  * 🔎 Investigation / 🧪 Testing Type (per opsLoad's isOpsEligibleType), no
  * non-terminal standard or ops session already handles it, it isn't within
- * its crash-budget cooldown, and every Depends-On clears the ops dep-gate
- * (Done + deployed).
+ * its crash-budget cooldown, its most recent ops session (if any) wasn't
+ * ended by an unresolved operator kill, and every Depends-On clears the ops
+ * dep-gate (Done + deployed).
  */
 export async function isOpsCandidate(
   task: NotionTask,
@@ -204,6 +222,7 @@ export async function isOpsCandidate(
   if (deps.hasActiveSession(task.id)) return false;
   if (deps.hasActiveOpsSession(task.id)) return false;
   if (deps.inCrashCooldown(task.id)) return false;
+  if (deps.isKillSuppressed(task.id)) return false;
   return passesOpsDepGate(task, deps.tasksById, deps.projectId);
 }
 
@@ -253,13 +272,20 @@ export interface DesignCandidateDeps {
   hasActiveDesignSession: (taskId: string) => boolean;
   /** Effective getArm(milestone.id, 'design') result — design defaults off. */
   armed: boolean;
+  /**
+   * True while the task's most recent design session was ended by an
+   * explicit operator kill (reason `user_kill`) and no task edit has landed
+   * since — see isPlanningKillSuppressed in db/queries.ts.
+   */
+  isKillSuppressed: (taskId: string) => boolean;
 }
 
 /**
  * A task is a design candidate when the design flow is armed, it's 🗂️ Ready
  * and a 📐 Design / 📋 Planning Type, no non-terminal standard or design
  * session already handles it, it isn't within its crash-budget cooldown,
- * and every Depends-On clears the design dep-gate.
+ * its most recent design session (if any) wasn't ended by an unresolved
+ * operator kill, and every Depends-On clears the design dep-gate.
  */
 export function isDesignCandidate(
   task: NotionTask,
@@ -271,6 +297,7 @@ export function isDesignCandidate(
   if (deps.hasActiveSession(task.id)) return false;
   if (deps.hasActiveDesignSession(task.id)) return false;
   if (deps.inCrashCooldown(task.id)) return false;
+  if (deps.isKillSuppressed(task.id)) return false;
   return passesDesignDepGate(task, deps.tasksById);
 }
 

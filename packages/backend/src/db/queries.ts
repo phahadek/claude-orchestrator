@@ -5580,6 +5580,57 @@ export function isGroomNoOpSuppressed(taskId: string): boolean {
 }
 
 /**
+ * A planning flow whose candidacy predicate needs to consult operator kills —
+ * see isPlanningKillSuppressed.
+ */
+export type KillSuppressiblePlanningFlow = 'groom' | 'design' | 'ops';
+
+/**
+ * True while a task's most recent planning session of `flow` was ended by an
+ * explicit operator kill (reason `user_kill`) and no orchestrator-authored
+ * edit (task_body_updated / task_deps_updated) has landed for the task since
+ * that kill — the deliberate-kill analog of isGroomNoOpSuppressed, generalized
+ * across groom/design/ops. A kill is deliberately excluded from the crash
+ * budget (SessionManager's UNCOUNTED_REASONS) so it never triggers a revert or
+ * needs_attention; without this gate that exclusion left the task fully
+ * candidate-eligible again, re-dispatching on the very next scan tick despite
+ * the operator's explicit stop. A session ending for any other reason
+ * (done/error/launch_failed/etc.) never suppresses candidacy. The
+ * session_errored audit event this reads is written unconditionally by
+ * markSessionErrored for every terminal session, including kills.
+ */
+export function isPlanningKillSuppressed(
+  taskId: string,
+  flow: KillSuppressiblePlanningFlow,
+): boolean {
+  const norm = normalizeBoardId(taskId);
+  const rows = db
+    .prepare<
+      { flow: string },
+      Session
+    >(`SELECT * FROM sessions WHERE session_type = @flow ORDER BY started_at DESC`)
+    .all({ flow }) as Session[];
+  const session = rows.find(
+    (row) => normalizeBoardId(row.task_id ?? '') === norm,
+  );
+  if (!session || session.status !== 'killed') return false;
+
+  const event = db
+    .prepare<{ actor_id: string }, { payload: string }>(
+      `SELECT payload FROM audit_log
+       WHERE event_type = 'session_errored' AND actor_id = @actor_id
+       ORDER BY ts DESC LIMIT 1`,
+    )
+    .get({ actor_id: session.session_id }) as { payload: string } | undefined;
+  if (!event) return false;
+
+  const payload = JSON.parse(event.payload) as { reason?: string };
+  if (payload.reason !== 'user_kill') return false;
+
+  return !hasTaskEditSinceTimestamp(taskId, session.ended_at ?? 0);
+}
+
+/**
  * True if this session has an unresolved `session.requestCapability` intent
  * (state `staged` or `approved`) awaiting an operator decision — the sanctioned
  * ask-permission path a dispatched verify/ops session uses instead of being

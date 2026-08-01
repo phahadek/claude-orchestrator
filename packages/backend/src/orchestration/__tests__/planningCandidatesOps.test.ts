@@ -147,6 +147,7 @@ describe('isOpsCandidate', () => {
     hasActiveOpsSession: () => false,
     inCrashCooldown: () => false,
     projectId: PROJECT,
+    isKillSuppressed: () => false,
   };
 
   it('rejects a task that is not 🗂️ Ready', async () => {
@@ -188,6 +189,17 @@ describe('isOpsCandidate', () => {
         ...baseDeps,
         tasksById: new Map(),
         inCrashCooldown: () => true,
+      }),
+    ).toBe(false);
+  });
+
+  it('skips a task whose most recent ops session was killed by the operator and not yet retired', async () => {
+    const t = task({ status: '🗂️ Ready' });
+    expect(
+      await isOpsCandidate(t, {
+        ...baseDeps,
+        tasksById: new Map(),
+        isKillSuppressed: () => true,
       }),
     ).toBe(false);
   });
