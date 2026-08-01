@@ -1,5 +1,7 @@
 import { listOpsJournalEntries } from '../db/queries';
 import type { OpsJournalState } from '../db/types';
+import { ProjectService } from '../projects/ProjectService';
+import { canonicalMilestoneKey } from '../projects/milestoneResolver';
 
 /** Terminal state: the ops task no longer blocks milestone completion. */
 const RESOLVED_STATE: OpsJournalState = 'resolved';
@@ -50,6 +52,22 @@ interface OpsMilestoneGroup {
   blockingCount: number;
 }
 
+/**
+ * ops_journal.milestone stores the milestone UUID; every sibling rollup
+ * (gate, seed) is keyed on the display name. Resolves the UUID back to its
+ * display name so listOpsMilestoneReadiness's output matches. Falls back to
+ * the raw stored value for a project/milestone that no longer resolves
+ * (deleted milestone, stale row) rather than dropping the row.
+ */
+function resolveOpsMilestoneDisplayName(
+  project: string,
+  milestoneId: string,
+): string {
+  const proj = ProjectService.getById(project);
+  const match = proj?.milestones.find((m) => m.id === milestoneId);
+  return match ? canonicalMilestoneKey(match) : milestoneId;
+}
+
 /** The multi-milestone / multi-project ops readiness rollup — mirrors gateService's listMilestoneReadiness. */
 export function listOpsMilestoneReadiness(
   options: ListOpsMilestoneReadinessOptions = {},
@@ -60,7 +78,11 @@ export function listOpsMilestoneReadiness(
 
   const groups = new Map<string, OpsMilestoneGroup>();
   for (const entry of entries) {
-    const key = JSON.stringify([entry.project, entry.milestone]);
+    const displayName = resolveOpsMilestoneDisplayName(
+      entry.project,
+      entry.milestone,
+    );
+    const key = JSON.stringify([entry.project, displayName]);
     const group = groups.get(key);
     const blocked = entry.state !== RESOLVED_STATE ? 1 : 0;
     if (group) {
@@ -68,7 +90,7 @@ export function listOpsMilestoneReadiness(
     } else {
       groups.set(key, {
         project: entry.project,
-        milestone: entry.milestone,
+        milestone: displayName,
         blockingCount: blocked,
       });
     }

@@ -156,6 +156,51 @@ describe('getMilestoneConvergence', () => {
     expect(result.distanceToGreen).toBe(0);
   });
 
+  it('allGreen is false when ops is the only non-green axis', () => {
+    opsReadinessMock.getOpsReadiness.mockReturnValue({
+      status: 'blocked',
+      blocking: [{ task_id: 'notion:1', state: 'candidate' }],
+      blockingCount: 1,
+    });
+    const result = getMilestoneConvergence('p1', 'M12');
+    expect(result.axes.tasks.status).toBe('green');
+    expect(result.axes.gate.status).toBe('green');
+    expect(result.axes.seed.status).toBe('green');
+    expect(result.axes.ops.status).toBe('blocked');
+    expect(result.status).toBe('blocked');
+  });
+
+  it('queries ops readiness by the milestone UUID, not the display name — ops_journal keys on the UUID while gate_item/seed_item key on the display name', () => {
+    opsReadinessMock.getOpsReadiness.mockImplementation(
+      (_project: string, milestone: string) => {
+        if (milestone === MILESTONE.id) {
+          return {
+            status: 'blocked',
+            blocking: [{ task_id: 'notion:9', state: 'candidate' }],
+            blockingCount: 1,
+          };
+        }
+        // Queried by display name (the bug) — ops_journal rows never match, so it reads as green.
+        return GREEN_OPS;
+      },
+    );
+
+    const result = getMilestoneConvergence('p1', 'M12');
+
+    expect(opsReadinessMock.getOpsReadiness).toHaveBeenCalledWith(
+      'p1',
+      MILESTONE.id,
+    );
+    expect(result.axes.ops.status).toBe('blocked');
+    expect(result.axes.ops.blockingCount).toBe(1);
+  });
+
+  it('still resolves gate and seed readiness by the milestone display name (regression)', () => {
+    getMilestoneConvergence('p1', 'M12');
+    expect(gateServiceMock.getGateReadiness).toHaveBeenCalledWith('p1', 'M12');
+    expect(seedServiceMock.getSeedReadiness).toHaveBeenCalledWith('p1', 'M12');
+  });
+
   it('distanceToGreen sums open tasks + gate blocking + seed blocking, excluding ops', () => {
     queriesMock.getTaskCache.mockReturnValue(
       boardRow([{ id: 'notion:1', title: 'A task', status: '🔲 Backlog' }]),

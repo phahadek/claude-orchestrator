@@ -173,3 +173,58 @@ describe('ConvergenceSnapshotJob per-milestone failure isolation', () => {
     expect(result.items_processed).toBe(1);
   });
 });
+
+describe('ConvergenceSnapshotJob ops axis key space', () => {
+  it('queries getOpsReadiness and listOpsJournalEntries by the milestone UUID, not the display name', async () => {
+    projectServiceMock.ProjectService.listMilestones.mockReturnValue([
+      milestone({ id: 'ms-uuid-77', name: 'M12', canonicalShortId: 'M12' }),
+    ]);
+    (getLatestConvergenceSnapshot as any).mockReturnValue(undefined);
+
+    const job = new ConvergenceSnapshotJob({
+      listProjects: () => [{ id: 'proj-1' } as any],
+    });
+
+    await job.runOnce();
+
+    expect(opsReadinessMock.getOpsReadiness).toHaveBeenCalledWith(
+      'proj-1',
+      'ms-uuid-77',
+    );
+    const filterCall = queriesMock.listOpsJournalEntries.mock.calls;
+    expect(filterCall.length).toBeGreaterThan(0);
+  });
+
+  it('produces a non-zero ops_open in the persisted snapshot when open ops_journal rows are keyed by the milestone UUID', async () => {
+    projectServiceMock.ProjectService.listMilestones.mockReturnValue([
+      milestone({ id: 'ms-uuid-77', name: 'M12', canonicalShortId: 'M12' }),
+    ]);
+    (getLatestConvergenceSnapshot as any).mockReturnValue(undefined);
+
+    queriesMock.listOpsJournalEntries.mockImplementation(() => [
+      { project: 'proj-1', milestone: 'ms-uuid-77', state: 'pending' },
+      { project: 'proj-1', milestone: 'ms-uuid-77', state: 'resolved' },
+      { project: 'proj-1', milestone: 'M12', state: 'pending' },
+    ]);
+    opsReadinessMock.getOpsReadiness.mockImplementation(
+      (_project: string, key: string) =>
+        key === 'ms-uuid-77'
+          ? {
+              status: 'blocked',
+              blocking: [{ task_id: 'notion:1', state: 'pending' }],
+              blockingCount: 1,
+            }
+          : { status: 'green', blocking: [], blockingCount: 0 },
+    );
+
+    const job = new ConvergenceSnapshotJob({
+      listProjects: () => [{ id: 'proj-1' } as any],
+    });
+
+    await job.runOnce();
+
+    expect(insertConvergenceSnapshot).toHaveBeenCalledTimes(1);
+    const snapshot = (insertConvergenceSnapshot as any).mock.calls[0][0];
+    expect(snapshot.ops_open).toBe(1);
+  });
+});
