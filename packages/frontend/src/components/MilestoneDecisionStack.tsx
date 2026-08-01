@@ -25,6 +25,8 @@ interface Props {
   flaggedOnly?: boolean;
   selection: MilestoneStackSelection | null;
   onSelect: (selection: MilestoneStackSelection) => void;
+  /** Selects the intent's card *and* switches the drill-down to session mode — wired to each card's "View session" button. */
+  onViewSession?: (selection: MilestoneStackSelection) => void;
   /** The centre column's scrollable ancestor (owned by MilestoneView) — scroll-follow attaches to it. Omit to skip scroll-follow (e.g. on mobile, where only one region is mounted at a time). */
   scrollContainerRef?: React.RefObject<HTMLElement | null>;
 }
@@ -45,6 +47,7 @@ export function MilestoneDecisionStack({
   flaggedOnly = false,
   selection,
   onSelect,
+  onViewSession,
   scrollContainerRef,
 }: Props) {
   const filteredTasks = tasks
@@ -74,6 +77,14 @@ export function MilestoneDecisionStack({
       onSelect(next);
     },
     [onSelect],
+  );
+
+  const handleViewSession = useCallback(
+    (next: MilestoneStackSelection) => {
+      handleSelect(next);
+      onViewSession?.(next);
+    },
+    [handleSelect, onViewSession],
   );
 
   const registerInboxTarget = useCallback(
@@ -143,6 +154,9 @@ export function MilestoneDecisionStack({
         flaggedOnly={flaggedOnly}
         selectedCardId={selectedIntentCardId}
         onSelectIntent={(intent) => handleSelect({ type: 'intent', intent })}
+        onViewSession={(intent) =>
+          handleViewSession({ type: 'intent', intent })
+        }
         registerScrollTarget={registerInboxTarget}
       />
 

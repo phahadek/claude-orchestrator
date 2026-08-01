@@ -15,6 +15,8 @@ import {
 import type { MilestoneStackSelection } from './MilestoneDecisionStack';
 import styles from './MilestoneDrilldown.module.css';
 
+export type DrilldownMode = 'task' | 'session';
+
 interface Props {
   selection: MilestoneStackSelection | null;
   /** Used to resolve an intent's task ref against the middle stack's loaded tasks — falls back to a direct spec fetch when absent. */
@@ -25,6 +27,9 @@ interface Props {
   setSessionArchived: (sessionId: string, archived: boolean) => void;
   setSessionFavorited: (sessionId: string, favorited: boolean) => void;
   project?: ProjectConfig | null;
+  /** Which of task/session occupies the panel — controlled by the parent so scroll-follow and card switches can reset it. */
+  mode: DrilldownMode;
+  onModeChange: (mode: DrilldownMode) => void;
 }
 
 /**
@@ -139,6 +144,8 @@ export function MilestoneDrilldown({
   setSessionArchived,
   setSessionFavorited,
   project = null,
+  mode,
+  onModeChange,
 }: Props) {
   const intentPayloadTaskId =
     selection?.type === 'intent' ? taskIdFromIntent(selection.intent) : null;
@@ -195,69 +202,98 @@ export function MilestoneDrilldown({
 
   return (
     <div className={styles.drilldown} data-testid="milestone-drilldown">
-      <div className={styles.taskReader} data-testid="milestone-task-reader">
-        <div className={styles.headingRow}>
-          <div className={styles.heading}>
-            {resolvedTask?.taskName ?? 'No task selected'}
-          </div>
-          {resolvedTask && (
-            <span className={styles.headingType}>{resolvedTask.taskType}</span>
-          )}
-        </div>
-        {!taskId && (
-          <p
-            className={styles.muted}
-            data-testid="milestone-drilldown-unresolved"
-          >
-            {selection.type === 'intent'
-              ? `This ${selection.intent.kind} decision doesn't reference an existing task yet.`
-              : 'No task selected.'}
-          </p>
-        )}
-        {taskId && taskLoading && <p className={styles.muted}>Loading task…</p>}
-        {taskId && taskError && (
-          <p className={styles.error}>Failed to load task: {taskError}</p>
-        )}
-        {taskId && !taskLoading && !taskError && taskMarkdown && (
-          <div className={styles.taskMarkdown}>
-            <Markdown remarkPlugins={[remarkGfm]}>{taskMarkdown}</Markdown>
-          </div>
-        )}
-        {taskId && !taskLoading && !taskError && !taskMarkdown && (
-          <p className={styles.muted}>No spec available for this task.</p>
-        )}
+      <div className={styles.modeTabs} role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'task'}
+          className={styles.modeTab}
+          onClick={() => onModeChange('task')}
+          data-testid="drilldown-mode-task"
+        >
+          Task
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'session'}
+          className={styles.modeTab}
+          onClick={() => onModeChange('session')}
+          data-testid="drilldown-mode-session"
+        >
+          Session
+        </button>
       </div>
 
-      <div
-        className={styles.sessionEmbed}
-        data-testid="milestone-session-embed"
-      >
-        {!sessionId && (
-          <p className={styles.muted}>
-            {resolvedTask
-              ? 'Not launched yet — no session to show.'
-              : 'No associated session.'}
-          </p>
-        )}
-        {sessionId && sessionLoading && (
-          <p className={styles.muted}>Loading session…</p>
-        )}
-        {sessionId && !sessionLoading && sessionNotFound && (
-          <p className={styles.muted}>
-            Transcript not available — session not loaded.
-          </p>
-        )}
-        {sessionId && !sessionLoading && resolvedSession && (
-          <SessionPanel
-            session={resolvedSession}
-            send={send}
-            setSessionArchived={setSessionArchived}
-            setSessionFavorited={setSessionFavorited}
-            project={project}
-            showDecisionPanel={false}
-          />
-        )}
-      </div>
+      {mode === 'task' ? (
+        <div className={styles.taskReader} data-testid="milestone-task-reader">
+          <div className={styles.headingRow}>
+            <div className={styles.heading}>
+              {resolvedTask?.taskName ?? 'No task selected'}
+            </div>
+            {resolvedTask && (
+              <span className={styles.headingType}>
+                {resolvedTask.taskType}
+              </span>
+            )}
+          </div>
+          {!taskId && (
+            <p
+              className={styles.muted}
+              data-testid="milestone-drilldown-unresolved"
+            >
+              {selection.type === 'intent'
+                ? `This ${selection.intent.kind} decision doesn't reference an existing task yet.`
+                : 'No task selected.'}
+            </p>
+          )}
+          {taskId && taskLoading && (
+            <p className={styles.muted}>Loading task…</p>
+          )}
+          {taskId && taskError && (
+            <p className={styles.error}>Failed to load task: {taskError}</p>
+          )}
+          {taskId && !taskLoading && !taskError && taskMarkdown && (
+            <div className={styles.taskMarkdown}>
+              <Markdown remarkPlugins={[remarkGfm]}>{taskMarkdown}</Markdown>
+            </div>
+          )}
+          {taskId && !taskLoading && !taskError && !taskMarkdown && (
+            <p className={styles.muted}>No spec available for this task.</p>
+          )}
+        </div>
+      ) : (
+        <div
+          className={styles.sessionEmbed}
+          data-testid="milestone-session-embed"
+        >
+          {!sessionId && (
+            <p className={styles.muted}>
+              {resolvedTask
+                ? 'Not launched yet — no session to show.'
+                : 'No associated session.'}
+            </p>
+          )}
+          {sessionId && sessionLoading && (
+            <p className={styles.muted}>Loading session…</p>
+          )}
+          {sessionId && !sessionLoading && sessionNotFound && (
+            <p className={styles.muted}>
+              Transcript not available — session not loaded.
+            </p>
+          )}
+          {sessionId && !sessionLoading && resolvedSession && (
+            <SessionPanel
+              session={resolvedSession}
+              send={send}
+              setSessionArchived={setSessionArchived}
+              setSessionFavorited={setSessionFavorited}
+              project={project}
+              showDecisionPanel={false}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }

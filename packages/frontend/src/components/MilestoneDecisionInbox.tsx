@@ -28,6 +28,8 @@ interface Props {
   selectedCardId?: string | null;
   /** Drives the middle-stack selection -> right drill-down wiring. Omit to render read-only (no selection affordance). */
   onSelectIntent?: (intent: StagedIntent) => void;
+  /** Selects the intent's owning card *and* switches the drill-down to session mode — the "View session" button's handler. Distinct from onSelectIntent, which only selects. */
+  onViewSession?: (intent: StagedIntent) => void;
   /** The shared phase filter emitted by the burndown (left column) — matched against each card's target task's derived phase. A card with no resolvable task ref stays visible under every phase. */
   phaseFilter?: string | null;
   /** True when phaseFilter was activated via a phase's ⚠ warning badge — narrows to cards whose target task is blocked, same as the task rows. */
@@ -118,6 +120,7 @@ export function MilestoneDecisionInbox({
   tasks = [],
   selectedCardId = null,
   onSelectIntent,
+  onViewSession,
   phaseFilter = null,
   flaggedOnly = false,
   registerScrollTarget,
@@ -270,7 +273,7 @@ export function MilestoneDecisionInbox({
                     className={styles.sessionJumpButton}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onSelectIntent?.(intent);
+                      onViewSession?.(intent);
                     }}
                     data-testid={`session-jump-${intent.id}`}
                   >
@@ -388,7 +391,7 @@ export function MilestoneDecisionInbox({
                       className={styles.sessionJumpButton}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onSelectIntent?.(groupIntents[0]);
+                        onViewSession?.(groupIntents[0]);
                       }}
                       data-testid={`session-jump-${groupId}`}
                     >
