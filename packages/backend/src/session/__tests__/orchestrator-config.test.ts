@@ -13,6 +13,7 @@ import {
   sessionEventsReadCapability,
   parseSessionEventsReadCapability,
   isSanctionedAutoApproveCapability,
+  bashCapabilityConfersFileMutation,
 } from '../orchestrator-config';
 import { NOTION_READ_MCP_TOOLS } from '../../config';
 import {
@@ -492,6 +493,40 @@ describe('isGrantable', () => {
 
   it('returns true for the own-record read capability — the never-grantable set stays unchanged', () => {
     expect(isGrantable(sessionRecordReadCapability('session-abc'))).toBe(true);
+  });
+});
+
+describe('bashCapabilityConfersFileMutation', () => {
+  it.each([
+    'Bash(sed:*)',
+    'Bash(perl -i:*)',
+    'Bash(tee:*)',
+    'Bash(dd:*)',
+    'Bash(rm:*)',
+    'Bash(cp:*)',
+    'Bash(mv:*)',
+  ])('returns true for the file-mutating command %s', (capability) => {
+    expect(bashCapabilityConfersFileMutation(capability)).toBe(true);
+  });
+
+  it('returns true when the capability string embeds a shell redirect', () => {
+    expect(bashCapabilityConfersFileMutation('Bash(echo hi > file.txt)')).toBe(
+      true,
+    );
+  });
+
+  it.each(['Bash(psql:*)', 'Bash(git:*)', 'Bash(cat:*)', 'Bash(ls:*)'])(
+    'returns false for the non-mutating command %s',
+    (capability) => {
+      expect(bashCapabilityConfersFileMutation(capability)).toBe(false);
+    },
+  );
+
+  it('returns false for a non-Bash capability', () => {
+    expect(
+      bashCapabilityConfersFileMutation('mcp__github__merge_pull_request'),
+    ).toBe(false);
+    expect(bashCapabilityConfersFileMutation('Edit')).toBe(false);
   });
 });
 

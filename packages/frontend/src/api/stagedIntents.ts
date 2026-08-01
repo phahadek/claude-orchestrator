@@ -109,6 +109,13 @@ export interface StagedIntent {
    * and the provenance badge's human-readable label.
    */
   groupKind?: 'groom' | 'investigation' | 'other';
+  /**
+   * `session.requestCapability` only: true when the requested `Bash(...)`
+   * capability confers file mutation — a "run this command" grant that is
+   * also a "write to any reachable file" grant. Advisory only; undefined for
+   * every other kind and for a non-file-mutating capability.
+   */
+  confersFileMutation?: boolean;
 }
 
 /** The two explicit operator-chosen outcomes for a reject disposition. */
