@@ -641,4 +641,142 @@ describe('StagedIntentPanel', () => {
       expect(screen.getByText('No body supplied.')).toBeTruthy();
     });
   });
+
+  describe('gate.verify', () => {
+    it('renders disposition, basis, summary as discrete elements and each trace entry on its own line, not escaped JSON', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: {
+              gateItemId: 'ecc8eab1-4e55-4eac-be6b-97237a6aacbb',
+              disposition: 'pass',
+              evidence: JSON.stringify({
+                basis: 'operational',
+                summary: 'Task 3a822f91 is no longer stranded.',
+                trace: [
+                  'audit_log id 164147 ts=1785536074470: human sets task status',
+                  'audit_log id 164150 ts=1785536090000: gate item resolved',
+                ],
+              }),
+            },
+          })}
+        />,
+      );
+
+      const card = screen.getByTestId('staged-intent-gate-verify');
+      expect(card.textContent).toContain(
+        'ecc8eab1-4e55-4eac-be6b-97237a6aacbb',
+      );
+      expect(card.textContent).toContain('pass');
+      expect(screen.getByText(/Basis: operational/)).toBeTruthy();
+      expect(
+        screen.getByText('Task 3a822f91 is no longer stranded.'),
+      ).toBeTruthy();
+      expect(card.textContent).not.toMatch(/\\"/);
+
+      expect(
+        screen.getByText(
+          'audit_log id 164147 ts=1785536074470: human sets task status',
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(
+          'audit_log id 164150 ts=1785536090000: gate item resolved',
+        ),
+      ).toBeTruthy();
+    });
+
+    it('shows unrecognised extra evidence fields rather than dropping them', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: {
+              gateItemId: 'gate-1',
+              disposition: 'needs-setup',
+              evidence: JSON.stringify({
+                basis: 'source',
+                summary: 'Needs config',
+                note: 'Blocked on secret rotation.',
+                queriesRun: ['SELECT 1'],
+              }),
+            },
+          })}
+        />,
+      );
+
+      expect(
+        screen.getByText(/Note: Blocked on secret rotation\./),
+      ).toBeTruthy();
+      fireEvent.click(screen.getByText('Other evidence'));
+      expect(screen.getByText(/queriesRun/)).toBeTruthy();
+      expect(screen.getByText(/SELECT 1/)).toBeTruthy();
+    });
+
+    it('falls back to the raw display without throwing when evidence is not valid JSON', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: {
+              gateItemId: 'gate-2',
+              disposition: 'fail',
+              evidence: '{not valid json',
+            },
+          })}
+        />,
+      );
+
+      expect(screen.getByTestId('staged-intent-gate-verify')).toBeTruthy();
+      expect(screen.getByText('{not valid json')).toBeTruthy();
+    });
+
+    it('renders without error when evidence is a plain string', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: {
+              gateItemId: 'gate-3',
+              disposition: 'pass',
+              evidence: 'looks fine to me',
+            },
+          })}
+        />,
+      );
+
+      expect(screen.getByText('looks fine to me')).toBeTruthy();
+    });
+
+    it('renders without error when evidence lacks a trace field', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: {
+              gateItemId: 'gate-4',
+              disposition: 'pass',
+              evidence: { basis: 'operational', summary: 'All good.' },
+            },
+          })}
+        />,
+      );
+
+      expect(screen.getByText('All good.')).toBeTruthy();
+    });
+
+    it('renders without error when evidence is entirely absent', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: { gateItemId: 'gate-5', disposition: 'pass' },
+          })}
+        />,
+      );
+
+      expect(screen.getByTestId('staged-intent-gate-verify')).toBeTruthy();
+    });
+  });
 });

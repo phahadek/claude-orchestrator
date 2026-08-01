@@ -824,6 +824,112 @@ function GateAccreteHeadline({ intent }: { intent: StagedIntent }) {
   );
 }
 
+interface GateVerifyPayload {
+  gateItemId: string;
+  disposition: 'pass' | 'fail' | 'needs-setup';
+  evidence?: unknown;
+  reclassify?: { to: string; reason: string };
+}
+
+interface GateVerifyEvidence {
+  basis?: unknown;
+  summary?: unknown;
+  trace?: unknown;
+  note?: unknown;
+  [key: string]: unknown;
+}
+
+const GATE_VERIFY_EVIDENCE_KNOWN_KEYS = new Set([
+  'basis',
+  'summary',
+  'trace',
+  'note',
+]);
+
+/**
+ * Evidence on a gate.verify intent is model-authored and its shape isn't
+ * guaranteed (see gateItemVerifier.ts's evidence.basis prompting and
+ * AgentSession.recordGateVerifyDisposition) — it may arrive as a JSON
+ * string, a plain object, a bare string, or malformed text. Returns null on
+ * anything that can't be read as a structured record, so the caller falls
+ * back to the raw display rather than throwing.
+ */
+function parseGateVerifyEvidence(evidence: unknown): GateVerifyEvidence | null {
+  if (evidence == null) return null;
+  if (typeof evidence === 'object' && !Array.isArray(evidence)) {
+    return evidence as GateVerifyEvidence;
+  }
+  if (typeof evidence === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(evidence);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as GateVerifyEvidence;
+      }
+      return { summary: parsed };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** The gate-verify report kind — a gate-verify session's pass/fail/needs-setup finding, staged for operator disposition. */
+function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
+  const payload = intent.payload as GateVerifyPayload;
+  const evidence = parseGateVerifyEvidence(payload.evidence);
+  const trace =
+    evidence && Array.isArray(evidence.trace) ? evidence.trace : null;
+  const extraEntries = evidence
+    ? Object.entries(evidence).filter(
+        ([key]) => !GATE_VERIFY_EVIDENCE_KNOWN_KEYS.has(key),
+      )
+    : [];
+
+  return (
+    <div className={styles.text} data-testid="staged-intent-gate-verify">
+      <p>
+        Gate item <strong>{payload.gateItemId}</strong>:{' '}
+        <strong>{payload.disposition}</strong>
+      </p>
+      {evidence == null && payload.evidence != null ? (
+        renderFallback(payload.evidence)
+      ) : (
+        <>
+          {typeof evidence?.basis === 'string' && (
+            <p>Basis: {evidence.basis}</p>
+          )}
+          {typeof evidence?.summary === 'string' && <p>{evidence.summary}</p>}
+          {trace && trace.length > 0 && (
+            <>
+              <p>Trace ({trace.length}):</p>
+              <ul className={styles.traceList}>
+                {trace.map((line, idx) => (
+                  <li key={idx}>{String(line)}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          {typeof evidence?.note === 'string' && <p>Note: {evidence.note}</p>}
+          {extraEntries.length > 0 && (
+            <details className={styles.expandDetail}>
+              <summary className={styles.expandSummary}>Other evidence</summary>
+              <pre className={styles.payload}>
+                {JSON.stringify(Object.fromEntries(extraEntries), null, 2)}
+              </pre>
+            </details>
+          )}
+        </>
+      )}
+      {payload.reclassify && (
+        <p>
+          Reclassify to <strong>{payload.reclassify.to}</strong>:{' '}
+          {payload.reclassify.reason}
+        </p>
+      )}
+    </div>
+  );
+}
+
 interface SeedContributionItemPayload {
   spec: string;
 }
@@ -989,6 +1095,8 @@ function renderHeadline(intent: StagedIntent): ReactNode {
       return <NoOpHeadline intent={intent} />;
     case 'gate.accrete':
       return <GateAccreteHeadline intent={intent} />;
+    case 'gate.verify':
+      return <GateVerifyHeadline intent={intent} />;
     case 'seed.stage':
       return <SeedStageHeadline intent={intent} />;
     case 'arch.createUnit':
