@@ -3093,7 +3093,10 @@ function formatStageTimeBlockFeedback(
 ): string {
   return (
     `Staged intent ${intent.id} (${intent.kind}) failed stage-time validation ` +
-    `and was sent back for revision:\n- ${detail}`
+    `and was sent back for revision:\n- ${detail}\n` +
+    `To fix this, stage the corrected intent with supersedes set to "${intent.id}" ` +
+    `(the id of this blocked intent) so it retires the blocked one instead of leaving it ` +
+    "in place — staging an unlinked correction does not retire it and will wedge this intent's group."
   );
 }
 
