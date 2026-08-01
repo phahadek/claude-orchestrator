@@ -30,7 +30,10 @@ function makeCandidateTask(id: string): NotionTask {
   };
 }
 
-function makeOpsTaskEntry(id: string, overrides: Partial<OpsTaskEntry> = {}): OpsTaskEntry {
+function makeOpsTaskEntry(
+  id: string,
+  overrides: Partial<OpsTaskEntry> = {},
+): OpsTaskEntry {
   return {
     id,
     title: 'Ops task',
@@ -192,10 +195,14 @@ describe('DispatchTriggerEvaluator.dispatchOpsCandidate — id-space normalizati
     expect(launched).toBe(false);
     expect(launchSelected).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('failed to load context for task notion:some-task: boom'),
+      expect.stringContaining(
+        'failed to load context for task notion:some-task: boom',
+      ),
     );
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('ops dispatch failed for task notion:some-task (attempt 1): boom'),
+      expect.stringContaining(
+        'ops dispatch failed for task notion:some-task (attempt 1): boom',
+      ),
     );
   });
 });
