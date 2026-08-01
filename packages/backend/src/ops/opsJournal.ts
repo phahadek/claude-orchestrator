@@ -36,10 +36,14 @@ export interface OpsBoardTaskRow {
 
 /**
  * The normal path walks pending → candidate → staged-proposal →
- * applied-pending-confirm → resolved. candidate → resolved is also allowed
- * directly, for Investigation work that reaches a decision without ever
- * applying a change. blocked / incident-frozen are freezes reachable from
- * (and returning to) any non-terminal state. resolved is terminal.
+ * applied-pending-confirm → resolved. candidate → resolved and
+ * staged-proposal → resolved are also allowed directly, for Investigation
+ * work that reaches a "no change needed" decision — there is no applied
+ * change to reconcile through applied-pending-confirm, so the proposal (the
+ * recommendation itself) closes straight to resolved once the operator
+ * approves the staged closing set. blocked / incident-frozen are freezes
+ * reachable from (and returning to) any non-terminal state. resolved is
+ * terminal.
  */
 export const ALLOWED_TRANSITIONS: Record<OpsState, OpsState[]> = {
   pending: ['candidate', 'blocked', 'incident-frozen'],
@@ -55,6 +59,7 @@ export const ALLOWED_TRANSITIONS: Record<OpsState, OpsState[]> = {
     'candidate',
     'blocked',
     'incident-frozen',
+    'resolved',
   ],
   'applied-pending-confirm': [
     'resolved',
