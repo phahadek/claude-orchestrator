@@ -1,7 +1,10 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getGrantedCapabilities } from '../../db/queries';
-import { AUDIT_LOG_ROW_CAP, queryAuditLogByProject } from '../../audit/AuditLog';
+import {
+  AUDIT_LOG_ROW_CAP,
+  queryAuditLogByProject,
+} from '../../audit/AuditLog';
 import { auditLogReadCapability } from '../../session/orchestrator-config';
 
 /** Per-connection context the audit-log-read tool is scoped to. */
