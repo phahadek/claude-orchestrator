@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import {
   ALLOWED_TOOLS,
   GROOM_ALLOWED_TOOLS,
@@ -165,7 +166,8 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
     }
   });
 
-  it('ops/gate allow-list contains the underscore forms of gate_verify, task_create, journal_setState, session_requestCapability', () => {
+  it('ops/gate allow-list contains the underscore forms of gate_verify, task_create, journal_setState, session_requestCapability — gate_verify granted via PLANNING_INTENT_KINDS.ops, a genuine staged-intent kind, not a hand-added entry', () => {
+    expect(PLANNING_INTENT_KINDS.ops).toContain('gate.verify');
     expect(OPS_ALLOWED_TOOLS).toContain('mcp__orchestrator__gate_verify');
     expect(OPS_ALLOWED_TOOLS).toContain('mcp__orchestrator__task_create');
     expect(OPS_ALLOWED_TOOLS).toContain('mcp__orchestrator__journal_setState');

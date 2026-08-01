@@ -18,11 +18,15 @@ const OPS_JOURNAL_INTENT_KIND = 'journal.setState';
 
 /**
  * Kinds that constitute "staged a decision" — every real task-write /
- * arch-write / gate / seed intent kind a groom or design session can stage.
- * Deliberately excludes decision.pickOne, session.requestCapability, and
- * completeness.disposition: those are questions/asks the session raises for
- * the operator, not decisions it has committed to, so staging one alone must
- * not mask a session that otherwise never decided anything.
+ * arch-write / gate / seed intent kind a groom, design, or ops (including
+ * gate-verify) session can stage. Deliberately excludes decision.pickOne,
+ * session.requestCapability, and completeness.disposition: those are
+ * questions/asks the session raises for the operator, not decisions it has
+ * committed to, so staging one alone must not mask a session that otherwise
+ * never decided anything. gate.verify is included here — without it, a
+ * gate-verify session that cleanly stages its report would trip
+ * PlanningOrchestrator.checkTerminal's terminal-no-decision nudge/pause
+ * backstop the next time it parks with nothing new to stage.
  * OPS_JOURNAL_INTENT_KIND and NO_OP_INTENT_KIND count as decisions too (see
  * hasStagedDecision) but are tracked separately since they aren't task-writes.
  */
@@ -41,6 +45,7 @@ const DECISION_INTENT_KINDS: ReadonlySet<string> = new Set([
   'arch.createUnit',
   'arch.updateUnit',
   'arch.supersedeUnit',
+  'gate.verify',
 ]);
 
 /**
