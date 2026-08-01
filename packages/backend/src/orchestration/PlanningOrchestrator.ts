@@ -678,7 +678,10 @@ export class PlanningOrchestrator {
       const list = bySession.get(sessionId) ?? [];
       list.push(intent);
       bySession.set(sessionId, list);
-      terminalBySession.set(sessionId, TERMINAL_SESSION_STATUSES.has(row.status));
+      terminalBySession.set(
+        sessionId,
+        TERMINAL_SESSION_STATUSES.has(row.status),
+      );
     }
 
     for (const [sessionId, sessionIntents] of bySession) {

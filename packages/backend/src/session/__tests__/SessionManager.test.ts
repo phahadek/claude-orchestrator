@@ -564,10 +564,11 @@ describe('enqueueFeedback — terminal session behavior', () => {
       attemptTerminalResume: false,
     });
 
-    expect(sendOrResumeSpy).toHaveBeenCalledWith(SESSION_ID, expect.any(String));
-    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([
-      'item-1',
-    ]);
+    expect(sendOrResumeSpy).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.any(String),
+    );
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
   });
 });
 
