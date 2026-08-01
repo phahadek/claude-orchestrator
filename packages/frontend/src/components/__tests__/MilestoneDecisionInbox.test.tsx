@@ -51,6 +51,7 @@ describe('MilestoneDecisionInbox', () => {
         projectId: 'proj-1',
         createdAt: 100,
         sessionId: 'session-groom',
+        groupKind: 'groom',
         milestone: 'M1',
         state: 'staged',
         decisionProposal: 'Promote task 1',
@@ -62,6 +63,7 @@ describe('MilestoneDecisionInbox', () => {
         projectId: 'proj-1',
         createdAt: 1,
         sessionId: 'session-ops',
+        groupKind: 'investigation',
         milestone: 'M1',
         state: 'staged',
       },
@@ -83,11 +85,11 @@ describe('MilestoneDecisionInbox', () => {
     ]);
 
     expect(screen.getByTestId('provenance-badge-top-ranked').textContent).toBe(
-      'session-groom',
+      'Groom',
     );
     expect(
       screen.getByTestId('provenance-badge-lower-ranked').textContent,
-    ).toBe('session-ops');
+    ).toBe('Investigation');
   });
 
   it('excludes a card from both the list and the count while its owning session is incomplete', async () => {
@@ -607,7 +609,7 @@ describe('MilestoneDecisionInbox', () => {
     expect(card.textContent).toContain('Group group-a');
   });
 
-  it("labels an ungrouped intent card with its target task's name and Type beside the session uuid", async () => {
+  it("labels an ungrouped intent card with its target task's name and Type beside its case label", async () => {
     const intents: StagedIntent[] = [
       {
         id: 'ungrouped-1',
@@ -616,6 +618,7 @@ describe('MilestoneDecisionInbox', () => {
         projectId: 'proj-1',
         createdAt: 0,
         sessionId: '0067bf6b-9ff8-4782-bd94-d1d9579b68d1',
+        groupKind: 'other',
         milestone: 'M1',
         state: 'staged',
       },
@@ -641,7 +644,7 @@ describe('MilestoneDecisionInbox', () => {
     expect(card.textContent).toContain('Groom the wire-analyst MCP guide');
     expect(card.textContent).toContain('📐');
     expect(screen.getByTestId('provenance-badge-ungrouped-1').textContent).toBe(
-      '0067bf6b-9ff8-4782-bd94-d1d9579b68d1',
+      'Other',
     );
   });
 

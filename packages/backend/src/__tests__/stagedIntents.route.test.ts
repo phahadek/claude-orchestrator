@@ -41,7 +41,7 @@ vi.mock('../db/queries', async (importOriginal) => {
 });
 
 import { db } from '../db/db';
-import { insertStagedIntent, insertSession } from '../db/queries';
+import { insertStagedIntent, insertSession, getTaskCache } from '../db/queries';
 import type { StagedIntentRow } from '../db/types';
 import {
   createStagedIntentsRouter,
@@ -1247,5 +1247,152 @@ describe('milestone-inbox turn-boundary reveal', () => {
     expect(
       broadcasts.filter((m) => m.type === 'staged_intent_changed'),
     ).toHaveLength(0);
+  });
+});
+
+describe('rowToApi groupKind', () => {
+  beforeEach(() => {
+    db.prepare('DELETE FROM staged_intent').run();
+    vi.mocked(getTaskCache).mockReturnValue(undefined);
+    setStagedIntentBroadcast(() => {});
+  });
+
+  function stageForSession(sessionId: string): StagedIntentRow {
+    const now = Date.now();
+    const row: StagedIntentRow = {
+      id: `intent-groupkind-${sessionId}`,
+      kind: 'task.updateBody',
+      payload: JSON.stringify({ taskId: 'task-1' }),
+      payload_hash: `hash-groupkind-${sessionId}`,
+      task_id: 'task-1',
+      project_id: 'proj-groupkind',
+      session_id: sessionId,
+      group_id: null,
+      milestone: null,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: now,
+      updated_at: now,
+    };
+    insertStagedIntent(row);
+    return row;
+  }
+
+  async function groupKindFor(sessionId: string): Promise<string> {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createStagedIntentsRouter());
+    const staged = stageForSession(sessionId);
+    const res = await supertest(app)
+      .get('/api/staged-intents')
+      .query({ sessionId });
+    const found = res.body.intents.find(
+      (i: { id: string }) => i.id === staged.id,
+    );
+    return found.groupKind;
+  }
+
+  it('a groom session yields groupKind "groom"', async () => {
+    insertSession({
+      session_id: 'session-groupkind-groom',
+      task_id: 'task-1',
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'groom',
+    });
+    expect(await groupKindFor('session-groupkind-groom')).toBe('groom');
+  });
+
+  it('an ops session whose task Type is Investigation yields groupKind "investigation"', async () => {
+    insertSession({
+      session_id: 'session-groupkind-ops-inv',
+      task_id: 'task-1',
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+    });
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: 'task-1',
+      raw_json: JSON.stringify({ type: '🔎 Investigation' }),
+      cached_at: 0,
+    } as ReturnType<typeof getTaskCache>);
+    expect(await groupKindFor('session-groupkind-ops-inv')).toBe(
+      'investigation',
+    );
+  });
+
+  it('an ops session whose task Type is not Investigation yields groupKind "other"', async () => {
+    insertSession({
+      session_id: 'session-groupkind-ops-other',
+      task_id: 'task-1',
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'ops',
+    });
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: 'task-1',
+      raw_json: JSON.stringify({ type: '🔧 Operational' }),
+      cached_at: 0,
+    } as ReturnType<typeof getTaskCache>);
+    expect(await groupKindFor('session-groupkind-ops-other')).toBe('other');
+  });
+
+  it('a design session yields groupKind "other"', async () => {
+    insertSession({
+      session_id: 'session-groupkind-design',
+      task_id: 'task-1',
+      task_url: null,
+      project_context_url: null,
+      status: 'idle',
+      started_at: 0,
+      session_type: 'design',
+    });
+    expect(await groupKindFor('session-groupkind-design')).toBe('other');
+  });
+
+  it('a human-staged intent (no session) yields groupKind "other"', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use('/api', createStagedIntentsRouter());
+    const now = Date.now();
+    const row: StagedIntentRow = {
+      id: 'intent-groupkind-human',
+      kind: 'task.updateBody',
+      payload: JSON.stringify({ taskId: 'task-1' }),
+      payload_hash: 'hash-groupkind-human',
+      task_id: 'task-1',
+      project_id: 'proj-groupkind',
+      session_id: null,
+      group_id: null,
+      milestone: null,
+      state: 'staged',
+      supersedes: null,
+      annotation: null,
+      decision_proposal: null,
+      groom_proposal: null,
+      advisory: null,
+      disposition_reason: null,
+      answer: null,
+      created_at: now,
+      updated_at: now,
+    };
+    insertStagedIntent(row);
+    const res = await supertest(app)
+      .get('/api/staged-intents')
+      .query({ projectId: 'proj-groupkind' });
+    const found = res.body.intents.find((i: { id: string }) => i.id === row.id);
+    expect(found.groupKind).toBe('other');
   });
 });

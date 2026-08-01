@@ -64,6 +64,13 @@ function summaryLineFor(intent: StagedIntent): string {
   return identifier ? `${intent.kind} — ${identifier}` : intent.kind;
 }
 
+/** The action-bar copy suffix for a group's case — "" for `other`, so the button reads as the bare verb. */
+function actionSuffixFor(groupKind: StagedIntent['groupKind']): string {
+  if (groupKind === 'groom') return ' groom';
+  if (groupKind === 'investigation') return ' investigation';
+  return '';
+}
+
 /**
  * The card's shared head proposal: the first member's groomProposal, or —
  * when no member carries one — the first member's decisionProposal. Mirrors
@@ -124,6 +131,7 @@ export function GroupCard({
     setExpandedIds((prev) => ({ ...prev, [id]: !prev[id] }));
 
   const head = headProposalOf(members);
+  const actionSuffix = actionSuffixFor(members[0]?.intent.groupKind);
   const blockedCount = members.filter(
     ({ intent }) =>
       intent.state === 'needs_revision' ||
@@ -289,7 +297,7 @@ export function GroupCard({
           disabled={inFlight || disabled}
           onClick={onApproveGroup}
         >
-          {inFlight ? 'Approving…' : '✓ Approve groom'}
+          {inFlight ? 'Approving…' : `✓ Approve${actionSuffix}`}
         </button>
         <div
           className={panelStyles.outcomeToggle}
@@ -346,10 +354,10 @@ export function GroupCard({
           {inFlight
             ? 'Submitting…'
             : draft.outcome === 'pushback'
-              ? '↩ Pushback groom'
+              ? `↩ Pushback${actionSuffix}`
               : draft.outcome === 'decline'
-                ? '✕ Decline groom'
-                : 'Reject groom'}
+                ? `✕ Decline${actionSuffix}`
+                : `Reject${actionSuffix}`}
         </button>
       </div>
     </div>

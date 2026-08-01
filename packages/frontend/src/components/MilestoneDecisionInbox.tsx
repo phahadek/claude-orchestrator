@@ -58,9 +58,17 @@ type Card =
   | { type: 'group'; groupId: string }
   | { type: 'intent'; intent: StagedIntent };
 
-/** A card's provenance — the originating session/flow, shown as a badge/optional filter, never the ranking axis. */
+/** A card's provenance — a human-readable case label, shown as a badge/optional filter, never the ranking axis. */
 function provenanceOf(intents: StagedIntent[]): string {
-  return intents[0]?.sessionId ?? 'human';
+  if (!intents[0]?.sessionId) return 'human';
+  switch (intents[0].groupKind) {
+    case 'groom':
+      return 'Groom';
+    case 'investigation':
+      return 'Investigation';
+    default:
+      return 'Other';
+  }
 }
 
 /**
