@@ -229,9 +229,7 @@ describe('resolveMilestoneForSessionTask', () => {
 
   it("returns a gate-verify session's gate item milestone for a gate-item:<uuid> task id", () => {
     vi.spyOn(queries, 'getGateItem').mockReturnValue(gateItem);
-    expect(
-      resolveMilestoneForSessionTask('p1', 'gate-item:gi-1'),
-    ).toBe('M13');
+    expect(resolveMilestoneForSessionTask('p1', 'gate-item:gi-1')).toBe('M13');
   });
 
   it('falls back to resolveMilestoneForTaskId, unchanged, for a non-gate-verify task id', () => {
@@ -244,9 +242,7 @@ describe('resolveMilestoneForSessionTask', () => {
       ...gateItem,
       milestone: null as unknown as string,
     });
-    expect(
-      resolveMilestoneForSessionTask('p1', 'gate-item:gi-1'),
-    ).toBeNull();
+    expect(resolveMilestoneForSessionTask('p1', 'gate-item:gi-1')).toBeNull();
   });
 
   it('returns null when the referenced gate item does not exist', () => {
