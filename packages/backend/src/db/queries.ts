@@ -1293,6 +1293,122 @@ export function getEventsBySession(sessionId: string): SessionEvent[] {
   }) as SessionEvent[];
 }
 
+// ─── session_events (project-scoped aggregate read) ────────────────────────
+
+/**
+ * Filters accepted by the project-scoped session_events read
+ * (`sessionEvents.query` MCP tool, see mcp/tools/sessionEventsReadTools.ts).
+ * Mirrors AuditLogQueryFilters' `since`/`until` shape, but there is no
+ * `eventType` filter — session_events only has four values (system, text,
+ * user_message, rate_limit), which makes it a near-useless discriminator —
+ * and `pattern` replaces it as the filter that actually matters: a
+ * substring match against the (large, assistant-turn-JSON) `payload` column.
+ */
+export interface SessionEventsProjectQueryFilters {
+  /** Substring match against `payload` (SQL LIKE, case-sensitive per SQLite's default). */
+  pattern?: string;
+  /** Inclusive lower bound on `timestamp` (epoch ms — session_events stores this as an integer, never ISO text). */
+  since?: number;
+  /** Inclusive upper bound on `timestamp` (epoch ms). */
+  until?: number;
+}
+
+/** One session's aggregate slice of a project-scoped session_events query — the default, payload-free return shape. */
+export interface SessionEventsAggregateRow {
+  session_id: string;
+  count: number;
+  first_timestamp: number;
+  last_timestamp: number;
+}
+
+/** Hard cap on rows returned when a caller opts into payload bodies — see querySessionEventsByProjectRows. */
+export const SESSION_EVENTS_ROW_CAP = 200;
+
+function buildSessionEventsFilterClauses(
+  filters: SessionEventsProjectQueryFilters,
+): { clauses: string[]; params: (string | number)[] } {
+  const clauses: string[] = [];
+  const params: (string | number)[] = [];
+  if (filters.pattern !== undefined) {
+    clauses.push('session_events.payload LIKE ?');
+    params.push(`%${filters.pattern}%`);
+  }
+  if (filters.since !== undefined) {
+    clauses.push('session_events.timestamp >= ?');
+    params.push(filters.since);
+  }
+  if (filters.until !== undefined) {
+    clauses.push('session_events.timestamp <= ?');
+    params.push(filters.until);
+  }
+  return { clauses, params };
+}
+
+/**
+ * Aggregate-first project-scoped read over session_events — grouped by
+ * session_id, with counts and a first/last timestamp per session rather
+ * than payload bodies (see SESSION_EVENTS_ROW_CAP's sibling,
+ * querySessionEventsByProjectRows, for the explicit-opt-in raw read). This
+ * is the default shape `sessionEvents.query` returns: it answers "did X
+ * happen, across any session in this project" without ever risking the
+ * tool-result size limit a naive `SELECT *` over every session's raw
+ * assistant-turn JSON would blow.
+ */
+export function querySessionEventsByProjectAggregate(
+  projectId: string,
+  filters: SessionEventsProjectQueryFilters = {},
+): SessionEventsAggregateRow[] {
+  const { clauses, params } = buildSessionEventsFilterClauses(filters);
+  const whereExtra = clauses.map((c) => `AND ${c}`).join(' ');
+  return db
+    .prepare<
+      (string | number)[],
+      SessionEventsAggregateRow
+    >(`
+      SELECT session_events.session_id AS session_id,
+             COUNT(*) AS count,
+             MIN(session_events.timestamp) AS first_timestamp,
+             MAX(session_events.timestamp) AS last_timestamp
+      FROM session_events
+      JOIN sessions ON sessions.session_id = session_events.session_id
+      WHERE sessions.project_id = ? ${whereExtra}
+      GROUP BY session_events.session_id
+      ORDER BY last_timestamp DESC
+    `)
+    .all(projectId, ...params);
+}
+
+/**
+ * Explicit-opt-in raw read over session_events, project-scoped and capped
+ * at `limit` (never more than SESSION_EVENTS_ROW_CAP) rows — the only path
+ * back to actual payload bodies, since those are large assistant-turn JSON
+ * blobs and an unbounded project-wide read of them is exactly what blew the
+ * tool-result size limit on the audit_log equivalent (see the task context:
+ * a single unscoped auditLog.query returned 1.4M characters).
+ */
+export function querySessionEventsByProjectRows(
+  projectId: string,
+  filters: SessionEventsProjectQueryFilters = {},
+  limit: number = SESSION_EVENTS_ROW_CAP,
+): SessionEvent[] {
+  const cappedLimit = Math.min(limit, SESSION_EVENTS_ROW_CAP);
+  const { clauses, params } = buildSessionEventsFilterClauses(filters);
+  const whereExtra = clauses.map((c) => `AND ${c}`).join(' ');
+  return db
+    .prepare<
+      (string | number)[],
+      SessionEvent
+    >(`
+      SELECT session_events.*
+      FROM session_events
+      JOIN sessions ON sessions.session_id = session_events.session_id
+      WHERE sessions.project_id = ? ${whereExtra}
+      ORDER BY session_events.timestamp DESC
+      LIMIT ?
+    `)
+    .all(projectId, ...params, cappedLimit);
+}
+
 const stmtClearPermissionDenials = db.prepare(`DELETE FROM permission_denials`);
 
 export function clearPermissionDenials(): void {

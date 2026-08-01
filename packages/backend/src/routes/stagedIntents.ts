@@ -118,6 +118,7 @@ import {
   isToolShapedCapability,
   parseSessionRecordReadCapability,
   parseAuditLogReadCapability,
+  parseSessionEventsReadCapability,
   isSanctionedAutoApproveCapability,
 } from '../session/orchestrator-config';
 import { runtimeSettings } from '../config';
@@ -1114,9 +1115,11 @@ function toArchUnitUpdateFields(
  * session.requestCapability's `capability` must be tool-shaped
  * (`isToolShapedCapability` — `Bash(...)`/`mcp__...`), the registered
  * own-record-read prefix (`parseSessionRecordReadCapability` —
- * `read:session-record:<id>`), or the registered audit-log-read prefix
- * (`parseAuditLogReadCapability` — `read:audit-log:<projectId>`), since
- * those are the only shapes that ever actually widen a session's access. A
+ * `read:session-record:<id>`), the registered audit-log-read prefix
+ * (`parseAuditLogReadCapability` — `read:audit-log:<projectId>`), or the
+ * registered session-events-read prefix (`parseSessionEventsReadCapability`
+ * — `read:session-events:<projectId>`), since those are the only shapes
+ * that ever actually widen a session's access. A
  * non-conforming string (e.g. "banana") is rejected here, before the row
  * ever reaches `staged`, rather than being durably granted and silently
  * never taking effect. This is distinct from and does not replace
@@ -1129,7 +1132,7 @@ class CapabilityRequestValidationError extends Error {
       `[stagedIntents] session.requestCapability rejected: "${capability}" is not a ` +
         'supported capability shape — expected a tool-shaped capability ' +
         '("Bash(...)" or "mcp__...") or "read:session-record:<id>" or ' +
-        '"read:audit-log:<projectId>"',
+        '"read:audit-log:<projectId>" or "read:session-events:<projectId>"',
     );
     this.name = 'CapabilityRequestValidationError';
   }
@@ -1146,7 +1149,8 @@ function validateCapabilityRequestPayload(
   if (
     !isToolShapedCapability(capability) &&
     parseSessionRecordReadCapability(capability) === null &&
-    parseAuditLogReadCapability(capability) === null
+    parseAuditLogReadCapability(capability) === null &&
+    parseSessionEventsReadCapability(capability) === null
   ) {
     throw new CapabilityRequestValidationError(capability);
   }

@@ -282,6 +282,36 @@ export function parseAuditLogReadCapability(capability: string): string | null {
 }
 
 /**
+ * Prefix for the grantable project-scoped session-events read capability:
+ * an aggregate-first read over the orchestrator's own `session_events`
+ * table across every session in one project, exposed via the
+ * `sessionEvents.query` MCP tool (see
+ * mcp/tools/sessionEventsReadTools.ts). Mirrors AUDIT_LOG_READ_PREFIX's
+ * shape and authorization rule exactly — parameterized by project id, own-
+ * project auto-approves, any other project's grant parks for operator
+ * approval — since session_events content is the same class of "another
+ * session's attributed actions" data as audit_log, just aggregated across
+ * sessions instead of read one session at a time (see
+ * SESSION_RECORD_READ_PREFIX). Read-only: there is no write counterpart,
+ * and `isGrantable` never denies this prefix.
+ */
+const SESSION_EVENTS_READ_PREFIX = 'read:session-events:';
+
+/** Builds the exact capability string for querying one project's session_events. */
+export function sessionEventsReadCapability(projectId: string): string {
+  return `${SESSION_EVENTS_READ_PREFIX}${projectId}`;
+}
+
+/** Extracts the target project id from a granted session-events-read capability, or null if it isn't one. */
+export function parseSessionEventsReadCapability(
+  capability: string,
+): string | null {
+  return capability.startsWith(SESSION_EVENTS_READ_PREFIX)
+    ? capability.slice(SESSION_EVENTS_READ_PREFIX.length)
+    : null;
+}
+
+/**
  * Curated, operator-editable allowlist of sanctioned read-only capabilities
  * that `session.requestCapability` auto-approves without an operator park
  * (see stagedIntents.ts's auto-approve branch). Every entry must be an exact
@@ -305,11 +335,12 @@ function sanctionedAutoApproveCapabilities(): readonly string[] {
  * capability for the requesting session itself (never another session's; a
  * capability naming a different target session id is not a match, even
  * though it is grantable via the existing operator-approval path), or the
- * audit-log-read capability for the requesting session's own dispatched
- * project (`requestingProjectId` — never a different project's, which parks
- * for operator approval as usual). Exact-string comparison only — never a
- * prefix/heuristic match, so a Bash(*:*) prefix or any other tool-shaped
- * capability can never auto-approve.
+ * audit-log-read / session-events-read capability for the requesting
+ * session's own dispatched project (`requestingProjectId` — never a
+ * different project's, which parks for operator approval as usual).
+ * Exact-string comparison only — never a prefix/heuristic match, so a
+ * Bash(*:*) prefix or any other tool-shaped capability can never
+ * auto-approve.
  */
 export function isSanctionedAutoApproveCapability(
   capability: string,
@@ -319,7 +350,8 @@ export function isSanctionedAutoApproveCapability(
   return (
     capability === sessionRecordReadCapability(requestingSessionId) ||
     (requestingProjectId != null &&
-      capability === auditLogReadCapability(requestingProjectId)) ||
+      (capability === auditLogReadCapability(requestingProjectId) ||
+        capability === sessionEventsReadCapability(requestingProjectId))) ||
     sanctionedAutoApproveCapabilities().includes(capability)
   );
 }
@@ -327,11 +359,11 @@ export function isSanctionedAutoApproveCapability(
 /**
  * A granted capability shaped like an actual CLI tool permission — a Bash
  * command prefix or a named MCP verb. Only these widen `--allowed-tools` at
- * spawn (see `getSessionAllowedTools` below); the own-record-read and
- * audit-log-read capabilities are checked directly by the `session.getRecord`
- * / `auditLog.query` MCP tool handlers against `getGrantedCapabilities`, not
- * merged into the CLI tool allowlist, since they name no tool the CLI
- * resolves.
+ * spawn (see `getSessionAllowedTools` below); the own-record-read,
+ * audit-log-read, and session-events-read capabilities are checked directly
+ * by the `session.getRecord` / `auditLog.query` / `sessionEvents.query` MCP
+ * tool handlers against `getGrantedCapabilities`, not merged into the CLI
+ * tool allowlist, since they name no tool the CLI resolves.
  */
 export function isToolShapedCapability(capability: string): boolean {
   return capability.startsWith('Bash(') || capability.startsWith('mcp__');
