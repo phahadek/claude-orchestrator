@@ -158,6 +158,7 @@ describe('SessionControls — Delete action', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1', {
         method: 'DELETE',
+        headers: {},
       });
       expect(onDeleted).toHaveBeenCalledWith('sess-1');
     });
@@ -194,6 +195,7 @@ describe('SessionControls — Archive action', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/archive', {
         method: 'PATCH',
+        headers: {},
       });
       expect(setSessionArchived).toHaveBeenCalledWith('sess-1', true);
     });
@@ -212,6 +214,7 @@ describe('SessionControls — Archive action', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/unarchive', {
         method: 'PATCH',
+        headers: {},
       });
       expect(setSessionArchived).toHaveBeenCalledWith('sess-1', false);
     });
@@ -232,6 +235,7 @@ describe('SessionControls — Favorite action', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/favorite', {
         method: 'PATCH',
+        headers: {},
       });
       expect(setSessionFavorited).toHaveBeenCalledWith('sess-1', true);
     });
@@ -250,7 +254,7 @@ describe('SessionControls — Favorite action', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
         '/api/sessions/sess-1/unfavorite',
-        { method: 'PATCH' },
+        { method: 'PATCH', headers: {} },
       );
       expect(setSessionFavorited).toHaveBeenCalledWith('sess-1', false);
     });
@@ -516,6 +520,7 @@ describe('SessionControls — compact disclosure toggle', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/archive', {
         method: 'PATCH',
+        headers: {},
       });
       expect(setSessionArchived).toHaveBeenCalledWith('sess-1', true);
     });
@@ -535,6 +540,7 @@ describe('SessionControls — compact disclosure toggle', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1', {
         method: 'DELETE',
+        headers: {},
       });
       expect(onDeleted).toHaveBeenCalledWith('sess-1');
     });
@@ -615,6 +621,7 @@ describe('SessionControls — embedded mode', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/archive', {
         method: 'PATCH',
+        headers: {},
       });
       expect(setSessionArchived).toHaveBeenCalledWith('sess-1', true);
     });
@@ -636,6 +643,7 @@ describe('SessionControls — embedded mode', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1', {
         method: 'DELETE',
+        headers: {},
       });
       expect(onDeleted).toHaveBeenCalledWith('sess-1');
     });

@@ -156,7 +156,10 @@ beforeEach(() => {
     'fetch',
     vi.fn().mockImplementation((url: string) => {
       if (url.includes('/api/tasks/active')) {
-        return Promise.resolve({ ok: true, json: async () => [MOCK_TASK] });
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ tasks: [MOCK_TASK], coldCache: false }),
+        });
       }
       if (url.includes('/api/settings')) {
         return Promise.resolve({ ok: true, json: async () => ({}) });

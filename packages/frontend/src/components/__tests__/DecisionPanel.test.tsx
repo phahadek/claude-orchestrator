@@ -108,6 +108,7 @@ describe('DecisionPanel', () => {
         createdAt: 0,
         sessionId: 'groom-session-1',
         groupId,
+        groupKind: 'groom',
         state: 'staged',
       },
       {
@@ -118,6 +119,7 @@ describe('DecisionPanel', () => {
         createdAt: 1,
         sessionId: 'groom-session-1',
         groupId,
+        groupKind: 'groom',
         state: 'staged',
       },
     ];
@@ -332,6 +334,7 @@ describe('DecisionPanel', () => {
         createdAt: 0,
         sessionId: 'groom-session-2',
         groupId,
+        groupKind: 'groom',
         state: 'staged',
       },
       {
@@ -352,6 +355,7 @@ describe('DecisionPanel', () => {
         createdAt: 1,
         sessionId: 'groom-session-2',
         groupId,
+        groupKind: 'groom',
         state: 'staged',
         groomProposal: {
           achieves: `Stand up ${taskId} cleanly`,
