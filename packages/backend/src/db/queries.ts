@@ -916,18 +916,31 @@ export function hasActivePlanningSessionForTask(
   taskId: string,
   flow: DedupedPlanningFlow,
 ): boolean {
+  return getActivePlanningSessionForTask(taskId, flow) !== undefined;
+}
+
+/**
+ * The row-returning counterpart to hasActivePlanningSessionForTask — used by
+ * the abort route (routes/taskAbort.ts) to resolve the specific session id
+ * to kill, rather than just a boolean. Same non-terminal (running OR parked
+ * idle), flow-scoped, archived=0 filter.
+ */
+export function getActivePlanningSessionForTask(
+  taskId: string,
+  flow: DedupedPlanningFlow,
+): Session | undefined {
   const norm = normalizeBoardId(taskId);
   const rows = db
-    .prepare<{ flow: string }, { task_id: string | null }>(
+    .prepare<{ flow: string }, Session>(
       `
-    SELECT task_id FROM sessions
+    SELECT * FROM sessions
     WHERE status NOT IN (${TERMINAL_STATUS_SQL_LIST})
       AND session_type = @flow
       AND archived = 0
   `,
     )
-    .all({ flow });
-  return rows.some((row) => normalizeBoardId(row.task_id ?? '') === norm);
+    .all({ flow }) as Session[];
+  return rows.find((row) => normalizeBoardId(row.task_id ?? '') === norm);
 }
 
 export function hasActiveSessionForTask(taskId: string): boolean {

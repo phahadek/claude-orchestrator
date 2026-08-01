@@ -96,7 +96,8 @@ type EventType =
   | 'milestone_wrapped'
   | 'base_fetch_failed'
   | 'mcp_stage_credential_rejected'
-  | 'memory_admission_deferred';
+  | 'memory_admission_deferred'
+  | 'task_aborted';
 
 type ActorType = 'ai' | 'human' | 'system';
 
