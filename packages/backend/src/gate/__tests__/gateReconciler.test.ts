@@ -10,7 +10,7 @@
  * hard-coded.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
 vi.mock('../../db/db.js', async () => {
   const { setupTestDb } = await import('../../../test/helpers/setupTestDb.js');
@@ -24,6 +24,8 @@ vi.mock('../../deploy/deployService.js', () => deployServiceMock);
 
 import { db } from '../../db/db.js';
 import { upsertTaskCache, upsertArm } from '../../db/queries.js';
+import { ProjectService } from '../../projects/ProjectService.js';
+import { logger } from '../../logger.js';
 import {
   insertItem,
   setMinDeployedCommit,
@@ -50,6 +52,28 @@ import {
   type ReattachableGateItemVerifier,
 } from '../gateReconciler.js';
 
+// The reconciler resolves the gate item's milestone display name (what
+// gate_item.milestone stores) to its milestone-table row id (what
+// flow_arm.milestone_id keys on) before checking the arm — see
+// resolveMilestoneRowForProject in gateReconciler.ts. M12's row is seeded
+// once here so every test's flow_arm writes below key on the same id the
+// reconciler resolves to.
+let m12Id: string;
+
+beforeAll(() => {
+  ProjectService.create({
+    id: 'polimarket-analyser',
+    name: 'Polimarket Analyser',
+    projectDir: '/tmp/polimarket-analyser',
+  });
+  m12Id = ProjectService.createMilestone({
+    id: 'ms-uuid-m12',
+    projectId: 'polimarket-analyser',
+    name: 'M12',
+    canonicalShortId: 'M12',
+  }).id;
+});
+
 beforeEach(() => {
   db.prepare('DELETE FROM gate_item_event').run();
   db.prepare('DELETE FROM gate_item_source').run();
@@ -60,6 +84,10 @@ beforeEach(() => {
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM staged_intent').run();
   deployServiceMock.getProjectDeployedSha.mockReset().mockReturnValue(null);
+  // Most tests below exercise auto-run behavior, which needs M12's
+  // gate-verify arm on (DEFAULT_ARM is disarmed) — tests exercising the
+  // disarmed/default/unresolvable paths explicitly override this.
+  upsertArm(m12Id, 'gate-verify', true, 1);
 });
 
 function makeItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
@@ -285,7 +313,7 @@ describe('runGateReconcilerTick', () => {
 
   it('auto-runs a runnable item when the milestone gate-verify arm is on', async () => {
     const item = makeRunnableItem({ classification: 'Read-Only' });
-    upsertArm('M12', 'gate-verify', true, 1);
+    upsertArm(m12Id, 'gate-verify', true, 1);
     const verifier: GateItemVerifier = {
       verify: vi.fn(async () => ({ disposition: 'pass' })),
     };
@@ -301,7 +329,7 @@ describe('runGateReconcilerTick', () => {
 
   it('does not auto-run when the milestone gate-verify arm is off, even with gate_verification_enabled', async () => {
     const item = makeRunnableItem({ classification: 'Read-Only' });
-    upsertArm('M12', 'gate-verify', false, 1);
+    upsertArm(m12Id, 'gate-verify', false, 1);
     const verifier: GateItemVerifier = {
       verify: vi.fn(async () => ({ disposition: 'pass' })),
     };
@@ -312,6 +340,45 @@ describe('runGateReconcilerTick', () => {
     expect(verifier.verify).not.toHaveBeenCalled();
     expect(result.processed).toEqual([]);
     expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('falls back to DEFAULT_ARM[flow] when no flow_arm row exists for the milestone', async () => {
+    db.prepare('DELETE FROM flow_arm').run();
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({ disposition: 'pass' })),
+    };
+    // DEFAULT_ARM['gate-verify'] is false, so with no row present at all,
+    // auto-run stays off — same as before this milestone id-space fix.
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+  });
+
+  it('skips (with a warning) a milestone display name that does not resolve to a milestone row, rather than falling through to DEFAULT_ARM', async () => {
+    const item = makeRunnableItem({
+      milestone: 'M-unregistered',
+      classification: 'Read-Only',
+    });
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({ disposition: 'pass' })),
+    };
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('M-unregistered'),
+    );
+    warnSpy.mockRestore();
   });
 
   it('auto-runs and auto-disposes a Read-Only item on pass', async () => {
@@ -476,7 +543,7 @@ describe('runGateReconcilerTick', () => {
 
   it('a dispatch failure (dispatchFailed:true) leaves latest_disposition unchanged and the item still runnable on the next pull', async () => {
     const item = makeRunnableItem({ classification: 'Read-Only' });
-    upsertArm('M12', 'gate-verify', true, 1);
+    upsertArm(m12Id, 'gate-verify', true, 1);
     const verifier: GateItemVerifier = {
       verify: vi.fn(async () => ({
         disposition: 'needs-setup' as const,
@@ -520,7 +587,7 @@ describe('runGateReconcilerTick', () => {
 
   it('records a dispatch failure as a log-only event — reason/error evidence preserved, disposition null', async () => {
     const item = makeRunnableItem({ classification: 'Read-Only' });
-    upsertArm('M12', 'gate-verify', true, 1);
+    upsertArm(m12Id, 'gate-verify', true, 1);
     const verifier: GateItemVerifier = {
       verify: vi.fn(async () => ({
         disposition: 'needs-setup' as const,
@@ -553,7 +620,7 @@ describe('runGateReconcilerTick', () => {
 
   it('an item previously skipped for a genuine needs-setup becomes eligible again once a later event supersedes it', async () => {
     const item = makeRunnableItem({ classification: 'Read-Only' });
-    upsertArm('M12', 'gate-verify', true, 1);
+    upsertArm(m12Id, 'gate-verify', true, 1);
     const verifier: GateItemVerifier = {
       verify: vi.fn(async () => ({
         disposition: 'needs-setup' as const,
