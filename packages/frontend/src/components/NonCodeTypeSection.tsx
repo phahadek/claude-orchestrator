@@ -25,6 +25,11 @@ interface Props {
   designCheckedIds?: Set<string>;
   onDesignCheckChange?: (taskId: string, checked: boolean) => void;
   isDesignEligible?: (task: TaskView) => boolean;
+  /** When provided, tasks matching isDocsEligible render a Docs(N) selection checkbox —
+   * takes precedence over the Groom checkbox when a task qualifies for both. */
+  docsCheckedIds?: Set<string>;
+  onDocsCheckChange?: (taskId: string, checked: boolean) => void;
+  isDocsEligible?: (task: TaskView) => boolean;
 }
 
 const TYPE_ORDER = [
@@ -73,6 +78,9 @@ export function NonCodeTypeSection({
   designCheckedIds,
   onDesignCheckChange,
   isDesignEligible,
+  docsCheckedIds,
+  onDocsCheckChange,
+  isDocsEligible,
 }: Props) {
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
 
@@ -157,10 +165,17 @@ export function NonCodeTypeSection({
                     !opsBlocked &&
                     designCheckedIds !== undefined &&
                     (isDesignEligible?.(task) ?? false);
+                  const docsEligible =
+                    !opsEligible &&
+                    !opsBlocked &&
+                    !designEligible &&
+                    docsCheckedIds !== undefined &&
+                    (isDocsEligible?.(task) ?? false);
                   const groomBlocked =
                     !opsEligible &&
                     !opsBlocked &&
                     !designEligible &&
+                    !docsEligible &&
                     groomCheckedIds !== undefined &&
                     task.displayStatus === 'backlog' &&
                     !!task.groomDepBlocked;
@@ -168,23 +183,28 @@ export function NonCodeTypeSection({
                     !opsEligible &&
                     !opsBlocked &&
                     !designEligible &&
+                    !docsEligible &&
                     !groomBlocked &&
                     groomCheckedIds !== undefined &&
                     task.displayStatus === 'backlog';
                   const showCheckbox =
-                    opsEligible || designEligible || groomable;
+                    opsEligible || designEligible || docsEligible || groomable;
                   const checked = opsEligible
                     ? opsCheckedIds!.has(task.taskId)
                     : designEligible
                       ? designCheckedIds!.has(task.taskId)
-                      : groomable && groomCheckedIds!.has(task.taskId);
+                      : docsEligible
+                        ? docsCheckedIds!.has(task.taskId)
+                        : groomable && groomCheckedIds!.has(task.taskId);
                   const onCheckChange = opsEligible
                     ? (onOpsCheckChange ?? (() => {}))
                     : designEligible
                       ? (onDesignCheckChange ?? (() => {}))
-                      : groomable
-                        ? (onGroomCheckChange ?? (() => {}))
-                        : () => {};
+                      : docsEligible
+                        ? (onDocsCheckChange ?? (() => {}))
+                        : groomable
+                          ? (onGroomCheckChange ?? (() => {}))
+                          : () => {};
                   return (
                     <CompactTaskCard
                       key={task.taskId}

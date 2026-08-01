@@ -33,7 +33,12 @@ export interface OpsLaunchResult {
 }
 
 /** Workflow the Groom(N) / Ops(N) launcher buttons dispatch — resolved to a sessionType server-side. */
-export type PlanningWorkflow = 'groom' | 'design' | 'ops' | 'investigation';
+export type PlanningWorkflow =
+  | 'groom'
+  | 'design'
+  | 'ops'
+  | 'investigation'
+  | 'docs';
 
 export const opsJournalApi = {
   listForMilestone(milestone: string): Promise<OpsJournalEntry[]> {
