@@ -12,6 +12,10 @@ import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
 import { catchUpMergeCommits } from './gateMergeConsumer';
 import {
+  resolveMilestoneRowForProject,
+  UnknownMilestoneError,
+} from '../projects/milestoneResolver';
+import {
   getGateReadiness,
   reconcileGateRunnability,
   nextRunnableGateItems,
@@ -620,7 +624,19 @@ export async function runGateReconcilerTick(
   } else {
     const verifier = options.verifier;
     for (const { project, milestone } of projectMilestones.values()) {
-      if (!getArm(milestone, 'gate-verify')) continue;
+      let milestoneRow;
+      try {
+        milestoneRow = resolveMilestoneRowForProject(project, milestone);
+      } catch (err) {
+        if (err instanceof UnknownMilestoneError) {
+          logger.warn(
+            `[GateReconciler] cannot resolve milestone "${milestone}" for project ${project} — skipping auto-run for this milestone: ${err.message}`,
+          );
+          continue;
+        }
+        throw err;
+      }
+      if (!getArm(milestoneRow.id, 'gate-verify')) continue;
       for (const classification of AUTO_RUN_TIERS) {
         const batch = nextRunnableGateItems(project, milestone, {
           classification,

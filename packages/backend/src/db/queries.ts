@@ -6414,7 +6414,13 @@ function getFlowArmRow(milestoneId: string, flow: FlowId): FlowArmRow | null {
   );
 }
 
-/** Effective arm state: the flow_arm row's value if present, else DEFAULT_ARM[flow]. */
+/**
+ * Effective arm state: the flow_arm row's value if present, else DEFAULT_ARM[flow].
+ * `milestoneId` is the milestone's DB id (UUID), NOT its gate_item/seed_item
+ * display name (e.g. "M13") — flow_arm.milestone_id is keyed by id. Resolve
+ * a display name to its row (e.g. via resolveMilestoneRowForProject) before
+ * calling this.
+ */
 export function getArm(milestoneId: string, flow: FlowId): boolean {
   const row = getFlowArmRow(milestoneId, flow);
   return row ? row.armed === 1 : DEFAULT_ARM[flow];
