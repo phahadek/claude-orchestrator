@@ -21,7 +21,7 @@
  * one-line reason. Do not add supporting prose beyond that.
  */
 
-export type RouteAudience = 'operator' | 'session' | 'tooling' | 'known-gap';
+type RouteAudience = 'operator' | 'session' | 'tooling' | 'known-gap';
 
 export interface RouteAudienceEntry {
   audience: RouteAudience;
