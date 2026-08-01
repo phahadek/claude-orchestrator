@@ -113,6 +113,25 @@ beforeEach(() => {
     started_at: 1,
     session_type: 'design',
   });
+
+  // A completeness.disposition now requires at least one decision.pickOne
+  // already staged for the bound task (see
+  // stagedIntents.completenessRequiresDecision.test.ts) — stage the standing
+  // one here so the tests below, which exercise the *approval* gate, aren't
+  // also tripping over that separate precondition.
+  stageIntent(
+    'decision.pickOne',
+    {
+      taskId: TASK_ID,
+      prompt: 'Standing decision for gate tests?',
+      options: [{ label: 'A', description: 'Option A' }],
+      allowFreeForm: false,
+    },
+    PROJECT_ID,
+    null,
+    SESSION_ID,
+    'Recommend option A.',
+  );
 });
 
 describe('completeness-approval gate on design terminal artifacts', () => {
