@@ -26,7 +26,10 @@ import { insertSession, insertGateItem, getStagedIntent } from '../db/queries';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import { createUnit } from '../architecture/ArchUnitStore';
 import * as AuditLog from '../audit/AuditLog';
-import { queryAuditLogByProject, getLatestEventByType } from '../audit/AuditLog';
+import {
+  queryAuditLogByProject,
+  getLatestEventByType,
+} from '../audit/AuditLog';
 
 function buildApp() {
   const app = express();
@@ -424,9 +427,7 @@ describe('orchestratorMcpServer — MCP lifecycle instrumentation', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].actorId).toBe('mcp-lifecycle-2');
     expect(entries[0].projectId).toBe('proj-lifecycle-closed');
-    expect((entries[0].payload as { reason: string }).reason).toBe(
-      'completed',
-    );
+    expect((entries[0].payload as { reason: string }).reason).toBe('completed');
   });
 
   it('records events for a session resumed via --resume, not only its first spawn', async () => {
@@ -484,9 +485,7 @@ describe('orchestratorMcpServer — MCP lifecycle instrumentation', () => {
       .set('Accept', 'application/json, text/event-stream')
       .send({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
     expect(unknownRes.status).toBe(401);
-    const unknownEvent = getLatestEventByType(
-      'mcp_stage_credential_rejected',
-    );
+    const unknownEvent = getLatestEventByType('mcp_stage_credential_rejected');
     expect(JSON.parse(unknownEvent!.payload).reason).toBe('unknown');
     expect(unknownEvent!.actor_id).toBeNull();
   });
@@ -517,9 +516,7 @@ describe('orchestratorMcpServer — MCP lifecycle instrumentation', () => {
     });
     expect(entries).toHaveLength(1);
     expect(entries[0].actorId).toBe('mcp-lifecycle-revoked');
-    expect((entries[0].payload as { reason: string }).reason).toBe(
-      'revoked',
-    );
+    expect((entries[0].payload as { reason: string }).reason).toBe('revoked');
 
     // Teardown itself was also recorded, naming the session id and reason.
     const revokedEvent = getLatestEventByType('mcp_session_credential_revoked');
@@ -541,11 +538,9 @@ describe('orchestratorMcpServer — MCP lifecycle instrumentation', () => {
       session_type: 'standard',
     });
     const token = mintStageCredential('mcp-lifecycle-swallow');
-    const spy = vi
-      .spyOn(AuditLog, 'recordEvent')
-      .mockImplementation(() => {
-        throw new Error('simulated audit write failure');
-      });
+    const spy = vi.spyOn(AuditLog, 'recordEvent').mockImplementation(() => {
+      throw new Error('simulated audit write failure');
+    });
     try {
       const res = await supertest(buildApp())
         .post('/api/mcp')
