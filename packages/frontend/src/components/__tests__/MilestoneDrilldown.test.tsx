@@ -588,27 +588,27 @@ describe('MilestoneDrilldown', () => {
       expect(reader.textContent).toContain('Read-Only');
       expect(reader.textContent).toContain('pass');
       expect(
-        fetchSpy.mock.calls.some((call) =>
-          String(call[0]).includes('/page'),
-        ),
+        fetchSpy.mock.calls.some((call) => String(call[0]).includes('/page')),
       ).toBe(false);
     });
 
     it('resolves the gate item from the intent payload gateItemId without a session round-trip', async () => {
       vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
-      const detailSpy = vi.spyOn(gateApi, 'getGateItemDetail').mockResolvedValue({
-        item: {
-          id: 'gate-item-1',
-          project: 'proj-1',
-          milestone: 'M1',
-          text: 'Verify the widget renders',
-          classification: 'Read-Only',
-          state: 'open',
-          updatedAt: '2026-01-01T00:00:00.000Z',
-        },
-        sources: [],
-        events: [],
-      });
+      const detailSpy = vi
+        .spyOn(gateApi, 'getGateItemDetail')
+        .mockResolvedValue({
+          item: {
+            id: 'gate-item-1',
+            project: 'proj-1',
+            milestone: 'M1',
+            text: 'Verify the widget renders',
+            classification: 'Read-Only',
+            state: 'open',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+          },
+          sources: [],
+          events: [],
+        });
       const sessionSpy = vi.spyOn(sessionsApi, 'getById');
 
       render(
@@ -633,7 +633,9 @@ describe('MilestoneDrilldown', () => {
         />,
       );
 
-      await waitFor(() => expect(detailSpy).toHaveBeenCalledWith('gate-item-1'));
+      await waitFor(() =>
+        expect(detailSpy).toHaveBeenCalledWith('gate-item-1'),
+      );
       // The live session store already has this session — the by-id fetch
       // that would run here is useSessionTaskId's, which the gate branch
       // must skip since gateItemId came straight off the intent payload.

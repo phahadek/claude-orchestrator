@@ -217,14 +217,13 @@ export function MilestoneDrilldown({
     error: gateItemError,
   } = useGateItemDetail(gateItemId);
 
-  const taskId =
-    isGateSelection
-      ? null
-      : selection?.type === 'task'
-        ? selection.task.taskId
-        : selection
-          ? taskIdForIntentDisplay(selection.intent, fallbackSessionTaskId)
-          : null;
+  const taskId = isGateSelection
+    ? null
+    : selection?.type === 'task'
+      ? selection.task.taskId
+      : selection
+        ? taskIdForIntentDisplay(selection.intent, fallbackSessionTaskId)
+        : null;
 
   const resolvedTask: TaskView | null =
     selection?.type === 'task'
@@ -302,7 +301,10 @@ export function MilestoneDrilldown({
             )}
           </div>
           {!gateItemId && (
-            <p className={styles.muted} data-testid="milestone-drilldown-unresolved">
+            <p
+              className={styles.muted}
+              data-testid="milestone-drilldown-unresolved"
+            >
               This gate.verify decision doesn't reference a gate item.
             </p>
           )}
@@ -314,31 +316,34 @@ export function MilestoneDrilldown({
               Failed to load gate item: {gateItemError}
             </p>
           )}
-          {gateItemId && !gateItemLoading && !gateItemError && gateItemDetail && (
-            <div className={styles.taskMarkdown}>
-              <p>
-                <strong>State:</strong> {gateItemDetail.item.state}
-                {gateItemDetail.item.currentDisposition
-                  ? ` (${gateItemDetail.item.currentDisposition})`
-                  : ''}
-              </p>
-              <div>
-                <strong>Event history</strong>
-                {gateItemDetail.events.length === 0 ? (
-                  <p className={styles.muted}>None</p>
-                ) : (
-                  <ul>
-                    {gateItemDetail.events.map((e, i) => (
-                      <li key={i}>
-                        {e.disposition} — {new Date(e.at).toLocaleString()}
-                        {e.operator ? ` by ${e.operator}` : ''}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+          {gateItemId &&
+            !gateItemLoading &&
+            !gateItemError &&
+            gateItemDetail && (
+              <div className={styles.taskMarkdown}>
+                <p>
+                  <strong>State:</strong> {gateItemDetail.item.state}
+                  {gateItemDetail.item.currentDisposition
+                    ? ` (${gateItemDetail.item.currentDisposition})`
+                    : ''}
+                </p>
+                <div>
+                  <strong>Event history</strong>
+                  {gateItemDetail.events.length === 0 ? (
+                    <p className={styles.muted}>None</p>
+                  ) : (
+                    <ul>
+                      {gateItemDetail.events.map((e, i) => (
+                        <li key={i}>
+                          {e.disposition} — {new Date(e.at).toLocaleString()}
+                          {e.operator ? ` by ${e.operator}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            )}
         </div>
       ) : mode === 'task' ? (
         <div className={styles.taskReader} data-testid="milestone-task-reader">

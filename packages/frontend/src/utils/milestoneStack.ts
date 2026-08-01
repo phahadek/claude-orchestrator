@@ -13,9 +13,7 @@ export function taskIdFromIntent(intent: StagedIntent): string | null {
  * session/sessionPredicates.ts). Never a real Notion task id, so nothing
  * downstream should try to resolve it as one.
  */
-export function isGateItemTaskId(
-  taskId: string | null | undefined,
-): boolean {
+export function isGateItemTaskId(taskId: string | null | undefined): boolean {
   return typeof taskId === 'string' && taskId.startsWith('gate-item:');
 }
 
