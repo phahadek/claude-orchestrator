@@ -17,7 +17,10 @@ import {
   stepTitleFor,
   type SkillId,
 } from '../procedureCore';
-import { ALLOWED_TRANSITIONS, isValidOpsTransition } from '../../ops/opsJournal';
+import {
+  ALLOWED_TRANSITIONS,
+  isValidOpsTransition,
+} from '../../ops/opsJournal';
 import { passesGroomDepGate } from '../../orchestration/planningCandidates';
 import type { NotionTask } from '../../notion/types';
 
@@ -942,9 +945,7 @@ describe('procedureCore', () => {
       const principle = CORE_PRINCIPLES.find(
         (p) => p.id === 'dispatched-ops-write-capable',
       )!;
-      expect(principle.title).not.toMatch(
-        /never park a staged proposal$/,
-      );
+      expect(principle.title).not.toMatch(/never park a staged proposal$/);
       expect(principle.title).toMatch(/stage the no-change terminal/);
 
       const rendered = renderPrinciple(principle, 'ops');

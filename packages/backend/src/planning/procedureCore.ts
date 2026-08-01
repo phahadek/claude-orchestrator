@@ -1411,12 +1411,12 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
         'pending capability grant, or a step only a human can perform, like ' +
         'secret provisioning). For a decided-no-change Investigation there is no ' +
         'change to apply, reconcile, or capture evidence for, so this loop never ' +
-        'starts — instead stage the no-change terminal\'s closing set (see ' +
+        "starts — instead stage the no-change terminal's closing set (see " +
         '"drive to applied-pending-confirm or stage the no-change terminal" ' +
         'above) and end the turn. The one transition this session never makes ' +
         'itself, on either path, is the `resolved` transition — whether reached ' +
         'via `applied-pending-confirm` → `resolved` or staged directly as the ' +
-        'no-change terminal\'s closing set — that confirmation is ' +
+        "no-change terminal's closing set — that confirmation is " +
         'device-auth/operator-only, always.',
       design:
         'A dispatched design session never applies a write itself — it only ' +
