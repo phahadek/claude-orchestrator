@@ -1392,9 +1392,7 @@ describe('rowToApi groupKind', () => {
     const res = await supertest(app)
       .get('/api/staged-intents')
       .query({ projectId: 'proj-groupkind' });
-    const found = res.body.intents.find(
-      (i: { id: string }) => i.id === row.id,
-    );
+    const found = res.body.intents.find((i: { id: string }) => i.id === row.id);
     expect(found.groupKind).toBe('other');
   });
 });
