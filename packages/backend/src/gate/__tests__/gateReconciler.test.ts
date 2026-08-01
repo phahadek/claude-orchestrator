@@ -23,7 +23,7 @@ const deployServiceMock = vi.hoisted(() => ({
 vi.mock('../../deploy/deployService.js', () => deployServiceMock);
 
 import { db } from '../../db/db.js';
-import { upsertTaskCache, upsertArm } from '../../db/queries.js';
+import { upsertTaskCache, upsertArm, archiveSession } from '../../db/queries.js';
 import { typedSetSetting } from '../../config/settings.js';
 import { ProjectService } from '../../projects/ProjectService.js';
 import { logger } from '../../logger.js';
@@ -163,6 +163,39 @@ describe('register', () => {
     const opts = scheduler.register.mock.calls[0][0];
     expect(opts.name).toBe('gate_verification_reconciler');
     await opts.run({ signal: new AbortController().signal });
+  });
+
+  it('reports items_processed as a negative count when the tick is skipped entirely for want of budget, distinct from a genuinely idle tick', async () => {
+    // Exhaust the verify sub-limit specifically (rather than the planning
+    // pool) so this test doesn't mutate max_concurrent_planning_sessions/
+    // human_reserve — settings persist across tests in this file (see the
+    // other describe blocks below), and doing so would leak into later
+    // tests that rely on the default planning budget.
+    typedSetSetting('max_concurrent_verify_sessions', 1);
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, session_type, status, started_at)
+       VALUES ('live-verify-1', 'gate-item:already-live', 'ops', 'running', 0)`,
+    ).run();
+    makeRunnableItem({ classification: 'Read-Only' });
+
+    const run = vi.fn(async () => undefined);
+    const scheduler = {
+      register: vi.fn(({ run: r }) => run.mockImplementation(r)),
+    };
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    register(scheduler as never, {
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+    const opts = scheduler.register.mock.calls[0][0];
+    const result = await opts.run({ signal: new AbortController().signal });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.items_processed).toBe(-1);
+
+    // Restore the default so later tests in this file that don't set their
+    // own max_concurrent_verify_sessions aren't affected by this one.
+    typedSetSetting('max_concurrent_verify_sessions', 5);
   });
 });
 
@@ -1158,6 +1191,78 @@ describe('runGateReconcilerTick — verify concurrency budgeting', () => {
     ]);
     expect(getItem(item.id)?.state).toBe('runnable');
     expect(getItem(item.id)?.latestDisposition).toBeUndefined();
+  });
+
+  it('does not let a pile of archived idle planning sessions pin the dispatch budget at zero', async () => {
+    typedSetSetting('max_concurrent_planning_sessions', 20);
+    typedSetSetting('human_reserve', 1);
+    typedSetSetting('max_concurrent_verify_sessions', 10);
+
+    // Reproduces the reported incident shape: 104 archived idle planning
+    // sessions (no longer holding any real capacity) plus a few genuinely
+    // live ones.
+    for (let i = 0; i < 104; i++) {
+      insertLiveSession({
+        sessionId: `archived-idle-${i}`,
+        taskId: `ops-task-${i}`,
+        sessionType: 'ops',
+      });
+      db.prepare(`UPDATE sessions SET status = 'idle' WHERE session_id = ?`).run(
+        `archived-idle-${i}`,
+      );
+      archiveSession(`archived-idle-${i}`);
+    }
+    insertLiveSession({
+      sessionId: 'live-running',
+      taskId: 'ops-task-live',
+      sessionType: 'ops',
+    });
+
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(result.processed).toHaveLength(1);
+    expect(result.skippedForBudget).toBe(0);
+  });
+
+  it('reports skippedForBudget when a runnable item is passed over solely for want of budget', async () => {
+    typedSetSetting('max_concurrent_planning_sessions', 1);
+    typedSetSetting('human_reserve', 0);
+    typedSetSetting('max_concurrent_verify_sessions', 10);
+    // available = 1 - humanReserve(0) - active(1) = 0.
+    insertLiveSession({ sessionId: 'live-ops-1', taskId: 'some-ops-task' });
+
+    makeRunnableItem({ classification: 'Read-Only' });
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(result.skippedForBudget).toBe(1);
+  });
+
+  it('reports skippedForBudget: 0 when a tick genuinely has no runnable items', async () => {
+    typedSetSetting('max_concurrent_planning_sessions', 5);
+    typedSetSetting('human_reserve', 0);
+    typedSetSetting('max_concurrent_verify_sessions', 10);
+
+    const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
+    const result = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier: { verify },
+    });
+
+    expect(verify).not.toHaveBeenCalled();
+    expect(result.processed).toEqual([]);
+    expect(result.skippedForBudget).toBe(0);
   });
 });
 

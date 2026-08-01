@@ -783,16 +783,38 @@ export function countLiveVerifySessions(): number {
 }
 
 /**
- * Count of live (non-terminal) sessions in the shared planning pool
- * (groom/design/ops/split/docs — see isPlanningSession), DB-backed so the
- * gate reconciler can budget against it without a SessionManager instance,
- * mirroring SessionManager.getLivePlanningSessionCount's predicate.
+ * Count of live (non-terminal, unarchived) sessions in the shared planning
+ * pool (groom/design/ops/split/docs — see isPlanningSession), DB-backed so
+ * the gate reconciler can budget against it without a SessionManager
+ * instance.
+ *
+ * Rule: an unarchived `idle` session still counts. idle is deliberately not
+ * a terminal status — a planning session parks idle between turns and is
+ * routinely resumed from it, so it is holding a slot the same as a running
+ * one. `archived` is the actual discriminator for "no longer live": it is
+ * the operator's explicit signal that a session will never be resumed, and
+ * archiving always accompanies ending the session's process (see
+ * SessionManager.archiveAndEndSession) — so it is excluded here too. Without
+ * this filter, a session archived days ago (and thus no longer holding any
+ * real capacity) still counted, which pinned this budget at zero once
+ * enough archived rows accumulated.
+ *
+ * This intentionally does not count the same population as
+ * SessionManager.getLivePlanningSessionCount(), which tracks only sessions
+ * with a live in-memory process (that map entry is removed the moment a
+ * session goes idle, see cleanupWorktree) — a narrower, in-process
+ * concurrency guard used by DispatchTriggerEvaluator to decide whether to
+ * spawn another session right now. This DB-backed count instead answers
+ * "how much of the planning pool's capacity is currently spoken for",
+ * including sessions parked idle and awaiting resume, which is what the
+ * gate reconciler needs to budget its own dispatches against.
  */
 export function countLivePlanningSessions(): number {
   const rows = db
     .prepare(
       `SELECT session_type FROM sessions
-       WHERE status NOT IN ('done', 'error', 'killed', 'superseded')`,
+       WHERE status NOT IN ('done', 'error', 'killed', 'superseded')
+         AND archived = 0`,
     )
     .all() as { session_type: string | null }[];
   return rows.filter((r) => isPlanningSession(r.session_type ?? '')).length;

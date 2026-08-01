@@ -239,6 +239,17 @@ export interface GateReconcileTickResult {
   processed: ProcessedGateItem[];
   /** Keyed by `${project}::${milestone}`, not milestone alone — see projectMilestones above. */
   readiness: Record<string, GateReadiness>;
+  /**
+   * Count of runnable items this tick found but passed over solely because
+   * the dispatch budget (planning/verify capacity) had run out — as
+   * distinct from finding no runnable items at all. A tick that is
+   * silently starved of budget every time (e.g. a stale live-session count
+   * pinning it at zero) otherwise looks identical in scheduler_audit to a
+   * healthy, idle tick: status=ok, items_processed=0. See register() below,
+   * which folds this into the audited items_processed as a negative count
+   * so the two cases are distinguishable without a schema change.
+   */
+  skippedForBudget: number;
 }
 
 function defaultAncestrySourceForProject(
@@ -650,6 +661,8 @@ export async function runGateReconcilerTick(
     });
   }
   const processed: ProcessedGateItem[] = [];
+  /** Count of runnable items this tick passed over solely because dispatchBudget had run out — see GateReconcileTickResult.skippedForBudget. */
+  let skippedForBudget = 0;
 
   if (!options.verifier) {
     if (projectMilestones.size > 0) {
@@ -683,6 +696,11 @@ export async function runGateReconcilerTick(
         countLiveVerifySessions(),
     );
     let dispatchBudget = Math.min(planningAvailable, verifyAvailable);
+    if (dispatchBudget <= 0) {
+      logger.warn(
+        `[GateReconciler] dispatch budget exhausted this tick (planningAvailable=${planningAvailable}, verifyAvailable=${verifyAvailable}) — no auto-run verifications will be dispatched`,
+      );
+    }
 
     for (const { project, milestone } of projectMilestones.values()) {
       let milestoneRow;
@@ -704,7 +722,10 @@ export async function runGateReconcilerTick(
           limit,
         });
         for (const item of batch) {
-          if (dispatchBudget <= 0) continue;
+          if (dispatchBudget <= 0) {
+            skippedForBudget++;
+            continue;
+          }
           const outcome = await processItem(
             item,
             verifier,
@@ -729,7 +750,7 @@ export async function runGateReconcilerTick(
     readiness[key] = getGateReadiness(project, milestone);
   }
 
-  return { deployShaByProject, reconciled, processed, readiness };
+  return { deployShaByProject, reconciled, processed, readiness, skippedForBudget };
 }
 
 let configuredVerificationOptions: GateReconcilerOptions | null = null;
@@ -834,7 +855,18 @@ export function register(
     enabled: () => runtimeSettings.gate_verification_enabled,
     run: async () => {
       const result = await runGateReconcilerTick(options);
-      return { items_processed: result.processed.length };
+      // A negative items_processed is this job's convention for "found
+      // runnable work but dispatched none of it for want of budget" — kept
+      // distinct in scheduler_audit from a genuinely idle tick
+      // (items_processed: 0, no runnable items at all). See
+      // GateReconcileTickResult.skippedForBudget.
+      const items_processed =
+        result.processed.length > 0
+          ? result.processed.length
+          : result.skippedForBudget > 0
+            ? -result.skippedForBudget
+            : 0;
+      return { items_processed };
     },
   });
 }

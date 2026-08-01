@@ -3096,6 +3096,19 @@ export class SessionManager extends EventEmitter {
    * Count live planning sessions (groom/design/ops/split) — the shared pool
    * DispatchTriggerEvaluator's backpressure check reads against, mirroring
    * the same-shaped count start() enforces as the raw cap at launch time.
+   *
+   * This is a narrower population than the DB-backed
+   * queries.countLivePlanningSessions(): it only counts sessions with a live
+   * in-memory process (this.sessions/pendingStarts), so an idle session —
+   * archived or not — is never counted here, since going idle removes the
+   * entry from `this.sessions` (see cleanupWorktree). That is intentional:
+   * this counter answers "would spawning one more exceed the concurrency
+   * cap right now", not "how much of the pool's capacity is spoken for" —
+   * the latter is what the gate reconciler budgets against via
+   * countLivePlanningSessions(), which must also count idle-but-resumable
+   * sessions as holding a slot. Keep this counter's in-memory-only
+   * semantics unchanged when touching either — DispatchTriggerEvaluator
+   * depends on it.
    */
   getLivePlanningSessionCount(): number {
     let n = 0;
