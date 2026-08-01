@@ -42,7 +42,11 @@ export function registerAuditLogReadTools(
         '`taskId` / `eventType` / a `[since, until]` ts window (epoch ms, inclusive). ' +
         'Requires a durable grant naming this exact project id — request it via ' +
         '`session.requestCapability` with capability `read:audit-log:<projectId>` ' +
-        "(auto-approved when `<projectId>` is this session's own dispatched project).",
+        "(auto-approved when `<projectId>` is this session's own dispatched project). " +
+        'An empty `entries` array alone does not mean the event never happened: check ' +
+        '`unattributedCount` (matching rows exist but carry no project_id — some event ' +
+        'types are never project-attributed) and `eventTypeRecognized` (false means the ' +
+        '`eventType` name matches no row anywhere, i.e. it is unrecognized or retired).',
       inputSchema: {
         projectId: z.string(),
         taskId: z.string().optional(),
@@ -60,7 +64,7 @@ export function registerAuditLogReadTools(
         );
       }
 
-      const entries = queryAuditLogByProject(args.projectId, {
+      const result = queryAuditLogByProject(args.projectId, {
         taskId: args.taskId,
         eventType: args.eventType,
         since: args.since,
@@ -68,7 +72,7 @@ export function registerAuditLogReadTools(
       });
 
       return {
-        content: [{ type: 'text', text: JSON.stringify({ entries }) }],
+        content: [{ type: 'text', text: JSON.stringify(result) }],
       };
     },
   );

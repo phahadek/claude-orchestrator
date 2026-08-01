@@ -1683,4 +1683,36 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // Backfill audit_log.project_id for historical rows written before
+  // recordEvent (audit/AuditLog.ts) started deriving it from actor_id/task_id
+  // — otherwise every project-scoped auditLog.query silently drops them.
+  // Only ever touches rows still NULL, so this is safe to re-run.
+  target.exec(`
+    UPDATE audit_log
+    SET project_id = (
+      SELECT sessions.project_id FROM sessions
+      WHERE sessions.session_id = audit_log.actor_id
+    )
+    WHERE project_id IS NULL
+      AND actor_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM sessions
+        WHERE sessions.session_id = audit_log.actor_id
+          AND sessions.project_id IS NOT NULL
+      );
+  `);
+  target.exec(`
+    UPDATE audit_log
+    SET project_id = (
+      SELECT task_repo_assignments.project_id FROM task_repo_assignments
+      WHERE task_repo_assignments.task_id = audit_log.task_id
+    )
+    WHERE project_id IS NULL
+      AND task_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM task_repo_assignments
+        WHERE task_repo_assignments.task_id = audit_log.task_id
+      );
+  `);
 }

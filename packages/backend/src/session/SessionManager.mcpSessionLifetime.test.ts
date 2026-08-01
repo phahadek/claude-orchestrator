@@ -98,7 +98,7 @@ describe('MCP session lifetime — dispatched session credential survives backen
     const projectId = 'proj-mcp-lifetime-test';
 
     // Nothing recorded yet for this project — the baseline "empty" case.
-    expect(queryAuditLogByProject(projectId)).toEqual([]);
+    expect(queryAuditLogByProject(projectId).entries).toEqual([]);
 
     const res = await supertest(buildMcpApp())
       .post('/api/mcp')
@@ -117,7 +117,7 @@ describe('MCP session lifetime — dispatched session credential survives backen
     // The unrelated project's audit log is still genuinely empty — a
     // transport failure never gets mistaken for "the record contains
     // nothing" and vice versa.
-    expect(queryAuditLogByProject(projectId)).toEqual([]);
+    expect(queryAuditLogByProject(projectId).entries).toEqual([]);
   });
 
   it('a revoked credential is rejected even after a simulated restart, and stays session-scoped', async () => {

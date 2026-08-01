@@ -78,6 +78,69 @@ describe('recordEvent()', () => {
   });
 });
 
+describe('recordEvent() project_id derivation', () => {
+  it('populates project_id from actor_id when the actor is a known session and none was supplied', async () => {
+    const { db } = await import('../db/db.js');
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, task_url, project_context_url, status, started_at, project_id)
+       VALUES ('sess-derive-actor', NULL, NULL, NULL, 'running', ?, 'proj-derive-actor')`,
+    ).run(Date.now());
+
+    recordEvent({
+      event_type: 'session_marked_done_while_running',
+      actor_type: 'system',
+      actor_id: 'sess-derive-actor',
+      payload: {},
+    });
+
+    const row = db
+      .prepare(
+        `SELECT project_id FROM audit_log WHERE event_type='session_marked_done_while_running' AND actor_id='sess-derive-actor'`,
+      )
+      .get() as { project_id: string | null } | undefined;
+    expect(row?.project_id).toBe('proj-derive-actor');
+  });
+
+  it('populates project_id from task_id when the actor does not resolve but the task does', async () => {
+    const { db } = await import('../db/db.js');
+    db.prepare(
+      `INSERT INTO task_repo_assignments (task_id, project_id, repo, assigned_by, assigned_at)
+       VALUES ('task-derive', 'proj-derive-task', 'org/repo', 'system', ?)`,
+    ).run(Date.now());
+
+    recordEvent({
+      event_type: 'pipeline_stage_entered',
+      actor_type: 'system',
+      task_id: 'task-derive',
+      payload: {},
+    });
+
+    const row = db
+      .prepare(
+        `SELECT project_id FROM audit_log WHERE event_type='pipeline_stage_entered' AND task_id='task-derive'`,
+      )
+      .get() as { project_id: string | null } | undefined;
+    expect(row?.project_id).toBe('proj-derive-task');
+  });
+
+  it('leaves project_id NULL and does not throw when neither actor nor task resolves', async () => {
+    const { db } = await import('../db/db.js');
+
+    expect(() =>
+      recordEvent({
+        event_type: 'process_boot',
+        actor_type: 'system',
+        payload: {},
+      }),
+    ).not.toThrow();
+
+    const row = db
+      .prepare(`SELECT project_id FROM audit_log WHERE event_type='process_boot'`)
+      .get() as { project_id: string | null } | undefined;
+    expect(row?.project_id).toBeNull();
+  });
+});
+
 describe('audit_log source-level DELETE/UPDATE guard', () => {
   it('backend source files contain no DELETE FROM audit_log statements', () => {
     const backendSrc = path.join(__dirname, '..', '..', 'src');
