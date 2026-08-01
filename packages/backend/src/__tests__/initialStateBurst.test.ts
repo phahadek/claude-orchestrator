@@ -190,8 +190,6 @@ describe('sendInitialStateBurst', () => {
     const sent: ServerMessage[] = [];
     sendInitialStateBurst((msg) => sent.push(msg));
 
-    expect(
-      sent.some((m) => m.type === 'session_feedback_pending'),
-    ).toBe(false);
+    expect(sent.some((m) => m.type === 'session_feedback_pending')).toBe(false);
   });
 });

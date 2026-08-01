@@ -556,13 +556,9 @@ describe('SessionManager.enqueueFeedback()', () => {
       );
       expect(pendingCalls.length).toBe(2);
       expect((pendingCalls[0][1] as { pending: boolean }).pending).toBe(true);
-      expect((pendingCalls[1][1] as { pending: boolean }).pending).toBe(
-        false,
-      );
+      expect((pendingCalls[1][1] as { pending: boolean }).pending).toBe(false);
       expect(queries.markInboxItemsDelivered).not.toHaveBeenCalled();
-      expect(queries.listUndeliveredInboxItems('sess-idle-3')).toHaveLength(
-        1,
-      );
+      expect(queries.listUndeliveredInboxItems('sess-idle-3')).toHaveLength(1);
     });
   });
 });
