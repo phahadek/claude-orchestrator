@@ -14,6 +14,7 @@ import {
   taskIdFromIntent,
   taskIdForIntentDisplay,
   isGateVerifyIntent,
+  isGateItemTaskId,
   gateItemIdFromIntent,
 } from '../utils/milestoneStack';
 import type { MilestoneStackSelection } from './MilestoneDecisionStack';
@@ -217,12 +218,19 @@ export function MilestoneDrilldown({
     error: gateItemError,
   } = useGateItemDetail(gateItemId);
 
+  // Guards against the session's task_id being a `gate-item:` sentinel (e.g.
+  // a stray intent whose originating session turns out to be a gate-verify
+  // session) — never surface that as a real task id.
+  const safeFallbackSessionTaskId = isGateItemTaskId(fallbackSessionTaskId)
+    ? null
+    : fallbackSessionTaskId;
+
   const taskId = isGateSelection
     ? null
     : selection?.type === 'task'
       ? selection.task.taskId
       : selection
-        ? taskIdForIntentDisplay(selection.intent, fallbackSessionTaskId)
+        ? taskIdForIntentDisplay(selection.intent, safeFallbackSessionTaskId)
         : null;
 
   const resolvedTask: TaskView | null =
