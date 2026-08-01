@@ -55,6 +55,7 @@ describe('MilestoneDecisionInbox', () => {
         milestone: 'M1',
         state: 'staged',
         decisionProposal: 'Promote task 1',
+        sessionComplete: true,
       },
       {
         id: 'lower-ranked',
@@ -66,6 +67,7 @@ describe('MilestoneDecisionInbox', () => {
         groupKind: 'investigation',
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
     ];
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
@@ -154,6 +156,7 @@ describe('MilestoneDecisionInbox', () => {
         milestone: 'M1',
         state: 'staged',
         decisionProposal: 'Need a call on the approach',
+        sessionComplete: true,
       },
       {
         id: 'ordinary-intent',
@@ -164,6 +167,7 @@ describe('MilestoneDecisionInbox', () => {
         sessionId: 'session-ops',
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
     ];
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
@@ -202,6 +206,7 @@ describe('MilestoneDecisionInbox', () => {
           groupId,
           milestone: 'M1',
           state: 'staged',
+          sessionComplete: true,
         },
         {
           id: `${groupId}-status`,
@@ -223,6 +228,7 @@ describe('MilestoneDecisionInbox', () => {
           groupId,
           milestone: 'M1',
           state: 'staged',
+          sessionComplete: true,
         },
       ];
     }
@@ -266,6 +272,7 @@ describe('MilestoneDecisionInbox', () => {
         sessionId: 'session-ungrouped',
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
       {
         id: 'grouped-dep',
@@ -277,6 +284,7 @@ describe('MilestoneDecisionInbox', () => {
         groupId: 'group-a',
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
       {
         id: 'grouped-status',
@@ -288,6 +296,7 @@ describe('MilestoneDecisionInbox', () => {
         groupId: 'group-a',
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
     ];
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
@@ -353,6 +362,7 @@ describe('MilestoneDecisionInbox', () => {
       groupId,
       milestone: 'M1',
       state: 'needs_revision',
+      sessionComplete: true,
     };
     const committedMember: StagedIntent = {
       id: 'committed-member',
@@ -364,6 +374,7 @@ describe('MilestoneDecisionInbox', () => {
       groupId,
       milestone: 'M1',
       state: 'committed',
+      sessionComplete: true,
     };
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
       blockedMember,
@@ -411,8 +422,10 @@ describe('MilestoneDecisionInbox', () => {
           projectId: 'proj-1',
           createdAt: 0,
           groupId,
+          groupKind: 'groom',
           milestone: 'M1',
           state: 'staged',
+          sessionComplete: true,
         },
       ];
     }
@@ -450,6 +463,7 @@ describe('MilestoneDecisionInbox', () => {
         groupId,
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
     ]);
 
@@ -471,6 +485,7 @@ describe('MilestoneDecisionInbox', () => {
       groupId,
       milestone: 'M1',
       state: 'needs_revision',
+      sessionComplete: true,
     };
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
       blockedMember,
@@ -511,8 +526,10 @@ describe('MilestoneDecisionInbox', () => {
         projectId: 'proj-1',
         createdAt: 0,
         groupId,
+        groupKind: 'groom',
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
     ]);
 
@@ -544,8 +561,10 @@ describe('MilestoneDecisionInbox', () => {
         projectId: 'proj-1',
         createdAt: 0,
         groupId,
+        groupKind: 'groom',
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
     ]);
     const rejectGroup = vi
@@ -584,6 +603,7 @@ describe('MilestoneDecisionInbox', () => {
         groupId: 'group-a',
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
     ];
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
@@ -621,6 +641,7 @@ describe('MilestoneDecisionInbox', () => {
         groupKind: 'other',
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
     ];
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
@@ -658,6 +679,7 @@ describe('MilestoneDecisionInbox', () => {
         createdAt: 2,
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
       {
         id: 'design-intent',
@@ -667,6 +689,7 @@ describe('MilestoneDecisionInbox', () => {
         createdAt: 1,
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
       {
         id: 'pickone-no-task',
@@ -680,6 +703,7 @@ describe('MilestoneDecisionInbox', () => {
         createdAt: 0,
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
     ];
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
@@ -728,6 +752,7 @@ describe('MilestoneDecisionInbox', () => {
         createdAt: 1,
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
       {
         id: 'open-intent',
@@ -737,6 +762,7 @@ describe('MilestoneDecisionInbox', () => {
         createdAt: 0,
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
     ];
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
@@ -785,6 +811,7 @@ describe('MilestoneDecisionInbox', () => {
         createdAt: 0,
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
     ];
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);

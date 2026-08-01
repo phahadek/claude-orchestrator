@@ -208,7 +208,7 @@ beforeEach(() => {
       if (url.includes('/api/tasks/active')) {
         return Promise.resolve({
           ok: true,
-          json: async () => [MOCK_TASK],
+          json: async () => ({ tasks: [MOCK_TASK], coldCache: false }),
         });
       }
       if (url.includes('/api/settings')) {

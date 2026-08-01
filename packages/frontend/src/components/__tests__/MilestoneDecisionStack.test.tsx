@@ -170,6 +170,7 @@ describe('MilestoneDecisionStack', () => {
         createdAt: 1,
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
       {
         id: 'design-intent',
@@ -179,6 +180,7 @@ describe('MilestoneDecisionStack', () => {
         createdAt: 0,
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
     ];
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
@@ -290,6 +292,7 @@ describe('MilestoneDecisionStack', () => {
         sessionId: 'session-1',
         milestone: 'M1',
         state: 'staged',
+        sessionComplete: true,
       },
     ];
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);

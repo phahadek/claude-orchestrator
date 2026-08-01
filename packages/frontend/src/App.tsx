@@ -161,7 +161,7 @@ export default function App() {
   // On localhost with zero devices the WS succeeds in bootstrap mode (no 4001),
   // so the device-unauthorized event never fires — this catches that case.
   useEffect(() => {
-    fetch('/api/enrollment/needs-bootstrap')
+    authedFetch('/api/enrollment/needs-bootstrap')
       .then((r) => r.json() as Promise<{ needsBootstrap: boolean }>)
       .then(({ needsBootstrap }) => {
         if (needsBootstrap) setNeedsEnrollment(true);

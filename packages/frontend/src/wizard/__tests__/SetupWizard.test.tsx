@@ -56,6 +56,7 @@ vi.mock('../../api/projects', () => ({
   projectsApi: {
     create: vi.fn().mockResolvedValue({ id: 'proj-1', name: 'Test Project' }),
   },
+  authedFetch: (input: RequestInfo, init?: RequestInit) => fetch(input, init),
 }));
 
 import { SetupWizard } from '../SetupWizard';
