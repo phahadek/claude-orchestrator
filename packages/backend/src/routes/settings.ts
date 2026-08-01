@@ -20,6 +20,7 @@ const router = Router();
 const SETTING_KEYS = [
   'max_concurrent_code_sessions',
   'max_concurrent_planning_sessions',
+  'max_concurrent_verify_sessions',
   'auto_review_concurrency',
   'auto_review',
   'card_preview_lines',
@@ -72,6 +73,9 @@ function applyToRuntime(
       break;
     case 'max_concurrent_planning_sessions':
       runtimeSettings.max_concurrent_planning_sessions = value as number;
+      break;
+    case 'max_concurrent_verify_sessions':
+      runtimeSettings.max_concurrent_verify_sessions = value as number;
       break;
     case 'auto_review_concurrency':
       runtimeSettings.auto_review_concurrency = value as number;
@@ -212,6 +216,9 @@ function runtimeSettingsAsRecord(): {
     ),
     max_concurrent_planning_sessions: String(
       runtimeSettings.max_concurrent_planning_sessions,
+    ),
+    max_concurrent_verify_sessions: String(
+      runtimeSettings.max_concurrent_verify_sessions,
     ),
     auto_review_concurrency: String(runtimeSettings.auto_review_concurrency),
     auto_review: String(runtimeSettings.auto_review),

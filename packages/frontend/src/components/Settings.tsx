@@ -283,6 +283,14 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                   'Shared pool for groom, design, ops and gate-verify sessions',
                 )}
                 {numInput(
+                  'max_concurrent_verify_sessions',
+                  'Max concurrent gate-verify sessions',
+                  1,
+                  100,
+                  1,
+                  'Sub-limit of the planning pool dedicated to gate-verify dispatch',
+                )}
+                {numInput(
                   'auto_review_concurrency',
                   'Max concurrent review sessions',
                   1,

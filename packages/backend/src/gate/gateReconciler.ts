@@ -1,9 +1,13 @@
 import { logger } from '../logger';
 import type { Scheduler } from '../orchestration/Scheduler';
 import { getAllProjects, getProjectById, runtimeSettings } from '../config';
+import { typedGetSetting } from '../config/settings';
+import { computeAvailableCapacity } from '../orchestration/DispatchTriggerEvaluator';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { getProjectDeployedSha } from '../deploy/deployService';
 import {
+  countLivePlanningSessions,
+  countLiveVerifySessions,
   getArm,
   getGateItemsWithPendingCapabilityRequest,
   hasLiveVerifySessionForGateItem,
@@ -191,6 +195,14 @@ const DEFAULT_TIER_LIMIT = 10;
 const DEFAULT_MAX_DISPATCH_ATTEMPTS = 3;
 const DEFAULT_MAX_FIX_ATTEMPTS = 3;
 
+/**
+ * NOTE: despite the name, `maxDispatchAttempts`/`maxFixAttempts` below are
+ * escalation thresholds (consecutive-crash / fix-cycle counters), not
+ * concurrency limits. The actual dispatch concurrency cap lives in settings
+ * as `max_concurrent_verify_sessions` (see typedGetSetting in
+ * runGateReconcilerTick) — a sub-limit of the shared
+ * max_concurrent_planning_sessions pool, not a separate pool.
+ */
 export interface GateVerificationConcurrencyConfig {
   /** Consecutive verifier crashes (thrown errors) before the item is forced to needs-setup. */
   maxDispatchAttempts?: number;
@@ -647,6 +659,31 @@ export async function runGateReconcilerTick(
     }
   } else {
     const verifier = options.verifier;
+
+    // Budget this tick's new dispatches: at most the smaller of (a) the
+    // shared planning pool's headroom above the human reserve, mirroring
+    // DispatchTriggerEvaluator's computeAvailableCapacity, and (b) the
+    // verify-specific sub-limit. DEFAULT_TIER_LIMIT above only bounds how
+    // many items are pulled per tier per tick — it is not a concurrency
+    // limit, since sessions dispatched on prior ticks may still be live —
+    // so this budget is the actual concurrency backstop ahead of
+    // SessionManager.start's hard cap (still in place as the last line of
+    // defense; a race between this read and the dispatch itself falls
+    // through to it and to the dispatchFailed path).
+    const planningAvailable = computeAvailableCapacity({
+      maxConcurrentPlanningSessions: typedGetSetting(
+        'max_concurrent_planning_sessions',
+      ),
+      humanReserve: typedGetSetting('human_reserve'),
+      activePlanningSessions: countLivePlanningSessions(),
+    });
+    const verifyAvailable = Math.max(
+      0,
+      typedGetSetting('max_concurrent_verify_sessions') -
+        countLiveVerifySessions(),
+    );
+    let dispatchBudget = Math.min(planningAvailable, verifyAvailable);
+
     for (const { project, milestone } of projectMilestones.values()) {
       let milestoneRow;
       try {
@@ -667,6 +704,7 @@ export async function runGateReconcilerTick(
           limit,
         });
         for (const item of batch) {
+          if (dispatchBudget <= 0) continue;
           const outcome = await processItem(
             item,
             verifier,
@@ -674,7 +712,13 @@ export async function runGateReconcilerTick(
             deployShaByProject[item.project] ?? null,
             options.concurrency,
           );
-          if (outcome) processed.push(outcome);
+          // Only a genuine dispatch attempt (verify() invoked) spends
+          // budget — an item skipped by the in-flight/live-session guards
+          // (outcome === null) claimed no new capacity.
+          if (outcome) {
+            processed.push(outcome);
+            dispatchBudget--;
+          }
         }
       }
     }

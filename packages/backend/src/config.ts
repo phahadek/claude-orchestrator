@@ -593,6 +593,15 @@ export interface RuntimeSettings {
    * attention.
    */
   max_concurrent_planning_sessions: number;
+  /**
+   * Sub-limit of max_concurrent_planning_sessions dedicated to gate-verify
+   * dispatch (see gateReconciler.ts) — verify sessions still count against
+   * the shared planning pool at SessionManager.start; this only bounds how
+   * many of that pool the reconciler will claim for verify in one tick.
+   * Setting it above max_concurrent_planning_sessions does not raise the
+   * real ceiling.
+   */
+  max_concurrent_verify_sessions: number;
   /** TaskCacheRefresher: how often (ms) to refresh per-project board caches in background. */
   task_cache_refresh_interval_ms: number;
   /** GateReconciler: built but not activated by default (no-coexistence rule) — off until an operator opts in. */
@@ -644,6 +653,9 @@ export const runtimeSettings: RuntimeSettings = {
   gate_verify_session_effort: '',
   max_concurrent_planning_sessions: Number(
     process.env.MAX_CONCURRENT_PLANNING_SESSIONS ?? 5,
+  ),
+  max_concurrent_verify_sessions: Number(
+    process.env.MAX_CONCURRENT_VERIFY_SESSIONS ?? 5,
   ),
   session_mode: process.env.SESSION_MODE === 'api' ? 'api' : 'cli',
   auto_launch_concurrency: Number(process.env.AUTO_LAUNCH_CONCURRENCY ?? 1),
