@@ -275,9 +275,7 @@ describe('DispatchModal', () => {
       { type: 'dispatch' }
     >;
     expect(dispatchMsg).toBeDefined();
-    expect(dispatchMsg.tasks[0].taskUrl).toBe(
-      'https://notion.so/yaml-task-id',
-    );
+    expect(dispatchMsg.tasks[0].taskUrl).toBe('https://notion.so/yaml-task-id');
     expect(dispatchMsg.tasks[0].taskUrl).not.toBe('yaml-task-id');
   });
 

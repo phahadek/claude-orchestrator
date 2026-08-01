@@ -608,9 +608,7 @@ describe('PRPanel — differential routing (WorkItemCard vs PRHistoryRow)', () =
     render(<PRPanel activeProjectId="proj-1" />);
     await waitFor(() => {
       // PRHistoryRow renders the title as a link — no WorkItemCard action buttons
-      expect(
-        screen.getByRole('link', { name: '#10 Merged PR' }),
-      ).toBeDefined();
+      expect(screen.getByRole('link', { name: '#10 Merged PR' })).toBeDefined();
       expect(screen.queryByRole('button', { name: /run review/i })).toBeNull();
     });
   });
@@ -626,9 +624,7 @@ describe('PRPanel — differential routing (WorkItemCard vs PRHistoryRow)', () =
     setupFetchWithPRs([closedPR]);
     render(<PRPanel activeProjectId="proj-1" />);
     await waitFor(() => {
-      expect(
-        screen.getByRole('link', { name: '#11 Closed PR' }),
-      ).toBeDefined();
+      expect(screen.getByRole('link', { name: '#11 Closed PR' })).toBeDefined();
       expect(screen.queryByRole('button', { name: /run review/i })).toBeNull();
     });
   });
