@@ -539,7 +539,7 @@ export default function App() {
         )
         .then((data) => {
           if (data) {
-            setTaskViews(data.tasks);
+            setTaskViews(Array.isArray(data.tasks) ? data.tasks : []);
             setTaskCacheCold(data.coldCache);
           } else {
             setTaskViews([]);
@@ -629,7 +629,7 @@ export default function App() {
       .then((r) => (r.ok ? (r.json() as Promise<TasksActiveResponse>) : null))
       .then((data) => {
         if (data) {
-          setTaskViews(data.tasks);
+          setTaskViews(Array.isArray(data.tasks) ? data.tasks : []);
           setTaskCacheCold(data.coldCache);
         }
       })
@@ -678,7 +678,7 @@ export default function App() {
         const res = await authedFetch(`/api/tasks/active?${params.toString()}`);
         if (res.ok) {
           const data = (await res.json()) as TasksActiveResponse;
-          setTaskViews(data.tasks);
+          setTaskViews(Array.isArray(data.tasks) ? data.tasks : []);
           setTaskCacheCold(data.coldCache);
         }
       }
