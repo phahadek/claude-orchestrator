@@ -293,7 +293,9 @@ describe('session.requestCapability decision-surface kind', () => {
     }
 
     expect(caught).toBeInstanceOf(Error);
-    expect((caught as Error).message).toMatch(/not a supported capability shape/);
+    expect((caught as Error).message).toMatch(
+      /not a supported capability shape/,
+    );
     expect((caught as Error).name).toBe('CapabilityRequestValidationError');
 
     const rows = db

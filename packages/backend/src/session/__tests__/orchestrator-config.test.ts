@@ -523,9 +523,9 @@ describe('bashCapabilityConfersFileMutation', () => {
   );
 
   it('returns false for a non-Bash capability', () => {
-    expect(bashCapabilityConfersFileMutation('mcp__github__merge_pull_request')).toBe(
-      false,
-    );
+    expect(
+      bashCapabilityConfersFileMutation('mcp__github__merge_pull_request'),
+    ).toBe(false);
     expect(bashCapabilityConfersFileMutation('Edit')).toBe(false);
   });
 });
