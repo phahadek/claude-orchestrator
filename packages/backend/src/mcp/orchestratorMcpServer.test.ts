@@ -18,12 +18,15 @@ import {
 } from './orchestratorMcpServer';
 import {
   mintStageCredential,
+  revokeStageCredential,
   _resetStageCredentialsForTesting,
 } from '../auth/SessionStageAuth';
 import { SessionManager } from '../session/SessionManager';
 import { insertSession, insertGateItem, getStagedIntent } from '../db/queries';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import { createUnit } from '../architecture/ArchUnitStore';
+import * as AuditLog from '../audit/AuditLog';
+import { queryAuditLogByProject, getLatestEventByType } from '../audit/AuditLog';
 
 function buildApp() {
   const app = express();
@@ -361,6 +364,198 @@ describe('buildMcpServer — ctx.milestone attribution', () => {
 
     await client.close();
     await server.close();
+  });
+});
+
+describe('orchestratorMcpServer — MCP lifecycle instrumentation', () => {
+  beforeEach(() => {
+    _resetStageCredentialsForTesting();
+  });
+
+  it('records a connection-established event naming the session id, readable back with a non-null project_id', async () => {
+    insertSession({
+      session_id: 'mcp-lifecycle-1',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-lifecycle-established',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'standard',
+    });
+    const token = mintStageCredential('mcp-lifecycle-1');
+    const res = await supertest(buildApp())
+      .post('/api/mcp')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
+    expect(res.status).toBe(200);
+
+    const { entries } = queryAuditLogByProject('proj-lifecycle-established', {
+      eventType: 'mcp_connection_established',
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].actorId).toBe('mcp-lifecycle-1');
+    expect(entries[0].projectId).toBe('proj-lifecycle-established');
+  });
+
+  it('records a connection-closed teardown event naming the session id and a reason, with a non-null project_id', async () => {
+    insertSession({
+      session_id: 'mcp-lifecycle-2',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-lifecycle-closed',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'standard',
+    });
+    const token = mintStageCredential('mcp-lifecycle-2');
+    const res = await supertest(buildApp())
+      .post('/api/mcp')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
+    expect(res.status).toBe(200);
+
+    const { entries } = queryAuditLogByProject('proj-lifecycle-closed', {
+      eventType: 'mcp_connection_closed',
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].actorId).toBe('mcp-lifecycle-2');
+    expect(entries[0].projectId).toBe('proj-lifecycle-closed');
+    expect((entries[0].payload as { reason: string }).reason).toBe(
+      'completed',
+    );
+  });
+
+  it('records events for a session resumed via --resume, not only its first spawn', async () => {
+    insertSession({
+      session_id: 'mcp-lifecycle-resume',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-lifecycle-resume',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'standard',
+    });
+    // First spawn mints the credential and connects once.
+    const token = mintStageCredential('mcp-lifecycle-resume');
+    const app = buildApp();
+    await supertest(app)
+      .post('/api/mcp')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
+
+    // A --resume re-spawn re-mints (idempotently, same token — see
+    // writeMcpConfig/mintStageCredential) and reconnects independently.
+    const resumedToken = mintStageCredential('mcp-lifecycle-resume');
+    expect(resumedToken).toBe(token);
+    const resumedRes = await supertest(app)
+      .post('/api/mcp')
+      .set('Authorization', `Bearer ${resumedToken}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
+    expect(resumedRes.status).toBe(200);
+
+    const { entries } = queryAuditLogByProject('proj-lifecycle-resume', {
+      eventType: 'mcp_connection_established',
+    });
+    expect(entries).toHaveLength(2);
+  });
+
+  it('distinguishes an absent credential from a rejected/expired one', async () => {
+    const absentRes = await supertest(buildApp())
+      .post('/api/mcp')
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
+    expect(absentRes.status).toBe(401);
+    const absentEvent = getLatestEventByType('mcp_stage_credential_rejected');
+    expect(absentEvent).toBeDefined();
+    expect(JSON.parse(absentEvent!.payload).reason).toBe('absent');
+    expect(absentEvent!.project_id).toBeNull();
+    expect(absentEvent!.actor_id).toBeNull();
+
+    const unknownRes = await supertest(buildApp())
+      .post('/api/mcp')
+      .set('Authorization', 'Bearer never-minted-token')
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
+    expect(unknownRes.status).toBe(401);
+    const unknownEvent = getLatestEventByType(
+      'mcp_stage_credential_rejected',
+    );
+    expect(JSON.parse(unknownEvent!.payload).reason).toBe('unknown');
+    expect(unknownEvent!.actor_id).toBeNull();
+  });
+
+  it('a revoked credential is rejected with an event attributing it back to the session, carrying a project_id', async () => {
+    insertSession({
+      session_id: 'mcp-lifecycle-revoked',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-lifecycle-revoked',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'standard',
+    });
+    const token = mintStageCredential('mcp-lifecycle-revoked');
+    revokeStageCredential('mcp-lifecycle-revoked', 'session_teardown');
+
+    const res = await supertest(buildApp())
+      .post('/api/mcp')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
+    expect(res.status).toBe(401);
+
+    const { entries } = queryAuditLogByProject('proj-lifecycle-revoked', {
+      eventType: 'mcp_stage_credential_rejected',
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].actorId).toBe('mcp-lifecycle-revoked');
+    expect((entries[0].payload as { reason: string }).reason).toBe(
+      'revoked',
+    );
+
+    // Teardown itself was also recorded, naming the session id and reason.
+    const revokedEvent = getLatestEventByType('mcp_session_credential_revoked');
+    expect(revokedEvent).toBeDefined();
+    expect(revokedEvent!.actor_id).toBe('mcp-lifecycle-revoked');
+    expect(revokedEvent!.project_id).toBe('proj-lifecycle-revoked');
+    expect(JSON.parse(revokedEvent!.payload).reason).toBe('session_teardown');
+  });
+
+  it('never fails the MCP request when the audit write itself throws', async () => {
+    insertSession({
+      session_id: 'mcp-lifecycle-swallow',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-lifecycle-swallow',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'standard',
+    });
+    const token = mintStageCredential('mcp-lifecycle-swallow');
+    const spy = vi
+      .spyOn(AuditLog, 'recordEvent')
+      .mockImplementation(() => {
+        throw new Error('simulated audit write failure');
+      });
+    try {
+      const res = await supertest(buildApp())
+        .post('/api/mcp')
+        .set('Authorization', `Bearer ${token}`)
+        .set('Accept', 'application/json, text/event-stream')
+        .send({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
+      expect(res.status).toBe(200);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

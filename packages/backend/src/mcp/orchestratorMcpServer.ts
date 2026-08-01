@@ -4,6 +4,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { requireSessionStageAuth } from '../auth/SessionStageAuth';
 import { getSession } from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
+import type { AuditEvent } from '../audit/types';
 import { registerStageProposalTools } from './tools/stageProposalTools';
 import { registerVerdictTools } from './tools/verdictTools';
 import { registerCompletenessTools } from './tools/completenessTools';
@@ -34,6 +36,19 @@ function toPlanningWorkflow(
     sessionType === 'split'
     ? sessionType
     : null;
+}
+
+/**
+ * Instrumentation must never fail the MCP request it observes — a
+ * recordEvent failure (e.g. a transient DB error) is swallowed here rather
+ * than left to propagate into the request path.
+ */
+function safeRecordEvent(event: AuditEvent): void {
+  try {
+    recordEvent(event);
+  } catch {
+    // Best-effort only — see doc comment above.
+  }
 }
 
 /** Path the router registers, relative to where it's mounted (see server.ts: app.use('/api', ...)). */
@@ -214,6 +229,20 @@ export function createOrchestratorMcpRouter(
       const { sessionId } = (
         req as Request & { stageSession: { sessionId: string } }
       ).stageSession;
+
+      // Connection-established: the durable record that this session
+      // authenticated and reached the MCP mount, keyed to its session id so
+      // it correlates with sessions/session_events. Fires identically for a
+      // fresh spawn or a --resume'd session — this handler has no notion of
+      // spawn-vs-resume, only of the credential presented, so a resumed
+      // session's reconnect is captured the same way a first connect is.
+      safeRecordEvent({
+        event_type: 'mcp_connection_established',
+        actor_type: 'system',
+        actor_id: sessionId,
+        payload: { path: req.path },
+      });
+
       const server = buildMcpServer(sessionId, sessionManager);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
@@ -221,6 +250,23 @@ export function createOrchestratorMcpRouter(
       res.on('close', () => {
         void transport.close();
         void server.close();
+        // Teardown, named with a reason: a response that never finished
+        // writing means the client (or the transport) dropped the
+        // connection before completion; a >=400 status means the request
+        // itself failed; anything else is an ordinary per-call teardown —
+        // this transport is stateless, so every request gets its own
+        // connect/close pair (see this router's doc comment).
+        const reason = !res.writableEnded
+          ? 'client_disconnected'
+          : res.statusCode >= 400
+            ? 'error'
+            : 'completed';
+        safeRecordEvent({
+          event_type: 'mcp_connection_closed',
+          actor_type: 'system',
+          actor_id: sessionId,
+          payload: { reason, statusCode: res.statusCode },
+        });
       });
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);

@@ -56,7 +56,10 @@ describe('reconcileSessionsMap()', () => {
 
     expect(result.dropped).toBe(1);
     expect(hasSessionEntry(sm, sessionId)).toBe(false);
-    expect(revokeStageCredential).toHaveBeenCalledWith(sessionId);
+    expect(revokeStageCredential).toHaveBeenCalledWith(
+      sessionId,
+      'missing_db_row',
+    );
   });
 
   it.each(['error', 'killed', 'done'])(
@@ -75,7 +78,10 @@ describe('reconcileSessionsMap()', () => {
 
       expect(result.dropped).toBe(1);
       expect(hasSessionEntry(sm, sessionId)).toBe(false);
-      expect(revokeStageCredential).toHaveBeenCalledWith(sessionId);
+      expect(revokeStageCredential).toHaveBeenCalledWith(
+        sessionId,
+        `terminal_status:${status}`,
+      );
     },
   );
 

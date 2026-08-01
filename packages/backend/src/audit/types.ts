@@ -96,6 +96,9 @@ type EventType =
   | 'milestone_wrapped'
   | 'base_fetch_failed'
   | 'mcp_stage_credential_rejected'
+  | 'mcp_connection_established'
+  | 'mcp_connection_closed'
+  | 'mcp_session_credential_revoked'
   | 'memory_admission_deferred'
   | 'task_aborted';
 

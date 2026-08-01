@@ -5,6 +5,20 @@ import type { Request, Response, NextFunction } from 'express';
 import { isLoopbackIp } from './DeviceAuth';
 import { getDataDir } from '../config/dataDir';
 import { recordEvent } from '../audit/AuditLog';
+import type { AuditEvent } from '../audit/types';
+
+/**
+ * Instrumentation must never fail the request it observes — a recordEvent
+ * failure (e.g. a transient DB error) is swallowed here rather than left to
+ * propagate into the auth/MCP request path.
+ */
+function safeRecordEvent(event: AuditEvent): void {
+  try {
+    recordEvent(event);
+  } catch {
+    // Best-effort only — see doc comment above.
+  }
+}
 
 /**
  * Per-session scoped stage credential: minted once per session at spawn,
@@ -21,6 +35,30 @@ interface StageCredential {
 
 const credentialsByToken = new Map<string, StageCredential>();
 const tokenBySession = new Map<string, string>();
+
+/**
+ * Short-lived, in-memory-only record of which session a just-revoked token
+ * belonged to — kept so a later request that presents that now-invalid
+ * token can still be attributed to a session in the rejection event's
+ * payload, distinguishing "this credential was valid and then revoked/
+ * expired" from "this token never existed at all." Deliberately not
+ * persisted to disk (advisory only, for correlating a rejection with the
+ * session it happened to, not for auth decisions) and capped so a long-lived
+ * process doesn't grow this unbounded.
+ */
+const revokedTokenAttribution = new Map<
+  string,
+  { sessionId: string; revokedAt: number }
+>();
+const MAX_REVOKED_ATTRIBUTION = 500;
+
+function rememberRevokedToken(token: string, sessionId: string): void {
+  revokedTokenAttribution.set(token, { sessionId, revokedAt: Date.now() });
+  if (revokedTokenAttribution.size > MAX_REVOKED_ATTRIBUTION) {
+    const oldestKey = revokedTokenAttribution.keys().next().value;
+    if (oldestKey !== undefined) revokedTokenAttribution.delete(oldestKey);
+  }
+}
 
 /**
  * On-disk mirror of the maps above, under the app data dir (mode 600 — same
@@ -109,13 +147,35 @@ export function mintStageCredential(sessionId: string): string {
   return token;
 }
 
-/** Revoke a session's stage credential. Safe to call multiple times. */
-export function revokeStageCredential(sessionId: string): void {
+/**
+ * Revoke a session's stage credential. Safe to call multiple times.
+ *
+ * Records `mcp_session_credential_revoked` — the durable signal that this
+ * session's orchestrator MCP access has ended server-side (session
+ * teardown, a stale in-memory entry reconciled away, etc.) — naming the
+ * session id and `reason` so it correlates with sessions/session_events.
+ * The token→session mapping is stashed in `revokedTokenAttribution` before
+ * it's dropped, so a subsequent request that still presents this token can
+ * be attributed back to this session in its own rejection event (see
+ * requireSessionStageAuth) rather than looking indistinguishable from a
+ * token that was never minted at all.
+ */
+export function revokeStageCredential(
+  sessionId: string,
+  reason: string = 'revoked',
+): void {
   const token = tokenBySession.get(sessionId);
   if (!token) return;
   tokenBySession.delete(sessionId);
   credentialsByToken.delete(token);
+  rememberRevokedToken(token, sessionId);
   persistCredentials();
+  safeRecordEvent({
+    event_type: 'mcp_session_credential_revoked',
+    actor_type: 'system',
+    actor_id: sessionId,
+    payload: { sessionId, reason },
+  });
 }
 
 /**
@@ -181,6 +241,15 @@ export function requireSessionStageAuth(
 
   const token = getBearerToken(req);
   if (!token) {
+    // An absent credential never resolves to any session — exempt from the
+    // project_id requirement (same accepted precedent as process_boot, see
+    // AuditLog.ts#resolveProjectId), but still recorded so it's distinct
+    // from a rejected/expired one below.
+    safeRecordEvent({
+      event_type: 'mcp_stage_credential_rejected',
+      actor_type: 'system',
+      payload: { reason: 'absent', path: req.path },
+    });
     res
       .status(401)
       .json({ error: 'unauthorized', code: 'stage_credential_required' });
@@ -192,11 +261,21 @@ export function requireSessionStageAuth(
     // Distinct, queryable record of an unrecoverable credential rejection —
     // a transport/auth failure must never be indistinguishable in the audit
     // trail from a tool call that legitimately found nothing (see
-    // auditLog.query, mcp/tools/auditLogReadTools.ts).
-    recordEvent({
+    // auditLog.query, mcp/tools/auditLogReadTools.ts). When the token was
+    // minted and later revoked (see revokeStageCredential), attribute it
+    // back to that session — carrying a real project_id — rather than
+    // lumping it in with a token that was never minted at all.
+    const attribution = revokedTokenAttribution.get(token);
+    safeRecordEvent({
       event_type: 'mcp_stage_credential_rejected',
       actor_type: 'system',
-      payload: { tokenPrefix: token.slice(0, 8), path: req.path },
+      actor_id: attribution?.sessionId ?? null,
+      payload: {
+        reason: attribution ? 'revoked' : 'unknown',
+        tokenPrefix: token.slice(0, 8),
+        path: req.path,
+        ...(attribution ? { sessionId: attribution.sessionId } : {}),
+      },
     });
     res
       .status(401)
