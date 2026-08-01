@@ -395,7 +395,9 @@ function isVisibleOnDecisionSurface(
   if (isAutoRejectedNeedsRevision(row)) {
     if (!row.session_id) return true;
     const owningSession = getSession(row.session_id);
-    return !owningSession || TERMINAL_SESSION_STATUSES.has(owningSession.status);
+    return (
+      !owningSession || TERMINAL_SESSION_STATUSES.has(owningSession.status)
+    );
   }
   return true;
 }

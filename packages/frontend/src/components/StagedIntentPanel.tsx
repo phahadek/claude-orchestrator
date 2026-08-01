@@ -1163,7 +1163,9 @@ export function StagedIntentPanel({
   const [overrideReason, setOverrideReason] = useState('');
 
   const blocked = Boolean(
-    intent.annotation && 'blocked' in intent.annotation && intent.annotation.blocked,
+    intent.annotation &&
+    'blocked' in intent.annotation &&
+    intent.annotation.blocked,
   );
   // The grant-approval kind: never applied — dispositioned only through
   // approve / reject / pushback, the existing consent vocabulary.

@@ -473,7 +473,8 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     await orch.handleDisposition({
       intent,
       disposition: 'pushback',
-      reason: '[TaskWriteCommands] invalid status transition for t-1: Backlog -> Ready',
+      reason:
+        '[TaskWriteCommands] invalid status transition for t-1: Backlog -> Ready',
       provenance: 'auto',
     });
 

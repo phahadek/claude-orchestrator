@@ -198,9 +198,9 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
     const afterEnded = await supertest(app).get(
       '/api/staged-intents?sessionId=session-visibility',
     );
-    expect(
-      afterEnded.body.intents.map((i: { id: string }) => i.id),
-    ).toContain(intent.id);
+    expect(afterEnded.body.intents.map((i: { id: string }) => i.id)).toContain(
+      intent.id,
+    );
   });
 
   it('a session superseding an auto-rejected group member unblocks the group commit guard — no operator action required', async () => {
