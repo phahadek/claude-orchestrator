@@ -1044,8 +1044,14 @@ describe('runGateReconcilerTick — verify concurrency budgeting', () => {
 
   it('dispatches no further verify sessions once live verify sessions already fill the cap', async () => {
     typedSetSetting('max_concurrent_verify_sessions', 2);
-    insertLiveSession({ sessionId: 'live-verify-1', taskId: 'gate-item:already-1' });
-    insertLiveSession({ sessionId: 'live-verify-2', taskId: 'gate-item:already-2' });
+    insertLiveSession({
+      sessionId: 'live-verify-1',
+      taskId: 'gate-item:already-1',
+    });
+    insertLiveSession({
+      sessionId: 'live-verify-2',
+      taskId: 'gate-item:already-2',
+    });
 
     const item = makeRunnableItem({ classification: 'Read-Only' });
     const verify = vi.fn(async () => ({ disposition: 'pass' as const }));
@@ -1061,7 +1067,10 @@ describe('runGateReconcilerTick — verify concurrency budgeting', () => {
 
   it('dispatches up to the remaining verify capacity and no more when the cap exceeds live sessions', async () => {
     typedSetSetting('max_concurrent_verify_sessions', 3);
-    insertLiveSession({ sessionId: 'live-verify-1', taskId: 'gate-item:already-1' });
+    insertLiveSession({
+      sessionId: 'live-verify-1',
+      taskId: 'gate-item:already-1',
+    });
 
     const items = [
       makeRunnableItem({ text: 'item a', classification: 'Read-Only' }),
