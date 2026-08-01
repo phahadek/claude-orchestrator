@@ -21,6 +21,7 @@ import {
   isPlanningSession,
   isGateVerifySession,
 } from '../session/sessionPredicates';
+import { getEntry } from '../ops/opsJournal';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage } from '../ws/types';
 import {
@@ -502,14 +503,30 @@ export class PlanningOrchestrator {
 
   /**
    * Close an ops session's target task once its closing set of staged
-   * intents has actually been applied — mirrors completeDesignTask. Callers
-   * must exclude gate-verify sessions (task_id `gate-item:<id>`) first,
-   * since those have no Notion task to close.
+   * intents has actually been applied — mirrors completeDesignTask, plus one
+   * additional precondition unique to ops: reaching terminal is not itself
+   * completion, since ops work is tracked by its own state machine
+   * (ops_journal: pending → candidate → staged-proposal →
+   * applied-pending-confirm → resolved, see ops/opsJournal.ts). Only a
+   * journal already at 'resolved' at this synchronous instant means the
+   * investigation actually concluded — every other state (including a
+   * missing entry) leaves the task in progress. This only ever fires for the
+   * no-change Investigation path, where journal.setState -> resolved is
+   * staged atomically alongside this session's other closing-group members
+   * via commitGroupIntents and is therefore already committed by the time
+   * markTerminal runs; the operator-confirmed applied-pending-confirm ->
+   * resolved path is out of scope (see routes/opsJournal.ts) and typically
+   * settles well after the session has gone terminal. Callers must exclude
+   * gate-verify sessions (task_id `gate-item:<id>`) first, since those have
+   * no Notion task to close and also have no ops_journal entry.
    */
   private completeOpsTask(sessionId: string, row: Session): void {
     const taskId = row.task_id;
     const projectId = row.project_id;
     if (!taskId || !projectId) return;
+
+    const journalEntry = getEntry(taskId);
+    if (!journalEntry || journalEntry.state !== 'resolved') return;
 
     const intents = listStagedIntentsBySession(sessionId);
     if (intents.some((i) => i.state === 'rejected')) return;
