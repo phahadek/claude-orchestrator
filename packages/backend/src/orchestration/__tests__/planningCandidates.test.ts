@@ -20,7 +20,9 @@ import {
   getTaskCache,
   hasActivePlanningSessionForTask,
   isGroomNoOpSuppressed,
+  isPlanningKillSuppressed,
   insertStagedIntent,
+  insertSession,
 } from '../../db/queries';
 import { recordEvent } from '../../audit/AuditLog';
 import type { StagedIntentRow, StagedIntentState } from '../../db/types';
@@ -219,6 +221,7 @@ describe('isGroomCandidate', () => {
     hasActiveGroomSession: () => false,
     inCrashCooldown: () => false,
     isNoOpSuppressed: () => false,
+    isKillSuppressed: () => false,
   };
 
   it('rejects a task that is not still 🔲 Backlog', () => {
@@ -301,6 +304,13 @@ describe('isGroomCandidate', () => {
     const t = task();
     expect(
       isGroomCandidate(t, { ...baseDeps, isNoOpSuppressed: () => true }),
+    ).toBe(false);
+  });
+
+  it('skips a task whose most recent groom session was killed by the operator and not yet retired', () => {
+    const t = task();
+    expect(
+      isGroomCandidate(t, { ...baseDeps, isKillSuppressed: () => true }),
     ).toBe(false);
   });
 });
@@ -415,6 +425,198 @@ describe('isGroomNoOpSuppressed', () => {
   });
 });
 
+function insertKilledSession(overrides: {
+  sessionId?: string;
+  taskId?: string;
+  sessionType?: 'groom' | 'design' | 'ops';
+  endedAt?: number;
+}): { sessionId: string; endedAt: number } {
+  const sessionId = overrides.sessionId ?? `sess-${Math.random()}`;
+  const taskId = overrides.taskId ?? 'task-1';
+  // Deliberately well in the past (not Date.now()) so a subsequently
+  // recorded audit event — always stamped with the live clock — is
+  // unambiguously "after" the kill, with no same-millisecond tie risk.
+  const endedAt = overrides.endedAt ?? Date.now() - 60_000;
+  insertSession({
+    session_id: sessionId,
+    task_id: taskId,
+    task_url: 'https://notion.so/task',
+    project_context_url: 'https://notion.so/ctx',
+    project_id: 'proj-1',
+    status: 'killed',
+    started_at: endedAt - 10 * 60 * 1000,
+    ended_at: endedAt,
+    session_type: overrides.sessionType ?? 'groom',
+  } as never);
+  return { sessionId, endedAt };
+}
+
+describe('isPlanningKillSuppressed', () => {
+  beforeEach(() => {
+    db.prepare('DELETE FROM sessions').run();
+    db.prepare('DELETE FROM audit_log').run();
+  });
+
+  it('suppresses while the most recent groom session was killed with reason user_kill', () => {
+    const { sessionId } = insertKilledSession({ taskId: 'task-1' });
+    recordEvent({
+      event_type: 'session_errored',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: null,
+      task_id: null,
+      payload: { sessionId, status: 'killed', reason: 'user_kill' },
+    });
+    expect(isPlanningKillSuppressed('task-1', 'groom')).toBe(true);
+  });
+
+  it('does not suppress when the task has no session for that flow', () => {
+    expect(isPlanningKillSuppressed('task-1', 'groom')).toBe(false);
+  });
+
+  it('does not suppress when the most recent session ended for a non-kill reason (done)', () => {
+    const sessionId = 'sess-done';
+    insertSession({
+      session_id: sessionId,
+      task_id: 'task-1',
+      task_url: 'https://notion.so/task',
+      project_context_url: 'https://notion.so/ctx',
+      project_id: 'proj-1',
+      status: 'done',
+      started_at: Date.now() - 10 * 60 * 1000,
+      ended_at: Date.now(),
+      session_type: 'groom',
+    } as never);
+    recordEvent({
+      event_type: 'session_errored',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: null,
+      task_id: null,
+      payload: { sessionId, status: 'done', reason: 'done' },
+    });
+    expect(isPlanningKillSuppressed('task-1', 'groom')).toBe(false);
+  });
+
+  it.each(['error', 'launch_failed'])(
+    'does not suppress when the session errored with reason %s rather than user_kill',
+    (reason) => {
+      const { sessionId } = insertKilledSession({ taskId: 'task-1' });
+      recordEvent({
+        event_type: 'session_errored',
+        actor_type: 'system',
+        actor_id: sessionId,
+        project_id: null,
+        task_id: null,
+        payload: { sessionId, status: 'killed', reason },
+      });
+      expect(isPlanningKillSuppressed('task-1', 'groom')).toBe(false);
+    },
+  );
+
+  it('is consistent across groom, design and ops flows', () => {
+    for (const flow of ['groom', 'design', 'ops'] as const) {
+      db.prepare('DELETE FROM sessions').run();
+      db.prepare('DELETE FROM audit_log').run();
+      const { sessionId } = insertKilledSession({
+        taskId: 'task-1',
+        sessionType: flow,
+      });
+      recordEvent({
+        event_type: 'session_errored',
+        actor_type: 'system',
+        actor_id: sessionId,
+        project_id: null,
+        task_id: null,
+        payload: { sessionId, status: 'killed', reason: 'user_kill' },
+      });
+      expect(isPlanningKillSuppressed('task-1', flow)).toBe(true);
+    }
+  });
+
+  it('does not suppress a different flow than the one the kill happened on', () => {
+    const { sessionId } = insertKilledSession({
+      taskId: 'task-1',
+      sessionType: 'groom',
+    });
+    recordEvent({
+      event_type: 'session_errored',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: null,
+      task_id: null,
+      payload: { sessionId, status: 'killed', reason: 'user_kill' },
+    });
+    expect(isPlanningKillSuppressed('task-1', 'design')).toBe(false);
+  });
+
+  it('retires the suppression once a task_body_updated event lands after the kill', () => {
+    const { sessionId, endedAt } = insertKilledSession({ taskId: 'task-1' });
+    recordEvent({
+      event_type: 'session_errored',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: null,
+      task_id: null,
+      payload: { sessionId, status: 'killed', reason: 'user_kill' },
+    });
+    expect(isPlanningKillSuppressed('task-1', 'groom')).toBe(true);
+
+    recordEvent({
+      event_type: 'task_body_updated',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: 'proj-1',
+      task_id: 'task-1',
+      payload: {},
+    });
+    expect(isPlanningKillSuppressed('task-1', 'groom')).toBe(false);
+    expect(endedAt).toBeGreaterThan(0);
+  });
+
+  it('retires the suppression once a task_deps_updated event lands after the kill', () => {
+    const { sessionId } = insertKilledSession({ taskId: 'task-1' });
+    recordEvent({
+      event_type: 'session_errored',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: null,
+      task_id: null,
+      payload: { sessionId, status: 'killed', reason: 'user_kill' },
+    });
+    recordEvent({
+      event_type: 'task_deps_updated',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: 'proj-1',
+      task_id: 'task-1',
+      payload: {},
+    });
+    expect(isPlanningKillSuppressed('task-1', 'groom')).toBe(false);
+  });
+
+  it('does not retire on an edit event for a different task', () => {
+    const { sessionId } = insertKilledSession({ taskId: 'task-1' });
+    recordEvent({
+      event_type: 'session_errored',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: null,
+      task_id: null,
+      payload: { sessionId, status: 'killed', reason: 'user_kill' },
+    });
+    recordEvent({
+      event_type: 'task_body_updated',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: 'proj-1',
+      task_id: 'task-2',
+      payload: {},
+    });
+    expect(isPlanningKillSuppressed('task-1', 'groom')).toBe(true);
+  });
+});
+
 describe('passesDesignDepGate', () => {
   it('requires every dep to be ✅ Done, regardless of Type', () => {
     const t = task({ dependsOn: ['code-dep'] });
@@ -446,6 +648,7 @@ describe('isDesignCandidate', () => {
     hasActiveDesignSession: () => false,
     inCrashCooldown: () => false,
     armed: true,
+    isKillSuppressed: () => false,
   };
 
   it('excludes a 🗂️ Ready 📐 Design task while the design flow is disarmed', () => {
@@ -497,6 +700,13 @@ describe('isDesignCandidate', () => {
     ).toBe(false);
   });
 
+  it('skips a task whose most recent design session was killed by the operator and not yet retired', () => {
+    const t = task({ status: '🗂️ Ready', type: '📐 Design' });
+    expect(
+      isDesignCandidate(t, { ...baseDeps, isKillSuppressed: () => true }),
+    ).toBe(false);
+  });
+
   it('rejects when the design dep-gate fails', () => {
     const t = task({
       status: '🗂️ Ready',
@@ -523,6 +733,7 @@ describe('isGroomCandidate — post-write candidate suppression via the board-ca
     hasActiveGroomSession: () => false,
     inCrashCooldown: () => false,
     isNoOpSuppressed: () => false,
+    isKillSuppressed: () => false,
   };
 
   it('a task read back after updateTaskStatusInBoardCaches(Backlog -> Ready) is no longer a groom candidate', () => {
@@ -568,6 +779,7 @@ describe('isDesignEligibleType — the shared predicate design-armed groom narro
       inCrashCooldown: () => false,
       hasActiveDesignSession: () => false,
       armed: true,
+      isKillSuppressed: () => false,
     };
     const readyTask = task({ status: '🗂️ Ready', type: '💻 Code' });
     // isDesignEligibleType('💻 Code') is false, so isDesignCandidate must
@@ -594,6 +806,7 @@ describe('isDesignEligibleType — the shared predicate design-armed groom narro
       hasActiveGroomSession: () => false,
       inCrashCooldown: () => false,
       isNoOpSuppressed: () => false,
+      isKillSuppressed: () => false,
     };
     expect(isGroomCandidate(t, baseDeps)).toBe(false);
   });

@@ -15,6 +15,7 @@ import {
   hasActivePlanningSessionForTask,
   hasActiveSessionForTask,
   isGroomNoOpSuppressed,
+  isPlanningKillSuppressed,
   listMilestonesByProject,
   setTaskPauseReason,
 } from '../db/queries';
@@ -237,6 +238,8 @@ export class DispatchTriggerEvaluator {
               hasActivePlanningSessionForTask(taskId, 'groom'),
             inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
             isNoOpSuppressed: isGroomNoOpSuppressed,
+            isKillSuppressed: (taskId) =>
+              isPlanningKillSuppressed(taskId, 'groom'),
           })
         ) {
           candidates.push({ projectId, milestone, task });
@@ -268,6 +271,8 @@ export class DispatchTriggerEvaluator {
             hasActivePlanningSessionForTask(taskId, 'ops'),
           inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
           projectId,
+          isKillSuppressed: (taskId) =>
+            isPlanningKillSuppressed(taskId, 'ops'),
         });
         if (candidate) candidates.push({ projectId, milestone, task });
       }
@@ -299,6 +304,8 @@ export class DispatchTriggerEvaluator {
               hasActivePlanningSessionForTask(taskId, 'design'),
             inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
             armed,
+            isKillSuppressed: (taskId) =>
+              isPlanningKillSuppressed(taskId, 'design'),
           })
         ) {
           candidates.push({ projectId, milestone, task });
