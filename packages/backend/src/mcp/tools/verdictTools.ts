@@ -106,9 +106,9 @@ export function registerVerdictTools(
     server.registerTool(
       'gate.verify',
       {
-        title: 'Report a gate-item verification disposition',
+        title: 'Stage a gate-item verification disposition',
         description:
-          "Reports this read-only gate-verify session's finding for the single gate item it was dispatched to verify — pass/fail/needs-setup, plus an optional self-correction reclassify proposal (Human-Observation or needs-triage only). The backend, never the session, turns this into the authoritative gate_item_event write.",
+          "Stages this read-only gate-verify session's finding for the single gate item it was dispatched to verify — pass/fail/needs-setup, plus an optional self-correction reclassify proposal (Human-Observation or needs-triage only) — as a normal gate.verify intent for an operator to dispose on the decision surface, exactly like any other staged intent. The operator, never the session or the backend automatically, turns this into the gate_item_event write; a rejection resumes this session for a normal turn to revise and report again, with no limit on revisions.",
         inputSchema: {
           gateItemId: z.string(),
           disposition: gateVerifyDispositionSchema,

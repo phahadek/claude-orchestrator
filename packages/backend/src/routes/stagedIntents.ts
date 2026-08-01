@@ -95,7 +95,17 @@ import {
   type NewArchUnitCommandFields,
 } from '../architecture/ArchWriteCommands';
 import type { ArchUnitUpdateFields } from '../architecture/ArchUnitStore';
-import type { ArchUnitKind, ArchUnitStatus } from '../db/types';
+import type {
+  ArchUnitKind,
+  ArchUnitStatus,
+  GateItemClassification,
+} from '../db/types';
+import { getGateItem } from '../gate/gateService';
+import {
+  routeVerificationResult,
+  defaultFollowupFiler,
+  type GateVerificationResult,
+} from '../gate/gateReconciler';
 import type { ServerMessage } from '../ws/types';
 import { logger } from '../logger';
 import { getMilestoneConvergence } from '../convergence/convergenceService';
@@ -921,6 +931,19 @@ interface JournalSetStatePayload {
   fields?: Parameters<typeof setEntryState>[2];
 }
 /**
+ * Payload for the gate.verify staged intent — a gate-verify session's
+ * reported finding for the single gate item it was dispatched to verify,
+ * staged for operator disposition rather than written straight to
+ * gate_item_event. See mcp/tools/verdictTools.ts and
+ * AgentSession.recordGateVerifyDisposition.
+ */
+interface GateVerifyIntentPayload {
+  gateItemId: string;
+  disposition: 'pass' | 'fail' | 'needs-setup';
+  evidence?: unknown;
+  reclassify?: { to: GateItemClassification; reason: string };
+}
+/**
  * Payload for the notion.pageEdit staged intent — the Notion
  * source-of-truth-page twin of the task.* board-write kinds above. Each
  * content_updates entry is a find/replace pair applied against the page's
@@ -1590,6 +1613,7 @@ export const KNOWN_INTENT_KINDS: ReadonlySet<string> = new Set([
   'intent.withdraw',
   'planning.noOp',
   'notion.pageEdit',
+  'gate.verify',
 ]);
 
 /**
@@ -2415,6 +2439,7 @@ const HUMAN_APPLY_ONLY_KINDS: ReadonlySet<string> = new Set([
   'arch.createUnit',
   'arch.updateUnit',
   'arch.supersedeUnit',
+  'gate.verify',
 ]);
 
 type ApplyActorType = 'human' | 'session';
@@ -2563,6 +2588,32 @@ async function applyIntent(
       const payload = intent.payload as JournalSetStatePayload;
       setEntryState(payload.taskId, payload.state, payload.fields);
       return { ok: true };
+    }
+    case 'gate.verify': {
+      const payload = intent.payload as GateVerifyIntentPayload;
+      const item = getGateItem(payload.gateItemId);
+      if (!item) {
+        throw new Error(
+          `[stagedIntents] gate.verify apply: gate item "${payload.gateItemId}" was not found`,
+        );
+      }
+      const result: GateVerificationResult = {
+        disposition: payload.disposition,
+        evidence: payload.evidence,
+        reclassify: payload.reclassify,
+      };
+      // The operator's approval is the verdict itself — reuse the exact
+      // routing gateReconciler already applies to an operator-triggered
+      // manual verify dispatch (fail-followup filing/dedup, reclassify,
+      // appendGateItemEvent), rather than a second bespoke write path.
+      return routeVerificationResult(
+        item,
+        result,
+        defaultFollowupFiler,
+        null,
+        {},
+        false,
+      );
     }
     case 'notion.pageEdit': {
       const payload = intent.payload as NotionPageEditPayload;

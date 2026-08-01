@@ -260,13 +260,13 @@ describe('AgentSession.handleCleanExit — planning session gating', () => {
   });
 });
 
-describe('AgentSession.handleCleanExit — gate-verify session archival', () => {
+describe('AgentSession.handleCleanExit — gate-verify session parking', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(hasActiveCapabilityRequestForSession).mockReturnValue(false);
   });
 
-  it('a gate-verify session (task_id gate-item:%) is marked done, not idle', async () => {
+  it('a gate-verify session (task_id gate-item:%) parks idle after reporting, exactly like an ordinary ops session — not archived done', async () => {
     const session = makeSession('ops', 'gate-item:abc-123');
     const messages: unknown[] = [];
     session.on('message', (m) => messages.push(m));
@@ -275,24 +275,22 @@ describe('AgentSession.handleCleanExit — gate-verify session archival', () => 
       session as unknown as { handleCleanExit: () => Promise<void> }
     ).handleCleanExit();
 
-    expect(markSessionDone).toHaveBeenCalledWith(
+    expect(markSessionIdle).toHaveBeenCalledWith(
       'test-session-id',
       expect.any(Number),
       null,
-      'gate_verify_clean_exit',
     );
-    expect(markSessionIdle).not.toHaveBeenCalled();
-    expect(getEventsBySession).not.toHaveBeenCalled();
+    expect(markSessionDone).not.toHaveBeenCalled();
     expect(messages).toContainEqual(
       expect.objectContaining({
         type: 'session_ended',
         sessionId: 'test-session-id',
-        status: 'done',
+        status: 'idle',
       }),
     );
   });
 
-  it('a gate-verify session with an unresolved capability request parks idle instead of being archived done', async () => {
+  it('a gate-verify session with an unresolved capability request also parks idle (unchanged — never archived done)', async () => {
     vi.mocked(hasActiveCapabilityRequestForSession).mockReturnValue(true);
     const session = makeSession('ops', 'gate-item:abc-123');
 

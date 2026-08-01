@@ -187,7 +187,7 @@ describe('buildMcpServer — tool surface per session type', () => {
     expect(names).not.toContain('journal.setState');
   });
 
-  it('an ops session exposes session.requestCapability and gate.verify', async () => {
+  it('an ops session exposes exactly health plus PLANNING_INTENT_KINDS.ops (including gate.verify, a genuine staged-intent kind) plus its always-on reads', async () => {
     insertSession({
       session_id: 'mcp-ops-1',
       task_id: null,
@@ -199,13 +199,22 @@ describe('buildMcpServer — tool surface per session type', () => {
       session_type: 'ops',
     });
     const names = await toolNamesFor('mcp-ops-1');
+    expect(PLANNING_INTENT_KINDS.ops).toContain('gate.verify');
+    expect(names).toEqual(
+      [
+        'health',
+        ...PLANNING_INTENT_KINDS.ops,
+        'architecture.getUnit',
+        'architecture.queryUnits',
+        'task.getById',
+        'pullRequest.getByTaskId',
+        'gateSeed.getState',
+        'session.getRecord',
+        'auditLog.query',
+      ].sort(),
+    );
     expect(names).toContain('session.requestCapability');
     expect(names).toContain('gate.verify');
-    expect(names).toContain('architecture.getUnit');
-    expect(names).toContain('architecture.queryUnits');
-    expect(names).toContain('task.getById');
-    expect(names).toContain('pullRequest.getByTaskId');
-    expect(names).toContain('gateSeed.getState');
     expect(names).not.toContain('review.disposition');
     expect(names).not.toContain('flaky.confirm');
   });

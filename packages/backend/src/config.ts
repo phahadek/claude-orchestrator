@@ -283,24 +283,23 @@ const DESIGN_MCP_TOOLS = [
   ...TIER_B_READ_MCP_TOOLS,
 ];
 
-// Plus gate.verify — a gate-item-verification session is sessionType 'ops'
-// (see sessionPredicates.ts#isGateVerifySession) and reports its finding
-// through this same verdict-delivery tool (mcp/tools/verdictTools.ts),
-// replacing the retired stdout-scraped `gate_verify` JSON block. gate.verify
-// is not a staged-intent kind (it's a direct verdict call, not something a
-// procedure stages), so it isn't in PLANNING_INTENT_KINDS.ops — it's added
-// here explicitly instead.
+// gate.verify — a gate-item-verification session is sessionType 'ops' (see
+// sessionPredicates.ts#isGateVerifySession) and stages its finding through
+// this same verdict-delivery tool (mcp/tools/verdictTools.ts), landing as a
+// normal gate.verify staged intent an operator disposes on the decision
+// surface. It IS a staged-intent kind (see PLANNING_INTENT_KINDS.ops), so it
+// is already covered by the spread below — no explicit entry needed here.
+//
 // Plus gateSeed.getState — the read-only gate_item/seed_item state lookup
 // (mcp/tools/gateSeedReadTools.ts) a gate-verify session needs to gather
 // evidence for the same gate item it verifies via gate.verify above. Only
 // the read belongs here; any mutating gate/seed surface must continue to
 // require an explicit capability grant instead of living in this always-on
 // set. Not a staged-intent kind, so it isn't in PLANNING_INTENT_KINDS.ops —
-// added here explicitly, mirroring gate.verify.
+// added here explicitly.
 const OPS_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
   ...PLANNING_INTENT_KINDS.ops.map(orchestratorMcpToolName),
-  orchestratorMcpToolName('gate.verify'),
   orchestratorMcpToolName('gateSeed.getState'),
   ...ARCHITECTURE_READ_MCP_TOOLS,
   ...TASK_READ_MCP_TOOLS,

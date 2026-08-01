@@ -21,10 +21,6 @@ import { patchBodySectionPayloadSchema } from '../mcp/tools/schemas';
 
 const ORCHESTRATOR_MCP_PREFIX = 'mcp__orchestrator__';
 const HEALTH_TOOL = orchestratorMcpToolName('health');
-// gate.verify is a direct verdict call, not a staged-intent kind — it isn't
-// in PLANNING_INTENT_KINDS.ops, so the ops guard below excludes it too (see
-// config.ts's OPS_MCP_TOOLS comment).
-const GATE_VERIFY_TOOL = orchestratorMcpToolName('gate.verify');
 // gateSeed.getState is the read-only gate_item/seed_item state lookup a
 // gate-verify (ops) session needs to gather evidence for the same item it
 // verifies via gate.verify above — also a direct read, not a staged-intent
@@ -94,7 +90,6 @@ const WORKFLOWS: {
     name: 'ops',
     allowedTools: OPS_ALLOWED_TOOLS,
     extraNonStagedTools: [
-      GATE_VERIFY_TOOL,
       GATESEED_GETSTATE_TOOL,
       ...ARCHITECTURE_READ_TOOLS,
       ...TASK_READ_TOOLS,
@@ -130,6 +125,12 @@ describe('planning workflow --allowed-tools parity with PLANNING_INTENT_KINDS', 
     const tool = orchestratorMcpToolName('session.requestCapability');
     expect(GROOM_ALLOWED_TOOLS).toContain(tool);
     expect(DESIGN_ALLOWED_TOOLS).toContain(tool);
+  });
+
+  it('gate.verify is a genuine PLANNING_INTENT_KINDS.ops staged-intent kind, granted to ops sessions', () => {
+    const tool = orchestratorMcpToolName('gate.verify');
+    expect(PLANNING_INTENT_KINDS.ops).toContain('gate.verify');
+    expect(OPS_ALLOWED_TOOLS).toContain(tool);
   });
 
   it('groom/design/ops session allow-lists grant the CLI-sanitized task_patchBodySection tool', () => {
