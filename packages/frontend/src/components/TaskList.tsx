@@ -350,9 +350,7 @@ export function TaskList({
   // selected task via the same unified planning-launch route.
   const [docsLoading, setDocsLoading] = useState(false);
   const [docsError, setDocsError] = useState<string | null>(null);
-  const [docsCheckedIds, setDocsCheckedIds] = useState<Set<string>>(
-    new Set(),
-  );
+  const [docsCheckedIds, setDocsCheckedIds] = useState<Set<string>>(new Set());
   // Cross-milestone move: the shared staged-intent display renders whichever
   // task.move intent was most recently staged from a TaskCard on this board.
   const [moveIntent, setMoveIntent] = useState<StagedIntent | null>(null);
@@ -985,9 +983,7 @@ export function TaskList({
                       }
                       data-testid="docs-btn"
                     >
-                      {docsLoading
-                        ? 'Loading…'
-                        : `Docs (${docsSelectedCount})`}
+                      {docsLoading ? 'Loading…' : `Docs (${docsSelectedCount})`}
                     </button>
                   )}
                 </div>
