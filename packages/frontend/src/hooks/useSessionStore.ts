@@ -84,6 +84,12 @@ export interface SessionState {
    * notionTaskUrl/etc. instead of being skipped as a stale hydration replay.
    */
   uninitialized?: boolean;
+  /**
+   * True while a disposition enqueued to this session's inbox is being
+   * delivered via sendOrResume — which, for a parked session, means a full
+   * CLI --resume spawn. Transient and self-clearing; never a fault signal.
+   */
+  feedbackPending?: boolean;
 }
 
 export interface IncompleteReview {
@@ -411,6 +417,13 @@ export function useSessionStore() {
         case 'pr_created': {
           const s = next.get(msg.sessionId);
           if (s) next.set(msg.sessionId, { ...s, prUrl: msg.prUrl });
+          break;
+        }
+        case 'session_feedback_pending': {
+          const s = next.get(msg.sessionId);
+          if (s) {
+            next.set(msg.sessionId, { ...s, feedbackPending: msg.pending });
+          }
           break;
         }
         case 'session_archived': {
