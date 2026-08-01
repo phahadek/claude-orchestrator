@@ -8,10 +8,7 @@ import {
   type OpsState,
 } from '../ops/opsJournal';
 import { requireDeviceAuth } from '../auth/DeviceAuth';
-import {
-  stageJournalDecision,
-  STAGED_PROPOSAL_STATE,
-} from './stagedIntents';
+import { stageJournalDecision, STAGED_PROPOSAL_STATE } from './stagedIntents';
 
 /**
  * Read/operator-write surface for the Ops(N) staged-intent view: exposes
