@@ -16,7 +16,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerAuditLogReadTools } from './auditLogReadTools';
 import { insertSession, addGrantedCapability } from '../../db/queries';
-import { recordEvent } from '../../audit/AuditLog';
+import { recordEvent, AUDIT_LOG_ROW_CAP } from '../../audit/AuditLog';
 import { auditLogReadCapability } from '../../session/orchestrator-config';
 
 beforeEach(() => {
@@ -220,6 +220,78 @@ describe('auditLog.query', () => {
         arguments: { projectId: 'proj-3' },
       });
       expect(result.isError).toBe(true);
+    } finally {
+      await close();
+    }
+  });
+
+  it('caps entries at AUDIT_LOG_ROW_CAP and reports matchedCount so truncation is detectable', async () => {
+    insertSession({
+      session_id: 'requester-6',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      status: 'running',
+      started_at: Date.now(),
+    });
+    const totalRows = AUDIT_LOG_ROW_CAP + 50;
+    for (let i = 0; i < totalRows; i++) {
+      recordEvent({
+        event_type: 'task_body_updated',
+        actor_type: 'session',
+        actor_id: 'sess-a',
+        project_id: 'proj-6',
+        task_id: `notion:task-${i}`,
+        payload: { i },
+      });
+    }
+    addGrantedCapability('requester-6', auditLogReadCapability('proj-6'));
+
+    const { client, close } = await connectedClient('requester-6');
+    try {
+      const result = await client.callTool({
+        name: 'auditLog.query',
+        arguments: { projectId: 'proj-6' },
+      });
+      const text = (result.content as Array<{ type: string; text?: string }>)[0]
+        ?.text;
+      const body = JSON.parse(text ?? '{}') as {
+        entries: Array<{ payload: { i: number } }>;
+        matchedCount: number;
+      };
+      expect(body.entries).toHaveLength(AUDIT_LOG_ROW_CAP);
+      expect(body.matchedCount).toBe(totalRows);
+      // Most recent rows, in ascending order — the last row inserted is last in the slice.
+      expect(body.entries[body.entries.length - 1].payload.i).toBe(
+        totalRows - 1,
+      );
+      expect(body.entries[0].payload.i).toBe(totalRows - AUDIT_LOG_ROW_CAP);
+    } finally {
+      await close();
+    }
+  });
+
+  it('rejects a limit above the row cap rather than silently clamping it', async () => {
+    insertSession({
+      session_id: 'requester-7',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      status: 'running',
+      started_at: Date.now(),
+    });
+    addGrantedCapability('requester-7', auditLogReadCapability('proj-7'));
+
+    const { client, close } = await connectedClient('requester-7');
+    try {
+      const result = await client.callTool({
+        name: 'auditLog.query',
+        arguments: { projectId: 'proj-7', limit: AUDIT_LOG_ROW_CAP + 1 },
+      });
+      expect(result.isError).toBe(true);
+      const text = (result.content as Array<{ type: string; text?: string }>)[0]
+        ?.text;
+      expect(text).toMatch(/too big|invalid/i);
     } finally {
       await close();
     }

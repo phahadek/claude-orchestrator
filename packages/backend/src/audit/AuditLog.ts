@@ -107,6 +107,17 @@ export function getAuditLogByActorId(actorId: string): AuditLogEntry[] {
   }));
 }
 
+/**
+ * Row cap for `queryAuditLogByProject`'s `entries` — an unfiltered
+ * project-wide `SELECT *` against a large project's audit_log can run to
+ * tens of thousands of rows and tens of megabytes, which blows the MCP
+ * client's tool-result size limit (see the task context: 78,896 rows /
+ * 22.9 MB for one project, silently surfaced by the CLI as an unrelated
+ * "MCP server session expired" error). Mirrors SESSION_EVENTS_ROW_CAP
+ * (db/queries.ts).
+ */
+export const AUDIT_LOG_ROW_CAP = 200;
+
 export interface AuditLogQueryFilters {
   taskId?: string;
   eventType?: string;
@@ -129,11 +140,16 @@ export interface AuditLogQueryFilters {
  *   (not applicable); otherwise whether that event type matches any row at
  *   all, anywhere in the table — false means the name is unrecognized or
  *   retired, not that it merely didn't fire in this window.
+ * - `matchedCount`: the total number of project-scoped rows matching the
+ *   filters, independent of the `entries` cap — lets a caller tell
+ *   `entries.length < matchedCount` apart from "that's really all of them"
+ *   without a silent truncation.
  */
 export interface AuditLogQueryResult {
   entries: AuditLogEntry[];
   unattributedCount: number;
   eventTypeRecognized: boolean | null;
+  matchedCount: number;
 }
 
 function buildFilterClauses(filters: AuditLogQueryFilters): {
@@ -170,16 +186,24 @@ function buildFilterClauses(filters: AuditLogQueryFilters): {
  * Backed by `idx_audit_log_project_task` (db/schema.ts) so this doesn't
  * table-scan.
  *
- * Also returns `unattributedCount` and `eventTypeRecognized` (see
- * `AuditLogQueryResult`) so a caller can tell "this did not happen" apart
- * from "this happened but isn't project-attributed" and "that event name
- * doesn't exist" — an empty `entries` array alone can't distinguish those.
+ * Also returns `unattributedCount`, `eventTypeRecognized`, and
+ * `matchedCount` (see `AuditLogQueryResult`) so a caller can tell "this did
+ * not happen" apart from "this happened but isn't project-attributed",
+ * "that event name doesn't exist", and "this was truncated to the cap" — an
+ * empty or short `entries` array alone can't distinguish any of those.
+ *
+ * `entries` is capped at `AUDIT_LOG_ROW_CAP` rows (or `limit`, if lower) and
+ * returns the most recent matching rows (`ORDER BY id DESC`, re-ascended to
+ * chronological order for the response) rather than the oldest — the useful
+ * slice when the full result is too large to return in one call.
  */
 export function queryAuditLogByProject(
   projectId: string,
   filters: AuditLogQueryFilters = {},
+  limit: number = AUDIT_LOG_ROW_CAP,
 ): AuditLogQueryResult {
   const { clauses, params } = buildFilterClauses(filters);
+  const cappedLimit = Math.min(limit, AUDIT_LOG_ROW_CAP);
 
   const scopedClauses = ['project_id = ?', ...clauses];
   const scopedParams = [projectId, ...params];
@@ -187,18 +211,28 @@ export function queryAuditLogByProject(
     .prepare<
       (string | number)[],
       AuditRow
-    >(`SELECT * FROM audit_log WHERE ${scopedClauses.join(' AND ')} ORDER BY id ASC`)
-    .all(...scopedParams);
-  const entries = rows.map((r) => ({
-    id: r.id,
-    ts: r.ts,
-    eventType: r.event_type,
-    actorType: r.actor_type,
-    actorId: r.actor_id,
-    projectId: r.project_id,
-    taskId: r.task_id,
-    payload: JSON.parse(r.payload) as unknown,
-  }));
+    >(`SELECT * FROM audit_log WHERE ${scopedClauses.join(' AND ')} ORDER BY id DESC LIMIT ?`)
+    .all(...scopedParams, cappedLimit);
+  const entries = rows
+    .map((r) => ({
+      id: r.id,
+      ts: r.ts,
+      eventType: r.event_type,
+      actorType: r.actor_type,
+      actorId: r.actor_id,
+      projectId: r.project_id,
+      taskId: r.task_id,
+      payload: JSON.parse(r.payload) as unknown,
+    }))
+    .reverse();
+
+  const matchedRow = db
+    .prepare<
+      (string | number)[],
+      { cnt: number }
+    >(`SELECT COUNT(*) AS cnt FROM audit_log WHERE ${scopedClauses.join(' AND ')}`)
+    .get(...scopedParams);
+  const matchedCount = matchedRow?.cnt ?? 0;
 
   const unattributedClauses = ['project_id IS NULL', ...clauses];
   const unattributedRow = db
@@ -220,7 +254,7 @@ export function queryAuditLogByProject(
     eventTypeRecognized = existsRow !== undefined;
   }
 
-  return { entries, unattributedCount, eventTypeRecognized };
+  return { entries, unattributedCount, eventTypeRecognized, matchedCount };
 }
 
 /**

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getGrantedCapabilities } from '../../db/queries';
-import { queryAuditLogByProject } from '../../audit/AuditLog';
+import { AUDIT_LOG_ROW_CAP, queryAuditLogByProject } from '../../audit/AuditLog';
 import { auditLogReadCapability } from '../../session/orchestrator-config';
 
 /** Per-connection context the audit-log-read tool is scoped to. */
@@ -40,19 +40,23 @@ export function registerAuditLogReadTools(
       description:
         'Read-only: returns audit_log rows for `projectId`, optionally narrowed by ' +
         '`taskId` / `eventType` / a `[since, until]` ts window (epoch ms, inclusive). ' +
-        'Requires a durable grant naming this exact project id — request it via ' +
-        '`session.requestCapability` with capability `read:audit-log:<projectId>` ' +
-        "(auto-approved when `<projectId>` is this session's own dispatched project). " +
-        'An empty `entries` array alone does not mean the event never happened: check ' +
-        '`unattributedCount` (matching rows exist but carry no project_id — some event ' +
-        'types are never project-attributed) and `eventTypeRecognized` (false means the ' +
-        '`eventType` name matches no row anywhere, i.e. it is unrecognized or retired).',
+        `Capped at \`limit\` (max ${AUDIT_LOG_ROW_CAP}, default ${AUDIT_LOG_ROW_CAP}) rows, ` +
+        'returning the most recent matching rows; check `matchedCount` against ' +
+        '`entries.length` to detect truncation. Requires a durable grant naming this ' +
+        'exact project id — request it via `session.requestCapability` with capability ' +
+        "`read:audit-log:<projectId>` (auto-approved when `<projectId>` is this session's " +
+        'own dispatched project). An empty `entries` array alone does not mean the event ' +
+        'never happened: check `unattributedCount` (matching rows exist but carry no ' +
+        'project_id — some event types are never project-attributed) and ' +
+        '`eventTypeRecognized` (false means the `eventType` name matches no row anywhere, ' +
+        'i.e. it is unrecognized or retired).',
       inputSchema: {
         projectId: z.string(),
         taskId: z.string().optional(),
         eventType: z.string().optional(),
         since: z.number().optional(),
         until: z.number().optional(),
+        limit: z.number().int().positive().max(AUDIT_LOG_ROW_CAP).optional(),
       },
     },
     async (args) => {
@@ -64,12 +68,16 @@ export function registerAuditLogReadTools(
         );
       }
 
-      const result = queryAuditLogByProject(args.projectId, {
-        taskId: args.taskId,
-        eventType: args.eventType,
-        since: args.since,
-        until: args.until,
-      });
+      const result = queryAuditLogByProject(
+        args.projectId,
+        {
+          taskId: args.taskId,
+          eventType: args.eventType,
+          since: args.since,
+          until: args.until,
+        },
+        args.limit ?? AUDIT_LOG_ROW_CAP,
+      );
 
       return {
         content: [{ type: 'text', text: JSON.stringify(result) }],
