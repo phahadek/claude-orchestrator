@@ -706,16 +706,23 @@ export function reclassifyGateItem(
 
 /**
  * Reclassification targets a gate-verify session is permitted to propose
- * (see gateItemVerifier's `reclassify` report field) — both route the item
- * *out* of auto-run rather than into it, so gateService auto-applies them
- * with provenance instead of staging for operator approval (locked at
- * grooming: low-risk, reversible, "more oversight" moves are auto-applied;
- * a move that would add auto-run, e.g. -> Read-Only, would need staging,
- * but a verifier is never allowed to propose one).
+ * (see gateItemVerifier's `reclassify` report field). Human-Observation and
+ * needs-triage route the item *out* of auto-run, so they're applied here
+ * with provenance regardless of how the verdict reached this function.
+ * Opportunistic routes the item *into* auto-run, but that's no longer a
+ * bare self-application: a gate.verify report is staged as a normal intent
+ * and an operator disposes it before proposeGateItemReclassification ever
+ * runs for it (see GateVerificationResult.awaitingDisposition), so an
+ * Opportunistic proposal is already operator-approved by the time it lands
+ * here — the "would need staging" bar this set otherwise enforces.
+ * MAX_VERIFIER_RECLASSIFY_ATTEMPTS independently caps repeat proposals per
+ * item. Read-Only and Prod-Mutating remain excluded — a verifier is never
+ * allowed to propose either.
  */
 const VERIFIER_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Human-Observation',
   'needs-triage',
+  'Opportunistic',
 ]);
 
 /** Ping-pong guard: caps how many times a verifier may reclassify the same item before a human has to step in via /gate. */

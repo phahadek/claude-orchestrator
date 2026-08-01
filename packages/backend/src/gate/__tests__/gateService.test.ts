@@ -859,6 +859,48 @@ describe('proposeGateItemReclassification', () => {
     expect(outcome.rejectedReason).toMatch(/only propose/);
   });
 
+  it('rejects a proposal to Prod-Mutating', () => {
+    const item = makeItem({ classification: 'needs-triage' });
+    const outcome = proposeGateItemReclassification(
+      item.id,
+      'Prod-Mutating',
+      'looks like it needs a prod mutation to verify',
+    );
+    expect(outcome.applied).toBe(false);
+    expect(outcome.item.classification).toBe('needs-triage');
+    expect(outcome.rejectedReason).toMatch(/only propose/);
+  });
+
+  it('applies a proposal to Opportunistic and leaves the item runnable rather than resolving it', () => {
+    const item = makeItem({ classification: 'needs-triage' });
+    const outcome = proposeGateItemReclassification(
+      item.id,
+      'Opportunistic',
+      'the triggering condition has not happened yet — check opportunistically when it does',
+    );
+    expect(outcome.applied).toBe(true);
+    expect(outcome.item.classification).toBe('Opportunistic');
+    // Reclassification alone never resolves an item — it stays out of the
+    // terminal pass/deferred/discarded states, eligible for a later run.
+    expect(['pass', 'deferred', 'discarded']).not.toContain(
+      outcome.item.state,
+    );
+
+    const detail = getGateItemDetail(item.id);
+    expect(detail!.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          disposition: 'reclassified',
+          operator: 'gate-verifier',
+          evidence: expect.objectContaining({
+            from: 'needs-triage',
+            to: 'Opportunistic',
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("rejects a no-op proposal to the item's current classification", () => {
     const item = makeItem({ classification: 'Human-Observation' });
     const outcome = proposeGateItemReclassification(
@@ -887,6 +929,29 @@ describe('proposeGateItemReclassification', () => {
       item.id,
       'Human-Observation',
       'second proposal',
+    );
+    expect(second.applied).toBe(false);
+    expect(second.rejectedReason).toMatch(/needs operator attention/);
+  });
+
+  it('caps a verifier proposing Opportunistic after an earlier verifier reclassification of the same item', () => {
+    const item = makeItem({ classification: 'Read-Only' });
+    const first = proposeGateItemReclassification(
+      item.id,
+      'needs-triage',
+      'first proposal',
+    );
+    expect(first.applied).toBe(true);
+
+    // An operator moves it back to an auto-run tier...
+    reclassifyGateItem(item.id, 'Read-Only', 'pedro');
+
+    // ...and the verifier tries Opportunistic next — still capped at one
+    // verifier-initiated reclassification per item.
+    const second = proposeGateItemReclassification(
+      item.id,
+      'Opportunistic',
+      'the condition has not happened yet',
     );
     expect(second.applied).toBe(false);
     expect(second.rejectedReason).toMatch(/needs operator attention/);

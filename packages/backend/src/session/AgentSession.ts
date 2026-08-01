@@ -92,14 +92,19 @@ const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
 
 /**
  * Classifications a gate-verify session may propose reclassifying its item
- * to — a self-correction channel, not a free-form retag. Both targets add
- * oversight (route the item out of auto-run), matching the grooming
- * decision that only downgrade-style reclassifications are permitted from
- * this channel; a verifier can never propose an auto-run tier.
+ * to — a self-correction channel, not a free-form retag. Human-Observation
+ * and needs-triage add oversight (route the item out of auto-run).
+ * Opportunistic is also permitted: a gate.verify report is staged as a
+ * normal intent and disposed by an operator, so a verifier proposing
+ * Opportunistic is a proposal an operator approves, not a self-applied
+ * escalation back into auto-run — and MAX_VERIFIER_RECLASSIFY_ATTEMPTS
+ * independently bounds ping-pong. Read-Only and Prod-Mutating remain off
+ * limits: a verifier can never propose those auto-run tiers.
  */
 export const VERIFIER_RECLASSIFY_TARGETS = new Set<GateItemClassification>([
   'Human-Observation',
   'needs-triage',
+  'Opportunistic',
 ]);
 
 export interface GateVerifyReclassifyProposal {

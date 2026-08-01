@@ -307,9 +307,10 @@ export const gateVerifyDispositionSchema = z.enum([
 ]);
 
 /** AgentSession.ts's VERIFIER_RECLASSIFY_TARGETS — the only reclassify targets a gate-verify session may propose. */
-const gateVerifyReclassifyToSchema = z.enum([
+export const gateVerifyReclassifyToSchema = z.enum([
   'Human-Observation',
   'needs-triage',
+  'Opportunistic',
 ]);
 
 export const gateVerifyReclassifySchema = z.object({

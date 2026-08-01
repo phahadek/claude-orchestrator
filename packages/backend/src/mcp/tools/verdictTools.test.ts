@@ -13,6 +13,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerVerdictTools } from './verdictTools';
 import type { AgentSession } from '../../session/AgentSession';
+import { VERIFIER_RECLASSIFY_TARGETS } from '../../session/AgentSession';
+import { gateVerifyReclassifyToSchema } from './schemas';
 import type { PlanningWorkflow } from '../../planning/planningIntentKinds';
 
 function fakeSession() {
@@ -192,19 +194,54 @@ describe('gate.verify', () => {
     await close();
   });
 
-  it('rejects a reclassify target outside Human-Observation/needs-triage', async () => {
+  it('accepts a reclassify proposal to Opportunistic', async () => {
     const session = fakeSession();
     const { client, close } = await connectedClient(() => session, 'ops');
-    const result = await client.callTool({
+    await client.callTool({
       name: 'gate.verify',
       arguments: {
-        gateItemId: 'item-3',
+        gateItemId: 'item-4',
         disposition: 'needs-setup',
-        reclassify: { to: 'Read-Only', reason: 'looks headless' },
+        reclassify: {
+          to: 'Opportunistic',
+          reason: 'the triggering condition has not happened yet',
+        },
       },
     });
-    expect(result.isError).toBe(true);
-    expect(session.recordGateVerifyDisposition).not.toHaveBeenCalled();
+    expect(session.recordGateVerifyDisposition).toHaveBeenCalledWith({
+      gateItemId: 'item-4',
+      disposition: 'needs-setup',
+      evidence: undefined,
+      reclassify: {
+        to: 'Opportunistic',
+        reason: 'the triggering condition has not happened yet',
+      },
+    });
     await close();
+  });
+
+  it.each(['Read-Only', 'Prod-Mutating'])(
+    'rejects a reclassify target of %s',
+    async (to) => {
+      const session = fakeSession();
+      const { client, close } = await connectedClient(() => session, 'ops');
+      const result = await client.callTool({
+        name: 'gate.verify',
+        arguments: {
+          gateItemId: 'item-3',
+          disposition: 'needs-setup',
+          reclassify: { to, reason: 'looks headless' },
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(session.recordGateVerifyDisposition).not.toHaveBeenCalled();
+      await close();
+    },
+  );
+
+  it('keeps VERIFIER_RECLASSIFY_TARGETS and gateVerifyReclassifyToSchema in sync', () => {
+    expect(new Set(gateVerifyReclassifyToSchema.options)).toEqual(
+      VERIFIER_RECLASSIFY_TARGETS,
+    );
   });
 });
