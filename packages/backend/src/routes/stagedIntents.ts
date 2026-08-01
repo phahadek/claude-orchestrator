@@ -120,6 +120,7 @@ import {
   parseAuditLogReadCapability,
   parseSessionEventsReadCapability,
   isSanctionedAutoApproveCapability,
+  isGrantable,
 } from '../session/orchestrator-config';
 import { runtimeSettings } from '../config';
 
@@ -1138,12 +1139,51 @@ class CapabilityRequestValidationError extends Error {
   }
 }
 
+/**
+ * Records a refused `session.requestCapability` so the demand it represents
+ * — a session reaching for a capability the orchestrator does not offer — is
+ * queryable instead of surviving only in the requesting session's own
+ * transcript. `gate` distinguishes the two refusal sites that share this
+ * event type: 'vocabulary' is validateCapabilityRequestPayload's stage-time
+ * shape check below (a missing-tool demand signal), while 'denylist' is
+ * isGrantable's grant-time policy check in resumeCapabilityRequester (a
+ * well-formed request denied on policy grounds, e.g. `Write`) — conflating
+ * them would make the demand signal unreadable. `capability` is stored
+ * exactly as received, unnormalized, so a malformed request and a
+ * coherent-but-unsupported one both stay verbatim-recoverable. `projectId` is
+ * required (never resolved after the fact) so the row is never dropped into
+ * the unattributed rows that `auditLog.query`'s project scoping can't see.
+ */
+function recordCapabilityRequestRefusal(
+  capability: unknown,
+  projectId: string,
+  sessionId: string | null | undefined,
+  gate: 'vocabulary' | 'denylist',
+): void {
+  recordEvent({
+    event_type: 'capability_request_refused',
+    actor_type: 'ai',
+    actor_id: sessionId ?? null,
+    project_id: projectId,
+    task_id: null,
+    payload: { capability, gate },
+  });
+}
+
 function validateCapabilityRequestPayload(
   payload: unknown,
+  projectId: string,
+  sessionId?: string | null,
 ): asserts payload is CapabilityRequestPayload {
   const p = payload as Partial<CapabilityRequestPayload> | null;
   const capability = p?.capability;
   if (typeof capability !== 'string') {
+    recordCapabilityRequestRefusal(
+      capability,
+      projectId,
+      sessionId,
+      'vocabulary',
+    );
     throw new CapabilityRequestValidationError(String(capability));
   }
   if (
@@ -1152,6 +1192,12 @@ function validateCapabilityRequestPayload(
     parseAuditLogReadCapability(capability) === null &&
     parseSessionEventsReadCapability(capability) === null
   ) {
+    recordCapabilityRequestRefusal(
+      capability,
+      projectId,
+      sessionId,
+      'vocabulary',
+    );
     throw new CapabilityRequestValidationError(capability);
   }
 }
@@ -2278,7 +2324,7 @@ export function stageIntent(
     validateDecisionPickOnePayload(payload, groupId, decisionProposal);
   }
   if (kind === 'session.requestCapability') {
-    validateCapabilityRequestPayload(payload);
+    validateCapabilityRequestPayload(payload, projectId, sessionId);
     validateCapabilityRequestDoesNotCarryGroup(groupId);
   }
   if (kind === 'planning.noOp') {
@@ -2964,6 +3010,15 @@ async function resumeCapabilityRequester(
       provenance,
     },
   });
+
+  if (outcome === 'approved' && !isGrantable(payload.capability)) {
+    recordCapabilityRequestRefusal(
+      payload.capability,
+      intent.projectId,
+      intent.sessionId,
+      'denylist',
+    );
+  }
 
   if (!sessionManager) return;
 

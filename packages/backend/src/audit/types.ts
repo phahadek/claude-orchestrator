@@ -83,6 +83,7 @@ type EventType =
   | 'staged_intent_disposition'
   | 'capability_revoked'
   | 'capability_request_disposition'
+  | 'capability_request_refused'
   | 'flake_recovery_attempted'
   | 'flake_recovery_f2_invalidated'
   | 'flake_recovery_f2_rerun'
