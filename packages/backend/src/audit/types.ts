@@ -23,6 +23,7 @@ type EventType =
   | 'task_orphan_reverted'
   | 'task_orphan_nudged'
   | 'task_orphan_surfaced'
+  | 'task_ops_stranded_surfaced'
   | 'session_errored'
   | 'session_backfilled'
   | 'verdict_routing_failed'

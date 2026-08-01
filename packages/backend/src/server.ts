@@ -69,6 +69,7 @@ import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { PlanUsagePoller } from './orchestration/PlanUsagePoller';
 import { registerUsagePoller } from './orchestration/usageAdmission';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
+import { StrandedOpsTaskMonitor } from './orchestration/StrandedOpsTaskMonitor';
 import { StalledPRReconciler } from './orchestration/StalledPRReconciler';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
@@ -499,6 +500,12 @@ const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
     sessionManager.enqueueFeedback(sessionId, source, payload),
 });
 
+// Stranded-ops detector: surfaces (never reverts) an Investigation/Operational
+// task whose ops_journal has advanced past pending but then stalled with no
+// live session and no pending operator decision — the gap OrphanedTaskSweeper's
+// exemption for such tasks otherwise leaves permanently unobserved.
+const strandedOpsTaskMonitor = new StrandedOpsTaskMonitor();
+
 const sessionEventsPruner = new SessionEventsPruner();
 
 // Convergence snapshot: samples the live milestone convergence every 5
@@ -525,6 +532,7 @@ opsSessionLauncher.register(scheduler);
 // local-only projects (no PR) still get approved branches squash-merged.
 autoMerger.register(scheduler);
 orphanedTaskSweeper.register(scheduler);
+strandedOpsTaskMonitor.register(scheduler);
 stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
 sessionEventsPruner.register(scheduler);
