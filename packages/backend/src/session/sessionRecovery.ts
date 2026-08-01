@@ -24,6 +24,14 @@ import { isCodeSession } from './sessionPredicates';
 
 export interface RecoverSessionOpts {
   scope: 'clean_exit' | 'boot' | 'periodic';
+  /**
+   * The status markSessionIdle actually left on the row for the clean_exit
+   * scope — 'idle' when the write landed, or the pre-existing terminal
+   * status ('done'/'error'/'killed') when the terminal guard skipped it.
+   * Only meaningful for scope 'clean_exit'; boot/periodic always broadcast
+   * 'done' since markSessionDone already ran before recoverSession there.
+   */
+  effectiveStatus?: string;
   prUrl: string | undefined;
   prDetectedLive: boolean;
   sessionType: string;
@@ -62,6 +70,7 @@ export async function recoverSession(
 ): Promise<void> {
   const {
     scope,
+    effectiveStatus,
     prUrl,
     prDetectedLive,
     sessionType,
@@ -243,9 +252,11 @@ export async function recoverSession(
   broadcast({
     type: 'session_ended',
     sessionId,
-    // Process-exit sets idle (waiting for PR merge); boot/periodic scopes
-    // operate on already-done sessions persisted before a restart.
-    status: scope === 'clean_exit' ? 'idle' : 'done',
+    // Process-exit sets idle (waiting for PR merge) unless markSessionIdle's
+    // terminal guard skipped the write — then effectiveStatus carries the
+    // row's actual (already-terminal) status. boot/periodic scopes operate
+    // on already-done sessions persisted before a restart.
+    status: scope === 'clean_exit' ? (effectiveStatus ?? 'idle') : 'done',
     ...(prUrl ? { prUrl } : {}),
     ...(taskId && { taskId }),
   });

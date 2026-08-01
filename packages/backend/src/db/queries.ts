@@ -16,6 +16,7 @@ import {
 } from './pauseReason';
 import type {
   Session,
+  SessionStatus,
   NewSession,
   SessionEvent,
   NewSessionEvent,
@@ -490,14 +491,19 @@ const stmtBackfillPrUrlIfNull = db.prepare<{
  * audit event is recorded. Any scraped pr_url is still backfilled onto the
  * row when it currently has none, so recoverSession/SessionAuditor can still
  * find it.
+ *
+ * Returns the row's effective status after the call — 'idle' when the write
+ * landed, or the pre-existing terminal status when it was skipped — so
+ * callers can broadcast what's actually in the database instead of assuming
+ * the write always lands.
  */
 export function markSessionIdle(
   sessionId: string,
   endedAt: number,
   prUrl?: string | null,
-): void {
+): SessionStatus {
   const current = stmtGetSession.get({ session_id: sessionId }) as
-    | { status: string; task_id: string | null }
+    | { status: SessionStatus; task_id: string | null }
     | undefined;
   if (current && TERMINAL_SESSION_STATUSES.has(current.status)) {
     recordEvent({
@@ -510,13 +516,14 @@ export function markSessionIdle(
     if (prUrl) {
       stmtBackfillPrUrlIfNull.run({ session_id: sessionId, pr_url: prUrl });
     }
-    return;
+    return current.status;
   }
   stmtMarkSessionIdle.run({
     session_id: sessionId,
     ended_at: endedAt,
     pr_url: prUrl ?? null,
   });
+  return 'idle';
 }
 
 export interface StuckResultSessionRow {

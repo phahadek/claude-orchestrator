@@ -10,7 +10,7 @@ export type { PauseReason };
 
 // ─── sessions ──────────────────────────────────────────────────────────────
 
-type SessionStatus =
+export type SessionStatus =
   | 'starting'
   | 'running'
   | 'needs_permission'
