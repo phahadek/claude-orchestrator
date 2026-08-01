@@ -3505,19 +3505,25 @@ export class SessionManager extends EventEmitter {
    * immediately via the same delivery path used for idle/exited sessions
    * (sendOrResume — a direct send() for a live session, a clean respawn
    * otherwise), never a raw stdin write into a possibly mid-teardown process.
-   * Terminal sessions (done/error/killed) are never silently record-only: a
-   * resume is attempted (bypassing the normal terminal refusal, mirroring
-   * relaunchFixerForPR's recovery path); only if that resume attempt itself
-   * fails is the item marked delivered-without-resend, and even then a
-   * needs-attention signal is surfaced (pause reason + session_action_failed)
-   * instead of dropping it silently. reconcileInboxAtBoot/
-   * redeliverUndeliveredFeedback do not opt into this — a boot sweep across
-   * every terminal session with stale items should not mass-relaunch them.
+   * Terminal sessions (done/error/killed) default to a resume attempt
+   * (bypassing the normal terminal refusal, mirroring relaunchFixerForPR's
+   * recovery path); only if that resume attempt itself fails is the item
+   * marked delivered-without-resend, and even then a needs-attention signal
+   * is surfaced (pause reason + session_action_failed) instead of dropping
+   * it silently. Callers that pass `{ attemptTerminalResume: false }` (the
+   * staged-intent disposition routes) opt out of all of that: on a terminal
+   * session the item is simply marked delivered, with no resume, no pause
+   * reason, and no needs-attention signal — a terminal session not
+   * receiving a disposition is the expected outcome there, not a failure.
+   * reconcileInboxAtBoot/redeliverUndeliveredFeedback do not opt into
+   * terminal resume either — a boot sweep across every terminal session
+   * with stale items should not mass-relaunch them.
    */
   async enqueueFeedback(
     sessionId: string,
     source: string,
     payload: string,
+    opts: { attemptTerminalResume?: boolean } = {},
   ): Promise<void> {
     enqueueFeedbackItem(sessionId, source, payload);
 
@@ -3526,7 +3532,7 @@ export class SessionManager extends EventEmitter {
     if (liveSession && liveSession.hasActiveTurn()) return;
 
     await this.deliverUndeliveredInboxItems(sessionId, 'enqueueFeedback', {
-      attemptTerminalResume: true,
+      attemptTerminalResume: opts.attemptTerminalResume ?? true,
     });
   }
 

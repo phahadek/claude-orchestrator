@@ -44,12 +44,27 @@ function makePlanningOrchestrator() {
   };
 }
 
+function makeSessionManager() {
+  return {
+    enqueueFeedback: vi.fn().mockResolvedValue(undefined),
+    grantCapability: vi.fn().mockResolvedValue([]),
+    on: vi.fn(),
+  } as unknown as import('../../session/SessionManager').SessionManager & {
+    enqueueFeedback: ReturnType<typeof vi.fn>;
+    grantCapability: ReturnType<typeof vi.fn>;
+  };
+}
+
 function makeApp(
   planningOrchestrator?: ReturnType<typeof makePlanningOrchestrator>,
+  sessionManager?: ReturnType<typeof makeSessionManager>,
 ) {
   const app = express();
   app.use(express.json());
-  app.use('/api', createStagedIntentsRouter(planningOrchestrator));
+  app.use(
+    '/api',
+    createStagedIntentsRouter(planningOrchestrator, sessionManager as any),
+  );
   return app;
 }
 
@@ -249,6 +264,64 @@ describe('POST /api/staged-intents/:id/reject', () => {
     expect(res.status).toBe(200);
     expect(mockRecordEvent).toHaveBeenCalled();
     expect(getStagedIntent(intent.id)!.disposition_reason).toBe('stale');
+  });
+
+  it('a capability-request decline still transitions the intent to rejected and routes the outcome via enqueueFeedback with attemptTerminalResume:false, so a terminal originating session is not resumed', async () => {
+    const sessionManager = makeSessionManager();
+    const app = makeApp(makePlanningOrchestrator(), sessionManager);
+    const intent = stageIntent(
+      'session.requestCapability',
+      {
+        capability: 'Bash(ls)',
+        plan: 'verify a gate item',
+        evidence: 'no other grantable capability reaches this',
+      },
+      'proj-1',
+      null,
+      'planning-session-1',
+    );
+
+    const res = await supertest(app)
+      .post(`/api/staged-intents/${intent.id}/reject`)
+      .send({ outcome: 'decline', reason: 'not needed' });
+
+    expect(res.status).toBe(200);
+    expect(getStagedIntent(intent.id)!.state).toBe('rejected');
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'operator-disposition',
+      expect.any(String),
+      { attemptTerminalResume: false },
+    );
+  });
+
+  it('a capability-request pushback lands in needs_revision and also routes via enqueueFeedback with attemptTerminalResume:false', async () => {
+    const sessionManager = makeSessionManager();
+    const app = makeApp(makePlanningOrchestrator(), sessionManager);
+    const intent = stageIntent(
+      'session.requestCapability',
+      {
+        capability: 'Bash(ls)',
+        plan: 'verify a gate item',
+        evidence: 'no other grantable capability reaches this',
+      },
+      'proj-1',
+      null,
+      'planning-session-1',
+    );
+
+    const res = await supertest(app)
+      .post(`/api/staged-intents/${intent.id}/reject`)
+      .send({ outcome: 'pushback', reason: 'reconsider' });
+
+    expect(res.status).toBe(200);
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+    expect(sessionManager.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'operator-disposition',
+      expect.any(String),
+      { attemptTerminalResume: false },
+    );
   });
 });
 
