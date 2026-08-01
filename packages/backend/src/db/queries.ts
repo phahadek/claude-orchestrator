@@ -5605,9 +5605,10 @@ export function isPlanningKillSuppressed(
 ): boolean {
   const norm = normalizeBoardId(taskId);
   const rows = db
-    .prepare<{ flow: string }, Session>(
-      `SELECT * FROM sessions WHERE session_type = @flow ORDER BY started_at DESC`,
-    )
+    .prepare<
+      { flow: string },
+      Session
+    >(`SELECT * FROM sessions WHERE session_type = @flow ORDER BY started_at DESC`)
     .all({ flow }) as Session[];
   const session = rows.find(
     (row) => normalizeBoardId(row.task_id ?? '') === norm,

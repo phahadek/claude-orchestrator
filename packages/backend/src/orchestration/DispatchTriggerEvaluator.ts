@@ -271,8 +271,7 @@ export class DispatchTriggerEvaluator {
             hasActivePlanningSessionForTask(taskId, 'ops'),
           inCrashCooldown: (taskId) => this.crashBudget.inCooldown(taskId),
           projectId,
-          isKillSuppressed: (taskId) =>
-            isPlanningKillSuppressed(taskId, 'ops'),
+          isKillSuppressed: (taskId) => isPlanningKillSuppressed(taskId, 'ops'),
         });
         if (candidate) candidates.push({ projectId, milestone, task });
       }
