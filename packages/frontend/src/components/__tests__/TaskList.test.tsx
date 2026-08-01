@@ -1054,9 +1054,7 @@ describe('TaskList', () => {
       fireEvent.click(
         within(backlogSection).getByTestId('group-header-backlog'),
       );
-      fireEvent.click(
-        screen.getByTestId('groom-select-all-btn'),
-      );
+      fireEvent.click(screen.getByTestId('groom-select-all-btn'));
 
       const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       expect(groomBtn.textContent).toContain('Groom (2)');
@@ -1420,9 +1418,7 @@ describe('TaskList', () => {
           .textContent,
       ).toContain('waiting on Investigation Task');
 
-      fireEvent.click(
-        screen.getByTestId('groom-select-all-btn'),
-      );
+      fireEvent.click(screen.getByTestId('groom-select-all-btn'));
       const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       expect(groomBtn.textContent).toContain('Groom (1)');
     });
