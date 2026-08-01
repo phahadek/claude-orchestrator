@@ -6,12 +6,18 @@
  * gate-verify adjudication layer".
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
 
+const { createTaskMock } = vi.hoisted(() => ({
+  createTaskMock: vi.fn(async () => 'notion:new-followup-task'),
+}));
 vi.mock('../../tasks/TaskBackend', () => ({
-  getTaskBackend: vi.fn().mockReturnValue({ type: 'notion' }),
+  getTaskBackend: vi.fn().mockReturnValue({
+    type: 'notion',
+    createTask: createTaskMock,
+  }),
 }));
 
 vi.mock('../../db/db.js', async () => {
@@ -24,6 +30,7 @@ import { insertItem, getItem } from '../../gate/gateStore.js';
 import { createStagedIntentsRouter } from '../stagedIntents';
 import { PLANNING_INTENT_KINDS } from '../../planning/planningIntentKinds';
 import { KNOWN_INTENT_KINDS } from '../stagedIntents';
+import { ProjectService } from '../../projects/ProjectService.js';
 
 function makeApp() {
   const app = express();
@@ -46,6 +53,31 @@ function makeGateItem(
   });
 }
 
+// M13's row id below deliberately mirrors the legacy composite id-space
+// (`<projectId>:<notionBoardId>`) production milestones M1-M3 carry — the
+// same shape the old boardId fallback silently handed to createTask as a
+// Notion database id. Its canonical_short_id ('M13') is what
+// gate_item.milestone actually stores in production, and its sourceId is a
+// distinct, valid-looking Notion database id — so a test that resolved via
+// the retired board.id/name lookup (or the boardId fallback) would either
+// miss entirely or hand createTask the wrong id, not vacuously pass.
+const M13_SOURCE_ID = 'db00d3a1-aaaa-bbbb-cccc-1234567890ab';
+
+beforeAll(() => {
+  ProjectService.create({
+    id: 'proj-a',
+    name: 'Project A',
+    projectDir: '/tmp/proj-a',
+  });
+  ProjectService.createMilestone({
+    id: 'proj-a:legacyboard13',
+    projectId: 'proj-a',
+    name: 'M13',
+    canonicalShortId: 'M13',
+    sourceId: M13_SOURCE_ID,
+  });
+});
+
 beforeEach(() => {
   db.prepare('DELETE FROM gate_item_event').run();
   db.prepare('DELETE FROM gate_item_source').run();
@@ -53,6 +85,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
   db.prepare('DELETE FROM audit_log').run();
+  createTaskMock.mockClear();
 });
 
 describe('gate.verify — intent-kind registration', () => {
@@ -192,5 +225,50 @@ describe('gate.verify — stage then apply', () => {
         reason: 'still not enough — cite the specific row',
       });
     expect(rejectedAgain.status).toBe(200);
+  });
+});
+
+describe('gate.verify — fail disposition files a follow-up task via resolveMilestoneDatabaseId', () => {
+  it('applies cleanly and reaches appendGateItemEvent, with no routeApplyTimeFailure pushback (regression for the 2026-08-01 auto-rejections)', async () => {
+    const item = makeGateItem({ milestone: 'M13' });
+    const app = makeApp();
+    const agent = supertest(app);
+
+    const staged = await agent.post('/api/staged-intents').send({
+      kind: 'gate.verify',
+      projectId: 'proj-a',
+      payload: {
+        gateItemId: item.id,
+        disposition: 'fail',
+        evidence: { basis: 'operational', note: 'the env var is missing' },
+      },
+    });
+    expect(staged.status).toBe(201);
+
+    await agent.post(`/api/staged-intents/${staged.body.id}/approve`).send({});
+    const applied = await agent
+      .post(`/api/staged-intents/${staged.body.id}/apply`)
+      .send({});
+
+    // Before the fix, resolveMilestoneDatabaseId's boardId fallback would
+    // hand createTask the legacy composite milestone row id instead of a
+    // Notion database id, the real backend would reject it, and this apply
+    // would come back 500 with redrivenToSession — exactly what happened to
+    // the five gate items auto-rejected on 2026-08-01.
+    expect(applied.status).toBe(200);
+    expect(applied.body.redrivenToSession).toBeUndefined();
+
+    expect(createTaskMock).toHaveBeenCalledTimes(1);
+    expect(createTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({ databaseId: M13_SOURCE_ID }),
+    );
+
+    const updated = getItem(item.id);
+    expect(updated?.events.at(-1)).toMatchObject({ disposition: 'fail' });
+
+    const row = db
+      .prepare('SELECT state FROM staged_intent WHERE id = ?')
+      .get(staged.body.id) as { state: string };
+    expect(row.state).toBe('committed');
   });
 });

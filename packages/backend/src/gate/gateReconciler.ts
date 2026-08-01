@@ -1,6 +1,6 @@
 import { logger } from '../logger';
 import type { Scheduler } from '../orchestration/Scheduler';
-import { getAllProjects, getProjectById, runtimeSettings } from '../config';
+import { getProjectById, runtimeSettings } from '../config';
 import { typedGetSetting } from '../config/settings';
 import { computeAvailableCapacity } from '../orchestration/DispatchTriggerEvaluator';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -16,6 +16,7 @@ import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
 import { catchUpMergeCommits } from './gateMergeConsumer';
 import {
+  resolveMilestoneDatabaseId,
   resolveMilestoneRowForProject,
   UnknownMilestoneError,
 } from '../projects/milestoneResolver';
@@ -140,20 +141,11 @@ const FOLLOWUP_TASK_TYPE = '💻 Code';
 
 export const defaultFollowupFiler: FollowupFixTaskFiler = {
   async fileFollowupFixTask(item) {
-    const project = getAllProjects().find((p) => p.id === item.project);
-    const databaseId =
-      project?.boards?.find(
-        (b) => b.id === item.milestone || b.name === item.milestone,
-      )?.sourceId ?? project?.boardId;
-    if (!project || !databaseId) {
-      throw new Error(
-        `[GateReconciler] cannot file follow-up task for gate item ${item.id} — no databaseId resolved for project=${item.project} milestone=${item.milestone}`,
-      );
-    }
-    const backend = getTaskBackend(project.id);
+    const databaseId = resolveMilestoneDatabaseId(item.project, item.milestone);
+    const backend = getTaskBackend(item.project);
     if (!backend.createTask) {
       throw new Error(
-        `[GateReconciler] task backend for project ${project.id} does not support createTask`,
+        `[GateReconciler] task backend for project ${item.project} does not support createTask`,
       );
     }
     const title = `Fix gate item: ${item.text}`;
