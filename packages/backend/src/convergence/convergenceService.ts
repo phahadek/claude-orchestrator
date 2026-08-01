@@ -188,7 +188,7 @@ export function getMilestoneConvergence(
     })),
   };
 
-  const opsReadiness = getOpsReadiness(projectId, key);
+  const opsReadiness = getOpsReadiness(projectId, milestoneRow.id);
   const ops: OpsAxis = {
     status: opsReadiness.status,
     blockingCount: opsReadiness.blockingCount,

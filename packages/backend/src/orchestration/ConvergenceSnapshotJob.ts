@@ -114,10 +114,10 @@ export class ConvergenceSnapshotJob {
     const seedOpen = seedReadiness.blocking.length;
     const seedClosed = sumCounts(seedReadiness.counts) - seedOpen;
 
-    const opsReadiness = getOpsReadiness(projectId, key);
+    const opsReadiness = getOpsReadiness(projectId, milestone.id);
     const opsOpen = opsReadiness.blockingCount;
     const opsTotal = listOpsJournalEntries().filter(
-      (e) => e.project === projectId && e.milestone === key,
+      (e) => e.project === projectId && e.milestone === milestone.id,
     ).length;
     const opsClosed = opsTotal - opsOpen;
 

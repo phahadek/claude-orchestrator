@@ -16,9 +16,12 @@ vi.mock('../../db/db.js', async () => {
 import { db } from '../../db/db.js';
 import { upsertOpsJournalEntry } from '../../db/queries.js';
 import { getOpsReadiness, listOpsMilestoneReadiness } from '../opsReadiness.js';
+import { ProjectService } from '../../projects/ProjectService.js';
 
 beforeEach(() => {
   db.prepare('DELETE FROM ops_journal').run();
+  db.prepare('DELETE FROM milestones').run();
+  db.prepare('DELETE FROM projects').run();
 });
 
 function entry(
@@ -132,6 +135,32 @@ describe('listOpsMilestoneReadiness', () => {
       task_id: 'notion:2',
       project: 'p2',
       milestone: 'M12',
+      state: 'candidate',
+    });
+
+    const rollup = listOpsMilestoneReadiness({ project: 'p1' });
+    expect(rollup).toEqual([
+      { project: 'p1', milestone: 'M12', status: 'blocked', blockingCount: 1 },
+    ]);
+  });
+
+  it('emits the milestone display name, not the UUID ops_journal stores, matching the gate/seed rollups', () => {
+    ProjectService.create({
+      id: 'p1',
+      name: 'Project One',
+      projectDir: '/tmp/p1',
+    });
+    const milestone = ProjectService.createMilestone({
+      id: 'ms-uuid-99',
+      projectId: 'p1',
+      name: 'M12',
+      canonicalShortId: 'M12',
+    });
+
+    entry({
+      task_id: 'notion:1',
+      project: 'p1',
+      milestone: milestone.id,
       state: 'candidate',
     });
 
