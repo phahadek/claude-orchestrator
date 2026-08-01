@@ -108,6 +108,7 @@ export function EventRow({ event }: EventRowProps) {
     case 'other': {
       if (isHiddenSystemEvent(payload)) return null;
       const { rawType, display } = extractSystem(payload, event.content);
+      if (rawType === 'result') return null;
       if (!display.trim()) return null;
       if (rawType === 'file-history-snapshot') {
         return <p className={styles.eventSystem}>📄 {display}</p>;
@@ -385,7 +386,8 @@ export function EventTranscript({
 
         case 'other': {
           if (isHiddenSystemEvent(payload)) break;
-          const display = extractSystem(payload, e.content).display;
+          const { rawType, display } = extractSystem(payload, e.content);
+          if (rawType === 'result') break;
           if (display.trim()) line = display;
           break;
         }

@@ -26,6 +26,8 @@ const defaultSettings = {
   review_session_model: '',
   code_session_effort: '',
   review_session_effort: '',
+  ops_session_effort: '',
+  gate_verify_session_effort: '',
   session_mode: 'cli',
   auto_launch_concurrency: '1',
   auto_launch_poll_interval_ms: '60000',
@@ -439,12 +441,12 @@ describe('Settings — effort dropdowns', () => {
       );
   }
 
-  it('renders five effort selects, each listing Default first then the levels', async () => {
+  it('renders six effort selects, each listing Default first then the levels', async () => {
     render(<Settings />);
     await screen.findByText('(off)');
 
     const effortSelects = findEffortSelects();
-    expect(effortSelects).toHaveLength(5);
+    expect(effortSelects).toHaveLength(6);
 
     for (const select of effortSelects) {
       const labels = Array.from((select as HTMLSelectElement).options).map(
@@ -527,7 +529,7 @@ describe('Settings — effort dropdowns', () => {
     render(<Settings />);
     await screen.findByText('(off)');
 
-    const [, , , , largeTaskEffortSelect] = findEffortSelects();
+    const [, , , , , largeTaskEffortSelect] = findEffortSelects();
     fireEvent.change(largeTaskEffortSelect, { target: { value: 'max' } });
 
     await waitFor(() => {

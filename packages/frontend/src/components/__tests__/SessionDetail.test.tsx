@@ -340,14 +340,14 @@ describe('SessionDetail', () => {
     expect(screen.getByText('62% ctx')).toBeTruthy();
   });
 
-  it('renders context occupancy ≥100% without clamping the label', () => {
+  it('renders context occupancy ≥100% clamped to 100%', () => {
     render(
       <SessionDetail
         session={makeSession({ context_occupancy_tokens: 210_000 })}
         {...defaultProps}
       />,
     );
-    expect(screen.getByText('105% ctx')).toBeTruthy();
+    expect(screen.getByText('100% ctx')).toBeTruthy();
   });
 
   it('does not render context occupancy badge when context_occupancy_tokens is absent', () => {
