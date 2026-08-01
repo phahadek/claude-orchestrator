@@ -131,6 +131,78 @@ describe('auditLog.query', () => {
     }
   });
 
+  it('distinguishes zero matching rows, unattributed matching rows, and an unrecognized eventType', async () => {
+    insertSession({
+      session_id: 'requester-5',
+      task_id: null,
+      task_url: null,
+      project_context_url: null,
+      status: 'running',
+      started_at: Date.now(),
+    });
+    // Recorded without a project_id — happened, but not attributed to any project.
+    recordEvent({
+      event_type: 'process_boot',
+      actor_type: 'system',
+      payload: {},
+    });
+    // A recognized event type, but only for a different project — never for proj-5.
+    recordEvent({
+      event_type: 'task_body_updated',
+      actor_type: 'session',
+      actor_id: 'other-session',
+      project_id: 'proj-other',
+      task_id: 'notion:elsewhere',
+      payload: {},
+    });
+    addGrantedCapability('requester-5', auditLogReadCapability('proj-5'));
+
+    const { client, close } = await connectedClient('requester-5');
+    try {
+      // Case 1: this did not happen — zero rows anywhere, recognized event type.
+      const neverHappened = await client.callTool({
+        name: 'auditLog.query',
+        arguments: { projectId: 'proj-5', eventType: 'task_body_updated' },
+      });
+      const neverHappenedBody = JSON.parse(
+        (neverHappened.content as Array<{ type: string; text?: string }>)[0]
+          ?.text ?? '{}',
+      ) as {
+        entries: unknown[];
+        unattributedCount: number;
+        eventTypeRecognized: boolean | null;
+      };
+      expect(neverHappenedBody.entries).toHaveLength(0);
+      expect(neverHappenedBody.unattributedCount).toBe(0);
+      expect(neverHappenedBody.eventTypeRecognized).toBe(true);
+
+      // Case 2: happened, but unattributed — entries empty, unattributedCount > 0.
+      const unattributed = await client.callTool({
+        name: 'auditLog.query',
+        arguments: { projectId: 'proj-5', eventType: 'process_boot' },
+      });
+      const unattributedBody = JSON.parse(
+        (unattributed.content as Array<{ type: string; text?: string }>)[0]
+          ?.text ?? '{}',
+      ) as { entries: unknown[]; unattributedCount: number };
+      expect(unattributedBody.entries).toHaveLength(0);
+      expect(unattributedBody.unattributedCount).toBe(1);
+
+      // Case 3: the event name itself is unrecognized — matches no row anywhere.
+      const unrecognized = await client.callTool({
+        name: 'auditLog.query',
+        arguments: { projectId: 'proj-5', eventType: 'totally_made_up_event' },
+      });
+      const unrecognizedBody = JSON.parse(
+        (unrecognized.content as Array<{ type: string; text?: string }>)[0]
+          ?.text ?? '{}',
+      ) as { eventTypeRecognized: boolean | null };
+      expect(unrecognizedBody.eventTypeRecognized).toBe(false);
+    } finally {
+      await close();
+    }
+  });
+
   it('returns a tool-level error when the capability is not granted', async () => {
     insertSession({
       session_id: 'requester-3',

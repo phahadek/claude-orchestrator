@@ -41,6 +41,7 @@ vi.mock('../db/queries', async () => {
 import { StuckSessionMonitor } from '../orchestration/StuckSessionMonitor';
 import type { SessionManager } from '../session/SessionManager';
 import { markSessionDone, applyPendingDone } from '../db/queries';
+import { queryAuditLogByProject } from '../audit/AuditLog';
 import { db } from '../db/db.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -182,6 +183,31 @@ describe('markSessionDone in-flight guard', () => {
 
     expect(applyPendingDone('sess-clean')).toBe(false);
     expect(getStatus('sess-clean')).toBe('idle');
+  });
+
+  it("a session_done_deferred_while_running row is visible via a project-scoped auditLog query for that session's project, even though the write site never supplied project_id", () => {
+    db.prepare(
+      `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
+         status, started_at, session_type, project_id)
+       VALUES (?, ?, 'https://notion.so/task', 'https://notion.so/ctx', ?, ?, 'standard', ?)`,
+    ).run(
+      'sess-proj-scoped',
+      'task-proj-scoped',
+      'running',
+      Date.now() - 10 * 60 * 1000,
+      'proj-markdone-e2e',
+    );
+
+    markSessionDone('sess-proj-scoped', Date.now(), null, 'test_call_site');
+
+    const result = queryAuditLogByProject('proj-markdone-e2e', {
+      eventType: 'session_done_deferred_while_running',
+    });
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      actorId: 'sess-proj-scoped',
+      projectId: 'proj-markdone-e2e',
+    });
   });
 
   it('applyPendingDone drops a stale deferred mark when the session already reached a terminal status via another path', () => {
