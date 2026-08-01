@@ -1162,7 +1162,9 @@ export function StagedIntentPanel({
   const [showOverride, setShowOverride] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
 
-  const blocked = intent.annotation?.blocked === true;
+  const blocked = Boolean(
+    intent.annotation && 'blocked' in intent.annotation && intent.annotation.blocked,
+  );
   // The grant-approval kind: never applied — dispositioned only through
   // approve / reject / pushback, the existing consent vocabulary.
   const isCapabilityRequest = intent.kind === 'session.requestCapability';

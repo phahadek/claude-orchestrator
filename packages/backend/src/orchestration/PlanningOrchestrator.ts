@@ -64,6 +64,16 @@ export interface PlanningDispositionPayload {
   reason?: string | null;
   /** The operator's answer to a decision.pickOne question-intent — required for the `answer` disposition. */
   answer?: StagedIntentAnswer | null;
+  /**
+   * Who produced this disposition — an operator decision (default) or an
+   * automatic validator rejection (stage-time/apply-time payload validation
+   * failure, routed here as a `pushback`). Only meaningfully distinguishes
+   * pushback/decline: it changes the enqueueFeedback `source` label and the
+   * message framing so the session can tell a validation failure it must fix
+   * itself from an operator judgement call, rather than reading both as the
+   * same `[operator-disposition]`-prefixed feedback.
+   */
+  provenance?: 'auto' | 'operator';
 }
 
 /**
@@ -550,6 +560,7 @@ export class PlanningOrchestrator {
    */
   async handleDisposition(payload: PlanningDispositionPayload): Promise<void> {
     const { intent, disposition, reason, answer } = payload;
+    const provenance = payload.provenance ?? 'operator';
     const sessionId = intent.session_id;
     if (!sessionId) {
       logger.warn(
@@ -591,11 +602,12 @@ export class PlanningOrchestrator {
       disposition,
       reason,
       answer,
+      provenance,
     );
     try {
       await this.sessionManager.enqueueFeedback(
         sessionId,
-        'operator-disposition',
+        provenance === 'auto' ? 'validation-error' : 'operator-disposition',
         message,
         { attemptTerminalResume: false },
       );
@@ -812,12 +824,18 @@ function formatDispositionMessage(
   disposition: Exclude<PlanningDisposition, 'approve'>,
   reason?: string | null,
   answer?: StagedIntentAnswer | null,
+  provenance: 'auto' | 'operator' = 'operator',
 ): string {
   switch (disposition) {
     case 'decline':
       return `Staged intent ${intent.id} (${intent.kind}) was declined. Reason: ${reason ?? ''}`;
     case 'pushback':
-      return `Staged intent ${intent.id} (${intent.kind}) was sent back for revision. Feedback: ${reason ?? ''}`;
+      return provenance === 'auto'
+        ? `Staged intent ${intent.id} (${intent.kind}) failed validation and was sent back for ` +
+            `revision. Validation error: ${reason ?? ''}\n` +
+            `To fix this, stage the corrected intent with supersedes set to "${intent.id}" (the id ` +
+            'of this rejected intent) so it retires the rejected one instead of leaving it in place.'
+        : `Staged intent ${intent.id} (${intent.kind}) was sent back for revision. Feedback: ${reason ?? ''}`;
     case 'answer':
       if (answer?.chosenLabel) {
         return (

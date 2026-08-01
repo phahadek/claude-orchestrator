@@ -21,8 +21,12 @@ vi.mock('../../tasks/TaskBackend', () => ({
   getTaskBackend: mockGetTaskBackend,
 }));
 
+const { mockRecordEvent } = vi.hoisted(() => ({
+  mockRecordEvent: vi.fn(),
+}));
+
 vi.mock('../../audit/AuditLog', () => ({
-  recordEvent: vi.fn(),
+  recordEvent: mockRecordEvent,
 }));
 
 vi.mock('../../db/db', async () => {
@@ -98,6 +102,7 @@ function stagePropertiesIntent(sessionId: string | null, taskId: string) {
 
 beforeEach(() => {
   mockGetTaskBackend.mockReset();
+  mockRecordEvent.mockReset();
   db.prepare('DELETE FROM staged_intent').run();
   db.prepare('DELETE FROM staged_intent_group').run();
   db.prepare('DELETE FROM sessions').run();
@@ -126,13 +131,140 @@ describe('apply-time redrive — routeApplyTimeFailure via POST /staged-intents/
     expect(sm.enqueueFeedback).toHaveBeenCalledTimes(1);
     const [sessionId, source, message] = sm.enqueueFeedback.mock.calls[0];
     expect(sessionId).toBe('session-1');
-    expect(source).toBe('operator-disposition');
+    // An apply-time failure is validator-driven (the session's mistake to
+    // fix), not an operator judgement call — it must route with a distinct
+    // source, never the operator-disposition label/prefix an operator
+    // pushback carries.
+    expect(source).toBe('validation-error');
+    expect(source).not.toBe('operator-disposition');
     expect(message).toContain('backend write failed');
+    expect(message).toContain('failed validation');
     // The feedback text ("sent back for revision") and the state the intent
     // actually lands in (needs_revision) must be asserted together — an
     // apply-time failure is always a pushback, so the two cannot drift apart.
     expect(message).toContain('sent back for revision');
     expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+
+    // A validator-driven rejection is machine attribution, not an operator
+    // decision — the audit trail must record it as such.
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'staged_intent_disposition',
+        actor_type: 'system',
+        payload: expect.objectContaining({
+          intentId: intent.id,
+          disposition: 'pushback',
+          provenance: 'auto',
+        }),
+      }),
+    );
+  });
+
+  it('an auto-rejected member is hidden from the decision surface while its session is still active, and surfaced once the session ends without correcting it', async () => {
+    mockGetTaskBackend.mockReturnValue({
+      type: 'notion',
+      setProperties: vi
+        .fn()
+        .mockRejectedValue(new Error('backend write failed')),
+    });
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    seedPlanningSession('session-visibility');
+    const intent = stagePropertiesIntent('session-visibility', 'notion:task-1');
+
+    const app = makeApp(planningOrchestrator);
+    await supertest(app)
+      .post(`/api/staged-intents/${intent.id}/apply`)
+      .send({});
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+
+    // Session still active (idle, not terminal) — the session still has a
+    // turn coming to correct this by superseding it, so it stays out of the
+    // operator's decision queue.
+    const whileActive = await supertest(app).get(
+      '/api/staged-intents?sessionId=session-visibility',
+    );
+    expect(
+      whileActive.body.intents.map((i: { id: string }) => i.id),
+    ).not.toContain(intent.id);
+
+    // Session ends without correcting it — no further session-side fix is
+    // coming, so it surfaces for the operator to decline.
+    db.prepare('UPDATE sessions SET status = ? WHERE session_id = ?').run(
+      'done',
+      'session-visibility',
+    );
+    const afterEnded = await supertest(app).get(
+      '/api/staged-intents?sessionId=session-visibility',
+    );
+    expect(
+      afterEnded.body.intents.map((i: { id: string }) => i.id),
+    ).toContain(intent.id);
+  });
+
+  it('a session superseding an auto-rejected group member unblocks the group commit guard — no operator action required', async () => {
+    const setProperties = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('backend write failed'))
+      .mockResolvedValue(undefined);
+    mockGetTaskBackend.mockReturnValue({ type: 'notion', setProperties });
+
+    const sm = makeSessionManager();
+    const planningOrchestrator = new PlanningOrchestrator(sm as any);
+    seedPlanningSession('session-group-unblock', 'notion:task-group');
+    const groupId = 'group-auto-reject-unblock';
+    const intent = stageIntent(
+      'task.setProperties',
+      { taskId: 'notion:task-group', patch: { title: 'Renamed' } },
+      'proj-1',
+      groupId,
+      'session-group-unblock',
+    );
+
+    const app = makeApp(planningOrchestrator);
+    await supertest(app)
+      .post(`/api/staged-intents/${intent.id}/approve`)
+      .send({});
+
+    // First attempt: the member is `approved`, so precheckGroupCommit lets
+    // the commit through to applyIntent, which fails and auto-rejects the
+    // member to needs_revision.
+    const commitFails = await supertest(app)
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+    expect(commitFails.status).toBe(500);
+    expect(getStagedIntent(intent.id)!.state).toBe('needs_revision');
+
+    // A retry now finds the member already blocked and refuses up front.
+    const commitBlocked = await supertest(app)
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+    expect(commitBlocked.status).toBe(409);
+    expect(commitBlocked.body.blockingId).toBe(intent.id);
+
+    // The staging session, not an operator, corrects the mistake by
+    // superseding the auto-rejected member.
+    const corrected = stageIntent(
+      'task.setProperties',
+      { taskId: 'notion:task-group', patch: { title: 'Renamed correctly' } },
+      'proj-1',
+      groupId,
+      'session-group-unblock',
+      null,
+      null,
+      intent.id,
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('superseded');
+    await supertest(app)
+      .post(`/api/staged-intents/${corrected.id}/approve`)
+      .send({});
+
+    const commitAfter = await supertest(app)
+      .post(`/api/staged-intents/group/${groupId}/commit`)
+      .send({});
+    expect(commitAfter.status).toBe(200);
+    expect(commitAfter.body.committed).toEqual([corrected.id]);
   });
 
   it('an apply-time failure lands in needs_revision and can be superseded by the staging session', async () => {
