@@ -61,7 +61,13 @@ vi.mock('../audit/AuditLog.js', () => ({
 }));
 
 vi.mock('../orchestration/memoryAdmission.js', () => ({
-  hasMemoryHeadroom: vi.fn().mockReturnValue(true),
+  hasMemoryHeadroom: vi.fn().mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  }),
 }));
 
 vi.mock('../config.js', () => ({

@@ -17,7 +17,13 @@ vi.mock('../../config.js', () => ({
 }));
 
 vi.mock('../memoryAdmission.js', () => ({
-  hasMemoryHeadroom: vi.fn().mockReturnValue(true),
+  hasMemoryHeadroom: vi.fn().mockReturnValue({
+    allowed: true,
+    freeMemMB: 8192,
+    minHostFreeMemoryMB: 4096,
+    perSessionReserveMB: 3072,
+    projectedFreeMB: 5120,
+  }),
 }));
 
 vi.mock('../../tasks/TaskBackend.js', () => ({
@@ -60,6 +66,7 @@ import {
   resetTaskCrashCount,
 } from '../../db/queries.js';
 import { recordEvent } from '../../audit/AuditLog.js';
+import { hasMemoryHeadroom } from '../memoryAdmission.js';
 import {
   AutoLauncher,
   AutoLauncherFetchTimeoutError,
@@ -1911,5 +1918,97 @@ describe('AutoLauncher — usage admission gate', () => {
     await launcher.pollOnce();
 
     expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+});
+
+describe('AutoLauncher — memory admission gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+  });
+
+  it('defers dispatch and records an audit event carrying the observed values when the gate denies', async () => {
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: false,
+      freeMemMB: 5000,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: 1928,
+    });
+    const { logger } = await import('../../logger.js');
+    const infoSpy = vi.spyOn(logger, 'info');
+
+    const task = makeResolvedTask({ id: 'task-memory-gated' });
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).not.toHaveBeenCalled();
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'memory_admission_deferred',
+        payload: {
+          freeMemMB: 5000,
+          minHostFreeMemoryMB: 4096,
+          perSessionReserveMB: 3072,
+          projectedFreeMB: 1928,
+        },
+      }),
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining('freeMemMB=5000'),
+    );
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining('projectedFreeMB=1928'),
+    );
+  });
+
+  it('emits no audit row and no log line when the gate allows', async () => {
+    vi.mocked(hasMemoryHeadroom).mockReturnValue({
+      allowed: true,
+      freeMemMB: 8192,
+      minHostFreeMemoryMB: 4096,
+      perSessionReserveMB: 3072,
+      projectedFreeMB: 5120,
+    });
+    const { logger } = await import('../../logger.js');
+    const infoSpy = vi.spyOn(logger, 'info');
+
+    const task = makeResolvedTask({ id: 'task-memory-ok' });
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).toHaveBeenCalledOnce();
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'memory_admission_deferred' }),
+    );
+    expect(infoSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('deferring dispatch — projected free host memory'),
+    );
   });
 });

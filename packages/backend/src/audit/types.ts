@@ -94,7 +94,8 @@ type EventType =
   | 'flow_arm_changed'
   | 'milestone_wrapped'
   | 'base_fetch_failed'
-  | 'mcp_stage_credential_rejected';
+  | 'mcp_stage_credential_rejected'
+  | 'memory_admission_deferred';
 
 type ActorType = 'ai' | 'human' | 'system';
 
