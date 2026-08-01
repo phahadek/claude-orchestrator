@@ -37,7 +37,10 @@ import {
   hasNonTerminalPlanningSessionForTask,
   hasPendingDecisionForTask,
 } from '../../db/queries.js';
-import { recordEvent, hasStrandedOpsSurfacedEvent } from '../../audit/AuditLog.js';
+import {
+  recordEvent,
+  hasStrandedOpsSurfacedEvent,
+} from '../../audit/AuditLog.js';
 import { getAllProjects } from '../../config.js';
 import { StrandedOpsTaskMonitor } from '../StrandedOpsTaskMonitor.js';
 
@@ -89,23 +92,21 @@ describe('StrandedOpsTaskMonitor', () => {
     vi.mocked(hasPendingDecisionForTask).mockReturnValue(false);
     vi.mocked(hasStrandedOpsSurfacedEvent).mockReturnValue(false);
     vi.mocked(recordEvent).mockClear();
-    vi.mocked(getOpsJournalEntry)
-      .mockReset()
-      .mockReturnValue({
-        task_id: 'task-1',
-        project: 'proj-1',
-        milestone: 'm1',
-        state: 'staged-proposal',
-        disposition: null,
-        worked_in: null,
-        evidence: null,
-        finding_or_proposal: null,
-        falsification: null,
-        filed_followons: null,
-        needs_from_operator: null,
-        resolution: null,
-        updated_at: OLD_UPDATED_AT,
-      });
+    vi.mocked(getOpsJournalEntry).mockReset().mockReturnValue({
+      task_id: 'task-1',
+      project: 'proj-1',
+      milestone: 'm1',
+      state: 'staged-proposal',
+      disposition: null,
+      worked_in: null,
+      evidence: null,
+      finding_or_proposal: null,
+      falsification: null,
+      filed_followons: null,
+      needs_from_operator: null,
+      resolution: null,
+      updated_at: OLD_UPDATED_AT,
+    });
   });
 
   function makeMonitor(tasks: ReturnType<typeof makeTask>[]) {

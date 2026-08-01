@@ -5538,9 +5538,7 @@ export function hasPendingDecisionForTask(taskId: string): boolean {
        AND state IN ('staged', 'needs_revision', 'pending_verification')
      LIMIT 1`,
   );
-  return (
-    _stmtHasPendingDecisionForTask.get({ task_id: taskId }) !== undefined
-  );
+  return _stmtHasPendingDecisionForTask.get({ task_id: taskId }) !== undefined;
 }
 
 let _stmtGetLatestNoOpForTask: Database.Statement | null = null;
