@@ -1175,7 +1175,12 @@ function validateCapabilityRequestPayload(
   const p = payload as Partial<CapabilityRequestPayload> | null;
   const capability = p?.capability;
   if (typeof capability !== 'string') {
-    recordCapabilityRequestRefusal(capability, projectId, sessionId, 'vocabulary');
+    recordCapabilityRequestRefusal(
+      capability,
+      projectId,
+      sessionId,
+      'vocabulary',
+    );
     throw new CapabilityRequestValidationError(String(capability));
   }
   if (
@@ -1183,7 +1188,12 @@ function validateCapabilityRequestPayload(
     parseSessionRecordReadCapability(capability) === null &&
     parseAuditLogReadCapability(capability) === null
   ) {
-    recordCapabilityRequestRefusal(capability, projectId, sessionId, 'vocabulary');
+    recordCapabilityRequestRefusal(
+      capability,
+      projectId,
+      sessionId,
+      'vocabulary',
+    );
     throw new CapabilityRequestValidationError(capability);
   }
 }

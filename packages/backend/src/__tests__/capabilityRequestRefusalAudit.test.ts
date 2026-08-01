@@ -27,7 +27,10 @@ vi.mock('../db/queries', async (importOriginal) => {
 });
 
 import { db } from '../db/db';
-import { createStagedIntentsRouter, stageIntent } from '../routes/stagedIntents';
+import {
+  createStagedIntentsRouter,
+  stageIntent,
+} from '../routes/stagedIntents';
 import { queryAuditLogByProject } from '../audit/AuditLog';
 
 function makeApp() {
