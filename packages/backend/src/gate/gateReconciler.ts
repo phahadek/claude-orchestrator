@@ -750,7 +750,13 @@ export async function runGateReconcilerTick(
     readiness[key] = getGateReadiness(project, milestone);
   }
 
-  return { deployShaByProject, reconciled, processed, readiness, skippedForBudget };
+  return {
+    deployShaByProject,
+    reconciled,
+    processed,
+    readiness,
+    skippedForBudget,
+  };
 }
 
 let configuredVerificationOptions: GateReconcilerOptions | null = null;

@@ -15,7 +15,11 @@ vi.mock('../db.js', async () => {
 });
 
 import { db } from '../db.js';
-import { insertSession, archiveSession, countLivePlanningSessions } from '../queries.js';
+import {
+  insertSession,
+  archiveSession,
+  countLivePlanningSessions,
+} from '../queries.js';
 
 beforeEach(() => {
   db.prepare('DELETE FROM sessions').run();

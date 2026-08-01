@@ -23,7 +23,11 @@ const deployServiceMock = vi.hoisted(() => ({
 vi.mock('../../deploy/deployService.js', () => deployServiceMock);
 
 import { db } from '../../db/db.js';
-import { upsertTaskCache, upsertArm, archiveSession } from '../../db/queries.js';
+import {
+  upsertTaskCache,
+  upsertArm,
+  archiveSession,
+} from '../../db/queries.js';
 import { typedSetSetting } from '../../config/settings.js';
 import { ProjectService } from '../../projects/ProjectService.js';
 import { logger } from '../../logger.js';
@@ -1207,9 +1211,9 @@ describe('runGateReconcilerTick — verify concurrency budgeting', () => {
         taskId: `ops-task-${i}`,
         sessionType: 'ops',
       });
-      db.prepare(`UPDATE sessions SET status = 'idle' WHERE session_id = ?`).run(
-        `archived-idle-${i}`,
-      );
+      db.prepare(
+        `UPDATE sessions SET status = 'idle' WHERE session_id = ?`,
+      ).run(`archived-idle-${i}`);
       archiveSession(`archived-idle-${i}`);
     }
     insertLiveSession({
