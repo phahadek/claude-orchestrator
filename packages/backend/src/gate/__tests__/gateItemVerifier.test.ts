@@ -186,6 +186,51 @@ describe('admitsLiveRecordUnreachable', () => {
     expect(admitsLiveRecordUnreachable(null)).toBe(false);
     expect(admitsLiveRecordUnreachable('some string')).toBe(false);
   });
+
+  it('is true when an admission names the record it could not read', () => {
+    expect(
+      admitsLiveRecordUnreachable({
+        note: 'could not read the audit log',
+      }),
+    ).toBe(true);
+  });
+
+  it('is false when negations concern only the subject under verification, not the evidence-gathering, even alongside a record mention elsewhere', () => {
+    expect(
+      admitsLiveRecordUnreachable({
+        note:
+          'audit_log confirms the task completed successfully. The task ' +
+          'was not stranded and never reverted the change.',
+      }),
+    ).toBe(false);
+  });
+
+  it('is false when evidence explicitly denies a limitation rather than admitting one', () => {
+    expect(
+      admitsLiveRecordUnreachable({
+        note:
+          'Both reads succeeded fully -- no read failure, no missing ' +
+          'capability, no abstention.',
+      }),
+    ).toBe(false);
+  });
+
+  it('passes the verbatim evidence reported by session 89e31fa8 on gate item ecc8eab1', () => {
+    const evidence = {
+      basis: 'operational',
+      note:
+        'audit_log trace: status -> Ready (id 164147), session_launched ' +
+        '23s later (id 164151), -> In Progress, pr_opened #1359, ' +
+        'pr_merged, -> Done, plus an independent task_getById read from ' +
+        'the live database.',
+      appeal:
+        'Both reads succeeded fully -- no read failure, no missing ' +
+        'capability, no abstention.',
+    };
+    expect(admitsLiveRecordUnreachable(evidence)).toBe(false);
+    expect(enforcePassEvidenceContract({ disposition: 'pass', evidence }))
+      .toMatchObject({ disposition: 'pass' });
+  });
 });
 
 describe('assertsStructuralUnverifiability', () => {
@@ -1386,5 +1431,22 @@ describe('enforceAbstentionEvidenceContract', () => {
     expect(
       (result.evidence as { abstentionNote: string }).abstentionNote,
     ).toMatch(/session-prompts/);
+  });
+
+  it('does not annotate a needs-setup produced by enforcePassEvidenceContract\'s own downgrade as an incomplete session abstention', () => {
+    const downgraded = enforcePassEvidenceContract({
+      disposition: 'pass',
+      evidence: {
+        basis: 'operational',
+        note: 'no target session ID for the live database read',
+      },
+    });
+    expect(downgraded.disposition).toBe('needs-setup');
+    const result = enforceAbstentionEvidenceContract(downgraded);
+    expect(result.evidence).toEqual(downgraded.evidence);
+    expect(
+      (result.evidence as { abstentionIncomplete?: boolean })
+        .abstentionIncomplete,
+    ).toBeUndefined();
   });
 });

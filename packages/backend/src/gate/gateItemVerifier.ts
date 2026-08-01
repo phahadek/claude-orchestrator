@@ -603,12 +603,82 @@ const LIVE_RECORD_MENTION_TOKENS = new Set([
 ]);
 
 /**
+ * Splits evidence text into clauses so a negation and a record mention only
+ * count as related when they appear in the same sentence/clause, rather than
+ * anywhere in the whole (JSON-stringified, all-keys-included) evidence blob.
+ * Splits on sentence terminators, em/en-dash breaks, and contrastive
+ * conjunctions that typically separate an admission from an unrelated aside.
+ */
+const CLAUSE_SPLIT_PATTERN =
+  /[.!?;\n]+|--+|—+|\b(?:but|however|though|whereas|although)\b/;
+
+/**
+ * A negation directly followed by one of these nouns denies a limitation
+ * ("no read failure", "no missing capability", "no abstention") rather than
+ * admitting one — the opposite of what `admitsLiveRecordUnreachable` looks
+ * for, even when a record-mention token happens to land nearby.
+ */
+const LIMITATION_DENIAL_TOKENS = new Set([
+  'failure',
+  'failures',
+  'missing',
+  'abstention',
+  'incomplete',
+  'issue',
+  'issues',
+  'problem',
+  'problems',
+  'gap',
+  'gaps',
+  'limitation',
+  'limitations',
+]);
+
+/** How many tokens on either side of a negation still count as "governing" it. */
+const NEGATION_GOVERNS_WINDOW = 6;
+
+/**
+ * True when some clause of `text` contains a negation token that governs a
+ * live-record-mention token — i.e. the two appear close together in the same
+ * clause, and the negation isn't itself denying an unrelated limitation
+ * ("no read failure"). This is the scoped replacement for a bare
+ * "negation anywhere + record mention anywhere" bag-of-words check.
+ */
+function hasNegationGoverningLiveRecordMention(text: string): boolean {
+  return text.split(CLAUSE_SPLIT_PATTERN).some((clause) => {
+    const clauseTokens = tokenize(clause);
+    return clauseTokens.some((token, i) => {
+      if (!NEGATION_TOKENS.has(token)) return false;
+      if (LIMITATION_DENIAL_TOKENS.has(clauseTokens[i + 1])) return false;
+      const start = Math.max(0, i - NEGATION_GOVERNS_WINDOW);
+      const end = Math.min(
+        clauseTokens.length,
+        i + NEGATION_GOVERNS_WINDOW + 1,
+      );
+      for (let j = start; j < end; j++) {
+        if (j === i) continue;
+        if (LIVE_RECORD_MENTION_TOKENS.has(clauseTokens[j])) return true;
+      }
+      return false;
+    });
+  });
+}
+
+/**
  * True when the evidence itself carries a limitation/caveat admitting the
  * live/operational record was not or could not be read — a self-reported
  * admission that the substantive claim rests on inference rather than a
  * captured runtime record. A pass paired with an admission like this is
- * downgraded regardless of what else the evidence names. Exported for
- * testing.
+ * downgraded regardless of what else the evidence names.
+ *
+ * Scoped to same-clause co-occurrence (see `hasNegationGoverningLiveRecordMention`)
+ * so this fires on an actual admission ("could not read the audit log")
+ * rather than merely on a negation word and a record-mention word appearing
+ * anywhere in the same evidence payload — e.g. a denial of a limitation
+ * ("no read failure, no missing capability, no abstention") or a negation
+ * about the subject under verification ("was not stranded") that happens to
+ * share a payload with an unrelated record mention ("names audit_log") no
+ * longer trips this. Exported for testing.
  */
 export function admitsLiveRecordUnreachable(evidence: unknown): boolean {
   const text = evidenceText(evidence);
@@ -617,11 +687,7 @@ export function admitsLiveRecordUnreachable(evidence: unknown): boolean {
   if (tokens.some((t) => LIVE_RECORD_UNREACHABLE_SIGNAL_TOKENS.has(t))) {
     return true;
   }
-  const hasNegation = tokens.some((t) => NEGATION_TOKENS.has(t));
-  const hasLiveRecordMention = tokens.some((t) =>
-    LIVE_RECORD_MENTION_TOKENS.has(t),
-  );
-  return hasNegation && hasLiveRecordMention;
+  return hasNegationGoverningLiveRecordMention(text);
 }
 
 /**
@@ -656,11 +722,7 @@ export function assertsStructuralUnverifiability(evidence: unknown): boolean {
     STRUCTURAL_UNVERIFIABILITY_SIGNAL_TOKENS.has(t),
   );
   if (!hasStructuralSignal) return false;
-  const hasNegation = tokens.some((t) => NEGATION_TOKENS.has(t));
-  const hasRecordMention = tokens.some((t) =>
-    LIVE_RECORD_MENTION_TOKENS.has(t),
-  );
-  return hasNegation && hasRecordMention;
+  return hasNegationGoverningLiveRecordMention(text);
 }
 
 /**
@@ -724,7 +786,7 @@ function downgrade(
 ): GateVerificationResult {
   return {
     disposition: 'needs-setup',
-    evidence: { reason, reportedEvidence },
+    evidence: { reason, reportedEvidence, contractGenerated: true },
     reclassify,
   };
 }
@@ -798,12 +860,20 @@ export function enforcePassEvidenceContract(
  * `buildGateVerifyProcedure`). There is no disposition below `needs-setup`
  * to downgrade to, so this annotates the evidence instead of changing the
  * disposition, leaving the incompleteness visible to whoever reconciles or
- * re-dispatches the item next. Exported for testing.
+ * re-dispatches the item next.
+ *
+ * A `needs-setup` produced by `enforcePassEvidenceContract`'s own downgrade
+ * (marked `contractGenerated`) is never a session's abstention in the first
+ * place — the session reported `pass`, not `needs-setup` — so it is exempt
+ * from this annotation regardless of what its (session-authored) reported
+ * evidence happens to say. Exported for testing.
  */
 export function enforceAbstentionEvidenceContract(
   result: GateVerificationResult,
 ): GateVerificationResult {
   if (result.disposition !== 'needs-setup') return result;
+  const evidenceObject = toEvidenceObject(result.evidence);
+  if (evidenceObject?.contractGenerated === true) return result;
   if (!citesMissingIdentifierWithoutSearch(result.evidence)) return result;
   const baseEvidence = toEvidenceObject(result.evidence) ?? {
     reportedEvidence: result.evidence,
