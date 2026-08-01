@@ -1593,7 +1593,10 @@ describe('TaskDetail — Backlog Abort action', () => {
       json: async () => ({ ok: true, killedSessionId: 'plan-sess-1' }),
     });
     vi.stubGlobal('fetch', fetchMock);
-    vi.stubGlobal('confirm', vi.fn(() => true));
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
 
     render(
       <TaskDetail
@@ -1626,7 +1629,10 @@ describe('TaskDetail — Backlog Abort action', () => {
       json: async () => ({ ok: true, killedSessionId: null }),
     });
     vi.stubGlobal('fetch', fetchMock);
-    vi.stubGlobal('confirm', vi.fn(() => true));
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
 
     render(
       <TaskDetail
@@ -1653,7 +1659,10 @@ describe('TaskDetail — Backlog Abort action', () => {
       json: async () => ({ error: 'task is not in Backlog' }),
     });
     vi.stubGlobal('fetch', fetchMock);
-    vi.stubGlobal('confirm', vi.fn(() => true));
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
 
     render(
       <TaskDetail
@@ -1666,9 +1675,7 @@ describe('TaskDetail — Backlog Abort action', () => {
 
     fireEvent.click(screen.getByLabelText('Abort Backlog task'));
 
-    expect(
-      await screen.findByText('task is not in Backlog'),
-    ).toBeTruthy();
+    expect(await screen.findByText('task is not in Backlog')).toBeTruthy();
 
     vi.unstubAllGlobals();
   });
