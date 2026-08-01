@@ -85,10 +85,9 @@ describe('defaultFollowupFiler.fileFollowupFixTask', () => {
   it('resolves the database id via resolveMilestoneDatabaseId for a canonical-short-id milestone and passes it to createTask', async () => {
     const item = makeItem();
 
-    const result = await defaultFollowupFiler.fileFollowupFixTask(
-      item,
-      { disposition: 'fail' },
-    );
+    const result = await defaultFollowupFiler.fileFollowupFixTask(item, {
+      disposition: 'fail',
+    });
 
     expect(createTaskMock).toHaveBeenCalledTimes(1);
     expect(createTaskMock).toHaveBeenCalledWith(
