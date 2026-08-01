@@ -1562,6 +1562,125 @@ describe('TaskDetail', () => {
   });
 });
 
+describe('TaskDetail — Backlog Abort action', () => {
+  it('does not render Abort action for a Ready task', () => {
+    render(
+      <TaskDetail
+        task={makeTask({ displayStatus: 'ready' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+    expect(screen.queryByLabelText('Abort Backlog task')).toBeNull();
+  });
+
+  it('renders Abort action for a Backlog task', () => {
+    render(
+      <TaskDetail
+        task={makeTask({ displayStatus: 'backlog' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+    expect(screen.getByLabelText('Abort Backlog task')).toBeTruthy();
+  });
+
+  it('calls the abort route and shows session-killed feedback on success', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, killedSessionId: 'plan-sess-1' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
+
+    render(
+      <TaskDetail
+        task={makeTask({ taskId: 'task-1', displayStatus: 'backlog' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('Abort Backlog task'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/tasks/task-1/abort',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    expect(
+      await screen.findByText('Task deferred; grooming session killed.'),
+    ).toBeTruthy();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('shows no-session feedback when nothing was running', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, killedSessionId: null }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
+
+    render(
+      <TaskDetail
+        task={makeTask({ taskId: 'task-1', displayStatus: 'backlog' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('Abort Backlog task'));
+
+    expect(
+      await screen.findByText('Task deferred; no session was running.'),
+    ).toBeTruthy();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('renders failure feedback when the abort route errors', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: 'task is not in Backlog' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
+
+    render(
+      <TaskDetail
+        task={makeTask({ taskId: 'task-1', displayStatus: 'backlog' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('Abort Backlog task'));
+
+    expect(await screen.findByText('task is not in Backlog')).toBeTruthy();
+
+    vi.unstubAllGlobals();
+  });
+});
+
 // ── Spec section ────────────────────────────────────────────────────────────
 
 describe('TaskDetail — Spec section', () => {
