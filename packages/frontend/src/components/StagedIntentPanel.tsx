@@ -922,7 +922,10 @@ function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
           )}
           {typeof evidence?.note === 'string' && <p>Note: {evidence.note}</p>}
           {extraStringEntries.map(([key, value]) => (
-            <p key={key} data-testid={`staged-intent-gate-verify-evidence-${key}`}>
+            <p
+              key={key}
+              data-testid={`staged-intent-gate-verify-evidence-${key}`}
+            >
               {key}: {value}
             </p>
           ))}
