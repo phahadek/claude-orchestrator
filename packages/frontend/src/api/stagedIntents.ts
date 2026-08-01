@@ -301,7 +301,9 @@ export const stagedIntentsApi = {
    * returned `recovered` intents rather than assume optimistic state, since
    * a capability-request member loses its `groupId` on recovery.
    */
-  recoverGroup(groupId: string): Promise<{ ok: boolean; recovered: StagedIntent[] }> {
+  recoverGroup(
+    groupId: string,
+  ): Promise<{ ok: boolean; recovered: StagedIntent[] }> {
     return apiRequest<{ ok: boolean; recovered: StagedIntent[] }>(
       `/api/staged-intents/group/${encodeURIComponent(groupId)}/recover`,
       { method: 'POST' },
