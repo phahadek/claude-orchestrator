@@ -26,8 +26,8 @@ describe('PLANNING_INTENT_KINDS', () => {
   });
 
   it('docs carries no task.* staging surface — a docs session reads its own task but does not write task status/body', () => {
-    expect(
-      PLANNING_INTENT_KINDS.docs.some((k) => k.startsWith('task.')),
-    ).toBe(false);
+    expect(PLANNING_INTENT_KINDS.docs.some((k) => k.startsWith('task.'))).toBe(
+      false,
+    );
   });
 });

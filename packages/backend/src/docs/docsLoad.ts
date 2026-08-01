@@ -67,7 +67,10 @@ function extractTargetSurface(md: string): string {
   if (!body) return '';
   const bullets = topLevelBullets(body);
   if (bullets.length) return bullets[0].replace(/^[`*_]+|[`*_]+$/g, '').trim();
-  return body.split('\n')[0].replace(/^[`*_]+|[`*_]+$/g, '').trim();
+  return body
+    .split('\n')[0]
+    .replace(/^[`*_]+|[`*_]+$/g, '')
+    .trim();
 }
 
 /** Extract the declared "Source domains" WebFetch allowlist from a Docs task body. Empty when not declared. */

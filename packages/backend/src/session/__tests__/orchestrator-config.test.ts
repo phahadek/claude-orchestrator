@@ -13,7 +13,10 @@ import {
   isSanctionedAutoApproveCapability,
 } from '../orchestrator-config';
 import { NOTION_READ_MCP_TOOLS } from '../../config';
-import { NOTION_MCP_SERVER_NAME, orchestratorMcpToolName } from '../../mcp/toolNaming';
+import {
+  NOTION_MCP_SERVER_NAME,
+  orchestratorMcpToolName,
+} from '../../mcp/toolNaming';
 import { PLANNING_INTENT_KINDS } from '../../planning/planningIntentKinds';
 
 describe('loadOrchestratorConfig', () => {

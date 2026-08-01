@@ -497,9 +497,7 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     expect((options.injectedProcedureContent as string).length).toBeGreaterThan(
       0,
     );
-    expect(options.injectedProcedureContent).toContain(
-      'docs/api/webhooks.md',
-    );
+    expect(options.injectedProcedureContent).toContain('docs/api/webhooks.md');
     expect(options.injectedProcedureContent).toContain('docs.stripe.com');
 
     expect(loadDocsContext).toHaveBeenCalledWith(
