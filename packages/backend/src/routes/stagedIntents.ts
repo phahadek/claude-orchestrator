@@ -784,6 +784,36 @@ export interface StagedIntent {
    * Null for human-staged intents (no owning session to gate on).
    */
   sessionComplete?: boolean | null;
+  /**
+   * The decision-surface case this intent's group belongs to, derived from
+   * the owning session's session_type (and, for an ops session, its task's
+   * cached Type) — never a live Notion call. Drives GroupCard's action-bar
+   * copy and the provenance badge's human-readable label.
+   */
+  groupKind: 'groom' | 'investigation' | 'other';
+}
+
+/**
+ * Resolves a StagedIntentRow to its decision-surface groupKind: `groom` for
+ * a groom session's Ready-flip decision, `investigation` for an ops
+ * session's closing decision whose task Type is Investigation, `other` for
+ * every remaining session_type (design, ops-operational, split, standard,
+ * review) and for rows with no owning session. Reads the task's Type via
+ * the existing per-project board cache (getCachedType), never a live
+ * Notion call.
+ */
+function computeGroupKind(
+  sessionId: string | null,
+): 'groom' | 'investigation' | 'other' {
+  if (!sessionId) return 'other';
+  const session = getSession(sessionId);
+  if (!session) return 'other';
+  if (session.session_type === 'groom') return 'groom';
+  if (session.session_type === 'ops' && session.task_id) {
+    const taskType = getCachedType(session.task_id);
+    if (taskType === '🔎 Investigation') return 'investigation';
+  }
+  return 'other';
 }
 
 /**
@@ -825,6 +855,7 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
           stagedIntentSessionManager,
         )
       : null,
+    groupKind: computeGroupKind(row.session_id),
   };
 }
 

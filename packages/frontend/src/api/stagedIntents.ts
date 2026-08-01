@@ -102,6 +102,13 @@ export interface StagedIntent {
   dispositionReason?: string | null;
   /** The operator's answer to a decision.pickOne question-intent. Null until answered. */
   answer?: StagedIntentAnswer | null;
+  /**
+   * The decision-surface case this intent's group belongs to, computed
+   * backend-side from the owning session's session_type (and, for an ops
+   * session, its task's cached Type). Drives GroupCard's action-bar copy
+   * and the provenance badge's human-readable label.
+   */
+  groupKind?: 'groom' | 'investigation' | 'other';
 }
 
 /** The two explicit operator-chosen outcomes for a reject disposition. */
