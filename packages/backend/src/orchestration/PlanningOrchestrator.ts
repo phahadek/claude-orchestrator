@@ -9,6 +9,7 @@ import {
   getSessionsWithPendingApproveTerminal,
   setTaskPauseReason,
   getPRBySessionId,
+  TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import type {
   Session,
@@ -521,12 +522,20 @@ export class PlanningOrchestrator {
       return;
     }
 
-    // Snapshot the current intent count so the next park's terminal check
-    // can tell whether the turn this disposition triggers stages anything new.
-    this.stagedCountAtResume.set(
-      sessionId,
-      listStagedIntentsBySession(sessionId).length,
-    );
+    // A terminal session (done/error/killed) will not be resumed by the
+    // enqueueFeedback call below (attemptTerminalResume: false), so the
+    // count snapshot below — which exists to let the next park's terminal
+    // check detect a resumed turn staging something new — would never be
+    // consulted. Skip it rather than leaving a misleading write.
+    const isTerminal = TERMINAL_SESSION_STATUSES.has(row.status);
+    if (!isTerminal) {
+      // Snapshot the current intent count so the next park's terminal check
+      // can tell whether the turn this disposition triggers stages anything new.
+      this.stagedCountAtResume.set(
+        sessionId,
+        listStagedIntentsBySession(sessionId).length,
+      );
+    }
 
     const message = formatDispositionMessage(
       intent,
@@ -539,6 +548,7 @@ export class PlanningOrchestrator {
         sessionId,
         'operator-disposition',
         message,
+        { attemptTerminalResume: false },
       );
     } catch (err) {
       logger.error(
@@ -659,6 +669,7 @@ export class PlanningOrchestrator {
     }
 
     const bySession = new Map<string, StagedIntentRow[]>();
+    const terminalBySession = new Map<string, boolean>();
     for (const intent of intents) {
       const sessionId = intent.session_id;
       if (!sessionId) continue;
@@ -667,13 +678,22 @@ export class PlanningOrchestrator {
       const list = bySession.get(sessionId) ?? [];
       list.push(intent);
       bySession.set(sessionId, list);
+      terminalBySession.set(
+        sessionId,
+        TERMINAL_SESSION_STATUSES.has(row.status),
+      );
     }
 
     for (const [sessionId, sessionIntents] of bySession) {
-      this.stagedCountAtResume.set(
-        sessionId,
-        listStagedIntentsBySession(sessionId).length,
-      );
+      // See handleDisposition's matching comment: a terminal session will
+      // not be resumed below (attemptTerminalResume: false), so skip the
+      // count snapshot rather than leaving a misleading write.
+      if (!terminalBySession.get(sessionId)) {
+        this.stagedCountAtResume.set(
+          sessionId,
+          listStagedIntentsBySession(sessionId).length,
+        );
+      }
 
       const message = formatGroupDispositionMessage(
         groupId,
@@ -686,6 +706,7 @@ export class PlanningOrchestrator {
           sessionId,
           'operator-disposition',
           message,
+          { attemptTerminalResume: false },
         );
       } catch (err) {
         logger.error(

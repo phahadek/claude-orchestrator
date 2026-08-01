@@ -457,6 +457,7 @@ describe('PlanningOrchestrator.handleDisposition', () => {
       'planning-session-1',
       'operator-disposition',
       expect.stringContaining('please reconsider the split'),
+      { attemptTerminalResume: false },
     );
   });
 
@@ -479,11 +480,13 @@ describe('PlanningOrchestrator.handleDisposition', () => {
       'planning-session-1',
       'operator-disposition',
       expect.stringContaining('declined'),
+      { attemptTerminalResume: false },
     );
     expect(sm.enqueueFeedback).toHaveBeenCalledWith(
       'planning-session-1',
       'operator-disposition',
       expect.stringContaining('no longer needed'),
+      { attemptTerminalResume: false },
     );
   });
 
@@ -505,6 +508,7 @@ describe('PlanningOrchestrator.handleDisposition', () => {
       'other-session-42',
       'operator-disposition',
       expect.any(String),
+      { attemptTerminalResume: false },
     );
     expect(sm.enqueueFeedback).not.toHaveBeenCalledWith(
       'planning-session-1',
@@ -607,6 +611,7 @@ describe('PlanningOrchestrator.handleGroupDisposition', () => {
       'planning-session-1',
       'operator-disposition',
       expect.any(String),
+      { attemptTerminalResume: false },
     );
   });
 
@@ -646,11 +651,13 @@ describe('PlanningOrchestrator.handleGroupDisposition', () => {
       'planning-session-1',
       'operator-disposition',
       expect.stringContaining('please reconsider the split'),
+      { attemptTerminalResume: false },
     );
     expect(sm.enqueueFeedback).toHaveBeenCalledWith(
       'planning-session-1',
       'operator-disposition',
       expect.stringContaining('group-42'),
+      { attemptTerminalResume: false },
     );
     const [, , message] = sm.enqueueFeedback.mock.calls[0];
     expect(message).toContain('intent-1');

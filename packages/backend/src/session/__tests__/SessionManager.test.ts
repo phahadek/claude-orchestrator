@@ -133,6 +133,9 @@ vi.mock('../../db/queries', () =>
     setTaskPauseReason: vi.fn(),
     listStagedIntentsBySession: vi.fn().mockReturnValue([]),
     TERMINAL_SESSION_STATUSES: new Set(['done', 'error', 'killed']),
+    enqueueFeedbackItem: vi.fn(),
+    listUndeliveredInboxItems: vi.fn().mockReturnValue([]),
+    markInboxItemsDelivered: vi.fn(),
   }),
 );
 
@@ -222,6 +225,9 @@ import {
   hasActivePlanningSessionForTask,
   getOtherRunningSessionsForTask,
   markSessionSuperseded,
+  listUndeliveredInboxItems,
+  markInboxItemsDelivered,
+  setSessionPauseReason,
 } from '../../db/queries';
 import { getProjectById } from '../../config';
 import { AgentSession } from '../AgentSession';
@@ -473,6 +479,95 @@ describe('sendOrResume — dead session path', () => {
     expect(vi.mocked(buildSessionContext)).toHaveBeenCalledWith(
       expect.objectContaining({ taskBackend: 'jira' }),
     );
+  });
+});
+
+// ── enqueueFeedback — attemptTerminalResume opt-out ──────────────────────────
+
+describe('enqueueFeedback — terminal session behavior', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(listUndeliveredInboxItems).mockReturnValue([
+      { id: 'item-1', source: 'operator-disposition', payload: 'feedback' },
+    ] as any);
+  });
+
+  it.each(['done', 'error', 'killed'])(
+    'defaults to attempting a resume on a terminal (%s) session (no opts passed — existing callers unaffected)',
+    async (terminalStatus) => {
+      vi.mocked(getSession).mockReturnValue({
+        ...makeDeadRow(),
+        status: terminalStatus,
+      } as any);
+      const sendOrResumeSpy = vi
+        .spyOn(sm, 'sendOrResume')
+        .mockResolvedValue(SESSION_ID);
+
+      await sm.enqueueFeedback(SESSION_ID, 'some-source', 'payload');
+
+      expect(sendOrResumeSpy).toHaveBeenCalledWith(
+        SESSION_ID,
+        expect.any(String),
+        { allowTerminal: true },
+      );
+      expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([
+        'item-1',
+      ]);
+    },
+  );
+
+  it.each(['done', 'error', 'killed'])(
+    'with attemptTerminalResume:false on a terminal (%s) session, marks delivered without resuming, no spawn, no pause reason, no session_action_failed',
+    async (terminalStatus) => {
+      vi.mocked(getSession).mockReturnValue({
+        ...makeDeadRow(),
+        status: terminalStatus,
+      } as any);
+      const sendOrResumeSpy = vi.spyOn(sm, 'sendOrResume');
+      const messageHandler = vi.fn();
+      sm.on('message', messageHandler);
+
+      await sm.enqueueFeedback(SESSION_ID, 'operator-disposition', 'payload', {
+        attemptTerminalResume: false,
+      });
+
+      expect(sendOrResumeSpy).not.toHaveBeenCalled();
+      expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
+      expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith([
+        'item-1',
+      ]);
+      expect(vi.mocked(setSessionPauseReason)).not.toHaveBeenCalled();
+      expect(
+        messageHandler.mock.calls.some(
+          ([msg]) => msg.type === 'session_action_failed',
+        ),
+      ).toBe(false);
+      expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event_type: 'session_terminal_reopened' }),
+      );
+    },
+  );
+
+  it('an idle (non-terminal) session still resumes and delivers regardless of attemptTerminalResume:false', async () => {
+    vi.mocked(getSession).mockReturnValue(makeDeadRow());
+    const sendOrResumeSpy = vi
+      .spyOn(sm, 'sendOrResume')
+      .mockResolvedValue(SESSION_ID);
+
+    await sm.enqueueFeedback(SESSION_ID, 'operator-disposition', 'payload', {
+      attemptTerminalResume: false,
+    });
+
+    expect(sendOrResumeSpy).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.any(String),
+    );
+    expect(vi.mocked(markInboxItemsDelivered)).toHaveBeenCalledWith(['item-1']);
   });
 });
 

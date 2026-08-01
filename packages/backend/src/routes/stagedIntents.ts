@@ -2683,6 +2683,7 @@ async function resumeCapabilityRequester(
       intent.sessionId,
       'operator-disposition',
       message,
+      { attemptTerminalResume: false },
     );
   } catch (err) {
     logger.error(
