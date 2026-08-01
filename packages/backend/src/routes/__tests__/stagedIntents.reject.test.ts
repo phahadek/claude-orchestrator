@@ -30,8 +30,12 @@ vi.mock('../../db/db', async () => {
 });
 
 import { db } from '../../db/db';
-import { createStagedIntentsRouter, stageIntent } from '../stagedIntents';
-import { getStagedIntent } from '../../db/queries';
+import {
+  createStagedIntentsRouter,
+  stageIntent,
+  SessionStagedDoneError,
+} from '../stagedIntents';
+import { getStagedIntent, listStagedIntentsBySession } from '../../db/queries';
 import type { PlanningOrchestrator } from '../../orchestration/PlanningOrchestrator';
 
 function makePlanningOrchestrator() {
@@ -449,5 +453,93 @@ describe('POST /api/staged-intents/:id/apply — group atomicity', () => {
 
     expect(res.status).toBe(200);
     expect(getStagedIntent(intent.id)!.state).toBe('committed');
+  });
+});
+
+describe('stageIntent — a session-staged task.setStatus -> Done is refused at stage time', () => {
+  for (const sessionType of ['groom-session', 'design-session', 'ops-session']) {
+    it(`refuses a task.setStatus -> Done staged by a ${sessionType}, naming that Done is the orchestrator's to set, and creates no row`, () => {
+      expect(() =>
+        stageIntent(
+          'task.setStatus',
+          { taskId: 't-1', status: 'Done' },
+          'proj-1',
+          null,
+          sessionType,
+        ),
+      ).toThrow(SessionStagedDoneError);
+
+      expect(() =>
+        stageIntent(
+          'task.setStatus',
+          { taskId: 't-1', status: 'Done' },
+          'proj-1',
+          null,
+          sessionType,
+        ),
+      ).toThrow(/orchestrator/);
+
+      // No row of any state — rejected or otherwise — was ever created.
+      expect(listStagedIntentsBySession(sessionType)).toHaveLength(0);
+    });
+  }
+
+  it('a human-staged (no sessionId) task.setStatus -> Done is unaffected by the refusal', () => {
+    const intent = stageIntent(
+      'task.setStatus',
+      { taskId: 't-1', status: 'Done' },
+      'proj-1',
+      null,
+      null,
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('staged');
+  });
+
+  it('an ops session staging task.setStatus -> a legitimate target (Blocked) still succeeds', () => {
+    const intent = stageIntent(
+      'task.setStatus',
+      { taskId: 't-2', status: 'Blocked' },
+      'proj-1',
+      null,
+      'ops-session-2',
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('staged');
+  });
+
+  it('an ops session staging task.setStatus -> Deferred still succeeds', () => {
+    const intent = stageIntent(
+      'task.setStatus',
+      { taskId: 't-3', status: 'Deferred' },
+      'proj-1',
+      null,
+      'ops-session-3',
+    );
+    expect(getStagedIntent(intent.id)!.state).toBe('staged');
+  });
+
+  it('a refused Done proposal leaves the rest of the session\'s closing group intact — no wedged member', () => {
+    const sessionId = 'design-session-4';
+    const kept = stageIntent(
+      'task.setDependsOn',
+      { taskId: 't-4', dependsOn: [] },
+      'proj-1',
+      'group-4',
+      sessionId,
+    );
+
+    expect(() =>
+      stageIntent(
+        'task.setStatus',
+        { taskId: 't-4', status: 'Done' },
+        'proj-1',
+        'group-4',
+        sessionId,
+      ),
+    ).toThrow(SessionStagedDoneError);
+
+    // The refused Done never became a row, so it cannot wedge the group —
+    // the sibling member staged before it is untouched.
+    expect(getStagedIntent(kept.id)!.state).toBe('staged');
+    expect(listStagedIntentsBySession(sessionId)).toHaveLength(1);
   });
 });
