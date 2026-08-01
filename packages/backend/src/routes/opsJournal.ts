@@ -9,6 +9,9 @@ import {
 } from '../ops/opsJournal';
 import { requireDeviceAuth } from '../auth/DeviceAuth';
 import { stageJournalDecision, STAGED_PROPOSAL_STATE } from './stagedIntents';
+import { getLatestOpsSessionByTaskId } from '../db/queries';
+import { closeDeferredOpsTask } from '../orchestration/PlanningOrchestrator';
+import { logger } from '../logger';
 
 /**
  * Read/operator-write surface for the Ops(N) staged-intent view: exposes
@@ -45,7 +48,7 @@ export function createOpsJournalRouter(): Router {
   router.post(
     '/ops-journal/:taskId/state',
     requireDeviceAuth,
-    (req: Request, res: Response) => {
+    async (req: Request, res: Response) => {
       const taskId = String(req.params.taskId);
 
       const body = req.body as {
@@ -107,6 +110,25 @@ export function createOpsJournalRouter(): Router {
         // session also stages a journal.setState intent itself.
         if (updated && updated.state === STAGED_PROPOSAL_STATE) {
           stageJournalDecision(updated, null);
+        }
+        // The operator-confirmed applied-pending-confirm -> resolved path is
+        // the deferred half of ops-task closure: the owning session has
+        // typically already gone terminal by the time this lands (see
+        // closeDeferredOpsTask's docstring), so completeOpsTask's
+        // synchronous check at markTerminal's exact instant never catches
+        // it. Best-effort — a failure here must not roll back the journal
+        // write, which already succeeded.
+        if (updated && updated.state === 'resolved') {
+          const opsSession = getLatestOpsSessionByTaskId(taskId);
+          if (opsSession) {
+            try {
+              await closeDeferredOpsTask(opsSession);
+            } catch (err) {
+              logger.error(
+                `[opsJournal] deferred close failed for task ${taskId}: ${err}`,
+              );
+            }
+          }
         }
         res.json(updated);
       } catch (err) {

@@ -50,6 +50,7 @@ export interface Session {
   pending_done_ended_at: number | null; // deferred done-transition, applied once the in-flight turn completes
   pending_done_pr_url: string | null;
   pending_done_call_site: string | null;
+  terminal_completion_reason: string | null; // reason string markTerminal passed to markSessionDone, persisted for lookup after the session has ended
 }
 
 export type NewSession = Omit<
@@ -77,6 +78,7 @@ export type NewSession = Omit<
   | 'pending_done_ended_at'
   | 'pending_done_pr_url'
   | 'pending_done_call_site'
+  | 'terminal_completion_reason'
 > & {
   ended_at?: number | null;
   pr_url?: string | null;

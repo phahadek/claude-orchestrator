@@ -223,6 +223,15 @@ export function emitTaskUpdated(notionTaskId: string): void {
   });
 }
 
+/** Broadcast a task_status_changed message directly, without a full TaskView rebuild. */
+export function broadcastTaskStatusChanged(
+  notionTaskId: string,
+  newStatus: string,
+): void {
+  if (!taskBroadcastFn) return;
+  taskBroadcastFn({ type: 'task_status_changed', notionTaskId, newStatus });
+}
+
 /** Build a TaskView for a single notionTaskId from current DB state. Returns null if not found. */
 async function buildTaskView(notionTaskId: string): Promise<TaskView | null> {
   const rows = getActiveTaskAggregates([notionTaskId]);

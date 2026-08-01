@@ -9,6 +9,7 @@ import {
   getSessionsWithPendingApproveTerminal,
   setTaskPauseReason,
   getPRBySessionId,
+  setSessionTerminalCompletionReason,
   TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import type {
@@ -29,10 +30,10 @@ import {
   sessionOwesGatedDesignArtifacts,
 } from '../routes/stagedIntents';
 import { getTaskBackend } from '../tasks/TaskBackend';
-import { emitTaskUpdated } from '../routes/tasks';
+import { emitTaskUpdated, broadcastTaskStatusChanged } from '../routes/tasks';
 import { NO_OP_INTENT_KIND, hasStagedDecision } from './planningDecisionKinds';
 
-const DESIGN_DONE_STATUS = '✅ Done';
+export const DESIGN_DONE_STATUS = '✅ Done';
 
 /**
  * Terminal reasons that represent a genuinely completed design — the only
@@ -373,6 +374,12 @@ export class PlanningOrchestrator {
     } else {
       markSessionDone(sessionId, Date.now(), null, reason);
     }
+    // Durable, queryable record of *why* this session went terminal — not
+    // just for design/docs/ops sessions below, since a future terminal
+    // reason may need this without gaining task-closing authority. See
+    // closeDeferredOpsTask, which reads this back well after the session
+    // has ended to drive the ops-journal route's deferred close.
+    setSessionTerminalCompletionReason(sessionId, reason);
     this.stagedCountAtResume.delete(sessionId);
     this.noDecisionNudgeSent.delete(sessionId);
     // The normal run().then() cleanup that frees a session's in-memory
@@ -865,4 +872,52 @@ function formatDispositionMessage(
         `The operator's answer: "${answer?.freeForm ?? ''}"`
       );
   }
+}
+
+/**
+ * Deferred half of ops-task closure. Mirrors PlanningOrchestrator's private
+ * completeOpsTask, but is driven by the ops-journal route's operator-confirmed
+ * applied-pending-confirm -> resolved transition (routes/opsJournal.ts)
+ * instead of completeOpsTask's synchronous journal check at markTerminal's
+ * exact instant — that check always misses this path, since the journal is
+ * still at applied-pending-confirm when the session goes terminal and
+ * typically only reaches resolved well after (see completeOpsTask's
+ * docstring). Standalone (not a class method) so the route can call it with
+ * just the session row it already looked up, without needing a
+ * PlanningOrchestrator/SessionManager instance.
+ *
+ * Guards mirror completeOpsTask's: excludes gate-verify sessions (no Notion
+ * task to close), requires the session's durable terminal_completion_reason
+ * to be one of DESIGN_COMPLETING_REASONS, and bails if any staged intent for
+ * the session is rejected. Additionally checks the task's current status
+ * before writing, so it no-ops if completeOpsTask's synchronous path (the
+ * decided-no-change Investigation, where journal.setState -> resolved
+ * commits atomically alongside the session's terminal) already closed the
+ * task — this route-driven path must never double-apply that close.
+ */
+export async function closeDeferredOpsTask(session: Session): Promise<void> {
+  const taskId = session.task_id;
+  const projectId = session.project_id;
+  if (!taskId || !projectId) return;
+  if (isGateVerifySession(taskId)) return;
+  if (
+    !session.terminal_completion_reason ||
+    !DESIGN_COMPLETING_REASONS.has(session.terminal_completion_reason)
+  ) {
+    return;
+  }
+
+  const intents = listStagedIntentsBySession(session.session_id);
+  if (intents.some((i) => i.state === 'rejected')) return;
+
+  const backend = getTaskBackend(projectId);
+  const summary = await backend.fetchTaskSummary(taskId);
+  if (summary?.status === DESIGN_DONE_STATUS) return;
+
+  await backend.updateStatus(taskId, DESIGN_DONE_STATUS, {
+    source: 'orchestrator',
+    sessionId: session.session_id,
+  });
+  broadcastTaskStatusChanged(taskId, DESIGN_DONE_STATUS);
+  emitTaskUpdated(taskId);
 }

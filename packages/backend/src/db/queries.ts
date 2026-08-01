@@ -228,6 +228,27 @@ function clearPendingDone(sessionId: string): void {
 }
 
 /**
+ * Durable record of *why* a session went terminal — written by
+ * PlanningOrchestrator.markTerminal alongside its markSessionDone call, so
+ * the reason survives past the session's own lifetime. Read by the
+ * ops-journal route's deferred close: the operator-confirmed
+ * applied-pending-confirm -> resolved journal transition typically settles
+ * well after the session has gone terminal, so it needs a durable place to
+ * ask "did this session's terminal reason justify closing the task?"
+ * instead of relying on a log line or an in-memory value.
+ */
+export function setSessionTerminalCompletionReason(
+  sessionId: string,
+  reason: string,
+): void {
+  db.prepare<{ session_id: string; terminal_completion_reason: string }>(
+    `UPDATE sessions
+     SET terminal_completion_reason = @terminal_completion_reason
+     WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId, terminal_completion_reason: reason });
+}
+
+/**
  * Durable copy of PlanningOrchestrator's in-memory pendingApproveTerminal
  * Set — written when an approve-driven terminal transition is deferred
  * because the session's turn is still in flight, cleared once that
@@ -2769,6 +2790,29 @@ export function getLatestCodeSessionByNotionTaskId(
       `
     SELECT * FROM sessions
     WHERE task_id = @task_id AND (session_type = 'standard' OR session_type IS NULL)
+    ORDER BY started_at DESC
+    LIMIT 1
+  `,
+    )
+    .get({ task_id: taskId }) as Session | undefined;
+}
+
+/**
+ * Returns the most recent ops session for a given task ID. Read by the
+ * ops-journal route's deferred close (see setEntryState -> 'resolved'
+ * handler) to look up the terminal_completion_reason of the session whose
+ * journal entry just settled, since the operator-confirmed
+ * applied-pending-confirm -> resolved transition typically happens well
+ * after that session has gone terminal.
+ */
+export function getLatestOpsSessionByTaskId(
+  taskId: string,
+): Session | undefined {
+  return db
+    .prepare<{ task_id: string }>(
+      `
+    SELECT * FROM sessions
+    WHERE task_id = @task_id AND session_type = 'ops'
     ORDER BY started_at DESC
     LIMIT 1
   `,
