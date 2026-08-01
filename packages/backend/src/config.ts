@@ -381,15 +381,15 @@ export const OPS_ALLOWED_TOOLS = [
   'Bash(git branch --list:*)',
 ];
 
-// The orchestrator MCP stage-proposal tool a docs session uses for a
-// Notion-page Target surface — the notion.pageEdit staged-edit path (see
-// mcp/tools/stageProposalTools.ts). docs isn't a PLANNING_INTENT_KINDS
-// workflow (it isn't an assembled groom/design/ops/split procedure), so this
-// is named explicitly rather than derived, same precedent as
-// groom.precheck/completeness.disposition/gate.verify above.
+// The orchestrator MCP stage-proposal tools a docs session is allowed to
+// call — derived from PLANNING_INTENT_KINDS.docs (the notion.pageEdit
+// staged-edit path for a Notion-page Target surface, plus intent.withdraw),
+// same precedent as GROOM_MCP_TOOLS/DESIGN_MCP_TOOLS/OPS_MCP_TOOLS above. A
+// repo-file Target surface never stages a kind here — it opens a PR
+// directly through the GitHub MCP tools in DOCS_ALLOWED_TOOLS below.
 const DOCS_MCP_TOOLS = [
   ORCHESTRATOR_MCP_HEALTH_TOOL,
-  orchestratorMcpToolName('notion.pageEdit'),
+  ...PLANNING_INTENT_KINDS.docs.map(orchestratorMcpToolName),
   ...ARCHITECTURE_READ_MCP_TOOLS,
   ...TASK_READ_MCP_TOOLS,
   ...TIER_B_READ_MCP_TOOLS,

@@ -22,7 +22,7 @@
 import { orchestratorMcpToolName } from '../mcp/toolNaming';
 import { ALLOWED_TRANSITIONS, type OpsState } from '../ops/opsJournal';
 
-export type SkillId = 'groom' | 'design' | 'ops' | 'split';
+export type SkillId = 'groom' | 'design' | 'ops' | 'split' | 'docs';
 
 /** `blocked` / `incident-frozen` are freezes reachable from (and returning to) any non-terminal state — not part of the normal path. */
 const OPS_JOURNAL_FREEZE_STATES: ReadonlySet<OpsState> = new Set([
@@ -77,6 +77,7 @@ export const SKILL_LABELS: Record<SkillId, string> = {
   design: 'Design Execution',
   ops: 'ops',
   split: 'Split',
+  docs: 'Docs Authoring',
 };
 
 /** A cross-cutting rule that would otherwise be restated per-skill. */

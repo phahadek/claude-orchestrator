@@ -53,6 +53,16 @@ function readSkillMd(skill: SkillId): string {
   return readFileSync(path, 'utf8');
 }
 
+describe('SKILL_LABELS', () => {
+  it('carries a label for every SkillId, including docs', () => {
+    const skills: SkillId[] = ['groom', 'design', 'ops', 'split', 'docs'];
+    for (const skill of skills) {
+      expect(typeof SKILL_LABELS[skill]).toBe('string');
+      expect(SKILL_LABELS[skill].length).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('procedureCore', () => {
   it('has at least one principle and one ordered step applicable to every skill', () => {
     const skills: SkillId[] = ['groom', 'design', 'ops', 'split'];

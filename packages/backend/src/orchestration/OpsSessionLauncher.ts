@@ -13,6 +13,7 @@ import {
   GroomTaskSourceUnsupportedError,
 } from '../groom/groomLoad';
 import { loadDesignContext } from '../design/designLoad';
+import { loadDocsContext } from '../docs/docsLoad';
 import { getProjectRowById } from '../db/queries';
 import { resolveMilestoneForProject } from '../projects/milestoneResolver';
 import { isPlanningSession } from '../session/sessionPredicates';
@@ -30,6 +31,7 @@ import {
   assemblePlanningProcedure,
   deriveGroomDigestSlice,
   deriveDesignDigestSlice,
+  deriveDocsDigestSlice,
   deriveOpsDigestSlice,
   GroomWorklistTaskNotFoundError,
   type PlanningDigest,
@@ -351,6 +353,14 @@ export class OpsSessionLauncher {
           project: projectId,
         });
         digest = { workflow: 'design', data: deriveDesignDigestSlice(result) };
+      } else if (sessionType === 'docs') {
+        const project = getProjectRowById(projectId);
+        if (!project) throw new Error(`unknown project ${projectId}`);
+        const result = await loadDocsContext(milestoneId, task.id, {
+          repoRoot: project.project_dir,
+          project: projectId,
+        });
+        digest = { workflow: 'docs', data: deriveDocsDigestSlice(result) };
       } else if (sessionType === 'ops') {
         if (!opsContext)
           throw new Error('ops session launched without opsContext');

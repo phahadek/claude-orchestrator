@@ -33,6 +33,10 @@ vi.mock('../../design/designLoad.js', () => ({
   loadDesignContext: vi.fn(),
 }));
 
+vi.mock('../../docs/docsLoad.js', () => ({
+  loadDocsContext: vi.fn(),
+}));
+
 vi.mock('../../db/queries.js', () => ({
   getProjectRowById: vi
     .fn()
@@ -455,6 +459,54 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     );
   });
 
+  it('passes a non-empty injectedProcedureContent for a docs dispatch, carrying the declared Target surface and Source domains', async () => {
+    const { loadDocsContext } = await import('../../docs/docsLoad.js');
+    (loadDocsContext as ReturnType<typeof vi.fn>).mockResolvedValue({
+      task: {
+        id: 'task-1',
+        title: 'Document the webhooks API',
+        status: '🔄 In Progress',
+        type: '📝 Docs',
+        url: 'https://www.notion.so/task-1',
+      },
+      markdown: '## Task\nDocument the webhooks API.',
+      targetSurface: 'docs/api/webhooks.md',
+      sourceDomains: ['docs.stripe.com'],
+    });
+
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = {
+      id: 'task-1',
+      title: 'Document the webhooks API',
+      url: '',
+      blockingDepIds: [],
+    };
+
+    await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'docs',
+      tasks: [task],
+    });
+
+    expect(start).toHaveBeenCalledTimes(1);
+    const [, , options] = start.mock.calls[0];
+    expect(options.sessionType).toBe('docs');
+    expect(typeof options.injectedProcedureContent).toBe('string');
+    expect((options.injectedProcedureContent as string).length).toBeGreaterThan(
+      0,
+    );
+    expect(options.injectedProcedureContent).toContain('docs/api/webhooks.md');
+    expect(options.injectedProcedureContent).toContain('docs.stripe.com');
+
+    expect(loadDocsContext).toHaveBeenCalledWith(
+      'milestone-1',
+      'task-1',
+      expect.objectContaining({ repoRoot: '/tmp/proj-1', project: 'proj-1' }),
+    );
+  });
+
   it('names a groom session after the digest-resolved title, not the bare task id', async () => {
     const { loadGroomContext } = await import('../../groom/groomLoad.js');
     (loadGroomContext as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -613,11 +665,15 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     );
   });
 
+  // groom/design/ops/split/docs each have a digest branch (see the tests
+  // above/below) — these two exercise the fallthrough itself with a
+  // not-yet-supported session type, since every real PlanningSessionType is
+  // now covered.
   it('buildInjectedProcedure throws (rather than resolving undefined) for a planning session type with no digest branch', async () => {
     const launcher = new OpsSessionLauncher(sessionManager as never);
     const task = {
       id: 'task-1',
-      title: 'Docs me',
+      title: 'Some other type',
       url: '',
       blockingDepIds: [],
     };
@@ -637,43 +693,22 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
       ).buildInjectedProcedure(
         'proj-1',
         'milestone-1',
-        'docs',
+        'not-a-real-workflow',
         undefined,
         task,
         '',
       ),
     ).rejects.toThrow(
-      /no injected-procedure branch for planning session type "docs" \(task task-1\)/,
+      /no injected-procedure branch for planning session type "not-a-real-workflow" \(task task-1\)/,
     );
   });
 
-  it('aborts before creating a session for a planning session type with no injected-procedure branch (docs), naming both the sessionType and the task id in the failure reason', async () => {
-    const launcher = new OpsSessionLauncher(sessionManager as never);
-    const task = {
-      id: 'task-1',
-      title: 'Docs me',
-      url: '',
-      blockingDepIds: [],
-    };
-
-    const result = await launcher.launchSelected({
-      projectId: 'proj-1',
-      projectContextUrl: 'https://www.notion.so/context',
-      milestoneId: 'milestone-1',
-      sessionType: 'docs',
-      tasks: [task],
-    });
-
-    expect(start).not.toHaveBeenCalled();
-    expect(result.launched).toEqual([]);
-    expect(result.failed).toEqual([
-      {
-        taskId: 'task-1',
-        reason: expect.stringContaining('docs'),
-      },
-    ]);
-    expect(result.failed[0].reason).toContain('task-1');
-  });
+  // No `launchSelected`-level ("aborts before creating a session") case
+  // remains for this fallthrough: `isPlanningSession` (session/
+  // sessionPredicates.ts) gates every real PlanningSessionType into
+  // `buildInjectedProcedure`, and groom/design/ops/split/docs now each
+  // resolve a digest branch there — so the only way to reach this throw is
+  // the direct-call unit test above, not through the public dispatch path.
 
   it('refuses a groom dispatch (no session launched) when the loader reports a non-Notion task source, with a reason distinct from a worklist-miss failure', async () => {
     const { loadGroomContext, GroomTaskSourceUnsupportedError } =

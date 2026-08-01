@@ -13,7 +13,11 @@ import {
   isSanctionedAutoApproveCapability,
 } from '../orchestrator-config';
 import { NOTION_READ_MCP_TOOLS } from '../../config';
-import { NOTION_MCP_SERVER_NAME } from '../../mcp/toolNaming';
+import {
+  NOTION_MCP_SERVER_NAME,
+  orchestratorMcpToolName,
+} from '../../mcp/toolNaming';
+import { PLANNING_INTENT_KINDS } from '../../planning/planningIntentKinds';
 
 describe('loadOrchestratorConfig', () => {
   let tmpDir: string;
@@ -307,6 +311,13 @@ describe('getSessionAllowedTools', () => {
       expect(tools).toContain('Bash(gh pr create:*)');
       expect(tools).toContain('mcp__github__create_pull_request');
       expect(tools).toContain('mcp__orchestrator__notion_pageEdit');
+    });
+
+    it('derives its staged-intent MCP tools from PLANNING_INTENT_KINDS.docs, not a hand-written list', () => {
+      const tools = getSessionAllowedTools('docs', { allowed_tools: [] });
+      for (const kind of PLANNING_INTENT_KINDS.docs) {
+        expect(tools).toContain(orchestratorMcpToolName(kind));
+      }
     });
 
     it('merges an allowlisted WebFetch entry per declared source domain and never grants open WebSearch', () => {
