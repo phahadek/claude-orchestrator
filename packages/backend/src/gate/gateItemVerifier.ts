@@ -40,7 +40,7 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000;
  * read-only verification session. The session never runs a vendored skill
  * to assemble this itself.
  */
-function buildGateVerifyProcedure(item: GateItem): string {
+export function buildGateVerifyProcedure(item: GateItem): string {
   const isHumanObservation = item.classification === 'Human-Observation';
   return [
     '## Session Lifecycle',
@@ -167,11 +167,9 @@ function buildGateVerifyProcedure(item: GateItem): string {
       'specific session stay reachable only through the brokered read, not a ' +
       "direct file or DB path. For any other read your base tools don't " +
       'cover, stage a `session.requestCapability` intent naming that exact read ' +
-      'and end the turn — an operator grant resumes you with it. If that is not ' +
-      'practical for a bounded one-shot investigation, report `needs-setup` and ' +
-      'name the missing capability. Never fabricate a pass/fail to route around ' +
-      'a permission denial — a blocked read is grounds for needs-setup, not for ' +
-      'guessing.',
+      'and end the turn — an operator grant resumes you with it. Never fabricate ' +
+      'a pass/fail to route around a permission denial — a blocked read is ' +
+      'grounds for needs-setup, not for guessing.',
     '',
     '**Before abstaining for a missing identifier** (e.g. "no target session ' +
       'ID to read"): exhaust the record surfaces your base tools already ' +
