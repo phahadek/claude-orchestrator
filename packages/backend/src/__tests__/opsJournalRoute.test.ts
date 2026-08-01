@@ -7,6 +7,15 @@ vi.mock('../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../projects/ProjectService', () => ({
+  ProjectService: {
+    getById: () => ({
+      id: 'polimarket-analyser',
+      milestones: [{ id: 'ms-12', name: 'M12', canonicalShortId: 'M12' }],
+    }),
+  },
+}));
+
 const mockUpdateStatus = vi.fn(async () => {});
 const mockFetchTaskSummary = vi.fn(
   async () => null as { status: string } | null,

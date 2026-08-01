@@ -49,7 +49,13 @@ export interface StageProposalToolContext {
    * dispatch (see orchestratorMcpServer.ts's buildMcpServer) — carried onto
    * every intent this session stages, for the milestone decision-inbox
    * attribution. Null for a session whose task couldn't be resolved to a
-   * milestone (falls to the "unattributed" bucket).
+   * milestone (falls to the "unattributed" bucket). Already the canonical
+   * short id — stageIntent() runs it through resolveMilestoneForProject
+   * regardless, but that's a no-op for a value already in canonical form.
+   * No stage-proposal tool exposes a caller-settable envelope-level
+   * milestone field; a caller-supplied milestone reference only ever
+   * reaches staged_intent.milestone via the human/device POST
+   * /staged-intents route, which is normalized the same way.
    */
   milestone?: string | null;
 }

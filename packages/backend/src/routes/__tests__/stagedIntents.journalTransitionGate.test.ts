@@ -26,6 +26,15 @@ vi.mock('../../db/db', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../../projects/ProjectService', () => ({
+  ProjectService: {
+    getById: () => ({
+      id: 'proj-1',
+      milestones: [{ id: 'ms-1', name: 'M1', canonicalShortId: 'M1' }],
+    }),
+  },
+}));
+
 import { db } from '../../db/db';
 import { createStagedIntentsRouter } from '../stagedIntents';
 import { upsertOpsJournalEntry } from '../../db/queries';
