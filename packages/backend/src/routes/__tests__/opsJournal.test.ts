@@ -28,7 +28,16 @@ function makeApp() {
 
 beforeEach(() => {
   db.prepare('DELETE FROM ops_journal').run();
+  db.prepare('DELETE FROM staged_intent').run();
 });
+
+function activeJournalMirrors(taskId: string) {
+  return db
+    .prepare(
+      `SELECT * FROM staged_intent WHERE task_id = ? AND kind = 'journal.setState' AND state IN ('staged', 'approved')`,
+    )
+    .all(taskId) as Array<{ decision_proposal: string; payload: string }>;
+}
 
 function seedEntry(taskId: string, state = 'candidate') {
   upsertOpsJournalEntry({
@@ -76,5 +85,36 @@ describe('POST /api/ops-journal/:taskId/state', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/invalid transition/);
+  });
+
+  it('mirrors a candidate -> staged-proposal write to exactly one decision, carrying the finding', async () => {
+    seedEntry('task-3', 'candidate');
+
+    const res = await request(makeApp())
+      .post('/api/ops-journal/task-3/state')
+      .send({
+        state: 'staged-proposal',
+        findingOrProposal: { summary: 'root cause is X' },
+      });
+
+    expect(res.status).toBe(200);
+    const mirrors = activeJournalMirrors('task-3');
+    expect(mirrors).toHaveLength(1);
+    expect(JSON.parse(mirrors[0].payload).fields.findingOrProposal).toEqual({
+      summary: 'root cause is X',
+    });
+  });
+
+  it('re-transitioning into staged-proposal still yields exactly one mirrored decision', async () => {
+    seedEntry('task-4', 'candidate');
+
+    await request(makeApp())
+      .post('/api/ops-journal/task-4/state')
+      .send({ state: 'staged-proposal' });
+    await request(makeApp())
+      .post('/api/ops-journal/task-4/state')
+      .send({ state: 'staged-proposal', evidence: { note: 'more context' } });
+
+    expect(activeJournalMirrors('task-4')).toHaveLength(1);
   });
 });

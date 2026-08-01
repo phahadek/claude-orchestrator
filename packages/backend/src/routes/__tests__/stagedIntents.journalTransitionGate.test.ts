@@ -143,6 +143,93 @@ describe('POST /api/staged-intents — journal.setState stage-time transition ga
     }
   });
 
+  function activeJournalMirrors(taskId: string) {
+    return db
+      .prepare(
+        `SELECT * FROM staged_intent WHERE task_id = ? AND kind = 'journal.setState' AND state IN ('staged', 'approved')`,
+      )
+      .all(taskId) as Array<{ id: string; payload: string }>;
+  }
+
+  it('mirrors onto the decision surface when an applied journal.setState intent lands on staged-proposal', async () => {
+    const app = buildApp();
+    seedEntry('task-mirror-1', 'candidate');
+
+    const stageRes = await supertest(app)
+      .post('/api/staged-intents')
+      .send({
+        kind: 'journal.setState',
+        payload: {
+          taskId: 'task-mirror-1',
+          state: 'staged-proposal',
+          fields: { findingOrProposal: { summary: 'root cause is X' } },
+        },
+        projectId: 'proj-1',
+      });
+    expect(stageRes.status).toBe(201);
+
+    const applyRes = await supertest(app)
+      .post(`/api/staged-intents/${stageRes.body.id}/apply`)
+      .send({});
+    expect(applyRes.status).toBe(200);
+
+    const mirrors = activeJournalMirrors('task-mirror-1');
+    expect(mirrors).toHaveLength(1);
+    // The applied intent is now committed (excluded by the state filter
+    // above) — this is a distinct, freshly-staged mirror.
+    expect(mirrors[0].id).not.toBe(stageRes.body.id);
+    expect(JSON.parse(mirrors[0].payload).fields.findingOrProposal).toEqual({
+      summary: 'root cause is X',
+    });
+  });
+
+  it('mirrors nothing when the applied transition lands on a non-staged-proposal state', async () => {
+    const app = buildApp();
+    seedEntry('task-mirror-2', 'pending');
+
+    const stageRes = await supertest(app)
+      .post('/api/staged-intents')
+      .send({
+        kind: 'journal.setState',
+        payload: { taskId: 'task-mirror-2', state: 'candidate' },
+        projectId: 'proj-1',
+      });
+    expect(stageRes.status).toBe(201);
+
+    await supertest(app)
+      .post(`/api/staged-intents/${stageRes.body.id}/apply`)
+      .send({});
+
+    expect(activeJournalMirrors('task-mirror-2')).toHaveLength(0);
+  });
+
+  it('does not produce a second decision when both the HTTP route and the intent path mirror the same entry', async () => {
+    const { createOpsJournalRouter } = await import('../opsJournal');
+    const app = buildApp();
+    app.use('/api', createOpsJournalRouter());
+    seedEntry('task-mirror-3', 'candidate');
+
+    const stageRes = await supertest(app)
+      .post('/api/staged-intents')
+      .send({
+        kind: 'journal.setState',
+        payload: { taskId: 'task-mirror-3', state: 'staged-proposal' },
+        projectId: 'proj-1',
+      });
+    await supertest(app)
+      .post(`/api/staged-intents/${stageRes.body.id}/apply`)
+      .send({});
+
+    // The same session also stages+applies its own journal.setState, and a
+    // dispatched session's ops write can also drive the HTTP route.
+    const res = await supertest(app)
+      .post('/api/ops-journal/task-mirror-3/state')
+      .send({ state: 'staged-proposal' });
+    expect(res.status).toBe(200);
+
+    expect(activeJournalMirrors('task-mirror-3')).toHaveLength(1);
+  });
+
   it('fails safely at apply when the journal state changed after a legal stage — apply-time check retained', async () => {
     const app = buildApp();
     seedEntry('task-3', 'pending');
