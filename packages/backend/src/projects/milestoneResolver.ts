@@ -1,8 +1,9 @@
 import { ProjectService } from './ProjectService';
 import type { ProjectMilestone } from './ProjectService';
-import { getTaskCache } from '../db/queries';
+import { getTaskCache, getGateItem } from '../db/queries';
 import { normalizeTaskId } from '../tasks/taskId';
 import type { NotionTask } from '../notion/types';
+import { isGateVerifySession } from '../session/sessionPredicates';
 
 /**
  * Thrown when a milestone reference doesn't resolve to exactly one known
@@ -160,6 +161,27 @@ export function resolveMilestoneForTaskId(
     }
   }
   return null;
+}
+
+/**
+ * Same as resolveMilestoneForTaskId, but aware of a gate-verify session's
+ * sentinel task id (`gate-item:<uuid>`, see isGateVerifySession) — a value
+ * that never matches any milestone board cache row. For that case, reads
+ * the milestone straight off the referenced gate_item row instead (the same
+ * untransformed field AgentSession.recordGateVerifyDisposition's gate.verify
+ * fix already stages with no conversion step); otherwise delegates
+ * unchanged to resolveMilestoneForTaskId. Returns null — never throws — when
+ * the gate item is missing or itself carries no milestone.
+ */
+export function resolveMilestoneForSessionTask(
+  projectId: string,
+  taskId: string,
+): string | null {
+  if (isGateVerifySession(taskId)) {
+    const itemId = taskId.slice('gate-item:'.length);
+    return getGateItem(itemId)?.milestone ?? null;
+  }
+  return resolveMilestoneForTaskId(projectId, taskId);
 }
 
 /**

@@ -21,7 +21,7 @@ import {
   _resetStageCredentialsForTesting,
 } from '../auth/SessionStageAuth';
 import { SessionManager } from '../session/SessionManager';
-import { insertSession } from '../db/queries';
+import { insertSession, insertGateItem, getStagedIntent } from '../db/queries';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import { createUnit } from '../architecture/ArchUnitStore';
 
@@ -304,6 +304,60 @@ describe('architecture.getUnit / architecture.queryUnits', () => {
     )[0];
     const queried = JSON.parse(queryContent.text) as { id: string }[];
     expect(queried.some((u) => u.id === unit.id)).toBe(true);
+
+    await client.close();
+    await server.close();
+  });
+});
+
+describe('buildMcpServer — ctx.milestone attribution', () => {
+  it("a gate-verify session's session.requestCapability persists the gate item's milestone", async () => {
+    insertGateItem({
+      id: 'gate-item-mcp-1',
+      project: 'proj-1',
+      milestone: 'M13',
+      text: 'some gate item',
+      classification: 'code',
+      min_deployed_commit: null,
+      state: 'open',
+      current_disposition: null,
+      latest_disposition: null,
+      updated_at: new Date(0).toISOString(),
+    });
+    insertSession({
+      session_id: 'mcp-gate-verify-1',
+      task_id: 'gate-item:gate-item-mcp-1',
+      task_url: null,
+      project_context_url: null,
+      project_id: 'proj-1',
+      status: 'running',
+      started_at: Date.now(),
+      session_type: 'ops',
+    });
+
+    const server = buildMcpServer('mcp-gate-verify-1', new SessionManager());
+    const [serverTransport, clientTransport] =
+      InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test-client', version: '1.0.0' });
+    await Promise.all([
+      server.connect(serverTransport),
+      client.connect(clientTransport),
+    ]);
+
+    const result = await client.callTool({
+      name: 'session.requestCapability',
+      arguments: {
+        payload: {
+          capability: 'Bash(ls)',
+          plan: 'list files to confirm the gate item is verifiable',
+          evidence: 'the gate item requires inspecting repo contents',
+        },
+      },
+    });
+    const content = (result.content as { type: string; text: string }[])[0];
+    const staged = JSON.parse(content.text) as { id: string };
+    const row = getStagedIntent(staged.id);
+    expect(row?.milestone).toBe('M13');
 
     await client.close();
     await server.close();
