@@ -53,6 +53,14 @@ export interface GateVerificationResult {
   disposition: 'pass' | 'fail' | 'needs-setup';
   evidence?: unknown;
   /**
+   * Set only when `disposition` is `needs-setup` and the session was never
+   * dispatched at all — a capacity/infra failure, not a verifier verdict.
+   * Distinguishes that case from a genuine verifier abstain so the
+   * reconciler can log it without occupying the item's latest_disposition,
+   * keeping the item eligible for the next `next` pull and auto-run tick.
+   */
+  dispatchFailed?: boolean;
+  /**
    * A self-correction: the session determined the item is mis-classified
    * and proposes the correct tier instead of forcing a pass/fail (or a bare
    * abstain) on a tier it structurally cannot verify. Supersedes
@@ -352,7 +360,16 @@ async function routeVerificationResult(
       disposition: 'needs-setup',
     };
   }
-  if (result.disposition === 'needs-setup') {
+  if (result.disposition === 'needs-setup' && result.dispatchFailed) {
+    // Infra failure, not a verifier verdict — log-only, no disposition, so
+    // the item's latest_disposition (and its eligibility for the next
+    // `next` pull / auto-run tick) is left untouched.
+    appendGateItemEvent(item.id, {
+      evidence: result.evidence,
+      deploySha: deploySha ?? undefined,
+      unattended,
+    });
+  } else if (result.disposition === 'needs-setup') {
     appendGateItemEvent(item.id, {
       disposition: 'needs-setup',
       evidence: result.evidence,

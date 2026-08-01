@@ -31,7 +31,11 @@ import {
   advanceState,
   getItem,
 } from '../gateStore.js';
-import { approveGateItem, reconcileGateRunnability } from '../gateService.js';
+import {
+  approveGateItem,
+  appendGateItemEvent,
+  reconcileGateRunnability,
+} from '../gateService.js';
 import {
   runGateReconcilerTick,
   register,
@@ -468,6 +472,126 @@ describe('runGateReconcilerTick', () => {
     });
     expect(verifier.verify).toHaveBeenCalledTimes(1);
     expect(second.processed).toEqual([]);
+  });
+
+  it('a dispatch failure (dispatchFailed:true) leaves latest_disposition unchanged and the item still runnable on the next pull', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    upsertArm('M12', 'gate-verify', true, 1);
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({
+        disposition: 'needs-setup' as const,
+        dispatchFailed: true,
+        evidence: {
+          reason: 'failed to dispatch verification session',
+          error: 'Max concurrent planning sessions (20) reached',
+        },
+      })),
+    };
+
+    const first = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(first.processed).toEqual([
+      {
+        itemId: item.id,
+        classification: 'Read-Only',
+        disposition: 'needs-setup',
+      },
+    ]);
+    expect(getItem(item.id)?.state).toBe('runnable');
+    expect(getItem(item.id)?.latestDisposition).toBeUndefined();
+
+    // Still eligible for the next tick's dispatch — a dispatch failure never
+    // occupies latest_disposition, so isAwaitingSetup does not skip it.
+    const second = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(verifier.verify).toHaveBeenCalledTimes(2);
+    expect(second.processed).toEqual([
+      {
+        itemId: item.id,
+        classification: 'Read-Only',
+        disposition: 'needs-setup',
+      },
+    ]);
+  });
+
+  it('records a dispatch failure as a log-only event — reason/error evidence preserved, disposition null', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    upsertArm('M12', 'gate-verify', true, 1);
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({
+        disposition: 'needs-setup' as const,
+        dispatchFailed: true,
+        evidence: {
+          reason: 'failed to dispatch verification session',
+          error: 'Max concurrent planning sessions (20) reached',
+        },
+      })),
+    };
+
+    await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+
+    expect(getItem(item.id)?.events).toHaveLength(1);
+    expect(getItem(item.id)?.events[0]).toMatchObject({
+      disposition: undefined,
+      evidence: {
+        reason: 'failed to dispatch verification session',
+        error: 'Max concurrent planning sessions (20) reached',
+      },
+    });
+    const row = db
+      .prepare(`SELECT disposition FROM gate_item_event WHERE gate_item_id = ?`)
+      .get(item.id) as { disposition: string | null };
+    expect(row.disposition).toBeNull();
+  });
+
+  it('an item previously skipped for a genuine needs-setup becomes eligible again once a later event supersedes it', async () => {
+    const item = makeRunnableItem({ classification: 'Read-Only' });
+    upsertArm('M12', 'gate-verify', true, 1);
+    const verifier: GateItemVerifier = {
+      verify: vi.fn(async () => ({
+        disposition: 'needs-setup' as const,
+        evidence: { reason: 'budget exceeded' },
+      })),
+    };
+
+    const first = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(first.processed).toHaveLength(1);
+
+    const skipped = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(skipped.processed).toEqual([]);
+
+    // A superseding event (e.g. an operator note) clears the awaiting-setup
+    // gate, so the next pull can reach it again.
+    appendGateItemEvent(item.id, {
+      disposition: 'noted',
+      evidence: { note: 'operator re-opened for another attempt' },
+    });
+
+    const resumed = await runGateReconcilerTick({
+      deployAdvanceTrigger: fixedTrigger('sha1'),
+      verifier,
+    });
+    expect(resumed.processed).toEqual([
+      {
+        itemId: item.id,
+        classification: 'Read-Only',
+        disposition: 'needs-setup',
+      },
+    ]);
+    expect(verifier.verify).toHaveBeenCalledTimes(2);
   });
 
   it("applies a verifier-proposed reclassification, superseding the run's disposition for routing", async () => {
