@@ -228,8 +228,9 @@ describe('admitsLiveRecordUnreachable', () => {
         'capability, no abstention.',
     };
     expect(admitsLiveRecordUnreachable(evidence)).toBe(false);
-    expect(enforcePassEvidenceContract({ disposition: 'pass', evidence }))
-      .toMatchObject({ disposition: 'pass' });
+    expect(
+      enforcePassEvidenceContract({ disposition: 'pass', evidence }),
+    ).toMatchObject({ disposition: 'pass' });
   });
 });
 
@@ -1433,7 +1434,7 @@ describe('enforceAbstentionEvidenceContract', () => {
     ).toMatch(/session-prompts/);
   });
 
-  it('does not annotate a needs-setup produced by enforcePassEvidenceContract\'s own downgrade as an incomplete session abstention', () => {
+  it("does not annotate a needs-setup produced by enforcePassEvidenceContract's own downgrade as an incomplete session abstention", () => {
     const downgraded = enforcePassEvidenceContract({
       disposition: 'pass',
       evidence: {
