@@ -34,9 +34,9 @@ describe('hasStagedDecision — gate.verify', () => {
   });
 
   it('is false when nothing decision-bearing has been staged', () => {
-    expect(hasStagedDecision([row({ kind: 'session.requestCapability' })])).toBe(
-      false,
-    );
+    expect(
+      hasStagedDecision([row({ kind: 'session.requestCapability' })]),
+    ).toBe(false);
     expect(hasStagedDecision([])).toBe(false);
   });
 });
