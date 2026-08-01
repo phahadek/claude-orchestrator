@@ -6,7 +6,9 @@ import {
   reviewDispositionSchema,
   flakyGateSchema,
   gateVerifyDispositionSchema,
+  gateVerifyEvidenceSchema,
   gateVerifyReclassifySchema,
+  gateVerifyPayloadSchema,
 } from './schemas';
 
 /** Per-connection context a verdict-delivery tool call is scoped to. */
@@ -35,6 +37,16 @@ function notLive(): { content: { type: 'text'; text: string }[] } {
 function ok(): { content: { type: 'text'; text: string }[] } {
   return {
     content: [{ type: 'text', text: JSON.stringify({ status: 'ok' }) }],
+  };
+}
+
+function invalid(message: string): {
+  content: { type: 'text'; text: string }[];
+  isError: true;
+} {
+  return {
+    content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+    isError: true,
   };
 }
 
@@ -112,13 +124,17 @@ export function registerVerdictTools(
         inputSchema: {
           gateItemId: z.string(),
           disposition: gateVerifyDispositionSchema,
-          evidence: z.unknown().optional(),
+          evidence: gateVerifyEvidenceSchema.optional(),
           reclassify: gateVerifyReclassifySchema.optional(),
         },
       },
       async (args) => {
         const session = ctx.getSession();
         if (!session) return notLive();
+        const parsed = gateVerifyPayloadSchema.safeParse(args);
+        if (!parsed.success) {
+          return invalid(parsed.error.issues.map((i) => i.message).join('; '));
+        }
         session.recordGateVerifyDisposition({
           gateItemId: args.gateItemId,
           disposition: args.disposition,

@@ -317,3 +317,54 @@ export const gateVerifyReclassifySchema = z.object({
   to: gateVerifyReclassifyToSchema,
   reason: z.string(),
 });
+
+/** One line, no exceptions — the cap that forces gate.verify evidence terse rather than prose. */
+const GATE_VERIFY_EVIDENCE_LINE_MAX = 240;
+
+const gateVerifyEvidenceLineSchema = z
+  .string()
+  .max(
+    GATE_VERIFY_EVIDENCE_LINE_MAX,
+    `must be a single line, ${GATE_VERIFY_EVIDENCE_LINE_MAX} characters or fewer`,
+  );
+
+/**
+ * gate.verify's evidence contract — expected/found/query are always
+ * required and each capped to one line, replacing the old free-prose
+ * evidence.explanation. `source` (a file:line reference) is admissible only
+ * when the sibling `disposition` is `fail`; see gateVerifyPayloadSchema for
+ * that cross-field enforcement, since this schema alone can't see
+ * `disposition`.
+ */
+export const gateVerifyEvidenceSchema = z.object({
+  expected: gateVerifyEvidenceLineSchema,
+  found: gateVerifyEvidenceLineSchema,
+  query: gateVerifyEvidenceLineSchema,
+  source: gateVerifyEvidenceLineSchema.optional(),
+});
+
+/**
+ * The full gate.verify tool-call shape, used to enforce the one rule that
+ * spans both sibling fields: `evidence.source` is admissible only on a
+ * `fail` disposition. The MCP tool registration also declares
+ * disposition/evidence/reclassify individually (for the JSON schema the
+ * calling agent sees), but the handler re-validates the assembled args
+ * against this schema so the fail-only-source rule is actually enforced.
+ */
+export const gateVerifyPayloadSchema = z
+  .object({
+    gateItemId: z.string(),
+    disposition: gateVerifyDispositionSchema,
+    evidence: gateVerifyEvidenceSchema.optional(),
+    reclassify: gateVerifyReclassifySchema.optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.evidence?.source !== undefined && value.disposition !== 'fail') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['evidence', 'source'],
+        message:
+          'evidence.source is only permitted when disposition is "fail".',
+      });
+    }
+  });
