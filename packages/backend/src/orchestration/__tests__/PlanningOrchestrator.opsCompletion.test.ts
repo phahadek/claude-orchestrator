@@ -7,6 +7,12 @@ import { mockDbQueries } from '../../__tests__/helpers/mockDbQueries';
  * operator-killed) terminal is the orchestrator's only signal to close its
  * target task, mirroring the design and docs closers. A gate-verify session
  * (task_id `gate-item:<id>`) must be excluded since it has no Notion task.
+ *
+ * Ops additionally requires its ops_journal entry to have already reached
+ * 'resolved' at the moment terminal is reached — terminal-session and
+ * completed-investigation are different events for ops (unlike design/docs,
+ * where reaching terminal is itself completion). See PlanningOrchestrator's
+ * completeOpsTask.
  */
 
 vi.mock('../../logger', () => ({
@@ -39,11 +45,27 @@ vi.mock('../../routes/tasks', () => ({
   emitTaskUpdated: vi.fn(),
 }));
 
+vi.mock('../../ops/opsJournal', () => ({
+  getEntry: vi.fn(),
+}));
+
 import { getSession, listStagedIntentsBySession } from '../../db/queries';
 import { getTaskBackend } from '../../tasks/TaskBackend';
 import { emitTaskUpdated } from '../../routes/tasks';
 import { PlanningOrchestrator } from '../PlanningOrchestrator';
 import type { StagedIntentRow } from '../../db/types';
+import { getEntry } from '../../ops/opsJournal';
+import type { OpsState } from '../../ops/opsJournal';
+
+function makeJournalEntry(state: OpsState) {
+  return {
+    taskId: 'task-1',
+    project: 'project-1',
+    milestone: 'M1',
+    state,
+    updatedAt: '2026-08-01T00:00:00.000Z',
+  };
+}
 
 function flush() {
   return new Promise((resolve) => setImmediate(resolve));
@@ -104,6 +126,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   updateStatus.mockResolvedValue(undefined);
   vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+  vi.mocked(getEntry).mockReturnValue(makeJournalEntry('resolved'));
 });
 
 describe('PlanningOrchestrator — ops task completion', () => {
@@ -217,6 +240,51 @@ describe('PlanningOrchestrator — ops task completion', () => {
 
     expect(terminal).toBe(true);
     expect(getTaskBackend).not.toHaveBeenCalled();
+    expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it.each(['pending', 'candidate', 'staged-proposal', 'applied-pending-confirm'] as const)(
+    'leaves the task status unchanged when the ops_journal entry is at %s',
+    async (state) => {
+      const sm = makeSessionManager();
+      vi.mocked(getSession).mockReturnValue(makeSessionRow());
+      vi.mocked(getEntry).mockReturnValue(makeJournalEntry(state));
+      const approveIntent = makeIntent({
+        id: 'intent-1',
+        state: 'committed',
+        group_id: null,
+      });
+      vi.mocked(listStagedIntentsBySession).mockReturnValue([approveIntent]);
+      const orch = new PlanningOrchestrator(sm as any);
+
+      await orch.handleDisposition({
+        intent: approveIntent,
+        disposition: 'approve',
+      });
+      await flush();
+
+      expect(updateStatus).not.toHaveBeenCalled();
+    },
+  );
+
+  it('leaves the task status unchanged when the ops session has no ops_journal entry', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(getEntry).mockReturnValue(undefined);
+    const approveIntent = makeIntent({
+      id: 'intent-1',
+      state: 'committed',
+      group_id: null,
+    });
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([approveIntent]);
+    const orch = new PlanningOrchestrator(sm as any);
+
+    await orch.handleDisposition({
+      intent: approveIntent,
+      disposition: 'approve',
+    });
+    await flush();
+
     expect(updateStatus).not.toHaveBeenCalled();
   });
 });
