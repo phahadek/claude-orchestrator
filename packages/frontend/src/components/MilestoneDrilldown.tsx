@@ -7,10 +7,14 @@ import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import type { SessionState } from '../hooks/useSessionStore';
 import { sessionsApi } from '../api/projects';
 import { useTaskPage } from '../hooks/useTaskPage';
+import { gateApi } from '../api/gate';
+import type { GateItemDetail } from '../api/gate';
 import { SessionPanel } from './SessionPanel';
 import {
   taskIdFromIntent,
   taskIdForIntentDisplay,
+  isGateVerifyIntent,
+  gateItemIdFromIntent,
 } from '../utils/milestoneStack';
 import type { MilestoneStackSelection } from './MilestoneDecisionStack';
 import styles from './MilestoneDrilldown.module.css';
@@ -135,6 +139,48 @@ function useSessionTaskId(sessionId: string | null): string | null {
   return result && result.id === sessionId ? result.taskId : null;
 }
 
+/** Fetches a gate item's detail (text/classification/state/events) directly by id — no task or session round-trip involved. */
+function useGateItemDetail(gateItemId: string | null): {
+  detail: GateItemDetail | null;
+  loading: boolean;
+  error: string | null;
+} {
+  const [state, setState] = useState<{
+    id: string;
+    detail: GateItemDetail | null;
+    error: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!gateItemId) return;
+    let cancelled = false;
+    gateApi
+      .getGateItemDetail(gateItemId)
+      .then((detail) => {
+        if (cancelled) return;
+        setState({ id: gateItemId, detail, error: null });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setState({
+          id: gateItemId,
+          detail: null,
+          error:
+            err instanceof Error ? err.message : 'Failed to load gate item',
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gateItemId]);
+
+  if (!gateItemId) return { detail: null, loading: false, error: null };
+  if (state && state.id === gateItemId) {
+    return { detail: state.detail, loading: false, error: state.error };
+  }
+  return { detail: null, loading: true, error: null };
+}
+
 export function MilestoneDrilldown({
   selection,
   tasks,
@@ -147,23 +193,38 @@ export function MilestoneDrilldown({
   mode,
   onModeChange,
 }: Props) {
+  const isGateSelection =
+    selection?.type === 'intent' && isGateVerifyIntent(selection.intent);
+  const gateItemId = isGateSelection
+    ? gateItemIdFromIntent(selection.intent)
+    : null;
+
   const intentPayloadTaskId =
     selection?.type === 'intent' ? taskIdFromIntent(selection.intent) : null;
   const intentSessionId =
     selection?.type === 'intent' ? (selection.intent.sessionId ?? null) : null;
-  // Only resolved when needed — a payload taskId or a task selection never triggers this fetch.
+  // Only resolved when needed — a payload taskId, a gate-verify intent (resolved by
+  // gateItemId directly, no session round-trip) or a task selection never trigger this fetch.
   const fallbackSessionTaskId = useSessionTaskId(
-    selection?.type === 'intent' && !intentPayloadTaskId
+    selection?.type === 'intent' && !intentPayloadTaskId && !isGateSelection
       ? intentSessionId
       : null,
   );
 
+  const {
+    detail: gateItemDetail,
+    loading: gateItemLoading,
+    error: gateItemError,
+  } = useGateItemDetail(gateItemId);
+
   const taskId =
-    selection?.type === 'task'
-      ? selection.task.taskId
-      : selection
-        ? taskIdForIntentDisplay(selection.intent, fallbackSessionTaskId)
-        : null;
+    isGateSelection
+      ? null
+      : selection?.type === 'task'
+        ? selection.task.taskId
+        : selection
+          ? taskIdForIntentDisplay(selection.intent, fallbackSessionTaskId)
+          : null;
 
   const resolvedTask: TaskView | null =
     selection?.type === 'task'
@@ -225,7 +286,61 @@ export function MilestoneDrilldown({
         </button>
       </div>
 
-      {mode === 'task' ? (
+      {mode === 'task' && isGateSelection ? (
+        <div
+          className={styles.taskReader}
+          data-testid="milestone-gate-item-reader"
+        >
+          <div className={styles.headingRow}>
+            <div className={styles.heading}>
+              {gateItemDetail?.item.text ?? 'Gate item'}
+            </div>
+            {gateItemDetail && (
+              <span className={styles.headingType}>
+                {gateItemDetail.item.classification}
+              </span>
+            )}
+          </div>
+          {!gateItemId && (
+            <p className={styles.muted} data-testid="milestone-drilldown-unresolved">
+              This gate.verify decision doesn't reference a gate item.
+            </p>
+          )}
+          {gateItemId && gateItemLoading && (
+            <p className={styles.muted}>Loading gate item…</p>
+          )}
+          {gateItemId && gateItemError && (
+            <p className={styles.error}>
+              Failed to load gate item: {gateItemError}
+            </p>
+          )}
+          {gateItemId && !gateItemLoading && !gateItemError && gateItemDetail && (
+            <div className={styles.taskMarkdown}>
+              <p>
+                <strong>State:</strong> {gateItemDetail.item.state}
+                {gateItemDetail.item.currentDisposition
+                  ? ` (${gateItemDetail.item.currentDisposition})`
+                  : ''}
+              </p>
+              <div>
+                <strong>Event history</strong>
+                {gateItemDetail.events.length === 0 ? (
+                  <p className={styles.muted}>None</p>
+                ) : (
+                  <ul>
+                    {gateItemDetail.events.map((e, i) => (
+                      <li key={i}>
+                        {e.disposition} — {new Date(e.at).toLocaleString()}
+                        {e.operator ? ` by ${e.operator}` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : mode === 'task' ? (
         <div className={styles.taskReader} data-testid="milestone-task-reader">
           <div className={styles.headingRow}>
             <div className={styles.heading}>

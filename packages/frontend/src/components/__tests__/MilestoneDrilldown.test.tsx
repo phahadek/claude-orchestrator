@@ -4,6 +4,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { MilestoneDrilldown, type DrilldownMode } from '../MilestoneDrilldown';
 import { stagedIntentsApi } from '../../api/stagedIntents';
 import { sessionsApi } from '../../api/projects';
+import { gateApi } from '../../api/gate';
 import type { StagedIntent } from '../../api/stagedIntents';
 import type { TaskView } from '../../types/taskView';
 
@@ -517,6 +518,252 @@ describe('MilestoneDrilldown', () => {
           sha,
         ).length - 1;
       expect(occurrences).toBe(3);
+    });
+  });
+
+  describe('gate.verify intent selection', () => {
+    function makeGateVerifyIntent(
+      overrides: Partial<StagedIntent> = {},
+    ): StagedIntent {
+      return {
+        id: 'intent-gate-verify',
+        kind: 'gate.verify',
+        payload: {
+          gateItemId: 'gate-item-1',
+          disposition: 'pass',
+          evidence: 'looked fine',
+        },
+        projectId: 'proj-1',
+        createdAt: 1,
+        sessionId: 'gate-sess-1',
+        milestone: 'M1',
+        state: 'staged',
+        ...overrides,
+      };
+    }
+
+    it("renders the gate item's text, classification and state, and issues no task-page fetch", async () => {
+      vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+      vi.spyOn(gateApi, 'getGateItemDetail').mockResolvedValue({
+        item: {
+          id: 'gate-item-1',
+          project: 'proj-1',
+          milestone: 'M1',
+          text: 'Verify the widget renders',
+          classification: 'Read-Only',
+          state: 'pass',
+          currentDisposition: 'pass',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+        sources: [],
+        events: [],
+      });
+      const fetchSpy = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+      });
+      vi.stubGlobal('fetch', fetchSpy);
+
+      render(
+        <MilestoneDrilldown
+          selection={{ type: 'intent', intent: makeGateVerifyIntent() }}
+          tasks={[]}
+          projectId="proj-1"
+          sessions={[]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          mode="task"
+          onModeChange={noop}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(
+          screen.getByTestId('milestone-gate-item-reader').textContent,
+        ).toContain('Verify the widget renders'),
+      );
+      const reader = screen.getByTestId('milestone-gate-item-reader');
+      expect(reader.textContent).toContain('Read-Only');
+      expect(reader.textContent).toContain('pass');
+      expect(
+        fetchSpy.mock.calls.some((call) =>
+          String(call[0]).includes('/page'),
+        ),
+      ).toBe(false);
+    });
+
+    it('resolves the gate item from the intent payload gateItemId without a session round-trip', async () => {
+      vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+      const detailSpy = vi.spyOn(gateApi, 'getGateItemDetail').mockResolvedValue({
+        item: {
+          id: 'gate-item-1',
+          project: 'proj-1',
+          milestone: 'M1',
+          text: 'Verify the widget renders',
+          classification: 'Read-Only',
+          state: 'open',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+        sources: [],
+        events: [],
+      });
+      const sessionSpy = vi.spyOn(sessionsApi, 'getById');
+
+      render(
+        <MilestoneDrilldown
+          selection={{ type: 'intent', intent: makeGateVerifyIntent() }}
+          tasks={[]}
+          projectId="proj-1"
+          sessions={[
+            {
+              sessionId: 'gate-sess-1',
+              taskName: 'gate-item:gate-item-1',
+              notionTaskUrl: '',
+              status: 'done',
+              events: [],
+            },
+          ]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          mode="task"
+          onModeChange={noop}
+        />,
+      );
+
+      await waitFor(() => expect(detailSpy).toHaveBeenCalledWith('gate-item-1'));
+      // The live session store already has this session — the by-id fetch
+      // that would run here is useSessionTaskId's, which the gate branch
+      // must skip since gateItemId came straight off the intent payload.
+      expect(sessionSpy).not.toHaveBeenCalled();
+    });
+
+    it("renders the gate item's event history", async () => {
+      vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+      vi.spyOn(gateApi, 'getGateItemDetail').mockResolvedValue({
+        item: {
+          id: 'gate-item-1',
+          project: 'proj-1',
+          milestone: 'M1',
+          text: 'Verify the widget renders',
+          classification: 'Read-Only',
+          state: 'pass',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+        sources: [],
+        events: [
+          {
+            disposition: 'pass',
+            at: '2026-01-01T00:00:00.000Z',
+            operator: 'gate-verify',
+          },
+        ],
+      });
+
+      render(
+        <MilestoneDrilldown
+          selection={{ type: 'intent', intent: makeGateVerifyIntent() }}
+          tasks={[]}
+          projectId="proj-1"
+          sessions={[]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          mode="task"
+          onModeChange={noop}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(
+          screen.getByTestId('milestone-gate-item-reader').textContent,
+        ).toContain('by gate-verify'),
+      );
+    });
+
+    it('still renders the session pane transcript alongside the gate item', async () => {
+      vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+      vi.spyOn(gateApi, 'getGateItemDetail').mockResolvedValue({
+        item: {
+          id: 'gate-item-1',
+          project: 'proj-1',
+          milestone: 'M1',
+          text: 'Verify the widget renders',
+          classification: 'Read-Only',
+          state: 'pass',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+        sources: [],
+        events: [],
+      });
+
+      render(
+        <DrilldownHarness
+          initialMode="session"
+          selection={{ type: 'intent', intent: makeGateVerifyIntent() }}
+          tasks={[]}
+          projectId="proj-1"
+          sessions={[
+            {
+              sessionId: 'gate-sess-1',
+              taskName: 'gate-item:gate-item-1',
+              notionTaskUrl: '',
+              status: 'done',
+              events: [],
+            },
+          ]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByText('No events yet.')).toBeTruthy(),
+      );
+      expect(screen.queryByTestId('milestone-gate-item-reader')).toBeNull();
+    });
+
+    it('renders the gate item on its own when the verify session is missing or archived', async () => {
+      vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+      vi.spyOn(gateApi, 'getGateItemDetail').mockResolvedValue({
+        item: {
+          id: 'gate-item-1',
+          project: 'proj-1',
+          milestone: 'M1',
+          text: 'Verify the widget renders',
+          classification: 'Read-Only',
+          state: 'pass',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+        sources: [],
+        events: [],
+      });
+
+      render(
+        <MilestoneDrilldown
+          selection={{
+            type: 'intent',
+            intent: makeGateVerifyIntent({ sessionId: null }),
+          }}
+          tasks={[]}
+          projectId="proj-1"
+          sessions={[]}
+          send={noop}
+          setSessionArchived={noop}
+          setSessionFavorited={noop}
+          mode="task"
+          onModeChange={noop}
+        />,
+      );
+
+      await waitFor(() =>
+        expect(
+          screen.getByTestId('milestone-gate-item-reader').textContent,
+        ).toContain('Verify the widget renders'),
+      );
     });
   });
 });
