@@ -75,6 +75,19 @@ export interface GateVerificationResult {
     to: GateItemClassification;
     reason: string;
   };
+  /**
+   * Set when this result came from a session's own `gate.verify` report,
+   * staged as a normal intent rather than written straight to
+   * gate_item_event (see mcp/tools/verdictTools.ts,
+   * AgentSession.recordGateVerifyDisposition). The verdict is not yet
+   * final — it is awaiting operator disposition on the decision surface —
+   * so `routeVerificationResult` must not write a gate_item_event or file
+   * follow-up work for it here; that happens later, once, from
+   * stagedIntents.ts's `gate.verify` apply case, which re-routes the
+   * operator-approved result through this exact function with this flag
+   * unset.
+   */
+  awaitingDisposition?: boolean;
 }
 
 /**
@@ -121,7 +134,7 @@ export interface FollowupFixTaskFiler {
 
 const FOLLOWUP_TASK_TYPE = '💻 Code';
 
-const defaultFollowupFiler: FollowupFixTaskFiler = {
+export const defaultFollowupFiler: FollowupFixTaskFiler = {
   async fileFollowupFixTask(item) {
     const project = getAllProjects().find((p) => p.id === item.project);
     const databaseId =
@@ -316,7 +329,7 @@ async function processItem(
  * a verifier's `reattach` rather than a fresh `verify()` dispatch but routes
  * it identically.
  */
-async function routeVerificationResult(
+export async function routeVerificationResult(
   item: GateItem,
   result: GateVerificationResult,
   followupFiler: FollowupFixTaskFiler,
@@ -326,6 +339,17 @@ async function routeVerificationResult(
   unattended = false,
 ): Promise<ProcessedGateItem> {
   const maxFixAttempts = concurrency.maxFixAttempts ?? DEFAULT_MAX_FIX_ATTEMPTS;
+
+  if (result.awaitingDisposition) {
+    // Handed off to the decision surface — a human disposes it, and that
+    // disposition re-enters this exact function (see stagedIntents.ts's
+    // `gate.verify` apply case) without this flag set. Nothing to write yet.
+    return {
+      itemId: item.id,
+      classification: item.classification,
+      disposition: result.disposition,
+    };
+  }
 
   if (result.reclassify) {
     const outcome = proposeGateItemReclassification(

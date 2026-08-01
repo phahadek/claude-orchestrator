@@ -33,7 +33,6 @@ import {
   markInboxItemsDelivered,
   getSession,
   markSessionInitiatedPRClose,
-  hasActiveCapabilityRequestForSession,
   getGrantedCapabilities,
   setTaskPauseReason,
   setHumanMergeOnly,
@@ -66,7 +65,8 @@ import {
   isGateVerifySession,
   opensPr,
 } from './sessionPredicates';
-import { hasPendingGateVerifyAppeal } from '../gate/gateItemVerifier';
+import { stageIntent } from '../routes/stagedIntents';
+import { getGateItem } from '../gate/gateService';
 import {
   VALID_EVENT_TYPES,
   SILENT_SKIP_TYPES,
@@ -444,10 +444,9 @@ export class AgentSession extends EventEmitter {
   private readonly processedPRBodyMessageIds = new Set<string>();
   /** Last-recorded verdict per key, serialized — MCP verdict tools dedup a
    *  same-content repeat call against these before emitting (see recordReviewDisposition,
-   *  recordVerifiedFlakyDisposition, recordGateVerifyDisposition below). */
+   *  recordVerifiedFlakyDisposition below). */
   private readonly recordedDispositions = new Map<number, string>();
   private recordedVerifiedFlaky: string | null = null;
-  private recordedGateVerify: string | null = null;
   /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
   private readonly warnedEscapeToolUseIds = new Set<string>();
   /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
@@ -2578,42 +2577,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     });
     const endedAt = Date.now();
 
-    // A gate-verify session (task_id `gate-item:<id>`) is one-shot: it exists
-    // to settle a single gate item and has no resume purpose once it has
-    // reported (a re-verify is a fresh session, not a resume of this one).
-    // Conclude it done/archived rather than parking it idle forever — unless
-    // it ended this turn with an unresolved session.requestCapability intent
-    // (the sanctioned ask-permission path — see stagedIntents.ts's
-    // resumeCapabilityRequester) or a pending gate-verify appeal (see
-    // gateItemVerifier.ts's hasPendingGateVerifyAppeal): either needs the
-    // session to still be parkable so it can be resumed with the operator's
-    // decision, or the appeal feedback, rather than archived out from under it.
-    if (
-      isPlanningSession(this.sessionType) &&
-      isGateVerifySession(this.taskId) &&
-      !hasActiveCapabilityRequestForSession(this.sessionId) &&
-      !hasPendingGateVerifyAppeal(this.sessionId)
-    ) {
-      markSessionDone(this.sessionId, endedAt, null, 'gate_verify_clean_exit');
-      resetTaskCrashCount(this.taskId);
-      recordEvent({
-        event_type: 'handle_clean_exit_session_marked_done',
-        actor_type: 'system',
-        actor_id: this.sessionId,
-        project_id: this.projectId ?? null,
-        task_id: this.taskId || null,
-        payload: { session_id: this.sessionId, pr_url: null },
-      });
-      this.broadcast({
-        type: 'session_ended',
-        sessionId: this.sessionId,
-        status: 'done',
-        ...(this.taskId && { taskId: this.taskId }),
-      });
-      return;
-    }
-
-    // Planning sessions (groom/design) never scrape for a PR URL and never
+    // Planning sessions (groom/design/ops, including gate-verify) never
     // enter the PR/recovery chain — they park into idle awaiting disposition
     // (human/dashboard action on the session's findings), not a merge.
     // A park that staged nothing counting as a decision (no task-write, no
@@ -2862,20 +2826,40 @@ The full task spec and all rules are in your system prompt. Begin implementing d
   }
 
   /**
-   * Record a gate-verify disposition delivered via the gate.verify MCP tool
-   * and emit the same `gate_verify_disposition` event the retired stdout
-   * parser (parseGateVerifyDisposition) used to emit, so GateItemVerifier is
-   * unaffected. Fires unconditionally (no PR gating) — a read-only
-   * gate-verify session has no PR of its own. Idempotent per session: an
-   * identical repeat call is a dedup no-op; a changed disposition is
-   * last-write-wins.
+   * Record a gate-verify disposition delivered via the gate.verify MCP tool:
+   * stages it as a normal `gate.verify` intent (see stagedIntents.ts) — the
+   * operator disposes it on the regular decision surface, with normal turns
+   * and normal pushback, exactly like any other groom/design/ops staged
+   * intent — never a direct gate_item_event write. Also emits the same
+   * `gate_verify_disposition` event the retired stdout parser
+   * (parseGateVerifyDisposition) used to emit, so GateItemVerifier's
+   * in-flight `verify()` dispatch (a distinct concern — settling the
+   * dispatch, not the verdict) is unaffected. Fires unconditionally (no PR
+   * gating) — a read-only gate-verify session has no PR of its own.
+   * Staging itself is content-idempotent (see stageIntent), so no separate
+   * dedup is needed here — unlike recordReviewDisposition/
+   * recordVerifiedFlakyDisposition above, a repeat call with the same
+   * disposition after a rejection must be allowed to re-stage.
    */
   recordGateVerifyDisposition(disposition: GateVerifyDisposition): void {
-    const serialized = JSON.stringify(disposition);
-    if (this.recordedGateVerify === serialized) {
-      return;
-    }
-    this.recordedGateVerify = serialized;
+    const item = getGateItem(disposition.gateItemId);
+    const summary =
+      `Gate item ${disposition.gateItemId}: reported ${disposition.disposition}` +
+      (disposition.reclassify
+        ? ` (proposes reclassify -> ${disposition.reclassify.to})`
+        : '');
+    stageIntent(
+      'gate.verify',
+      disposition,
+      this.projectId,
+      null,
+      this.sessionId,
+      summary,
+      null,
+      null,
+      item?.milestone ?? null,
+      null,
+    );
     const payload: GateVerifyDispositionPayload = {
       sessionId: this.sessionId,
       disposition,
