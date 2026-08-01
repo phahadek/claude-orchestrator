@@ -183,6 +183,13 @@
   margin-top: 4px;
 }
 
+/* Groom launcher — sits above the Code/non-Code Backlog sections it spans */
+.groomLauncher {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+
 /* Static (non-collapsible) heading above the Non-code type cards */
 .sectionHeading {
   display: flex;

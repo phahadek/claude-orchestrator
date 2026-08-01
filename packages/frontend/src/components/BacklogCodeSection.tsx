@@ -11,12 +11,6 @@ interface Props {
   /** Groom selection mode — reuses the same checkedIds + Select All pattern as ReadySection. */
   groomCheckedIds?: Set<string>;
   onGroomCheckChange?: (taskId: string, checked: boolean) => void;
-  /** Total groomable count across code + non-code Backlog tasks, and its selected count. */
-  groomableCount?: number;
-  groomSelectedCount?: number;
-  onGroomSelectAll?: () => void;
-  onGroomLaunch?: () => void;
-  groomLoading?: boolean;
 }
 
 /** Compact single-line section for backlog code tasks — sits directly below the Code section. */
@@ -27,11 +21,6 @@ export function BacklogCodeSection({
   onSelectTask,
   groomCheckedIds,
   onGroomCheckChange,
-  groomableCount = 0,
-  groomSelectedCount = 0,
-  onGroomSelectAll,
-  onGroomLaunch,
-  groomLoading = false,
 }: Props) {
   if (tasks.length === 0) return null;
 
@@ -56,29 +45,6 @@ export function BacklogCodeSection({
         </span>
         <span className={styles.groupLabel}>🔲 Backlog — Code</span>
         <span className={styles.groupCount}>{sorted.length}</span>
-        {groomable && groomableCount > 0 && (
-          <div
-            className={styles.launchControls}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              className={styles.selectAllBtn}
-              onClick={onGroomSelectAll}
-              disabled={groomableCount === 0 || groomLoading}
-              data-testid="groom-select-all-btn"
-            >
-              Select All
-            </button>
-            <button
-              className={styles.groomBtn}
-              onClick={onGroomLaunch}
-              disabled={groomSelectedCount === 0 || groomLoading}
-              data-testid="groom-btn"
-            >
-              {groomLoading ? 'Loading…' : `Groom (${groomSelectedCount})`}
-            </button>
-          </div>
-        )}
       </div>
 
       {isExpanded && (

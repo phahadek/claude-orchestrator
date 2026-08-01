@@ -818,6 +818,41 @@ export function TaskList({
           />
         )}
 
+        {/* Groom launcher — spans both Code and non-Code Backlog sections, so it
+            must render at this shared scope rather than inside either section. */}
+        {groomableTasks.length > 0 && (
+          <div
+            className={`${styles.groupHeader} ${styles.groomLauncher}`}
+            data-testid="groom-launcher"
+          >
+            <span className={styles.groupLabel}>🌱 Groom</span>
+            <span className={styles.groupCount}>{groomableTasks.length}</span>
+            <div className={styles.launchControls}>
+              <button
+                className={styles.selectAllBtn}
+                onClick={handleGroomSelectAll}
+                disabled={groomLoading}
+                data-testid="groom-select-all-btn"
+              >
+                Select All
+              </button>
+              <button
+                className={styles.groomBtn}
+                onClick={() => void handleGroomLaunch()}
+                disabled={groomSelectedCount === 0 || groomLoading}
+                data-testid="groom-btn"
+              >
+                {groomLoading ? 'Loading…' : `Groom (${groomSelectedCount})`}
+              </button>
+            </div>
+          </div>
+        )}
+        {groomError && (
+          <div className={styles.error} data-testid="groom-error">
+            {groomError}
+          </div>
+        )}
+
         {/* 🔲 Backlog — Code */}
         <BacklogCodeSection
           tasks={backlogCodeTasks}
@@ -826,17 +861,7 @@ export function TaskList({
           onSelectTask={onSelectTask}
           groomCheckedIds={groomCheckedIds}
           onGroomCheckChange={toggleGroomCheck}
-          groomableCount={groomableTasks.length}
-          groomSelectedCount={groomSelectedCount}
-          onGroomSelectAll={handleGroomSelectAll}
-          onGroomLaunch={() => void handleGroomLaunch()}
-          groomLoading={groomLoading}
         />
-        {groomError && (
-          <div className={styles.error} data-testid="groom-error">
-            {groomError}
-          </div>
-        )}
 
         {/* 📋 Non-code, by type */}
         {nonCodeNotDone.length > 0 && (
