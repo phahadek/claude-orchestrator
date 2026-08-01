@@ -27,6 +27,7 @@ import {
   spawnShell,
   validateBindingReferences,
   RESTART_STEP_ID,
+  IDENTITY_CAPTURE_INVALID,
   type DeployOrchestratorDeps,
   type ShellResult,
 } from '../DeployOrchestrator';
@@ -688,6 +689,121 @@ describe('DeployOrchestrator: verify gates on a differing pre/post-restart ident
     );
     expect(captureEvent).toBeDefined();
     expect(captureEvent?.detail).toBe('pid-111');
+  });
+
+  it('persists only the stdout value when identity_capture also writes to stderr', async () => {
+    const { logger } = await import('../../logger');
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const deps = makeDeps(identityPlaybook(), {
+      pollMaxAttempts: 1,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        if (command === IDENTITY_CMD) {
+          return {
+            ok: true,
+            output:
+              '/etc/bash.bashrc: line 1: PS1: unbound variable\npid-111',
+            exitCode: 0,
+            stdout: 'pid-111',
+            stderr: '/etc/bash.bashrc: line 1: PS1: unbound variable',
+          };
+        }
+        return { ok: true, output: '', exitCode: 0, stdout: '', stderr: '' };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const captureEvent = listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'pre_restart_identity_captured',
+    );
+    expect(captureEvent?.detail).toBe('pid-111');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('PS1: unbound variable'),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('trims surrounding whitespace/newlines from the captured identity value', async () => {
+    const deps = makeDeps(identityPlaybook(), {
+      pollMaxAttempts: 1,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        if (command === IDENTITY_CMD) {
+          return {
+            ok: true,
+            output: '  pid-111  \n',
+            exitCode: 0,
+            stdout: '  pid-111  \n',
+            stderr: '',
+          };
+        }
+        return { ok: true, output: '', exitCode: 0, stdout: '', stderr: '' };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const captureEvent = listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'pre_restart_identity_captured',
+    );
+    expect(captureEvent?.detail).toBe('pid-111');
+  });
+
+  it('records an explicit invalid marker when the stdout-only capture is malformed', async () => {
+    const deps = makeDeps(identityPlaybook(), {
+      pollMaxAttempts: 1,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        if (command === IDENTITY_CMD) {
+          return {
+            ok: true,
+            output: '',
+            exitCode: 0,
+            stdout: '',
+            stderr: 'some warning',
+          };
+        }
+        return { ok: true, output: '', exitCode: 0, stdout: '', stderr: '' };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    const captureEvent = listDeployRunEvents(run.run_id).find(
+      (e) => e.event_type === 'pre_restart_identity_captured',
+    );
+    expect(captureEvent?.detail).toBe(IDENTITY_CAPTURE_INVALID);
+  });
+
+  it('compares the cleaned stdout-only value on verify\'s post-restart re-read', async () => {
+    let identityCalls = 0;
+    const deps = makeDeps(identityPlaybook(), {
+      pollMaxAttempts: 5,
+      runShell: vi.fn(async (command: string): Promise<ShellResult> => {
+        if (command === IDENTITY_CMD) {
+          identityCalls += 1;
+          const stdout = identityCalls === 1 ? 'pid-old' : 'pid-new';
+          return {
+            ok: true,
+            output: `/etc/bash.bashrc: line 1: PS1: unbound variable\n${stdout}`,
+            exitCode: 0,
+            stdout,
+            stderr: '/etc/bash.bashrc: line 1: PS1: unbound variable',
+          };
+        }
+        if (command === HEALTH_CMD) {
+          return { ok: true, output: '', exitCode: 0, stdout: '', stderr: '' };
+        }
+        return { ok: true, output: '', exitCode: 0, stdout: '', stderr: '' };
+      }),
+    });
+    const orchestrator = new DeployOrchestrator('proj', '/tmp/proj', deps);
+    const run = await orchestrator.startDeploy('sha-target');
+    await flush();
+
+    expect(getDeployRun(run.run_id)?.status).toBe('succeeded');
+    expect(identityCalls).toBeGreaterThanOrEqual(2);
   });
 
   it('fails verify when the observed post-restart identity equals the pre-restart one', async () => {
