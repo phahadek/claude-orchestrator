@@ -42,7 +42,7 @@ export const DESIGN_DONE_STATUS = '✅ Done';
  * inherit it by default. planning_operator_end is deliberately excluded: an
  * operator-ended session is not a completed design.
  */
-export const DESIGN_COMPLETING_REASONS = new Set([
+const DESIGN_COMPLETING_REASONS = new Set([
   'planning_approved',
   'planning_no_pending_dispositions',
 ]);
