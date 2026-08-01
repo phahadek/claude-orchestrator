@@ -37,6 +37,7 @@ describe('EnrollmentFlow', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -87,7 +88,7 @@ describe('EnrollmentFlow', () => {
     ]);
     const onEnrolled = vi.fn();
 
-    vi.useFakeTimers();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
 
     render(<EnrollmentFlow onEnrolled={onEnrolled} />);
 
@@ -100,7 +101,7 @@ describe('EnrollmentFlow', () => {
     await waitFor(() => screen.getByText('654321'));
 
     await act(async () => {
-      vi.advanceTimersByTime(2000);
+      await vi.advanceTimersByTimeAsync(2000);
     });
 
     await waitFor(() => expect(onEnrolled).toHaveBeenCalledTimes(1));

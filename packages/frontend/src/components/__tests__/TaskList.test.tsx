@@ -1641,10 +1641,10 @@ describe('TaskList', () => {
         { boardId: 'milestone-1' },
       );
 
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
       const opTaskCheckbox = screen
         .getByTestId('type-card-operational')
         .querySelector('input[type="checkbox"]') as HTMLInputElement;
-      fireEvent.click(screen.getByTestId('type-card-header-operational'));
       fireEvent.click(opTaskCheckbox);
 
       fireEvent.click(screen.getByTestId('type-card-header-testing'));
@@ -2063,9 +2063,9 @@ describe('TaskList', () => {
       expect(screen.getByTestId('design-btn')).toBeDefined();
 
       fireEvent.click(screen.getByTestId('type-card-header-design'));
-      const readyCheckbox = screen
-        .getByTestId('type-card-design')
-        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      const readyCheckbox = screen.getByRole('checkbox', {
+        name: 'Select Ready Design Task',
+      }) as HTMLInputElement;
       expect(readyCheckbox).not.toBeNull();
 
       const designBtn = screen.getByTestId('design-btn') as HTMLButtonElement;
@@ -2910,7 +2910,7 @@ describe('TaskList', () => {
       fireEvent.click(stageButton);
 
       const applyButton = await screen.findByRole('button', {
-        name: /apply/i,
+        name: /commit/i,
       });
       expect(onForceRefetch).not.toHaveBeenCalled();
 
