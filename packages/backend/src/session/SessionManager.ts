@@ -535,6 +535,30 @@ export const PLANNING_RESUME_FALLBACK_MESSAGE =
   'Re-read the disposition feedback on your staged intents and revise your proposal accordingly.';
 
 /**
+ * Continuation nudge for a planning/ops session resumed by the boot-orphan
+ * path (a backend restart landed mid-turn) that has no reject-state staged
+ * intent to relay. Must state the true cause — a restart, not a disposition
+ * — and must not mention disposition feedback or staged intents: neither
+ * exists for this session, and PLANNING_RESUME_FALLBACK_MESSAGE's false
+ * claim that they do is exactly the bug this message exists to avoid (see
+ * buildPlanningResumeMessage).
+ */
+export const PLANNING_RESTART_RESUME_MESSAGE =
+  'Your backend process was restarted, interrupting this session mid-turn. Nothing was decided or rejected while you were gone — continue the work you were doing.';
+
+/**
+ * Why a session is being resumed — threaded from the call site rather than
+ * inferred from state, so buildResumeMessage never has to guess. 'restart'
+ * is the boot-orphan path (resumeSession's only caller): every 'running'
+ * session left behind by a backend restart. 'disposition' is the
+ * enqueueFeedback → deliverUndeliveredInboxItems → sendOrResume path, which
+ * delivers the inbox item directly and does not call buildResumeMessage —
+ * kept here only so a future caller on that path fails loudly if it forgets
+ * to pass a cause, rather than silently defaulting to 'restart'.
+ */
+export type ResumeCause = 'restart' | 'disposition';
+
+/**
  * Human-facing label for a staged intent in a resume nudge, e.g.
  * `task.create "Fix the thing"` or `task.setStatus for task-123`. Falls back
  * to the bare kind when the payload carries neither a title nor a taskId —
@@ -566,13 +590,20 @@ function describeStagedIntentForNudge(intent: {
  * to revise, re-stage, supersede, or withdraw it. `needs_revision` means
  * pushback — revisable, so the message instructs the session to revise it
  * (see transitionRejectedIntent in stagedIntents.ts for the state contract).
- * Falls back to PLANNING_RESUME_FALLBACK_MESSAGE when neither state is
- * present, rather than a generic instruction it can misinterpret as
+ * Falls back to PLANNING_RESTART_RESUME_MESSAGE (for a restart-caused resume)
+ * or PLANNING_RESUME_FALLBACK_MESSAGE (for any other cause) when neither
+ * state is present, rather than a generic instruction it can misinterpret as
  * "nothing to do here" (see PLANNING_RESUME_FALLBACK_MESSAGE doc-comment for
- * why silence is not an acceptable fallback). Exported so tests can verify
- * the exact message without hardcoding it.
+ * why silence is not an acceptable fallback). When a reject-state intent
+ * *does* exist on a restart-caused resume, that feedback wins — it is the
+ * more specific and more actionable of the two true facts — so the restart
+ * message is only ever the fallback, never layered on top. Exported so
+ * tests can verify the exact message without hardcoding it.
  */
-export function buildPlanningResumeMessage(row: Session): string {
+export function buildPlanningResumeMessage(
+  row: Session,
+  cause: ResumeCause = 'disposition',
+): string {
   const intents = listStagedIntentsBySession(row.session_id);
   let mostRecentReject: (typeof intents)[number] | undefined;
   for (const intent of intents) {
@@ -583,7 +614,11 @@ export function buildPlanningResumeMessage(row: Session): string {
       mostRecentReject = intent;
     }
   }
-  if (!mostRecentReject) return PLANNING_RESUME_FALLBACK_MESSAGE;
+  if (!mostRecentReject) {
+    return cause === 'restart'
+      ? PLANNING_RESTART_RESUME_MESSAGE
+      : PLANNING_RESUME_FALLBACK_MESSAGE;
+  }
 
   const label = describeStagedIntentForNudge(mostRecentReject);
   const reason =
@@ -604,12 +639,18 @@ export function buildPlanningResumeMessage(row: Session): string {
  * For a code session, when its PR has a stored review verdict, inject that
  * verdict so the coder doesn't need to query GitHub (where verdicts are
  * never posted). Falls back to the plain RESUME_NUDGE_MESSAGE when there is
- * no verdict or the stored JSON is malformed. Exported so tests can verify
- * the exact message without hardcoding it.
+ * no verdict or the stored JSON is malformed. `cause` defaults to
+ * 'disposition' since resumeSession's boot-orphan caller is the only
+ * production caller that has a definite cause ('restart') to pass; see
+ * ResumeCause's doc-comment. Exported so tests can verify the exact message
+ * without hardcoding it.
  */
-export function buildResumeMessage(row: Session): string {
+export function buildResumeMessage(
+  row: Session,
+  cause: ResumeCause = 'disposition',
+): string {
   if (isPlanningSession(row.session_type)) {
-    return buildPlanningResumeMessage(row);
+    return buildPlanningResumeMessage(row, cause);
   }
   const pr = getPRBySessionId(row.session_id);
   if (!pr?.review_result) return RESUME_NUDGE_MESSAGE;
@@ -2604,7 +2645,7 @@ export class SessionManager extends EventEmitter {
     // Send the nudge after a short delay so the CLI process is ready to receive
     // stdin before we write to it. Review sessions should not receive the
     // code-session nudge — they wait for a re-review prompt with a diff instead.
-    const nudgeMessage = buildResumeMessage(row);
+    const nudgeMessage = buildResumeMessage(row, 'restart');
     const nudgeDelay = setTimeout(() => {
       if (!session.hasEnded && row.session_type !== 'review') {
         this.send(row.session_id, nudgeMessage);

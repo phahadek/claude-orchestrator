@@ -205,6 +205,7 @@ import {
   buildPlanningResumeMessage,
   RESUME_NUDGE_MESSAGE,
   PLANNING_RESUME_FALLBACK_MESSAGE,
+  PLANNING_RESTART_RESUME_MESSAGE,
   fetchBaseBranchCoalesced,
 } from '../SessionManager';
 import {
@@ -1267,6 +1268,101 @@ describe('buildResumeMessage — session-type branch', () => {
     vi.mocked(getPRBySessionId).mockReturnValue(null);
 
     expect(buildResumeMessage(row)).toBe(RESUME_NUDGE_MESSAGE);
+  });
+});
+
+// ── buildResumeMessage / buildPlanningResumeMessage — restart cause ─────────
+
+describe('buildResumeMessage — restart cause', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
+  });
+
+  it('a planning session resumed by the boot-orphan path with zero staged intents states it was interrupted by a restart, and mentions no disposition feedback or staged intents', () => {
+    const row = { ...makeDeadRow(), session_type: 'groom' };
+    const message = buildResumeMessage(row, 'restart');
+    expect(message).toBe(PLANNING_RESTART_RESUME_MESSAGE);
+    expect(message.length).toBeGreaterThan(0);
+    expect(message.toLowerCase()).not.toMatch(/disposition|staged intent/);
+  });
+
+  it('a restart-resumed planning session with a needs_revision intent still receives the sent-back-revise message', () => {
+    const row = { ...makeDeadRow(), session_type: 'design' };
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      {
+        id: 'intent-1',
+        kind: 'task.create',
+        payload: JSON.stringify({ title: 'Fix the flaky test' }),
+        state: 'needs_revision',
+        disposition_reason: 'needs more detail',
+        updated_at: 100,
+      } as any,
+    ]);
+
+    const message = buildResumeMessage(row, 'restart');
+    expect(message).toContain('task.create "Fix the flaky test"');
+    expect(message).toContain('needs more detail');
+    expect(message.toLowerCase()).toContain('revise');
+    expect(message).not.toBe(PLANNING_RESTART_RESUME_MESSAGE);
+  });
+
+  it('a restart-resumed planning session with a rejected intent still receives the declined-final message', () => {
+    const row = { ...makeDeadRow(), session_type: 'design' };
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      {
+        id: 'intent-1',
+        kind: 'task.create',
+        payload: JSON.stringify({ title: 'Fix the flaky test' }),
+        state: 'rejected',
+        disposition_reason: 'duplicate of task-42',
+        updated_at: 100,
+      } as any,
+    ]);
+
+    const message = buildResumeMessage(row, 'restart');
+    expect(message).toContain('task.create "Fix the flaky test"');
+    expect(message).toContain('duplicate of task-42');
+    expect(message).toContain('final');
+    expect(message).not.toBe(PLANNING_RESTART_RESUME_MESSAGE);
+  });
+
+  it('a restart-resumed session holding a reject-state intent produces exactly one message, not the restart fallback layered on top', () => {
+    const row = { ...makeDeadRow(), session_type: 'groom' };
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      {
+        id: 'intent-1',
+        kind: 'task.setStatus',
+        payload: JSON.stringify({ taskId: 'task-1' }),
+        state: 'rejected',
+        disposition_reason: 'declined reason',
+        updated_at: 100,
+      } as any,
+    ]);
+
+    const message = buildResumeMessage(row, 'restart');
+    expect(message).not.toContain(PLANNING_RESTART_RESUME_MESSAGE);
+    expect(message.toLowerCase()).not.toMatch(/restart|backend process/);
+  });
+
+  it('a restart-resumed code session with a stored needs_changes verdict still receives the formatted review feedback', () => {
+    const row = { ...makeDeadRow(), session_type: 'standard' };
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      review_iteration: 1,
+      merge_state: 'clean',
+      base_branch: 'dev',
+    } as any);
+
+    expect(buildResumeMessage(row, 'restart')).toBe('review-feedback');
+  });
+
+  it('a restart-resumed code session with no stored verdict still receives RESUME_NUDGE_MESSAGE', () => {
+    const row = { ...makeDeadRow(), session_type: 'standard' };
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+
+    expect(buildResumeMessage(row, 'restart')).toBe(RESUME_NUDGE_MESSAGE);
   });
 });
 
