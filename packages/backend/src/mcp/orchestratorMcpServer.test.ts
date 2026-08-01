@@ -66,6 +66,17 @@ describe('orchestratorMcpServer — auth gate', () => {
       .set('Authorization', `Bearer ${token}`);
     expect(delRes.status).toBe(405);
   });
+
+  it('responds with Connection: close so the client cannot reuse a pooled socket', async () => {
+    const token = mintStageCredential('session-mcp-conn-close');
+    const res = await supertest(buildApp())
+      .post('/api/mcp')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
+    expect(res.status).toBe(200);
+    expect(res.headers['connection']).toBe('close');
+  });
 });
 
 describe('orchestratorMcpServer — end-to-end MCP handshake', () => {

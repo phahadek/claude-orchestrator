@@ -184,6 +184,30 @@ export function createOrchestratorMcpRouter(
     ORCHESTRATOR_MCP_PATH,
     requireSessionStageAuth,
     async (req: Request, res: Response) => {
+      // Each request already gets a fresh transport + server instance (see
+      // this router's doc comment) — there is no throughput benefit to
+      // pooling the underlying TCP connection for reuse, only the risk of
+      // the client reusing a socket the server's default keep-alive timeout
+      // (Node's 5s default on the shared http.Server, see server.ts) has
+      // silently closed, which the CLI's MCP client surfaces as "session
+      // expired". Force a fresh connection per call instead by rewriting
+      // the SDK transport's own explicit "Connection: keep-alive" header
+      // (set for its SSE-capable response) at the one point guaranteed to
+      // run after it: wrapping res.writeHead, since per Node's semantics a
+      // header passed directly to writeHead() beats a prior setHeader() call.
+      const originalWriteHead = res.writeHead.bind(res);
+      res.writeHead = ((...args: Parameters<typeof res.writeHead>) => {
+        const headersArg = args[args.length - 1];
+        if (headersArg && typeof headersArg === 'object') {
+          for (const key of Object.keys(headersArg)) {
+            if (key.toLowerCase() === 'connection') {
+              delete (headersArg as Record<string, unknown>)[key];
+            }
+          }
+        }
+        res.setHeader('Connection', 'close');
+        return originalWriteHead(...args);
+      }) as typeof res.writeHead;
       const { sessionId } = (
         req as Request & { stageSession: { sessionId: string } }
       ).stageSession;
