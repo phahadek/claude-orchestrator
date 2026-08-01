@@ -1018,16 +1018,16 @@ describe('procedureCore', () => {
       expect(isValidOpsTransition('staged-proposal', 'blocked')).toBe(true);
     });
 
-    it('never presents staging task.setStatus -> Done as part of any closing set anywhere in the rendered ops procedure — Done is the orchestrator\'s to set, not a session\'s to propose', () => {
+    it("never presents staging task.setStatus -> Done as part of any closing set anywhere in the rendered ops procedure — Done is the orchestrator's to set, not a session's to propose", () => {
       const rendered = principlesFor('ops', { dispatched: true })
         .map((p) => renderPrinciple(p, 'ops'))
-        .concat(
-          ORDERED_STEPS.map((s) => stepSummaryFor(s, 'ops')),
-        )
+        .concat(ORDERED_STEPS.map((s) => stepSummaryFor(s, 'ops')))
         .join('\n');
       // No instruction ever tells the session to DO stage a Done transition.
       expect(rendered).not.toMatch(/DO stage[^.]*`task\.setStatus`[^.]*Done/);
-      expect(rendered).not.toMatch(/`task\.setStatus`[^.]*→[^.]*✅ Done[^.]*,[^.]*under/);
+      expect(rendered).not.toMatch(
+        /`task\.setStatus`[^.]*→[^.]*✅ Done[^.]*,[^.]*under/,
+      );
       // The explicit prohibition is present instead.
       expect(rendered).toMatch(
         /DO NOT stage `task\.setStatus` → ✅ Done alongside it, or\s+ever/,

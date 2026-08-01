@@ -235,7 +235,7 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       '`staged-proposal`; `staged-proposal` → `resolved` is a legal ' +
       '`journal.setState` target exactly for this case (see "ops_journal state ' +
       'machine" above). DO NOT stage `task.setStatus` → ✅ Done alongside it, or ' +
-      'ever — marking the task ✅ Done is the orchestrator\'s to do on the ' +
+      "ever — marking the task ✅ Done is the orchestrator's to do on the " +
       "session's natural terminal, never a session's to propose; that intent is " +
       'refused at stage time. That `journal.setState` stage IS the terminal ' +
       'action a no-change investigation takes, and ends the turn. DO NOT apply ' +

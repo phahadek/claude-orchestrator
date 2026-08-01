@@ -457,7 +457,11 @@ describe('POST /api/staged-intents/:id/apply — group atomicity', () => {
 });
 
 describe('stageIntent — a session-staged task.setStatus -> Done is refused at stage time', () => {
-  for (const sessionType of ['groom-session', 'design-session', 'ops-session']) {
+  for (const sessionType of [
+    'groom-session',
+    'design-session',
+    'ops-session',
+  ]) {
     it(`refuses a task.setStatus -> Done staged by a ${sessionType}, naming that Done is the orchestrator's to set, and creates no row`, () => {
       expect(() =>
         stageIntent(
@@ -517,7 +521,7 @@ describe('stageIntent — a session-staged task.setStatus -> Done is refused at 
     expect(getStagedIntent(intent.id)!.state).toBe('staged');
   });
 
-  it('a refused Done proposal leaves the rest of the session\'s closing group intact — no wedged member', () => {
+  it("a refused Done proposal leaves the rest of the session's closing group intact — no wedged member", () => {
     const sessionId = 'design-session-4';
     const kept = stageIntent(
       'task.setDependsOn',
