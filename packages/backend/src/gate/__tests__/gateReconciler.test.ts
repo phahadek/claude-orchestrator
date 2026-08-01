@@ -546,9 +546,7 @@ describe('runGateReconcilerTick', () => {
       },
     });
     const row = db
-      .prepare(
-        `SELECT disposition FROM gate_item_event WHERE gate_item_id = ?`,
-      )
+      .prepare(`SELECT disposition FROM gate_item_event WHERE gate_item_id = ?`)
       .get(item.id) as { disposition: string | null };
     expect(row.disposition).toBeNull();
   });
