@@ -148,7 +148,9 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
 
   it('ALLOWED_TOOLS contains the underscore form of sessionEvents.query — the name the CLI actually exposes, not the dotted registration name', () => {
     expect(ALLOWED_TOOLS).toContain('mcp__orchestrator__sessionEvents_query');
-    expect(ALLOWED_TOOLS).not.toContain('mcp__orchestrator__sessionEvents.query');
+    expect(ALLOWED_TOOLS).not.toContain(
+      'mcp__orchestrator__sessionEvents.query',
+    );
   });
 
   it('groom/design/ops allow-lists all contain the underscore forms of architecture_getUnit and architecture_queryUnits', () => {

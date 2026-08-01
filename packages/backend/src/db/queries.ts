@@ -1361,10 +1361,8 @@ export function querySessionEventsByProjectAggregate(
   const { clauses, params } = buildSessionEventsFilterClauses(filters);
   const whereExtra = clauses.map((c) => `AND ${c}`).join(' ');
   return db
-    .prepare<
-      (string | number)[],
-      SessionEventsAggregateRow
-    >(`
+    .prepare<(string | number)[], SessionEventsAggregateRow>(
+      `
       SELECT session_events.session_id AS session_id,
              COUNT(*) AS count,
              MIN(session_events.timestamp) AS first_timestamp,
@@ -1374,7 +1372,8 @@ export function querySessionEventsByProjectAggregate(
       WHERE sessions.project_id = ? ${whereExtra}
       GROUP BY session_events.session_id
       ORDER BY last_timestamp DESC
-    `)
+    `,
+    )
     .all(projectId, ...params);
 }
 
@@ -1395,17 +1394,16 @@ export function querySessionEventsByProjectRows(
   const { clauses, params } = buildSessionEventsFilterClauses(filters);
   const whereExtra = clauses.map((c) => `AND ${c}`).join(' ');
   return db
-    .prepare<
-      (string | number)[],
-      SessionEvent
-    >(`
+    .prepare<(string | number)[], SessionEvent>(
+      `
       SELECT session_events.*
       FROM session_events
       JOIN sessions ON sessions.session_id = session_events.session_id
       WHERE sessions.project_id = ? ${whereExtra}
       ORDER BY session_events.timestamp DESC
       LIMIT ?
-    `)
+    `,
+    )
     .all(projectId, ...params, cappedLimit);
 }
 

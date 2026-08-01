@@ -16,7 +16,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerSessionEventsReadTools } from './sessionEventsReadTools';
-import { insertSession, insertEvent, addGrantedCapability } from '../../db/queries';
+import {
+  insertSession,
+  insertEvent,
+  addGrantedCapability,
+} from '../../db/queries';
 import { sessionEventsReadCapability } from '../../session/orchestrator-config';
 
 beforeEach(() => {
@@ -94,7 +98,9 @@ describe('sessionEvents.query', () => {
     insertEvent({
       session_id: 'worker-a',
       event_type: 'text',
-      payload: JSON.stringify({ text: 'session_marked_done_while_running at pr_merge_watcher' }),
+      payload: JSON.stringify({
+        text: 'session_marked_done_while_running at pr_merge_watcher',
+      }),
       timestamp: 1000,
     });
     insertEvent({
@@ -192,7 +198,10 @@ describe('sessionEvents.query', () => {
         sessions: Array<{ session_id: string; count: number }>;
       };
       expect(body.sessions).toHaveLength(1);
-      expect(body.sessions[0]).toMatchObject({ session_id: 'worker-c', count: 1 });
+      expect(body.sessions[0]).toMatchObject({
+        session_id: 'worker-c',
+        count: 1,
+      });
     } finally {
       await close();
     }
@@ -259,7 +268,10 @@ describe('sessionEvents.query', () => {
         sessions: Array<{ session_id: string; count: number }>;
       };
       expect(body.sessions).toHaveLength(1);
-      expect(body.sessions[0]).toMatchObject({ session_id: 'worker-d', count: 2 });
+      expect(body.sessions[0]).toMatchObject({
+        session_id: 'worker-d',
+        count: 2,
+      });
     } finally {
       await close();
     }

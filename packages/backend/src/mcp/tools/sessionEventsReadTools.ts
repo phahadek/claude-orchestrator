@@ -50,7 +50,7 @@ export function registerSessionEventsReadTools(
       title: "Query a project's session_events, aggregated across sessions",
       description:
         'Read-only: by default, returns per-session_id counts + first/last timestamp ' +
-        '(epoch ms) for `projectId`\'s session_events, optionally narrowed by a `pattern` ' +
+        "(epoch ms) for `projectId`'s session_events, optionally narrowed by a `pattern` " +
         'substring match against `payload` or a `[since, until]` timestamp window (epoch ' +
         'ms, inclusive). Pass `includePayloads: true` to instead get up to `limit` ' +
         `(max ${SESSION_EVENTS_ROW_CAP}) raw rows including payload bodies. Requires a ` +
@@ -63,7 +63,12 @@ export function registerSessionEventsReadTools(
         since: z.number().optional(),
         until: z.number().optional(),
         includePayloads: z.boolean().optional(),
-        limit: z.number().int().positive().max(SESSION_EVENTS_ROW_CAP).optional(),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(SESSION_EVENTS_ROW_CAP)
+          .optional(),
       },
     },
     async (args) => {
