@@ -17,7 +17,7 @@ import { registerAuditLogReadTools } from './tools/auditLogReadTools';
 import type { SessionManager } from '../session/SessionManager';
 import { PLANNING_INTENT_KINDS } from '../planning/planningIntentKinds';
 import type { PlanningWorkflow } from '../planning/planningIntentKinds';
-import { resolveMilestoneForTaskId } from '../projects/milestoneResolver';
+import { resolveMilestoneForSessionTask } from '../projects/milestoneResolver';
 
 /**
  * Maps a session's `session_type` to its planning workflow, or null for a
@@ -121,7 +121,7 @@ export function buildMcpServer(
     // non-milestone task) resolves to null, and the intent lands in the
     // "unattributed" bucket rather than blocking staging.
     const milestone = session.task_id
-      ? resolveMilestoneForTaskId(session.project_id, session.task_id)
+      ? resolveMilestoneForSessionTask(session.project_id, session.task_id)
       : null;
     registerStageProposalTools(server, {
       sessionId,
