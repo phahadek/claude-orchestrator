@@ -615,7 +615,12 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
 
   it('buildInjectedProcedure throws (rather than resolving undefined) for a planning session type with no digest branch', async () => {
     const launcher = new OpsSessionLauncher(sessionManager as never);
-    const task = { id: 'task-1', title: 'Docs me', url: '', blockingDepIds: [] };
+    const task = {
+      id: 'task-1',
+      title: 'Docs me',
+      url: '',
+      blockingDepIds: [],
+    };
 
     await expect(
       (
@@ -637,12 +642,19 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
         task,
         '',
       ),
-    ).rejects.toThrow(/no injected-procedure branch for planning session type "docs" \(task task-1\)/);
+    ).rejects.toThrow(
+      /no injected-procedure branch for planning session type "docs" \(task task-1\)/,
+    );
   });
 
   it('aborts before creating a session for a planning session type with no injected-procedure branch (docs), naming both the sessionType and the task id in the failure reason', async () => {
     const launcher = new OpsSessionLauncher(sessionManager as never);
-    const task = { id: 'task-1', title: 'Docs me', url: '', blockingDepIds: [] };
+    const task = {
+      id: 'task-1',
+      title: 'Docs me',
+      url: '',
+      blockingDepIds: [],
+    };
 
     const result = await launcher.launchSelected({
       projectId: 'proj-1',
