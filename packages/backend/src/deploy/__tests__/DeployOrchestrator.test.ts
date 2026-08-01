@@ -700,8 +700,7 @@ describe('DeployOrchestrator: verify gates on a differing pre/post-restart ident
         if (command === IDENTITY_CMD) {
           return {
             ok: true,
-            output:
-              '/etc/bash.bashrc: line 1: PS1: unbound variable\npid-111',
+            output: '/etc/bash.bashrc: line 1: PS1: unbound variable\npid-111',
             exitCode: 0,
             stdout: 'pid-111',
             stderr: '/etc/bash.bashrc: line 1: PS1: unbound variable',
@@ -776,7 +775,7 @@ describe('DeployOrchestrator: verify gates on a differing pre/post-restart ident
     expect(captureEvent?.detail).toBe(IDENTITY_CAPTURE_INVALID);
   });
 
-  it('compares the cleaned stdout-only value on verify\'s post-restart re-read', async () => {
+  it("compares the cleaned stdout-only value on verify's post-restart re-read", async () => {
     let identityCalls = 0;
     const deps = makeDeps(identityPlaybook(), {
       pollMaxAttempts: 5,

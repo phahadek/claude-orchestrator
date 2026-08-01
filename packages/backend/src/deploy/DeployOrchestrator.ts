@@ -229,7 +229,13 @@ export function spawnShell(
       err += d.toString();
     });
     proc.on('error', (e) =>
-      resolve({ ok: false, output: String(e), exitCode: null, stdout: '', stderr: '' }),
+      resolve({
+        ok: false,
+        output: String(e),
+        exitCode: null,
+        stdout: '',
+        stderr: '',
+      }),
     );
     proc.on('close', (code) =>
       resolve({
