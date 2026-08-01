@@ -502,10 +502,26 @@ export class AutoLauncher {
     if (cap === 0) return false;
     const liveCodeSessions = this.countLiveCodeSessions();
     if (liveCodeSessions >= cap) return false;
-    if (!hasMemoryHeadroom()) {
+    const memoryHeadroom = hasMemoryHeadroom();
+    if (!memoryHeadroom.allowed) {
       logger.info(
-        '[AutoLauncher] deferring dispatch — projected free host memory below configured budget',
+        `[AutoLauncher] deferring dispatch — projected free host memory below configured budget ` +
+          `(freeMemMB=${memoryHeadroom.freeMemMB.toFixed(1)}, minHostFreeMemoryMB=${memoryHeadroom.minHostFreeMemoryMB}, ` +
+          `perSessionReserveMB=${memoryHeadroom.perSessionReserveMB}, projectedFreeMB=${memoryHeadroom.projectedFreeMB.toFixed(1)})`,
       );
+      recordEvent({
+        event_type: 'memory_admission_deferred',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: null,
+        payload: {
+          freeMemMB: memoryHeadroom.freeMemMB,
+          minHostFreeMemoryMB: memoryHeadroom.minHostFreeMemoryMB,
+          perSessionReserveMB: memoryHeadroom.perSessionReserveMB,
+          projectedFreeMB: memoryHeadroom.projectedFreeMB,
+        },
+      });
       return false;
     }
     const usageAdmission = isUsageAdmitted();
