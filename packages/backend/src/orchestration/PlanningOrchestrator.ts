@@ -17,7 +17,10 @@ import type {
   StagedIntentAnswer,
   StagedIntentState,
 } from '../db/types';
-import { isPlanningSession } from '../session/sessionPredicates';
+import {
+  isPlanningSession,
+  isGateVerifySession,
+} from '../session/sessionPredicates';
 import type { SessionManager } from '../session/SessionManager';
 import type { ServerMessage } from '../ws/types';
 import {
@@ -401,6 +404,18 @@ export class PlanningOrchestrator {
     if (row.session_type === 'docs' && DESIGN_COMPLETING_REASONS.has(reason)) {
       this.completeDocsTask(sessionId, row);
     }
+
+    // An ops session's natural terminal closes its target task the same
+    // way — except a gate-verify session (task_id `gate-item:<id>`) has no
+    // Notion task to close, so it is excluded rather than mistakenly
+    // written to as one.
+    if (
+      row.session_type === 'ops' &&
+      DESIGN_COMPLETING_REASONS.has(reason) &&
+      !isGateVerifySession(row.task_id)
+    ) {
+      this.completeOpsTask(sessionId, row);
+    }
   }
 
   /**
@@ -471,6 +486,40 @@ export class PlanningOrchestrator {
       .catch((err) => {
         logger.error(
           `[PlanningOrchestrator] failed to close docs task ${taskId} for session ${sessionId.slice(0, 8)}: ${err}`,
+        );
+      });
+  }
+
+  /**
+   * Close an ops session's target task once its closing set of staged
+   * intents has actually been applied — mirrors completeDesignTask. Callers
+   * must exclude gate-verify sessions (task_id `gate-item:<id>`) first,
+   * since those have no Notion task to close.
+   */
+  private completeOpsTask(sessionId: string, row: Session): void {
+    const taskId = row.task_id;
+    const projectId = row.project_id;
+    if (!taskId || !projectId) return;
+
+    const intents = listStagedIntentsBySession(sessionId);
+    if (intents.some((i) => i.state === 'rejected')) return;
+
+    getTaskBackend(projectId)
+      .updateStatus(taskId, DESIGN_DONE_STATUS, {
+        source: 'orchestrator',
+        sessionId,
+      })
+      .then(() => {
+        this.sessionManager.emit('message', {
+          type: 'task_status_changed',
+          notionTaskId: taskId,
+          newStatus: DESIGN_DONE_STATUS,
+        } satisfies ServerMessage);
+        emitTaskUpdated(taskId);
+      })
+      .catch((err) => {
+        logger.error(
+          `[PlanningOrchestrator] failed to close ops task ${taskId} for session ${sessionId.slice(0, 8)}: ${err}`,
         );
       });
   }

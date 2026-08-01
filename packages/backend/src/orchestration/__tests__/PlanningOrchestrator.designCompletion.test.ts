@@ -349,23 +349,4 @@ describe('PlanningOrchestrator — design task completion', () => {
     expect(terminal).toBe(true);
     expect(updateStatus).not.toHaveBeenCalled();
   });
-
-  it('does not close the task for an ops session reaching terminal', async () => {
-    const sm = makeSessionManager();
-    vi.mocked(getSession).mockReturnValue(
-      makeSessionRow({ session_type: 'ops' }),
-    );
-    vi.mocked(listStagedIntentsBySession).mockReturnValue([]);
-    const orch = new PlanningOrchestrator(sm as any);
-
-    // First call with no staged decisions sends the terminal-no-decision
-    // nudge and reports non-terminal; the second call (post-nudge, still
-    // nothing staged) reaches terminal — matching the groom-session test above.
-    orch.checkTerminal('design-session-1');
-    const terminal = orch.checkTerminal('design-session-1');
-    await flush();
-
-    expect(terminal).toBe(true);
-    expect(updateStatus).not.toHaveBeenCalled();
-  });
 });
