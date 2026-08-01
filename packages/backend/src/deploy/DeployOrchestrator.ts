@@ -50,13 +50,45 @@ const VERIFY_STEP_ID = 'verify';
 /** Event type recording the restart step's `identity_capture` output, read before it executes. */
 const PRE_RESTART_IDENTITY_EVENT = 'pre_restart_identity_captured';
 
+/**
+ * Persisted in place of an `identity_capture` reading that doesn't look like
+ * a single-line token (empty, or spanning multiple lines) once stderr has
+ * already been stripped out — e.g. the capture command itself printed a
+ * warning to stdout, or produced no output at all. Storing this explicit
+ * marker keeps a malformed capture from being persisted as if it were a
+ * usable identity value.
+ */
+export const IDENTITY_CAPTURE_INVALID = '<identity-capture-invalid>';
+
 export type AgenticVerdict = 'approved' | 'rejected';
 
 export interface ShellResult {
   ok: boolean;
+  /** Combined stdout+stderr, kept for existing failure-diagnostic callers. */
   output: string;
   /** The child's exit code, or `null` when it never ran (e.g. spawn error). */
   exitCode: number | null;
+  /** stdout only. Falls back to `output` when a `ShellRunner` doesn't distinguish streams (e.g. a test double). */
+  stdout?: string;
+  /** stderr only. Falls back to `''` when a `ShellRunner` doesn't distinguish streams. */
+  stderr?: string;
+}
+
+/** stdout for a `ShellResult`, falling back to the combined `output` when a runner doesn't separate streams. */
+function shellStdout(result: ShellResult): string {
+  return result.stdout ?? result.output;
+}
+
+/**
+ * Normalizes a captured identity reading: trims surrounding whitespace, and
+ * replaces anything that doesn't look like a single-line token (empty, or
+ * still spanning multiple lines) with the explicit invalid marker rather
+ * than persisting it as-is.
+ */
+function normalizeIdentityCapture(stdout: string): string {
+  const trimmed = stdout.trim();
+  if (!trimmed || /\r|\n/.test(trimmed)) return IDENTITY_CAPTURE_INVALID;
+  return trimmed;
 }
 
 /** Runs a step's shell command (kind `shell`/`validation`), optionally as another user. */
@@ -189,17 +221,30 @@ export function spawnShell(
       env: buildDeployStepEnv(process.env, opts.bindings),
     });
     let out = '';
+    let err = '';
     proc.stdout?.on('data', (d: Buffer) => {
       out += d.toString();
     });
     proc.stderr?.on('data', (d: Buffer) => {
-      out += d.toString();
+      err += d.toString();
     });
-    proc.on('error', (err) =>
-      resolve({ ok: false, output: String(err), exitCode: null }),
+    proc.on('error', (e) =>
+      resolve({
+        ok: false,
+        output: String(e),
+        exitCode: null,
+        stdout: '',
+        stderr: '',
+      }),
     );
     proc.on('close', (code) =>
-      resolve({ ok: code === 0, output: out, exitCode: code }),
+      resolve({
+        ok: code === 0,
+        output: out + err,
+        exitCode: code,
+        stdout: out,
+        stderr: err,
+      }),
     );
   });
 }
@@ -618,11 +663,17 @@ export class DeployOrchestrator {
             cwd: this.projectDir,
             bindings,
           });
+          const stderr = (identityResult.stderr ?? '').trim();
+          if (stderr) {
+            logger.warn(
+              `[DeployOrchestrator] run ${runId} (${this.project}) identity_capture for step "${step.id}" wrote to stderr: ${stderr}`,
+            );
+          }
           appendDeployRunEvent({
             runId,
             step: step.id,
             eventType: PRE_RESTART_IDENTITY_EVENT,
-            detail: identityResult.output.trim(),
+            detail: normalizeIdentityCapture(shellStdout(identityResult)),
             at: this.now(),
           });
         }
@@ -912,7 +963,15 @@ export class DeployOrchestrator {
           cwd: this.projectDir,
           bindings,
         });
-        const currentIdentity = identityResult.output.trim();
+        const stderr = (identityResult.stderr ?? '').trim();
+        if (stderr) {
+          logger.warn(
+            `[DeployOrchestrator] identity_capture re-read for step "${stepId}" wrote to stderr: ${stderr}`,
+          );
+        }
+        const currentIdentity = normalizeIdentityCapture(
+          shellStdout(identityResult),
+        );
         if (!identityResult.ok || currentIdentity === identityCheck.baseline) {
           lastResult = {
             ok: false,
