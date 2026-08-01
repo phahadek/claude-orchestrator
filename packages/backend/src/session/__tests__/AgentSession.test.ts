@@ -189,7 +189,9 @@ describe('AgentSession.handleCleanExit — broadcasts the real post-write status
 
       await callHandleCleanExit(session);
 
-      const ended = messages.find((m: any) => m.type === 'session_ended') as any;
+      const ended = messages.find(
+        (m: any) => m.type === 'session_ended',
+      ) as any;
       expect(ended).toBeDefined();
       expect(ended.status).toBe('idle');
     });
