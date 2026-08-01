@@ -936,6 +936,80 @@ describe('TaskList', () => {
       expect(screen.queryByTestId('groom-btn')).toBeNull();
     });
 
+    it('renders when there are zero Backlog Code tasks but a groomable non-Code Backlog task exists, and launches it', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation(
+        (url: string) => {
+          if (url.includes('/api/planning/launch')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({ launched: ['bn1'], deferred: [] }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({}),
+          });
+        },
+      );
+
+      renderList(
+        [
+          makeTask({
+            taskId: 'bn1',
+            taskName: 'Backlog Operational Task',
+            displayStatus: 'backlog',
+            taskType: '🔧 Operational',
+          }),
+        ],
+        { boardId: 'milestone-1' },
+      );
+
+      expect(screen.queryByTestId('backlog-section')).toBeNull();
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
+      expect(groomBtn.textContent).toContain('Groom (0)');
+
+      fireEvent.click(screen.getByTestId('type-card-header-operational'));
+      const checkbox = screen
+        .getByTestId('type-card-operational')
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      fireEvent.click(checkbox);
+      expect(groomBtn.textContent).toContain('Groom (1)');
+
+      fireEvent.click(groomBtn);
+
+      await waitFor(() => {
+        expect(
+          (global.fetch as ReturnType<typeof vi.fn>).mock.calls.some(
+            ([url, init]) =>
+              typeof url === 'string' &&
+              url.includes('/api/planning/launch') &&
+              JSON.stringify(init?.body ?? '').includes('bn1'),
+          ),
+        ).toBe(true);
+      });
+    });
+
+    it('renders exactly once when both Code and non-Code groomable Backlog tasks are present', () => {
+      renderList([
+        makeTask({
+          taskId: 'bc1',
+          taskName: 'Backlog Code Task',
+          displayStatus: 'backlog',
+          taskType: '💻 Code',
+        }),
+        makeTask({
+          taskId: 'bn1',
+          taskName: 'Backlog Design Task',
+          displayStatus: 'backlog',
+          taskType: '📐 Design',
+        }),
+      ]);
+
+      expect(screen.getAllByTestId('groom-btn')).toHaveLength(1);
+    });
+
     it('renders on the Backlog section and reflects the selected count', () => {
       renderList([
         makeTask({
@@ -951,9 +1025,7 @@ describe('TaskList', () => {
         within(backlogSection).getByTestId('group-header-backlog'),
       );
 
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       expect(groomBtn.textContent).toContain('Groom (0)');
       expect(groomBtn.disabled).toBe(true);
 
@@ -982,13 +1054,9 @@ describe('TaskList', () => {
       fireEvent.click(
         within(backlogSection).getByTestId('group-header-backlog'),
       );
-      fireEvent.click(
-        within(backlogSection).getByTestId('groom-select-all-btn'),
-      );
+      fireEvent.click(screen.getByTestId('groom-select-all-btn'));
 
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       expect(groomBtn.textContent).toContain('Groom (2)');
     });
 
@@ -1043,9 +1111,7 @@ describe('TaskList', () => {
           .querySelector('input[type="checkbox"]') as HTMLInputElement,
       );
 
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       fireEvent.click(groomBtn);
 
       await waitFor(() => {
@@ -1105,9 +1171,7 @@ describe('TaskList', () => {
           .querySelector('input[type="checkbox"]') as HTMLInputElement,
       );
 
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       fireEvent.click(groomBtn);
 
       await waitFor(() => {
@@ -1174,9 +1238,7 @@ describe('TaskList', () => {
           .querySelector('input[type="checkbox"]') as HTMLInputElement,
       );
 
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       fireEvent.click(groomBtn);
 
       await waitFor(() => {
@@ -1251,7 +1313,7 @@ describe('TaskList', () => {
         .querySelectorAll('input[type="checkbox"]');
       designCheckboxes.forEach((checkbox) => fireEvent.click(checkbox));
 
-      const groomBtn = within(backlogSection).getByTestId('groom-btn');
+      const groomBtn = screen.getByTestId('groom-btn');
       fireEvent.click(groomBtn);
 
       await waitFor(() => {
@@ -1289,13 +1351,8 @@ describe('TaskList', () => {
 
       fireEvent.click(checkbox);
 
-      const backlogSection = screen.getByTestId('backlog-section');
-      fireEvent.click(
-        within(backlogSection).getByTestId('group-header-backlog'),
-      );
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
+      expect(screen.queryByTestId('backlog-section')).toBeNull();
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       expect(groomBtn.textContent).toContain('Groom (1)');
     });
 
@@ -1361,12 +1418,8 @@ describe('TaskList', () => {
           .textContent,
       ).toContain('waiting on Investigation Task');
 
-      fireEvent.click(
-        within(backlogSection).getByTestId('groom-select-all-btn'),
-      );
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
+      fireEvent.click(screen.getByTestId('groom-select-all-btn'));
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
       expect(groomBtn.textContent).toContain('Groom (1)');
     });
 
@@ -1386,7 +1439,7 @@ describe('TaskList', () => {
         within(backlogSection).getByTestId('group-header-backlog'),
       );
       fireEvent.click(within(backlogSection).getByRole('checkbox'));
-      fireEvent.click(within(backlogSection).getByTestId('groom-btn'));
+      fireEvent.click(screen.getByTestId('groom-btn'));
 
       expect(screen.queryByTestId('groom-launched-panel')).toBeNull();
       expect(fetch).not.toHaveBeenCalled();
@@ -1911,16 +1964,9 @@ describe('TaskList', () => {
       fireEvent.click(screen.getByTestId('non-code-select-all-btn'));
       expect(opsBtn.textContent).toContain('Ops (2)');
 
-      const backlogSection = screen.getByTestId('backlog-section');
-      fireEvent.click(
-        within(backlogSection).getByTestId('group-header-backlog'),
-      );
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
-      fireEvent.click(
-        within(backlogSection).getByTestId('groom-select-all-btn'),
-      );
+      expect(screen.queryByTestId('backlog-section')).toBeNull();
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
+      fireEvent.click(screen.getByTestId('groom-select-all-btn'));
       expect(groomBtn.textContent).toContain('Groom (1)');
     });
 
@@ -2022,16 +2068,9 @@ describe('TaskList', () => {
       fireEvent.click(readyCheckbox);
       expect(designBtn.textContent).toContain('Design (1)');
 
-      const backlogSection = screen.getByTestId('backlog-section');
-      fireEvent.click(
-        within(backlogSection).getByTestId('group-header-backlog'),
-      );
-      const groomBtn = within(backlogSection).getByTestId(
-        'groom-btn',
-      ) as HTMLButtonElement;
-      fireEvent.click(
-        within(backlogSection).getByTestId('groom-select-all-btn'),
-      );
+      expect(screen.queryByTestId('backlog-section')).toBeNull();
+      const groomBtn = screen.getByTestId('groom-btn') as HTMLButtonElement;
+      fireEvent.click(screen.getByTestId('groom-select-all-btn'));
       expect(groomBtn.textContent).toContain('Groom (1)');
     });
 
