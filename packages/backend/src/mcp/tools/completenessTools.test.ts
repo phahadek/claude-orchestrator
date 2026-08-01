@@ -13,6 +13,15 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../../projects/ProjectService', () => ({
+  ProjectService: {
+    getById: () => ({
+      id: 'proj-1',
+      milestones: [{ id: 'ms-13', name: 'M13', canonicalShortId: 'M13' }],
+    }),
+  },
+}));
+
 import { db } from '../../db/db';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';

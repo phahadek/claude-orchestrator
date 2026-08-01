@@ -15,6 +15,15 @@ vi.mock('../../db/db.js', async () => {
   return { db: setupTestDb() };
 });
 
+vi.mock('../../projects/ProjectService', () => ({
+  ProjectService: {
+    getById: () => ({
+      id: 'polimarket-analyser',
+      milestones: [{ id: 'ms-12', name: 'M12', canonicalShortId: 'M12' }],
+    }),
+  },
+}));
+
 import { db } from '../../db/db.js';
 import { createOpsJournalRouter } from '../opsJournal.js';
 import { upsertOpsJournalEntry } from '../../db/queries.js';

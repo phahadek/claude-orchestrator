@@ -112,7 +112,10 @@ import {
 import type { ServerMessage } from '../ws/types';
 import { logger } from '../logger';
 import { getMilestoneConvergence } from '../convergence/convergenceService';
-import { UnknownMilestoneError } from '../projects/milestoneResolver';
+import {
+  UnknownMilestoneError,
+  resolveMilestoneForProject,
+} from '../projects/milestoneResolver';
 import { rankDecisions } from '../convergence/decisionRanking';
 import { resolveSessionCompleteForDisplay } from '../convergence/attentionSignals';
 import {
@@ -2429,6 +2432,15 @@ export function stageIntent(
   milestone?: string | null,
   investigation?: string | null,
 ): StagedIntent {
+  // Normalize a caller-supplied milestone (DB UUID, display name, or already
+  // the canonical short id) to the canonical short id before it ever reaches
+  // the row — resolveMilestoneForProject is a no-op on an already-canonical
+  // value, so the server-derived ctx.milestone path is unaffected. An
+  // unresolvable value rejects at stage time rather than silently spawning a
+  // shadow key nothing queries.
+  const resolvedMilestone =
+    milestone != null ? resolveMilestoneForProject(projectId, milestone) : null;
+
   if (kind === 'decision.pickOne') {
     validateDecisionPickOnePayload(payload, groupId, decisionProposal);
   }
@@ -2531,7 +2543,7 @@ export function stageIntent(
       project_id: projectId,
       session_id: sessionId ?? null,
       group_id: groupId ?? null,
-      milestone: milestone ?? existing.milestone ?? null,
+      milestone: resolvedMilestone ?? existing.milestone ?? null,
       state: 'staged',
       supersedes: null,
       annotation: null,
@@ -2560,7 +2572,7 @@ export function stageIntent(
     project_id: projectId,
     session_id: sessionId ?? null,
     group_id: groupId ?? null,
-    milestone: milestone ?? null,
+    milestone: resolvedMilestone,
     state: 'staged',
     supersedes: null,
     annotation: null,
@@ -4436,7 +4448,10 @@ export function createStagedIntentsRouter(
         investigation,
       );
     } catch (err) {
-      if (err instanceof ReadyPathMissingGroupError) {
+      if (
+        err instanceof ReadyPathMissingGroupError ||
+        err instanceof UnknownMilestoneError
+      ) {
         res.status(400).json({ error: err.message });
         return;
       }
