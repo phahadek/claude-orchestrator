@@ -58,7 +58,7 @@ function runScript(args) {
 }
 
 describe('staged-intents-client.mjs usage', () => {
-  it('lists all six subcommands when invoked with no command', async () => {
+  it('lists all seven subcommands when invoked with no command', async () => {
     let stderr = '';
     try {
       await runScript([]);
@@ -72,9 +72,27 @@ describe('staged-intents-client.mjs usage', () => {
       'list',
       'approve',
       'group-commit',
+      'recover',
     ]) {
       expect(stderr).toContain(subcommand);
     }
+  });
+});
+
+describe('staged-intents-client.mjs recover', () => {
+  it('POSTs /group/:groupId/recover, bearing the device token', async () => {
+    const { stdout } = await runScript(['recover', 'grp-1']);
+
+    expect(lastRequestMethod).toBe('POST');
+    expect(lastRequestPath).toBe('/api/staged-intents/group/grp-1/recover');
+    expect(lastAuthHeader).toBe('Bearer test-token');
+    expect(lastRequestBody).toEqual({});
+    expect(JSON.parse(stdout)).toEqual(responseBody);
+  });
+
+  it('fails fast without a group id', async () => {
+    await expect(runScript(['recover'])).rejects.toThrow();
+    expect(lastRequestPath).toBeNull();
   });
 });
 

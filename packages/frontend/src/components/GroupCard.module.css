@@ -70,3 +70,34 @@
   margin-left: 6px;
   padding-left: 8px;
 }
+
+.recoveryBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: rgba(250, 179, 135, 0.12);
+  border: 1px solid rgba(250, 179, 135, 0.4);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+}
+
+.recoveryBannerText {
+  color: var(--ctp-peach);
+  font-size: 0.78rem;
+}
+
+.recoverButton {
+  background: rgba(250, 179, 135, 0.15);
+  border: 1px solid rgba(250, 179, 135, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-peach);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 4px 10px;
+}
+
+.recoverButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

@@ -239,6 +239,53 @@ describe('DecisionPanel', () => {
     );
   });
 
+  it('renders no recovery control for a group with no blocked members', async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(
+      groomGroupIntents('group-7', 't-7'),
+    );
+
+    render(<DecisionPanel sessionId="groom-session-1" />);
+    await waitFor(() => screen.getByTestId('decision-panel'));
+
+    expect(screen.queryByTestId('recover-group-group-7')).toBeNull();
+  });
+
+  it('shows a recovery control naming the blocked member count when a group has a needs_revision/pending_verification member', async () => {
+    const members = groomGroupIntents('group-8', 't-8');
+    members[1] = { ...members[1], state: 'needs_revision' };
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(members);
+
+    render(<DecisionPanel sessionId="groom-session-1" />);
+    await waitFor(() => screen.getByTestId('decision-panel'));
+
+    expect(screen.getByTestId('recovery-banner-group-8').textContent).toMatch(
+      /1 blocked member/,
+    );
+    expect(screen.getByTestId('recover-group-group-8')).toBeTruthy();
+  });
+
+  it('invoking the recovery control calls recoverGroup with the group id and re-renders from the response', async () => {
+    const members = groomGroupIntents('group-9', 't-9');
+    members[1] = { ...members[1], state: 'pending_verification' };
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(members);
+    const recoverGroup = vi
+      .spyOn(stagedIntentsApi, 'recoverGroup')
+      .mockResolvedValue({
+        ok: true,
+        recovered: [{ ...members[1], state: 'staged' }],
+      });
+
+    render(<DecisionPanel sessionId="groom-session-1" />);
+    await waitFor(() => screen.getByTestId('decision-panel'));
+
+    fireEvent.click(screen.getByTestId('recover-group-group-9'));
+
+    await waitFor(() => expect(recoverGroup).toHaveBeenCalledWith('group-9'));
+    await waitFor(() =>
+      expect(screen.queryByTestId('recovery-banner-group-9')).toBeNull(),
+    );
+  });
+
   it('exposes a reachable dismiss control at mobile viewport widths, which collapses the panel to a reopenable badge', async () => {
     mockMobileViewport();
     vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue(

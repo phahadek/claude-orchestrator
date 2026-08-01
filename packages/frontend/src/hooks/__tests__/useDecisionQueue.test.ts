@@ -340,4 +340,54 @@ describe('useDecisionQueue', () => {
       reason: 'out of scope',
     });
   });
+
+  it('recovers a group by re-rendering from the recovered intents the route returns', async () => {
+    const blocked: StagedIntent = {
+      id: 'i-blocked',
+      kind: 'gate.accrete',
+      payload: {},
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: 'session-1',
+      groupId: 'group-1',
+      state: 'needs_revision',
+    };
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([blocked]);
+    const recovered: StagedIntent = { ...blocked, state: 'staged' };
+    const recoverGroup = vi
+      .spyOn(stagedIntentsApi, 'recoverGroup')
+      .mockResolvedValue({ ok: true, recovered: [recovered] });
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({ type: 'session', sessionId: 'session-1' }),
+    );
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    await act(async () => {
+      await result.current.handleRecoverGroup('group-1');
+    });
+
+    expect(recoverGroup).toHaveBeenCalledWith('group-1');
+    expect(
+      result.current.intents.find((i) => i.id === 'i-blocked')?.state,
+    ).toBe('staged');
+  });
+
+  it('surfaces a recover failure as a group error', async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+    vi.spyOn(stagedIntentsApi, 'recoverGroup').mockRejectedValue(
+      new Error('no blocked members'),
+    );
+
+    const { result } = renderHook(() =>
+      useDecisionQueue({ type: 'session', sessionId: 'session-1' }),
+    );
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    await act(async () => {
+      await result.current.handleRecoverGroup('group-1');
+    });
+
+    expect(result.current.groupErrors['group-1']).toBe('no blocked members');
+  });
 });

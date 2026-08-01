@@ -430,6 +430,69 @@ describe('MilestoneDecisionInbox', () => {
     expect(cardB.textContent).not.toContain('boom');
   });
 
+  it('renders no recovery control for a group with no blocked members', async () => {
+    const groupId = 'group-clean';
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+      {
+        id: `${groupId}-status`,
+        kind: 'task.setStatus',
+        payload: { taskId: 't-clean', status: 'Ready' },
+        projectId: 'proj-1',
+        createdAt: 0,
+        groupId,
+        milestone: 'M1',
+        state: 'staged',
+      },
+    ]);
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    expect(screen.queryByTestId(`recover-group-${groupId}`)).toBeNull();
+  });
+
+  it('shows a recovery control naming the blocked member count and invoking it calls recoverGroup, re-rendering from the response', async () => {
+    const groupId = 'group-wedged';
+    const blockedMember: StagedIntent = {
+      id: 'wedged-member',
+      kind: 'gate.accrete',
+      payload: { taskId: 't-wedged' },
+      projectId: 'proj-1',
+      createdAt: 0,
+      sessionId: 'session-groom',
+      groupId,
+      milestone: 'M1',
+      state: 'needs_revision',
+    };
+    vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([
+      blockedMember,
+    ]);
+    vi.spyOn(stagedIntentsApi, 'listGroup').mockResolvedValue({
+      groupId,
+      wedged: true,
+      intents: [blockedMember],
+    });
+    const recoverGroup = vi
+      .spyOn(stagedIntentsApi, 'recoverGroup')
+      .mockResolvedValue({
+        ok: true,
+        recovered: [{ ...blockedMember, state: 'staged' }],
+      });
+
+    render(<MilestoneDecisionInbox projectId="proj-1" milestone="M1" />);
+    await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
+
+    const banner = screen.getByTestId(`recovery-banner-${groupId}`);
+    expect(banner.textContent).toMatch(/1 blocked member/);
+
+    fireEvent.click(screen.getByTestId(`recover-group-${groupId}`));
+
+    await waitFor(() => expect(recoverGroup).toHaveBeenCalledWith(groupId));
+    await waitFor(() =>
+      expect(screen.queryByTestId(`recovery-banner-${groupId}`)).toBeNull(),
+    );
+  });
+
   it('disables the group reject submit until an outcome is chosen, even with a reason typed', async () => {
     const groupId = 'group-reject';
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue([

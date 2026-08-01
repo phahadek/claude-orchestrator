@@ -3,8 +3,9 @@
 // surface (see packages/backend/src/routes/stagedIntents.ts): POST
 // /api/staged-intents (create), POST /api/staged-intents/:id/apply (apply),
 // POST /api/staged-intents/:id/reject (reject), GET /api/staged-intents
-// (list), POST /api/staged-intents/:id/approve (approve), and POST
-// /api/staged-intents/group/:groupId/commit (group-commit).
+// (list), POST /api/staged-intents/:id/approve (approve), POST
+// /api/staged-intents/group/:groupId/commit (group-commit), and POST
+// /api/staged-intents/group/:groupId/recover (recover).
 //
 // This is the surface the interactive skills (/groom, /design, /ops) use to
 // stage and apply task-write intents: they run in the trusted Remote-Control
@@ -26,6 +27,12 @@
 //   node staged-intents-client.mjs list [--projectId <projectId>]
 //   node staged-intents-client.mjs approve <intentId>
 //   node staged-intents-client.mjs group-commit <groupId> [--override <reason>] [--actorType human|session]
+//   node staged-intents-client.mjs recover <groupId>
+//
+// A wedged group (every needs_revision/pending_verification member blocking
+// its commit) is unwedged with recover, which re-surfaces those members onto
+// the normal staged/approved surface — it does not approve or commit them:
+//   node staged-intents-client.mjs recover <groupId>
 //
 // Example:
 //   node staged-intents-client.mjs create task.setDependsOn \
@@ -207,6 +214,17 @@ export function groupCommitStagedIntents({
   });
 }
 
+export function recoverStagedIntentsGroup({ host, port, token, groupId }) {
+  return requestStagedIntents({
+    host,
+    port,
+    token,
+    method: 'POST',
+    path: `/api/staged-intents/group/${encodeURIComponent(groupId)}/recover`,
+    payload: {},
+  });
+}
+
 function parseFlags(argv) {
   function option(name) {
     const i = argv.indexOf(name);
@@ -229,7 +247,8 @@ const USAGE =
   '  node staged-intents-client.mjs reject <intentId> --outcome pushback|decline --reason <reason>\n' +
   '  node staged-intents-client.mjs list [--projectId <projectId>]\n' +
   '  node staged-intents-client.mjs approve <intentId>\n' +
-  '  node staged-intents-client.mjs group-commit <groupId> [--override <reason>] [--actorType human|session]';
+  '  node staged-intents-client.mjs group-commit <groupId> [--override <reason>] [--actorType human|session]\n' +
+  '  node staged-intents-client.mjs recover <groupId>';
 
 async function main() {
   function fail(message) {
@@ -324,6 +343,15 @@ async function main() {
         override: override !== undefined,
         reason: override,
         actorType,
+      });
+    } else if (command === 'recover') {
+      const [groupId] = rest;
+      if (!groupId) return fail(USAGE);
+      result = await recoverStagedIntentsGroup({
+        host,
+        port,
+        token,
+        groupId,
       });
     } else {
       return fail(USAGE);
