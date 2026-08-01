@@ -230,15 +230,17 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'whose conclusion is that no change is needed, so THE NO-CHANGE TERMINAL ' +
       'exists for exactly that outcome, and staging it is not the parking this ' +
       'rule forbids. Once a decided-no-change conclusion is reached, DO stage ' +
-      'the closing set directly — `journal.setState` → `resolved` alongside ' +
-      '`task.setStatus` → ✅ Done, under one shared `groupId` (see the closing-set ' +
-      'directive in the Present-for-sign-off step) — from whichever state the ' +
-      'decision was reached in, `candidate` or `staged-proposal`; `staged-proposal` → ' +
-      '`resolved` is a legal `journal.setState` target exactly for this case ' +
-      '(see "ops_journal state machine" above). That stage IS the terminal ' +
+      'the no-change terminal directly — `journal.setState` → `resolved`, alone ' +
+      '— from whichever state the decision was reached in, `candidate` or ' +
+      '`staged-proposal`; `staged-proposal` → `resolved` is a legal ' +
+      '`journal.setState` target exactly for this case (see "ops_journal state ' +
+      'machine" above). DO NOT stage `task.setStatus` → ✅ Done alongside it, or ' +
+      "ever — marking the task ✅ Done is the orchestrator's to do on the " +
+      "session's natural terminal, never a session's to propose; that intent is " +
+      'refused at stage time. That `journal.setState` stage IS the terminal ' +
       'action a no-change investigation takes, and ends the turn. DO NOT apply ' +
-      'that group yourself — the session stages the closing set, it never makes ' +
-      'the `resolved` transition happen; the operator approving the group is ' +
+      'it yourself — the session stages the transition, it never makes the ' +
+      '`resolved` transition happen; the operator approving the staged intent is ' +
       'the device-auth step that actually performs it, which is what "a ' +
       'dispatched session never reaches resolved itself" (below) means. A ' +
       'missing write tool IS a capability request, never a blocker: DO call ' +
@@ -288,8 +290,8 @@ export const CORE_PRINCIPLES: readonly ProcedurePrinciple[] = [
       'dispatched {skillLabel} session never reaches resolved / ✅ Done / task-apply itself — ' +
       'that transition is device-auth/operator-only. This holds even for the no-change ' +
       'terminal (see "drive to applied-pending-confirm or stage the no-change terminal" ' +
-      'above): the session stages the `journal.setState` → `resolved` closing set, it ' +
-      "never applies it — the operator's approval of that staged group is the " +
+      'above): the session stages the `journal.setState` → `resolved` transition, it ' +
+      "never applies it — the operator's approval of that staged intent is the " +
       'device-auth action that performs the transition.',
   },
   {

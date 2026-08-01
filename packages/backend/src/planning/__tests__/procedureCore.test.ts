@@ -989,15 +989,17 @@ describe('procedureCore', () => {
       );
     });
 
-    it('instructs staging the closing set (journal.setState to resolved + task.setStatus to Done under a shared groupId) as the no-change terminal, staged never applied by the session', () => {
+    it('instructs staging journal.setState to resolved, alone, as the no-change terminal, staged never applied by the session — and never task.setStatus to Done alongside it', () => {
       const principle = CORE_PRINCIPLES.find(
         (p) => p.id === 'dispatched-ops-write-capable',
       )!;
       const rendered = renderPrinciple(principle, 'ops');
       expect(rendered).toMatch(/journal\.setState.*→.*`resolved`/);
-      expect(rendered).toMatch(/task\.setStatus.*→.*✅ Done/);
-      expect(rendered).toMatch(/shared `groupId`/);
-      expect(rendered).toMatch(/DO NOT apply that group yourself/);
+      expect(rendered).toMatch(
+        /DO NOT stage `task\.setStatus` → ✅ Done alongside it, or\s+ever/,
+      );
+      expect(rendered).toMatch(/refused at stage time/);
+      expect(rendered).toMatch(/DO NOT apply it yourself/);
     });
 
     it('the transition the no-change terminal requires — staged-proposal to resolved — is legal per isValidOpsTransition', () => {
@@ -1016,7 +1018,23 @@ describe('procedureCore', () => {
       expect(isValidOpsTransition('staged-proposal', 'blocked')).toBe(true);
     });
 
-    it('the granted-writes-idempotent-resumable principle reconciles staging the no-change closing set with never reaching resolved itself', () => {
+    it("never presents staging task.setStatus -> Done as part of any closing set anywhere in the rendered ops procedure — Done is the orchestrator's to set, not a session's to propose", () => {
+      const rendered = principlesFor('ops', { dispatched: true })
+        .map((p) => renderPrinciple(p, 'ops'))
+        .concat(ORDERED_STEPS.map((s) => stepSummaryFor(s, 'ops')))
+        .join('\n');
+      // No instruction ever tells the session to DO stage a Done transition.
+      expect(rendered).not.toMatch(/DO stage[^.]*`task\.setStatus`[^.]*Done/);
+      expect(rendered).not.toMatch(
+        /`task\.setStatus`[^.]*→[^.]*✅ Done[^.]*,[^.]*under/,
+      );
+      // The explicit prohibition is present instead.
+      expect(rendered).toMatch(
+        /DO NOT stage `task\.setStatus` → ✅ Done alongside it, or\s+ever/,
+      );
+    });
+
+    it('the granted-writes-idempotent-resumable principle reconciles staging the no-change terminal with never reaching resolved itself', () => {
       const principle = CORE_PRINCIPLES.find(
         (p) => p.id === 'granted-writes-idempotent-resumable',
       )!;
@@ -1024,7 +1042,7 @@ describe('procedureCore', () => {
       expect(rendered).toMatch(/never reaches resolved/);
       expect(rendered).toMatch(/no-change terminal/);
       expect(rendered).toMatch(
-        /the session stages the `journal\.setState` → `resolved` closing set, it never applies it/,
+        /the session stages the `journal\.setState` → `resolved` transition, it never applies it/,
       );
     });
   });

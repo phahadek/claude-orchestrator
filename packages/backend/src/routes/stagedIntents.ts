@@ -2067,6 +2067,45 @@ function generateDesignClosingSynthesisAccount(sessionId: string): {
  * task.updateBody not scoped to a design session's own bound task (e.g. a
  * groom/ops session's unrelated task.updateBody use).
  */
+/**
+ * Thrown at stage time when a session-originated `task.setStatus` targets
+ * Done — Done is set by the orchestrator on the session's natural terminal,
+ * never proposed by a session (groom, design, or ops alike). Refusing here,
+ * before the row is ever inserted, keeps a session's own illegitimate
+ * proposal from leaving a permanent `rejected` row that the planning-session
+ * closure guard (`intents.some((i) => i.state === 'rejected')`) would then
+ * treat as a blocker forever.
+ */
+export class SessionStagedDoneError extends Error {
+  constructor(taskId: string) {
+    super(
+      `[stagedIntents] "task.setStatus" -> Done for task "${taskId}" is refused: Done is set by the ` +
+        "orchestrator on the session's natural terminal, and is never a session's to propose — this " +
+        'applies to every planning session (groom, design, or ops).',
+    );
+    this.name = 'SessionStagedDoneError';
+  }
+}
+
+/**
+ * Stage-time twin of TaskWriteCommands's apply-time transition guard
+ * (VALID_TRANSITIONS['In Progress'] has no Done): rejects a session-staged
+ * `task.setStatus` -> Done before it ever becomes a `staged` row, so it
+ * cannot later be refused-and-rejected and poison the closure guard. Gated on
+ * the staging intent carrying a sessionId (a session-originated write) — a
+ * human-staged task.setStatus (no sessionId) is unaffected.
+ */
+function assertNotSessionStagedDone(
+  kind: string,
+  payload: unknown,
+  sessionId: string | null | undefined,
+): void {
+  if (kind !== 'task.setStatus' || !sessionId) return;
+  const p = payload as Partial<SetStatusPayload> | null;
+  if (p?.status !== 'Done') return;
+  throw new SessionStagedDoneError(p.taskId ?? 'unknown');
+}
+
 function applyDesignClosingSynthesisGeneration(
   kind: string,
   payload: unknown,
@@ -2131,6 +2170,7 @@ export function stageIntent(
   }
 
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
+  assertNotSessionStagedDone(kind, payload, sessionId);
   assertCompletenessApproval(kind, sessionId);
   assertExpectedTerminalKinds(kind, payload, sessionId);
   assertTaskCreateGrouped(kind, sessionId, groupId);
