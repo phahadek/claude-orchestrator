@@ -79,7 +79,10 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
   'POST /api/update/check': { audience: 'operator', reason: 'update banner' },
   'POST /api/update/dismiss': { audience: 'operator', reason: 'update banner' },
   'POST /api/update/install': { audience: 'operator', reason: 'update banner' },
-  'PUT /api/update/channel': { audience: 'operator', reason: 'update channel setting' },
+  'PUT /api/update/channel': {
+    audience: 'operator',
+    reason: 'update channel setting',
+  },
 
   // -- design.ts -----------------------------------------------------------
   'POST /api/design/:taskId/completeness-disposition': {
@@ -96,19 +99,34 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'session',
     reason: "called by each project's /deploy playbook, not a UI action",
   },
-  'POST /api/deploy/launch': { audience: 'operator', reason: 'deploy launch button' },
+  'POST /api/deploy/launch': {
+    audience: 'operator',
+    reason: 'deploy launch button',
+  },
 
   // -- setup.ts ------------------------------------------------------------
-  'POST /api/setup/validate': { audience: 'operator', reason: 'first-run setup wizard' },
-  'POST /api/setup/import': { audience: 'operator', reason: 'first-run setup wizard' },
+  'POST /api/setup/validate': {
+    audience: 'operator',
+    reason: 'first-run setup wizard',
+  },
+  'POST /api/setup/import': {
+    audience: 'operator',
+    reason: 'first-run setup wizard',
+  },
   'POST /api/setup/save-credentials': {
     audience: 'operator',
     reason: 'first-run setup wizard',
   },
-  'POST /api/setup/complete': { audience: 'operator', reason: 'first-run setup wizard' },
+  'POST /api/setup/complete': {
+    audience: 'operator',
+    reason: 'first-run setup wizard',
+  },
 
   // -- prs.ts ----------------------------------------------------------------
-  'POST /api/prs/:prNumber/review': { audience: 'operator', reason: 'PR panel review action' },
+  'POST /api/prs/:prNumber/review': {
+    audience: 'operator',
+    reason: 'PR panel review action',
+  },
   'POST /api/prs/:owner/:repoName/:prNumber/merge': {
     audience: 'operator',
     reason: 'PR panel merge action',
@@ -121,7 +139,10 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: 'PR panel approve action',
   },
-  'DELETE /api/prs/:prNumber': { audience: 'operator', reason: 'PR panel remove action' },
+  'DELETE /api/prs/:prNumber': {
+    audience: 'operator',
+    reason: 'PR panel remove action',
+  },
   'POST /api/prs/:owner/:repoName/:prNumber/fix-conflicts': {
     audience: 'operator',
     reason: 'PR panel fix-conflicts action',
@@ -143,7 +164,10 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
   },
 
   // -- tasks.ts --------------------------------------------------------------
-  'POST /api/tasks/refresh': { audience: 'operator', reason: 'task board refresh action' },
+  'POST /api/tasks/refresh': {
+    audience: 'operator',
+    reason: 'task board refresh action',
+  },
   'POST /api/tasks/:taskId/unblock': {
     audience: 'operator',
     reason: 'task card unblock action',
@@ -152,7 +176,10 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'operator',
     reason: 'task card assign-repo action',
   },
-  'POST /api/tasks/move-preview': { audience: 'operator', reason: 'task move dialog' },
+  'POST /api/tasks/move-preview': {
+    audience: 'operator',
+    reason: 'task move dialog',
+  },
   'POST /api/tasks/:taskId/recover': {
     audience: 'operator',
     reason: 'task card recover action',
@@ -169,9 +196,18 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     reason:
       'manual gate-runnability reconcile trigger, issued directly by an ops session, no UI button',
   },
-  'POST /api/gate/items/:id/events': { audience: 'operator', reason: 'gate item disposition' },
-  'POST /api/gate/items/:id/approve': { audience: 'operator', reason: 'gate item disposition' },
-  'POST /api/gate/items/:id/reopen': { audience: 'operator', reason: 'gate item disposition' },
+  'POST /api/gate/items/:id/events': {
+    audience: 'operator',
+    reason: 'gate item disposition',
+  },
+  'POST /api/gate/items/:id/approve': {
+    audience: 'operator',
+    reason: 'gate item disposition',
+  },
+  'POST /api/gate/items/:id/reopen': {
+    audience: 'operator',
+    reason: 'gate item disposition',
+  },
   'POST /api/gate/items/:id/classification': {
     audience: 'operator',
     reason: 'gate item reclassify',
@@ -184,10 +220,16 @@ export const ROUTE_AUDIENCE: Record<string, RouteAudienceEntry> = {
     audience: 'tooling',
     reason: 'called by packages/backend/scripts/gate-state-client.mjs',
   },
-  'POST /api/gate/verify-launch': { audience: 'operator', reason: 'gate verify-session launch' },
+  'POST /api/gate/verify-launch': {
+    audience: 'operator',
+    reason: 'gate verify-session launch',
+  },
 
   // -- seedState.ts --------------------------------------------------------
-  'POST /api/seed/items/:id/events': { audience: 'operator', reason: 'seed item disposition' },
+  'POST /api/seed/items/:id/events': {
+    audience: 'operator',
+    reason: 'seed item disposition',
+  },
   'POST /api/seed/backfill': {
     audience: 'tooling',
     reason: 'Remote-Control tooling (seed-state-client.mjs)',
@@ -277,7 +319,9 @@ export const ROUTE_FILE_MOUNT_PREFIX: Record<string, string> = {
  */
 export function normalizeRoutePath(rawPath: string): string {
   const withoutQuery = rawPath.split('?')[0];
-  const segments = withoutQuery.split('/').filter((segment) => segment.length > 0);
+  const segments = withoutQuery
+    .split('/')
+    .filter((segment) => segment.length > 0);
   const normalized = segments.map((segment) => {
     if (segment.startsWith(':')) return '*';
     if (/^\$\{[^}]*\}$/.test(segment)) return '*';
@@ -288,5 +332,7 @@ export function normalizeRoutePath(rawPath: string): string {
 
 /** Joins a router mount prefix and a router-declared path into one full path. */
 export function joinMountPath(mountPrefix: string, routePath: string): string {
-  return `${mountPrefix}/${routePath}`.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+  return (
+    `${mountPrefix}/${routePath}`.replace(/\/+/g, '/').replace(/\/$/, '') || '/'
+  );
 }

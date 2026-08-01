@@ -31,7 +31,11 @@ interface DiscoveredRoute {
 function discoverBackendRoutes(): DiscoveredRoute[] {
   const files = fs
     .readdirSync(ROUTES_DIR)
-    .filter((f) => f.endsWith('.ts') && !fs.statSync(path.join(ROUTES_DIR, f)).isDirectory());
+    .filter(
+      (f) =>
+        f.endsWith('.ts') &&
+        !fs.statSync(path.join(ROUTES_DIR, f)).isDirectory(),
+    );
 
   const routes: DiscoveredRoute[] = [];
   for (const file of files) {
@@ -68,7 +72,10 @@ function collectFrontendApiPaths(): string[] {
         walk(full);
         continue;
       }
-      if (!/\.(ts|tsx)$/.test(entry.name) || /\.test\.(ts|tsx)$/.test(entry.name)) {
+      if (
+        !/\.(ts|tsx)$/.test(entry.name) ||
+        /\.test\.(ts|tsx)$/.test(entry.name)
+      ) {
         continue;
       }
       const content = fs.readFileSync(full, 'utf8');
@@ -116,7 +123,9 @@ describe('routeAudience registry', () => {
   it('does not require a frontend binding for session/tooling routes', () => {
     const sessionOrTooling = backendRoutes.filter((r) => {
       const entry = ROUTE_AUDIENCE[`${r.verb} ${r.fullPath}`];
-      return entry && (entry.audience === 'session' || entry.audience === 'tooling');
+      return (
+        entry && (entry.audience === 'session' || entry.audience === 'tooling')
+      );
     });
     // These routes are legitimately unbound in the frontend; presence here
     // (rather than throwing during discovery) is the assertion.
@@ -124,7 +133,8 @@ describe('routeAudience registry', () => {
   });
 
   it('records the two known-gap routes with their fix tasks', () => {
-    const opsJournalEntry = ROUTE_AUDIENCE['POST /api/ops-journal/:taskId/state'];
+    const opsJournalEntry =
+      ROUTE_AUDIENCE['POST /api/ops-journal/:taskId/state'];
     expect(opsJournalEntry?.audience).toBe('known-gap');
     expect(opsJournalEntry?.fixTask).toBeTruthy();
 
@@ -149,13 +159,18 @@ describe('normalizeRoutePath / isBoundInFrontend', () => {
   it('treats :param and ${...} as equivalent wildcards', () => {
     const backendPath = '/api/gate/items/:id/approve';
     const frontendCall = '/api/gate/items/${encodeURIComponent(id)}/approve';
-    expect(normalizeRoutePath(backendPath)).toBe(normalizeRoutePath(frontendCall));
+    expect(normalizeRoutePath(backendPath)).toBe(
+      normalizeRoutePath(frontendCall),
+    );
     expect(isBoundInFrontend(backendPath, [frontendCall])).toBe(true);
   });
 
   it('compares exactly, not by prefix — an unbound route beneath a referenced base path stays unbound', () => {
-    const referencedBasePath = '/api/staged-intents/group/${encodeURIComponent(groupId)}';
+    const referencedBasePath =
+      '/api/staged-intents/group/${encodeURIComponent(groupId)}';
     const unboundSiblingRoute = '/api/staged-intents/group/:groupId/recover';
-    expect(isBoundInFrontend(unboundSiblingRoute, [referencedBasePath])).toBe(false);
+    expect(isBoundInFrontend(unboundSiblingRoute, [referencedBasePath])).toBe(
+      false,
+    );
   });
 });
