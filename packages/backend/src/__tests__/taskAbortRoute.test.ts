@@ -49,7 +49,9 @@ async function fakeKill(sessionId: string): Promise<void> {
 function makeApp(withSessionManager = true) {
   const app = express();
   app.use(express.json());
-  const sessionManager = withSessionManager ? { kill: vi.fn(fakeKill) } : undefined;
+  const sessionManager = withSessionManager
+    ? { kill: vi.fn(fakeKill) }
+    : undefined;
   app.use('/api', createTaskAbortRouter(sessionManager));
   return { app, sessionManager };
 }
