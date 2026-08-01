@@ -62,6 +62,7 @@ import {
   clearStagedIntentGroup,
   getTaskCache,
   getSession,
+  hasDecisionPickOneForTask,
   updateCompletenessDispositionApproval,
   deleteCompletenessDisposition,
   isSessionComplete,
@@ -1852,6 +1853,58 @@ function assertCompletenessApproval(
 }
 
 /**
+ * Thrown at stage time when a design session attempts to stage
+ * completeness.disposition before its bound task has a single decision.pickOne
+ * to run the critic against — the open half of the …3012260f ordering
+ * invariant (see COMPLETENESS_GATED_KINDS's own doc comment for the other,
+ * already-enforced half). Names the precondition and tells the session what
+ * to do instead, mirroring CompletenessApprovalRequiredError's phrasing.
+ */
+class CompletenessRequiresDecisionError extends Error {
+  constructor(taskId: string) {
+    super(
+      `[stagedIntents] "completeness.disposition" for design task "${taskId}" is blocked: no ` +
+        'decision.pickOne has been staged for this task yet — surface the open questions to the ' +
+        'operator as decision.pickOne intents first, then run the completeness critic against the ' +
+        'locked decisions.',
+    );
+    this.name = 'CompletenessRequiresDecisionError';
+  }
+}
+
+/**
+ * Stage-time enforcement of the other half of the ordering invariant
+ * assertCompletenessApproval enforces: a dispatched design session cannot
+ * stage completeness.disposition for its own bound task until at least one
+ * decision.pickOne exists for that task, in any state but withdrawn or
+ * superseded (see hasDecisionPickOneForTask). Scoped by *task*, not by the
+ * staging session's own id, so a design session resumed or re-dispatched onto
+ * a task whose decisions were locked by an earlier session is not blocked —
+ * only a task with zero decisions ever staged against it, by anyone, trips
+ * this. Scoped the same way assertCompletenessApproval scopes itself: a
+ * dispatched session bound to a task (`sessions.task_id`) whose session_type
+ * is `design`; a human-staged intent with no originating session, or any
+ * non-design session, is not checked here.
+ */
+function assertCompletenessRequiresDecision(
+  kind: string,
+  sessionId: string | null | undefined,
+): void {
+  if (kind !== 'completeness.disposition' || !sessionId) return;
+  const session = getSession(sessionId);
+  if (!session?.task_id || session.session_type !== 'design') return;
+  // Raw, not normalizeTaskId'd — hasDecisionPickOneForTask joins against
+  // other sessions' own raw sessions.task_id column and hyphen-strips both
+  // sides (getTerminalSessionsForTask's pattern), so the lookup side must
+  // stay in that same raw form for the comparison to line up.
+  if (!hasDecisionPickOneForTask(session.task_id)) {
+    throw new CompletenessRequiresDecisionError(
+      normalizeTaskId(session.task_id),
+    );
+  }
+}
+
+/**
  * The two terminal-artifact kinds a design session's completeness approval
  * unblocks — deliberately excludes `task.create` from COMPLETENESS_GATED_KINDS:
  * a follow-on task set can already exist before the disposition that gates it
@@ -2200,6 +2253,7 @@ export function stageIntent(
   assertSessionTaskBinding(kind, payload, sessionId, groupId);
   assertNotSessionStagedDone(kind, payload, sessionId);
   assertCompletenessApproval(kind, sessionId);
+  assertCompletenessRequiresDecision(kind, sessionId);
   assertExpectedTerminalKinds(kind, payload, sessionId);
   assertTaskCreateGrouped(kind, sessionId, groupId);
 

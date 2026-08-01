@@ -5589,6 +5589,7 @@ let _stmtUpdateStagedIntentState: Database.Statement | null = null;
 let _stmtHasStagedIntentForTask: Database.Statement | null = null;
 let _stmtHasActiveCapabilityRequestForSession: Database.Statement | null = null;
 let _stmtHasPendingDecisionForTask: Database.Statement | null = null;
+let _stmtHasDecisionPickOneForTask: Database.Statement | null = null;
 
 export function insertStagedIntent(row: StagedIntentRow): void {
   _stmtInsertStagedIntent ??= db.prepare<StagedIntentRow>(`
@@ -5629,6 +5630,35 @@ export function hasStagedIntentForTask(taskId: string): boolean {
     `SELECT 1 FROM staged_intent WHERE task_id = @task_id LIMIT 1`,
   );
   return _stmtHasStagedIntentForTask.get({ task_id: taskId }) !== undefined;
+}
+
+/**
+ * True if this task has at least one decision.pickOne intent, staged by any
+ * session, in a non-withdrawn/non-superseded state. decision.pickOne carries
+ * no taskId of its own the way grouped kinds do (extractTaskId returns null
+ * for it — see stagedIntents.ts's assertCompletenessApproval doc comment), so
+ * this joins staged_intent to sessions on session_id and scopes by the
+ * session's own bound task_id instead — normalized the same way
+ * getTerminalSessionsForTask normalizes, so a hyphenated/bare id mismatch
+ * never hides a real predecessor decision. Scoped to the *task*, not the
+ * staging session, so a resumed or re-dispatched design session sees
+ * decisions an earlier session on the same task already staged or had
+ * answered.
+ */
+export function hasDecisionPickOneForTask(taskId: string): boolean {
+  _stmtHasDecisionPickOneForTask ??= db.prepare<{ task_id: string }>(
+    `SELECT 1 FROM staged_intent si
+     JOIN sessions s ON s.session_id = si.session_id
+     WHERE si.kind = 'decision.pickOne'
+       AND si.state NOT IN ('withdrawn', 'superseded')
+       AND REPLACE(COALESCE(s.task_id, ''), '-', '') = @task_id
+     LIMIT 1`,
+  );
+  return (
+    _stmtHasDecisionPickOneForTask.get({
+      task_id: taskId.replace(/-/g, ''),
+    }) !== undefined
+  );
 }
 
 /**
