@@ -360,7 +360,10 @@ export class OpsSessionLauncher {
           data: deriveOpsDigestSlice(opsContext, task.id, journalEntry),
         };
       } else {
-        return undefined;
+        throw new Error(
+          `no injected-procedure branch for planning session type "${sessionType}" ` +
+            `(task ${task.id}) — refusing to dispatch a planning session with no procedure`,
+        );
       }
       const resolvedTitle = digest.data.task.title;
       const content = assemblePlanningProcedure({

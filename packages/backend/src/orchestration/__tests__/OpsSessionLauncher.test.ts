@@ -613,6 +613,56 @@ describe('OpsSessionLauncher — injected planning procedure', () => {
     );
   });
 
+  it('buildInjectedProcedure throws (rather than resolving undefined) for a planning session type with no digest branch', async () => {
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = { id: 'task-1', title: 'Docs me', url: '', blockingDepIds: [] };
+
+    await expect(
+      (
+        launcher as unknown as {
+          buildInjectedProcedure: (
+            projectId: string,
+            milestoneId: string,
+            sessionType: string,
+            opsContext: undefined,
+            task: typeof task,
+            taskUrl: string,
+          ) => Promise<unknown>;
+        }
+      ).buildInjectedProcedure(
+        'proj-1',
+        'milestone-1',
+        'docs',
+        undefined,
+        task,
+        '',
+      ),
+    ).rejects.toThrow(/no injected-procedure branch for planning session type "docs" \(task task-1\)/);
+  });
+
+  it('aborts before creating a session for a planning session type with no injected-procedure branch (docs), naming both the sessionType and the task id in the failure reason', async () => {
+    const launcher = new OpsSessionLauncher(sessionManager as never);
+    const task = { id: 'task-1', title: 'Docs me', url: '', blockingDepIds: [] };
+
+    const result = await launcher.launchSelected({
+      projectId: 'proj-1',
+      projectContextUrl: 'https://www.notion.so/context',
+      milestoneId: 'milestone-1',
+      sessionType: 'docs',
+      tasks: [task],
+    });
+
+    expect(start).not.toHaveBeenCalled();
+    expect(result.launched).toEqual([]);
+    expect(result.failed).toEqual([
+      {
+        taskId: 'task-1',
+        reason: expect.stringContaining('docs'),
+      },
+    ]);
+    expect(result.failed[0].reason).toContain('task-1');
+  });
+
   it('refuses a groom dispatch (no session launched) when the loader reports a non-Notion task source, with a reason distinct from a worklist-miss failure', async () => {
     const { loadGroomContext, GroomTaskSourceUnsupportedError } =
       await import('../../groom/groomLoad.js');
