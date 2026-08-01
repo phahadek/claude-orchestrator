@@ -436,11 +436,16 @@ export class DispatchTriggerEvaluator {
     }
 
     const entry = opsContext.worklist.executable.find(
-      (t) => t.id === candidate.task.id,
+      (t) => normalizeBoardId(t.id) === normalizeBoardId(candidate.task.id),
     );
     // Not in the live executable worklist (status/dep-gate changed since the
     // cached-board scan) — skip this tick rather than force a stale dispatch.
-    if (!entry) return false;
+    if (!entry) {
+      logger.warn(
+        `[DispatchTriggerEvaluator] ops candidate task ${candidate.task.id} not found in executable worklist for milestone ${milestone.id} after normalization — skipping this tick`,
+      );
+      return false;
+    }
 
     const result = await this.launcher.launchSelected({
       projectId: project.id,
