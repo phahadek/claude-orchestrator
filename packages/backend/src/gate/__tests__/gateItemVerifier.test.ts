@@ -429,6 +429,25 @@ describe('SessionGateItemVerifier — archives its dispatched session once the d
     expect(sessionManager.archiveAndEndSession).toHaveBeenCalledWith('sess-1');
   });
 
+  it('sets dispatchFailed:true and preserves reason/error evidence when sessionManager.start() rejects', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(sessionManager.start).mockRejectedValue(
+      new Error('Max concurrent planning sessions (20) reached'),
+    );
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const result = await verifier.verify(item);
+
+    expect(result).toMatchObject({
+      disposition: 'needs-setup',
+      dispatchFailed: true,
+      evidence: {
+        reason: 'failed to dispatch verification session',
+        error: 'Max concurrent planning sessions (20) reached',
+      },
+    });
+  });
+
   it('names the session "Gate verify: <item text>", unaffected by the groom/design/ops planning-session naming scheme', async () => {
     const sessionManager = makeSessionManager();
     vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);

@@ -879,6 +879,7 @@ export class SessionGateItemVerifier implements GateItemVerifier {
       this.sessionManager.off('gate_verify_disposition', capture);
       return {
         disposition: 'needs-setup',
+        dispatchFailed: true,
         evidence: {
           reason: 'failed to dispatch verification session',
           error: err instanceof Error ? err.message : String(err),
