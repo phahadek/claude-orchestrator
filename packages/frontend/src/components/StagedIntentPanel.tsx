@@ -832,6 +832,10 @@ interface GateVerifyPayload {
 }
 
 interface GateVerifyEvidence {
+  expected?: unknown;
+  found?: unknown;
+  query?: unknown;
+  source?: unknown;
   basis?: unknown;
   summary?: unknown;
   trace?: unknown;
@@ -840,6 +844,10 @@ interface GateVerifyEvidence {
 }
 
 const GATE_VERIFY_EVIDENCE_KNOWN_KEYS = new Set([
+  'expected',
+  'found',
+  'query',
+  'source',
   'basis',
   'summary',
   'trace',
@@ -906,6 +914,18 @@ function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
         renderFallback(payload.evidence)
       ) : (
         <>
+          {typeof evidence?.expected === 'string' && (
+            <p>Expected: {evidence.expected}</p>
+          )}
+          {typeof evidence?.found === 'string' && (
+            <p>Found: {evidence.found}</p>
+          )}
+          {typeof evidence?.query === 'string' && (
+            <p>Query: {evidence.query}</p>
+          )}
+          {typeof evidence?.source === 'string' && (
+            <p>Source: {evidence.source}</p>
+          )}
           {typeof evidence?.basis === 'string' && (
             <p>Basis: {evidence.basis}</p>
           )}

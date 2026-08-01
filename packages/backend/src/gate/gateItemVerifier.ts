@@ -197,15 +197,23 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'session_events, live DB/API state, an observed runtime occurrence). ' +
       'If the strongest evidence you found is "the source code looks like ' +
       'it does X", that is not a pass — report needs-setup and explain ' +
-      'what operational trace is missing. Set `evidence.basis` to ' +
-      '"operational" when your pass is backed by such a trace, or ' +
-      '"source" when you only read source code. Also set ' +
-      '`evidence.explanation` to a short prose paragraph stating what you ' +
-      'found and why it supports the disposition — this is the field the ' +
-      'operator reviewing your report on the decision surface actually ' +
-      'reads; an invented key of your own choosing (e.g. `conclusion`, ' +
-      '`summary`, `finding`) will not render there. There is no backend ' +
-      'heuristic re-checking any of this.',
+      'what operational trace is missing.',
+    '',
+    'Report your evidence as three required one-line fields — no free-' +
+      'prose paragraph, no invented key of your own choosing (e.g. ' +
+      '`conclusion`, `summary`, `basis`, `explanation`): `expected` (the ' +
+      'behavior this item asserts), `found` (what the operational record ' +
+      'actually shows, or that nothing was found), and `query` (the ' +
+      'operational read you actually ran — tool + table/filter, e.g. ' +
+      '"auditLog.query projectId=X action=Y"). `query` names the ' +
+      'mechanism, not decoration: if all you did was grep source, you have ' +
+      'no operational read to name there truthfully, which is itself a ' +
+      'sign this should be `needs-setup`, not `pass`. A fourth field, ' +
+      '`source` (a file:line reference), is admissible only when ' +
+      '`disposition` is `fail`, to cite where the grounded error traces to ' +
+      '— it is rejected by the tool on `pass` and `needs-setup` reports. ' +
+      'These fields are the entire report; the operator reads exactly ' +
+      '`expected` and `found` on the decision surface.',
     '',
     ...(isHumanObservation
       ? [
@@ -272,7 +280,13 @@ export function buildGateVerifyProcedure(item: GateItem): string {
       'on structural unverifiability:',
     '',
     '```json',
-    `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"basis": "operational"|"source", "explanation": "...", "...": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,
+    `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"expected": "...", "found": "...", "query": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,
+    '```',
+    '',
+    'On a `fail`, `evidence` may also carry `source` (admissible only on fail):',
+    '',
+    '```json',
+    '{"expected": "...", "found": "...", "query": "...", "source": "path/to/file.ts:123"}',
     '```',
   ].join('\n');
 }

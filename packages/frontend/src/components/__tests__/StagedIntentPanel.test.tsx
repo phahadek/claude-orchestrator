@@ -687,6 +687,41 @@ describe('StagedIntentPanel', () => {
       ).toBeTruthy();
     });
 
+    it('renders expected/found/query as the leading lines for a new-shape report', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: {
+              gateItemId: 'gate-6',
+              disposition: 'pass',
+              evidence: {
+                expected: 'The endpoint records an audit_log row on success.',
+                found: 'audit_log shows one matching row from the last run.',
+                query: 'auditLog.query projectId=proj-1 action=widget_created',
+              },
+            },
+          })}
+        />,
+      );
+
+      expect(
+        screen.getByText(
+          /Expected: The endpoint records an audit_log row on success\./,
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(
+          /Found: audit_log shows one matching row from the last run\./,
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(
+          /Query: auditLog\.query projectId=proj-1 action=widget_created/,
+        ),
+      ).toBeTruthy();
+    });
+
     it('shows unrecognised extra evidence fields rather than dropping them', () => {
       render(
         <StagedIntentPanel

@@ -235,7 +235,7 @@ describe('SessionGateItemVerifier — leaves a reporting session live, archives 
     expect(recordFirstIndex).toBeLessThan(sourceOrientIndex);
   });
 
-  it('names a required evidence.explanation field alongside evidence.basis', async () => {
+  it('names the required expected/found/query evidence fields, fail-only source', async () => {
     const sessionManager = makeSessionManager();
     vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
 
@@ -253,16 +253,21 @@ describe('SessionGateItemVerifier — leaves a reporting session live, archives 
       dispatchOpts as { injectedProcedureContent: string }
     ).injectedProcedureContent;
 
-    // The prompting names evidence.explanation explicitly, alongside
-    // evidence.basis, as the field the operator's decision-surface card
-    // actually renders — not an invented key of the session's choosing.
-    expect(injectedProcedureContent).toMatch(/evidence\.explanation/);
-    expect(injectedProcedureContent).toMatch(/evidence\.basis/);
+    // The prompting names the terse contract fields, not a free-prose
+    // explanation/basis pair.
+    expect(injectedProcedureContent).toMatch(/`expected`/);
+    expect(injectedProcedureContent).toMatch(/`found`/);
+    expect(injectedProcedureContent).toMatch(/`query`/);
+    expect(injectedProcedureContent).not.toMatch(/evidence\.explanation/);
+    expect(injectedProcedureContent).not.toMatch(/prose paragraph stating/);
 
-    // The JSON report template mandates both keys.
+    // The JSON report template mandates the three keys.
     expect(injectedProcedureContent).toMatch(
-      /"basis":\s*"operational"\|"source",\s*"explanation":\s*"\.\.\."/,
+      /"expected":\s*"\.\.\.",\s*"found":\s*"\.\.\.",\s*"query":\s*"\.\.\."/,
     );
+
+    // source is shown as fail-only, not part of the base template.
+    expect(injectedProcedureContent).toMatch(/admissible only on fail/);
   });
 
   it('defines the operational record with distinct IS / IS-NOT sections', async () => {
