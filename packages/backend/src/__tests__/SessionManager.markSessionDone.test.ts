@@ -185,7 +185,7 @@ describe('markSessionDone in-flight guard', () => {
     expect(getStatus('sess-clean')).toBe('idle');
   });
 
-  it('a session_done_deferred_while_running row is visible via a project-scoped auditLog query for that session\'s project, even though the write site never supplied project_id', () => {
+  it("a session_done_deferred_while_running row is visible via a project-scoped auditLog query for that session's project, even though the write site never supplied project_id", () => {
     db.prepare(
       `INSERT INTO sessions (session_id, task_id, task_url, project_context_url,
          status, started_at, session_type, project_id)

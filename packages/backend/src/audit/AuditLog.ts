@@ -27,9 +27,10 @@ function resolveProjectId(
 ): string | null {
   if (actorId) {
     const row = db
-      .prepare<[string], { project_id: string | null }>(
-        `SELECT project_id FROM sessions WHERE session_id = ?`,
-      )
+      .prepare<
+        [string],
+        { project_id: string | null }
+      >(`SELECT project_id FROM sessions WHERE session_id = ?`)
       .get(actorId);
     if (row?.project_id) {
       return row.project_id;
@@ -37,9 +38,10 @@ function resolveProjectId(
   }
   if (taskId) {
     const row = db
-      .prepare<[string], { project_id: string }>(
-        `SELECT project_id FROM task_repo_assignments WHERE task_id = ?`,
-      )
+      .prepare<
+        [string],
+        { project_id: string }
+      >(`SELECT project_id FROM task_repo_assignments WHERE task_id = ?`)
       .get(taskId);
     if (row?.project_id) {
       return row.project_id;

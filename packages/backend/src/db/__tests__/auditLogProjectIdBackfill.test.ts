@@ -60,10 +60,7 @@ function insertAuditRow(
   );
 }
 
-function getProjectId(
-  db: Database.Database,
-  eventType: string,
-): string | null {
+function getProjectId(db: Database.Database, eventType: string): string | null {
   const row = db
     .prepare('SELECT project_id FROM audit_log WHERE event_type = ?')
     .get(eventType) as { project_id: string | null };

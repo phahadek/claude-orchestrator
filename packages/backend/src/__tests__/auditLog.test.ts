@@ -135,7 +135,9 @@ describe('recordEvent() project_id derivation', () => {
     ).not.toThrow();
 
     const row = db
-      .prepare(`SELECT project_id FROM audit_log WHERE event_type='process_boot'`)
+      .prepare(
+        `SELECT project_id FROM audit_log WHERE event_type='process_boot'`,
+      )
       .get() as { project_id: string | null } | undefined;
     expect(row?.project_id).toBeNull();
   });
