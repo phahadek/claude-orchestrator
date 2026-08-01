@@ -145,6 +145,10 @@ describe('POST /api/staged-intents/:id/reject', () => {
     expect(mockRecordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'staged_intent_disposition',
+        // An operator disposition is a human judgement call, unchanged by
+        // the auto-rejection provenance work — the audit trail must still
+        // attribute it to a human, never 'system'.
+        actor_type: 'human',
         payload: expect.objectContaining({
           intentId: intent.id,
           disposition: 'decline',
@@ -182,6 +186,20 @@ describe('POST /api/staged-intents/:id/reject', () => {
     // terminal rejected state, which is reserved for an operator decline.
     expect(row.state).toBe('needs_revision');
     expect(row.disposition_reason).toBe('please reconsider');
+
+    // An operator pushback is still a human judgement call — unchanged by
+    // the auto-rejection provenance work.
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'staged_intent_disposition',
+        actor_type: 'human',
+        payload: expect.objectContaining({
+          intentId: intent.id,
+          disposition: 'pushback',
+          reason: 'please reconsider',
+        }),
+      }),
+    );
 
     expect(planningOrchestrator.handleDisposition).toHaveBeenCalledWith(
       expect.objectContaining({

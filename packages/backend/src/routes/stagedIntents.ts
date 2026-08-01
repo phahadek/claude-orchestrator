@@ -65,6 +65,7 @@ import {
   updateCompletenessDispositionApproval,
   deleteCompletenessDisposition,
   isSessionComplete,
+  TERMINAL_SESSION_STATUSES,
 } from '../db/queries';
 import { parseTaskId, normalizeTaskId } from '../tasks/taskId';
 import { NotionApiError } from '../notion/types';
@@ -362,17 +363,43 @@ function assertOwningSessionComplete(
  * stopped" true by construction: while the session's turn is still in
  * flight, staging the request writes the row immediately (never delayed),
  * but every decision-surface lens filters it out until the session parks.
- * Every other intent kind is unaffected — visibility for those is unchanged.
+ *
+ * An auto-rejected member (see isAutoRejectedNeedsRevision) follows the same
+ * shape for the same reason: it is the staging session's to fix — by
+ * superseding it — for as long as that session still has a turn coming, so
+ * surfacing it to the operator mid-correction would only invite a duplicate,
+ * premature disposition. It is hidden while the owning session is still
+ * live (non-terminal) and surfaced once that session reaches a terminal
+ * state (done/error/killed) without correcting it — at which point no
+ * further session-side fix is coming and it is the operator's to decline.
+ * This is a listing-visibility rule only: getBlockedStagedIntent (the
+ * per-item reject route's lookup) is state-based, not visibility-based, so
+ * the operator can still individually decline a hidden auto-rejected member
+ * by id at any time — it never vanishes from that surface, only from the
+ * default listing.
+ *
+ * Every other intent kind/state is unaffected — visibility for those is
+ * unchanged.
  */
 function isVisibleOnDecisionSurface(
   row: StagedIntentRow,
   sessionManager: SessionManager | undefined,
 ): boolean {
-  if (row.kind !== 'session.requestCapability') return true;
-  if (!row.session_id) return true;
-  const turnInFlight =
-    sessionManager?.getLiveSession?.(row.session_id)?.hasActiveTurn() ?? false;
-  return isSessionComplete(row.session_id, turnInFlight);
+  if (row.kind === 'session.requestCapability') {
+    if (!row.session_id) return true;
+    const turnInFlight =
+      sessionManager?.getLiveSession?.(row.session_id)?.hasActiveTurn() ??
+      false;
+    return isSessionComplete(row.session_id, turnInFlight);
+  }
+  if (isAutoRejectedNeedsRevision(row)) {
+    if (!row.session_id) return true;
+    const owningSession = getSession(row.session_id);
+    return (
+      !owningSession || TERMINAL_SESSION_STATUSES.has(owningSession.status)
+    );
+  }
+  return true;
 }
 
 function hasGroupDependsOn(groupId: string, taskId: string): boolean {
@@ -700,6 +727,7 @@ export interface StagedIntent {
   annotation?:
     | { blocked: true; violations: ReadinessViolation[] }
     | { blocked: true; reasons: string[] }
+    | { autoRejected: true }
     | null;
   /**
    * Correlates multiple intents that form one structural-change unit (e.g. a
@@ -2719,6 +2747,7 @@ function transitionRejectedIntent(
   row: StagedIntentRow,
   outcome: StagedIntentRejectOutcome,
   reason: string,
+  provenance: 'auto' | 'operator' = 'operator',
 ): { intent: StagedIntent; row: StagedIntentRow } {
   // pushback (including an apply-time failure, which is always pushback) is
   // revisable — it lands in needs_revision, the same state the stage-time
@@ -2736,19 +2765,28 @@ function transitionRejectedIntent(
     row.state === 'pending_verification' && targetState === 'rejected'
       ? transitionStagedIntent(row.id, 'needs_revision')
       : row;
+  // Auto (validator-driven) rejections are tagged on the row itself, via the
+  // same annotation channel a stage-time block already uses, so the
+  // decision-surface visibility rule (see isVisibleOnDecisionSurface) can
+  // tell an auto-rejection apart from an operator pushback landing in the
+  // same needs_revision state — the operator path leaves annotation
+  // untouched (whatever it already was).
   const rejected = transitionStagedIntent(current.id, targetState, {
     dispositionReason: reason,
+    ...(provenance === 'auto'
+      ? { annotation: JSON.stringify({ autoRejected: true }) }
+      : {}),
   });
   const rejectedIntent = rowToApi(rejected);
   broadcastIntentChange(rejectedIntent);
 
   recordEvent({
     event_type: 'staged_intent_disposition',
-    actor_type: 'human',
+    actor_type: provenance === 'auto' ? 'system' : 'human',
     actor_id: null,
     project_id: rejectedIntent.projectId,
     task_id: row.task_id,
-    payload: { intentId: row.id, disposition: outcome, reason },
+    payload: { intentId: row.id, disposition: outcome, reason, provenance },
   });
 
   return { intent: rejectedIntent, row: rejected };
@@ -2954,17 +2992,21 @@ export function translateApplyError(
 
 /**
  * Apply-time twin of routeStageTimeBlock's redrive: an unexpected exception
- * from applyIntent (a provider failure the stage-time gates didn't catch) used
- * to reach the operator as a raw exception with the intent left dangling —
- * no route back to the session that staged it. This rejects the intent (so
- * it can never be silently re-applied — a corrected intent must be freshly
- * staged and freshly disposed by the operator, never auto-retried here) and
- * routes the translated failure to the originating session through the same
- * pushback path PlanningOrchestrator.handleDisposition already uses for an
- * operator pushback — reusing its enqueue-and-resume mechanics rather than
- * adding a parallel one. handleDisposition itself no-ops (logs only) when
- * the intent has no originating session or that session no longer exists; in
- * either case `redriven` comes back false so the caller still surfaces the
+ * from applyIntent — most commonly a TaskWriteCommands payload-validation
+ * failure the stage-time gates didn't catch, occasionally a genuine provider
+ * failure — used to reach the operator as a raw exception with the intent
+ * left dangling — no route back to the session that staged it. This rejects
+ * the intent (so it can never be silently re-applied — a corrected intent
+ * must be freshly staged and freshly disposed, never auto-retried here) with
+ * `provenance: 'auto'` — this is the session's mistake to fix, not an
+ * operator judgement call, so it is recorded and routed back as a system
+ * rejection rather than one attributed to the operator — and routes the
+ * translated failure to the originating session through the same pushback
+ * path PlanningOrchestrator.handleDisposition already uses for an operator
+ * pushback — reusing its enqueue-and-resume mechanics rather than adding a
+ * parallel one. handleDisposition itself no-ops (logs only) when the intent
+ * has no originating session or that session no longer exists; in either
+ * case `redriven` comes back false so the caller still surfaces the
  * translated error to the operator instead of treating the failure as
  * silently handled.
  */
@@ -2981,7 +3023,12 @@ async function routeApplyTimeFailure(
   // untouched, mirroring routeStageTimeBlock's own no-session bail-out.
   if (!row.session_id) return { reason, redriven: false };
 
-  const { row: rejected } = transitionRejectedIntent(row, 'pushback', reason);
+  const { row: rejected } = transitionRejectedIntent(
+    row,
+    'pushback',
+    reason,
+    'auto',
+  );
   broadcastIntentChange(rowToApi(rejected));
 
   const redriven = Boolean(getSession(row.session_id));
@@ -2990,6 +3037,7 @@ async function routeApplyTimeFailure(
       intent: rejected,
       disposition: 'pushback',
       reason,
+      provenance: 'auto',
     });
   }
   return { reason, redriven };
@@ -3254,10 +3302,23 @@ export interface GroupVerificationOutcome {
 function describeBlockedAnnotation(
   annotation: StagedIntent['annotation'],
 ): string | null {
-  if (!annotation?.blocked) return null;
+  if (!annotation || !('blocked' in annotation) || !annotation.blocked) {
+    return null;
+  }
   return 'violations' in annotation
     ? annotation.violations.map((v) => v.detail).join('; ')
     : annotation.reasons.join('; ');
+}
+
+/** True when this row was auto-rejected (a validator-driven pushback, tagged by transitionRejectedIntent's `provenance: 'auto'`) and is still sitting in needs_revision awaiting a session-side correction — as opposed to an operator pushback, which lands in the same state but carries no such tag. */
+function isAutoRejectedNeedsRevision(row: StagedIntentRow): boolean {
+  if (row.state !== 'needs_revision' || !row.annotation) return false;
+  try {
+    const annotation = JSON.parse(row.annotation) as { autoRejected?: unknown };
+    return annotation.autoRejected === true;
+  } catch {
+    return false;
+  }
 }
 
 function formatStageTimeBlockFeedback(

@@ -461,6 +461,60 @@ describe('PlanningOrchestrator.handleDisposition', () => {
     );
   });
 
+  it('an auto (validator-driven) pushback routes with a distinct source and message, naming the validation failure — not the [operator-disposition] label an operator pushback carries', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'needs_revision',
+    });
+    await orch.handleDisposition({
+      intent,
+      disposition: 'pushback',
+      reason:
+        '[TaskWriteCommands] invalid status transition for t-1: Backlog -> Ready',
+      provenance: 'auto',
+    });
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'validation-error',
+      expect.stringContaining('failed validation'),
+      { attemptTerminalResume: false },
+    );
+    expect(sm.enqueueFeedback).not.toHaveBeenCalledWith(
+      'planning-session-1',
+      'operator-disposition',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('an operator pushback (provenance omitted, the default) is unchanged: routes as operator-disposition with the existing message wording', async () => {
+    const sm = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    const orch = new PlanningOrchestrator(sm as any);
+
+    const intent = makeIntent({
+      session_id: 'planning-session-1',
+      state: 'needs_revision',
+    });
+    await orch.handleDisposition({
+      intent,
+      disposition: 'pushback',
+      reason: 'please reconsider the split',
+    });
+
+    expect(sm.enqueueFeedback).toHaveBeenCalledWith(
+      'planning-session-1',
+      'operator-disposition',
+      `Staged intent ${intent.id} (${intent.kind}) was sent back for revision. Feedback: please reconsider the split`,
+      { attemptTerminalResume: false },
+    );
+  });
+
   it('resumes with a decline message carrying the reason, distinct from pushback', async () => {
     const sm = makeSessionManager();
     vi.mocked(getSession).mockReturnValue(makeSessionRow());
