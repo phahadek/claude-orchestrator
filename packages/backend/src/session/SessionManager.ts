@@ -2878,7 +2878,7 @@ export class SessionManager extends EventEmitter {
     projectDir: string,
   ): void {
     this.sessions.delete(sessionId);
-    revokeStageCredential(sessionId);
+    revokeStageCredential(sessionId, 'session_teardown');
 
     // Chokepoint guard: never tear down an idle session's worktree.
     // The worktree IS the session state for idle sessions — uncommitted WIP must
@@ -4252,7 +4252,10 @@ export class SessionManager extends EventEmitter {
         continue;
       }
       this.evictDeadSessionEntry(sessionId);
-      revokeStageCredential(sessionId);
+      revokeStageCredential(
+        sessionId,
+        row ? `terminal_status:${row.status}` : 'missing_db_row',
+      );
       dropped++;
       logger.info(
         `[SessionManager] reconcileSessionsMap: dropped stale in-memory entry for session ${sessionId.slice(0, 8)} (${row ? `status=${row.status}` : 'missing DB row'})`,
