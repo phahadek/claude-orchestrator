@@ -17,9 +17,7 @@ vi.mock('../projects/ProjectService', () => ({
       id === 'proj-1'
         ? {
             id: 'proj-1',
-            milestones: [
-              { id: 'ms-13', name: 'M13', canonicalShortId: 'M13' },
-            ],
+            milestones: [{ id: 'ms-13', name: 'M13', canonicalShortId: 'M13' }],
           }
         : undefined,
   },
