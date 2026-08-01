@@ -83,6 +83,7 @@ import {
   isValidOpsTransition,
   ALLOWED_TRANSITIONS,
   type OpsState,
+  type OpsJournalEntry,
 } from '../ops/opsJournal';
 import { classifyReadyProposal } from '../tasks/deferralClassifier';
 import type { PlanningOrchestrator } from '../orchestration/PlanningOrchestrator';
@@ -2241,6 +2242,87 @@ export function stageIntent(
   return staged;
 }
 
+/** The state at which an ops_journal entry becomes an operator-reviewable
+ *  decision — the point both the HTTP route and the staged-intent apply path
+ *  mirror it into a staged_intent so it renders on the decision surface
+ *  (DecisionPanel reads staged_intent, not ops_journal). */
+export const STAGED_PROPOSAL_STATE: OpsState = 'staged-proposal';
+
+/** Best-effort short human-readable summary of a journal entry's finding for
+ *  the staged intent's `decisionProposal` — the payload itself carries the
+ *  full structured finding, this is just the panel headline. */
+function summarizeJournalDecision(entry: OpsJournalEntry): string {
+  const finding = entry.findingOrProposal;
+  if (typeof finding === 'string' && finding.trim()) return finding.trim();
+  if (finding && typeof finding === 'object') {
+    const candidate =
+      (finding as Record<string, unknown>).summary ??
+      (finding as Record<string, unknown>).proposal;
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return `ops_journal proposal for ${entry.taskId} — awaiting sign-off`;
+}
+
+/**
+ * Stage (or re-stage) the journal.setState decision for this entry so it
+ * shows up on the decision surface. Shared by both paths that can drive an
+ * ops_journal entry to staged-proposal — the direct HTTP write
+ * (routes/opsJournal.ts) and a dispatched session's staged journal.setState
+ * intent (applyIntent's 'journal.setState' case below) — so a staged-proposal
+ * reached either way produces exactly one operator-dispositionable decision.
+ * Idempotent: stageIntent keys journal.setState on taskId
+ * (findActiveStagedIntentForTask), so a second call for the same entry either
+ * no-ops (unchanged payload hash) or supersedes the prior mirror, never
+ * producing a second competing decision card.
+ */
+export function stageJournalDecision(
+  entry: OpsJournalEntry,
+  sessionId: string | null,
+): void {
+  stageIntent(
+    'journal.setState',
+    {
+      taskId: entry.taskId,
+      state: entry.state,
+      fields: {
+        disposition: entry.disposition,
+        findingOrProposal: entry.findingOrProposal,
+        evidence: entry.evidence,
+        resolution: entry.resolution,
+      },
+    },
+    entry.project,
+    null,
+    sessionId,
+    summarizeJournalDecision(entry),
+    null,
+    null,
+    entry.milestone,
+  );
+}
+
+/**
+ * Mirrors a committed journal.setState intent onto the decision surface when
+ * its apply transitioned the entry to staged-proposal — the staged-intent
+ * apply path's counterpart to the mirror in routes/opsJournal.ts's POST
+ * /api/ops-journal/:taskId/state handler. Must run only after `intent` has
+ * already transitioned out of 'staged'/'approved' (i.e. after
+ * transitionStagedIntent(intent.id, 'committed', ...) has returned):
+ * stageJournalDecision's dedup (findActiveStagedIntentForTask) matches on
+ * (project, kind, taskId) among *active* rows only, and this very intent — if
+ * still active — would otherwise be the row it collides with.
+ */
+function mirrorJournalDecisionIfStagedProposal(intent: StagedIntent): void {
+  if (intent.kind !== 'journal.setState') return;
+  const payload = intent.payload as JournalSetStatePayload;
+  const updated = getOpsJournalEntry(payload.taskId);
+  if (updated && updated.state === STAGED_PROPOSAL_STATE) {
+    stageJournalDecision(updated, intent.sessionId ?? null);
+  }
+}
+
 /** States a session may still withdraw from — mirrors ACTIVE_STATES below (declared later in this file). */
 const WITHDRAWABLE_STATES: StagedIntentState[] = ['staged', 'approved'];
 
@@ -3687,6 +3769,7 @@ async function commitGroupIntents(
         annotation: null,
       });
       broadcastIntentChange(rowToApi(committedRow));
+      mirrorJournalDecisionIfStagedProposal(intent);
       await planningOrchestrator?.handleDisposition({
         intent: committedRow,
         disposition: 'approve',
@@ -4020,6 +4103,7 @@ export function createStagedIntentsRouter(
           annotation: null,
         });
         broadcastIntentChange(rowToApi(committed));
+        mirrorJournalDecisionIfStagedProposal(intent);
         await planningOrchestrator?.handleDisposition({
           intent: committed,
           disposition: 'approve',

@@ -6,65 +6,9 @@ import {
   setEntryState,
   isValidOpsTransition,
   type OpsState,
-  type OpsJournalEntry,
 } from '../ops/opsJournal';
 import { requireDeviceAuth } from '../auth/DeviceAuth';
-import { stageIntent } from './stagedIntents';
-
-/** The state at which an ops_journal entry becomes an operator-reviewable
- *  decision — the point this route also mirrors it into a staged_intent so
- *  it renders on the decision surface (DecisionPanel reads staged_intent,
- *  not ops_journal). */
-const STAGED_PROPOSAL_STATE: OpsState = 'staged-proposal';
-
-/** Best-effort short human-readable summary of a journal entry's finding for
- *  the staged intent's `decisionProposal` — the payload itself carries the
- *  full structured finding, this is just the panel headline. */
-function summarizeDecision(entry: OpsJournalEntry): string {
-  const finding = entry.findingOrProposal;
-  if (typeof finding === 'string' && finding.trim()) return finding.trim();
-  if (finding && typeof finding === 'object') {
-    const candidate =
-      (finding as Record<string, unknown>).summary ??
-      (finding as Record<string, unknown>).proposal;
-    if (typeof candidate === 'string' && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  return `ops_journal proposal for ${entry.taskId} — awaiting sign-off`;
-}
-
-/**
- * Stage (or re-stage) the journal.setState decision for this entry so it
- * shows up on the decision surface. Content-idempotent (stageIntent dedups
- * by payload hash), so a re-transition into staged-proposal with unchanged
- * fields is a no-op rather than a duplicate row.
- */
-function stageJournalDecision(
-  entry: OpsJournalEntry,
-  sessionId: string | null,
-): void {
-  stageIntent(
-    'journal.setState',
-    {
-      taskId: entry.taskId,
-      state: entry.state,
-      fields: {
-        disposition: entry.disposition,
-        findingOrProposal: entry.findingOrProposal,
-        evidence: entry.evidence,
-        resolution: entry.resolution,
-      },
-    },
-    entry.project,
-    null,
-    sessionId,
-    summarizeDecision(entry),
-    null,
-    null,
-    entry.milestone,
-  );
-}
+import { stageJournalDecision, STAGED_PROPOSAL_STATE } from './stagedIntents';
 
 /**
  * Read/operator-write surface for the Ops(N) staged-intent view: exposes
