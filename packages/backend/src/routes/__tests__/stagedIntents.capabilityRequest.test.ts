@@ -275,7 +275,8 @@ describe('session.requestCapability decision-surface kind', () => {
   });
 
   it('rejects a non-conforming capability shape at stage time, before any row is written', () => {
-    expect(() =>
+    let caught: unknown;
+    try {
       stageIntent(
         'session.requestCapability',
         {
@@ -286,8 +287,14 @@ describe('session.requestCapability decision-surface kind', () => {
         'proj-1',
         null,
         'sess-6',
-      ),
-    ).toThrow(/not a supported capability shape/);
+      );
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toMatch(/not a supported capability shape/);
+    expect((caught as Error).name).toBe('CapabilityRequestValidationError');
 
     const rows = db
       .prepare(
@@ -296,6 +303,38 @@ describe('session.requestCapability decision-surface kind', () => {
       .all();
     expect(rows).toHaveLength(0);
   });
+
+  it.each(['Edit', 'Write', 'NotebookEdit', 'MultiEdit'])(
+    'rejects a denylisted bare tool name "%s" as denied, not as an unsupported shape',
+    (capability) => {
+      let caught: unknown;
+      try {
+        stageIntent(
+          'session.requestCapability',
+          { capability, plan: 'edit a file directly', evidence: 'because' },
+          'proj-1',
+          null,
+          'sess-denied',
+        );
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).name).toBe('CapabilityRequestDeniedError');
+      expect((caught as Error).message).toMatch(/is denied/);
+      expect((caught as Error).message).not.toMatch(
+        /not a supported capability shape/,
+      );
+
+      const rows = db
+        .prepare(
+          "SELECT * FROM staged_intent WHERE kind = 'session.requestCapability'",
+        )
+        .all();
+      expect(rows).toHaveLength(0);
+    },
+  );
 
   it('stages a well-formed but isGrantable-denylisted capability normally — denylist enforcement stays at grant time, not stage time', () => {
     const intent = stageIntent(
@@ -343,5 +382,64 @@ describe('session.requestCapability decision-surface kind', () => {
     );
     expect(intent.state).toBe('staged');
     expect(intent.groupId).toBeNull();
+  });
+
+  it('marks a Bash(...) capability that confers file mutation on the staged intent', () => {
+    const intent = stageIntent(
+      'session.requestCapability',
+      {
+        capability: 'Bash(sed:*)',
+        plan: "Run: sed -i '/- name: Build/i - name: Test frontend' build.yml",
+        evidence: 'operator directed this session to edit the workflow',
+      },
+      'proj-1',
+      null,
+      'sess-10',
+    );
+    expect(intent.confersFileMutation).toBe(true);
+  });
+
+  it('does not mark a Bash(...) capability that does not confer file mutation', () => {
+    const intent = stageIntent(
+      'session.requestCapability',
+      {
+        capability: 'Bash(psql:*)',
+        plan: 'inspect prod row counts',
+        evidence: 'task asks for a row-count audit',
+      },
+      'proj-1',
+      null,
+      'sess-11',
+    );
+    expect(intent.confersFileMutation).toBe(false);
+  });
+
+  it('leaves the mark advisory — the intent still stages and remains approvable', async () => {
+    const sessionManager = makeSessionManager();
+    const app = makeApp(sessionManager);
+
+    const intent = stageIntent(
+      'session.requestCapability',
+      {
+        capability: 'Bash(tee:*)',
+        plan: 'write build output to a log file',
+        evidence: 'debugging a failing build',
+      },
+      'proj-1',
+      null,
+      'sess-12',
+    );
+    expect(intent.state).toBe('staged');
+    expect(intent.confersFileMutation).toBe(true);
+
+    const res = await supertest(app).post(
+      `/api/staged-intents/${intent.id}/approve`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('committed');
+    expect(sessionManager.grantCapability).toHaveBeenCalledWith(
+      'sess-12',
+      'Bash(tee:*)',
+    );
   });
 });

@@ -843,4 +843,45 @@ describe('StagedIntentPanel', () => {
       expect(screen.getByTestId('staged-intent-gate-verify')).toBeTruthy();
     });
   });
+
+  describe('session.requestCapability file-mutation advisory', () => {
+    it('renders the file-write advisory when confersFileMutation is true', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'session.requestCapability',
+            payload: {
+              capability: 'Bash(sed:*)',
+              plan: 'edit the workflow file in place',
+              evidence: 'operator directed this session to edit the file',
+            },
+            confersFileMutation: true,
+          })}
+        />,
+      );
+
+      expect(
+        screen.getByTestId('staged-intent-capability-file-mutation-warning'),
+      ).toBeTruthy();
+    });
+
+    it('does not render the advisory when confersFileMutation is false/undefined', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'session.requestCapability',
+            payload: {
+              capability: 'Bash(psql:*)',
+              plan: 'inspect prod row counts',
+              evidence: 'task asks for a row-count audit',
+            },
+          })}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId('staged-intent-capability-file-mutation-warning'),
+      ).toBeNull();
+    });
+  });
 });

@@ -370,6 +370,54 @@ export function isToolShapedCapability(capability: string): boolean {
 }
 
 /**
+ * Command names whose Bash(...) capability, once granted, lets a session
+ * overwrite or delete file content on disk — the same ground a bare `Edit`/
+ * `Write` request covers, just reached through a shell verb the denylist
+ * (GRANT_DENYLIST_PATTERNS above) does not spell against. Not a grantability
+ * check: this list feeds `bashCapabilityConfersFileMutation` only, which is
+ * advisory display, never `isGrantable`.
+ */
+const FILE_MUTATING_BASH_COMMANDS = [
+  'sed',
+  'perl',
+  'awk',
+  'tee',
+  'dd',
+  'truncate',
+  'cp',
+  'mv',
+  'rm',
+  'install',
+  'patch',
+  'tr',
+  'chmod',
+  'chown',
+  'ln',
+  'rsync',
+  'sponge',
+];
+
+/**
+ * True when a requested `Bash(...)` capability confers the ability to mutate
+ * file contents — the equivalence a denied `Edit`/`Write` request and a
+ * differently-spelled `Bash(...)` grant can share (e.g. `Bash(sed:*)` in
+ * place of a refused `Edit`). Purely advisory: it never feeds `isGrantable`
+ * and never blocks a grant, it only marks the staged intent so an approving
+ * operator can see that a "run this command" request is also a
+ * "write to any reachable file" request. Two signals: the command name (the
+ * first token inside the parens, before any `:*` prefix wildcard or literal
+ * argument) is a known file-mutating command, or the capability string
+ * itself embeds a shell redirect (`>`/`>>`) onto a file.
+ */
+export function bashCapabilityConfersFileMutation(capability: string): boolean {
+  if (!capability.startsWith('Bash(')) return false;
+  const inner = capability.slice('Bash('.length).replace(/\)$/, '');
+  if (inner.includes('>')) return true;
+  const command = inner.trim().split(/[\s:]/, 1)[0];
+  return FILE_MUTATING_BASH_COMMANDS.includes(command);
+}
+
+/**
  * The full allowlist a spawned session is granted. For code/review sessions
  * this is the base ALLOWED_TOOLS plus the per-project extras from
  * .claude-orchestrator.yml. Planning sessions (groom/design) get a dedicated,

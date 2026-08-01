@@ -626,6 +626,16 @@ function CapabilityRequestHeadline({ intent }: { intent: StagedIntent }) {
       <p>
         Requests capability: <code>{payload.capability}</code>
       </p>
+      {intent.confersFileMutation && (
+        <p
+          className={styles.fileMutationWarning}
+          data-testid="staged-intent-capability-file-mutation-warning"
+        >
+          This grants file-write capability — it can create, overwrite, or
+          delete any file this session can reach, the same ground a
+          structured Edit/Write request covers.
+        </p>
+      )}
       <p>Plan: {payload.plan}</p>
       <p>Evidence: {payload.evidence}</p>
     </div>

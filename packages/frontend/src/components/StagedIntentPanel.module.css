@@ -72,6 +72,14 @@
   padding-left: 8px;
 }
 
+.fileMutationWarning {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  border-left: 3px solid var(--ctp-yellow);
+  padding-left: 8px;
+}
+
 .skippedKindLabel {
   font-weight: 600;
   color: var(--text-muted);

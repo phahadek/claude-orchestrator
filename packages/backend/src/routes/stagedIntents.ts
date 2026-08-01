@@ -122,6 +122,7 @@ import {
   parseSessionEventsReadCapability,
   isSanctionedAutoApproveCapability,
   isGrantable,
+  bashCapabilityConfersFileMutation,
 } from '../session/orchestrator-config';
 import { runtimeSettings } from '../config';
 
@@ -795,6 +796,16 @@ export interface StagedIntent {
    * copy and the provenance badge's human-readable label.
    */
   groupKind: 'groom' | 'investigation' | 'other';
+  /**
+   * `session.requestCapability` only: true when the requested `Bash(...)`
+   * capability confers file mutation (see
+   * `bashCapabilityConfersFileMutation`) — surfaced so the operator
+   * dispositioning the request sees that a "run this command" grant is also
+   * a "write to any reachable file" grant, distinct from a denied `Edit`
+   * only by spelling. Advisory only: never blocks staging or approval.
+   * Undefined for every other kind and for a non-`Bash(...)` capability.
+   */
+  confersFileMutation?: boolean;
 }
 
 /**
@@ -829,10 +840,15 @@ function computeGroupKind(
 let stagedIntentSessionManager: SessionManager | undefined;
 
 function rowToApi(row: StagedIntentRow): StagedIntent {
+  const payload = JSON.parse(row.payload) as unknown;
+  const capability =
+    row.kind === 'session.requestCapability'
+      ? (payload as Partial<CapabilityRequestPayload> | null)?.capability
+      : undefined;
   return {
     id: row.id,
     kind: row.kind,
-    payload: JSON.parse(row.payload) as unknown,
+    payload,
     projectId: row.project_id,
     createdAt: row.created_at,
     sessionId: row.session_id,
@@ -860,6 +876,10 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
         )
       : null,
     groupKind: computeGroupKind(row.session_id),
+    confersFileMutation:
+      typeof capability === 'string'
+        ? bashCapabilityConfersFileMutation(capability)
+        : undefined,
   };
 }
 
@@ -1124,9 +1144,14 @@ function toArchUnitUpdateFields(
  * that ever actually widen a session's access. A
  * non-conforming string (e.g. "banana") is rejected here, before the row
  * ever reaches `staged`, rather than being durably granted and silently
- * never taking effect. This is distinct from and does not replace
- * `isGrantable`'s denylist check, which stays at grant/approval time for
- * well-formed-but-denylisted requests (e.g. `Write`).
+ * never taking effect. A shape-non-conforming string that is ALSO
+ * `isGrantable`-denylisted (e.g. `Edit`, which is bare — never tool-shaped —
+ * and matches `/^Edit$/i`) is rejected as `CapabilityRequestDeniedError`
+ * instead, below, so the session is told it is refused on policy grounds
+ * rather than told it misspelled the request. `isGrantable` otherwise stays
+ * a grant/approval-time check for well-formed-but-denylisted requests (e.g.
+ * `mcp__github__resolve_review_thread`, which is tool-shaped and so reaches
+ * `staged` normally — the denylist only blocks its eventual grant).
  */
 class CapabilityRequestValidationError extends Error {
   constructor(capability: string) {
@@ -1141,19 +1166,44 @@ class CapabilityRequestValidationError extends Error {
 }
 
 /**
+ * Sibling of CapabilityRequestValidationError for the case that error's own
+ * doc comment carves out: a `capability` string that fails the tool-shape
+ * check for the same reason a bare built-in tool name always will (`Edit`,
+ * `Write`, `NotebookEdit`, `MultiEdit` are never `Bash(...)`/`mcp__...`), but
+ * IS recognized by `isGrantable`'s denylist. Distinguished from
+ * CapabilityRequestValidationError by `.name` (and by class identity via
+ * `instanceof`) rather than by message text, so a caller can tell "this
+ * capability is denied by policy" apart from "this string isn't a supported
+ * capability shape at all" without parsing prose.
+ */
+class CapabilityRequestDeniedError extends Error {
+  constructor(public readonly capability: string) {
+    super(
+      `[stagedIntents] session.requestCapability rejected: "${capability}" is denied — ` +
+        'this capability can never be granted to a dispatched session. Stage the ' +
+        'underlying change as a task instead, or request a specific, narrower capability.',
+    );
+    this.name = 'CapabilityRequestDeniedError';
+  }
+}
+
+/**
  * Records a refused `session.requestCapability` so the demand it represents
  * — a session reaching for a capability the orchestrator does not offer — is
  * queryable instead of surviving only in the requesting session's own
- * transcript. `gate` distinguishes the two refusal sites that share this
- * event type: 'vocabulary' is validateCapabilityRequestPayload's stage-time
- * shape check below (a missing-tool demand signal), while 'denylist' is
+ * transcript. `gate` distinguishes the refusal sites that share this event
+ * type: 'vocabulary' is validateCapabilityRequestPayload's stage-time shape
+ * check below (a missing-tool demand signal), while 'denylist' covers both
+ * validateCapabilityRequestPayload's stage-time policy check (a
+ * shape-non-conforming AND denylisted request, e.g. `Write`) and
  * isGrantable's grant-time policy check in resumeCapabilityRequester (a
- * well-formed request denied on policy grounds, e.g. `Write`) — conflating
- * them would make the demand signal unreadable. `capability` is stored
- * exactly as received, unnormalized, so a malformed request and a
- * coherent-but-unsupported one both stay verbatim-recoverable. `projectId` is
- * required (never resolved after the fact) so the row is never dropped into
- * the unattributed rows that `auditLog.query`'s project scoping can't see.
+ * well-formed request denied on policy grounds at approval) — conflating
+ * 'vocabulary' with either would make the demand signal unreadable.
+ * `capability` is stored exactly as received, unnormalized, so a malformed
+ * request and a coherent-but-unsupported one both stay verbatim-recoverable.
+ * `projectId` is required (never resolved after the fact) so the row is
+ * never dropped into the unattributed rows that `auditLog.query`'s project
+ * scoping can't see.
  */
 function recordCapabilityRequestRefusal(
   capability: unknown,
@@ -1193,6 +1243,15 @@ function validateCapabilityRequestPayload(
     parseAuditLogReadCapability(capability) === null &&
     parseSessionEventsReadCapability(capability) === null
   ) {
+    if (!isGrantable(capability)) {
+      recordCapabilityRequestRefusal(
+        capability,
+        projectId,
+        sessionId,
+        'denylist',
+      );
+      throw new CapabilityRequestDeniedError(capability);
+    }
     recordCapabilityRequestRefusal(
       capability,
       projectId,
