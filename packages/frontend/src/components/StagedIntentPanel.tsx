@@ -877,7 +877,8 @@ function parseGateVerifyEvidence(evidence: unknown): GateVerifyEvidence | null {
 function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
   const payload = intent.payload as GateVerifyPayload;
   const evidence = parseGateVerifyEvidence(payload.evidence);
-  const trace = evidence && Array.isArray(evidence.trace) ? evidence.trace : null;
+  const trace =
+    evidence && Array.isArray(evidence.trace) ? evidence.trace : null;
   const extraEntries = evidence
     ? Object.entries(evidence).filter(
         ([key]) => !GATE_VERIFY_EVIDENCE_KNOWN_KEYS.has(key),
@@ -894,7 +895,9 @@ function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
         renderFallback(payload.evidence)
       ) : (
         <>
-          {typeof evidence?.basis === 'string' && <p>Basis: {evidence.basis}</p>}
+          {typeof evidence?.basis === 'string' && (
+            <p>Basis: {evidence.basis}</p>
+          )}
           {typeof evidence?.summary === 'string' && <p>{evidence.summary}</p>}
           {trace && trace.length > 0 && (
             <>
@@ -909,9 +912,7 @@ function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
           {typeof evidence?.note === 'string' && <p>Note: {evidence.note}</p>}
           {extraEntries.length > 0 && (
             <details className={styles.expandDetail}>
-              <summary className={styles.expandSummary}>
-                Other evidence
-              </summary>
+              <summary className={styles.expandSummary}>Other evidence</summary>
               <pre className={styles.payload}>
                 {JSON.stringify(Object.fromEntries(extraEntries), null, 2)}
               </pre>

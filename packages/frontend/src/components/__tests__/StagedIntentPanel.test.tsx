@@ -665,7 +665,9 @@ describe('StagedIntentPanel', () => {
       );
 
       const card = screen.getByTestId('staged-intent-gate-verify');
-      expect(card.textContent).toContain('ecc8eab1-4e55-4eac-be6b-97237a6aacbb');
+      expect(card.textContent).toContain(
+        'ecc8eab1-4e55-4eac-be6b-97237a6aacbb',
+      );
       expect(card.textContent).toContain('pass');
       expect(screen.getByText(/Basis: operational/)).toBeTruthy();
       expect(
@@ -704,7 +706,9 @@ describe('StagedIntentPanel', () => {
         />,
       );
 
-      expect(screen.getByText(/Note: Blocked on secret rotation\./)).toBeTruthy();
+      expect(
+        screen.getByText(/Note: Blocked on secret rotation\./),
+      ).toBeTruthy();
       fireEvent.click(screen.getByText('Other evidence'));
       expect(screen.getByText(/queriesRun/)).toBeTruthy();
       expect(screen.getByText(/SELECT 1/)).toBeTruthy();
