@@ -882,9 +882,7 @@ describe('proposeGateItemReclassification', () => {
     expect(outcome.item.classification).toBe('Opportunistic');
     // Reclassification alone never resolves an item — it stays out of the
     // terminal pass/deferred/discarded states, eligible for a later run.
-    expect(['pass', 'deferred', 'discarded']).not.toContain(
-      outcome.item.state,
-    );
+    expect(['pass', 'deferred', 'discarded']).not.toContain(outcome.item.state);
 
     const detail = getGateItemDetail(item.id);
     expect(detail!.events).toEqual(
