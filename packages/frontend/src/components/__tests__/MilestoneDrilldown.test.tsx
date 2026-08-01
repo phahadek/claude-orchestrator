@@ -232,7 +232,9 @@ describe('MilestoneDrilldown', () => {
 
     fireEvent.click(screen.getByTestId('drilldown-mode-session'));
 
-    await waitFor(() => expect(screen.getByText('No events yet.')).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText('No events yet.')).toBeTruthy(),
+    );
     expect(screen.queryByTestId('milestone-task-reader')).toBeNull();
     // The embedded SessionPanel must not duplicate the centre column's
     // decision inbox — the milestone drill-down opts out of DecisionPanel.

@@ -58,18 +58,14 @@ vi.mock('../MilestoneDecisionStack', () => ({
       <button
         type="button"
         data-testid="select-task-a"
-        onClick={() =>
-          onSelect({ type: 'task', task: { taskId: 'task-a' } })
-        }
+        onClick={() => onSelect({ type: 'task', task: { taskId: 'task-a' } })}
       >
         select task a
       </button>
       <button
         type="button"
         data-testid="select-task-b"
-        onClick={() =>
-          onSelect({ type: 'task', task: { taskId: 'task-b' } })
-        }
+        onClick={() => onSelect({ type: 'task', task: { taskId: 'task-b' } })}
       >
         select task b
       </button>
