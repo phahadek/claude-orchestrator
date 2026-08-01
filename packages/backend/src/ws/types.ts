@@ -415,6 +415,20 @@ export type ServerMessage =
       detail: string;
     }
   | {
+      /**
+       * Transient in-progress delivery state, not a failure: a disposition
+       * has been enqueued for this session and is being delivered via
+       * sendOrResume, which may require resuming a parked session (spawning
+       * a fresh CLI process) before it lands. Cleared once the underlying
+       * inbox items are marked delivered (or once the delivery attempt
+       * concludes, success or failure) — must never be rendered as a fault
+       * or needs-attention condition the way session_action_failed is.
+       */
+      type: 'session_feedback_pending';
+      sessionId: string;
+      pending: boolean;
+    }
+  | {
       type: 'boot_reconciliation_started';
       steps: string[];
       started_at: string;

@@ -3626,6 +3626,8 @@ export class SessionManager extends EventEmitter {
       return;
     }
 
+    this.emitFeedbackPending(sessionId, true);
+
     if (isTerminal) {
       let resumed: string | null = null;
       try {
@@ -3649,6 +3651,7 @@ export class SessionManager extends EventEmitter {
         } satisfies ServerMessage);
       }
       markInboxItemsDelivered(items.map((i) => i.id));
+      this.emitFeedbackPending(sessionId, false);
       return;
     }
 
@@ -3658,9 +3661,26 @@ export class SessionManager extends EventEmitter {
       logger.warn(
         `[SessionManager] ${logContext}: sendOrResume failed for ${sessionId.slice(0, 8)}: ${err}`,
       );
+      this.emitFeedbackPending(sessionId, false);
       return;
     }
     markInboxItemsDelivered(items.map((i) => i.id));
+    this.emitFeedbackPending(sessionId, false);
+  }
+
+  /**
+   * Broadcast the transient pending/cleared delivery state for a session's
+   * inbox items — see session_feedback_pending in ws/types.ts. Emitted
+   * around every sendOrResume call in deliverUndeliveredInboxItems so a
+   * resume-driven delivery (which can take as long as a full CLI --resume
+   * spawn) is visible to the dashboard instead of looking dropped.
+   */
+  private emitFeedbackPending(sessionId: string, pending: boolean): void {
+    this.emit('message', {
+      type: 'session_feedback_pending',
+      sessionId,
+      pending,
+    } satisfies ServerMessage);
   }
 
   /**

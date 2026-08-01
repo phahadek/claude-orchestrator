@@ -225,6 +225,14 @@ export function SessionControls({
           compactionCount={session.compaction_count}
           model={session.model}
         />
+        {session.feedbackPending && (
+          <span
+            className={styles.feedbackPendingBadge}
+            title="A disposition was approved and is being delivered — the session may need to resume before it lands."
+          >
+            disposition queued — resuming session
+          </span>
+        )}
 
         {/* Admin chrome group A: cost + favorite — CSS-hidden on mobile until disclosure opens */}
         <div className={adminChromeClass}>
