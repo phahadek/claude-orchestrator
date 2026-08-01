@@ -1,6 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { MilestoneDrilldown } from '../MilestoneDrilldown';
+import { MilestoneDrilldown, type DrilldownMode } from '../MilestoneDrilldown';
 import { stagedIntentsApi } from '../../api/stagedIntents';
 import { sessionsApi } from '../../api/projects';
 import type { StagedIntent } from '../../api/stagedIntents';
@@ -35,6 +36,18 @@ function makeTask(overrides: Partial<TaskView>): TaskView {
 
 const noop = () => {};
 
+/** MilestoneDrilldown is a controlled component (mode lives in the parent, per MilestoneView). This harness supplies that state so tests can exercise the mode toggle via the component's own tabs. */
+function DrilldownHarness({
+  initialMode = 'task',
+  ...props
+}: Omit<
+  React.ComponentProps<typeof MilestoneDrilldown>,
+  'mode' | 'onModeChange'
+> & { initialMode?: DrilldownMode }) {
+  const [mode, setMode] = useState<DrilldownMode>(initialMode);
+  return <MilestoneDrilldown {...props} mode={mode} onModeChange={setMode} />;
+}
+
 describe('MilestoneDrilldown', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -57,6 +70,8 @@ describe('MilestoneDrilldown', () => {
         send={noop}
         setSessionArchived={noop}
         setSessionFavorited={noop}
+        mode="task"
+        onModeChange={noop}
       />,
     );
 
@@ -91,6 +106,8 @@ describe('MilestoneDrilldown', () => {
         send={noop}
         setSessionArchived={noop}
         setSessionFavorited={noop}
+        mode="task"
+        onModeChange={noop}
       />,
     );
 
@@ -109,12 +126,52 @@ describe('MilestoneDrilldown', () => {
         send={noop}
         setSessionArchived={noop}
         setSessionFavorited={noop}
+        mode="task"
+        onModeChange={noop}
       />,
     );
     expect(screen.getByTestId('milestone-drilldown-empty')).toBeTruthy();
   });
 
-  it('drives the task reader + SessionPanel embed from a selected launched task', async () => {
+  it('renders only the active view — task mode never renders a sibling session container that could crush its height', async () => {
+    vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([]);
+    // A body far taller than any panel — the historical bug crushed the
+    // session embed to 0px underneath a task reader this size.
+    const tallMarkdown = `# Spec\n\n${'Lorem ipsum dolor sit amet. '.repeat(500)}`;
+    const task = makeTask({ taskId: 'task-tall' });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ markdown: tallMarkdown }),
+      }),
+    );
+
+    render(
+      <MilestoneDrilldown
+        selection={{ type: 'task', task }}
+        tasks={[task]}
+        projectId="proj-1"
+        sessions={[]}
+        send={noop}
+        setSessionArchived={noop}
+        setSessionFavorited={noop}
+        mode="task"
+        onModeChange={noop}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('milestone-task-reader')).toBeTruthy(),
+    );
+    // No stacked sibling — the task reader is the sole content, so it's
+    // free to take (and keep) the panel's full height.
+    expect(screen.queryByTestId('milestone-session-embed')).toBeNull();
+  });
+
+  it('switches to session mode and renders SessionPanel in place of the task reader, then back again via the mode tabs', async () => {
     vi.spyOn(stagedIntentsApi, 'listBySession').mockResolvedValue([
       {
         id: 'intent-1',
@@ -150,7 +207,8 @@ describe('MilestoneDrilldown', () => {
     );
 
     render(
-      <MilestoneDrilldown
+      <DrilldownHarness
+        initialMode="task"
         selection={{ type: 'task', task }}
         tasks={[task]}
         projectId="proj-1"
@@ -170,13 +228,25 @@ describe('MilestoneDrilldown', () => {
     );
 
     await waitFor(() => expect(screen.getByText('Spec body')).toBeTruthy());
-    expect(screen.getByText('No events yet.')).toBeTruthy();
+    expect(screen.queryByTestId('milestone-session-embed')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('drilldown-mode-session'));
+
+    await waitFor(() =>
+      expect(screen.getByText('No events yet.')).toBeTruthy(),
+    );
+    expect(screen.queryByTestId('milestone-task-reader')).toBeNull();
     // The embedded SessionPanel must not duplicate the centre column's
     // decision inbox — the milestone drill-down opts out of DecisionPanel.
     expect(screen.queryByTestId('decision-panel')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('drilldown-mode-task'));
+
+    await waitFor(() => expect(screen.getByText('Spec body')).toBeTruthy());
+    expect(screen.queryByTestId('milestone-session-embed')).toBeNull();
   });
 
-  it('handles an unresolvable create-intent gracefully', async () => {
+  it('handles an unresolvable create-intent gracefully in both modes', async () => {
     const intent: StagedIntent = {
       id: 'intent-create',
       kind: 'task.create',
@@ -189,7 +259,8 @@ describe('MilestoneDrilldown', () => {
     };
 
     render(
-      <MilestoneDrilldown
+      <DrilldownHarness
+        initialMode="task"
         selection={{ type: 'intent', intent }}
         tasks={[]}
         projectId="proj-1"
@@ -203,6 +274,9 @@ describe('MilestoneDrilldown', () => {
     expect(
       screen.getByTestId('milestone-drilldown-unresolved').textContent,
     ).toContain("doesn't reference an existing task yet");
+
+    fireEvent.click(screen.getByTestId('drilldown-mode-session'));
+    // Degrades gracefully — a defined fallback line, not a blank pane.
     expect(screen.getByText('No associated session.')).toBeTruthy();
   });
 
@@ -273,6 +347,8 @@ describe('MilestoneDrilldown', () => {
         send={noop}
         setSessionArchived={noop}
         setSessionFavorited={noop}
+        mode="task"
+        onModeChange={noop}
       />,
     );
 
@@ -296,7 +372,8 @@ describe('MilestoneDrilldown', () => {
     };
 
     render(
-      <MilestoneDrilldown
+      <DrilldownHarness
+        initialMode="task"
         selection={{ type: 'intent', intent }}
         tasks={[]}
         projectId="proj-1"
@@ -310,6 +387,8 @@ describe('MilestoneDrilldown', () => {
     expect(
       screen.getByTestId('milestone-drilldown-unresolved').textContent,
     ).toContain("doesn't reference an existing task yet");
+
+    fireEvent.click(screen.getByTestId('drilldown-mode-session'));
     expect(screen.getByText('No associated session.')).toBeTruthy();
   });
 
@@ -340,6 +419,8 @@ describe('MilestoneDrilldown', () => {
         send={noop}
         setSessionArchived={noop}
         setSessionFavorited={noop}
+        mode="session"
+        onModeChange={noop}
       />,
     );
 
@@ -381,6 +462,8 @@ describe('MilestoneDrilldown', () => {
         send={noop}
         setSessionArchived={noop}
         setSessionFavorited={noop}
+        mode="session"
+        onModeChange={noop}
       />,
     );
 
@@ -417,6 +500,8 @@ describe('MilestoneDrilldown', () => {
           send={noop}
           setSessionArchived={noop}
           setSessionFavorited={noop}
+          mode="task"
+          onModeChange={noop}
         />,
       );
 

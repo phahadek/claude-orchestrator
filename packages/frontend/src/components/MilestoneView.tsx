@@ -13,7 +13,7 @@ import {
   MilestoneDecisionStack,
   type MilestoneStackSelection,
 } from './MilestoneDecisionStack';
-import { MilestoneDrilldown } from './MilestoneDrilldown';
+import { MilestoneDrilldown, type DrilldownMode } from './MilestoneDrilldown';
 import { GateReadinessPanel } from './GateReadinessPanel';
 import { isGatePhase } from '../utils/phaseBurndown';
 import styles from './MilestoneView.module.css';
@@ -29,6 +29,16 @@ const MOBILE_REGIONS: Array<{ id: MobileRegion; label: string }> = [
   { id: 'stack', label: 'Decisions' },
   { id: 'drilldown', label: 'Drill-down' },
 ];
+
+/** Identity of a stack selection — used to detect a genuinely different card (as opposed to scroll-follow re-selecting the same one) so the drill-down mode can reset only on a real switch. */
+function selectionKey(
+  selection: MilestoneStackSelection | null,
+): string | null {
+  if (!selection) return null;
+  return selection.type === 'task'
+    ? `task:${selection.task.taskId}`
+    : `intent:${selection.intent.id}`;
+}
 
 interface Props {
   activeProjectId: string | null;
@@ -69,8 +79,28 @@ export function MilestoneView({
   const [selection, setSelection] = useState<MilestoneStackSelection | null>(
     null,
   );
+  const [drilldownMode, setDrilldownMode] = useState<DrilldownMode>('task');
   const isMobile = useIsMobile();
   const [mobileRegion, setMobileRegion] = useState<MobileRegion>('burndown');
+
+  // Plain selection: only resets the mode when the identity actually
+  // changes, so scroll-follow re-selecting the already-selected card
+  // (suppressNextScrollRef's one-event no-op) never yanks an operator out
+  // of session mode — only a deliberate switch to a different card does.
+  const handleSelect = (next: MilestoneStackSelection) => {
+    if (selectionKey(selection) !== selectionKey(next)) {
+      setDrilldownMode('task');
+    }
+    setSelection(next);
+  };
+
+  // The "View session" button's handler — selects the card (if not already)
+  // and switches straight to session mode.
+  const handleViewSession = (next: MilestoneStackSelection) => {
+    setSelection(next);
+    setDrilldownMode('session');
+    if (isMobile) setMobileRegion('drilldown');
+  };
 
   const invalidationKey = useMemo(
     () => `${lastTaskUpdate?.taskId ?? ''}:${lastStagedIntentChange?.id ?? ''}`,
@@ -152,6 +182,7 @@ export function MilestoneView({
   // milestone scope changes so the drill-down never shows a stale item.
   useEffect(() => {
     setSelection(null);
+    setDrilldownMode('task');
   }, [activeProjectId, activeBoardId]);
 
   if (!activeBoardMilestone) {
@@ -201,7 +232,8 @@ export function MilestoneView({
       phaseFilter={phaseFilter}
       flaggedOnly={flaggedOnly}
       selection={selection}
-      onSelect={setSelection}
+      onSelect={handleSelect}
+      onViewSession={handleViewSession}
       scrollContainerRef={middlePanelRef}
     />
   ) : (
@@ -220,6 +252,8 @@ export function MilestoneView({
       setSessionArchived={setSessionArchived}
       setSessionFavorited={setSessionFavorited}
       project={project}
+      mode={drilldownMode}
+      onModeChange={setDrilldownMode}
     />
   );
 

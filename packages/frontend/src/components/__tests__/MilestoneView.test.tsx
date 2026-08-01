@@ -44,15 +44,48 @@ vi.mock('../FlowArmToggle', () => ({
 }));
 
 vi.mock('../MilestoneDecisionStack', () => ({
-  MilestoneDecisionStack: ({ phaseFilter }: { phaseFilter: string | null }) => (
+  MilestoneDecisionStack: ({
+    phaseFilter,
+    onSelect,
+    onViewSession,
+  }: {
+    phaseFilter: string | null;
+    onSelect: (selection: unknown) => void;
+    onViewSession?: (selection: unknown) => void;
+  }) => (
     <div data-testid="milestone-decision-stack">
       filtered: {phaseFilter ?? 'none'}
+      <button
+        type="button"
+        data-testid="select-task-a"
+        onClick={() => onSelect({ type: 'task', task: { taskId: 'task-a' } })}
+      >
+        select task a
+      </button>
+      <button
+        type="button"
+        data-testid="select-task-b"
+        onClick={() => onSelect({ type: 'task', task: { taskId: 'task-b' } })}
+      >
+        select task b
+      </button>
+      <button
+        type="button"
+        data-testid="view-session-task-a"
+        onClick={() =>
+          onViewSession?.({ type: 'task', task: { taskId: 'task-a' } })
+        }
+      >
+        view session
+      </button>
     </div>
   ),
 }));
 
 vi.mock('../MilestoneDrilldown', () => ({
-  MilestoneDrilldown: () => <div data-testid="milestone-drilldown" />,
+  MilestoneDrilldown: ({ mode }: { mode: string }) => (
+    <div data-testid="milestone-drilldown">mode: {mode}</div>
+  ),
 }));
 
 vi.mock('../GateReadinessPanel', () => ({
@@ -66,6 +99,19 @@ vi.mock('../GateReadinessPanel', () => ({
     </div>
   ),
 }));
+
+function mockMatchMedia(isMobile: boolean) {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: isMobile,
+    media: query,
+    onchange: null,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }));
+}
 
 describe('MilestoneView', () => {
   const baseProps = {
@@ -102,5 +148,58 @@ describe('MilestoneView', () => {
     );
     expect(screen.queryByTestId('milestone-decision-stack')).toBeNull();
     expect(screen.getByTestId('active-phase').textContent).toBe('gate');
+  });
+
+  it('defaults the drill-down to task mode and switches it to session mode when the stack requests a view-session', () => {
+    render(<MilestoneView {...baseProps} />);
+
+    expect(screen.getByTestId('milestone-drilldown').textContent).toBe(
+      'mode: task',
+    );
+
+    fireEvent.click(screen.getByTestId('view-session-task-a'));
+
+    expect(screen.getByTestId('milestone-drilldown').textContent).toBe(
+      'mode: session',
+    );
+  });
+
+  it('does not reset session mode when the stack re-selects the same card (scroll-follow), but does reset it on a genuinely different selection', () => {
+    render(<MilestoneView {...baseProps} />);
+
+    fireEvent.click(screen.getByTestId('view-session-task-a'));
+    expect(screen.getByTestId('milestone-drilldown').textContent).toBe(
+      'mode: session',
+    );
+
+    // Scroll-follow re-selecting the already-selected card — an equivalent
+    // selection, not a switch.
+    fireEvent.click(screen.getByTestId('select-task-a'));
+    expect(screen.getByTestId('milestone-drilldown').textContent).toBe(
+      'mode: session',
+    );
+
+    // A deliberate scroll/click to a different card does reset the mode.
+    fireEvent.click(screen.getByTestId('select-task-b'));
+    expect(screen.getByTestId('milestone-drilldown').textContent).toBe(
+      'mode: task',
+    );
+  });
+
+  it('switches the active mobile region to the drill-down when view-session is requested on a mobile viewport', () => {
+    mockMatchMedia(true);
+    render(<MilestoneView {...baseProps} />);
+
+    fireEvent.click(screen.getByTestId('phase-segment-code'));
+    // On mobile the stack lives behind the "Decisions" tab.
+    fireEvent.click(screen.getByRole('tab', { name: 'Decisions' }));
+    expect(screen.getByTestId('milestone-decision-stack-mount')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('view-session-task-a'));
+
+    expect(screen.getByTestId('milestone-drilldown-mount')).toBeTruthy();
+    expect(screen.getByTestId('milestone-drilldown').textContent).toBe(
+      'mode: session',
+    );
   });
 });

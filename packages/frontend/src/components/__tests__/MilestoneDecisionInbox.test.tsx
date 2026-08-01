@@ -253,7 +253,7 @@ describe('MilestoneDecisionInbox', () => {
     );
   });
 
-  it('exposes a per-card control that selects the card (staying on the Milestones tab), for ungrouped and grouped intents, without dispatching a selectSession navigation event', async () => {
+  it('gives the View session button its own handler — selecting the card via onViewSession, distinct from onSelectIntent, without dispatching a selectSession navigation event', async () => {
     const intents: StagedIntent[] = [
       {
         id: 'ungrouped',
@@ -291,11 +291,13 @@ describe('MilestoneDecisionInbox', () => {
     vi.spyOn(stagedIntentsApi, 'listByMilestone').mockResolvedValue(intents);
 
     const onSelectIntent = vi.fn();
+    const onViewSession = vi.fn();
     render(
       <MilestoneDecisionInbox
         projectId="proj-1"
         milestone="M1"
         onSelectIntent={onSelectIntent}
+        onViewSession={onViewSession}
       />,
     );
     await waitFor(() => screen.getByTestId('milestone-decision-inbox'));
@@ -303,14 +305,18 @@ describe('MilestoneDecisionInbox', () => {
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
 
     fireEvent.click(screen.getByTestId('session-jump-ungrouped'));
-    expect(onSelectIntent).toHaveBeenCalledWith(
+    expect(onViewSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'ungrouped' }),
     );
 
     fireEvent.click(screen.getByTestId('session-jump-group-a'));
-    expect(onSelectIntent).toHaveBeenCalledWith(
+    expect(onViewSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'grouped-dep' }),
     );
+
+    // The button is wired to onViewSession, not onSelectIntent — it must not
+    // repeat the card's own click handler.
+    expect(onSelectIntent).not.toHaveBeenCalled();
 
     expect(dispatchSpy).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: 'selectSession' }),
