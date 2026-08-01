@@ -2622,7 +2622,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
         });
         return;
       }
-      markSessionIdle(this.sessionId, endedAt, null);
+      const effectiveStatus = markSessionIdle(this.sessionId, endedAt, null);
       if (this.taskId) resetTaskCrashCount(this.taskId);
       recordEvent({
         event_type: 'handle_clean_exit_session_marked_idle',
@@ -2635,7 +2635,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
       this.broadcast({
         type: 'session_ended',
         sessionId: this.sessionId,
-        status: 'idle',
+        status: effectiveStatus,
         ...(this.taskId && { taskId: this.taskId }),
       });
       return;
@@ -2692,7 +2692,11 @@ The full task spec and all rules are in your system prompt. Begin implementing d
     // calls. Session becomes done only when the PR merges (PRMergeWatcher).
     // Using idle (not done) prevents the post-hoc auditor from triggering review
     // on a stale SHA before the PR has been properly reviewed/merged.
-    markSessionIdle(this.sessionId, endedAt, prUrl ?? null);
+    const effectiveStatus = markSessionIdle(
+      this.sessionId,
+      endedAt,
+      prUrl ?? null,
+    );
     if (this.taskId) resetTaskCrashCount(this.taskId);
     recordEvent({
       event_type: 'handle_clean_exit_session_marked_idle',
@@ -2705,6 +2709,7 @@ The full task spec and all rules are in your system prompt. Begin implementing d
 
     await recoverSession(this.sessionId, {
       scope: 'clean_exit',
+      effectiveStatus,
       prUrl,
       prDetectedLive: this.prDetectedLive,
       sessionType: this.sessionType,
