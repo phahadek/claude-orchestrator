@@ -1060,7 +1060,7 @@ describe('buildResumeMessage — session-type branch', () => {
     expect(message.length).toBeGreaterThan(0);
   });
 
-  it('a planning session resumed after an intent was sent back names that intent and the rejection reason', () => {
+  it('a planning session resumed after an intent was declined names that intent and reason, with no instruction to revise/re-stage/supersede/withdraw', () => {
     const row = { ...makeDeadRow(), session_type: 'design' };
     vi.mocked(listStagedIntentsBySession).mockReturnValue([
       {
@@ -1069,15 +1069,38 @@ describe('buildResumeMessage — session-type branch', () => {
         payload: JSON.stringify({ title: 'Fix the flaky test' }),
         state: 'rejected',
         disposition_reason: 'duplicate of task-42',
+        updated_at: 100,
       } as any,
     ]);
 
     const message = buildResumeMessage(row);
     expect(message).toContain('task.create "Fix the flaky test"');
     expect(message).toContain('duplicate of task-42');
+    expect(message.toLowerCase()).not.toMatch(
+      /revise|re-stage|restage|supersede|withdraw/,
+    );
   });
 
-  it('picks the most recently rejected intent when multiple exist', () => {
+  it('a planning session resumed after an intent was sent back (needs_revision) names that intent, the reason, and instructs revision', () => {
+    const row = { ...makeDeadRow(), session_type: 'design' };
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      {
+        id: 'intent-1',
+        kind: 'task.create',
+        payload: JSON.stringify({ title: 'Fix the flaky test' }),
+        state: 'needs_revision',
+        disposition_reason: 'needs more detail',
+        updated_at: 100,
+      } as any,
+    ]);
+
+    const message = buildResumeMessage(row);
+    expect(message).toContain('task.create "Fix the flaky test"');
+    expect(message).toContain('needs more detail');
+    expect(message.toLowerCase()).toContain('revise');
+  });
+
+  it('picks the most recently updated reject-state intent when multiple exist', () => {
     const row = { ...makeDeadRow(), session_type: 'groom' };
     vi.mocked(listStagedIntentsBySession).mockReturnValue([
       {
@@ -1086,6 +1109,7 @@ describe('buildResumeMessage — session-type branch', () => {
         payload: JSON.stringify({ taskId: 'task-1' }),
         state: 'rejected',
         disposition_reason: 'first reason',
+        updated_at: 100,
       } as any,
       {
         id: 'intent-2',
@@ -1093,6 +1117,7 @@ describe('buildResumeMessage — session-type branch', () => {
         payload: JSON.stringify({ taskId: 'task-2' }),
         state: 'rejected',
         disposition_reason: 'second reason',
+        updated_at: 200,
       } as any,
     ]);
 
@@ -1100,6 +1125,34 @@ describe('buildResumeMessage — session-type branch', () => {
     expect(message).toContain('task-2');
     expect(message).toContain('second reason');
     expect(message).not.toContain('first reason');
+  });
+
+  it('when a session holds both a rejected and a needs_revision intent, the more recently updated one determines the branch', () => {
+    const row = { ...makeDeadRow(), session_type: 'groom' };
+    vi.mocked(listStagedIntentsBySession).mockReturnValue([
+      {
+        id: 'intent-1',
+        kind: 'task.setStatus',
+        payload: JSON.stringify({ taskId: 'task-1' }),
+        state: 'rejected',
+        disposition_reason: 'declined reason',
+        updated_at: 100,
+      } as any,
+      {
+        id: 'intent-2',
+        kind: 'task.setStatus',
+        payload: JSON.stringify({ taskId: 'task-2' }),
+        state: 'needs_revision',
+        disposition_reason: 'pushback reason',
+        updated_at: 200,
+      } as any,
+    ]);
+
+    const message = buildPlanningResumeMessage(row);
+    expect(message).toContain('task-2');
+    expect(message).toContain('pushback reason');
+    expect(message.toLowerCase()).toContain('revise');
+    expect(message).not.toContain('declined reason');
   });
 
   it('a code session with a stored needs_changes verdict still receives the formatted review feedback unchanged', () => {
