@@ -64,6 +64,7 @@ import type { ReadinessViolation } from '../tasks/readinessGate';
 import { normalizeBoardId } from '../tasks/taskId';
 import type { TypeCheckResult } from '../groom/typeCheck';
 import type { DesignLoadResult } from '../design/designLoad';
+import type { DocsLoadResult } from '../docs/docsLoad';
 import type { OpsLoadResult, OpsTaskEntry } from '../ops/opsLoad';
 import type { OpsJournalEntry } from '../ops/opsJournal';
 import { GATE_ITEM_TIER_SELECTION_GUIDANCE } from '../gate/gateItemClassificationGuidance';
@@ -85,6 +86,7 @@ export const WORKFLOW_LOADERS: Record<PlanningWorkflow, string> = {
   design: 'design/designLoad.ts#loadDesignContext',
   ops: 'ops/opsLoad.ts#loadOpsContext',
   split: 'groom/groomLoad.ts#loadGroomContext',
+  docs: 'docs/docsLoad.ts#loadDocsContext',
 };
 
 // ─── per-type digest slices (Q3: a constrained section set, not the loader's
@@ -159,6 +161,30 @@ export interface DesignDigestSlice {
   hasCodeMapGrounding: boolean;
 }
 
+/**
+ * A docs session's deliverable is a never-auto-merge PR (repo-file Target
+ * surface) or a staged `notion.pageEdit` intent (Notion-page Target
+ * surface) — never a design decision — so this carries the Docs
+ * task-body-convention fields (`targetSurface` / `sourceDomains`) a
+ * dispatched session has no other channel for, rather than reusing
+ * `DesignDigestSlice`'s open-question/arch-unit shape.
+ */
+export interface DocsDigestSlice {
+  task: {
+    id: string;
+    title: string;
+    status: string;
+    type: string;
+    url: string;
+  };
+  /** The declared Target surface — a repo path or a Notion page id. Empty when undeclared. */
+  targetSurface: string;
+  /** The declared Source domain(s) this session's WebFetch allowlist is scoped to. Empty when undeclared. */
+  sourceDomains: string[];
+  /** The task's full markdown body, verbatim. */
+  markdown: string;
+}
+
 export interface OpsDigestSlice {
   task: OpsTaskEntry;
   journalEntry: OpsJournalEntry | null;
@@ -183,7 +209,8 @@ export type PlanningDigest =
   | { workflow: 'groom'; data: GroomDigestSlice }
   | { workflow: 'design'; data: DesignDigestSlice }
   | { workflow: 'ops'; data: OpsDigestSlice }
-  | { workflow: 'split'; data: SplitDigestSlice };
+  | { workflow: 'split'; data: SplitDigestSlice }
+  | { workflow: 'docs'; data: DocsDigestSlice };
 
 const normId = normalizeBoardId;
 
@@ -270,6 +297,16 @@ export function deriveDesignDigestSlice(
     archUnits: result.archUnits,
     unresolvedPageRefs: result.unresolvedPageRefs,
     hasCodeMapGrounding: Object.keys(result.codeMapGrounding).length > 0,
+  };
+}
+
+/** `loadDocsContext` already resolves a single target task — just narrow the fields carried forward. */
+export function deriveDocsDigestSlice(result: DocsLoadResult): DocsDigestSlice {
+  return {
+    task: result.task,
+    targetSurface: result.targetSurface,
+    sourceDomains: result.sourceDomains,
+    markdown: result.markdown,
   };
 }
 
@@ -1247,6 +1284,28 @@ function renderSplitDigest(data: SplitDigestSlice): string {
   return renderGroomDigest(data, '## Split Candidate Slice');
 }
 
+/**
+ * Renders the Target surface / Source domains this dispatched docs session
+ * has no other channel for — see the Docs task-body convention
+ * (`skills/docs/SKILL.md`). Either field renders as an explicit "not
+ * declared" call-out rather than a bare empty string, since the skill's own
+ * hard rule is to stop and ask rather than guess when either is missing.
+ */
+function renderDocsDigest(data: DocsDigestSlice): string {
+  const lines: string[] = [
+    '## Docs Authoring Slice',
+    '',
+    `- Task: ${data.task.title} (${data.task.type}, ${data.task.status}) — ${data.task.url}`,
+    `- Target surface: ${data.targetSurface || '(not declared — stop and ask; do not guess a target surface)'}`,
+    `- Source domains: ${data.sourceDomains.length ? data.sourceDomains.join(', ') : '(not declared — stop and ask; do not widen by inference)'}`,
+    '',
+    '### Task body',
+    '',
+    data.markdown || '(empty)',
+  ];
+  return lines.join('\n');
+}
+
 function renderDigest(digest: PlanningDigest): string {
   switch (digest.workflow) {
     case 'groom':
@@ -1257,6 +1316,8 @@ function renderDigest(digest: PlanningDigest): string {
       return renderOpsDigest(digest.data);
     case 'split':
       return renderSplitDigest(digest.data);
+    case 'docs':
+      return renderDocsDigest(digest.data);
   }
 }
 

@@ -35,6 +35,7 @@ import {
   assemblePlanningProcedure,
   deriveGroomDigestSlice,
   deriveDesignDigestSlice,
+  deriveDocsDigestSlice,
   deriveOpsDigestSlice,
   GroomWorklistTaskNotFoundError,
   WORKFLOW_LOADERS,
@@ -43,6 +44,7 @@ import {
 import { SIZE_TYPE_CHECK } from '../procedureCore';
 import type { GroomLoadResult } from '../../groom/groomLoad';
 import type { DesignLoadResult } from '../../design/designLoad';
+import type { DocsLoadResult } from '../../docs/docsLoad';
 import type { OpsLoadResult } from '../../ops/opsLoad';
 import { KNOWN_INTENT_KINDS } from '../../routes/stagedIntents';
 import { orchestratorMcpToolName } from '../../mcp/toolNaming';
@@ -150,6 +152,23 @@ function fixtureOpsLoadResult(): OpsLoadResult {
       newly_unblocked: [],
     },
   } as unknown as OpsLoadResult;
+}
+
+function fixtureDocsLoadResult(opts: { blank?: boolean } = {}): DocsLoadResult {
+  return {
+    task: {
+      id: 'task-4',
+      title: 'Document the webhooks API',
+      status: '🔄 In Progress',
+      type: '📝 Docs',
+      url: 'https://notion.so/task-4',
+    },
+    markdown: '# Document the webhooks API\n\nSome body.',
+    targetSurface: opts.blank ? '' : 'docs/api/webhooks.md',
+    sourceDomains: opts.blank
+      ? []
+      : ['docs.stripe.com', 'developer.github.com'],
+  };
 }
 
 // ─── derive* ────────────────────────────────────────────────────────────────
@@ -281,6 +300,59 @@ describe('deriveOpsDigestSlice', () => {
     expect(() =>
       deriveOpsDigestSlice(fixtureOpsLoadResult(), 'nope', null),
     ).toThrow();
+  });
+});
+
+describe('deriveDocsDigestSlice', () => {
+  it('narrows the loader result, carrying the declared Target surface and Source domains', () => {
+    const slice = deriveDocsDigestSlice(fixtureDocsLoadResult());
+    expect(slice.task.id).toBe('task-4');
+    expect(slice.targetSurface).toBe('docs/api/webhooks.md');
+    expect(slice.sourceDomains).toEqual([
+      'docs.stripe.com',
+      'developer.github.com',
+    ]);
+    expect(slice.markdown).toContain('Document the webhooks API');
+  });
+});
+
+// ─── PlanningDigest 'docs' variant + renderDigest ──────────────────────────
+
+describe('docs digest rendering', () => {
+  it('assemblePlanningProcedure renders non-empty content carrying the declared Target surface and Source domains', () => {
+    const digest: PlanningDigest = {
+      workflow: 'docs',
+      data: deriveDocsDigestSlice(fixtureDocsLoadResult()),
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Document the webhooks API',
+      taskUrl: 'https://notion.so/task-4',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    expect(output.length).toBeGreaterThan(0);
+    expect(output).toContain('## Session Lifecycle');
+    expect(output).toContain('## Transport');
+    expect(output).toContain('docs/api/webhooks.md');
+    expect(output).toContain('docs.stripe.com');
+    expect(output).toContain('developer.github.com');
+    expect(output).toContain(orchestratorMcpToolName('notion.pageEdit'));
+  });
+
+  it('renders an explicit stop-and-ask call-out, never a silent blank, when Target surface / Source domains are undeclared', () => {
+    const digest: PlanningDigest = {
+      workflow: 'docs',
+      data: deriveDocsDigestSlice(fixtureDocsLoadResult({ blank: true })),
+    };
+    const output = assemblePlanningProcedure({
+      taskName: 'Undeclared docs task',
+      taskUrl: 'https://notion.so/task-4',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest,
+    });
+    expect(output).toMatch(/not declared.*stop and ask/i);
   });
 });
 
@@ -1594,6 +1666,7 @@ describe('WORKFLOW_LOADERS', () => {
     expect(WORKFLOW_LOADERS.groom).toMatch(/groomLoad/);
     expect(WORKFLOW_LOADERS.design).toMatch(/designLoad/);
     expect(WORKFLOW_LOADERS.ops).toMatch(/opsLoad/);
+    expect(WORKFLOW_LOADERS.docs).toMatch(/docsLoad/);
   });
 });
 
