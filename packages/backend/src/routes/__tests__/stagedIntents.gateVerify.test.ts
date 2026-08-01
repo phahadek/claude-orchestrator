@@ -32,7 +32,9 @@ function makeApp() {
   return app;
 }
 
-function makeGateItem(overrides: Partial<Parameters<typeof insertItem>[0]> = {}) {
+function makeGateItem(
+  overrides: Partial<Parameters<typeof insertItem>[0]> = {},
+) {
   return insertItem({
     project: 'proj-a',
     milestone: 'M12',
@@ -132,7 +134,9 @@ describe('gate.verify — stage then apply', () => {
     const updated = getItem(item.id);
     expect(updated?.state).toBe(item.state);
     expect(updated?.currentDisposition).toBeUndefined();
-    expect(updated?.events.at(-1)).toMatchObject({ disposition: 'needs-setup' });
+    expect(updated?.events.at(-1)).toMatchObject({
+      disposition: 'needs-setup',
+    });
   });
 
   it('a rejection routes the intent to needs_revision — a normal turn for the session to revise, with no appeal cap', async () => {
