@@ -884,6 +884,17 @@ function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
         ([key]) => !GATE_VERIFY_EVIDENCE_KNOWN_KEYS.has(key),
       )
     : [];
+  // A string-valued off-contract key is a session's explanation under an
+  // invented name — render it inline like the known prose fields so it
+  // isn't lost behind a collapsed block. Only non-string/structural values
+  // (objects, arrays, numbers, booleans) still collapse: they aren't prose
+  // an operator reads at a glance.
+  const extraStringEntries = extraEntries.filter(
+    (entry): entry is [string, string] => typeof entry[1] === 'string',
+  );
+  const extraStructuralEntries = extraEntries.filter(
+    ([, value]) => typeof value !== 'string',
+  );
 
   return (
     <div className={styles.text} data-testid="staged-intent-gate-verify">
@@ -910,11 +921,23 @@ function GateVerifyHeadline({ intent }: { intent: StagedIntent }) {
             </>
           )}
           {typeof evidence?.note === 'string' && <p>Note: {evidence.note}</p>}
-          {extraEntries.length > 0 && (
+          {extraStringEntries.map(([key, value]) => (
+            <p
+              key={key}
+              data-testid={`staged-intent-gate-verify-evidence-${key}`}
+            >
+              {key}: {value}
+            </p>
+          ))}
+          {extraStructuralEntries.length > 0 && (
             <details className={styles.expandDetail}>
               <summary className={styles.expandSummary}>Other evidence</summary>
               <pre className={styles.payload}>
-                {JSON.stringify(Object.fromEntries(extraEntries), null, 2)}
+                {JSON.stringify(
+                  Object.fromEntries(extraStructuralEntries),
+                  null,
+                  2,
+                )}
               </pre>
             </details>
           )}

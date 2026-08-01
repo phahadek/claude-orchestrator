@@ -235,6 +235,36 @@ describe('SessionGateItemVerifier — leaves a reporting session live, archives 
     expect(recordFirstIndex).toBeLessThan(sourceOrientIndex);
   });
 
+  it('names a required evidence.explanation field alongside evidence.basis', async () => {
+    const sessionManager = makeSessionManager();
+    vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);
+
+    const verifier = new SessionGateItemVerifier(sessionManager as never);
+    const resultPromise = verifier.verify(item);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    sessionManager.emit('gate_verify_disposition', {
+      sessionId: 'sess-1',
+      disposition: { disposition: 'needs-setup' },
+    });
+    await resultPromise;
+
+    const [, , dispatchOpts] = vi.mocked(sessionManager.start).mock.calls[0];
+    const injectedProcedureContent = (
+      dispatchOpts as { injectedProcedureContent: string }
+    ).injectedProcedureContent;
+
+    // The prompting names evidence.explanation explicitly, alongside
+    // evidence.basis, as the field the operator's decision-surface card
+    // actually renders — not an invented key of the session's choosing.
+    expect(injectedProcedureContent).toMatch(/evidence\.explanation/);
+    expect(injectedProcedureContent).toMatch(/evidence\.basis/);
+
+    // The JSON report template mandates both keys.
+    expect(injectedProcedureContent).toMatch(
+      /"basis":\s*"operational"\|"source",\s*"explanation":\s*"\.\.\."/,
+    );
+  });
+
   it('defines the operational record with distinct IS / IS-NOT sections', async () => {
     const sessionManager = makeSessionManager();
     vi.mocked(getSession).mockReturnValue({ status: 'running' } as never);

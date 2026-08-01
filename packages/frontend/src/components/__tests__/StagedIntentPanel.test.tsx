@@ -709,9 +709,38 @@ describe('StagedIntentPanel', () => {
       expect(
         screen.getByText(/Note: Blocked on secret rotation\./),
       ).toBeTruthy();
+      // queriesRun is a structural (array) value, so it still collapses.
       fireEvent.click(screen.getByText('Other evidence'));
       expect(screen.getByText(/queriesRun/)).toBeTruthy();
       expect(screen.getByText(/SELECT 1/)).toBeTruthy();
+    });
+
+    it('renders an off-contract string evidence key as visible text without expanding anything', () => {
+      render(
+        <StagedIntentPanel
+          intent={makeIntent({
+            kind: 'gate.verify',
+            payload: {
+              gateItemId: '03a0a16f-2636-4f9b-9de7-608a3fd1ba06',
+              disposition: 'pass',
+              evidence: JSON.stringify({
+                basis: 'operational',
+                sourceOrient: 'Read gateItemVerifier.ts to find the check.',
+                operationalCheck: 'audit_log confirms the write landed.',
+              }),
+            },
+          })}
+        />,
+      );
+
+      expect(screen.getByText(/Basis: operational/)).toBeTruthy();
+      expect(
+        screen.getByText(/Read gateItemVerifier\.ts to find the check\./),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(/audit_log confirms the write landed\./),
+      ).toBeTruthy();
+      expect(screen.queryByText('Other evidence')).toBeNull();
     });
 
     it('falls back to the raw display without throwing when evidence is not valid JSON', () => {

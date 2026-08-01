@@ -201,9 +201,13 @@ function buildGateVerifyProcedure(item: GateItem): string {
       'it does X", that is not a pass — report needs-setup and explain ' +
       'what operational trace is missing. Set `evidence.basis` to ' +
       '"operational" when your pass is backed by such a trace, or ' +
-      '"source" when you only read source code — the operator reviewing ' +
-      'your report on the decision surface weighs that basis directly; ' +
-      'there is no backend heuristic re-checking it.',
+      '"source" when you only read source code. Also set ' +
+      '`evidence.explanation` to a short prose paragraph stating what you ' +
+      'found and why it supports the disposition — this is the field the ' +
+      'operator reviewing your report on the decision surface actually ' +
+      'reads; an invented key of your own choosing (e.g. `conclusion`, ' +
+      '`summary`, `finding`) will not render there. There is no backend ' +
+      'heuristic re-checking any of this.',
     '',
     ...(isHumanObservation
       ? [
@@ -270,7 +274,7 @@ function buildGateVerifyProcedure(item: GateItem): string {
       'on structural unverifiability:',
     '',
     '```json',
-    `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"basis": "operational"|"source", "...": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,
+    `{"gateItemId": "${item.id}", "disposition": "pass"|"fail"|"needs-setup", "evidence": {"basis": "operational"|"source", "explanation": "...", "...": "..."}, "reclassify": {"to": "Human-Observation"|"needs-triage", "reason": "..."}}`,
     '```',
   ].join('\n');
 }
