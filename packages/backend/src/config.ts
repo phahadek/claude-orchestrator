@@ -96,18 +96,21 @@ process.env.BASH_MAX_OUTPUT_LENGTH = String(BASH_MAX_OUTPUT_LENGTH);
 process.env.BASH_DEFAULT_TIMEOUT_MS = String(BASH_DEFAULT_TIMEOUT_MS);
 
 // The Tier-B (capability-gated) read MCP tools — session.getRecord (own
-// runtime record by target session id, mcp/tools/sessionRecordReadTool.ts)
-// and auditLog.query (project-scoped audit_log, mcp/tools/auditLogReadTools.ts).
-// Registered unconditionally on every MCP connection (see
-// orchestratorMcpServer.ts) since the grant check happens per-call inside
-// each tool handler, not at connection time — but the CLI's own
-// --allowed-tools gate is a separate, prior boundary, so both tools must
-// also appear here (and in every planning workflow's *_MCP_TOOLS below) for
-// any session type to be able to call them at all once granted the
-// underlying capability.
+// runtime record by target session id, mcp/tools/sessionRecordReadTool.ts),
+// auditLog.query (project-scoped audit_log, mcp/tools/auditLogReadTools.ts),
+// and sessionEvents.query (project-scoped, aggregate-first session_events,
+// mcp/tools/sessionEventsReadTools.ts). Registered unconditionally on every
+// MCP connection (see orchestratorMcpServer.ts) since the grant check
+// happens per-call inside each tool handler, not at connection time — but
+// the CLI's own --allowed-tools gate is a separate, prior boundary, so
+// every one of these tools must also appear here (and in every planning
+// workflow's *_MCP_TOOLS below), in the CLI-exposed underscore-sanitized
+// form `orchestratorMcpToolName` produces, for any session type to be able
+// to call them at all once granted the underlying capability.
 const TIER_B_READ_MCP_TOOLS = [
   orchestratorMcpToolName('session.getRecord'),
   orchestratorMcpToolName('auditLog.query'),
+  orchestratorMcpToolName('sessionEvents.query'),
 ];
 
 export const ALLOWED_TOOLS = [

@@ -135,6 +135,34 @@ describe('session.requestCapability decision-surface kind', () => {
     );
   });
 
+  it('grants the session-events read capability (session_events aggregated by project id) through the same approve -> grant -> re-dispatch loop', async () => {
+    const sessionManager = makeSessionManager();
+    const app = makeApp(sessionManager);
+
+    const intent = stageIntent(
+      'session.requestCapability',
+      {
+        capability: 'read:session-events:proj-9',
+        plan: 'verify a gate item asking whether an event occurred across any session in this project',
+        evidence:
+          "no other grantable capability reaches this orchestrator's own DB in aggregate",
+      },
+      'proj-1',
+      null,
+      'sess-verify-3',
+    );
+
+    const res = await supertest(app).post(
+      `/api/staged-intents/${intent.id}/approve`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(sessionManager.grantCapability).toHaveBeenCalledWith(
+      'sess-verify-3',
+      'read:session-events:proj-9',
+    );
+  });
+
   it('never grants a broader or resolved/apply scope than the exact requested capability', async () => {
     const sessionManager = makeSessionManager();
     const app = makeApp(sessionManager);

@@ -49,6 +49,7 @@ const REGISTERED_ORCHESTRATOR_MCP_KINDS = [
   'gateSeed.getState',
   'session.getRecord',
   'auditLog.query',
+  'sessionEvents.query',
 ];
 
 const REGISTERED_TOOL_NAMES = new Set(
@@ -143,6 +144,13 @@ describe('mcp__orchestrator__ allow-list entries match the CLI-exposed tool name
 
   it('groom allow-list contains the underscore form of groom_precheck', () => {
     expect(GROOM_ALLOWED_TOOLS).toContain('mcp__orchestrator__groom_precheck');
+  });
+
+  it('ALLOWED_TOOLS contains the underscore form of sessionEvents.query — the name the CLI actually exposes, not the dotted registration name', () => {
+    expect(ALLOWED_TOOLS).toContain('mcp__orchestrator__sessionEvents_query');
+    expect(ALLOWED_TOOLS).not.toContain(
+      'mcp__orchestrator__sessionEvents.query',
+    );
   });
 
   it('groom/design/ops allow-lists all contain the underscore forms of architecture_getUnit and architecture_queryUnits', () => {

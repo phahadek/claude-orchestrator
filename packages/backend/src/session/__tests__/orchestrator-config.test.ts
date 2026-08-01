@@ -10,6 +10,8 @@ import {
   parseSessionRecordReadCapability,
   auditLogReadCapability,
   parseAuditLogReadCapability,
+  sessionEventsReadCapability,
+  parseSessionEventsReadCapability,
   isSanctionedAutoApproveCapability,
 } from '../orchestrator-config';
 import { NOTION_READ_MCP_TOOLS } from '../../config';
@@ -547,6 +549,34 @@ describe('auditLogReadCapability / parseAuditLogReadCapability', () => {
   });
 });
 
+describe('sessionEventsReadCapability / parseSessionEventsReadCapability', () => {
+  it('round-trips the target project id through the capability string', () => {
+    const capability = sessionEventsReadCapability('project-abc');
+    expect(capability).toBe('read:session-events:project-abc');
+    expect(parseSessionEventsReadCapability(capability)).toBe('project-abc');
+  });
+
+  it('returns null for a capability that is not a session-events-read grant', () => {
+    expect(parseSessionEventsReadCapability('Bash(psql:*)')).toBeNull();
+    expect(
+      parseSessionEventsReadCapability(
+        sessionRecordReadCapability('session-abc'),
+      ),
+    ).toBeNull();
+    expect(
+      parseSessionEventsReadCapability(auditLogReadCapability('project-abc')),
+    ).toBeNull();
+  });
+
+  it("is never merged into the spawned session's CLI --allowed-tools", () => {
+    const capability = sessionEventsReadCapability('project-abc');
+    const merged = getSessionAllowedTools('ops', { allowed_tools: [] }, [
+      capability,
+    ]);
+    expect(merged).not.toContain(capability);
+  });
+});
+
 describe('isSanctionedAutoApproveCapability', () => {
   it("auto-approves the audit-log capability for the requesting session's own project", () => {
     expect(
@@ -573,6 +603,26 @@ describe('isSanctionedAutoApproveCapability', () => {
       isSanctionedAutoApproveCapability(
         auditLogReadCapability('project-abc'),
         'session-1',
+      ),
+    ).toBe(false);
+  });
+
+  it("auto-approves the session-events capability for the requesting session's own project", () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        sessionEventsReadCapability('project-abc'),
+        'session-1',
+        'project-abc',
+      ),
+    ).toBe(true);
+  });
+
+  it("does not auto-approve the session-events capability for a different project than the requester's own", () => {
+    expect(
+      isSanctionedAutoApproveCapability(
+        sessionEventsReadCapability('project-other'),
+        'session-1',
+        'project-abc',
       ),
     ).toBe(false);
   });

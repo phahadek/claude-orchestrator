@@ -24,6 +24,7 @@ import {
 import {
   sessionRecordReadCapability,
   auditLogReadCapability,
+  sessionEventsReadCapability,
 } from '../../session/orchestrator-config';
 import { getAuditLogByActorId } from '../../audit/AuditLog';
 import { runtimeSettings } from '../../config';
@@ -101,6 +102,32 @@ describe('session.requestCapability auto-approve policy', () => {
     const sessionManager = makeSessionManager();
     const capability = auditLogReadCapability('some-other-project');
     const intent = stageCapabilityRequest('sess-park-audit-1', capability);
+
+    const checked = await routeStageTimeBlock(intent, sessionManager);
+
+    expect(checked.state).toBe('staged');
+    expect(sessionManager.grantCapability).not.toHaveBeenCalled();
+  });
+
+  it("auto-grants and re-dispatches a session-events-read request for the requesting session's own dispatched project (proj-1) without an operator park", async () => {
+    const sessionManager = makeSessionManager();
+    const capability = sessionEventsReadCapability('proj-1');
+    const intent = stageCapabilityRequest('sess-auto-events-1', capability);
+    expect(intent.state).toBe('staged');
+
+    const checked = await routeStageTimeBlock(intent, sessionManager);
+
+    expect(checked.state).toBe('committed');
+    expect(sessionManager.grantCapability).toHaveBeenCalledWith(
+      'sess-auto-events-1',
+      capability,
+    );
+  });
+
+  it("parks a session-events-read request for a different project than the requester's own — only own-project reads are sanctioned", async () => {
+    const sessionManager = makeSessionManager();
+    const capability = sessionEventsReadCapability('some-other-project');
+    const intent = stageCapabilityRequest('sess-park-events-1', capability);
 
     const checked = await routeStageTimeBlock(intent, sessionManager);
 
