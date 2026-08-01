@@ -294,6 +294,23 @@ export const stagedIntentsApi = {
   },
 
   /**
+   * Wedged-group recovery: re-surfaces every needs_revision/pending_verification
+   * member of the group onto the normal staged/approved surface so the usual
+   * commit or per-item disposition routes can act on it again. Does not
+   * approve or commit anything — the caller must re-render from the
+   * returned `recovered` intents rather than assume optimistic state, since
+   * a capability-request member loses its `groupId` on recovery.
+   */
+  recoverGroup(
+    groupId: string,
+  ): Promise<{ ok: boolean; recovered: StagedIntent[] }> {
+    return apiRequest<{ ok: boolean; recovered: StagedIntent[] }>(
+      `/api/staged-intents/group/${encodeURIComponent(groupId)}/recover`,
+      { method: 'POST' },
+    );
+  },
+
+  /**
    * The approve-by-standard decision surface: commits a default-approved
    * clean set spanning multiple task groups from one triaged interactive-type
    * batch, on a single operator disposition. Each named group still commits

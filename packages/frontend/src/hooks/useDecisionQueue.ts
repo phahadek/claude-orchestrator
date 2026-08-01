@@ -264,6 +264,30 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
     [draftFor, clearGroupError],
   );
 
+  const handleRecoverGroup = useCallback(
+    async (groupId: string) => {
+      setGroupInFlight(groupId);
+      clearGroupError(groupId);
+      try {
+        const { recovered } = await stagedIntentsApi.recoverGroup(groupId);
+        setIntents((prev) => {
+          const recoveredIds = new Set(recovered.map((i) => i.id));
+          const withoutRecovered = prev.filter((i) => !recoveredIds.has(i.id));
+          return [...withoutRecovered, ...recovered];
+        });
+      } catch (err) {
+        setGroupErrors((prev) => ({
+          ...prev,
+          [groupId]:
+            err instanceof Error ? err.message : 'Failed to recover group',
+        }));
+      } finally {
+        setGroupInFlight(null);
+      }
+    },
+    [clearGroupError],
+  );
+
   // Whole-panel signal for the session-scoped DecisionPanel: a session's
   // completeness is uniform across its own intents (it is a property of the
   // session, not the individual intent), so any one incomplete intent means
@@ -293,6 +317,7 @@ export function useDecisionQueue(scope: DecisionQueueScope) {
     setDraft,
     handleApproveGroup,
     handleRejectGroup,
+    handleRecoverGroup,
     upsert,
     remove,
   };

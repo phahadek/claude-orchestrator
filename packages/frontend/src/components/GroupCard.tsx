@@ -40,6 +40,8 @@ interface Props {
   onSetDraft: (patch: Partial<GroupCardDraft>) => void;
   onApproveGroup: () => void;
   onRejectGroup: () => void;
+  /** Re-surfaces every blocked (needs_revision/pending_verification) member back onto the staged surface — a recovery, not a force-commit. */
+  onRecoverGroup: () => void;
   /** True while the owning session hasn't signaled its proposal set complete for the turn — the backend refuses these too, so the group's controls are disabled rather than left to fail. */
   disabled?: boolean;
   /** Provenance badge / session-jump button — only the milestone inbox supplies this. */
@@ -109,6 +111,7 @@ export function GroupCard({
   onSetDraft,
   onApproveGroup,
   onRejectGroup,
+  onRecoverGroup,
   disabled = false,
   headerExtra,
   onClick,
@@ -121,6 +124,11 @@ export function GroupCard({
     setExpandedIds((prev) => ({ ...prev, [id]: !prev[id] }));
 
   const head = headProposalOf(members);
+  const blockedCount = members.filter(
+    ({ intent }) =>
+      intent.state === 'needs_revision' ||
+      intent.state === 'pending_verification',
+  ).length;
 
   return (
     <div
@@ -163,6 +171,27 @@ export function GroupCard({
         <div className={panelStyles.groupError}>{batchException}</div>
       )}
       {groupError && <div className={panelStyles.groupError}>{groupError}</div>}
+
+      {blockedCount > 0 && (
+        <div
+          className={styles.recoveryBanner}
+          onClick={(e) => e.stopPropagation()}
+          data-testid={`recovery-banner-${groupId}`}
+        >
+          <span className={styles.recoveryBannerText}>
+            {blockedCount} blocked member{blockedCount === 1 ? '' : 's'}
+          </span>
+          <button
+            type="button"
+            className={styles.recoverButton}
+            disabled={inFlight || disabled}
+            onClick={onRecoverGroup}
+            data-testid={`recover-group-${groupId}`}
+          >
+            {inFlight ? 'Recovering…' : '↺ Recover'}
+          </button>
+        </div>
+      )}
 
       {head.groomProposal ? (
         <dl

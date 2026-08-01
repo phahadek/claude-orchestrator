@@ -141,6 +141,7 @@ export function MilestoneDecisionInbox({
     setDraft,
     handleApproveGroup,
     handleRejectGroup,
+    handleRecoverGroup,
     upsert,
     remove,
   } = useDecisionQueue({ type: 'milestone', projectId, milestone });
@@ -362,6 +363,7 @@ export function MilestoneDecisionInbox({
               onSetDraft={(patch) => setDraft(groupId, patch)}
               onApproveGroup={() => void handleApproveGroup(groupId)}
               onRejectGroup={() => void handleRejectGroup(groupId)}
+              onRecoverGroup={() => void handleRecoverGroup(groupId)}
               selected={selectedCardId === groupId}
               className={
                 selectedCardId === groupId ? styles.selectedCard : undefined
