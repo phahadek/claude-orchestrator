@@ -62,6 +62,7 @@ import {
   clearStagedIntentGroup,
   getTaskCache,
   getSession,
+  hasActiveCapabilityRequestForSession,
   hasDecisionPickOneForTask,
   updateCompletenessDispositionApproval,
   deleteCompletenessDisposition,
@@ -1934,6 +1935,55 @@ function assertCompletenessApproval(
 }
 
 /**
+ * Thrown at stage time when a gate-verify session stages a `gate.verify`
+ * disposition while it still has an outstanding `session.requestCapability`
+ * intent of its own (state `staged` or `approved`) — the same predicate
+ * `onBudgetFire` already uses to suspend the verification budget rather than
+ * time the session out (see GateItemVerifier). That precedent covers the
+ * timeout path; this covers the disposition path: a session should never
+ * spend its one `gate.verify` verdict while the read it asked for to reach
+ * that verdict is still pending. Unlike the budget suspension (which
+ * silently retries on a timer), this rejects in-band at stage time so the
+ * session sees the feedback immediately and knows to end its turn and wait
+ * for the grant, rather than believing it already reported.
+ */
+class GateVerifyCapabilityRequestOutstandingError extends Error {
+  constructor(capability: string | undefined) {
+    super(
+      `[stagedIntents] "gate.verify" is blocked: this session has an outstanding ` +
+        `session.requestCapability request${capability ? ` for "${capability}"` : ''} ` +
+        'that has not yet been granted or refused. End the turn and wait for the ' +
+        'operator grant to resume — do not stage gate.verify until that request clears.',
+    );
+    this.name = 'GateVerifyCapabilityRequestOutstandingError';
+  }
+}
+
+/**
+ * Stage-time twin of `onBudgetFire`'s capability-request check: reuses
+ * `hasActiveCapabilityRequestForSession` (never a second predicate) to
+ * refuse a `gate.verify` staged while that same session has an unresolved
+ * `session.requestCapability` intent. Scoped to sessions only — a
+ * human-staged gate.verify with no session_id is never checked here.
+ */
+function assertNoOutstandingCapabilityRequest(
+  kind: string,
+  sessionId: string | null | undefined,
+): void {
+  if (kind !== 'gate.verify' || !sessionId) return;
+  if (!hasActiveCapabilityRequestForSession(sessionId)) return;
+  const pending = listStagedIntentsBySession(sessionId).find(
+    (row) =>
+      row.kind === 'session.requestCapability' &&
+      (row.state === 'staged' || row.state === 'approved'),
+  );
+  const capability = pending
+    ? (JSON.parse(pending.payload) as { capability?: string }).capability
+    : undefined;
+  throw new GateVerifyCapabilityRequestOutstandingError(capability);
+}
+
+/**
  * Thrown at stage time when a design session attempts to stage
  * completeness.disposition before its bound task has a single decision.pickOne
  * to run the critic against — the open half of the …3012260f ordering
@@ -2335,6 +2385,7 @@ export function stageIntent(
   assertNotSessionStagedDone(kind, payload, sessionId);
   assertCompletenessApproval(kind, sessionId);
   assertCompletenessRequiresDecision(kind, sessionId);
+  assertNoOutstandingCapabilityRequest(kind, sessionId);
   assertExpectedTerminalKinds(kind, payload, sessionId);
   assertTaskCreateGrouped(kind, sessionId, groupId);
 
