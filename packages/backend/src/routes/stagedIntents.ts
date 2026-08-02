@@ -1004,6 +1004,34 @@ export interface StagedIntent {
    * Undefined for every other kind and for a non-`Bash(...)` capability.
    */
   confersFileMutation?: boolean;
+  /**
+   * Mirrors commitGroupIntents' non-committability predicate (the group
+   * commit route's 409 guard): true when this intent's group has any member
+   * — visible or not — in needs_revision/pending_verification, or any live
+   * member's owning session is incomplete. Null for an ungrouped intent.
+   * Computed over every member (`listStagedIntentsByGroup`), never the
+   * decision-surface-filtered listing, so a group blocked solely by a
+   * hidden auto-rejected member still reads blocked here.
+   */
+  groupBlocked?: boolean | null;
+  /**
+   * Count of this intent's group members — visible or not — sitting in
+   * needs_revision/pending_verification. Distinct from `groupBlocked`
+   * (which also folds in the incomplete-session leg): used by the decision
+   * surface to render an accurate blocked-member banner even when the
+   * blocking member itself is hidden (see isVisibleOnDecisionSurface).
+   */
+  groupBlockedMemberCount?: number | null;
+  /**
+   * True when some live member of this intent's group has an owning session
+   * that hasn't gone complete for the turn — the incomplete-session leg of
+   * `groupBlocked`, isolated so the milestone inbox can wire it through
+   * GroupCard's `disabled` prop the same way DecisionPanel wires its
+   * session-scoped `sessionIncomplete`, without also disabling the
+   * blocked-member Recover/Decline affordances (which stay usable while
+   * blocked — see the group reject route).
+   */
+  groupSessionIncomplete?: boolean | null;
 }
 
 /**
@@ -1036,6 +1064,43 @@ function computeGroupKind(
  * at router construction (startup), read on every subsequent request.
  */
 let stagedIntentSessionManager: SessionManager | undefined;
+
+/**
+ * Mirrors commitGroupIntents' non-committability predicate for display: a
+ * group is blocked when any member (any state, any visibility) sits in
+ * needs_revision/pending_verification, or when any live member's owning
+ * session hasn't gone complete (see isSessionComplete/
+ * resolveSessionCompleteForDisplay). Read every member via
+ * listStagedIntentsByGroup — the same unfiltered source commitGroupIntents
+ * itself reads — never the decision-surface-filtered listing, so a group
+ * whose only blocked member is hidden (a live-session auto-rejected row)
+ * still reports blocked.
+ */
+function computeGroupBlockedSignals(
+  groupId: string,
+  sessionManager: SessionManager | undefined,
+): {
+  blocked: boolean;
+  blockedMemberCount: number;
+  sessionIncomplete: boolean;
+} {
+  const allMembers = listStagedIntentsByGroup(groupId);
+  const blockedMemberCount = allMembers.filter(
+    (r) => r.state === 'needs_revision' || r.state === 'pending_verification',
+  ).length;
+  const sessionIncomplete = allMembers
+    .filter((r) => ACTIVE_STATES.includes(r.state))
+    .some(
+      (r) =>
+        !!r.session_id &&
+        !resolveSessionCompleteForDisplay(r.session_id, sessionManager),
+    );
+  return {
+    blocked: blockedMemberCount > 0 || sessionIncomplete,
+    blockedMemberCount,
+    sessionIncomplete,
+  };
+}
 
 function rowToApi(row: StagedIntentRow): StagedIntent {
   const payload = JSON.parse(row.payload) as unknown;
@@ -1078,6 +1143,23 @@ function rowToApi(row: StagedIntentRow): StagedIntent {
       typeof capability === 'string'
         ? bashCapabilityConfersFileMutation(capability)
         : undefined,
+    ...(row.group_id
+      ? (() => {
+          const signals = computeGroupBlockedSignals(
+            row.group_id!,
+            stagedIntentSessionManager,
+          );
+          return {
+            groupBlocked: signals.blocked,
+            groupBlockedMemberCount: signals.blockedMemberCount,
+            groupSessionIncomplete: signals.sessionIncomplete,
+          };
+        })()
+      : {
+          groupBlocked: null,
+          groupBlockedMemberCount: null,
+          groupSessionIncomplete: null,
+        }),
   };
 }
 
