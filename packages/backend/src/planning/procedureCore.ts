@@ -1034,10 +1034,17 @@ export const ORDERED_STEPS: readonly ProcedureStep[] = [
     summary:
       'Read the code / live data / architecture pages the open items actually turn ' +
       'on, once per region, keeping the reads in subagents so the main window stays ' +
-      'small. The injected digest (resolved regions + verbatim task body) is ' +
-      'authoritative for a dispatched session — verify scope by spot-checking the ' +
-      'specific claims the decision actually turns on, not by re-deriving findings ' +
-      'the digest already traced from git history or from scratch. When a ' +
+      'small. The injected digest (resolved regions + verbatim task body + any ' +
+      '`Arch-store-selected units` section) is authoritative for a dispatched ' +
+      'session — verify scope by spot-checking the specific claims the decision ' +
+      'actually turns on, not by re-deriving findings the digest already traced ' +
+      'from git history or from scratch. EXCEPTION: a store-sourced arch-unit ' +
+      'selection (design/ops) renders titles/ids only, with an explicit hint to ' +
+      `fetch full bodies via ${orchestratorMcpToolName('architecture.getUnit')} / ` +
+      `${orchestratorMcpToolName('architecture.queryUnits')} — dereferencing a ` +
+      'unit through those tools when the decision turns on its content is the ' +
+      'sanctioned way to consult it, not the forbidden "fetch/re-derive context ' +
+      'by hand" behavior this step otherwise rules out. When a ' +
       'spot-check contradicts the digest, that contradiction is itself a blocker ' +
       'to surface, never to wave away or quietly resolve around: keep the task at ' +
       'Backlog with a decisionProposal naming the contradicting finding, rather ' +

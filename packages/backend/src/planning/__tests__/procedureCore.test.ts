@@ -401,6 +401,25 @@ describe('procedureCore', () => {
     expect(text).toMatch(/never staged ungrouped/);
   });
 
+  it('names the Arch-store-selected units digest section and sanctions dereferencing it via the architecture read tools', () => {
+    const step = ORDERED_STEPS.find((s) => s.id === 'investigate')!;
+    for (const skill of ['groom', 'design', 'ops', 'split'] as SkillId[]) {
+      const text = stepSummaryFor(step, skill);
+      expect(text, `${skill} investigate summary`).toContain(
+        'Arch-store-selected units',
+      );
+      expect(text, `${skill} investigate summary`).toContain(
+        'mcp__orchestrator__architecture_getUnit',
+      );
+      expect(text, `${skill} investigate summary`).toContain(
+        'mcp__orchestrator__architecture_queryUnits',
+      );
+      expect(text, `${skill} investigate summary`).toMatch(
+        /sanctioned way to consult it/,
+      );
+    }
+  });
+
   it('instructs surfacing a digest-contradicting spot-check as a blocker, not resolving around it', () => {
     const step = ORDERED_STEPS.find((s) => s.id === 'investigate')!;
     const text = stepSummaryFor(step, 'groom');
