@@ -24,7 +24,7 @@ import { formatCIFailureFeedback } from './reviewUtils';
 import { recordEvent } from '../audit/AuditLog';
 import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
-import type { ReviewJob } from './types';
+import type { ReviewJob, FlakeRecoveryOutcome } from './types';
 import type { ProjectConfig } from '../config';
 import type { PauseReason } from '../db/types';
 import { parsePauseReason } from '../db/pauseReason';
@@ -405,13 +405,18 @@ export class PreReviewPipeline {
     headSha: string,
     worktreePath: string,
     project: ProjectConfig,
-  ): Promise<{ passed: boolean; output: string } | null> {
+  ): Promise<{
+    outcome: FlakeRecoveryOutcome;
+    passed: boolean;
+    output: string;
+  } | null> {
     const config = loadOrchestratorConfig(project.projectDir);
     if (!config.test?.length) return null;
 
     recordEvent({
       event_type: 'flake_recovery_f2_invalidated',
       actor_type: 'system',
+      project_id: project.id,
       task_id: null,
       payload: { prNumber, repo, sha: headSha },
     });
@@ -427,16 +432,28 @@ export class PreReviewPipeline {
     );
     upsertTestResult(prNumber, repo, headSha, passed, output);
 
+    // Re-verify head_sha immediately before recording the outcome — a push
+    // that landed mid-run means this result no longer speaks to the SHA the
+    // disposition was diagnosed against.
+    let outcome: FlakeRecoveryOutcome = passed ? 'passed' : 'failed';
+    if (this.github) {
+      const current = await this.github.getPRState(prNumber, repo);
+      if (current.headSha !== headSha) {
+        outcome = 'inconclusive';
+      }
+    }
+
     recordEvent({
       event_type: 'flake_recovery_f2_rerun',
       actor_type: 'system',
+      project_id: project.id,
       task_id: null,
-      payload: { prNumber, repo, sha: headSha, passed },
+      payload: { prNumber, repo, sha: headSha, outcome },
     });
     logger.info(
-      `[PreReviewPipeline] flaky re-run ${passed ? 'PASSED' : 'FAILED'} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
+      `[PreReviewPipeline] flaky re-run ${outcome} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
     );
-    return { passed, output };
+    return { outcome, passed, output };
   }
 
   /**

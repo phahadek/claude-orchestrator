@@ -153,7 +153,9 @@ function makePayload(
 
 function makeMockGitHub(): GitHubClient {
   return {
-    rerunFailedJobs: vi.fn().mockResolvedValue([]),
+    rerunFailedJobs: vi.fn().mockResolvedValue([1, 2]),
+    waitForCheckRunsCompletion: vi.fn().mockResolvedValue(true),
+    getPRState: vi.fn().mockResolvedValue({ state: 'open', headSha: HEAD_SHA }),
     categorizeMergeability: vi.fn().mockResolvedValue({
       category: 'clean',
       mergeState: 'clean',
@@ -181,23 +183,26 @@ function makeMockAutoMerger(): AutoMerger {
 
 function makeMockReviewOrchestrator(): ReviewOrchestrator {
   return {
-    rerunFlakyTests: vi.fn().mockResolvedValue({ passed: true, output: 'ok' }),
+    rerunFlakyTests: vi
+      .fn()
+      .mockResolvedValue({ outcome: 'passed', passed: true, output: 'ok' }),
   } as unknown as ReviewOrchestrator;
 }
 
 function makeWatcher(github: GitHubClient) {
   const sessions = makeMockSessions();
+  const broadcast = vi.fn();
   const watcher = new PRMergeWatcher(
     github,
     sessions,
     undefined,
-    vi.fn(),
+    broadcast,
   ) as PRMergeWatcher & { handleVerifiedFlakyDisposition: any };
   const autoMerger = makeMockAutoMerger();
   const reviewOrchestrator = makeMockReviewOrchestrator();
   watcher.setAutoMerger(autoMerger);
   watcher.setReviewOrchestrator(reviewOrchestrator);
-  return { watcher, autoMerger, reviewOrchestrator, sessions };
+  return { watcher, autoMerger, reviewOrchestrator, sessions, broadcast };
 }
 
 beforeEach(() => {
@@ -229,6 +234,12 @@ describe('PRMergeWatcher.handleVerifiedFlakyDisposition — same-SHA re-run actu
       HEAD_SHA,
       REPO,
     );
+    expect(vi.mocked(github.waitForCheckRunsCompletion)).toHaveBeenCalledWith(
+      HEAD_SHA,
+      REPO,
+      [1, 2],
+    );
+    expect(vi.mocked(github.getPRState)).toHaveBeenCalledWith(PR_NUMBER, REPO);
     expect(vi.mocked(incrementFlakeRecoveryAttempts)).toHaveBeenCalledWith(
       PR_NUMBER,
       REPO,
@@ -366,6 +377,81 @@ describe('PRMergeWatcher.handleVerifiedFlakyDisposition — retry cap', () => {
       REPO,
       'ci_failing',
       'flake-recovery-exhausted',
+    );
+  });
+
+  it('emits a dedicated audit event and WS broadcast when the retry cap is reached', async () => {
+    vi.mocked(typedGetSetting).mockReturnValue(2);
+    const github = makeMockGitHub();
+    const { watcher, broadcast } = makeWatcher(github);
+    const pr = makePRRow({ flake_recovery_attempts: 2 });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+
+    const { recordEvent } = await import('../../audit/AuditLog');
+
+    await watcher.handleVerifiedFlakyDisposition(makePayload());
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'flake_recovery_exhausted',
+        project_id: 'project-1',
+      }),
+    );
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'pr_flake_recovery_exhausted',
+        prNumber: PR_NUMBER,
+        repo: REPO,
+      }),
+    );
+    expect(vi.mocked(github.rerunFailedJobs)).not.toHaveBeenCalled();
+  });
+});
+
+// ── Inconclusive outcome (SHA drift) ────────────────────────────────────────
+
+describe('PRMergeWatcher.handleVerifiedFlakyDisposition — inconclusive outcome', () => {
+  it('CI gate: records inconclusive and does not consume retry budget when head_sha drifts mid-rerun', async () => {
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'open',
+      headSha: 'sha-new-push-mid-rerun',
+    } as any);
+    const { watcher } = makeWatcher(github);
+    const pr = makePRRow();
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+
+    await watcher.handleVerifiedFlakyDisposition(makePayload());
+
+    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+    expect(vi.mocked(incrementFlakeRecoveryAttempts)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      null,
+    );
+  });
+
+  it('F2 gate: records inconclusive and does not consume retry budget when ReviewOrchestrator reports SHA drift', async () => {
+    const github = makeMockGitHub();
+    const { watcher, reviewOrchestrator } = makeWatcher(github);
+    vi.mocked(reviewOrchestrator.rerunFlakyTests).mockResolvedValue({
+      outcome: 'inconclusive',
+      passed: false,
+      output: '',
+    } as any);
+    const pr = makePRRow();
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+
+    await watcher.handleVerifiedFlakyDisposition(
+      makePayload({ disposition: { gate: 'f2', reason: 'contention' } }),
+    );
+
+    expect(vi.mocked(incrementFlakeRecoveryAttempts)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      null,
     );
   });
 });

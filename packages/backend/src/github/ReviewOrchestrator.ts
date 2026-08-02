@@ -39,7 +39,7 @@ import type {
 import { FetchRetryExhaustedError } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
-import type { ReviewJob } from './types';
+import type { ReviewJob, FlakeRecoveryOutcome } from './types';
 import { GitHubDiffSource, LocalDiffSource } from './DiffSource';
 import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
 import type { DispositionsParsedPayload } from './types';
@@ -533,7 +533,11 @@ export class ReviewOrchestrator {
     headSha: string,
     worktreePath: string,
     project: ProjectConfig,
-  ): Promise<{ passed: boolean; output: string } | null> {
+  ): Promise<{
+    outcome: FlakeRecoveryOutcome;
+    passed: boolean;
+    output: string;
+  } | null> {
     return this.preReviewPipeline.rerunFlakyTests(
       prNumber,
       repo,
