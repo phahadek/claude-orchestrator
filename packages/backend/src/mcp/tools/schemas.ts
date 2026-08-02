@@ -218,7 +218,18 @@ export const taskBodySectionsSchema = z.object({
 /** groomGate.ts's GroomingGateEntry — deep validation stays with checkGroomingPromotionGate. */
 export const groomingGateEntrySchema = z
   .object({
-    size_check: z.record(z.string(), z.unknown()).nullable().optional(),
+    size_check: z
+      .object({
+        decision: z.enum(['no_split', 'split_now', 'unsplittable', 'n/a']),
+        files: z.number().optional(),
+        loc: z.number().optional(),
+        loc_method: z.string().optional(),
+        split_into: z.array(z.unknown()).optional(),
+        reason: z.string().optional(),
+      })
+      .loose()
+      .nullable()
+      .optional(),
     type_check: z.record(z.string(), z.unknown()).nullable().optional(),
     type: z.string().optional(),
     regions: z.unknown().optional(),

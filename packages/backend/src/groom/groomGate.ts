@@ -155,7 +155,19 @@ interface GateContributionCandidate {
 }
 
 export interface GroomingGateEntry {
-  size_check?: { decision?: unknown; [key: string]: unknown } | null;
+  /**
+   * `files`/`loc`/`loc_method` are required alongside `decision` for the
+   * numeric decisions (no_split/split_now/unsplittable) — see
+   * `sizeCheckMissingNumericFields` below. `n/a` (Design/Planning, sized in
+   * open-question count instead) carries no numbers to require.
+   */
+  size_check?: {
+    decision?: unknown;
+    files?: unknown;
+    loc?: unknown;
+    loc_method?: unknown;
+    [key: string]: unknown;
+  } | null;
   type_check?: {
     decision?: unknown;
     disposition?: unknown;
@@ -255,6 +267,38 @@ function isSizeCheckClassified(entry: GroomingGateEntry): boolean {
     typeof sc.decision === 'string' &&
     SIZE_CHECK_DECISIONS.has(sc.decision)
   );
+}
+
+/** Decisions that size the actual code diff and so must carry files/loc/loc_method. */
+const SIZE_CHECK_NUMERIC_DECISIONS = new Set([
+  'no_split',
+  'split_now',
+  'unsplittable',
+]);
+
+/**
+ * A numeric size_check decision (everything but Design/Planning's `n/a`)
+ * must also record `files`/`loc`/`loc_method` — the estimate the decision
+ * rests on, not merely the decision itself. Names each missing field rather
+ * than a bare "malformed" so the groomer knows exactly what to add; never
+ * judges whether the recorded numbers are plausible.
+ */
+function sizeCheckMissingNumericFields(entry: GroomingGateEntry): string[] {
+  const sc = entry.size_check;
+  if (
+    !sc ||
+    typeof sc !== 'object' ||
+    typeof sc.decision !== 'string' ||
+    !SIZE_CHECK_NUMERIC_DECISIONS.has(sc.decision)
+  ) {
+    return [];
+  }
+  const missing: string[] = [];
+  if (typeof sc.files !== 'number') missing.push('files');
+  if (typeof sc.loc !== 'number') missing.push('loc');
+  if (typeof sc.loc_method !== 'string' || !sc.loc_method.trim())
+    missing.push('loc_method');
+  return missing;
 }
 
 /**
@@ -741,6 +785,15 @@ export async function checkGroomingPromotionGate(
       'size_check is missing or malformed — every Code/Tooling task must have an explicit size ' +
         'classification recorded before promotion. Expected {"decision": "no_split"|"split_now"|"unsplittable"|"n/a"}.',
     );
+  } else {
+    const missingNumericFields = sizeCheckMissingNumericFields(entry);
+    if (missingNumericFields.length > 0) {
+      reasons.push(
+        `size_check is missing required field(s): ${missingNumericFields.join(', ')} — a numeric ` +
+          'size decision (no_split/split_now/unsplittable) must also record the files/loc/loc_method ' +
+          'estimate the decision rests on, not judge whether that estimate is correct.',
+      );
+    }
   }
 
   if (!isTypeCheckDispositioned(entry)) {

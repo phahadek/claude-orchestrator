@@ -1142,6 +1142,27 @@ describe('assemblePlanningProcedure', () => {
     expect(example).toContain('"dependsOnTasks"');
   });
 
+  it('shows the size_check example in its populated shape — files/loc/loc_method alongside decision, not decision-only', () => {
+    const output = assemblePlanningProcedure({
+      taskName: 'A task',
+      taskUrl: 'https://notion.so/x',
+      milestoneId: 'm1',
+      projectId: 'p1',
+      digest: {
+        workflow: 'groom',
+        data: deriveGroomDigestSlice(fixtureGroomLoadResult(), 'task-1'),
+      },
+    });
+
+    const exampleStart = output.indexOf('"groomingGate":{');
+    const example = output.slice(exampleStart, exampleStart + 600);
+    expect(example).toContain('"size_check":{"decision":"no_split"');
+    expect(example).toContain('"files"');
+    expect(example).toContain('"loc"');
+    expect(example).toContain('"loc_method"');
+    expect(example).not.toContain('"size_check":{"decision":"no_split"},');
+  });
+
   it('states both the LoC and file-count size_check thresholds, and that exceeding either nominates a split', () => {
     const output = assemblePlanningProcedure({
       taskName: 'A task',

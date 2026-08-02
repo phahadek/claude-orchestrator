@@ -307,7 +307,12 @@ interface GroomingGateRegions {
 
 /** Mirrors groomGate.ts's GroomingGateEntry — the client only renders these fields, never re-judges them. */
 interface GroomingGate {
-  size_check?: { decision?: string } | null;
+  size_check?: {
+    decision?: string;
+    files?: number;
+    loc?: number;
+    loc_method?: string;
+  } | null;
   type_check?: { decision?: string; disposition?: string } | null;
   type?: string;
   regions?: GroomingGateRegions;
@@ -330,6 +335,11 @@ function GroomingGateSummary({ gate }: { gate: GroomingGate }) {
   ).length;
   const filesPathsEntries = gate.filesPathsEntries ?? [];
   const constraintsDispositioned = gate.constraintsDispositioned ?? {};
+  const sizeCheck = gate.size_check;
+  const sizeCheckEstimate =
+    typeof sizeCheck?.loc === 'number' && typeof sizeCheck?.files === 'number'
+      ? ` (${sizeCheck.loc} LoC${sizeCheck.loc_method ? ` ${sizeCheck.loc_method}` : ''}, ${sizeCheck.files} file${sizeCheck.files === 1 ? '' : 's'})`
+      : '';
 
   return (
     <div
@@ -337,10 +347,11 @@ function GroomingGateSummary({ gate }: { gate: GroomingGate }) {
       data-testid="staged-intent-grooming-gate-summary"
     >
       <p>
-        Size: {gate.size_check?.decision ?? '—'} · Type check:{' '}
-        {gate.type_check?.decision ?? '—'} · Task type: {gate.type ?? '—'} ·{' '}
-        {regionCount} region{regionCount === 1 ? '' : 's'} · {constraintCount}{' '}
-        constraint{constraintCount === 1 ? '' : 's'} dispositioned
+        Size: {sizeCheck?.decision ?? '—'}
+        {sizeCheckEstimate} · Type check: {gate.type_check?.decision ?? '—'} ·
+        Task type: {gate.type ?? '—'} · {regionCount} region
+        {regionCount === 1 ? '' : 's'} · {constraintCount} constraint
+        {constraintCount === 1 ? '' : 's'} dispositioned
       </p>
       {(constraintCount > 0 || filesPathsEntries.length > 0) && (
         <details className={styles.expandDetail}>
