@@ -1,62 +1,95 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { ShortcutHint } from '../ShortcutHint';
-import styles from '../ShortcutHint.module.css';
-import { KEYBOARD_SHORTCUTS } from '../../hooks/useKeyboardShortcuts';
+import type { PanelKeyboardDeclaration } from '../../types/panelKeyboard';
+
+function setViewportWidth(width: number) {
+  Object.defineProperty(window, 'innerWidth', {
+    writable: true,
+    configurable: true,
+    value: width,
+  });
+  window.dispatchEvent(new Event('resize'));
+}
+
+const panelDeclaration: PanelKeyboardDeclaration = {
+  orderedItems: () => [],
+  hints: [
+    { key: 'j', description: 'Next decision' },
+    { key: 'k', description: 'Previous decision' },
+    { key: 'a', description: 'Approve highlighted card' },
+    { key: 'r', description: 'Focus reason field' },
+  ],
+};
 
 describe('ShortcutHint', () => {
-  it('renders the trigger button at desktop viewport (regression)', () => {
+  afterEach(() => {
+    setViewportWidth(1024);
+  });
+
+  it('renders the trigger button', () => {
     render(<ShortcutHint />);
     expect(
       screen.getByRole('button', { name: /keyboard shortcuts/i }),
     ).toBeDefined();
   });
 
-  it('container uses the CSS class that hides at mobile via media query', () => {
-    const { container } = render(<ShortcutHint />);
-    const root = container.firstChild as HTMLElement;
-    expect(root.className).toContain(styles.container);
-  });
-
-  it('drift guard: every key handled by useKeyboardShortcuts is documented in the cheatsheet', () => {
-    // Rendering (not visibility) is what matters here — the mobile-hiding
-    // media query only affects CSS display, not whether the rows exist in
-    // the DOM, so this assertion holds regardless of viewport.
-    render(<ShortcutHint />);
+  it('renders the active panel hints plus the fixed global bindings', () => {
+    render(<ShortcutHint activePanel={panelDeclaration} />);
     fireEvent.click(
       screen.getByRole('button', { name: /keyboard shortcuts/i }),
     );
 
-    for (const { key, desc } of KEYBOARD_SHORTCUTS) {
-      const row = screen.getByText(key, { selector: 'kbd' }).closest('tr');
-      expect(row).not.toBeNull();
-      expect(row?.textContent).toContain(desc);
+    const dialog = screen.getByRole('dialog');
+
+    for (const { key, description } of panelDeclaration.hints) {
+      expect(
+        screen.getByText(key, { selector: 'kbd', exact: true }),
+      ).toBeDefined();
+      expect(screen.getByText(description)).toBeDefined();
     }
+
+    // Fixed global bindings.
+    expect(screen.getByText('Open Dispatch modal')).toBeDefined();
+    expect(screen.getByText('Close modal / panel')).toBeDefined();
+    expect(screen.getByText('Focus search')).toBeDefined();
+
+    // Panel-scoped J/K/Enter should not be duplicated by a stale global entry.
+    expect(screen.queryByText('Next session')).toBeNull();
+
+    expect(dialog).toBeDefined();
   });
 
-  it('drift guard: the cheatsheet documents no key that useKeyboardShortcuts does not handle', () => {
-    const { container } = render(<ShortcutHint />);
+  it('omits panel hints when no panel is active', () => {
+    render(<ShortcutHint activePanel={null} />);
     fireEvent.click(
       screen.getByRole('button', { name: /keyboard shortcuts/i }),
     );
-
-    const knownKeys = new Set(KEYBOARD_SHORTCUTS.map((s) => s.key));
-    // Shift+Enter is the one documented binding not owned by
-    // useKeyboardShortcuts — it's handled locally by the Composer.
-    knownKeys.add('Shift+Enter');
-
-    const kbdEls = container.querySelectorAll('kbd');
-    expect(kbdEls.length).toBeGreaterThan(0);
-    kbdEls.forEach((el) => {
-      expect(knownKeys.has(el.textContent ?? '')).toBe(true);
-    });
+    expect(screen.queryByText('Approve highlighted card')).toBeNull();
+    expect(screen.getByText('Open Dispatch modal')).toBeDefined();
   });
 
-  it('does not document the removed Rules view shortcut', () => {
+  it('opens on "?" and closes on Escape at a desktop viewport width', () => {
+    setViewportWidth(1280);
     render(<ShortcutHint />);
-    fireEvent.click(
-      screen.getByRole('button', { name: /keyboard shortcuts/i }),
-    );
-    expect(screen.queryByText('Rules view')).toBeNull();
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.keyDown(window, { key: '?' });
+    expect(screen.getByRole('dialog')).toBeDefined();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('opens on "?" and closes on Escape at a mobile viewport width', () => {
+    setViewportWidth(375);
+    render(<ShortcutHint />);
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.keyDown(window, { key: '?' });
+    expect(screen.getByRole('dialog')).toBeDefined();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

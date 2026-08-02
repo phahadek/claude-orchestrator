@@ -1752,7 +1752,7 @@ export default function App() {
         notifications={notifications}
         onDismiss={dismissNotification}
       />
-      <ShortcutHint />
+      <ShortcutHint activePanel={activePanel} />
 
       {hasConnectedOnce && connectionState !== 'connected' && (
         <div className={styles.connectionBanner}>Reconnecting...</div>
