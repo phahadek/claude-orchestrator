@@ -388,7 +388,11 @@ that actuation here.
    enumerates the 🔧 Operational / 🔎 Investigation tasks — **plus observational / E2E 🧪 Testing
    folded in as an Investigation variant** (mode `investigation`, flavor `testing`), while
    **excluding test-authoring** Testing to the `worklist.test_authoring` triage list (reclassify →
-   💻 Code) — into `worklist.executable` / `dep_blocked` / `needs_grooming` / `closed_not_done`; and
+   💻 Code) — into `worklist.executable` / `dep_blocked` / `needs_grooming` / `closed_not_done`
+   (`worklist.newly_unblocked` further flags which executable entries were `dep_blocked` on the
+   previous ops-context load for this milestone and have since cleared every blocking
+   dependency — call these out explicitly in step 4; they read identically to an always-ready
+   task otherwise.); and
    (c) pre-seeds + reconciles the `ops_journal` DB table server-side — one row per **eligible**
    (Ready / In-Progress) task at `state:"pending"`, preserving prior worked fields and **trimming**
    rows whose task is now Done / off-board (same job the old loader did to its on-disk journal, now
@@ -425,7 +429,8 @@ that actuation here.
 4. **Present the overview + a suggested review order.** Open with the **coverage line — "N eligible ·
    N advanced off `pending`"** (they must match; any entry still `pending` in
    `ops-client.mjs journal --milestone <M>`'s output means step 3 isn't finished — go back). Summarize: what's staged, what's blocked
-   and on what, what was filed, incidents frozen. Then propose a review order (like `design`),
+   and on what, what was filed, incidents frozen, and which tasks are `newly_unblocked` (name them
+   by id — a dependency just landed and they were stuck last run). Then propose a review order (like `design`),
    favoring in this priority:
    1. **Incidents / blockers** — safety, first eyes.
    2. **High-confidence items** — cheap, mechanically-verified directed-Operational completions
