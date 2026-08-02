@@ -4977,6 +4977,18 @@ async function commitGroupIntents(
   // verifyGroup earlier in the same turn still classifies each intent once.
   void classifyReadyProposal(groupId).catch(() => {});
 
+  recordEvent({
+    event_type: 'staged_intent_group_committed',
+    actor_type: opts.actorType === 'session' ? 'ai' : 'human',
+    actor_id: null,
+    project_id: allMembers[0]?.project_id ?? null,
+    payload: {
+      group_id: groupId,
+      member_count: ordered.length,
+      outcome: 'committed',
+      committed,
+    },
+  });
   return { status: 200, body: { ok: true, committed } };
 }
 

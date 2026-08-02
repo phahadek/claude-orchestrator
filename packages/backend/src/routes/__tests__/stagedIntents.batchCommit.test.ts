@@ -125,7 +125,8 @@ describe('POST /api/staged-intents/batch/commit', () => {
     expect(res.body.exceptions).toEqual([]);
 
     expect(updateStatus).toHaveBeenCalledTimes(2);
-    expect(mockRecordEvent).toHaveBeenCalledTimes(2);
+    // 2 readiness_override + 2 staged_intent_group_committed (one per group commit).
+    expect(mockRecordEvent).toHaveBeenCalledTimes(4);
     for (const [taskId] of [['notion:t-1'], ['notion:t-2']]) {
       expect(mockRecordEvent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -133,6 +134,17 @@ describe('POST /api/staged-intents/batch/commit', () => {
           task_id: taskId,
           payload: expect.objectContaining({
             reason: expect.stringContaining('triaged clean in the M12'),
+          }),
+        }),
+      );
+    }
+    for (const groupId of ['g-1', 'g-2']) {
+      expect(mockRecordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'staged_intent_group_committed',
+          payload: expect.objectContaining({
+            group_id: groupId,
+            outcome: 'committed',
           }),
         }),
       );

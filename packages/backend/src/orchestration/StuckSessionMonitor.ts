@@ -1,6 +1,7 @@
 import { logger } from '../logger';
 import type { SessionManager } from '../session/SessionManager';
 import { runtimeSettings } from '../config';
+import { recordEvent } from '../audit/AuditLog';
 import type { Scheduler } from './Scheduler';
 import {
   getPRBySessionId,
@@ -45,6 +46,10 @@ interface TimerState {
    * does that.
    */
   suspended: boolean;
+  /** ms epoch of the last activity (or timer arm), used to compute the
+   * observed event-gap recorded alongside both the notify and the
+   * explicit did-not-notify audit rows. */
+  lastActivityAt: number;
 }
 
 const PAUSE_MESSAGE =
@@ -263,6 +268,7 @@ export class StuckSessionMonitor {
         hardStopRemainingMs: row.hard_stop_remaining_ms,
         hardStopArmed: row.hard_stop_armed !== 0,
         suspended: row.suspended !== 0,
+        lastActivityAt: now,
       };
       this.timers.set(row.session_id, state);
 
@@ -433,6 +439,7 @@ export class StuckSessionMonitor {
       hardStopRemainingMs: null,
       hardStopArmed: false,
       suspended: false,
+      lastActivityAt: Date.now(),
     };
     this.timers.set(sessionId, state);
     this.scheduleNotifyAndPause(sessionId, state);
@@ -449,6 +456,26 @@ export class StuckSessionMonitor {
   private recordActivity(sessionId: string): void {
     const state = this.timers.get(sessionId);
     if (!state || state.suspended) return;
+    // A notify timer still pending means the session was inside the notify
+    // window and this activity arrived before it ever fired — the explicit
+    // did-not-flag counterpart to fireNotify's flagged row below, so the
+    // negative case ("still emitting events, not flagged") is checkable
+    // after the fact rather than being indistinguishable from no signal at
+    // all.
+    if (state.notifyTimer) {
+      const thresholdMs = runtimeSettings.session_notify_threshold_seconds * 1000;
+      recordEvent({
+        event_type: 'stuck_session_notify_checked',
+        actor_type: 'system',
+        actor_id: sessionId,
+        payload: {
+          session_id: sessionId,
+          observed_gap_ms: Date.now() - state.lastActivityAt,
+          threshold_ms: thresholdMs,
+          flagged: false,
+        },
+      });
+    }
     if (state.notifyTimer) clearTimeout(state.notifyTimer);
     if (state.pauseTimer) clearTimeout(state.pauseTimer);
     state.notifyTimer = null;
@@ -457,6 +484,7 @@ export class StuckSessionMonitor {
     state.pauseDeadline = 0;
     state.notifyRemainingMs = null;
     state.pauseRemainingMs = null;
+    state.lastActivityAt = Date.now();
     this.scheduleNotifyAndPause(sessionId, state);
   }
 
@@ -591,9 +619,22 @@ export class StuckSessionMonitor {
   private fireNotify(sessionId: string): void {
     const state = this.timers.get(sessionId);
     if (!state) return;
+    const thresholdMs = runtimeSettings.session_notify_threshold_seconds * 1000;
+    const observedGapMs = Date.now() - state.lastActivityAt;
     state.notifyTimer = null;
     state.notifyDeadline = 0;
     this.persistTimerState(sessionId);
+    recordEvent({
+      event_type: 'stuck_session_notify_checked',
+      actor_type: 'system',
+      actor_id: sessionId,
+      payload: {
+        session_id: sessionId,
+        observed_gap_ms: observedGapMs,
+        threshold_ms: thresholdMs,
+        flagged: true,
+      },
+    });
     const message = `⚠️ ${state.taskName} exceeding expected duration — possible grooming gap`;
     this.broadcast({
       type: 'stuck_session_notified',

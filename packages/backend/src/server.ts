@@ -569,7 +569,8 @@ scheduler.register({
   runOnBoot: true,
   concurrency: 'skip-if-running',
   run: async () => {
-    sessionManager.reconcileSessionsMap();
+    const { dropped } = sessionManager.reconcileSessionsMap();
+    return { items_processed: dropped };
   },
 });
 // Gate-verification reconciler: runnability/readiness reconcile on every

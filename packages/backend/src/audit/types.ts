@@ -105,7 +105,10 @@ type EventType =
   | 'memory_admission_deferred'
   | 'task_aborted'
   | 'planning_dispatch_launched'
-  | 'capability_disposition_investigation_filed';
+  | 'capability_disposition_investigation_filed'
+  | 'stuck_session_notify_checked'
+  | 'session_map_entry_dropped'
+  | 'staged_intent_group_committed';
 
 type ActorType = 'ai' | 'human' | 'system';
 
