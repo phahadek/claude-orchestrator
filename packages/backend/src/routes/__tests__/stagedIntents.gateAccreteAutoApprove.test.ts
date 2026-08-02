@@ -39,7 +39,9 @@ function makeBackend(body: string | (() => Promise<string>)) {
     updateStatus: vi.fn().mockResolvedValue(undefined),
     setDependsOn: vi.fn().mockResolvedValue(undefined),
     fetchTaskPage:
-      typeof body === 'function' ? vi.fn(body) : vi.fn().mockResolvedValue(body),
+      typeof body === 'function'
+        ? vi.fn(body)
+        : vi.fn().mockResolvedValue(body),
   };
 }
 
@@ -56,7 +58,12 @@ function stageGateAccrete(
   return stageIntent(
     'gate.accrete',
     {
-      sourceTask: { id: taskId, title: 'A task', project: 'proj-1', milestone: 'M1' },
+      sourceTask: {
+        id: taskId,
+        title: 'A task',
+        project: 'proj-1',
+        milestone: 'M1',
+      },
       items: overrides.items ?? [{ text: 'Check it.' }],
       classification: overrides.classification ?? 'items',
       ...(overrides.reason ? { reason: overrides.reason } : {}),
@@ -116,7 +123,9 @@ describe('gate.accrete stage-time auto-grant (routeStageTimeBlock)', () => {
   it('transitions staged -> approved at stage time on a clean content-match, tagged and audited', async () => {
     const taskId = 'notion:stage-auto-1';
     mockGetTaskBackend.mockReturnValue(
-      makeBackend('## Summary\nClean.\n\n### 👁️ Manual verification\n- Check it.\n'),
+      makeBackend(
+        '## Summary\nClean.\n\n### 👁️ Manual verification\n- Check it.\n',
+      ),
     );
     const intent = stageGateAccrete('session-1', 'group-1', taskId);
     expect(intent.state).toBe('staged');
@@ -141,7 +150,9 @@ describe('gate.accrete stage-time auto-grant (routeStageTimeBlock)', () => {
   it('leaves a mismatched gate.accrete intent in ordinary staged state', async () => {
     const taskId = 'notion:stage-auto-2';
     mockGetTaskBackend.mockReturnValue(
-      makeBackend('## Summary\nClean.\n\n### 👁️ Manual verification\n- Check it.\n'),
+      makeBackend(
+        '## Summary\nClean.\n\n### 👁️ Manual verification\n- Check it.\n',
+      ),
     );
     const intent = stageGateAccrete('session-2', 'group-2', taskId, {
       items: [{ text: 'Something totally unrelated' }],
@@ -181,7 +192,9 @@ describe('gate.accrete stage-time auto-grant (routeStageTimeBlock)', () => {
     runtimeSettings.gate_seed_auto_approve_enabled = false;
     const taskId = 'notion:stage-auto-4';
     mockGetTaskBackend.mockReturnValue(
-      makeBackend('## Summary\nClean.\n\n### 👁️ Manual verification\n- Check it.\n'),
+      makeBackend(
+        '## Summary\nClean.\n\n### 👁️ Manual verification\n- Check it.\n',
+      ),
     );
     const intent = stageGateAccrete('session-4', 'group-4', taskId);
 
@@ -209,7 +222,9 @@ describe('gate.accrete stage-time auto-grant (routeStageTimeBlock)', () => {
   it('still cannot commit an auto-approved gate.accrete member until every other live group member is approved', async () => {
     const taskId = 'notion:stage-auto-6';
     mockGetTaskBackend.mockReturnValue(
-      makeBackend('## Summary\nClean.\n\n### 👁️ Manual verification\n- Check it.\n'),
+      makeBackend(
+        '## Summary\nClean.\n\n### 👁️ Manual verification\n- Check it.\n',
+      ),
     );
     const groupId = 'group-6';
     const gateAccrete = stageGateAccrete('session-6', groupId, taskId);
