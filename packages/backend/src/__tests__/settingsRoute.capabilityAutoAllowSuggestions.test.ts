@@ -41,7 +41,11 @@ function buildApp() {
 function disposition(
   projectId: string,
   capability: string,
-  outcome: 'auto_approved' | 'operator_approved' | 'operator_denied' | 'declined',
+  outcome:
+    | 'auto_approved'
+    | 'operator_approved'
+    | 'operator_denied'
+    | 'declined',
 ) {
   recordEvent({
     event_type: 'capability_request_disposition',
