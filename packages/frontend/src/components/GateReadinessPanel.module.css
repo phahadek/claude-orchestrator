@@ -151,6 +151,35 @@
   white-space: nowrap;
 }
 
+.awaitingSetupBadge {
+  display: inline-block;
+  font-weight: 700;
+  font-size: 0.8125rem;
+  padding: 4px 10px;
+  border-radius: 6px;
+  width: fit-content;
+  border: none;
+  background: rgba(249, 226, 175, 0.15);
+  color: var(--warning, #f9e2af);
+  cursor: pointer;
+}
+
+.awaitingSetupBadge:hover {
+  background: rgba(249, 226, 175, 0.25);
+}
+
+.awaitingSetupIndicator {
+  margin-left: 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--warning, #f9e2af);
+  white-space: nowrap;
+}
+
+.awaitingSetupRow td {
+  background: rgba(249, 226, 175, 0.06);
+}
+
 .filters {
   display: flex;
   align-items: center;

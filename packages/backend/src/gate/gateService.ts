@@ -141,6 +141,15 @@ export interface GateReadiness {
   nonResolvingItems: GateBlockingItem[];
   /** The milestone's full per-state item totals, independent of any table filter; sums to the milestone's item total. */
   counts: Record<string, number>;
+  /**
+   * Exact count of items whose latest_disposition is `needs-setup` — the
+   * same set the `awaitingSetup` list filter surfaces (queries.ts's
+   * buildGateItemWhereClause: `latest_disposition = 'needs-setup'`). Not the
+   * wider `nonResolvingItems` (needs-setup ∪ noted) — awaiting-setup items
+   * still count inside `counts[item.state]` (always `runnable`) exactly as
+   * before; this is an additive sibling field, not another counts key.
+   */
+  awaitingSetupCount: number;
 }
 
 /**
@@ -175,12 +184,16 @@ export function getGateReadiness(
   for (const item of items) {
     counts[item.state] = (counts[item.state] ?? 0) + 1;
   }
+  const awaitingSetupCount = items.filter(
+    (item) => item.latestDisposition === 'needs-setup',
+  ).length;
   return {
     status: blocking.length === 0 ? 'green' : 'blocked',
     blocking,
     bespokeStates: blocking.filter((item) => item.bespoke),
     nonResolvingItems: blocking.filter((item) => item.nonResolving),
     counts,
+    awaitingSetupCount,
   };
 }
 

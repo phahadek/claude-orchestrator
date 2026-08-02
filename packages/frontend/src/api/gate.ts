@@ -104,6 +104,8 @@ export interface GateReadiness {
   nonResolvingItems: GateBlockingItem[];
   /** The milestone's full per-state item totals, independent of any table filter. */
   counts: Record<string, number>;
+  /** Exact count of items whose latest_disposition is needs-setup — matches the awaitingSetup list filter's own semantics, not the wider nonResolvingItems (needs-setup ∪ noted) set. */
+  awaitingSetupCount: number;
 }
 
 export interface MilestoneReadiness {

@@ -58,6 +58,7 @@ beforeEach(() => {
     bespokeStates: [],
     nonResolvingItems: [],
     counts: {},
+    awaitingSetupCount: 0,
   });
   seedApiMock.listSeedMilestoneReadiness.mockResolvedValue([]);
   seedApiMock.listSeedItems.mockResolvedValue({ items: [], total: 0, page: 1 });
