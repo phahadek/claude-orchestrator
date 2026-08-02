@@ -3,7 +3,11 @@ import * as gateStore from './gateStore';
 import type { GateItem } from './gateStore';
 import type { GateItemClassification } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
-import { getTaskCache, getVerifySessionsForGateItems } from '../db/queries';
+import {
+  getTaskCache,
+  getVerifySessionsForGateItems,
+  getLiveVerifySessionItemIds,
+} from '../db/queries';
 import type { GateItemListOrder, GateItemVerifySession } from '../db/queries';
 import { backfillGateBody, type GateBackfillResult } from './gateBackfill';
 import { normalizeTaskId } from '../tasks/taskId';
@@ -392,8 +396,13 @@ export interface ListGateItemsOptions {
   order?: GateItemListOrder;
 }
 
+export interface GateItemWithVerifyStatus extends GateItem {
+  /** True if this item currently has a non-terminal, unended verify session. */
+  verifyInFlight: boolean;
+}
+
 export interface ListGateItemsResult {
-  items: GateItem[];
+  items: GateItemWithVerifyStatus[];
   total: number;
   page: number;
 }
@@ -426,7 +435,15 @@ export function listGateItems(
     offset,
     options.order,
   );
-  return { items, total, page };
+  const liveItemIds = getLiveVerifySessionItemIds(items.map((item) => item.id));
+  return {
+    items: items.map((item) => ({
+      ...item,
+      verifyInFlight: liveItemIds.has(item.id),
+    })),
+    total,
+    page,
+  };
 }
 
 export interface MilestoneReadiness {

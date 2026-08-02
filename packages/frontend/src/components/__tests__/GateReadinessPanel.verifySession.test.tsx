@@ -192,3 +192,52 @@ describe('GateReadinessPanel — gate item verify session', () => {
     expect(screen.queryByTestId('gate-item-verify-session')).toBeNull();
   });
 });
+
+describe('GateReadinessPanel — in-flight verify indicator', () => {
+  it('renders a per-row in-flight indicator and a rollup count on a freshly loaded page, with no prior click', async () => {
+    gateApiMock.listGateItems.mockResolvedValue({
+      items: [
+        { ...ITEM_WITH_SESSION, verifyInFlight: true },
+        { ...ITEM_WITHOUT_SESSION, verifyInFlight: false },
+      ],
+      total: 2,
+      page: 1,
+    });
+
+    render(<GateReadinessPanel activeProjectId="proj-1" />);
+
+    await screen.findByText('has a verify session');
+
+    expect(
+      screen.getByTestId('gate-item-inflight-item-with-session'),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId('gate-item-inflight-item-without-session'),
+    ).toBeNull();
+
+    const badge = await screen.findByTestId(
+      'gate-readiness-status-inflight-count',
+    );
+    expect(badge.textContent).toContain('1');
+
+    // No click happened in this test — the indicator reflects a reconciler
+    // (arm-driven/unattended) dispatch, not client-local dispatch state.
+    expect(gateApiMock.getVerifySessions).not.toHaveBeenCalled();
+  });
+
+  it('renders no rollup count badge when no item is in flight', async () => {
+    gateApiMock.listGateItems.mockResolvedValue({
+      items: [{ ...ITEM_WITHOUT_SESSION, verifyInFlight: false }],
+      total: 1,
+      page: 1,
+    });
+
+    render(<GateReadinessPanel activeProjectId="proj-1" />);
+
+    await screen.findByText('has no verify session');
+
+    expect(
+      screen.queryByTestId('gate-readiness-status-inflight-count'),
+    ).toBeNull();
+  });
+});

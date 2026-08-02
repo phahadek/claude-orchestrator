@@ -183,6 +183,8 @@ interface RollupHeaderProps {
   doneStates: string[];
   activeState: string;
   onSelectState: (state: string) => void;
+  /** Count of items with a live verify session right now — rendered as a standalone badge, never a progress-bar segment (in-flight is not a gate_item state). */
+  inFlightCount?: number;
 }
 
 function RollupHeader({
@@ -196,6 +198,7 @@ function RollupHeader({
   doneStates,
   activeState,
   onSelectState,
+  inFlightCount,
 }: RollupHeaderProps) {
   const total = stateOrder.reduce((sum, s) => sum + (counts[s] ?? 0), 0);
   const doneCount = doneStates.reduce((sum, s) => sum + (counts[s] ?? 0), 0);
@@ -212,6 +215,14 @@ function RollupHeader({
             }`}
           >
             {status === 'green' ? '✅ Green — ready' : '🚫 Blocked'}
+          </div>
+        )}
+        {!!inFlightCount && (
+          <div
+            className={styles.inFlightBadge}
+            data-testid={`${testId}-inflight-count`}
+          >
+            Verifying: {inFlightCount}
           </div>
         )}
       </div>
@@ -1124,6 +1135,7 @@ export function GateReadinessPanel({
             doneStates={GATE_DONE_STATES}
             activeState={stateFilter}
             onSelectState={selectGateChip}
+            inFlightCount={items.filter((item) => item.verifyInFlight).length}
           />
 
           <div className={styles.filters}>
@@ -1246,6 +1258,15 @@ export function GateReadinessPanel({
                         </td>
                         <td onClick={() => toggleExpanded(item.id)}>
                           {item.text}
+                          {item.verifyInFlight && (
+                            <span
+                              className={styles.inFlightIndicator}
+                              data-testid={`gate-item-inflight-${item.id}`}
+                              title="A verify session is running right now"
+                            >
+                              ● verifying
+                            </span>
+                          )}
                         </td>
                         <td onClick={(e) => e.stopPropagation()}>
                           <select
