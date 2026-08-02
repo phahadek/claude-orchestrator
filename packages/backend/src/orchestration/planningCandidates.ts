@@ -33,17 +33,23 @@ const DOCS_TOKEN = 'Docs';
  * one exception: it's a terminal, distinct state (scope superseded, or will
  * never be done) rather than "not yet groomed," so it still blocks
  * regardless of Type. A dependency absent from `tasksById` can't be verified
- * as cleared, so it fails the gate closed rather than assuming clearance.
+ * as cleared, so it fails the gate closed rather than assuming clearance —
+ * unless `resolveDep` (a project-wide, cross-board lookup) finds it
+ * elsewhere: milestones are seeded ahead of the previous one completing by
+ * design, so a dep can legitimately live on a different milestone's board of
+ * the same project, and "not on this milestone's board" alone isn't grounds
+ * to treat it as unknown.
  */
 export function passesGroomDepGate(
   task: NotionTask,
   tasksById: Map<string, NotionTask>,
+  resolveDep?: (depId: string) => NotionTask | undefined,
 ): boolean {
   for (const depId of task.dependsOn) {
-    const dep = tasksById.get(normalizeBoardId(depId));
+    const dep = tasksById.get(normalizeBoardId(depId)) ?? resolveDep?.(depId);
     if (!dep) {
       logger.warn(
-        `[passesGroomDepGate] unresolved dependency: task ${task.id} depends on ${depId}, which is not present in tasksById (not a lookup miss vs unsatisfied — this dep is absent from the board)`,
+        `[passesGroomDepGate] unresolved dependency: task ${task.id} depends on ${depId}, which is not present in tasksById and not resolvable on any other board of the project (not a lookup miss vs unsatisfied — this dep is absent from every board)`,
       );
       return false;
     }
@@ -94,6 +100,13 @@ export function groomBlockingDepTitles(
 export interface GroomCandidateDeps {
   /** Every task on the same board, keyed by id — used to read each dep's Type+Status. */
   tasksById: Map<string, NotionTask>;
+  /**
+   * Project-wide fallback lookup for a dep id absent from `tasksById` — scans
+   * every milestone board of the project, not just this one. Optional so
+   * existing single-board callers (tests, other candidate scans) keep the
+   * prior fail-closed-on-this-board-only behavior unchanged.
+   */
+  resolveDep?: (depId: string) => NotionTask | undefined;
   /** True when a non-terminal *standard* session already handles this task id. */
   hasActiveSession: (taskId: string) => boolean;
   /** True while this task id is within its crash-budget cooldown window. */
@@ -147,7 +160,7 @@ export function isGroomCandidate(
   if (deps.inCrashCooldown(task.id)) return false;
   if (deps.isNoOpSuppressed(task.id)) return false;
   if (deps.isKillSuppressed(task.id)) return false;
-  return passesGroomDepGate(task, deps.tasksById);
+  return passesGroomDepGate(task, deps.tasksById, deps.resolveDep);
 }
 
 export interface OpsCandidateDeps {
@@ -233,17 +246,19 @@ export function isDesignEligibleType(type: string): boolean {
  * Design dep-gate: every Depends-On must be ✅ Done (any Type) — unlike the
  * ops dep-gate, design work isn't run against live/prod state, so there's no
  * deploy check here. A dependency absent from `tasksById` fails the gate
- * closed, mirroring passesGroomDepGate.
+ * closed, mirroring passesGroomDepGate — including the same `resolveDep`
+ * project-wide cross-board fallback before giving up.
  */
 export function passesDesignDepGate(
   task: NotionTask,
   tasksById: Map<string, NotionTask>,
+  resolveDep?: (depId: string) => NotionTask | undefined,
 ): boolean {
   for (const depId of task.dependsOn) {
-    const dep = tasksById.get(normalizeBoardId(depId));
+    const dep = tasksById.get(normalizeBoardId(depId)) ?? resolveDep?.(depId);
     if (!dep) {
       logger.warn(
-        `[passesDesignDepGate] unresolved dependency: task ${task.id} depends on ${depId}, which is not present in tasksById (not a lookup miss vs unsatisfied — this dep is absent from the board)`,
+        `[passesDesignDepGate] unresolved dependency: task ${task.id} depends on ${depId}, which is not present in tasksById and not resolvable on any other board of the project (not a lookup miss vs unsatisfied — this dep is absent from every board)`,
       );
       return false;
     }
@@ -255,6 +270,13 @@ export function passesDesignDepGate(
 export interface DesignCandidateDeps {
   /** Every task on the same board, keyed by id — used to read each dep's Type+Status. */
   tasksById: Map<string, NotionTask>;
+  /**
+   * Project-wide fallback lookup for a dep id absent from `tasksById` — scans
+   * every milestone board of the project, not just this one. Optional so
+   * existing single-board callers (tests, other candidate scans) keep the
+   * prior fail-closed-on-this-board-only behavior unchanged.
+   */
+  resolveDep?: (depId: string) => NotionTask | undefined;
   /** True when a non-terminal *standard* session already handles this task id. */
   hasActiveSession: (taskId: string) => boolean;
   /** True while this task id is within its crash-budget cooldown window. */
@@ -296,7 +318,7 @@ export function isDesignCandidate(
   if (deps.hasActiveDesignSession(task.id)) return false;
   if (deps.inCrashCooldown(task.id)) return false;
   if (deps.isKillSuppressed(task.id)) return false;
-  return passesDesignDepGate(task, deps.tasksById);
+  return passesDesignDepGate(task, deps.tasksById, deps.resolveDep);
 }
 
 /** True for a Type value the docs flow dispatches: 📝 Docs only, never 🎨 Assets. */

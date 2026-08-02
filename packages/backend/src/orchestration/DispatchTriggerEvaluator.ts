@@ -235,6 +235,7 @@ export class DispatchTriggerEvaluator {
         if (
           isGroomCandidate(task, {
             tasksById,
+            resolveDep: (depId) => this.resolveProjectDep(projectId, depId),
             hasActiveSession: hasActiveSessionForTask,
             hasActiveGroomSession: (taskId) =>
               hasActivePlanningSessionForTask(taskId, 'groom'),
@@ -300,6 +301,7 @@ export class DispatchTriggerEvaluator {
         if (
           isDesignCandidate(task, {
             tasksById,
+            resolveDep: (depId) => this.resolveProjectDep(projectId, depId),
             hasActiveSession: hasActiveSessionForTask,
             hasActiveDesignSession: (taskId) =>
               hasActivePlanningSessionForTask(taskId, 'design'),
@@ -345,6 +347,28 @@ export class DispatchTriggerEvaluator {
       }
     }
     return candidates;
+  }
+
+  /**
+   * Project-wide dependency lookup — scans every milestone board of the
+   * project (not just the one the current candidate lives on) for a dep id.
+   * Milestones are seeded ahead of the previous one completing by design, so
+   * a Depends-On legitimately lands on a different milestone's board; the
+   * per-board `tasksById` map alone can't see it. Reuses loadBoardTasks'
+   * memo, so this is cheap after the first scan of a given board this tick.
+   */
+  private resolveProjectDep(
+    projectId: string,
+    depId: string,
+  ): NotionTask | undefined {
+    const normalized = normalizeBoardId(depId);
+    for (const milestone of listMilestonesByProject(projectId)) {
+      const found = this.loadBoardTasks(milestone.id).find(
+        (t) => normalizeBoardId(t.id) === normalized,
+      );
+      if (found) return found;
+    }
+    return undefined;
   }
 
   private loadBoardTasks(milestoneId: string): NotionTask[] {

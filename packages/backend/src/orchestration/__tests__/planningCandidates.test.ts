@@ -218,6 +218,50 @@ describe('passesGroomDepGate', () => {
       warnSpy.mockRestore();
     }
   });
+
+  it('falls back to resolveDep for a dep absent from tasksById, and evaluates its status normally', () => {
+    const t = task({ dependsOn: ['cross-board-dep'] });
+    const crossBoardDone = task({
+      id: 'cross-board-dep',
+      type: '💻 Code',
+      status: '✅ Done',
+    });
+    expect(
+      passesGroomDepGate(t, new Map(), (depId) =>
+        normalizeBoardId(depId) === normalizeBoardId(crossBoardDone.id)
+          ? crossBoardDone
+          : undefined,
+      ),
+    ).toBe(true);
+
+    const crossBoardBacklog = task({
+      id: 'cross-board-dep',
+      type: '📐 Design',
+      status: '🔲 Backlog',
+    });
+    expect(
+      passesGroomDepGate(t, new Map(), (depId) =>
+        normalizeBoardId(depId) === normalizeBoardId(crossBoardBacklog.id)
+          ? crossBoardBacklog
+          : undefined,
+      ),
+    ).toBe(false);
+  });
+
+  it('prefers a same-board tasksById hit over resolveDep', () => {
+    const t = task({ dependsOn: ['dep-1'] });
+    const tasksById = depsMap([
+      task({ id: 'dep-1', type: '💻 Code', status: '🔲 Backlog' }),
+    ]);
+    const resolveDep = vi.fn();
+    expect(passesGroomDepGate(t, tasksById, resolveDep)).toBe(true);
+    expect(resolveDep).not.toHaveBeenCalled();
+  });
+
+  it('still fails closed when resolveDep also finds nothing', () => {
+    const t = task({ dependsOn: ['missing-dep'] });
+    expect(passesGroomDepGate(t, new Map(), () => undefined)).toBe(false);
+  });
 });
 
 describe('groomBlockingDepTitles', () => {
@@ -695,6 +739,40 @@ describe('passesDesignDepGate', () => {
 
   it('passes with no dependencies', () => {
     expect(passesDesignDepGate(task(), new Map())).toBe(true);
+  });
+
+  it('falls back to resolveDep for a dep absent from tasksById, and evaluates its status normally', () => {
+    const t = task({ dependsOn: ['cross-board-dep'] });
+    const crossBoardDone = task({
+      id: 'cross-board-dep',
+      type: '💻 Code',
+      status: '✅ Done',
+    });
+    expect(
+      passesDesignDepGate(t, new Map(), (depId) =>
+        normalizeBoardId(depId) === normalizeBoardId(crossBoardDone.id)
+          ? crossBoardDone
+          : undefined,
+      ),
+    ).toBe(true);
+
+    const crossBoardNotDone = task({
+      id: 'cross-board-dep',
+      type: '💻 Code',
+      status: '🗂️ Ready',
+    });
+    expect(
+      passesDesignDepGate(t, new Map(), (depId) =>
+        normalizeBoardId(depId) === normalizeBoardId(crossBoardNotDone.id)
+          ? crossBoardNotDone
+          : undefined,
+      ),
+    ).toBe(false);
+  });
+
+  it('still fails closed when resolveDep also finds nothing', () => {
+    const t = task({ dependsOn: ['missing-dep'] });
+    expect(passesDesignDepGate(t, new Map(), () => undefined)).toBe(false);
   });
 });
 
