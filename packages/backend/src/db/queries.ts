@@ -6266,7 +6266,9 @@ export function setStagedIntentAppliedTaskId(
   _stmtSetStagedIntentAppliedTaskId ??= db.prepare<{
     id: string;
     applied_task_id: string;
-  }>(`UPDATE staged_intent SET applied_task_id = @applied_task_id WHERE id = @id`);
+  }>(
+    `UPDATE staged_intent SET applied_task_id = @applied_task_id WHERE id = @id`,
+  );
   _stmtSetStagedIntentAppliedTaskId.run({ id, applied_task_id: resultId });
 }
 
